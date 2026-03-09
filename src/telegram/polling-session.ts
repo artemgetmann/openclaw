@@ -13,8 +13,15 @@ const TELEGRAM_POLL_RESTART_POLICY = {
   jitter: 0.25,
 };
 
-const POLL_STALL_THRESHOLD_MS = 90_000;
-const POLL_WATCHDOG_INTERVAL_MS = 30_000;
+// Polling stall detection: if no getUpdates call is seen for this long,
+// assume the runner is stuck and force-restart it.
+//
+// Important: thresholds below ~1 minute can false-trigger during normal
+// long-poll/network jitter and cause restart storms across multiple bot accounts.
+// We therefore derive the threshold from poll timeout and enforce a hard floor.
+const POLL_STALL_GRACE_MULTIPLIER = 4;
+const POLL_STALL_MIN_THRESHOLD_MS = 120_000;
+const POLL_WATCHDOG_INTERVAL_MS = 10_000;
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
@@ -198,12 +205,24 @@ export class TelegramPollingSession {
       }
     };
 
+    const fetchTimeoutCandidate = this.opts.runnerOptions.runner?.fetch?.timeout;
+    const runnerFetchTimeoutSeconds =
+      typeof fetchTimeoutCandidate === "number" &&
+      Number.isFinite(fetchTimeoutCandidate) &&
+      fetchTimeoutCandidate > 0
+        ? fetchTimeoutCandidate
+        : 30;
+    const pollStallThresholdMs = Math.max(
+      POLL_STALL_MIN_THRESHOLD_MS,
+      Math.ceil(runnerFetchTimeoutSeconds * 1000 * POLL_STALL_GRACE_MULTIPLIER),
+    );
+
     const watchdog = setInterval(() => {
       if (this.opts.abortSignal?.aborted) {
         return;
       }
       const elapsed = Date.now() - lastGetUpdatesAt;
-      if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+      if (elapsed > pollStallThresholdMs && runner.isRunning()) {
         stalledRestart = true;
         this.opts.log(
           `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
