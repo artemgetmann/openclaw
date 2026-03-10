@@ -236,18 +236,19 @@ export class TelegramPollingSession {
         bypassExpired = true;
       }
       if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
-        if (bypassExpired) {
+        stalledRestart = true;
+        const bypassDetail = (() => {
+          if (!bypassExpired) {
+            return "";
+          }
           const activeElapsed =
             this.#activeUpdateHandlersSinceMs === null
               ? 0
               : now - this.#activeUpdateHandlersSinceMs;
-          this.opts.log(
-            `[telegram] Polling watchdog bypass expired (${this.#activeUpdateHandlers} active handler(s) for ${formatDurationPrecise(activeElapsed)}); forcing restart.`,
-          );
-        }
-        stalledRestart = true;
+          return `; watchdog bypass expired after ${formatDurationPrecise(activeElapsed)} with ${this.#activeUpdateHandlers} active handler(s)`;
+        })();
         this.opts.log(
-          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
+          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}${bypassDetail}); forcing restart.`,
         );
         void stopRunner();
       }
