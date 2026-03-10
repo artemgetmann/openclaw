@@ -226,17 +226,25 @@ export class TelegramPollingSession {
       }
       const now = Date.now();
       const elapsed = now - lastGetUpdatesAt;
+      let bypassExpired = false;
       if (this.#activeUpdateHandlers > 0) {
         const activeElapsed =
           this.#activeUpdateHandlersSinceMs === null ? 0 : now - this.#activeUpdateHandlersSinceMs;
         if (activeElapsed <= ACTIVE_HANDLER_WATCHDOG_BYPASS_MAX_MS) {
           return;
         }
-        this.opts.log(
-          `[telegram] Polling watchdog bypass expired (${this.#activeUpdateHandlers} active handler(s) for ${formatDurationPrecise(activeElapsed)}); forcing restart.`,
-        );
+        bypassExpired = true;
       }
       if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+        if (bypassExpired) {
+          const activeElapsed =
+            this.#activeUpdateHandlersSinceMs === null
+              ? 0
+              : now - this.#activeUpdateHandlersSinceMs;
+          this.opts.log(
+            `[telegram] Polling watchdog bypass expired (${this.#activeUpdateHandlers} active handler(s) for ${formatDurationPrecise(activeElapsed)}); forcing restart.`,
+          );
+        }
         stalledRestart = true;
         this.opts.log(
           `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
