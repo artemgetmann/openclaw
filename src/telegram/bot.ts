@@ -1,6 +1,6 @@
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import type { ApiClientOptions } from "grammy";
+import type { ApiClientOptions, Context } from "grammy";
 import { Bot } from "grammy";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
@@ -64,6 +64,11 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  /**
+   * Optional hook for middleware that must run before bot handlers are registered.
+   * Useful for cross-cutting update lifecycle tracking used by polling watchdogs.
+   */
+  onBeforeHandlersRegister?: (bot: Bot) => void;
 };
 
 export { getTelegramSequentialKey };
@@ -413,6 +418,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     textLimit,
     opts,
   });
+
+  // Allow callers to attach middleware that must execute before the first
+  // handler layer. This avoids relying on post-handler middleware ordering.
+  opts.onBeforeHandlersRegister?.(bot);
 
   registerTelegramNativeCommands({
     bot,

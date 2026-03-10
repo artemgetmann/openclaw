@@ -35,6 +35,7 @@ export class TelegramPollingSession {
   #restartAttempts = 0;
   #webhookCleared = false;
   #forceRestarted = false;
+  #activeUpdateHandlers = 0;
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
 
@@ -105,6 +106,7 @@ export class TelegramPollingSession {
   async #createPollingBot(): Promise<TelegramBot | undefined> {
     const fetchAbortController = new AbortController();
     this.#activeFetchAbort = fetchAbortController;
+    this.#activeUpdateHandlers = 0;
     try {
       return createTelegramBot({
         token: this.opts.token,
@@ -116,6 +118,16 @@ export class TelegramPollingSession {
         updateOffset: {
           lastUpdateId: this.opts.getLastUpdateId(),
           onUpdateId: this.opts.persistUpdateId,
+        },
+        onBeforeHandlersRegister: (bot) => {
+          bot.use(async (_ctx, next) => {
+            this.#activeUpdateHandlers += 1;
+            try {
+              await next();
+            } finally {
+              this.#activeUpdateHandlers = Math.max(0, this.#activeUpdateHandlers - 1);
+            }
+          });
         },
       });
     } catch (err) {
@@ -164,22 +176,11 @@ export class TelegramPollingSession {
     await this.#confirmPersistedOffset(bot);
 
     let lastGetUpdatesAt = Date.now();
-    // Track active update handlers so the watchdog does not treat
-    // "busy processing updates" as a stalled poller.
-    let activeUpdateHandlers = 0;
     bot.api.config.use((prev, method, payload, signal) => {
       if (method === "getUpdates") {
         lastGetUpdatesAt = Date.now();
       }
       return prev(method, payload, signal);
-    });
-    bot.use(async (_ctx, next) => {
-      activeUpdateHandlers += 1;
-      try {
-        await next();
-      } finally {
-        activeUpdateHandlers = Math.max(0, activeUpdateHandlers - 1);
-      }
     });
 
     const runner = run(bot, this.opts.runnerOptions);
@@ -213,7 +214,7 @@ export class TelegramPollingSession {
       if (this.opts.abortSignal?.aborted) {
         return;
       }
-      if (activeUpdateHandlers > 0) {
+      if (this.#activeUpdateHandlers > 0) {
         return;
       }
       const elapsed = Date.now() - lastGetUpdatesAt;
