@@ -139,6 +139,14 @@ Your live bot at `~/.openclaw` stays untouched.
 
 ---
 
-## Full Spec
+## Docs
 
-Full execution spec at: `~/.openclaw/workspace/docs/research/openclaw-consumer-execution-spec.md`
+All product docs live in `docs/consumer/` on this branch:
+
+| File | Purpose |
+|------|---------|
+| `docs/consumer/openclaw-consumer-execution-spec.md` | Full execution plan — all decisions, sprint breakdown, what's cut |
+| `docs/consumer/CODEX-PROMPT.md` | Codex kickoff prompt for each sprint phase |
+| `docs/consumer/openclaw-consumer-go-to-market-plan.md` | GTM plan, architecture, pricing |
+| `docs/consumer/openclaw-consumer-brutal-execution-board.md` | 30-day execution board |
+| `docs/consumer/openclaw-consumer-investor-brief-1page.md` | 1-page investor brief |
