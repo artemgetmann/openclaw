@@ -61,6 +61,8 @@ export TELEGRAM_API_HASH=...
 export TG_BIN=/absolute/path/to/tg
 # optional if needed:
 # export TG_BOT=Jarvis
+# or provide token directly (no tg alias setup required):
+# export TG_BOT_TOKEN=<bot-id:token>
 
 ./run-model-inheritance-e2e.sh \
   --chat "<chat-id-or-username>" \
@@ -80,3 +82,6 @@ Pass criteria:
 
 - Thread targeting in userbot send uses `reply_to` anchoring.
 - For private chat topics, `tg` output may expose either `message_thread_id` or `direct_messages_topic.topic_id`; the runner checks both.
+- Runner session selection order is `USERBOT_SESSION` env var -> `scripts/telegram-e2e/userbot.session` (if present) -> `scripts/telegram-e2e/tmp/userbot.session`.
+- If `tg poll` hits `409 Conflict` because the gateway already owns Bot API polling, `run-model-inheritance-e2e.sh` automatically falls back to `userbot_wait.py` (MTProto assertion path) so live E2E still completes without stopping the gateway.
+- Optional: set `TG_BOT_TOKEN` in your env to avoid local `tg bot add` setup and to improve fallback sender filtering (`<botId>:<token>`).
