@@ -130,6 +130,24 @@
 
 - `sync`: if working tree is dirty, commit all changes (pick a sensible Conventional Commit message), then `git pull --rebase`; if rebase conflicts and cannot resolve, stop; otherwise `git push`.
 
+## Gateway Rollout (Local Fork)
+
+- Use this checklist for production gateway rollouts when the host is intended to run from a local OpenClaw fork.
+- Preflight:
+  - Run `git fetch upstream`.
+  - Rebase your working branch onto `upstream/main` before restart (`git rebase upstream/main`).
+  - If conflicts touch routing/auth/session surfaces, run full auth/session validation before restart.
+  - Verify launchd target path is local fork (not global): `launchctl print gui/$UID/ai.openclaw.gateway | rg '/Programming_Projects/openclaw/dist/index.js'`.
+  - Verify runtime build/version from the same local checkout: `node /Users/user/Programming_Projects/openclaw/dist/index.js --version`.
+- Restart procedure:
+  - Run from the local fork checkout only:
+    - `node /Users/user/Programming_Projects/openclaw/dist/index.js gateway install`
+    - `node /Users/user/Programming_Projects/openclaw/dist/index.js gateway start`
+- Post-restart validation:
+  - `curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18789/` returns `200`.
+  - `node /Users/user/Programming_Projects/openclaw/dist/index.js models status --probe --probe-provider anthropic --json` reports anthropic probe `status: ok`.
+  - Run one controlled live message in the target Telegram topic and verify no new `No API key found for provider "anthropic"` / fallback errors in `~/.openclaw/logs/gateway.err.log`.
+
 ## Git Notes
 
 - If `git branch -d/-D <branch>` is policy-blocked, delete the local ref directly: `git update-ref -d refs/heads/<branch>`.
@@ -174,6 +192,8 @@
 ## Agent-Specific Notes
 
 - Vocabulary: "makeup" = "mac app".
+- For hosts that are intentionally pinned to a local fork runtime, never manage production gateway lifecycle with a global `openclaw` binary from `node_modules`.
+- If launchd drifts to a global runtime path, immediately reinstall/start from the local fork checkout (`node .../dist/index.js gateway install && ... gateway start`) and re-run rollout preflight checks.
 - Never edit `node_modules` (global/Homebrew/npm/git installs too). Updates overwrite. Skill notes go in `tools.md` or `AGENTS.md`.
 - When adding a new `AGENTS.md` anywhere in the repo, also add a `CLAUDE.md` symlink pointing to it (example: `ln -s AGENTS.md CLAUDE.md`).
 - Signal: "update fly" => `fly ssh console -a flawd-bot -C "bash -lc 'cd /data/clawd/openclaw && git pull --rebase origin main'"` then `fly machines restart e825232f34d058 -a flawd-bot`.
