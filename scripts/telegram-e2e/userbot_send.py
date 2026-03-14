@@ -43,11 +43,13 @@ async def run() -> int:
   session_path = Path(args.session).expanduser()
   session_path.parent.mkdir(parents=True, exist_ok=True)
 
+  chat_entity = int(args.chat) if args.chat.lstrip("-").isdigit() else args.chat
+
   client = TelegramClient(str(session_path), args.api_id, args.api_hash)
   await client.start()
   try:
     sent = await client.send_message(
-      entity=args.chat,
+      entity=chat_entity,
       message=args.text,
       reply_to=args.reply_to or None,
     )
