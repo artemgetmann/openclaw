@@ -48,7 +48,8 @@ export async function probeGateway(opts: {
       // Keep device identity on loopback probes so local scope diagnostics are accurate.
       return isLoopbackHost(new URL(opts.url).hostname);
     } catch {
-      return false;
+      // Fail open on malformed URLs; probe connection will fail anyway.
+      return true;
     }
   })();
 

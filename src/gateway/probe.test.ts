@@ -79,6 +79,7 @@ describe("probeGateway", () => {
     });
 
     expect(result.ok).toBe(true);
+    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
     expect(gatewayClientState.requests).toEqual([]);
   });
 });
