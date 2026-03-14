@@ -1,3 +1,5 @@
+> **CONSUMER BRANCH:** Read `CONSUMER.md` before starting any work. This branch is the OpenClaw consumer product, not the upstream open-source project. Different rules apply.
+
 # Repository Guidelines
 
 - Repo: https://github.com/openclaw/openclaw
