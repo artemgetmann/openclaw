@@ -74,11 +74,12 @@ export async function createVoyageEmbeddingProvider(
 export async function resolveVoyageEmbeddingClient(
   options: EmbeddingProviderOptions,
 ): Promise<VoyageEmbeddingClient> {
-  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
-    provider: "voyage",
-    options,
-    defaultBaseUrl: DEFAULT_VOYAGE_BASE_URL,
-  });
+  const { baseUrl, headers, ssrfPolicy, authSource, authFingerprint } =
+    await resolveRemoteEmbeddingBearerClient({
+      provider: "voyage",
+      options,
+      defaultBaseUrl: DEFAULT_VOYAGE_BASE_URL,
+    });
   const model = normalizeVoyageModel(options.model);
-  return { baseUrl, headers, ssrfPolicy, model };
+  return { baseUrl, headers, ssrfPolicy, model, authSource, authFingerprint };
 }

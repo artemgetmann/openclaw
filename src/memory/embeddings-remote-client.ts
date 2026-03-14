@@ -7,8 +7,28 @@ import { resolveMemorySecretInputString } from "./secret-input.js";
 
 export type RemoteEmbeddingProviderId = "openai" | "voyage" | "mistral";
 
-function fingerprintApiKey(apiKey: string): string {
-  return crypto.createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
+function fingerprintSecret(secret: string): string {
+  return crypto.createHash("sha256").update(secret).digest("hex").slice(0, 12);
+}
+
+function readHeaderValue(
+  headers: Record<string, unknown> | undefined,
+  name: string,
+): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const needle = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== needle || typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
 }
 
 export async function resolveRemoteEmbeddingBearerClient(params: {
@@ -48,11 +68,24 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
     Authorization: `Bearer ${apiKey}`,
     ...headerOverrides,
   };
+  const providerAuthorizationOverride = readHeaderValue(providerConfig?.headers, "Authorization");
+  const remoteAuthorizationOverride = readHeaderValue(remote?.headers, "Authorization");
+  const effectiveAuthorization = readHeaderValue(headers, "Authorization");
+  const hasAuthorizationOverride = Boolean(
+    providerAuthorizationOverride || remoteAuthorizationOverride,
+  );
   return {
     baseUrl,
     headers,
     ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
-    authSource: resolvedAuth.source,
-    authFingerprint: fingerprintApiKey(apiKey),
+    authSource: remoteAuthorizationOverride
+      ? "agents.*.memorySearch.remote.headers.Authorization"
+      : providerAuthorizationOverride
+        ? `models.providers.${params.provider}.headers.Authorization`
+        : resolvedAuth.source,
+    authFingerprint:
+      hasAuthorizationOverride && effectiveAuthorization
+        ? fingerprintSecret(effectiveAuthorization)
+        : fingerprintSecret(apiKey),
   };
 }
