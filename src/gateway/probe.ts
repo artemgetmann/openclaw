@@ -4,6 +4,7 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
+import { isLoopbackHost } from "./net.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -38,6 +39,17 @@ export async function probeGateway(opts: {
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
+  const attachDeviceIdentity = (() => {
+    if (!(opts.auth?.token || opts.auth?.password)) {
+      return true;
+    }
+    try {
+      // Keep device identity on loopback probes so local scope diagnostics are accurate.
+      return isLoopbackHost(new URL(opts.url).hostname);
+    } catch {
+      return false;
+    }
+  })();
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
@@ -60,6 +72,7 @@ export async function probeGateway(opts: {
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
+      deviceIdentity: attachDeviceIdentity ? undefined : null,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
       },
