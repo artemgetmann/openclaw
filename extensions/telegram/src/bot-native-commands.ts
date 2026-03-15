@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { promisify } from "node:util";
 import type { Bot, Context } from "grammy";
 import { ensureConfiguredAcpRouteReady } from "../../../src/acp/persistent-bindings.route.js";
 import { resolveChunkMode } from "../../../src/auto-reply/chunk.js";
@@ -75,6 +78,31 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const execFileAsync = promisify(execFile);
+
+async function resolveCurrentBranchName(): Promise<string> {
+  const candidateCwds = [
+    process.cwd(),
+    process.env.INIT_CWD,
+    process.env.PWD,
+    process.argv[1] ? path.dirname(process.argv[1]) : undefined,
+  ].filter((value): value is string => Boolean(value));
+  for (const cwd of candidateCwds) {
+    try {
+      const { stdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+        cwd,
+        timeout: 1500,
+      });
+      const branch = stdout.trim();
+      if (branch) {
+        return branch;
+      }
+    } catch {
+      // Try next candidate cwd.
+    }
+  }
+  return "HEAD";
+}
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -599,6 +627,16 @@ export const registerTelegramNativeCommands = ({
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+          if (command.name === "ping") {
+            const branch = await resolveCurrentBranchName();
+            const pingText = `pong (${branch})`;
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () => bot.api.sendMessage(chatId, pingText, threadParams),
+            });
+            return;
+          }
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
           const rawText = ctx.match?.trim() ?? "";
