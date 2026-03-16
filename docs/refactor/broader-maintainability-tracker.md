@@ -14,7 +14,7 @@ Current status:
 - Stage 1A complete
 - Stage 1B complete
 - Stage 2A initial deterministic-read seam complete
-- Stage 2B container foundation started (runtime-overrides seam)
+- Stage 2B startup-threaded container seam complete
 - Stages 3 to 5 not started
 
 ## Protected runtime slice
@@ -60,9 +60,9 @@ Do not edit these files under this plan:
 ### Stage 2B: global state registry hardening
 
 - [x] Introduce first `RuntimeStateContainer` seam in `runtime-overrides`
-- [ ] Introduce `RuntimeStateContainer` in startup path
-- [ ] Keep compatibility adapters for existing globals
-- [ ] Add tests for container lifecycle and order
+- [x] Introduce `RuntimeStateContainer` in startup path
+- [x] Keep compatibility adapters for existing globals
+- [x] Add tests for container lifecycle and order
 
 ### Stage 3A: gateway startup decomposition
 
