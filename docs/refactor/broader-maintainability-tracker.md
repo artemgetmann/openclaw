@@ -13,7 +13,8 @@ Current status:
 - Stage 0 complete
 - Stage 1A complete
 - Stage 1B complete
-- Stages 2 to 5 not started
+- Stage 2A initial deterministic-read seam complete
+- Stages 2B to 5 not started
 
 ## Protected runtime slice
 
@@ -51,9 +52,9 @@ Do not edit these files under this plan:
 
 ### Stage 2A: config read and write determinism
 
-- [ ] Split config read and validate from mutation APIs
-- [ ] Prove `loadConfig()` does not write files
-- [ ] Add deterministic tests for read-only config paths
+- [x] Split config read and validate from mutation APIs
+- [x] Prove `loadConfig()` does not write files
+- [x] Add deterministic tests for read-only config paths
 
 ### Stage 2B: global state registry hardening
 
