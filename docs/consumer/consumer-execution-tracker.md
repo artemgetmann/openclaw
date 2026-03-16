@@ -1,0 +1,156 @@
+# OpenClaw Consumer Execution Tracker
+
+Last updated: 2026-03-16
+Owner: consumer execution team
+Status: Active
+
+## Source of truth
+
+Use these documents in this order when there is any ambiguity:
+
+1. `CONSUMER.md` (branch identity, north star, week-1 boundaries)
+2. `docs/consumer/openclaw-consumer-execution-spec.md` (week-1 execution spec)
+3. `docs/consumer/CODEX-PROMPT.md` (browser-spike task framing)
+4. `docs/consumer/openclaw-consumer-brutal-execution-board.md` (30-day cadence)
+5. `docs/consumer/openclaw-consumer-go-to-market-plan.md` (architecture and launch context)
+
+## Locked decisions
+
+- Week 1 scope follows `CONSUMER.md` + execution spec (power mode, no safety-profile build in week 1).
+- Browser path priority is CDP first:
+  1. `browser profile=user` (existing-session / Chrome MCP)
+  2. `browser profile=openclaw` (managed isolated browser)
+  3. Claude-in-Chrome investigation/adaptation
+  4. Browserbase (currently credential-blocked; run when creds arrive)
+- Benchmark output path is `docs/consumer/browser-spike-results.md`.
+- Benchmark protocol is 2 runs per approach/task, using median time.
+
+## Current baseline snapshot
+
+- Branch: `codex/consumer-openclaw-project`
+- `consumer...origin/main`: ahead 17, behind 0
+- `codex/consumer-openclaw-project...origin/main`: ahead 18, behind 0
+- `origin/main...upstream/main`: ahead 61, behind 6
+- Phase A merge blocker is cleared; next blocker is Phase A runtime validation.
+
+## Execution phases and gates
+
+### Phase A: Branch convergence (blocking)
+
+- [x] Merge `origin/main` into `consumer`
+- [x] Resolve conflicts (runtime/browser behavior follows merged mainline)
+- [ ] Validate:
+  - [x] `pnpm install`
+  - [x] `pnpm build`
+  - [x] `pnpm openclaw gateway --port 19001 --bind loopback --allow-unconfigured` (consumer profile bootstrap path)
+- [x] Push updated `consumer`
+- [x] Merge updated `origin/consumer` into this worktree branch
+
+Gate to exit Phase A:
+
+- [x] `consumer` no longer materially behind `origin/main` for runtime/browser work
+
+Phase A validation notes (2026-03-16):
+
+- Gateway probe on isolated runtime passed (`Gateway reachable`) on `19001`.
+- `browser --browser-profile openclaw status` passed.
+- `browser --browser-profile user status|tabs` failed with `Could not find DevToolsActivePort` because local Chrome was not running for existing-session attach.
+
+### Phase B: Browser spike (week 1, days 1-3)
+
+- [ ] Finalize benchmark matrix in `docs/consumer/browser-spike-results.md`
+- [ ] Run approach: `user` existing-session path
+- [ ] Run approach: `openclaw` managed profile path
+- [ ] Run approach: Claude-in-Chrome investigation/adaptation
+- [ ] Mark Browserbase rows `credential-blocked` until credentials are available
+- [ ] Re-run Browserbase rows once credentials are provided
+- [ ] Select primary + fallback browser architecture
+
+Gate to exit Phase B:
+
+- [ ] Clear recommendation with evidence
+- [ ] Reliability threshold met or explicit fix-loop declared
+
+### Phase C: Consumer loop integration (week 1, days 4-5)
+
+- [ ] Start isolated consumer runtime on port `19001`
+- [ ] Confirm Telegram bot responds in isolated runtime
+- [ ] Confirm Telegram -> agent -> browser -> Telegram roundtrip
+- [ ] Confirm observability with `openclaw logs --follow`
+
+Gate to exit Phase C:
+
+- [ ] End-to-end loop works without manual intervention
+
+### Phase D: Killer task hardening (week 1, days 6-7)
+
+- [ ] Implement/test: "Find flights NYC to London in April"
+- [ ] Run 3 consecutive attempts
+- [ ] Ensure each run is < 3 minutes
+
+Gate to exit Phase D:
+
+- [ ] 3/3 consecutive successful autonomous runs
+
+## Runbook commands
+
+### Consumer runtime baseline
+
+```bash
+pnpm install && pnpm build
+OPENCLAW_HOME=/tmp/openclaw-consumer \
+OPENCLAW_PROFILE=consumer-test \
+pnpm openclaw gateway --port 19001 --bind loopback
+```
+
+### Health and probes
+
+```bash
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm openclaw channels status --probe
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm openclaw logs --follow
+```
+
+### Browser verification (post-merge)
+
+```bash
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm openclaw browser --browser-profile user status
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm openclaw browser --browser-profile user tabs
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm openclaw browser --browser-profile openclaw status
+```
+
+## Benchmark tracker template
+
+| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                    |
+| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ------------------------ |
+| user (existing-session) | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | prioritize first         |
+| openclaw (managed)      | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | isolated baseline        |
+| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation |
+| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds          |
+
+## Scope guardrails (week 1)
+
+In scope:
+
+- Branch/runtime isolation
+- Browser spike and recommendation
+- Telegram end-to-end loop
+- Flight killer task reliability
+
+Out of scope:
+
+- Safety profile implementation
+- Irreversible confirmation gate implementation
+- Billing/licensing
+- Onboarding wizard polish
+- WhatsApp and managed hosting expansion
+
+## Daily log template
+
+```md
+### YYYY-MM-DD
+
+- Done:
+- Blocked:
+- Evidence links:
+- Next 3 actions:
+```
