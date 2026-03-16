@@ -15,7 +15,8 @@ Current status:
 - Stage 1B complete
 - Stage 2A initial deterministic-read seam complete
 - Stage 2B startup-threaded container seam complete
-- Stages 3 to 5 not started
+- Stage 3A started (config preflight phase extracted)
+- Stages 3B to 5 not started
 
 ## Protected runtime slice
 
