@@ -105,7 +105,12 @@ describe("runGatewayStartupConfigPreflight", () => {
 
     expect(writeConfig).toHaveBeenCalledWith(phaseThree.config);
     expect(info).toHaveBeenCalledWith(expect.stringContaining("auto-enabled plugins"));
-    expect(result).toBe(phaseThree);
+    expect(result).toEqual(
+      expect.objectContaining({
+        preflightSnapshot: phaseThree,
+        config: phaseThree.config,
+      }),
+    );
   });
 });
 
@@ -121,6 +126,7 @@ describe("runGatewayStartupSecretsPrecheck", () => {
 
     await expect(
       runGatewayStartupSecretsPrecheck({
+        context: createGatewayStartupContext(createSnapshot()),
         readSnapshot,
         prepareConfig,
         activateRuntimeSecrets,
@@ -149,7 +155,8 @@ describe("runGatewayStartupSecretsPrecheck", () => {
       .fn<(config: OpenClawConfig) => Promise<void>>()
       .mockResolvedValue();
 
-    await runGatewayStartupSecretsPrecheck({
+    const result = await runGatewayStartupSecretsPrecheck({
+      context: createGatewayStartupContext(snapshot),
       readSnapshot,
       prepareConfig,
       activateRuntimeSecrets,
@@ -157,6 +164,8 @@ describe("runGatewayStartupSecretsPrecheck", () => {
 
     expect(prepareConfig).toHaveBeenCalledWith(snapshot.config);
     expect(activateRuntimeSecrets).toHaveBeenCalledWith(preparedConfig);
+    expect(result.secretsPrechecked).toBe(true);
+    expect(result.config).toEqual(snapshot.config);
   });
 });
 
@@ -192,6 +201,7 @@ describe("runGatewayStartupAuthBootstrap", () => {
 
     const result = await runGatewayStartupAuthBootstrap({
       loadConfig: () => initialConfig,
+      context: createGatewayStartupContext(createSnapshot({ config: initialConfig })),
       ensureGatewayStartupAuth,
       activateRuntimeSecrets,
       log: { info: vi.fn(), warn: vi.fn() },
@@ -208,7 +218,7 @@ describe("runGatewayStartupAuthBootstrap", () => {
       persist: true,
     });
     expect(activateRuntimeSecrets).toHaveBeenCalledWith(authConfig);
-    expect(result).toBe(activatedConfig);
+    expect(result.config).toBe(activatedConfig);
   });
 
   it("logs info when token generation is persisted", async () => {
@@ -217,6 +227,7 @@ describe("runGatewayStartupAuthBootstrap", () => {
 
     await runGatewayStartupAuthBootstrap({
       loadConfig: () => ({}),
+      context: createGatewayStartupContext(createSnapshot()),
       ensureGatewayStartupAuth: vi.fn().mockResolvedValue({
         cfg: {},
         generatedToken: "generated",
@@ -238,6 +249,7 @@ describe("runGatewayStartupAuthBootstrap", () => {
 
     await runGatewayStartupAuthBootstrap({
       loadConfig: () => ({}),
+      context: createGatewayStartupContext(createSnapshot()),
       ensureGatewayStartupAuth: vi.fn().mockResolvedValue({
         cfg: {},
         generatedToken: "generated",
@@ -273,7 +285,7 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
       .mockResolvedValue(seededConfig);
 
     const result = await runGatewayStartupRuntimePolicyPhase({
-      context: createGatewayStartupContext(config),
+      context: createGatewayStartupContext(createSnapshot({ config })),
       isDiagnosticsEnabled: () => true,
       startDiagnosticHeartbeat,
       isRestartEnabled: () => true,
@@ -288,14 +300,19 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
     expect(setPreRestartDeferralCheck).toHaveBeenCalledTimes(1);
     expect(setPreRestartDeferralCheck.mock.calls[0]?.[0]()).toBe(7);
     expect(seedControlUiAllowedOrigins).toHaveBeenCalledWith(config);
-    expect(result).toEqual({ config: seededConfig, diagnosticsEnabled: true });
+    expect(result).toEqual(
+      expect.objectContaining({
+        config: seededConfig,
+        diagnosticsEnabled: true,
+      }),
+    );
   });
 
   it("does not start diagnostics when disabled", async () => {
     const startDiagnosticHeartbeat = vi.fn<() => void>();
 
     const result = await runGatewayStartupRuntimePolicyPhase({
-      context: createGatewayStartupContext({}),
+      context: createGatewayStartupContext(createSnapshot()),
       isDiagnosticsEnabled: () => false,
       startDiagnosticHeartbeat,
       isRestartEnabled: () => false,

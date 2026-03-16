@@ -87,7 +87,6 @@ import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import {
-  createGatewayStartupContext,
   runGatewayStartupAuthBootstrap,
   runGatewayStartupConfigPreflight,
   runGatewayStartupRuntimePolicyPhase,
@@ -286,7 +285,7 @@ export async function startGatewayServer(
     description: "raw stream log path override",
   });
 
-  await runGatewayStartupConfigPreflight({
+  let startupContext = await runGatewayStartupConfigPreflight({
     readSnapshot: readConfigFileSnapshot,
     writeConfig: writeConfigFile,
     log,
@@ -317,7 +316,8 @@ export async function startGatewayServer(
 
   // Fail fast before startup if required refs are unresolved.
   let cfgAtStart: OpenClawConfig;
-  await runGatewayStartupSecretsPrecheck({
+  startupContext = await runGatewayStartupSecretsPrecheck({
+    context: startupContext,
     readSnapshot: readConfigFileSnapshot,
     prepareConfig: (config) =>
       applyGatewayAuthOverridesForStartupPreflight(config, {
@@ -332,20 +332,19 @@ export async function startGatewayServer(
     },
   });
 
-  let startupContext = createGatewayStartupContext(
-    await runGatewayStartupAuthBootstrap({
-      loadConfig,
-      ensureGatewayStartupAuth,
-      activateRuntimeSecrets: async (config) =>
-        await activateRuntimeSecrets(config, {
-          reason: "startup",
-          activate: true,
-        }),
-      log,
-      authOverride: opts.auth,
-      tailscaleOverride: opts.tailscale,
-    }),
-  );
+  startupContext = await runGatewayStartupAuthBootstrap({
+    loadConfig,
+    context: startupContext,
+    ensureGatewayStartupAuth,
+    activateRuntimeSecrets: async (config) =>
+      await activateRuntimeSecrets(config, {
+        reason: "startup",
+        activate: true,
+      }),
+    log,
+    authOverride: opts.auth,
+    tailscaleOverride: opts.tailscale,
+  });
   startupContext = await runGatewayStartupRuntimePolicyPhase({
     context: startupContext,
     isDiagnosticsEnabled,
