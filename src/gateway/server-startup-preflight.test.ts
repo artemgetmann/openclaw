@@ -4,6 +4,7 @@ import {
   runGatewayStartupAuthBootstrap,
   GatewayStartupPreflightError,
   runGatewayStartupConfigPreflight,
+  runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
 } from "./server-startup-preflight.js";
 
@@ -247,5 +248,64 @@ describe("runGatewayStartupAuthBootstrap", () => {
       "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
     );
     expect(info).not.toHaveBeenCalled();
+  });
+});
+
+describe("runGatewayStartupRuntimePolicyPhase", () => {
+  it("enables diagnostics and applies runtime policies", async () => {
+    const config: OpenClawConfig = { gateway: { diagnostics: { enabled: true } } };
+    const seededConfig: OpenClawConfig = {
+      ...config,
+      gateway: {
+        ...config.gateway,
+        controlUi: { allowedOrigins: ["https://example.com"] },
+      },
+    };
+    const startDiagnosticHeartbeat = vi.fn<() => void>();
+    const setGatewaySigusr1RestartPolicy = vi.fn<(opts: { allowExternal: boolean }) => void>();
+    const setPreRestartDeferralCheck = vi.fn<(check: () => number) => void>();
+    const getPendingWorkCount = vi.fn<() => number>().mockReturnValue(7);
+    const seedControlUiAllowedOrigins = vi
+      .fn<(nextConfig: OpenClawConfig) => Promise<OpenClawConfig>>()
+      .mockResolvedValue(seededConfig);
+
+    const result = await runGatewayStartupRuntimePolicyPhase({
+      config,
+      isDiagnosticsEnabled: () => true,
+      startDiagnosticHeartbeat,
+      isRestartEnabled: () => true,
+      setGatewaySigusr1RestartPolicy,
+      setPreRestartDeferralCheck,
+      getPendingWorkCount,
+      seedControlUiAllowedOrigins,
+    });
+
+    expect(startDiagnosticHeartbeat).toHaveBeenCalledTimes(1);
+    expect(setGatewaySigusr1RestartPolicy).toHaveBeenCalledWith({ allowExternal: true });
+    expect(setPreRestartDeferralCheck).toHaveBeenCalledTimes(1);
+    expect(setPreRestartDeferralCheck.mock.calls[0]?.[0]()).toBe(7);
+    expect(seedControlUiAllowedOrigins).toHaveBeenCalledWith(config);
+    expect(result).toEqual({
+      config: seededConfig,
+      diagnosticsEnabled: true,
+    });
+  });
+
+  it("does not start diagnostics when disabled", async () => {
+    const startDiagnosticHeartbeat = vi.fn<() => void>();
+
+    const result = await runGatewayStartupRuntimePolicyPhase({
+      config: {},
+      isDiagnosticsEnabled: () => false,
+      startDiagnosticHeartbeat,
+      isRestartEnabled: () => false,
+      setGatewaySigusr1RestartPolicy: vi.fn(),
+      setPreRestartDeferralCheck: vi.fn(),
+      getPendingWorkCount: () => 0,
+      seedControlUiAllowedOrigins: async (config) => config,
+    });
+
+    expect(startDiagnosticHeartbeat).not.toHaveBeenCalled();
+    expect(result.diagnosticsEnabled).toBe(false);
   });
 });

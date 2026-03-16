@@ -96,6 +96,7 @@ import { logGatewayStartup } from "./server-startup-log.js";
 import {
   runGatewayStartupAuthBootstrap,
   runGatewayStartupConfigPreflight,
+  runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
 } from "./server-startup-preflight.js";
 import { startGatewaySidecars } from "./server-startup.js";
@@ -392,21 +393,26 @@ export async function startGatewayServer(
     authOverride: opts.auth,
     tailscaleOverride: opts.tailscale,
   });
-  const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
-  if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat();
-  }
-  setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
-  setPreRestartDeferralCheck(
-    () => getTotalQueueSize() + getTotalPendingReplies() + getActiveEmbeddedRunCount(),
-  );
-  // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
-  // non-loopback installs that upgraded to v2026.2.26+ without required origins.
-  cfgAtStart = await maybeSeedControlUiAllowedOriginsAtStartup({
+  const startupPolicyPhase = await runGatewayStartupRuntimePolicyPhase({
     config: cfgAtStart,
-    writeConfig: writeConfigFile,
-    log,
+    isDiagnosticsEnabled,
+    startDiagnosticHeartbeat,
+    isRestartEnabled,
+    setGatewaySigusr1RestartPolicy,
+    setPreRestartDeferralCheck,
+    getPendingWorkCount: () =>
+      getTotalQueueSize() + getTotalPendingReplies() + getActiveEmbeddedRunCount(),
+    seedControlUiAllowedOrigins: async (config) =>
+      await maybeSeedControlUiAllowedOriginsAtStartup({
+        // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
+        // non-loopback installs that upgraded to v2026.2.26+ without required origins.
+        config,
+        writeConfig: writeConfigFile,
+        log,
+      }),
   });
+  cfgAtStart = startupPolicyPhase.config;
+  const diagnosticsEnabled = startupPolicyPhase.diagnosticsEnabled;
 
   initSubagentRegistry();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
