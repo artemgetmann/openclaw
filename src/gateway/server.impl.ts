@@ -6,7 +6,6 @@ import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
 import {
@@ -14,12 +13,10 @@ import {
   type OpenClawConfig,
   isNixMode,
   loadConfig,
-  migrateLegacyConfig,
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
@@ -97,6 +94,7 @@ import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
+import { runGatewayStartupConfigPreflight } from "./server-startup-preflight.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -289,54 +287,12 @@ export async function startGatewayServer(
     description: "raw stream log path override",
   });
 
-  let configSnapshot = await readConfigFileSnapshot();
-  if (configSnapshot.legacyIssues.length > 0) {
-    if (isNixMode) {
-      throw new Error(
-        "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
-      );
-    }
-    const { config: migrated, changes } = migrateLegacyConfig(configSnapshot.parsed);
-    if (!migrated) {
-      log.warn(
-        "gateway: legacy config entries detected but no auto-migration changes were produced; continuing with validation.",
-      );
-    } else {
-      await writeConfigFile(migrated);
-      if (changes.length > 0) {
-        log.info(
-          `gateway: migrated legacy config entries:\n${changes
-            .map((entry) => `- ${entry}`)
-            .join("\n")}`,
-        );
-      }
-    }
-  }
-
-  configSnapshot = await readConfigFileSnapshot();
-  if (configSnapshot.exists && !configSnapshot.valid) {
-    const issues =
-      configSnapshot.issues.length > 0
-        ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join("\n")
-        : "Unknown validation issue.";
-    throw new Error(
-      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
-    );
-  }
-
-  const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
-  if (autoEnable.changes.length > 0) {
-    try {
-      await writeConfigFile(autoEnable.config);
-      log.info(
-        `gateway: auto-enabled plugins:\n${autoEnable.changes
-          .map((entry) => `- ${entry}`)
-          .join("\n")}`,
-      );
-    } catch (err) {
-      log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
-    }
-  }
+  await runGatewayStartupConfigPreflight({
+    readSnapshot: readConfigFileSnapshot,
+    writeConfig: writeConfigFile,
+    log,
+    isNixMode,
+  });
 
   let secretsDegraded = false;
   const emitSecretsStateEvent = (
