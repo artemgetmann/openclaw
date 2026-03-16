@@ -162,6 +162,10 @@
 
 - If `git branch -d/-D <branch>` is policy-blocked, delete the local ref directly: `git update-ref -d refs/heads/<branch>`.
 - Bulk PR close/reopen safety: if a close action would affect more than 5 PRs, first ask for explicit user confirmation with the exact PR count and target scope/query.
+- Fork maintenance update policy: keep auto-updates disabled (`openclaw config set update.auto.enabled false`).
+- Fork maintenance update policy: disable startup update checks (`openclaw config set update.checkOnStart false`).
+- Fork maintenance update policy: do not use `openclaw update` for fork maintenance; use explicit git sync commands (`git fetch upstream --prune`, `git rebase upstream/main`).
+- Fork maintenance update policy: when history rewrite is required, use `git push --force-with-lease` (never plain `--force`).
 
 ## GitHub Search (`gh`)
 
