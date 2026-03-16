@@ -224,6 +224,13 @@ describe("gatherDaemonStatus", () => {
       status: "running",
       detail: "19001",
     });
+    expect(status.runtimeFingerprint).toEqual({
+      branch: expect.any(String),
+      worktree: expect.any(String),
+      stateDir: "/tmp/openclaw-daemon",
+      configPath: "/tmp/openclaw-daemon/openclaw.json",
+      serviceLabel: "LaunchAgent",
+    });
   });
 
   it("resolves daemon gateway auth password SecretRef values before probing", async () => {

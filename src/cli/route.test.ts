@@ -1,21 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const emitCliBannerMock = vi.hoisted(() => vi.fn());
-const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
-const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
+const prepareCliExecutionMock = vi.hoisted(() => vi.fn(async () => {}));
 const findRoutedCommandMock = vi.hoisted(() => vi.fn());
 const runRouteMock = vi.hoisted(() => vi.fn(async () => true));
 
-vi.mock("./banner.js", () => ({
-  emitCliBanner: emitCliBannerMock,
-}));
-
-vi.mock("./program/config-guard.js", () => ({
-  ensureConfigReady: ensureConfigReadyMock,
-}));
-
-vi.mock("./plugin-registry.js", () => ({
-  ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
+vi.mock("./program/prepare-cli-execution.js", () => ({
+  prepareCliExecution: prepareCliExecutionMock,
 }));
 
 vi.mock("./program/routes.js", () => ({
@@ -53,8 +43,9 @@ describe("tryRouteCli", () => {
   it("passes suppressDoctorStdout=true for routed --json commands", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status", "--json"])).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith(
+    expect(prepareCliExecutionMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        argv: ["node", "openclaw", "status", "--json"],
         commandPath: ["status"],
         suppressDoctorStdout: true,
       }),
@@ -64,9 +55,13 @@ describe("tryRouteCli", () => {
   it("does not pass suppressDoctorStdout for routed non-json commands", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: expect.any(Object),
+    expect(prepareCliExecutionMock).toHaveBeenCalledWith({
+      argv: ["node", "openclaw", "status"],
       commandPath: ["status"],
+      runtime: expect.any(Object),
+      bannerVersion: expect.any(String),
+      loadPlugins: false,
+      suppressDoctorStdout: false,
     });
   });
 
@@ -76,9 +71,13 @@ describe("tryRouteCli", () => {
     );
 
     expect(findRoutedCommandMock).toHaveBeenCalledWith(["status"]);
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: expect.any(Object),
+    expect(prepareCliExecutionMock).toHaveBeenCalledWith({
+      argv: ["node", "openclaw", "--log-level", "debug", "status"],
       commandPath: ["status"],
+      runtime: expect.any(Object),
+      bannerVersion: expect.any(String),
+      loadPlugins: false,
+      suppressDoctorStdout: false,
     });
   });
 });

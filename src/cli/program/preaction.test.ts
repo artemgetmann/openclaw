@@ -2,9 +2,7 @@ import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setVerboseMock = vi.fn();
-const emitCliBannerMock = vi.fn();
-const ensureConfigReadyMock = vi.fn(async () => {});
-const ensurePluginRegistryLoadedMock = vi.fn();
+const prepareCliExecutionMock = vi.fn(async () => {});
 
 const runtimeMock = {
   log: vi.fn(),
@@ -20,20 +18,12 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtimeMock,
 }));
 
-vi.mock("../banner.js", () => ({
-  emitCliBanner: emitCliBannerMock,
-}));
-
 vi.mock("../cli-name.js", () => ({
   resolveCliName: () => "openclaw",
 }));
 
-vi.mock("./config-guard.js", () => ({
-  ensureConfigReady: ensureConfigReadyMock,
-}));
-
-vi.mock("../plugin-registry.js", () => ({
-  ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
+vi.mock("./prepare-cli-execution.js", () => ({
+  prepareCliExecution: prepareCliExecutionMock,
 }));
 
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
@@ -143,13 +133,16 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "status", "--debug"],
     });
 
-    expect(emitCliBannerMock).toHaveBeenCalledWith("9.9.9-test");
     expect(setVerboseMock).toHaveBeenCalledWith(true);
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+    expect(prepareCliExecutionMock).toHaveBeenCalledWith({
+      argv: ["node", "openclaw", "status", "--debug"],
+      bannerVersion: "9.9.9-test",
+      hideBanner: false,
       runtime: runtimeMock,
       commandPath: ["status"],
+      loadPlugins: true,
+      suppressDoctorStdout: false,
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
     expect(process.title).toBe("openclaw-status");
 
     vi.clearAllMocks();
@@ -160,11 +153,15 @@ describe("registerPreActionHooks", () => {
 
     expect(setVerboseMock).toHaveBeenCalledWith(false);
     expect(process.env.NODE_NO_WARNINGS).toBe("1");
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+    expect(prepareCliExecutionMock).toHaveBeenCalledWith({
+      argv: ["node", "openclaw", "message", "send"],
+      bannerVersion: "9.9.9-test",
+      hideBanner: false,
       runtime: runtimeMock,
       commandPath: ["message", "send"],
+      loadPlugins: true,
+      suppressDoctorStdout: false,
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips help/version preaction and respects banner opt-out", async () => {
@@ -173,9 +170,8 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "--version"],
     });
 
-    expect(emitCliBannerMock).not.toHaveBeenCalled();
+    expect(prepareCliExecutionMock).not.toHaveBeenCalled();
     expect(setVerboseMock).not.toHaveBeenCalled();
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
     process.env.OPENCLAW_HIDE_BANNER = "1";
@@ -185,8 +181,15 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "status"],
     });
 
-    expect(emitCliBannerMock).not.toHaveBeenCalled();
-    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+    expect(prepareCliExecutionMock).toHaveBeenCalledWith({
+      argv: ["node", "openclaw", "status"],
+      bannerVersion: "9.9.9-test",
+      hideBanner: true,
+      runtime: runtimeMock,
+      commandPath: ["status"],
+      loadPlugins: true,
+      suppressDoctorStdout: false,
+    });
   });
 
   it("applies --json stdout suppression only for explicit JSON output commands", async () => {
@@ -195,9 +198,13 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "update", "status", "--json"],
     });
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+    expect(prepareCliExecutionMock).toHaveBeenCalledWith({
+      argv: ["node", "openclaw", "update", "status", "--json"],
+      bannerVersion: "9.9.9-test",
+      hideBanner: true,
       runtime: runtimeMock,
       commandPath: ["update", "status"],
+      loadPlugins: false,
       suppressDoctorStdout: true,
     });
 
@@ -207,9 +214,14 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "config", "set", "gateway.auth.mode", "{bad", "--json"],
     });
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+    expect(prepareCliExecutionMock).toHaveBeenCalledWith({
+      argv: ["node", "openclaw", "config", "set", "gateway.auth.mode", "{bad", "--json"],
+      bannerVersion: "9.9.9-test",
+      hideBanner: false,
       runtime: runtimeMock,
       commandPath: ["config", "set"],
+      loadPlugins: false,
+      suppressDoctorStdout: false,
     });
   });
 
@@ -219,7 +231,7 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "config", "validate"],
     });
 
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(prepareCliExecutionMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for config validate when root option values are present", async () => {
@@ -228,7 +240,7 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "--profile", "work", "config", "validate"],
     });
 
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(prepareCliExecutionMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for backup create", async () => {
@@ -237,7 +249,7 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "backup", "create", "--json"],
     });
 
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(prepareCliExecutionMock).not.toHaveBeenCalled();
   });
 
   beforeAll(() => {

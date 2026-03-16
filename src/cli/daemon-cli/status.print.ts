@@ -10,6 +10,7 @@ import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../../daemon/systemd-hints.js";
+import { formatRuntimeFingerprint } from "../../infra/runtime-fingerprint.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -70,6 +71,13 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     defaultRuntime.log(`${label("File logs:")} ${infoText(shortenHomePath(logFile))}`);
   } catch {
     // ignore missing config/log resolution
+  }
+  if (status.runtimeFingerprint) {
+    defaultRuntime.log(
+      `${label("Runtime ID:")} ${infoText(
+        formatRuntimeFingerprint(status.runtimeFingerprint, shortenHomePath),
+      )}`,
+    );
   }
   if (service.command?.programArguments?.length) {
     defaultRuntime.log(

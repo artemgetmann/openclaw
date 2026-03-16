@@ -9,8 +9,8 @@ import {
   hasFlag,
   hasHelpOrVersion,
 } from "../argv.js";
-import { emitCliBanner } from "../banner.js";
 import { resolveCliName } from "../cli-name.js";
+import { prepareCliExecution } from "./prepare-cli-execution.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -38,8 +38,6 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
 ]);
 const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["backup", "doctor", "completion", "secrets"]);
 const JSON_PARSE_ONLY_COMMANDS = new Set(["config set"]);
-let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
-let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;
 
 function shouldBypassConfigGuard(commandPath: string[]): boolean {
   const [primary, secondary] = commandPath;
@@ -55,16 +53,6 @@ function shouldBypassConfigGuard(commandPath: string[]): boolean {
     return true;
   }
   return false;
-}
-
-function loadConfigGuardModule() {
-  configGuardModulePromise ??= import("./config-guard.js");
-  return configGuardModulePromise;
-}
-
-function loadPluginRegistryModule() {
-  pluginRegistryModulePromise ??= import("../plugin-registry.js");
-  return pluginRegistryModulePromise;
 }
 
 function getRootCommand(command: Command): Command {
@@ -111,9 +99,6 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       commandPath[0] === "update" ||
       commandPath[0] === "completion" ||
       (commandPath[0] === "plugins" && commandPath[1] === "update");
-    if (!hideBanner) {
-      emitCliBanner(programVersion);
-    }
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);
     const cliLogLevel = getCliLogLevel(actionCommand);
@@ -126,17 +111,14 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (shouldBypassConfigGuard(commandPath)) {
       return;
     }
-    const suppressDoctorStdout = isJsonOutputMode(commandPath, argv);
-    const { ensureConfigReady } = await loadConfigGuardModule();
-    await ensureConfigReady({
-      runtime: defaultRuntime,
+    await prepareCliExecution({
+      argv,
       commandPath,
-      ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+      runtime: defaultRuntime,
+      bannerVersion: programVersion,
+      hideBanner,
+      suppressDoctorStdout: isJsonOutputMode(commandPath, argv),
+      loadPlugins: PLUGIN_REQUIRED_COMMANDS.has(commandPath[0] ?? ""),
     });
-    // Load plugins for commands that need channel access
-    if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
-      const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-      ensurePluginRegistryLoaded();
-    }
   });
 }
