@@ -65,6 +65,7 @@ Do not edit these files under this plan:
 - [x] Introduce `RuntimeStateContainer` in startup path
 - [x] Keep compatibility adapters for existing globals
 - [x] Add tests for container lifecycle and order
+- [x] Move fallback gateway context ownership into `RuntimeStateContainer` and clear it during shutdown
 
 ### Stage 3A: gateway startup decomposition
 
