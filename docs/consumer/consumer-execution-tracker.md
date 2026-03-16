@@ -31,7 +31,10 @@ Use these documents in this order when there is any ambiguity:
 - `consumer...origin/main`: ahead 17, behind 0
 - `codex/consumer-openclaw-project...origin/main`: ahead 18, behind 0
 - `origin/main...upstream/main`: ahead 61, behind 6
-- Phase A merge blocker is cleared; next blocker is Phase A runtime validation.
+- Phase A merge and runtime validation are complete.
+- Phase B blockers now confirmed:
+  - `profile=user`: Chrome-side `DevToolsActivePort` is missing (existing-session attach not ready).
+  - `profile=openclaw`: benchmark automation is blocked by gateway session stability (`1006` close during runs) and harness routing shape.
 
 ## Execution phases and gates
 
@@ -39,10 +42,10 @@ Use these documents in this order when there is any ambiguity:
 
 - [x] Merge `origin/main` into `consumer`
 - [x] Resolve conflicts (runtime/browser behavior follows merged mainline)
-- [ ] Validate:
+- [x] Validate:
   - [x] `pnpm install`
   - [x] `pnpm build`
-  - [x] `pnpm openclaw gateway --port 19001 --bind loopback --allow-unconfigured` (consumer profile bootstrap path)
+  - [x] `pnpm openclaw gateway --port 19001 --bind loopback` (after `gateway.mode=local` bootstrap)
 - [x] Push updated `consumer`
 - [x] Merge updated `origin/consumer` into this worktree branch
 
@@ -52,15 +55,18 @@ Gate to exit Phase A:
 
 Phase A validation notes (2026-03-16):
 
+- Consumer profile configured: `gateway.mode=local`.
 - Gateway probe on isolated runtime passed (`Gateway reachable`) on `19001`.
 - `browser --browser-profile openclaw status` passed.
-- `browser --browser-profile user status|tabs` failed with `Could not find DevToolsActivePort` because local Chrome was not running for existing-session attach.
+- `browser --browser-profile user status|tabs` failed with `Could not find DevToolsActivePort` (existing-session readiness not satisfied).
 
 ### Phase B: Browser spike (week 1, days 1-3)
 
 - [ ] Finalize benchmark matrix in `docs/consumer/browser-spike-results.md`
 - [ ] Run approach: `user` existing-session path
+  - Current blocker: Chrome remote debugging readiness (`DevToolsActivePort` missing).
 - [ ] Run approach: `openclaw` managed profile path
+  - Current blocker: gateway closes during benchmark runs in current CLI automation path.
 - [ ] Run approach: Claude-in-Chrome investigation/adaptation
 - [ ] Mark Browserbase rows `credential-blocked` until credentials are available
 - [ ] Re-run Browserbase rows once credentials are provided
@@ -100,7 +106,7 @@ Gate to exit Phase D:
 pnpm install && pnpm build
 OPENCLAW_HOME=/tmp/openclaw-consumer \
 OPENCLAW_PROFILE=consumer-test \
-pnpm openclaw gateway --port 19001 --bind loopback
+pnpm openclaw gateway run --port 19001 --bind loopback
 ```
 
 ### Health and probes
@@ -116,16 +122,17 @@ OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm opencla
 OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm openclaw browser --browser-profile user status
 OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm openclaw browser --browser-profile user tabs
 OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm openclaw browser --browser-profile openclaw status
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm openclaw browser --browser-profile openclaw start
 ```
 
 ## Benchmark tracker template
 
-| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                    |
-| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ------------------------ |
-| user (existing-session) | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | prioritize first         |
-| openclaw (managed)      | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | isolated baseline        |
-| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation |
-| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds          |
+| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                      |
+| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ------------------------------------------ |
+| user (existing-session) | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | missing DevToolsActivePort                 |
+| openclaw (managed)      | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | gateway 1006 closure during benchmark runs |
+| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                   |
+| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                            |
 
 ## Scope guardrails (week 1)
 
