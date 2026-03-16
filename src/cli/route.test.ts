@@ -47,10 +47,11 @@ describe("tryRouteCli", () => {
       expect.objectContaining({
         argv: ["node", "openclaw", "status", "--json"],
         commandPath: ["status"],
+        loadPlugins: false,
+        pluginScope: undefined,
         suppressDoctorStdout: true,
       }),
     );
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("does not pass suppressDoctorStdout for routed non-json commands", async () => {
@@ -61,10 +62,10 @@ describe("tryRouteCli", () => {
       commandPath: ["status"],
       runtime: expect.any(Object),
       bannerVersion: expect.any(String),
-      loadPlugins: false,
+      loadPlugins: true,
+      pluginScope: "channels",
       suppressDoctorStdout: false,
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
   });
 
   it("routes status when root options precede the command", async () => {
@@ -78,9 +79,9 @@ describe("tryRouteCli", () => {
       commandPath: ["status"],
       runtime: expect.any(Object),
       bannerVersion: expect.any(String),
-      loadPlugins: false,
+      loadPlugins: true,
+      pluginScope: "channels",
       suppressDoctorStdout: false,
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
   });
 });
