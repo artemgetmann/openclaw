@@ -154,6 +154,17 @@ type GatewayStartupAuthBootstrapDeps = {
   tailscaleOverride?: unknown;
 };
 
+type GatewayStartupRuntimePolicyDeps = {
+  config: OpenClawConfig;
+  isDiagnosticsEnabled: (config: OpenClawConfig) => boolean;
+  startDiagnosticHeartbeat: () => void;
+  isRestartEnabled: (config: OpenClawConfig) => boolean;
+  setGatewaySigusr1RestartPolicy: (opts: { allowExternal: boolean }) => void;
+  setPreRestartDeferralCheck: (check: () => number) => void;
+  getPendingWorkCount: () => number;
+  seedControlUiAllowedOrigins: (config: OpenClawConfig) => Promise<OpenClawConfig>;
+};
+
 /**
  * Startup phase: fail-fast secrets precheck before runtime boot.
  */
@@ -201,4 +212,26 @@ export async function runGatewayStartupAuthBootstrap(
   }
 
   return (await deps.activateRuntimeSecrets(cfgAtStart)).config;
+}
+
+/**
+ * Startup phase: apply runtime policies derived from resolved startup config.
+ */
+export async function runGatewayStartupRuntimePolicyPhase(
+  deps: GatewayStartupRuntimePolicyDeps,
+): Promise<{ config: OpenClawConfig; diagnosticsEnabled: boolean }> {
+  const diagnosticsEnabled = deps.isDiagnosticsEnabled(deps.config);
+  if (diagnosticsEnabled) {
+    deps.startDiagnosticHeartbeat();
+  }
+
+  deps.setGatewaySigusr1RestartPolicy({
+    allowExternal: deps.isRestartEnabled(deps.config),
+  });
+  deps.setPreRestartDeferralCheck(deps.getPendingWorkCount);
+
+  return {
+    config: await deps.seedControlUiAllowedOrigins(deps.config),
+    diagnosticsEnabled,
+  };
 }
