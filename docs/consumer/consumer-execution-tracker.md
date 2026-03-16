@@ -35,6 +35,7 @@ Use these documents in this order when there is any ambiguity:
 - Phase B blockers now confirmed:
   - `profile=user`: Chrome-side `DevToolsActivePort` is missing (existing-session attach not ready).
   - `profile=openclaw`: benchmark automation is blocked by gateway session stability (`1006` close during runs) and harness routing shape.
+  - LaunchAgent route was tested and reverted: it binds `19001` but runs against `~/.openclaw` state instead of `/tmp/openclaw-consumer`, so isolated auth/state checks fail.
 
 ## Execution phases and gates
 

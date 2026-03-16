@@ -328,6 +328,24 @@ Observed:
   - `gateway closed (1006 abnormal closure (no close frame))`
 - Full matrix run stayed blocked because gateway process lifetime was unstable in this CLI automation environment.
 
+### 2026-03-16 - LaunchAgent lane mismatch (not suitable for isolated runtime)
+
+Commands:
+
+```bash
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test OPENCLAW_GATEWAY_PORT=19001 pnpm openclaw gateway install --port 19001 --bind loopback
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test OPENCLAW_GATEWAY_PORT=19001 pnpm openclaw gateway start
+launchctl print gui/$UID/ai.openclaw.consumer-test
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test OPENCLAW_GATEWAY_PORT=19001 pnpm openclaw channels status --probe
+```
+
+Observed:
+
+- LaunchAgent starts and listens on `19001`.
+- Runtime identity in logs is `stateDir=/Users/user/.openclaw` (not `/tmp/openclaw-consumer/.openclaw`).
+- Probe from isolated runtime times out because auth/state do not match isolated config.
+- Result: LaunchAgent flow is unsuitable for this benchmark's isolated state model; reverted with `gateway stop` + `gateway uninstall`.
+
 ### 2026-03-16 - Harness validation error (command shape)
 
 Commands:
@@ -363,6 +381,6 @@ Observed:
 ## Next actions
 
 1. Resolve `profile=user` readiness in Chrome UI: enable remote debugging at `chrome://inspect/#remote-debugging`, keep Chrome open, accept attach prompt, verify `DevToolsActivePort` exists, then rerun `user` checks.
-2. Stabilize benchmark gateway lifecycle for automation runs (`gateway run` lifetime) and re-run `openclaw` matrix.
+2. Stabilize benchmark gateway lifecycle for automation runs in the same isolated state context (`OPENCLAW_HOME=/tmp/openclaw-consumer`) and re-run `openclaw` matrix.
 3. Re-run benchmark harness with explicit routing (`--agent main` or explicit `--session-id`).
 4. Run Claude-in-Chrome investigation track and fill final weighted recommendation.
