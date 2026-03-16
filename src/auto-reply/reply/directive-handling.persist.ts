@@ -16,7 +16,10 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { applyVerboseOverride } from "../../sessions/level-overrides.js";
+import {
+  applyFutureThreadThinkingLevelOverride,
+  applyVerboseOverride,
+} from "../../sessions/level-overrides.js";
 import {
   applyFutureThreadModelDefaultToSessionEntry,
   applyModelOverrideToSessionEntry,
@@ -91,6 +94,26 @@ export async function persistInlineDirectives(params: {
     if (directives.hasThinkDirective && directives.thinkLevel) {
       sessionEntry.thinkingLevel = directives.thinkLevel;
       updated = true;
+      const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
+        sessionKey,
+        channelHint: telegramChannelHint,
+      });
+      if (telegramParentSessionKey) {
+        const parentEntry =
+          sessionStore[telegramParentSessionKey] ??
+          ({
+            sessionId: crypto.randomUUID(),
+            updatedAt: Date.now(),
+          } satisfies SessionEntry);
+        const { updated: parentUpdated } = applyFutureThreadThinkingLevelOverride(
+          parentEntry,
+          directives.thinkLevel,
+        );
+        if (parentUpdated) {
+          sessionStore[telegramParentSessionKey] = parentEntry;
+          updated = true;
+        }
+      }
     }
     if (directives.hasVerboseDirective && directives.verboseLevel) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
