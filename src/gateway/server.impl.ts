@@ -57,9 +57,6 @@ import {
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
 import {
-  activateSecretsRuntimeSnapshot,
-  clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
   resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
@@ -74,6 +71,10 @@ import {
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { NodeRegistry } from "./node-registry.js";
+import {
+  createGlobalRuntimeStateContainer,
+  type RuntimeStateContainer,
+} from "./runtime-state-container.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import { createAgentEventHandler } from "./server-chat.js";
@@ -215,6 +216,11 @@ export type GatewayServer = {
 
 export type GatewayServerOptions = {
   /**
+   * Runtime state container used for startup/reload/shutdown state transitions.
+   * Defaults to global runtime adapters for backward compatibility.
+   */
+  runtimeState?: RuntimeStateContainer;
+  /**
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1
    * - lan: 0.0.0.0
@@ -268,6 +274,7 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  const runtimeState = opts.runtimeState ?? createGlobalRuntimeStateContainer();
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
@@ -359,7 +366,7 @@ export async function startGatewayServer(
       try {
         const prepared = await prepareSecretsRuntimeSnapshot({ config });
         if (params.activate) {
-          activateSecretsRuntimeSnapshot(prepared);
+          runtimeState.secretsRuntime.activate(prepared);
           logGatewayAuthSurfaceDiagnostics(prepared);
         }
         for (const warning of prepared.warnings) {
@@ -988,7 +995,7 @@ export async function startGatewayServer(
           initialConfig: cfgAtStart,
           readSnapshot: readConfigFileSnapshot,
           onHotReload: async (plan, nextConfig) => {
-            const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+            const previousSnapshot = runtimeState.secretsRuntime.getActive();
             const prepared = await activateRuntimeSecrets(nextConfig, {
               reason: "reload",
               activate: true,
@@ -997,9 +1004,9 @@ export async function startGatewayServer(
               await applyHotReload(plan, prepared.config);
             } catch (err) {
               if (previousSnapshot) {
-                activateSecretsRuntimeSnapshot(previousSnapshot);
+                runtimeState.secretsRuntime.activate(previousSnapshot);
               } else {
-                clearSecretsRuntimeSnapshot();
+                runtimeState.secretsRuntime.clear();
               }
               throw err;
             }
@@ -1063,7 +1070,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
-      clearSecretsRuntimeSnapshot();
+      runtimeState.secretsRuntime.clear();
       await close(opts);
     },
   };
