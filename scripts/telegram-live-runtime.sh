@@ -17,6 +17,7 @@ BASE_CONFIG_PATH="${OPENCLAW_TELEGRAM_BASE_CONFIG_PATH:-${OPENCLAW_CONFIG_PATH:-
 PROFILE_ID=""
 RUNTIME_PORT=""
 RUNTIME_STATE_DIR=""
+RUNTIME_CONFIG_PATH=""
 RUNTIME_LOG_PATH=""
 RUNTIME_PID=""
 RUNTIME_WORKTREE=""
@@ -26,6 +27,7 @@ RUNTIME_START_ACTION="not-started"
 TOKEN_PRESENT="no"
 TOKEN_POOL_GUARD="fail"
 TOKEN_FINGERPRINT="none"
+ASSIGNED_BOT_TOKEN=""
 FAIL=0
 FAIL_REASONS=()
 
@@ -174,14 +176,43 @@ resolve_runtime_owner() {
 
 probe_runtime_health() {
   RUNTIME_HEALTH="fail"
-  if [[ -z "$RUNTIME_PORT" || -z "$RUNTIME_STATE_DIR" ]]; then
+  if [[ -z "$RUNTIME_PORT" || -z "$RUNTIME_STATE_DIR" || -z "$RUNTIME_CONFIG_PATH" ]]; then
     return
   fi
-  if env \
-    OPENCLAW_STATE_DIR="$RUNTIME_STATE_DIR" \
-    OPENCLAW_CONFIG_PATH="$BASE_CONFIG_PATH" \
-    OPENCLAW_GATEWAY_PORT="$RUNTIME_PORT" \
-    openclaw gateway status --deep --require-rpc >/tmp/openclaw-telegram-live-health.$$ 2>&1; then
+  # Readiness probe is bounded and profile-scoped (derived runtime port).
+  if RUNTIME_PORT="$RUNTIME_PORT" node --input-type=module - >/tmp/openclaw-telegram-live-health.$$ 2>&1 <<'NODE'
+const port = Number.parseInt(process.env.RUNTIME_PORT ?? "", 10);
+if (!Number.isFinite(port) || port <= 0) {
+  process.exit(1);
+}
+
+let response;
+try {
+  response = await fetch(`http://127.0.0.1:${port}/readyz`, {
+    signal: AbortSignal.timeout(2500),
+  });
+} catch {
+  process.exit(1);
+}
+
+if (!response.ok) {
+  process.exit(1);
+}
+
+let payload = null;
+try {
+  payload = await response.json();
+} catch {
+  process.exit(1);
+}
+
+if (payload && typeof payload === "object" && payload.ready === true) {
+  process.exit(0);
+}
+
+process.exit(1);
+NODE
+  then
     RUNTIME_HEALTH="ok"
   fi
 }
@@ -216,6 +247,7 @@ ensure_tester_bot_claim() {
   fi
 
   TOKEN_PRESENT="yes"
+  ASSIGNED_BOT_TOKEN="$token"
   TOKEN_FINGERPRINT="$(mask_token "$token")"
 
   local in_pool="no"
@@ -242,14 +274,103 @@ ensure_tester_bot_claim() {
   fi
 }
 
+prepare_isolated_runtime_config() {
+  if [[ -z "$RUNTIME_STATE_DIR" ]]; then
+    add_failure "runtime_state_dir_missing"
+    return
+  fi
+  if [[ -z "$ASSIGNED_BOT_TOKEN" ]]; then
+    add_failure "assigned_token_missing"
+    return
+  fi
+
+  RUNTIME_CONFIG_PATH="${RUNTIME_STATE_DIR}/openclaw.telegram-live.json"
+  mkdir -p "$RUNTIME_STATE_DIR"
+
+  if ! BASE_CONFIG_PATH="$BASE_CONFIG_PATH" \
+    RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
+    ASSIGNED_BOT_TOKEN="$ASSIGNED_BOT_TOKEN" \
+    node --input-type=module - <<'NODE'
+import fs from "node:fs";
+import path from "node:path";
+
+const basePath = process.env.BASE_CONFIG_PATH;
+const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
+const assignedToken = process.env.ASSIGNED_BOT_TOKEN;
+
+if (!runtimeConfigPath || !assignedToken) {
+  throw new Error("Missing runtime config path or assigned token.");
+}
+
+let config = {};
+if (basePath && fs.existsSync(basePath)) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(basePath, "utf8"));
+    if (parsed && typeof parsed === "object") {
+      config = parsed;
+    }
+  } catch {
+    // Fall back to a minimal config if base config is absent/invalid.
+  }
+}
+
+const gateway = config.gateway && typeof config.gateway === "object" ? config.gateway : {};
+const controlUi =
+  gateway.controlUi && typeof gateway.controlUi === "object" ? gateway.controlUi : {};
+config.gateway = {
+  ...gateway,
+  mode: "local",
+  controlUi: {
+    ...controlUi,
+    enabled: false,
+  },
+};
+
+const channels = config.channels && typeof config.channels === "object" ? config.channels : {};
+const telegram =
+  channels.telegram && typeof channels.telegram === "object" ? channels.telegram : {};
+
+// Force a single-bot Telegram runtime for worktree live tests so a worktree can
+// never silently poll with stable/main bot credentials.
+delete telegram.accounts;
+channels.telegram = {
+  ...telegram,
+  enabled: true,
+  botToken: assignedToken,
+};
+config.channels = channels;
+
+fs.mkdirSync(path.dirname(runtimeConfigPath), { recursive: true });
+fs.writeFileSync(runtimeConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+NODE
+  then
+    add_failure "runtime_config_prepare_failed"
+  fi
+}
+
 start_isolated_runtime() {
   mkdir -p "$RUNTIME_STATE_DIR"
-  if nohup env \
-    OPENCLAW_STATE_DIR="$RUNTIME_STATE_DIR" \
-    OPENCLAW_CONFIG_PATH="$BASE_CONFIG_PATH" \
-    OPENCLAW_GATEWAY_PORT="$RUNTIME_PORT" \
-    pnpm openclaw gateway run --bind loopback --port "$RUNTIME_PORT" --force \
-    >"$RUNTIME_LOG_PATH" 2>&1 & then
+  if [[ -z "$RUNTIME_CONFIG_PATH" ]]; then
+    RUNTIME_START_ACTION="start-failed"
+    add_failure "runtime_config_path_missing"
+    return
+  fi
+  # Use direct Node entrypoint under the current worktree. `pnpm openclaw` can
+  # exit early under nohup in some environments, leaving no listener behind.
+  if (
+    cd "$REPO_ROOT"
+    nohup env \
+      OPENCLAW_STATE_DIR="$RUNTIME_STATE_DIR" \
+      OPENCLAW_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
+      OPENCLAW_GATEWAY_PORT="$RUNTIME_PORT" \
+      OPENCLAW_SKIP_GMAIL_WATCHER=1 \
+      OPENCLAW_SKIP_CRON=1 \
+      OPENCLAW_SKIP_CANVAS_HOST=1 \
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1 \
+      OPENCLAW_DISABLE_BONJOUR=1 \
+      node scripts/run-node.mjs gateway run --bind loopback --port "$RUNTIME_PORT" --force --allow-unconfigured \
+      >"$RUNTIME_LOG_PATH" 2>&1 &
+  ); then
     RUNTIME_START_ACTION="started"
   else
     RUNTIME_START_ACTION="start-failed"
@@ -280,6 +401,7 @@ ensure_command() {
   fi
 
   ensure_tester_bot_claim
+  prepare_isolated_runtime_config
 
   resolve_runtime_owner
 
@@ -293,7 +415,11 @@ ensure_command() {
 
   if [[ "$FAIL" -eq 0 ]]; then
     local waited=0
-    while [[ "$waited" -lt 60 ]]; do
+    local startup_timeout="${OPENCLAW_TELEGRAM_LIVE_START_TIMEOUT_SECS:-300}"
+    if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]]; then
+      startup_timeout=300
+    fi
+    while [[ "$waited" -lt "$startup_timeout" ]]; do
       resolve_runtime_owner
       if [[ "$RUNTIME_OWNERSHIP" == "ok" ]]; then
         probe_runtime_health

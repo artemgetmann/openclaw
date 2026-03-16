@@ -106,6 +106,7 @@ Use one source of truth in your main checkout, then copy into each worktree.
 5. First runtime claim happens on first canonical ensure run:
    - `scripts/telegram-live-runtime.sh ensure`
    - This auto-claims a tester bot token for the worktree (or hard-fails if none are available).
+   - Pool tokens that are already present in the stable/main Telegram config are treated as reserved and are never claimed by worktree live tests.
 
 Lane auth continuity:
 

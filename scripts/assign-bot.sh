@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_MODULE="${SCRIPT_DIR}/lib/telegram-live-runtime-helpers.mjs"
+BASE_CONFIG_PATH="${OPENCLAW_TELEGRAM_BASE_CONFIG_PATH:-${OPENCLAW_CONFIG_PATH:-${HOME}/.openclaw/openclaw.json}}"
 
 # Trim leading/trailing whitespace for robust .env parsing.
 trim() {
@@ -155,6 +156,7 @@ if [[ -d "$current_worktree" ]]; then
 fi
 current_token=""
 claimed_tokens_other_worktrees=()
+reserved_tokens=()
 worktree_path=""
 env_local_path=""
 claimed=""
@@ -180,6 +182,66 @@ for worktree_path in "${worktree_paths[@]-}"; do
     claimed_tokens_other_worktrees+=("$claimed")
   fi
 done
+
+if [[ -f "$BASE_CONFIG_PATH" ]]; then
+  reserved_lines="$(
+    BASE_CONFIG_PATH="$BASE_CONFIG_PATH" node --input-type=module - <<'NODE'
+import fs from "node:fs";
+
+const configPath = process.env.BASE_CONFIG_PATH;
+if (!configPath || !fs.existsSync(configPath)) {
+  process.exit(0);
+}
+
+let parsed;
+try {
+  parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+} catch {
+  process.exit(0);
+}
+
+const tokens = new Set();
+const telegram = parsed?.channels?.telegram;
+const pushToken = (value) => {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return;
+  }
+  tokens.add(trimmed);
+};
+
+if (telegram && typeof telegram === "object") {
+  pushToken(telegram.botToken);
+  const accounts = telegram.accounts;
+  if (accounts && typeof accounts === "object") {
+    for (const account of Object.values(accounts)) {
+      if (account && typeof account === "object") {
+        pushToken(account.botToken);
+      }
+    }
+  }
+}
+
+for (const token of tokens) {
+  process.stdout.write(`${token}\n`);
+}
+NODE
+  )"
+
+  while IFS= read -r token || [[ -n "$token" ]]; do
+    token="$(trim "$token")"
+    if [[ -n "$token" ]]; then
+      reserved_tokens+=("$token")
+    fi
+  done <<< "$reserved_lines"
+fi
+
+if (( ${#reserved_tokens[@]} > 0 )); then
+  claimed_tokens_other_worktrees+=("${reserved_tokens[@]}")
+fi
 
 tmp_dir="$(mktemp -d -t openclaw-assign-bot.XXXXXX)"
 pool_file="${tmp_dir}/pool.txt"
@@ -233,6 +295,9 @@ if [[ "$selection_ok" != "1" || -z "$selected_token" ]]; then
   echo "Error: no tester bot token available for this worktree." >&2
   echo "Reason: ${selection_reason:-unknown}" >&2
   echo "Claimed by other worktrees: ${#claimed_tokens_other_worktrees[@]} / Pool size: ${#bot_tokens[@]}" >&2
+  if (( ${#reserved_tokens[@]} > 0 )); then
+    echo "Reserved by stable config: ${#reserved_tokens[@]} token(s) from ${BASE_CONFIG_PATH}" >&2
+  fi
   echo "No fallback to stable/main bot token is allowed." >&2
   exit 1
 fi
