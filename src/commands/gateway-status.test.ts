@@ -201,6 +201,7 @@ describe("gateway-status command", () => {
 
     expect(runtimeErrors).toHaveLength(0);
     expect(runtimeLogs.join("\n")).toContain("Gateway Status");
+    expect(runtimeLogs.join("\n")).toContain("Local runtime:");
     expect(runtimeLogs.join("\n")).toContain("Discovery (this machine)");
     expect(runtimeLogs.join("\n")).toContain("Targets");
   });
@@ -213,6 +214,7 @@ describe("gateway-status command", () => {
     expect(runtimeErrors).toHaveLength(0);
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
     expect(parsed.ok).toBe(true);
+    expect(parsed.runtimeFingerprint).toBeTruthy();
     expect(parsed.targets).toBeTruthy();
     const targets = parsed.targets as Array<Record<string, unknown>>;
     expect(targets.length).toBeGreaterThanOrEqual(2);

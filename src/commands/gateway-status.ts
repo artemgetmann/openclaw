@@ -2,6 +2,10 @@ import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { probeGateway } from "../gateway/probe.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
+import {
+  formatRuntimeFingerprint,
+  resolveRuntimeFingerprint,
+} from "../infra/runtime-fingerprint.js";
 import { resolveSshConfig } from "../infra/ssh-config.js";
 import { parseSshTarget, startSshPortForward } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
@@ -40,6 +44,7 @@ export async function gatewayStatusCommand(
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
   const overallTimeoutMs = parseTimeoutMs(opts.timeout, 3000);
+  const runtimeFingerprint = resolveRuntimeFingerprint({ moduleUrl: import.meta.url });
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });
@@ -259,6 +264,7 @@ export async function gatewayStatusCommand(
           durationMs: Date.now() - startedAt,
           timeoutMs: overallTimeoutMs,
           primaryTargetId: primary?.target.id ?? null,
+          runtimeFingerprint,
           warnings,
           network,
           discovery: {
@@ -318,6 +324,9 @@ export async function gatewayStatusCommand(
       : `${colorize(rich, theme.error, "Reachable")}: no`,
   );
   runtime.log(colorize(rich, theme.muted, `Probe budget: ${overallTimeoutMs}ms`));
+  runtime.log(
+    colorize(rich, theme.muted, `Local runtime: ${formatRuntimeFingerprint(runtimeFingerprint)}`),
+  );
 
   if (warnings.length > 0) {
     runtime.log("");

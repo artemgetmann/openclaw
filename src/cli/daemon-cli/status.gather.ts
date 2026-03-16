@@ -26,6 +26,10 @@ import {
   type PortListener,
   type PortUsageStatus,
 } from "../../infra/ports.js";
+import {
+  resolveRuntimeFingerprint,
+  type RuntimeFingerprint,
+} from "../../infra/runtime-fingerprint.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
 import { probeGatewayStatus } from "./probe.js";
@@ -74,6 +78,7 @@ type ResolvedGatewayStatus = {
 };
 
 export type DaemonStatus = {
+  runtimeFingerprint?: RuntimeFingerprint;
   service: {
     label: string;
     loaded: boolean;
@@ -338,6 +343,10 @@ export async function gatherDaemonStatus(
   }
 
   return {
+    runtimeFingerprint: resolveRuntimeFingerprint({
+      env: serviceEnv,
+      serviceLabel: service.label,
+    }),
     service: {
       label: service.label,
       loaded,
