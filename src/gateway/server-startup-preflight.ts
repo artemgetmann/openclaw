@@ -13,6 +13,12 @@ export type GatewayStartupPreflightPhase =
   | "plugin_auto_enable";
 
 export type GatewayStartupContext = {
+  preflightSnapshot: ConfigFileSnapshot;
+  secretsPrechecked: boolean;
+  authBootstrap: {
+    generatedToken: boolean;
+    persistedGeneratedToken: boolean;
+  };
   config: OpenClawConfig;
   diagnosticsEnabled: boolean;
 };
@@ -109,7 +115,7 @@ function buildInvalidConfigMessageForStartupSecretPrecheck(snapshot: ConfigFileS
  */
 export async function runGatewayStartupConfigPreflight(
   deps: GatewayStartupPreflightDeps,
-): Promise<ConfigFileSnapshot> {
+): Promise<GatewayStartupContext> {
   const migrateLegacy = deps.migrateLegacyConfigFn ?? migrateLegacyConfig;
   const autoEnablePlugins = deps.applyPluginAutoEnableFn ?? applyPluginAutoEnable;
   const env = deps.env ?? process.env;
@@ -152,7 +158,7 @@ export async function runGatewayStartupConfigPreflight(
     env,
   });
   if (autoEnable.changes.length === 0) {
-    return configSnapshot;
+    return createGatewayStartupContext(configSnapshot);
   }
 
   try {
@@ -162,14 +168,15 @@ export async function runGatewayStartupConfigPreflight(
         .map((entry) => `- ${entry}`)
         .join("\n")}`,
     );
-    return await deps.readSnapshot();
+    return createGatewayStartupContext(await deps.readSnapshot());
   } catch (err) {
     deps.log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
-    return configSnapshot;
+    return createGatewayStartupContext(configSnapshot);
   }
 }
 
 type GatewayStartupSecretsPrecheckDeps = {
+  context: GatewayStartupContext;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   prepareConfig: (config: OpenClawConfig) => OpenClawConfig;
   activateRuntimeSecrets: (config: OpenClawConfig) => Promise<void>;
@@ -183,6 +190,7 @@ type StartupAuthBootstrapResult = {
 
 type GatewayStartupAuthBootstrapDeps = {
   loadConfig: () => OpenClawConfig;
+  context: GatewayStartupContext;
   ensureGatewayStartupAuth: (params: {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -216,7 +224,7 @@ type GatewayStartupRuntimePolicyDeps = {
  */
 export async function runGatewayStartupSecretsPrecheck(
   deps: GatewayStartupSecretsPrecheckDeps,
-): Promise<void> {
+): Promise<GatewayStartupContext> {
   const freshSnapshot = await deps.readSnapshot();
   if (!freshSnapshot.valid) {
     throw new GatewayStartupPreflightError(
@@ -226,6 +234,12 @@ export async function runGatewayStartupSecretsPrecheck(
   }
   const startupPreflightConfig = deps.prepareConfig(freshSnapshot.config);
   await deps.activateRuntimeSecrets(startupPreflightConfig);
+  return {
+    ...deps.context,
+    preflightSnapshot: freshSnapshot,
+    config: freshSnapshot.config,
+    secretsPrechecked: true,
+  };
 }
 
 /**
@@ -233,7 +247,7 @@ export async function runGatewayStartupSecretsPrecheck(
  */
 export async function runGatewayStartupAuthBootstrap(
   deps: GatewayStartupAuthBootstrapDeps,
-): Promise<OpenClawConfig> {
+): Promise<GatewayStartupContext> {
   const env = deps.env ?? process.env;
 
   let cfgAtStart = deps.loadConfig();
@@ -257,12 +271,27 @@ export async function runGatewayStartupAuthBootstrap(
     }
   }
 
-  return (await deps.activateRuntimeSecrets(cfgAtStart)).config;
+  return {
+    ...deps.context,
+    config: (await deps.activateRuntimeSecrets(cfgAtStart)).config,
+    authBootstrap: {
+      generatedToken: Boolean(authBootstrap.generatedToken),
+      persistedGeneratedToken: authBootstrap.persistedGeneratedToken,
+    },
+  };
 }
 
-export function createGatewayStartupContext(config: OpenClawConfig): GatewayStartupContext {
+export function createGatewayStartupContext(
+  preflightSnapshot: ConfigFileSnapshot,
+): GatewayStartupContext {
   return {
-    config,
+    preflightSnapshot,
+    secretsPrechecked: false,
+    authBootstrap: {
+      generatedToken: false,
+      persistedGeneratedToken: false,
+    },
+    config: preflightSnapshot.config,
     diagnosticsEnabled: false,
   };
 }
@@ -284,6 +313,7 @@ export async function runGatewayStartupRuntimePolicyPhase(
   deps.setPreRestartDeferralCheck(deps.getPendingWorkCount);
 
   return {
+    ...deps.context,
     config: await deps.seedControlUiAllowedOrigins(deps.context.config),
     diagnosticsEnabled,
   };
