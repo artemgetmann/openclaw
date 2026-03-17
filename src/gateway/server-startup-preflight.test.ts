@@ -12,6 +12,7 @@ import {
   runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
+  runGatewayStartupSidecarPhase,
   runGatewayStartupTransportBootstrapPhase,
   runGatewayStartupTlsRuntimePhase,
 } from "./server-startup-preflight.js";
@@ -468,6 +469,30 @@ describe("runGatewayStartupTransportBootstrapPhase", () => {
   });
 });
 
+describe("runGatewayStartupSidecarPhase", () => {
+  it("returns sidecar runtime on success", async () => {
+    const sidecarRuntime = { browserControl: {}, pluginServices: null };
+    const result = await runGatewayStartupSidecarPhase({
+      startSidecars: vi.fn().mockResolvedValue(sidecarRuntime),
+    });
+
+    expect(result).toBe(sidecarRuntime);
+  });
+
+  it("classifies sidecar startup failures", async () => {
+    await expect(
+      runGatewayStartupSidecarPhase({
+        startSidecars: vi.fn().mockRejectedValue(new Error("browser control failed")),
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "sidecar_startup",
+        message: "browser control failed",
+      }),
+    );
+  });
+});
+
 describe("runGatewayStartupRuntimeConfigPhase", () => {
   it("stores resolved runtime config and preserves prior context fields", async () => {
     const baseSnapshot = createSnapshot({ config: { gateway: { bind: "loopback" } } });
@@ -685,6 +710,19 @@ describe("classifyGatewayStartupPreflightError", () => {
     });
   });
 
+  it("classifies serialized sidecar startup errors", () => {
+    const classified = classifyGatewayStartupPreflightError({
+      name: "GatewayStartupPreflightError",
+      phase: "sidecar_startup",
+      message: "browser control failed",
+    });
+
+    expect(classified).toEqual({
+      phase: "sidecar_startup",
+      message: "browser control failed",
+    });
+  });
+
   it("returns null for non-preflight errors", () => {
     expect(classifyGatewayStartupPreflightError(new Error("boom"))).toBeNull();
   });
@@ -749,6 +787,16 @@ describe("formatGatewayStartupPreflightFailure", () => {
         message: "address already in use",
       }),
     ).toBe("Gateway startup phase failed (transport_bootstrap): address already in use");
+  });
+
+  it("formats classified sidecar startup failures", () => {
+    expect(
+      formatGatewayStartupPreflightFailure({
+        name: "GatewayStartupPreflightError",
+        phase: "sidecar_startup",
+        message: "browser control failed",
+      }),
+    ).toBe("Gateway startup phase failed (sidecar_startup): browser control failed");
   });
 
   it("returns null for non-classified failures", () => {

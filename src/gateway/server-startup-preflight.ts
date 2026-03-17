@@ -19,6 +19,7 @@ export type GatewayStartupPreflightPhase =
   | "runtime_policy"
   | "tls_runtime_resolution"
   | "transport_bootstrap"
+  | "sidecar_startup"
   | "runtime_config_resolution"
   | "control_ui_root_resolution";
 
@@ -62,6 +63,7 @@ function isGatewayStartupPreflightPhase(value: unknown): value is GatewayStartup
     value === "runtime_policy" ||
     value === "tls_runtime_resolution" ||
     value === "transport_bootstrap" ||
+    value === "sidecar_startup" ||
     value === "runtime_config_resolution" ||
     value === "control_ui_root_resolution"
   );
@@ -261,6 +263,10 @@ type GatewayStartupTransportBootstrapPhaseDeps<TTransportRuntime> = {
   bootstrapTransport: () => Promise<TTransportRuntime> | TTransportRuntime;
 };
 
+type GatewayStartupSidecarPhaseDeps<TSidecarRuntime> = {
+  startSidecars: () => Promise<TSidecarRuntime> | TSidecarRuntime;
+};
+
 type GatewayStartupRuntimeConfigPhaseDeps = {
   context: GatewayStartupContext;
   resolveRuntimeConfig: (config: OpenClawConfig) => Promise<GatewayRuntimeConfig>;
@@ -449,6 +455,23 @@ export async function runGatewayStartupTransportBootstrapPhase<TTransportRuntime
     throw new GatewayStartupPreflightError(
       "transport_bootstrap",
       formatStartupPhaseErrorMessage(err, "Failed to bootstrap gateway transport runtime."),
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * Startup phase: start browser/plugin sidecars after the core gateway transport is live.
+ */
+export async function runGatewayStartupSidecarPhase<TSidecarRuntime>(
+  deps: GatewayStartupSidecarPhaseDeps<TSidecarRuntime>,
+): Promise<TSidecarRuntime> {
+  try {
+    return await deps.startSidecars();
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "sidecar_startup",
+      formatStartupPhaseErrorMessage(err, "Failed to start gateway sidecars."),
       { cause: err },
     );
   }
