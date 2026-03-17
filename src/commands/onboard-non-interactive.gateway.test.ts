@@ -556,6 +556,62 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("forces loopback bind when tailscale serve is requested", async () => {
+    await withStateDir("state-local-tailscale-serve-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "lan",
+          gatewayAuth: "token",
+          tailscale: "serve",
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        gateway?: {
+          bind?: string;
+          auth?: { mode?: string };
+          tailscale?: { mode?: string };
+        };
+      }>(resolveStateConfigPath(process.env, stateDir));
+
+      expect(cfg.gateway?.bind).toBe("loopback");
+      expect(cfg.gateway?.auth?.mode).toBe("token");
+      expect(cfg.gateway?.tailscale?.mode).toBe("serve");
+    });
+  }, 60_000);
+
+  it("forces password auth for tailscale funnel and requires a password", async () => {
+    await withStateDir("state-local-tailscale-funnel-", async (stateDir) => {
+      await expect(
+        runNonInteractiveSetup(
+          {
+            nonInteractive: true,
+            mode: "local",
+            workspace: path.join(stateDir, "openclaw"),
+            authChoice: "skip",
+            skipSkills: true,
+            skipHealth: true,
+            installDaemon: false,
+            gatewayBind: "lan",
+            gatewayAuth: "token",
+            tailscale: "funnel",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("Missing --gateway-password for password auth.");
+    });
+  }, 60_000);
+
   it("auto-generates token auth when binding LAN and persists the token", async () => {
     if (process.platform === "win32") {
       // Windows runner occasionally drops the temp config write in this flow; skip to keep CI green.
