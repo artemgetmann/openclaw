@@ -30,8 +30,8 @@ import {
   text,
 } from "./configure.shared.js";
 import { formatHealthCheckFailure } from "./health-format.js";
-import { healthCommand } from "./health.js";
 import { noteChannelStatus, setupChannels } from "./onboard-channels.js";
+import { runGatewayReachabilityHealthWorkflow } from "./onboard-gateway-health.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -41,7 +41,6 @@ import {
   probeGatewayReachable,
   resolveControlUiLinks,
   summarizeExistingConfig,
-  waitForGatewayReachable,
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
@@ -95,26 +94,24 @@ async function runGatewayHealthCheck(params: {
     process.env.CLAWDBOT_GATEWAY_PASSWORD ??
     configuredPassword;
 
-  await waitForGatewayReachable({
-    url: wsUrl,
+  await runGatewayReachabilityHealthWorkflow({
+    runtime: params.runtime,
+    wsUrl,
     token,
     password,
     deadlineMs: 15_000,
+    onHealthFailure: (err) => {
+      params.runtime.error(formatHealthCheckFailure(err));
+      note(
+        [
+          "Docs:",
+          "https://docs.openclaw.ai/gateway/health",
+          "https://docs.openclaw.ai/gateway/troubleshooting",
+        ].join("\n"),
+        "Health check help",
+      );
+    },
   });
-
-  try {
-    await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
-  } catch (err) {
-    params.runtime.error(formatHealthCheckFailure(err));
-    note(
-      [
-        "Docs:",
-        "https://docs.openclaw.ai/gateway/health",
-        "https://docs.openclaw.ai/gateway/troubleshooting",
-      ].join("\n"),
-      "Health check help",
-    );
-  }
 }
 
 async function promptConfigureSection(

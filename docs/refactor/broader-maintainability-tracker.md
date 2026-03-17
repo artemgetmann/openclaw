@@ -15,8 +15,9 @@ Current status:
 - Stage 1B complete
 - Stage 2A initial deterministic-read seam complete
 - Stage 2B startup-threaded container seam complete
-- Stage 3A in progress (startup phases extracted, typed context threaded across early phases, startup failure classification unified)
-- Stages 3B to 5 not started
+- Stage 3A complete enough to pause (startup phases extracted, typed context threaded across early phases, startup failure classification unified across major boundaries)
+- Stage 3B initial seam in progress
+- Stages 4 to 5 not started
 
 ## Protected runtime slice
 
@@ -95,6 +96,7 @@ Do not edit these files under this plan:
 
 ### Stage 3B: onboarding flow consolidation
 
+- [x] Extract first shared gateway reachability and health-check workflow used by wizard and non-interactive local onboarding
 - [ ] Define shared `OnboardingPlan` decision graph
 - [ ] Keep separate interactive and non-interactive executors
 - [ ] Add parity coverage for equivalent inputs
