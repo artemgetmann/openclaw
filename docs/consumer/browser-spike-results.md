@@ -35,12 +35,12 @@ Legend:
 
 - `PASS`, `FAIL`, `BLOCKED`, `PENDING`
 
-| Approach                  | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Notes                                                                        |
-| ------------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ---------------------------------------------------------------------------- |
-| `user` (existing-session) | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | `DevToolsActivePort` missing; remote debugging not enabled in Chrome profile |
-| `openclaw` (managed)      | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Gateway session instability (`1006` close) blocked full matrix completion    |
-| Claude-in-Chrome          | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Investigation/adaptation track                                               |
-| Browserbase               | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                           |
+| Approach                  | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Notes                                                                                            |
+| ------------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------------------------------------------------------------------------------------ |
+| `user` (existing-session) | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Control lane now passes (`start/status/tabs`); task runs blocked by local agent-turn reliability |
+| `openclaw` (managed)      | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Control lane now passes (`start/status/tabs`); task runs blocked by local agent-turn reliability |
+| Claude-in-Chrome          | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Investigation/adaptation track                                                                   |
+| Browserbase               | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                                               |
 
 ## Command-level benchmark runbook (week 1)
 
@@ -75,7 +75,7 @@ now_ms() { node -e 'console.log(Date.now())'; }
 ### 1) Gateway startup and health
 
 ```bash
-oc gateway run --port 19001 --bind loopback --force >"$RUN_ROOT/logs/gateway.log" 2>&1 &
+oc gateway run --port 19001 --bind loopback >"$RUN_ROOT/logs/gateway.log" 2>&1 &
 export GATEWAY_PID=$!
 echo "$GATEWAY_PID" >"$RUN_ROOT/logs/gateway.pid"
 sleep 4
@@ -83,6 +83,8 @@ sleep 4
 oc gateway status --deep --require-rpc --json >"$RUN_ROOT/logs/gateway-status.json"
 oc channels status --probe --json >"$RUN_ROOT/logs/channels-probe.json"
 ```
+
+If `19001` is already used by another active gateway, pick a different isolated port for the benchmark run instead of using `--force`.
 
 ### 2) Browserbase credential check and blocked-state mark
 
@@ -378,9 +380,45 @@ Observed:
 - After setting `gateway.mode=local`, gateway starts cleanly on `19001` without `--allow-unconfigured`.
 - Probe remains PASS (`Gateway reachable`).
 
+### 2026-03-17 - Control-lane retest after Chrome remote debugging enablement
+
+Commands:
+
+```bash
+ls -l "$HOME/Library/Application Support/Google/Chrome/DevToolsActivePort"
+cat "$HOME/Library/Application Support/Google/Chrome/DevToolsActivePort"
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test OPENCLAW_GATEWAY_PORT=19001 pnpm openclaw channels status --probe
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test OPENCLAW_GATEWAY_PORT=19001 pnpm openclaw browser --json --browser-profile user start
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test OPENCLAW_GATEWAY_PORT=19001 pnpm openclaw browser --json --browser-profile user status
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test OPENCLAW_GATEWAY_PORT=19001 pnpm openclaw browser --json --browser-profile user tabs
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test OPENCLAW_GATEWAY_PORT=19001 pnpm openclaw browser --json --browser-profile openclaw start
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test OPENCLAW_GATEWAY_PORT=19001 pnpm openclaw browser --json --browser-profile openclaw status
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test OPENCLAW_GATEWAY_PORT=19001 pnpm openclaw browser --json --browser-profile openclaw tabs
+```
+
+Observed:
+
+- `DevToolsActivePort` exists and reports `9222`.
+- All control-lane commands succeeded (`probe=0 user_start=0 user_status=0 user_tabs=0 open_start=0 open_status=0 open_tabs=0`).
+- Evidence bundle: `.artifacts/browser-spike/20260317-140720-post-remote-debug/`.
+
+### 2026-03-17 - Local agent-turn blocker after lane recovery
+
+Commands:
+
+```bash
+OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test OPENCLAW_GATEWAY_PORT=19001 pnpm openclaw agent --local --agent main --timeout 90 --json --message "Use browser with profile user. Open a snapshot and reply exactly: RESULT: PASS"
+```
+
+Observed:
+
+- First failure was missing isolated auth profile (`No API key found for provider "anthropic"`).
+- After copying `~/.openclaw/agents/main/agent/auth-profiles.json` into `/tmp/openclaw-consumer/.openclaw/agents/main/agent/auth-profiles.json`, immediate auth failure cleared.
+- Local agent turn still did not complete reliably within expected timeout window in this harness run, so task-matrix execution remains blocked at agent-turn reliability (not browser attach).
+
 ## Next actions
 
-1. Resolve `profile=user` readiness in Chrome UI: enable remote debugging at `chrome://inspect/#remote-debugging`, keep Chrome open, accept attach prompt, verify `DevToolsActivePort` exists, then rerun `user` checks.
-2. Stabilize benchmark gateway lifecycle for automation runs in the same isolated state context (`OPENCLAW_HOME=/tmp/openclaw-consumer`) and re-run `openclaw` matrix.
-3. Re-run benchmark harness with explicit routing (`--agent main` or explicit `--session-id`).
-4. Run Claude-in-Chrome investigation track and fill final weighted recommendation.
+1. Keep existing-session precondition on (`DevToolsActivePort` present, Chrome open).
+2. Make local agent turns deterministic for isolated runtime (routing + timeout behavior), then execute the full 2x5 matrix.
+3. Run Claude-in-Chrome investigation track.
+4. Fill final weighted recommendation with task-level timings and reliability.

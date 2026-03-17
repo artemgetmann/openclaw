@@ -28,13 +28,14 @@ Use these documents in this order when there is any ambiguity:
 ## Current baseline snapshot
 
 - Branch: `codex/consumer-openclaw-project`
-- `consumer...origin/main`: ahead 17, behind 0
-- `codex/consumer-openclaw-project...origin/main`: ahead 18, behind 0
-- `origin/main...upstream/main`: ahead 61, behind 6
+- `consumer...origin/main`: ahead 17, behind 27
+- `codex/consumer-openclaw-project...origin/main`: ahead 22, behind 5
+- `origin/main...upstream/main`: ahead 88, behind 220
 - Phase A merge and runtime validation are complete.
-- Phase B blockers now confirmed:
-  - `profile=user`: Chrome-side `DevToolsActivePort` is missing (existing-session attach not ready).
-  - `profile=openclaw`: benchmark automation is blocked by gateway session stability (`1006` close during runs) and harness routing shape.
+- Phase B status now:
+  - `profile=user` control lane passes (`start/status/tabs`) after remote debugging enablement.
+  - `profile=openclaw` control lane passes (`start/status/tabs`) on isolated runtime.
+  - Remaining blocker is local agent-turn reliability for full task-matrix execution.
   - LaunchAgent route was tested and reverted: it binds `19001` but runs against `~/.openclaw` state instead of `/tmp/openclaw-consumer`, so isolated auth/state checks fail.
 
 ## Execution phases and gates
@@ -65,9 +66,9 @@ Phase A validation notes (2026-03-16):
 
 - [ ] Finalize benchmark matrix in `docs/consumer/browser-spike-results.md`
 - [ ] Run approach: `user` existing-session path
-  - Current blocker: Chrome remote debugging readiness (`DevToolsActivePort` missing).
+  - Control lane verified; remaining blocker is task execution via local agent turn.
 - [ ] Run approach: `openclaw` managed profile path
-  - Current blocker: gateway closes during benchmark runs in current CLI automation path.
+  - Control lane verified; remaining blocker is task execution via local agent turn.
 - [ ] Run approach: Claude-in-Chrome investigation/adaptation
 - [ ] Mark Browserbase rows `credential-blocked` until credentials are available
 - [ ] Re-run Browserbase rows once credentials are provided
@@ -128,12 +129,12 @@ OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm opencla
 
 ## Benchmark tracker template
 
-| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                      |
-| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ------------------------------------------ |
-| user (existing-session) | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | missing DevToolsActivePort                 |
-| openclaw (managed)      | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | gateway 1006 closure during benchmark runs |
-| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                   |
-| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                            |
+| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                        |
+| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ------------------------------------------------------------ |
+| user (existing-session) | pending       | pending     | pending            | pending          | pending           | pending            | control lane passes; blocked on local agent-turn reliability |
+| openclaw (managed)      | pending       | pending     | pending            | pending          | pending           | pending            | control lane passes; blocked on local agent-turn reliability |
+| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                                     |
+| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                                              |
 
 ## Scope guardrails (week 1)
 
