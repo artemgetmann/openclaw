@@ -8,6 +8,7 @@ import {
   runGatewayStartupControlUiRootPhase,
   GatewayStartupPreflightError,
   runGatewayStartupConfigPreflight,
+  runGatewayStartupPluginBootstrapPhase,
   runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
@@ -169,6 +170,27 @@ describe("runGatewayStartupSecretsPrecheck", () => {
     expect(result.secretsPrechecked).toBe(true);
     expect(result.config).toEqual(snapshot.config);
   });
+
+  it("classifies secrets precheck activation failures", async () => {
+    const snapshot = createSnapshot();
+    const activateRuntimeSecrets = vi
+      .fn<(config: OpenClawConfig) => Promise<void>>()
+      .mockRejectedValue(new Error("missing OPENAI_API_KEY"));
+
+    await expect(
+      runGatewayStartupSecretsPrecheck({
+        context: createGatewayStartupContext(snapshot),
+        readSnapshot: vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot),
+        prepareConfig: vi.fn<(config: OpenClawConfig) => OpenClawConfig>().mockReturnValue({}),
+        activateRuntimeSecrets,
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "secrets_precheck",
+        message: "missing OPENAI_API_KEY",
+      }),
+    );
+  });
 });
 
 describe("runGatewayStartupAuthBootstrap", () => {
@@ -266,6 +288,23 @@ describe("runGatewayStartupAuthBootstrap", () => {
     );
     expect(info).not.toHaveBeenCalled();
   });
+
+  it("classifies auth bootstrap failures", async () => {
+    await expect(
+      runGatewayStartupAuthBootstrap({
+        loadConfig: () => ({}),
+        context: createGatewayStartupContext(createSnapshot()),
+        ensureGatewayStartupAuth: vi.fn().mockRejectedValue(new Error("auth bootstrap failed")),
+        activateRuntimeSecrets: vi.fn().mockResolvedValue({ config: {} }),
+        log: { info: vi.fn(), warn: vi.fn() },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "auth_bootstrap",
+        message: "auth bootstrap failed",
+      }),
+    );
+  });
 });
 
 describe("runGatewayStartupRuntimePolicyPhase", () => {
@@ -326,6 +365,56 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
 
     expect(startDiagnosticHeartbeat).not.toHaveBeenCalled();
     expect(result.diagnosticsEnabled).toBe(false);
+  });
+
+  it("classifies runtime policy failures", async () => {
+    await expect(
+      runGatewayStartupRuntimePolicyPhase({
+        context: createGatewayStartupContext(createSnapshot()),
+        isDiagnosticsEnabled: () => false,
+        startDiagnosticHeartbeat: vi.fn(),
+        isRestartEnabled: () => false,
+        setGatewaySigusr1RestartPolicy: vi.fn(),
+        setPreRestartDeferralCheck: vi.fn(),
+        getPendingWorkCount: () => 0,
+        seedControlUiAllowedOrigins: vi.fn().mockRejectedValue(new Error("seed failed")),
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "runtime_policy",
+        message: "seed failed",
+      }),
+    );
+  });
+});
+
+describe("runGatewayStartupPluginBootstrapPhase", () => {
+  it("returns plugin bootstrap result on success", async () => {
+    const pluginBootstrap = {
+      pluginRegistry: { gatewayHandlers: {}, close: async () => {} },
+      gatewayMethods: ["health", "chat.send"],
+    };
+
+    const result = await runGatewayStartupPluginBootstrapPhase({
+      loadPlugins: vi.fn().mockReturnValue(pluginBootstrap),
+    });
+
+    expect(result).toBe(pluginBootstrap);
+  });
+
+  it("classifies plugin bootstrap failures", async () => {
+    const failure = new Error("plugin manifest failed");
+
+    await expect(
+      runGatewayStartupPluginBootstrapPhase({
+        loadPlugins: vi.fn().mockRejectedValue(failure),
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "plugin_bootstrap",
+        message: "plugin manifest failed",
+      }),
+    );
   });
 });
 
@@ -494,6 +583,32 @@ describe("classifyGatewayStartupPreflightError", () => {
     });
   });
 
+  it("classifies serialized plugin bootstrap startup errors", () => {
+    const classified = classifyGatewayStartupPreflightError({
+      name: "GatewayStartupPreflightError",
+      phase: "plugin_bootstrap",
+      message: "plugin bootstrap failed",
+    });
+
+    expect(classified).toEqual({
+      phase: "plugin_bootstrap",
+      message: "plugin bootstrap failed",
+    });
+  });
+
+  it("classifies serialized auth bootstrap startup phase errors", () => {
+    const classified = classifyGatewayStartupPreflightError({
+      name: "GatewayStartupPreflightError",
+      phase: "auth_bootstrap",
+      message: "auth bootstrap failed",
+    });
+
+    expect(classified).toEqual({
+      phase: "auth_bootstrap",
+      message: "auth bootstrap failed",
+    });
+  });
+
   it("returns null for non-preflight errors", () => {
     expect(classifyGatewayStartupPreflightError(new Error("boom"))).toBeNull();
   });
@@ -518,6 +633,26 @@ describe("formatGatewayStartupPreflightFailure", () => {
         message: "control ui root failed",
       }),
     ).toBe("Gateway startup phase failed (control_ui_root_resolution): control ui root failed");
+  });
+
+  it("formats classified plugin bootstrap failures", () => {
+    expect(
+      formatGatewayStartupPreflightFailure({
+        name: "GatewayStartupPreflightError",
+        phase: "plugin_bootstrap",
+        message: "plugin bootstrap failed",
+      }),
+    ).toBe("Gateway startup phase failed (plugin_bootstrap): plugin bootstrap failed");
+  });
+
+  it("formats classified auth bootstrap failures", () => {
+    expect(
+      formatGatewayStartupPreflightFailure({
+        name: "GatewayStartupPreflightError",
+        phase: "auth_bootstrap",
+        message: "auth bootstrap failed",
+      }),
+    ).toBe("Gateway startup phase failed (auth_bootstrap): auth bootstrap failed");
   });
 
   it("returns null for non-classified failures", () => {
