@@ -475,9 +475,10 @@ export async function initSessionState(params: {
     const parentEntry = sessionStore[futureThreadParentSessionKey];
     const parentProvider = parentEntry?.futureThreadProviderOverride?.trim();
     const parentModel = parentEntry?.futureThreadModelOverride?.trim();
-    // Seed brand-new thread/topic sessions from the parent chat's
-    // future-thread default. Existing thread sessions are intentionally left
-    // untouched so model history remains stable.
+    const parentThinkingLevel = parentEntry?.futureThreadThinkingLevelOverride?.trim();
+    // Seed brand-new Telegram thread sessions from the parent chat's
+    // future-thread defaults. Existing thread sessions are intentionally left
+    // untouched so model/think history remains stable.
     if (
       parentProvider &&
       parentModel &&
@@ -491,6 +492,9 @@ export async function initSessionState(params: {
           model: parentModel,
         },
       });
+    }
+    if (parentThinkingLevel && !sessionEntry.thinkingLevel) {
+      sessionEntry.thinkingLevel = parentThinkingLevel;
     }
   }
   const alreadyForked = sessionEntry.forkedFromParent === true;
