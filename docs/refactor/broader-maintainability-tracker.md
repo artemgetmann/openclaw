@@ -85,6 +85,8 @@ Do not edit these files under this plan:
 - [x] Add phase failure classification tests and shared reporting (CLI startup and restart loop)
 - [x] Extract explicit runtime-config and control-ui-root startup phase helpers with focused tests
 - [x] Classify runtime-config and control-ui-root phase failures through shared startup phase formatter
+- [x] Classify secrets precheck, auth bootstrap, and runtime policy startup failures through shared startup phase formatter
+- [x] Classify plugin bootstrap startup failures through shared startup phase formatter
 
 ### Stage 3B: onboarding flow consolidation
 

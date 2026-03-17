@@ -90,6 +90,7 @@ import {
   runGatewayStartupAuthBootstrap,
   runGatewayStartupConfigPreflight,
   runGatewayStartupControlUiRootPhase,
+  runGatewayStartupPluginBootstrapPhase,
   runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
@@ -383,12 +384,15 @@ export async function startGatewayServer(
   const emptyPluginRegistry = createEmptyPluginRegistry();
   const { pluginRegistry, gatewayMethods: baseGatewayMethods } = minimalTestGateway
     ? { pluginRegistry: emptyPluginRegistry, gatewayMethods: baseMethods }
-    : loadGatewayPlugins({
-        cfg: cfgAtStart,
-        workspaceDir: defaultWorkspaceDir,
-        log,
-        coreGatewayHandlers,
-        baseMethods,
+    : await runGatewayStartupPluginBootstrapPhase({
+        loadPlugins: () =>
+          loadGatewayPlugins({
+            cfg: cfgAtStart,
+            workspaceDir: defaultWorkspaceDir,
+            log,
+            coreGatewayHandlers,
+            baseMethods,
+          }),
       });
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
