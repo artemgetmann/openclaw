@@ -12,6 +12,7 @@ import {
   runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
+  runGatewayStartupTransportBootstrapPhase,
   runGatewayStartupTlsRuntimePhase,
 } from "./server-startup-preflight.js";
 
@@ -443,6 +444,30 @@ describe("runGatewayStartupTlsRuntimePhase", () => {
   });
 });
 
+describe("runGatewayStartupTransportBootstrapPhase", () => {
+  it("returns transport runtime on success", async () => {
+    const transportRuntime = { httpServer: {}, wss: {} };
+    const result = await runGatewayStartupTransportBootstrapPhase({
+      bootstrapTransport: vi.fn().mockResolvedValue(transportRuntime),
+    });
+
+    expect(result).toBe(transportRuntime);
+  });
+
+  it("classifies transport bootstrap failures", async () => {
+    await expect(
+      runGatewayStartupTransportBootstrapPhase({
+        bootstrapTransport: vi.fn().mockRejectedValue(new Error("address already in use")),
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "transport_bootstrap",
+        message: "address already in use",
+      }),
+    );
+  });
+});
+
 describe("runGatewayStartupRuntimeConfigPhase", () => {
   it("stores resolved runtime config and preserves prior context fields", async () => {
     const baseSnapshot = createSnapshot({ config: { gateway: { bind: "loopback" } } });
@@ -647,6 +672,19 @@ describe("classifyGatewayStartupPreflightError", () => {
     });
   });
 
+  it("classifies serialized transport bootstrap errors", () => {
+    const classified = classifyGatewayStartupPreflightError({
+      name: "GatewayStartupPreflightError",
+      phase: "transport_bootstrap",
+      message: "address already in use",
+    });
+
+    expect(classified).toEqual({
+      phase: "transport_bootstrap",
+      message: "address already in use",
+    });
+  });
+
   it("returns null for non-preflight errors", () => {
     expect(classifyGatewayStartupPreflightError(new Error("boom"))).toBeNull();
   });
@@ -701,6 +739,16 @@ describe("formatGatewayStartupPreflightFailure", () => {
         message: "tls cert missing",
       }),
     ).toBe("Gateway startup phase failed (tls_runtime_resolution): tls cert missing");
+  });
+
+  it("formats classified transport bootstrap failures", () => {
+    expect(
+      formatGatewayStartupPreflightFailure({
+        name: "GatewayStartupPreflightError",
+        phase: "transport_bootstrap",
+        message: "address already in use",
+      }),
+    ).toBe("Gateway startup phase failed (transport_bootstrap): address already in use");
   });
 
   it("returns null for non-classified failures", () => {
