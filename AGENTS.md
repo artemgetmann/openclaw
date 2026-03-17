@@ -208,9 +208,10 @@
   - If runtime path mismatches, you MUST restart gateway from the current worktree and re-check runtime ownership before testing.
   - If `.env.local` is missing, you MUST run `bash scripts/assign-bot.sh` before starting gateway.
   - You MUST NOT print raw token values.
-  - You MUST emit proof lines in logs/output: `branch=<...>` and `runtime_worktree=<...>`.
+  - You MUST emit proof lines in logs/output: `branch=<...>`, `runtime_worktree=<...>`, `runtime_state_dir=<...>`, `runtime_port=<...>`, masked `token_fingerprint=<...>`, and `agent_auth_profiles=<yes|no>`.
   - You MUST NOT use the shared default gateway/profile for parallel Telegram tests.
   - One lane = one token slot = one profile = one port.
+  - In shells where LaunchAgent is unavailable, lane-up may fall back to a lane-scoped direct `gateway run` process with PID file in that lane state dir.
 
 - Known Failure Pattern (Telegram live checks):
   - Code/tests can be correct while live results are false if Telegram is handled by the wrong runtime process (not the current worktree). Always verify runtime ownership first.
@@ -222,6 +223,7 @@
     - `cp /Users/user/Programming_Projects/openclaw/.env.bots ./.env.bots`
     - `bash scripts/assign-bot.sh` (creates `.env.local` with this worktree's bot token)
     - `bash scripts/telegram-e2e/lane-up.sh` (creates the isolated lane profile/port metadata and starts the lane gateway)
+  - `lane-up.sh` also syncs `~/.openclaw/agents/main/agent/auth-profiles.json` into the isolated lane when present, so embedded Codex/Claude runs in that lane inherit real model auth.
   - If Telegram userbot E2E is needed, copy local-only files (do not commit):
     - `mkdir -p scripts/telegram-e2e/tmp`
     - `cp /Users/user/Programming_Projects/openclaw/scripts/telegram-e2e/.env scripts/telegram-e2e/.env` (if present)

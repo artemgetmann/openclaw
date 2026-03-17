@@ -29,7 +29,13 @@ TOKEN_PRESENT="no"
 AUTO_REPAIRED="no"
 EXPECTED_PROFILE=""
 EXPECTED_PORT=""
+EXPECTED_TOKEN_FINGERPRINT=""
 RUNTIME_WORKTREE=""
+RUNTIME_STATE_DIR=""
+RUNTIME_PORT=""
+RUNTIME_PID=""
+RUNTIME_LISTENER_PID=""
+AGENT_AUTH_PROFILES="no"
 STATUS_JSON=""
 
 CHECK_ERRORS=()
@@ -57,6 +63,7 @@ resolve_expected_lane() {
     if lane_resolve_from_token_pool "${token}" >/dev/null 2>&1; then
       EXPECTED_PROFILE="${LANE_PROFILE}"
       EXPECTED_PORT="${LANE_PORT}"
+      EXPECTED_TOKEN_FINGERPRINT="${LANE_TOKEN_FINGERPRINT}"
       lane_write_metadata_file "${BRANCH:-unknown}" "${WORKTREE}"
       return 0
     fi
@@ -65,6 +72,7 @@ resolve_expected_lane() {
   if lane_load_metadata_file >/dev/null 2>&1; then
     EXPECTED_PROFILE="${OPENCLAW_TG_LANE_PROFILE:-}"
     EXPECTED_PORT="${OPENCLAW_TG_LANE_PORT:-}"
+    EXPECTED_TOKEN_FINGERPRINT="${OPENCLAW_TG_LANE_TOKEN_FINGERPRINT:-}"
     if [[ -n "${EXPECTED_PROFILE}" && -n "${EXPECTED_PORT}" ]]; then
       return 0
     fi
@@ -72,7 +80,15 @@ resolve_expected_lane() {
 
   EXPECTED_PROFILE=""
   EXPECTED_PORT=""
+  EXPECTED_TOKEN_FINGERPRINT=""
   return 1
+}
+
+run_local_openclaw() {
+  (
+    cd "${ROOT_DIR}"
+    node scripts/run-node.mjs "$@"
+  )
 }
 
 collect_status_json() {
@@ -80,7 +96,7 @@ collect_status_json() {
     STATUS_JSON=""
     return 1
   fi
-  STATUS_JSON="$(openclaw --profile "${EXPECTED_PROFILE}" gateway status --deep --json 2>/dev/null || true)"
+  STATUS_JSON="$(run_local_openclaw --profile "${EXPECTED_PROFILE}" gateway status --deep --json 2>/dev/null || true)"
   if ! jq -e . >/dev/null 2>&1 <<<"${STATUS_JSON}"; then
     STATUS_JSON=""
     return 1
@@ -93,8 +109,14 @@ validate_current_state() {
   TOKEN_PRESENT="no"
   EXPECTED_PROFILE=""
   EXPECTED_PORT=""
+  EXPECTED_TOKEN_FINGERPRINT=""
   STATUS_JSON=""
   RUNTIME_WORKTREE=""
+  RUNTIME_STATE_DIR=""
+  RUNTIME_PORT=""
+  RUNTIME_PID=""
+  RUNTIME_LISTENER_PID=""
+  AGENT_AUTH_PROFILES="no"
 
   if [[ -z "${BRANCH}" || "${BRANCH}" == "HEAD" ]]; then
     append_error "branch is detached; switch to a named branch before live Telegram checks."
@@ -121,22 +143,43 @@ validate_current_state() {
     return 1
   fi
 
+  if ! run_local_openclaw --profile "${EXPECTED_PROFILE}" gateway status --deep --require-rpc >/dev/null 2>&1; then
+    append_error "gateway status --deep --require-rpc failed for profile ${EXPECTED_PROFILE}."
+  fi
+
   local rpc_ok=""
   local active_port=""
   rpc_ok="$(jq -r '.rpc.ok // false' <<<"${STATUS_JSON}")"
   active_port="$(jq -r '.gateway.port // empty' <<<"${STATUS_JSON}")"
   RUNTIME_WORKTREE="$(lane_runtime_worktree_from_status_json "${STATUS_JSON}")"
+  RUNTIME_STATE_DIR="$(lane_status_runtime_state_dir_from_status_json "${STATUS_JSON}")"
+  RUNTIME_PORT="$(lane_status_runtime_port_from_status_json "${STATUS_JSON}")"
+  RUNTIME_PID="$(lane_status_runtime_pid_from_status_json "${STATUS_JSON}")"
+  RUNTIME_LISTENER_PID="$(lane_listener_pid_for_port "${EXPECTED_PORT}")"
 
   if [[ "${rpc_ok}" != "true" ]]; then
     append_error "gateway RPC probe failed for profile ${EXPECTED_PROFILE}."
   fi
-  if [[ "${active_port}" != "${EXPECTED_PORT}" ]]; then
+  if [[ "${active_port}" != "${EXPECTED_PORT}" && "${RUNTIME_PORT}" != "${EXPECTED_PORT}" ]]; then
     append_error "gateway port mismatch for profile ${EXPECTED_PROFILE} (expected ${EXPECTED_PORT}, got ${active_port:-unknown})."
+  fi
+  if [[ -z "${RUNTIME_LISTENER_PID}" ]]; then
+    append_error "lane listener is not bound on expected port ${EXPECTED_PORT}."
+  fi
+  if [[ -n "${RUNTIME_PID}" && -n "${RUNTIME_LISTENER_PID}" && "${RUNTIME_LISTENER_PID}" != "${RUNTIME_PID}" ]] && \
+    ! lane_pid_has_descendant "${RUNTIME_PID}" "${RUNTIME_LISTENER_PID}"; then
+    append_error "lane listener pid mismatch (runtime ${RUNTIME_PID}, listener ${RUNTIME_LISTENER_PID})."
   fi
   if [[ -z "${RUNTIME_WORKTREE}" ]]; then
     append_error "gateway runtime path missing from service command metadata."
   elif [[ "${RUNTIME_WORKTREE}" != "${WORKTREE}" ]]; then
     append_error "gateway runtime path mismatch (expected ${WORKTREE}, got ${RUNTIME_WORKTREE})."
+  fi
+  if [[ -z "${RUNTIME_STATE_DIR}" ]]; then
+    append_error "gateway runtime state dir missing from status metadata."
+  fi
+  if [[ -n "${EXPECTED_PROFILE}" ]] && lane_auth_profiles_present_for_profile "${EXPECTED_PROFILE}"; then
+    AGENT_AUTH_PROFILES="yes"
   fi
 
   if [[ "${#CHECK_ERRORS[@]}" -gt 0 ]]; then
@@ -166,6 +209,10 @@ if ! validate_current_state; then
     echo "branch=${BRANCH:-unknown}"
     echo "worktree=${WORKTREE}"
     echo "runtime_worktree=${RUNTIME_WORKTREE}"
+    echo "runtime_state_dir=${RUNTIME_STATE_DIR}"
+    echo "runtime_port=${RUNTIME_PORT}"
+    echo "token_fingerprint=${EXPECTED_TOKEN_FINGERPRINT:-unknown}"
+    echo "agent_auth_profiles=${AGENT_AUTH_PROFILES}"
     echo "token_present=${TOKEN_PRESENT}"
     echo "profile=${EXPECTED_PROFILE}"
     echo "port=${EXPECTED_PORT}"
@@ -178,6 +225,10 @@ if ! validate_current_state; then
     echo "branch=${BRANCH:-unknown}"
     echo "worktree=${WORKTREE}"
     echo "runtime_worktree=${RUNTIME_WORKTREE}"
+    echo "runtime_state_dir=${RUNTIME_STATE_DIR}"
+    echo "runtime_port=${RUNTIME_PORT}"
+    echo "token_fingerprint=${EXPECTED_TOKEN_FINGERPRINT:-unknown}"
+    echo "agent_auth_profiles=${AGENT_AUTH_PROFILES}"
     echo "token_present=${TOKEN_PRESENT}"
     echo "profile=${EXPECTED_PROFILE}"
     echo "port=${EXPECTED_PORT}"
@@ -189,6 +240,10 @@ fi
 echo "branch=${BRANCH}"
 echo "worktree=${WORKTREE}"
 echo "runtime_worktree=${RUNTIME_WORKTREE}"
+echo "runtime_state_dir=${RUNTIME_STATE_DIR}"
+echo "runtime_port=${RUNTIME_PORT}"
+echo "token_fingerprint=${EXPECTED_TOKEN_FINGERPRINT:-unknown}"
+echo "agent_auth_profiles=${AGENT_AUTH_PROFILES}"
 echo "token_present=${TOKEN_PRESENT}"
 echo "profile=${EXPECTED_PROFILE}"
 echo "port=${EXPECTED_PORT}"

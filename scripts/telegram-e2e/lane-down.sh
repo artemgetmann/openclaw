@@ -99,7 +99,25 @@ if [[ -z "${LANE_PROFILE}" ]]; then
   exit 1
 fi
 
+stop_lane_direct_gateway() {
+  local state_dir="${HOME}/.openclaw-${LANE_PROFILE}"
+  local pidfile="${state_dir}/gateway-direct.pid"
+  local pid=""
+  if [[ -f "${pidfile}" ]]; then
+    pid="$(cat "${pidfile}" 2>/dev/null || true)"
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+      kill "${pid}" >/dev/null 2>&1 || true
+      sleep 1
+      if kill -0 "${pid}" 2>/dev/null; then
+        kill -9 "${pid}" >/dev/null 2>&1 || true
+      fi
+    fi
+    rm -f "${pidfile}"
+  fi
+}
+
 openclaw --profile "${LANE_PROFILE}" gateway stop >/dev/null 2>&1 || true
+stop_lane_direct_gateway
 rm -f "${TELEGRAM_LANE_METADATA_FILE}"
 
 if [[ "${RELEASE_TOKEN}" == "1" ]]; then

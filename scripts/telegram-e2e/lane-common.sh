@@ -9,6 +9,7 @@ readonly TELEGRAM_LANE_ENV_LOCAL_FILE="${TELEGRAM_LANE_ROOT_DIR}/.env.local"
 readonly TELEGRAM_LANE_ENV_BOTS_FILE="${TELEGRAM_LANE_ROOT_DIR}/.env.bots"
 readonly TELEGRAM_LANE_METADATA_FILE="${TELEGRAM_LANE_ROOT_DIR}/.telegram-lane.env"
 readonly TELEGRAM_LANE_ASSIGN_BOT_SCRIPT="${TELEGRAM_LANE_ROOT_DIR}/scripts/assign-bot.sh"
+readonly TELEGRAM_LANE_DEFAULT_AUTH_SOURCE="${HOME}/.openclaw/agents/main/agent/auth-profiles.json"
 
 # lane_* globals are intentionally shared across callers after lane_resolve_*.
 LANE_SLOT=""
@@ -228,6 +229,46 @@ lane_load_metadata_file() {
   return 0
 }
 
+lane_state_dir_for_profile() {
+  local profile="$1"
+  printf '%s' "${HOME}/.openclaw-${profile}"
+}
+
+lane_auth_source_path() {
+  printf '%s' "${OPENCLAW_TG_LANE_AUTH_SOURCE:-${TELEGRAM_LANE_DEFAULT_AUTH_SOURCE}}"
+}
+
+lane_auth_target_path_for_profile() {
+  local profile="$1"
+  printf '%s' "$(lane_state_dir_for_profile "${profile}")/agents/main/agent/auth-profiles.json"
+}
+
+lane_auth_profiles_present_for_profile() {
+  local profile="$1"
+  local target=""
+  target="$(lane_auth_target_path_for_profile "${profile}")"
+  [[ -f "${target}" ]]
+}
+
+lane_sync_auth_profiles_to_profile() {
+  local profile="$1"
+  local src=""
+  local dst=""
+
+  src="$(lane_auth_source_path)"
+  if [[ ! -f "${src}" ]]; then
+    return 1
+  fi
+
+  dst="$(lane_auth_target_path_for_profile "${profile}")"
+  mkdir -p "$(dirname "${dst}")"
+  if [[ ! -f "${dst}" ]] || ! cmp -s "${src}" "${dst}"; then
+    cp "${src}" "${dst}"
+    chmod 600 "${dst}" 2>/dev/null || true
+  fi
+  return 0
+}
+
 lane_runtime_worktree_from_status_json() {
   local status_json="$1"
   local runtime_entry=""
@@ -247,4 +288,84 @@ lane_runtime_worktree_from_status_json() {
   fi
 
   printf '%s' "${runtime_entry%/dist/index.js}"
+}
+
+lane_status_runtime_pid_from_status_json() {
+  local status_json="$1"
+  jq -r '.service.runtime.pid // empty' <<<"${status_json}" 2>/dev/null
+}
+
+lane_status_runtime_port_from_status_json() {
+  local status_json="$1"
+  jq -r '.port.port // .gateway.port // empty' <<<"${status_json}" 2>/dev/null
+}
+
+lane_status_runtime_state_dir_from_status_json() {
+  local status_json="$1"
+  local state_dir=""
+  state_dir="$(
+    jq -r '
+      .service.command.environment.OPENCLAW_STATE_DIR
+      // (.config.daemon.path // "" | sub("/[^/]+$"; ""))
+      // empty
+    ' <<<"${status_json}" 2>/dev/null
+  )"
+  printf '%s' "${state_dir}"
+}
+
+lane_status_service_missing_unit_from_status_json() {
+  local status_json="$1"
+  jq -r '.service.runtime.missingUnit // false' <<<"${status_json}" 2>/dev/null
+}
+
+lane_listener_pid_for_port() {
+  local port="$1"
+  if [[ -z "${port}" ]]; then
+    printf '%s' ""
+    return
+  fi
+
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null | head -n1 || true
+    return
+  fi
+
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp 2>/dev/null \
+      | awk -v p=":${port}" '$4 ~ p { if (match($0, /pid=([0-9]+)/, m)) print m[1]; }' \
+      | head -n1 || true
+    return
+  fi
+
+  printf '%s' ""
+}
+
+lane_pid_has_descendant() {
+  local ancestor_pid="$1"
+  local target_pid="$2"
+  local current_pid=""
+  local parent_pid=""
+
+  if [[ -z "${ancestor_pid}" || -z "${target_pid}" ]]; then
+    return 1
+  fi
+  if [[ "${ancestor_pid}" == "${target_pid}" ]]; then
+    return 0
+  fi
+
+  current_pid="${target_pid}"
+  while [[ -n "${current_pid}" && "${current_pid}" != "1" ]]; do
+    parent_pid="$(ps -p "${current_pid}" -o ppid= 2>/dev/null | tr -d '[:space:]')"
+    if [[ -z "${parent_pid}" ]]; then
+      return 1
+    fi
+    if [[ "${parent_pid}" == "${ancestor_pid}" ]]; then
+      return 0
+    fi
+    if [[ "${parent_pid}" == "${current_pid}" ]]; then
+      return 1
+    fi
+    current_pid="${parent_pid}"
+  done
+  return 1
 }

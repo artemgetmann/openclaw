@@ -3,6 +3,8 @@ set -euo pipefail
 
 MAIN_REPO_DEFAULT="/Users/user/Programming_Projects/openclaw"
 MAIN_REPO="${OPENCLAW_MAIN_REPO:-$MAIN_REPO_DEFAULT}"
+MAIN_STATE_DIR_DEFAULT="$HOME/.openclaw"
+MAIN_STATE_DIR="${OPENCLAW_MAIN_STATE_DIR:-$MAIN_STATE_DIR_DEFAULT}"
 
 if [[ ! -d "$MAIN_REPO" ]]; then
   echo "Main repo not found: $MAIN_REPO" >&2
@@ -45,6 +47,17 @@ fi
 if [[ -x "./scripts/telegram-e2e/lane-up.sh" ]]; then
   if ! bash ./scripts/telegram-e2e/lane-up.sh --prepare-only >/dev/null; then
     echo "skip: lane metadata preparation failed"
+  fi
+fi
+
+if [[ -f "./.telegram-lane.env" ]]; then
+  # Metadata file is script-generated and contains no command substitutions.
+  # shellcheck disable=SC1091
+  source "./.telegram-lane.env"
+  AUTH_SRC="${OPENCLAW_TG_LANE_AUTH_SOURCE:-$MAIN_STATE_DIR/agents/main/agent/auth-profiles.json}"
+  AUTH_DST="$HOME/.openclaw-${OPENCLAW_TG_LANE_PROFILE:-}/agents/main/agent/auth-profiles.json"
+  if [[ -n "${OPENCLAW_TG_LANE_PROFILE:-}" ]]; then
+    copy_if_exists "$AUTH_SRC" "$AUTH_DST"
   fi
 fi
 
