@@ -9,6 +9,25 @@ This validates:
 3. Existing threads stay unchanged.
 4. `/models` catalog is lean allowlisted and disallowed models are rejected.
 
+## Quickstart
+
+Run these in every worktree before live Telegram E2E:
+
+```bash
+bash scripts/bootstrap-worktree-telegram.sh
+bash scripts/telegram-e2e/lane-up.sh
+# then run the E2E script you need
+```
+
+Lane rules:
+
+- One lane = one token slot = one profile = one port.
+- Token slot comes from the assigned `BOT_TOKEN` position in `.env.bots`.
+- Profile is derived as `tg-lane-<slot>`.
+- Port is derived as `19789 + (slot - 1) * 20` unless overridden.
+- Lane metadata is written to `.telegram-lane.env` and is local-only.
+- Do not use the shared default gateway/profile for parallel Telegram tests.
+
 ## One-time setup
 
 ### 1) Build `tg` (bot-side poll/inspect)
@@ -81,8 +100,15 @@ Use one source of truth in your main checkout, then copy into each worktree.
 2. Never commit or print raw secrets (`TELEGRAM_API_HASH`, `TG_BOT_TOKEN`, session contents).
 3. For every new worktree, run:
    - `bash scripts/bootstrap-worktree-telegram.sh`
+   - `bash scripts/telegram-e2e/lane-up.sh`
 4. Smoke check from that worktree:
    - `scripts/telegram-e2e/userbot-send-live.sh --chat "<chat-id-or-username>" --text "handoff smoke"`
+
+Lane auth continuity:
+
+- `lane-up.sh` now syncs the main agent auth store into the isolated lane when `~/.openclaw/agents/main/agent/auth-profiles.json` exists.
+- Override the source with `OPENCLAW_TG_LANE_AUTH_SOURCE=/path/to/auth-profiles.json` if needed.
+- Preflight prints `agent_auth_profiles=yes|no` so you can tell whether embedded Codex/Claude runs have credentials in that lane.
 
 ## Required values and anchors
 
@@ -118,13 +144,34 @@ Default remains `openai-codex/gpt-5.3-codex`.
 
 ## Critical runtime rule (prevents false negatives)
 
-Run the gateway from the same branch/worktree you are validating:
+Always bring up the lane first:
 
 ```bash
-node dist/index.js gateway run --bind loopback --port 18789 --force
+bash scripts/telegram-e2e/lane-up.sh
 ```
 
-If another checkout/global runtime is serving Telegram, your E2E result is invalid for this branch.
+This binds live E2E to the current worktree's token slot, profile, and port. If another checkout or the shared default gateway is serving Telegram, your result is invalid for this branch.
+
+The lane gate is strict now: lane-up/preflight only pass when all are true at the same time:
+
+- `gateway status --deep --require-rpc` is healthy
+- lane port is actually listening
+- runtime ownership matches the current worktree
+- the listener PID is the runtime PID or a child of it (wrapper process is allowed)
+
+If startup is flaky, `lane-up.sh` now does lane-targeted stop/start retries (default: `3`) before failing.
+Override with `OPENCLAW_TG_LANE_START_ATTEMPTS=<n>`.
+Default readiness timeout is `300s` (`OPENCLAW_TG_LANE_RPC_TIMEOUT_SECONDS=<n>` to override).
+If LaunchAgent is unavailable in the current shell context, or the lane still has no listener after the fallback grace window, lane-up falls back to a lane-targeted direct `gateway run` process.
+
+Proof lines include:
+
+- `branch=...`
+- `runtime_worktree=...`
+- `runtime_state_dir=...`
+- `runtime_port=...`
+- `token_fingerprint=...` (masked)
+- `agent_auth_profiles=...`
 
 ## Deterministic gateway recovery (main runtime)
 
@@ -199,6 +246,7 @@ Pass signal is `PASS: thread B reports expected model (...)`.
   - Runner auto-falls back to MTProto assertion (`userbot_wait.py`), no action needed.
 - `tg poll returned non-JSON output` means `tg` is not configured for polling in that shell.
   - Set `TG_BOT_TOKEN` in `.env.local` (recommended) or configure `tg bot add`.
+  - Runner now retries userbot assertion without thread-anchor filtering if bot replies are unanchored in DM flows.
 - `userbot_send failed: EOF when reading a line` means Telethon session is not authenticated.
   - Re-run `userbot_send.py` once interactively to refresh login.
 - `E_MISSING_SESSION`: no session file at canonical path.
