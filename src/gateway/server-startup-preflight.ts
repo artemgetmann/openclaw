@@ -17,6 +17,7 @@ export type GatewayStartupPreflightPhase =
   | "secrets_precheck"
   | "auth_bootstrap"
   | "runtime_policy"
+  | "tls_runtime_resolution"
   | "runtime_config_resolution"
   | "control_ui_root_resolution";
 
@@ -58,6 +59,7 @@ function isGatewayStartupPreflightPhase(value: unknown): value is GatewayStartup
     value === "secrets_precheck" ||
     value === "auth_bootstrap" ||
     value === "runtime_policy" ||
+    value === "tls_runtime_resolution" ||
     value === "runtime_config_resolution" ||
     value === "control_ui_root_resolution"
   );
@@ -249,6 +251,10 @@ type GatewayStartupPluginBootstrapPhaseDeps<TBootstrapResult> = {
   loadPlugins: () => Promise<TBootstrapResult> | TBootstrapResult;
 };
 
+type GatewayStartupTlsRuntimePhaseDeps<TTlsRuntime> = {
+  loadTlsRuntime: () => Promise<TTlsRuntime> | TTlsRuntime;
+};
+
 type GatewayStartupRuntimeConfigPhaseDeps = {
   context: GatewayStartupContext;
   resolveRuntimeConfig: (config: OpenClawConfig) => Promise<GatewayRuntimeConfig>;
@@ -403,6 +409,23 @@ export async function runGatewayStartupPluginBootstrapPhase<TBootstrapResult>(
     throw new GatewayStartupPreflightError(
       "plugin_bootstrap",
       formatStartupPhaseErrorMessage(err, "Failed to bootstrap gateway plugins."),
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * Startup phase: resolve and validate TLS runtime before transport boot.
+ */
+export async function runGatewayStartupTlsRuntimePhase<TTlsRuntime>(
+  deps: GatewayStartupTlsRuntimePhaseDeps<TTlsRuntime>,
+): Promise<TTlsRuntime> {
+  try {
+    return await deps.loadTlsRuntime();
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "tls_runtime_resolution",
+      formatStartupPhaseErrorMessage(err, "Failed to resolve gateway TLS runtime."),
       { cause: err },
     );
   }

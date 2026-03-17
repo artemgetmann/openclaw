@@ -12,6 +12,7 @@ import {
   runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
+  runGatewayStartupTlsRuntimePhase,
 } from "./server-startup-preflight.js";
 
 function createSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {
@@ -418,6 +419,30 @@ describe("runGatewayStartupPluginBootstrapPhase", () => {
   });
 });
 
+describe("runGatewayStartupTlsRuntimePhase", () => {
+  it("returns tls runtime on success", async () => {
+    const tlsRuntime = { enabled: true, server: null };
+    const result = await runGatewayStartupTlsRuntimePhase({
+      loadTlsRuntime: vi.fn().mockResolvedValue(tlsRuntime),
+    });
+
+    expect(result).toBe(tlsRuntime);
+  });
+
+  it("classifies tls runtime resolution failures", async () => {
+    await expect(
+      runGatewayStartupTlsRuntimePhase({
+        loadTlsRuntime: vi.fn().mockRejectedValue(new Error("tls cert missing")),
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "tls_runtime_resolution",
+        message: "tls cert missing",
+      }),
+    );
+  });
+});
+
 describe("runGatewayStartupRuntimeConfigPhase", () => {
   it("stores resolved runtime config and preserves prior context fields", async () => {
     const baseSnapshot = createSnapshot({ config: { gateway: { bind: "loopback" } } });
@@ -609,6 +634,19 @@ describe("classifyGatewayStartupPreflightError", () => {
     });
   });
 
+  it("classifies serialized tls startup phase errors", () => {
+    const classified = classifyGatewayStartupPreflightError({
+      name: "GatewayStartupPreflightError",
+      phase: "tls_runtime_resolution",
+      message: "tls cert missing",
+    });
+
+    expect(classified).toEqual({
+      phase: "tls_runtime_resolution",
+      message: "tls cert missing",
+    });
+  });
+
   it("returns null for non-preflight errors", () => {
     expect(classifyGatewayStartupPreflightError(new Error("boom"))).toBeNull();
   });
@@ -653,6 +691,16 @@ describe("formatGatewayStartupPreflightFailure", () => {
         message: "auth bootstrap failed",
       }),
     ).toBe("Gateway startup phase failed (auth_bootstrap): auth bootstrap failed");
+  });
+
+  it("formats classified tls startup failures", () => {
+    expect(
+      formatGatewayStartupPreflightFailure({
+        name: "GatewayStartupPreflightError",
+        phase: "tls_runtime_resolution",
+        message: "tls cert missing",
+      }),
+    ).toBe("Gateway startup phase failed (tls_runtime_resolution): tls cert missing");
   });
 
   it("returns null for non-classified failures", () => {
