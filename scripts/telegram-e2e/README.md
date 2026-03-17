@@ -160,8 +160,15 @@ This enforces:
 2. tester token claim/pool guard
 3. deterministic isolated runtime (`runtime_port`, `runtime_state_dir`)
 4. ownership and health proof lines
+5. plugin isolation for live runtime (`plugins.enabled=false`, `plugins.slots.memory=none`)
 
 Do not manually start `gateway run` for Telegram live tests.
+
+### Plugin isolation note (important)
+
+The canonical worktree live runtime intentionally disables plugins to keep startup deterministic and prevent cross-worktree plugin side effects.
+
+If your test case depends on plugin behavior, do not use the isolated Telegram live runtime path for that assertion. Run that plugin-specific validation in the appropriate plugin-focused test lane instead.
 
 ## Deterministic gateway recovery (main runtime)
 

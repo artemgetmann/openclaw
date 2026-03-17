@@ -24,6 +24,8 @@ RUNTIME_WORKTREE=""
 RUNTIME_OWNERSHIP="fail"
 RUNTIME_HEALTH="fail"
 RUNTIME_START_ACTION="not-started"
+RUNTIME_START_TIMEOUT_SECS="unknown"
+RUNTIME_PLUGIN_MODE="disabled"
 TOKEN_PRESENT="no"
 TOKEN_POOL_GUARD="fail"
 TOKEN_FINGERPRINT="none"
@@ -102,6 +104,31 @@ add_failure() {
   local reason="$1"
   FAIL=1
   FAIL_REASONS+=("$reason")
+}
+
+sanitize_runtime_log_line() {
+  local line="$1"
+  printf '%s\n' "$line" | sed -E \
+    -e 's/([A-Za-z_][A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|API_KEY)[A-Za-z0-9_]*=)[^[:space:]]+/\1***REDACTED***/Ig' \
+    -e 's/[0-9]{8,}:[A-Za-z0-9_-]{20,}/****:***REDACTED***/g' \
+    -e 's/sk-[A-Za-z0-9_-]{16,}/sk-***REDACTED***/g' \
+    -e 's/(fc|nvapi|rnd|BSA)-[A-Za-z0-9_-]{8,}/\1-***REDACTED***/g'
+}
+
+emit_runtime_log_summary() {
+  local lines="${OPENCLAW_TELEGRAM_LIVE_FAIL_LOG_LINES:-40}"
+  if [[ ! "$lines" =~ ^[0-9]+$ ]]; then
+    lines=40
+  fi
+  if [[ -z "$RUNTIME_LOG_PATH" || ! -f "$RUNTIME_LOG_PATH" ]]; then
+    return
+  fi
+
+  echo "runtime_log_tail_begin" >&2
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    sanitize_runtime_log_line "$line" >&2
+  done < <(tail -n "$lines" "$RUNTIME_LOG_PATH")
+  echo "runtime_log_tail_end" >&2
 }
 
 resolve_profile() {
@@ -326,19 +353,32 @@ config.gateway = {
   },
 };
 
-const channels = config.channels && typeof config.channels === "object" ? config.channels : {};
+const baseChannels = config.channels && typeof config.channels === "object" ? config.channels : {};
 const telegram =
-  channels.telegram && typeof channels.telegram === "object" ? channels.telegram : {};
+  baseChannels.telegram && typeof baseChannels.telegram === "object" ? baseChannels.telegram : {};
+const basePlugins = config.plugins && typeof config.plugins === "object" ? config.plugins : {};
+const pluginSlots =
+  basePlugins.slots && typeof basePlugins.slots === "object" ? basePlugins.slots : {};
 
-// Force a single-bot Telegram runtime for worktree live tests so a worktree can
-// never silently poll with stable/main bot credentials.
+// Force a Telegram-only runtime profile for worktree live tests. This avoids
+// unrelated channel/plugin startup side effects (for example other network
+// channels) that can mask Telegram runtime ownership/health checks.
 delete telegram.accounts;
-channels.telegram = {
-  ...telegram,
-  enabled: true,
-  botToken: assignedToken,
+config.channels = {
+  telegram: {
+    ...telegram,
+    enabled: true,
+    botToken: assignedToken,
+  },
 };
-config.channels = channels;
+config.plugins = {
+  ...basePlugins,
+  enabled: false,
+  slots: {
+    ...pluginSlots,
+    memory: "none",
+  },
+};
 
 fs.mkdirSync(path.dirname(runtimeConfigPath), { recursive: true });
 fs.writeFileSync(runtimeConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -388,6 +428,8 @@ emit_ensure_proof_lines() {
   echo "runtime_ownership=${RUNTIME_OWNERSHIP}"
   echo "runtime_health=${RUNTIME_HEALTH}"
   echo "runtime_start_action=${RUNTIME_START_ACTION}"
+  echo "runtime_start_timeout_secs=${RUNTIME_START_TIMEOUT_SECS}"
+  echo "runtime_plugin_mode=${RUNTIME_PLUGIN_MODE}"
   echo "token_present=${TOKEN_PRESENT}"
   echo "token_pool_guard=${TOKEN_POOL_GUARD}"
   echo "token_fingerprint=${TOKEN_FINGERPRINT}"
@@ -415,10 +457,11 @@ ensure_command() {
 
   if [[ "$FAIL" -eq 0 ]]; then
     local waited=0
-    local startup_timeout="${OPENCLAW_TELEGRAM_LIVE_START_TIMEOUT_SECS:-300}"
+    local startup_timeout="${OPENCLAW_TELEGRAM_LIVE_START_TIMEOUT_SECS:-120}"
     if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]]; then
-      startup_timeout=300
+      startup_timeout=120
     fi
+    RUNTIME_START_TIMEOUT_SECS="$startup_timeout"
     while [[ "$waited" -lt "$startup_timeout" ]]; do
       resolve_runtime_owner
       if [[ "$RUNTIME_OWNERSHIP" == "ok" ]]; then
@@ -448,6 +491,7 @@ ensure_command() {
     done
     if [[ -n "$RUNTIME_LOG_PATH" ]]; then
       echo "runtime_log=${RUNTIME_LOG_PATH}" >&2
+      emit_runtime_log_summary
     fi
     return 1
   fi
@@ -489,22 +533,43 @@ stop_owned_runtime_if_present() {
 handoff_main_command() {
   stop_owned_runtime_if_present
 
+  local pre_health="fail"
+  if openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+    pre_health="ok"
+  fi
+
   local recover_result="fail"
+  local main_health="fail"
   if [[ "$(uname -s)" != "Darwin" ]]; then
     recover_result="skip-non-darwin"
+    main_health="skip-non-darwin"
   elif [[ ! -x "$MAIN_RECOVER_SCRIPT" ]]; then
     recover_result="fail-missing-script"
     add_failure "main_recover_script_missing"
   elif "$MAIN_RECOVER_SCRIPT"; then
-    recover_result="ok"
+    if [[ "$pre_health" == "ok" ]]; then
+      recover_result="already-healthy"
+    else
+      recover_result="ok"
+    fi
+    if openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+      main_health="ok"
+    else
+      main_health="fail"
+      add_failure "main_health_check_failed"
+    fi
   else
     recover_result="fail"
     add_failure "main_recover_failed"
   fi
 
   echo "handoff_main_recover=${recover_result}"
+  echo "handoff_main_health=${main_health}"
 
-  if [[ "$recover_result" != "ok" && "$recover_result" != "skip-non-darwin" ]]; then
+  if [[ "$recover_result" != "ok" && "$recover_result" != "already-healthy" && "$recover_result" != "skip-non-darwin" ]]; then
+    return 1
+  fi
+  if [[ "$main_health" == "fail" ]]; then
     return 1
   fi
 }

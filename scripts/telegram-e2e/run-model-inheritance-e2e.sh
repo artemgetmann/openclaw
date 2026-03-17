@@ -117,7 +117,10 @@ if [[ ! -x "${TG_BIN}" ]]; then
 fi
 
 # Hard gate: ensure this worktree owns Telegram runtime before live assertions.
-"${RUNTIME_CTL}" ensure
+if ! "${RUNTIME_CTL}" ensure; then
+  echo "FAIL: canonical runtime proof gate failed; aborting live assertions." >&2
+  exit 1
+fi
 
 on_exit() {
   local status=$?

@@ -4,20 +4,29 @@ import {
   selectTelegramTesterToken,
 } from "../../scripts/lib/telegram-live-runtime-helpers.mjs";
 
-describe("telegram-live-runtime-helpers", () => {
-  it("derives deterministic per-worktree runtime profile", () => {
-    const first = deriveTelegramLiveRuntimeProfile({ worktreePath: "/tmp/openclaw/worktree-a" });
-    const second = deriveTelegramLiveRuntimeProfile({ worktreePath: "/tmp/openclaw/worktree-a" });
-    const third = deriveTelegramLiveRuntimeProfile({ worktreePath: "/tmp/openclaw/worktree-b" });
+describe("deriveTelegramLiveRuntimeProfile", () => {
+  it("returns stable deterministic profile fields for the same worktree path", () => {
+    const worktreePath = "/tmp/openclaw/worktrees/runtime-a";
+    const first = deriveTelegramLiveRuntimeProfile({ worktreePath });
+    const second = deriveTelegramLiveRuntimeProfile({ worktreePath });
 
-    expect(first).toEqual(second);
-    expect(first.profileId).not.toBe(third.profileId);
-    expect(first.runtimePort).not.toBe(18789);
+    expect(second).toEqual(first);
+    expect(first.profileId).toMatch(/^tg-live-[a-f0-9]{10}$/);
     expect(first.runtimePort).toBeGreaterThanOrEqual(20000);
     expect(first.runtimePort).toBeLessThan(30000);
+    expect(first.runtimePort).not.toBe(18789);
   });
 
-  it("retains current token when valid and unclaimed by other worktrees", () => {
+  it("produces different profile IDs for different worktree paths", () => {
+    const a = deriveTelegramLiveRuntimeProfile({ worktreePath: "/tmp/openclaw/worktrees/a" });
+    const b = deriveTelegramLiveRuntimeProfile({ worktreePath: "/tmp/openclaw/worktrees/b" });
+
+    expect(a.profileId).not.toBe(b.profileId);
+  });
+});
+
+describe("selectTelegramTesterToken", () => {
+  it("retains the current worktree token when it remains available", () => {
     const result = selectTelegramTesterToken({
       poolTokens: ["token-a", "token-b", "token-c"],
       claimedTokens: ["token-b"],
@@ -32,22 +41,22 @@ describe("telegram-live-runtime-helpers", () => {
     });
   });
 
-  it("reassigns token when current token is invalid/conflicting", () => {
+  it("reassigns when current token is conflicting or invalid", () => {
     const result = selectTelegramTesterToken({
       poolTokens: ["token-a", "token-b", "token-c"],
-      claimedTokens: ["token-a", "token-b"],
-      currentToken: "token-a",
+      claimedTokens: ["token-b", "token-c"],
+      currentToken: "token-b",
     });
 
     expect(result).toEqual({
       ok: true,
       action: "assign",
       reason: "reassign_conflict_or_invalid",
-      selectedToken: "token-c",
+      selectedToken: "token-a",
     });
   });
 
-  it("fails hard when no tester token is available", () => {
+  it("hard-fails when the tester pool is exhausted", () => {
     const result = selectTelegramTesterToken({
       poolTokens: ["token-a", "token-b"],
       claimedTokens: ["token-a", "token-b"],
