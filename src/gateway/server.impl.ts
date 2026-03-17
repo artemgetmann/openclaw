@@ -94,6 +94,7 @@ import {
   runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
+  runGatewayStartupSidecarPhase,
   runGatewayStartupTransportBootstrapPhase,
   runGatewayStartupTlsRuntimePhase,
 } from "./server-startup-preflight.js";
@@ -846,16 +847,19 @@ export async function startGatewayServer(
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   if (!minimalTestGateway) {
-    ({ browserControl, pluginServices } = await startGatewaySidecars({
-      cfg: cfgAtStart,
-      pluginRegistry,
-      defaultWorkspaceDir,
-      deps,
-      startChannels,
-      log,
-      logHooks,
-      logChannels,
-      logBrowser,
+    ({ browserControl, pluginServices } = await runGatewayStartupSidecarPhase({
+      startSidecars: async () =>
+        await startGatewaySidecars({
+          cfg: cfgAtStart,
+          pluginRegistry,
+          defaultWorkspaceDir,
+          deps,
+          startChannels,
+          log,
+          logHooks,
+          logChannels,
+          logBrowser,
+        }),
     }));
   }
 
