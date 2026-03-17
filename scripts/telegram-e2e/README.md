@@ -2,6 +2,10 @@
 
 Goal: run live Telegram end-to-end checks for thread model inheritance without re-discovering setup every time.
 
+Manual Telegram verification is the release gate. The probe/runner is support
+tooling and should not block closure if Telegram behavior is correct but the
+probe is flaky.
+
 This validates:
 
 1. Group forum topics: `/model` in topic A becomes default for newly created topic B in the same group.
@@ -163,6 +167,7 @@ Recommended follow-up after this PR:
 - `USERBOT_SESSION` (optional override; default is `scripts/telegram-e2e/tmp/userbot.session`)
 - `TG_BOT_TOKEN` (optional; worktree live runner prefers the claimed `TELEGRAM_BOT_TOKEN` from repo-root `.env.local`)
 - `TG_BIN` (absolute path to built `tg`)
+- `TG_PROBE_MODEL` (optional model used by `probe_dm_thread_inheritance.py`)
 - `TG_FORUM_CHAT_ID` (group chat id, usually `-100...`)
 - `TG_DM_CHAT_ID` (bot DM chat id)
 
@@ -215,6 +220,34 @@ scripts/telegram-live-runtime.sh release
 The canonical worktree live runtime intentionally allows only the bundled Telegram plugin to keep startup deterministic and prevent cross-worktree plugin side effects.
 
 If your test case depends on plugin behavior, do not use the isolated Telegram live runtime path for that assertion. Run that plugin-specific validation in the appropriate plugin-focused test lane instead.
+
+`scripts/telegram-live-preflight.sh` now also prints:
+
+- current branch
+- current worktree path
+- assigned bot username/id
+- token claim count across git worktrees
+
+It fails fast if the same Telegram bot token is claimed by more than one
+worktree.
+
+## DM probe helper
+
+Use the DM probe for debugging, not as the final ship gate:
+
+```bash
+scripts/telegram-e2e/.venv/bin/python scripts/telegram-e2e/probe_dm_thread_inheritance.py \
+  --chat "${TG_DM_CHAT_ID:-@Artem_jarvis_exec_bot}" \
+  --target-model "anthropic/claude-sonnet-4-6"
+```
+
+The probe now:
+
+- resolves bot identity dynamically from Telegram
+- prints bot username/id diagnostics
+- accepts multiple valid DM-thread reply shapes
+- prints ignored-message diagnostics on timeout
+- fails fast when another Telethon process already owns the same userbot session
 
 ## Deterministic gateway recovery (main runtime)
 
@@ -303,8 +336,13 @@ inheritance checks.
   - Verify chat id/username and account access.
 - `E_AMBIGUOUS_SESSION`: both legacy and canonical session files exist.
   - Set `USERBOT_SESSION` explicitly or remove one file.
+- `E_SESSION_BUSY`: another Telethon process already owns the sqlite session.
+  - Stop the other probe/send/wait process before retrying.
 - HTTP `503` or no bot replies usually means gateway is not fully started yet.
   - Wait for provider-start logs and retry.
+- `gateway status` / RPC probe can still report unhealthy while Telegram replies
+  are flowing in the same lane.
+  - Treat actual Telegram message replies as the stronger signal.
 - If inherited model fails while unchanged-existing-thread passes, verify gateway runtime path and branch first.
 
 ## Notes

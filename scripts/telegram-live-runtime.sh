@@ -32,6 +32,11 @@ TOKEN_PRESENT="no"
 TOKEN_POOL_GUARD="fail"
 TOKEN_FINGERPRINT="none"
 ASSIGNED_BOT_TOKEN=""
+ASSIGNED_BOT_ID="unknown"
+ASSIGNED_BOT_USERNAME="unknown"
+ASSIGNED_BOT_NAME="unknown"
+TOKEN_CLAIM_COUNT=0
+TOKEN_CLAIM_PATHS=()
 FAIL=0
 FAIL_REASONS=()
 
@@ -106,6 +111,71 @@ add_failure() {
   local reason="$1"
   FAIL=1
   FAIL_REASONS+=("$reason")
+}
+
+resolve_token_claims() {
+  local current_token="$1"
+  local worktree_path=""
+  local env_local_path=""
+  local claimed=""
+
+  TOKEN_CLAIM_COUNT=0
+  TOKEN_CLAIM_PATHS=()
+
+  while IFS= read -r worktree_path || [[ -n "${worktree_path}" ]]; do
+    [[ -z "${worktree_path}" ]] && continue
+    env_local_path="${worktree_path}/.env.local"
+    [[ -f "${env_local_path}" ]] || continue
+    claimed="$(read_last_env_value "${env_local_path}" "TELEGRAM_BOT_TOKEN")"
+    if [[ -n "${claimed}" && "${claimed}" == "${current_token}" ]]; then
+      TOKEN_CLAIM_COUNT=$((TOKEN_CLAIM_COUNT + 1))
+      TOKEN_CLAIM_PATHS+=("${worktree_path}")
+    fi
+  done < <(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+}
+
+resolve_bot_identity() {
+  [[ -n "${ASSIGNED_BOT_TOKEN}" ]] || return 0
+
+  if [[ "${ASSIGNED_BOT_TOKEN}" == *:* ]]; then
+    ASSIGNED_BOT_ID="${ASSIGNED_BOT_TOKEN%%:*}"
+  fi
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local identity
+  identity="$(
+    TELEGRAM_BOT_TOKEN="${ASSIGNED_BOT_TOKEN}" python3 - <<'PY' 2>/dev/null || true
+import json
+import os
+import urllib.request
+
+token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+if not token:
+    raise SystemExit(0)
+
+req = urllib.request.Request(
+    f"https://api.telegram.org/bot{token}/getMe",
+    headers={"User-Agent": "openclaw-telegram-live-runtime"},
+)
+with urllib.request.urlopen(req, timeout=10) as response:
+    data = json.load(response)
+result = data.get("result") or {}
+print(json.dumps({
+    "id": result.get("id"),
+    "username": result.get("username"),
+    "name": result.get("first_name"),
+}))
+PY
+  )"
+
+  if [[ -n "${identity}" ]]; then
+    ASSIGNED_BOT_ID="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data.get("id") or "unknown")' <<<"${identity}" 2>/dev/null || printf '%s' "${ASSIGNED_BOT_ID}")"
+    ASSIGNED_BOT_USERNAME="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data.get("username") or "unknown")' <<<"${identity}" 2>/dev/null || printf 'unknown')"
+    ASSIGNED_BOT_NAME="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data.get("name") or "unknown")' <<<"${identity}" 2>/dev/null || printf 'unknown')"
+  fi
 }
 
 sanitize_runtime_log_line() {
@@ -336,6 +406,8 @@ ensure_tester_bot_claim() {
   TOKEN_PRESENT="yes"
   ASSIGNED_BOT_TOKEN="$token"
   TOKEN_FINGERPRINT="$(mask_token "$token")"
+  resolve_token_claims "$token"
+  resolve_bot_identity
 
   local in_pool="no"
   local line=""
@@ -588,6 +660,13 @@ emit_ensure_proof_lines() {
   echo "token_present=${TOKEN_PRESENT}"
   echo "token_pool_guard=${TOKEN_POOL_GUARD}"
   echo "token_fingerprint=${TOKEN_FINGERPRINT}"
+  echo "assigned_bot_id=${ASSIGNED_BOT_ID}"
+  echo "assigned_bot_username=${ASSIGNED_BOT_USERNAME}"
+  echo "assigned_bot_name=${ASSIGNED_BOT_NAME}"
+  echo "token_claim_count=${TOKEN_CLAIM_COUNT}"
+  for claim_path in "${TOKEN_CLAIM_PATHS[@]}"; do
+    echo "token_claim_path=${claim_path}"
+  done
 }
 
 ensure_command() {
@@ -638,6 +717,9 @@ ensure_command() {
   fi
   if [[ "$RUNTIME_HEALTH" != "ok" ]]; then
     add_failure "runtime_health_check_failed"
+  fi
+  if [[ "${TOKEN_CLAIM_COUNT}" -gt 1 ]]; then
+    add_failure "token_claim_count:${TOKEN_CLAIM_COUNT}"
   fi
 
   emit_ensure_proof_lines
