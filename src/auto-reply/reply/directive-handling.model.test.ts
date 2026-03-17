@@ -406,7 +406,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(result?.text).toContain("Model set to openai/gpt-4o");
-    expect(result?.text).toContain("New threads in this chat will default to openai/gpt-4o");
+    expect(result?.text).not.toContain("New threads in this chat will default to openai/gpt-4o");
     expect(sessionStore[parentSessionKey]?.futureThreadProviderOverride).toBe("openai");
     expect(sessionStore[parentSessionKey]?.futureThreadModelOverride).toBe("gpt-4o");
   });

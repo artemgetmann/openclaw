@@ -24,7 +24,10 @@ import {
   applyFutureThreadModelDefaultToSessionEntry,
   applyModelOverrideToSessionEntry,
 } from "../../sessions/model-overrides.js";
-import { resolveFutureThreadParentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  resolveFutureThreadParentSessionKey,
+  resolveTelegramThreadParentSessionKey,
+} from "../../sessions/session-key-utils.js";
 import { resolveProfileOverride } from "./directive-handling.auth.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";

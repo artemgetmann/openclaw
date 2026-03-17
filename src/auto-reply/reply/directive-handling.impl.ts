@@ -18,7 +18,10 @@ import {
   applyFutureThreadModelDefaultToSessionEntry,
   applyModelOverrideToSessionEntry,
 } from "../../sessions/model-overrides.js";
-import { resolveFutureThreadParentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  resolveFutureThreadParentSessionKey,
+  resolveTelegramThreadParentSessionKey,
+} from "../../sessions/session-key-utils.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
