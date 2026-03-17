@@ -213,6 +213,22 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("surfaces transport bootstrap phase classification on startup failure", async () => {
+    startGatewayServer.mockRejectedValueOnce({
+      name: "GatewayStartupPreflightError",
+      phase: "transport_bootstrap",
+      message: "address already in use",
+    });
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors).toContain(
+      "Gateway startup phase failed (transport_bootstrap): address already in use",
+    );
+  });
+
   it.each(["none", "trusted-proxy"] as const)("accepts --auth %s override", async (mode) => {
     await runGatewayCli(["gateway", "run", "--auth", mode, "--allow-unconfigured"]);
 
