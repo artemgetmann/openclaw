@@ -94,6 +94,7 @@ import {
   runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
+  runGatewayStartupTlsRuntimePhase,
 } from "./server-startup-preflight.js";
 import { createGatewaySecretsActivationController } from "./server-startup-secrets.js";
 import { startGatewaySidecars } from "./server-startup.js";
@@ -466,10 +467,18 @@ export async function startGatewayServer(
 
   const deps = createDefaultDeps();
   let canvasHostServer: CanvasHostServer | null = null;
-  const gatewayTls = await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
-  if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
-    throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
-  }
+  const gatewayTls = await runGatewayStartupTlsRuntimePhase({
+    loadTlsRuntime: async () => {
+      const resolvedGatewayTls = await loadGatewayTlsRuntime(
+        cfgAtStart.gateway?.tls,
+        log.child("tls"),
+      );
+      if (cfgAtStart.gateway?.tls?.enabled && !resolvedGatewayTls.enabled) {
+        throw new Error(resolvedGatewayTls.error ?? "gateway tls: failed to enable");
+      }
+      return resolvedGatewayTls;
+    },
+  });
   const serverStartedAt = Date.now();
   const channelManager = createChannelManager({
     loadConfig,
