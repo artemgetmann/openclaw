@@ -92,6 +92,21 @@
   `pkill -9 -f openclaw-gateway || true; nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
 - Verify: `openclaw channels status --probe`, `ss -ltnp | rg 18789`, `tail -n 120 /tmp/openclaw-gateway.log`.
 
+## Gateway Recovery (macOS multi-worktree)
+
+If the main gateway is down and not responding — **before spending time debugging** — check the runbook first: `docs/gateway/troubleshooting.md` section "Gateway starts but exits silently after a few minutes".
+
+The most common silent-exit pattern on macOS dev setups:
+
+1. **Config-reload triggered `process.exit()`**: The gateway's file watcher detected a config change, built a reload plan with `restartGateway=true`, and called `process.exit()`. If the LaunchAgent is disabled, no restart happens and the gateway stays down silently.
+   - Fix: `openclaw config set gateway.reload.mode hot` then `openclaw gateway install` to re-enable the service.
+
+2. **Wrong gateway owns the runtime**: In a multi-worktree setup, a worktree gateway may have grabbed the main config lock. Check lock files at `$TMPDIR/openclaw-$(id -u)/gateway.*.lock` — each contains the `configPath` and PID. Only kill the process whose `configPath` matches `~/.openclaw/openclaw.json`; leave worktree gateways (different configPaths/ports) alone.
+
+3. **LaunchAgent disabled**: Run `openclaw gateway install` — do NOT use manual `launchctl enable` from a shell (fails with error 125 from a non-GUI session). If a stale lock blocks startup, add `--force`.
+
+Verify recovery: `openclaw gateway status --deep` and `openclaw channels status --probe`.
+
 ## Build, Test, and Development Commands
 
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
@@ -221,22 +236,34 @@
 ## Agent-Specific Notes
 
 - Pre-Live Telegram Check (REQUIRED before any live Telegram validation):
+  - You MUST run `bash scripts/telegram-e2e/lane-up.sh` before live Telegram E2E.
   - You MUST confirm the current git branch is named and NOT `HEAD`.
   - You MUST confirm gateway runtime is owned by the current worktree path.
-  - If runtime path mismatches, you MUST restart gateway from the current worktree and re-check runtime ownership before testing.
-  - If `.env.local` is missing, you MUST run `bash scripts/assign-bot.sh` before starting gateway.
+  - Use the canonical gate: `scripts/telegram-live-runtime.sh ensure` (it enforces ownership + health proof and isolated runtime).
+  - Token claiming happens on first `ensure` run; do not pre-claim at worktree creation time.
   - You MUST NOT print raw token values.
-  - You MUST emit proof lines in logs/output: `branch=<...>` and `runtime_worktree=<...>`.
+  - You MUST emit proof lines in logs/output: `branch=<...>`, `runtime_worktree=<...>`, `runtime_state_dir=<...>`, `runtime_port=<...>`, masked `token_fingerprint=<...>`, and `agent_auth_profiles=<yes|no>`.
+  - You MUST NOT use the shared default gateway/profile for parallel Telegram tests.
+  - One lane = one token slot = one profile = one port.
+  - In shells where LaunchAgent is unavailable, lane-up may fall back to a lane-scoped direct `gateway run` process with PID file in that lane state dir.
 
 - Known Failure Pattern (Telegram live checks):
   - Code/tests can be correct while live results are false if Telegram is handled by the wrong runtime process (not the current worktree). Always verify runtime ownership first.
+  - DM threaded E2E does not use plain DM message ids as thread ids. The real DM thread anchor is the topic-create service message (`MessageActionTopicCreate`), and thread-scoped commands/replies carry that anchor in `reply_to_top_id`.
+  - If you need to automate DM threaded E2E, inspect recent MTProto messages to find topic-create anchors, or create a fresh DM topic with MTProto `messages.CreateForumTopicRequest` before sending `/model` into it. Do not guess anchors from visible text messages.
 
 - Worktree credential bootstrap (Telegram live checks):
   - Source of truth is the main checkout at `/Users/user/Programming_Projects/openclaw`.
   - Preferred: run `bash scripts/bootstrap-worktree-telegram.sh` in each new worktree.
   - For every new worktree, run:
     - `cp /Users/user/Programming_Projects/openclaw/.env.bots ./.env.bots`
-    - `bash scripts/assign-bot.sh` (creates `.env.local` with this worktree's bot token)
+    - `scripts/telegram-live-runtime.sh ensure` (auto-claims/retains this worktree tester bot token)
+  - When a worktree is no longer needed for Telegram live testing, run:
+    - `scripts/telegram-live-runtime.sh release`
+  - Do not use the stable/main bot for worktree live tests.
+  - Do not release a tester bot based on PR merge or chat archive; claims are worktree-scoped.
+  - If stale-claim cleanup becomes necessary, implement garbage collection only for deleted/inactive worktrees.
+  - For full operational details, scaling notes, and live-runner behavior, read `scripts/telegram-e2e/README.md`.
   - If Telegram userbot E2E is needed, copy local-only files (do not commit):
     - `mkdir -p scripts/telegram-e2e/tmp`
     - `cp /Users/user/Programming_Projects/openclaw/scripts/telegram-e2e/.env scripts/telegram-e2e/.env` (if present)
@@ -366,11 +393,10 @@
 
 BEFORE starting the bot in any worktree:
 
-1. Check if `.env.local` exists in this worktree
-2. If NOT, run: `bash scripts/assign-bot.sh`
-3. This assigns a dedicated test bot token to this worktree
-4. Always start the bot — it will use the assigned token automatically
-5. NEVER use the production token for testing
-6. When done with this worktree, you can delete `.env.local` to free the token
+1. Run: `scripts/telegram-live-runtime.sh ensure`
+2. This auto-claims (first run) or retains (later runs) a dedicated test bot token for this worktree
+3. Always start/testing through that canonical ensure gate
+4. NEVER use the production token for testing
+5. When done with this worktree, you can delete `.env.local` to free the token
 
 DO NOT share tokens between worktrees. Each worktree = one bot.

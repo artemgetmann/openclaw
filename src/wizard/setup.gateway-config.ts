@@ -2,6 +2,7 @@ import {
   promptSecretRefForSetup,
   resolveSecretInputModeForEnvSelection,
 } from "../commands/auth-choice.apply-helpers.js";
+import { normalizeGatewayExposureSafety } from "../commands/onboard-gateway-exposure.js";
 import {
   normalizeGatewayTokenInput,
   randomToken,
@@ -142,19 +143,21 @@ export async function configureGatewayForSetup(
     );
   }
 
-  // Safety + constraints:
-  // - Tailscale wants bind=loopback so we never expose a non-loopback server + tailscale serve/funnel at once.
-  // - Funnel requires password auth.
-  if (tailscaleMode !== "off" && bind !== "loopback") {
+  const exposureSafety = normalizeGatewayExposureSafety({
+    bind,
+    authMode,
+    tailscaleMode,
+    customBindHost,
+  });
+  if (exposureSafety.adjustments.bindForcedToLoopback) {
     await prompter.note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
-    bind = "loopback";
-    customBindHost = undefined;
   }
-
-  if (tailscaleMode === "funnel" && authMode !== "password") {
+  if (exposureSafety.adjustments.authForcedToPassword) {
     await prompter.note("Tailscale funnel requires password auth.", "Note");
-    authMode = "password";
   }
+  bind = exposureSafety.bind;
+  authMode = exposureSafety.authMode;
+  customBindHost = exposureSafety.customBindHost;
 
   let gatewayToken: string | undefined;
   let gatewayTokenInput: SecretInput | undefined;
