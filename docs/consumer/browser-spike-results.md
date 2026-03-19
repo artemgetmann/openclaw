@@ -35,38 +35,33 @@ Legend:
 
 - `PASS`, `FAIL`, `BLOCKED`, `PENDING`
 
-| Approach                  | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Notes                                                                                                                                    |
-| ------------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `user` (existing-session) | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Control lane passes on clean direct-built gateway (`status`, `tabs`, `open`); current blocker is local `openclaw-agent` timeout          |
-| `openclaw` (managed)      | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`); current blocker is local `openclaw-agent` timeout |
-| Claude-in-Chrome          | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Investigation/adaptation track                                                                                                           |
-| Browserbase               | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                                                                                       |
+| Approach                  | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Notes                                                                                                     |
+| ------------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | --------------------------------------------------------------------------------------------------------- |
+| `user` (existing-session) | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | `status` passes, but `tabs/open` fail due Chrome MCP attach/list_pages behavior in current Chrome session |
+| `openclaw` (managed)      | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`)                     |
+| Claude-in-Chrome          | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Investigation/adaptation track                                                                            |
+| Browserbase               | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                                                        |
 
 ## Current blocker summary
 
-- Browser attach is no longer the primary blocker.
-- Gateway/browser control is healthy on a clean direct-built runtime:
-  - `user`: `status`, `tabs`, and `open https://example.com` succeed
-  - `openclaw`: `start`, `status`, `tabs`, and `open https://example.com` succeed
+- Browser attach is now profile-specific:
+  - `openclaw` profile is healthy (`start`, `status`, `tabs`, `open https://example.com` all succeed).
+  - `user` existing-session is still blocked after attach handoff (`status` passes; `tabs/open` fail).
 - The benchmark-specific runtime now lives at `/tmp/openclaw-consumer-bench`:
   - copied from `/tmp/openclaw-consumer`
   - `channels.telegram.enabled=false`
   - stale `plugins.entries.openai` removed
-- Gateway handshake tracing on the bench runtime is fast, around 23 ms from connect auth resolution to `hello_ok`, so the timeout budget is not being lost in gateway auth or browser attach.
-- The current hard blocker is local `openclaw-agent` startup/bootstrap on trivial prompts:
-  - `agent --local --message 'Reply with exactly OK and nothing else.' --timeout 120` still times out on `openai-codex/gpt-5.1-codex-mini`
-  - logs show `candidate_failed ... reason=timeout`, not gateway failure
-  - sampled `openclaw-agent` processes show heavy `fs.stat` callback churn during startup/bootstrap
-- Codex OAuth is healthy enough again to rule out the old auth-window collision:
-  - the previous `state mismatch` was caused by overlapping OAuth tabs / stale `127.0.0.1:1455` listener state
-  - current failure mode is runtime timeout, not OAuth rejection
+- Local runner startup blocker is resolved:
+  - `agent --local --message 'Reply with exactly OK and nothing else.' --timeout 120` returns `OK` on bench runtime.
+- Existing-session failure reproduces outside OpenClaw (direct MCP probe):
+  - `chrome-devtools-mcp --autoConnect`: `list_pages` request times out.
+  - `chrome-devtools-mcp --browserUrl http://127.0.0.1:9222`: returns error content because `/json/version` is HTTP 404.
 
 Interpretation:
 
-- This is not currently a browser failure.
-- This is no longer primarily a model-auth failure either.
-- The next fix loop belongs in the local runner / `openclaw-agent` startup path.
-- Once a trivial local `OK` run finishes reliably, both `user` and `openclaw` browser lanes can resume the real task matrix immediately.
+- This is not a gateway/local-runner timeout issue anymore.
+- Existing-session instability is currently a Chrome MCP handshake/attach issue with the current Chrome runtime.
+- Benchmark execution can proceed immediately on `openclaw` managed profile while existing-session is being stabilized.
 
 ## Command-level benchmark runbook (week 1)
 

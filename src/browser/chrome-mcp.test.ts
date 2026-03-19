@@ -267,4 +267,38 @@ describe("chrome MCP page parsing", () => {
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(2);
   });
+
+  it("forwards per-call timeout to Chrome MCP tool requests", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await listChromeMcpTabs("chrome-live", { timeoutMs: 1234 });
+
+    const calls = (session.client.callTool as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls;
+    expect(calls[0]?.[2]).toEqual(expect.objectContaining({ timeout: 1234 }));
+  });
+
+  it("fails fast when Chrome MCP session readiness exceeds timeout", async () => {
+    const close = vi.fn(async () => {});
+    const callTool = vi.fn(async () => ({}));
+    const session = {
+      client: {
+        callTool,
+        listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
+        close,
+        connect: vi.fn().mockResolvedValue(undefined),
+      },
+      transport: { pid: 123 },
+      ready: new Promise<void>(() => {}),
+    } as unknown as ChromeMcpSession;
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(listChromeMcpTabs("chrome-live", { timeoutMs: 25 })).rejects.toThrow(
+      /attach timed out/i,
+    );
+    expect(close).toHaveBeenCalled();
+  });
 });
