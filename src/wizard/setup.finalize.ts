@@ -19,8 +19,11 @@ import {
   openUrl,
   probeGatewayReachable,
   waitForGatewayReachable,
-  resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
+import {
+  resolveLocalGatewayLinks,
+  resolveLocalGatewayReachabilityAuth,
+} from "../commands/onboard-local-gateway.js";
 import {
   resolveLocalSetupExecutionPlan,
   type LocalSetupIntent,
@@ -36,7 +39,6 @@ import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
-import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
 
 type FinalizeOnboardingOptions = {
@@ -240,16 +242,19 @@ export async function finalizeSetupWizard(
   }
 
   if (setupPlan.shouldRunHealthCheck) {
-    const probeLinks = resolveControlUiLinks({
-      bind: nextConfig.gateway?.bind ?? "loopback",
-      port: settings.port,
-      customBindHost: nextConfig.gateway?.customBindHost,
-      basePath: undefined,
+    const probeLinks = resolveLocalGatewayLinks({
+      state: settings,
+    });
+    const probeAuth = await resolveLocalGatewayReachabilityAuth({
+      state: settings,
+      config: nextConfig,
+      env: process.env,
     });
     // Daemon install/restart can briefly flap the WS; wait a bit so health check doesn't false-fail.
     await waitForGatewayReachable({
       url: probeLinks.wsUrl,
-      token: settings.gatewayToken,
+      token: probeAuth.token,
+      password: probeAuth.password,
       deadlineMs: 15_000,
     });
     try {
@@ -288,41 +293,39 @@ export async function finalizeSetupWizard(
 
   const controlUiBasePath =
     nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
-  const links = resolveControlUiLinks({
-    bind: settings.bind,
-    port: settings.port,
-    customBindHost: settings.customBindHost,
+  const links = resolveLocalGatewayLinks({
+    state: settings,
     basePath: controlUiBasePath,
   });
   const authedUrl =
     settings.authMode === "token" && settings.gatewayToken
       ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
       : links.httpUrl;
-  let resolvedGatewayPassword = "";
-  if (settings.authMode === "password") {
-    try {
-      resolvedGatewayPassword =
-        (await resolveSetupSecretInputString({
-          config: nextConfig,
-          value: nextConfig.gateway?.auth?.password,
-          path: "gateway.auth.password",
-          env: process.env,
-        })) ?? "";
-    } catch (error) {
-      await prompter.note(
-        [
-          "Could not resolve gateway.auth.password SecretRef for setup auth.",
-          error instanceof Error ? error.message : String(error),
-        ].join("\n"),
-        "Gateway auth",
-      );
-    }
+  let gatewayAuth = { token: settings.gatewayToken, password: "" };
+  try {
+    const resolvedAuth = await resolveLocalGatewayReachabilityAuth({
+      state: settings,
+      config: nextConfig,
+      env: process.env,
+    });
+    gatewayAuth = {
+      token: resolvedAuth.token,
+      password: resolvedAuth.password ?? "",
+    };
+  } catch (error) {
+    await prompter.note(
+      [
+        "Could not resolve gateway.auth.password SecretRef for setup auth.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n"),
+      "Gateway auth",
+    );
   }
 
   const gatewayProbe = await probeGatewayReachable({
     url: links.wsUrl,
-    token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-    password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+    token: gatewayAuth.token,
+    password: gatewayAuth.password,
   });
   const gatewayStatusLine = gatewayProbe.ok
     ? "Gateway: reachable"
@@ -397,8 +400,8 @@ export async function finalizeSetupWizard(
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
       await runTui({
         url: links.wsUrl,
-        token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+        token: gatewayAuth.token,
+        password: gatewayAuth.password,
         // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
         deliver: false,
         message: hasBootstrap ? "Wake up, my friend!" : undefined,
