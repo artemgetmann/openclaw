@@ -3,9 +3,9 @@ import Foundation
 import SwiftUI
 
 enum DebugActions {
-    private static var verboseDefaultsKey: String { "\(AppFlavor.current.defaultsPrefix).debug.verboseMain" }
+    private static let verboseDefaultsKey = "openclaw.debug.verboseMain"
     private static let sessionMenuLimit = 12
-    private static var onboardingSeenKey: String { "\(AppFlavor.current.defaultsPrefix).onboardingSeen" }
+    private static let onboardingSeenKey = "openclaw.onboardingSeen"
 
     @MainActor
     static func openAgentEventsWindow() {
@@ -61,10 +61,7 @@ enum DebugActions {
     }
 
     static func sendTestNotification() async {
-        _ = await NotificationManager().send(
-            title: AppFlavor.current.appName,
-            body: "Test notification",
-            sound: nil)
+        _ = await NotificationManager().send(title: "OpenClaw", body: "Test notification", sound: nil)
     }
 
     static func sendDebugVoice() async -> Result<String, DebugActionError> {

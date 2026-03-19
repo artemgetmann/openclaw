@@ -237,7 +237,7 @@ actor GatewayEndpointStore {
         if let modeRaw {
             initialMode = AppState.ConnectionMode(rawValue: modeRaw) ?? .local
         } else {
-            let seen = UserDefaults.standard.bool(forKey: onboardingSeenKey)
+            let seen = UserDefaults.standard.bool(forKey: "openclaw.onboardingSeen")
             initialMode = seen ? .local : .unconfigured
         }
 

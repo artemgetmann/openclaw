@@ -19,9 +19,6 @@ struct GeneralSettings: View {
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
     }
-    private var isConsumer: Bool {
-        AppFlavor.current.isConsumer
-    }
 
     private var remoteLabelWidth: CGFloat {
         88
@@ -32,10 +29,8 @@ struct GeneralSettings: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 12) {
                     SettingsToggleRow(
-                        title: "\(AppFlavor.current.appName) active",
-                        subtitle: self.isConsumer
-                            ? "Pause to stop your AI operator on this Mac."
-                            : "Pause to stop the OpenClaw gateway; no messages will be processed.",
+                        title: "OpenClaw active",
+                        subtitle: "Pause to stop the OpenClaw gateway; no messages will be processed.",
                         binding: self.activeBinding)
 
                     self.connectionSection
@@ -49,7 +44,7 @@ struct GeneralSettings: View {
 
                     SettingsToggleRow(
                         title: "Show Dock icon",
-                        subtitle: "Keep \(AppFlavor.current.appName) visible in the Dock instead of menu-bar-only mode.",
+                        subtitle: "Keep OpenClaw visible in the Dock instead of menu-bar-only mode.",
                         binding: self.$state.showDockIcon)
 
                     SettingsToggleRow(
@@ -76,19 +71,12 @@ struct GeneralSettings: View {
                         title: "Enable debug tools",
                         subtitle: "Show the Debug tab with development utilities.",
                         binding: self.$state.debugPaneEnabled)
-
-                    if self.isConsumer {
-                        SettingsToggleRow(
-                            title: "Show advanced settings",
-                            subtitle: "Reveal the full operator controls without removing them from the app.",
-                            binding: self.$state.showAdvancedSettings)
-                    }
                 }
 
                 Spacer(minLength: 12)
                 HStack {
                     Spacer()
-                    Button("Quit \(AppFlavor.current.appName)") { NSApp.terminate(nil) }
+                    Button("Quit OpenClaw") { NSApp.terminate(nil) }
                         .buttonStyle(.borderedProminent)
                 }
             }
@@ -115,7 +103,7 @@ struct GeneralSettings: View {
 
     private var connectionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(self.isConsumer ? "Where your AI operator runs" : "OpenClaw runs")
+            Text("OpenClaw runs")
                 .font(.title3.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -129,9 +117,7 @@ struct GeneralSettings: View {
             .frame(width: 260, alignment: .leading)
 
             if self.state.connectionMode == .unconfigured {
-                Text(self.isConsumer
-                    ? "Pick This Mac to keep setup simple. Remote stays available in Advanced when you need it."
-                    : "Pick Local or Remote to start the Gateway.")
+                Text("Pick Local or Remote to start the Gateway.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
