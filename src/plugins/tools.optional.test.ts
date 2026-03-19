@@ -9,9 +9,14 @@ type MockRegistryToolEntry = {
 };
 
 const loadOpenClawPluginsMock = vi.fn();
+const getGlobalPluginRegistryMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
+}));
+
+vi.mock("./hook-runner-global.js", () => ({
+  getGlobalPluginRegistry: () => getGlobalPluginRegistryMock(),
 }));
 
 function makeTool(name: string) {
@@ -92,6 +97,7 @@ function resolveOptionalDemoTools(toolAllowlist?: string[]) {
 describe("resolvePluginTools optional tools", () => {
   beforeEach(() => {
     loadOpenClawPluginsMock.mockClear();
+    getGlobalPluginRegistryMock.mockReset().mockReturnValue(null);
   });
 
   it("skips optional tools without explicit allowlist", () => {
@@ -169,5 +175,24 @@ describe("resolvePluginTools optional tools", () => {
         env,
       }),
     );
+  });
+
+  it("reuses the global plugin registry when already initialized", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "message-plugin",
+        optional: false,
+        source: "/tmp/message-plugin.js",
+        factory: () => makeTool("message_plugin"),
+      },
+    ]);
+    getGlobalPluginRegistryMock.mockReturnValue(registry);
+
+    const tools = resolvePluginTools({
+      context: createContext() as never,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message_plugin"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 });

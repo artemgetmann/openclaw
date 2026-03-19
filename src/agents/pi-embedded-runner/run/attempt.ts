@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
@@ -1423,7 +1424,19 @@ export async function runEmbeddedAttempt(
     resolveRemainingAttemptTimeoutMs({ attemptDeadlineMs });
   process.chdir(effectiveWorkspace);
   try {
+    const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+    const traceStage = (stage: string) => {
+      if (!stageLogPath) {
+        return;
+      }
+      try {
+        appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+      } catch {
+        // Best-effort tracing only. Never let debug logging change runtime behavior.
+      }
+    };
     const logPreLockStage = (stage: string) => {
+      traceStage(`prelock-${stage}`);
       if (isProbeSession) {
         return;
       }
@@ -1770,6 +1783,7 @@ export async function runEmbeddedAttempt(
       });
 
       await prewarmSessionFile(params.sessionFile);
+      logPreLockStage("session-file-prewarmed");
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
@@ -1798,6 +1812,7 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         cwd: effectiveWorkspace,
       });
+      logPreLockStage("session-manager-prepared");
 
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
         cwd: effectiveWorkspace,
@@ -1829,6 +1844,7 @@ export async function runEmbeddedAttempt(
           extensionFactories,
         });
         await resourceLoader.reload();
+        logPreLockStage("resource-loader-reloaded");
       }
 
       // Get hook runner early so it's available when creating tools
@@ -1876,6 +1892,7 @@ export async function runEmbeddedAttempt(
         settingsManager,
         resourceLoader,
       }));
+      logPreLockStage("agent-session-created");
       applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
         throw new Error("Embedded agent session missing");
@@ -2103,6 +2120,7 @@ export async function runEmbeddedAttempt(
       }
 
       try {
+        traceStage("pre-sanitize-session-history");
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
           modelApi: params.model.api,
@@ -2114,6 +2132,7 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           policy: transcriptPolicy,
         });
+        traceStage(`post-sanitize-session-history messages=${prior.length}`);
         cacheTrace?.recordStage("session:sanitized", { messages: prior });
         const validatedGemini = transcriptPolicy.validateGeminiTurns
           ? validateGeminiTurns(prior)
@@ -2131,21 +2150,28 @@ export async function runEmbeddedAttempt(
         const limited = transcriptPolicy.repairToolUseResultPairing
           ? sanitizeToolUseResultPairing(truncated)
           : truncated;
+        traceStage(`post-limit-history messages=${limited.length}`);
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
+          traceStage("pre-replace-messages");
           activeSession.agent.replaceMessages(limited);
+          traceStage("post-replace-messages");
         }
 
         if (params.contextEngine) {
           try {
+            traceStage("pre-context-engine-assemble");
             const assembled = await params.contextEngine.assemble({
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
             });
+            traceStage(`post-context-engine-assemble messages=${assembled.messages.length}`);
             if (assembled.messages !== activeSession.messages) {
+              traceStage("pre-replace-context-engine-messages");
               activeSession.agent.replaceMessages(assembled.messages);
+              traceStage("post-replace-context-engine-messages");
             }
             if (assembled.systemPromptAddition) {
               systemPromptText = prependSystemPromptAddition({
@@ -2244,6 +2270,7 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      traceStage("pre-subscribe-embedded-session");
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -2269,6 +2296,7 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         agentId: sessionAgentId,
       });
+      traceStage("post-subscribe-embedded-session");
 
       const {
         assistantTexts,
@@ -2294,7 +2322,9 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         abort: abortRun,
       };
+      traceStage("pre-set-active-embedded-run");
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+      traceStage("post-set-active-embedded-run");
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
@@ -2353,12 +2383,14 @@ export async function runEmbeddedAttempt(
           Math.max(1, delayMs),
         );
       };
+      traceStage("pre-arm-timeout");
       const remainingTimeoutMs = getRemainingAttemptTimeoutMs();
       if (remainingTimeoutMs <= 0) {
         abortRun(true, makeTimeoutAbortReason());
       } else {
         scheduleAbortTimer(remainingTimeoutMs, "initial");
       }
+      traceStage(`post-arm-timeout remainingMs=${remainingTimeoutMs}`);
       if (!isProbeSession) {
         log.debug(
           `embedded run timeout armed: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs} remainingMs=${remainingTimeoutMs} setupMs=${Date.now() - attemptStartedAt}`,
@@ -2418,6 +2450,7 @@ export async function runEmbeddedAttempt(
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
         };
+        traceStage("pre-resolve-prompt-build-hook-result");
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
           messages: activeSession.messages,
@@ -2425,6 +2458,7 @@ export async function runEmbeddedAttempt(
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
         });
+        traceStage("post-resolve-prompt-build-hook-result");
         {
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
@@ -2456,6 +2490,7 @@ export async function runEmbeddedAttempt(
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
+        traceStage("pre-prompt-before-cache-trace");
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,
           messages: activeSession.messages,
@@ -2480,13 +2515,16 @@ export async function runEmbeddedAttempt(
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
 
         try {
+          traceStage("pre-prune-processed-history-images");
           // Idempotent cleanup for legacy sessions with persisted image payloads.
           // Called each run; only mutates already-answered user turns that still carry image blocks.
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
+          traceStage(`post-prune-processed-history-images pruned=${didPruneImages ? "yes" : "no"}`);
           if (didPruneImages) {
             activeSession.agent.replaceMessages(activeSession.messages);
           }
 
+          traceStage("pre-detect-and-load-prompt-images");
           // Detect and load images referenced in the prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
           const imageResult = await detectAndLoadPromptImages({
@@ -2503,6 +2541,7 @@ export async function runEmbeddedAttempt(
                 ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
                 : undefined,
           });
+          traceStage(`post-detect-and-load-prompt-images images=${imageResult.images.length}`);
 
           cacheTrace?.recordStage("prompt:images", {
             prompt: effectivePrompt,
@@ -2565,6 +2604,11 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
+          traceStage(
+            imageResult.images.length > 0
+              ? "pre-agent-session-prompt-with-images"
+              : "pre-agent-session-prompt",
+          );
           if (imageResult.images.length > 0) {
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {

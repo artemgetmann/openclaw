@@ -2,6 +2,7 @@ import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
+import { getGlobalPluginRegistry } from "./hook-runner-global.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import type { OpenClawPluginToolContext } from "./types.js";
@@ -58,12 +59,16 @@ export function resolvePluginTools(params: {
     return [];
   }
 
-  const registry = loadOpenClawPlugins({
-    config: effectiveConfig,
-    workspaceDir: params.context.workspaceDir,
-    env,
-    logger: createPluginLoaderLogger(log),
-  });
+  // Agent runtime paths eagerly bootstrap plugins before tool construction, so reusing the
+  // global registry avoids a second full discovery/import/register pass on the same turn.
+  const registry =
+    getGlobalPluginRegistry() ??
+    loadOpenClawPlugins({
+      config: effectiveConfig,
+      workspaceDir: params.context.workspaceDir,
+      env,
+      logger: createPluginLoaderLogger(log),
+    });
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
