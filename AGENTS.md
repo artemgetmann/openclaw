@@ -1,4 +1,11 @@
-> **CONSUMER BRANCH:** Read `CONSUMER.md` before starting any work. This branch is the OpenClaw consumer product, not the upstream open-source project. Different rules apply.
+> **CONSUMER PRODUCT:** Read `CONSUMER.md` before starting any work. This repo path is being used for the OpenClaw consumer product, not the upstream open-source project. Different rules apply.
+
+## Consumer Branch Target
+
+- The main consumer integration branch is `codex/consumer-openclaw-project`.
+- For consumer-product work, open PRs against `codex/consumer-openclaw-project` and merge there.
+- Treat `consumer` as a legacy branch. Do not target new consumer PRs there unless the user explicitly asks.
+- If consumer work was landed on the wrong branch by mistake, sync it forward into `codex/consumer-openclaw-project` and continue from there.
 
 # Repository Guidelines
 
