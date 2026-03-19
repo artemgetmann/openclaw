@@ -3,11 +3,7 @@ import {
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
-import {
-  closeChromeMcpSession,
-  ensureChromeMcpAvailable,
-  listChromeMcpTabs,
-} from "./chrome-mcp.js";
+import { closeChromeMcpSession, ensureChromeMcpAvailable } from "./chrome-mcp.js";
 import {
   isChromeCdpReady,
   isChromeReachable,
@@ -52,6 +48,13 @@ export function createProfileAvailability({
   setProfileRunning,
 }: AvailabilityDeps): AvailabilityOps {
   const capabilities = getBrowserProfileCapabilities(profile);
+  const resolveChromeMcpReadyTimeoutMs = (timeoutMs: number | undefined) => {
+    const minimumReadyTimeoutMs = 5_000;
+    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+      return minimumReadyTimeoutMs;
+    }
+    return Math.max(minimumReadyTimeoutMs, Math.floor(timeoutMs));
+  };
   const resolveTimeouts = (timeoutMs: number | undefined) =>
     resolveCdpReachabilityTimeouts({
       profileIsLoopback: profile.cdpIsLoopback,
@@ -62,8 +65,11 @@ export function createProfileAvailability({
 
   const isReachable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
-      // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required
-      await listChromeMcpTabs(profile.name);
+      // Chrome MCP startup/attach often takes longer than CDP ping windows.
+      // Clamp to a sane minimum so status/list checks avoid false negatives.
+      await ensureChromeMcpAvailable(profile.name, {
+        timeoutMs: resolveChromeMcpReadyTimeoutMs(timeoutMs),
+      });
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
