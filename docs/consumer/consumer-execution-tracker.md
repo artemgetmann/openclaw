@@ -13,6 +13,7 @@ Use these documents in this order when there is any ambiguity:
 3. `docs/consumer/CODEX-PROMPT.md` (browser-spike task framing)
 4. `docs/consumer/openclaw-consumer-brutal-execution-board.md` (30-day cadence)
 5. `docs/consumer/openclaw-consumer-go-to-market-plan.md` (architecture and launch context)
+6. `docs/consumer/macos-consumer-app.md` (consumer macOS app identity, UX, and distribution assumptions)
 
 ## Locked decisions
 
@@ -44,6 +45,36 @@ Use these documents in this order when there is any ambiguity:
   - LaunchAgent route was tested and reverted: it binds `19001` but runs against `~/.openclaw` state instead of `/tmp/openclaw-consumer`, so isolated auth/state checks fail.
 
 ## Execution phases and gates
+
+### Worktree A: Consumer macOS app simplification and isolation
+
+- [x] Consumer app uses a separate app/runtime identity
+  - [x] Separate bundle/app identity documented
+  - [x] Separate state dir + port defaults implemented
+  - [x] Separate launch labels/log roots implemented
+- [x] Consumer onboarding is local-first
+  - [x] Remote setup hidden behind Advanced
+  - [x] Consumer-facing copy avoids gateway jargon in the main flow
+- [x] Consumer default surface is simplified
+  - [x] Menu bar trimmed to status/chat/settings/pause/quit
+  - [x] Default settings tabs reduced to General/Permissions/About
+  - [x] Advanced toggle reveals hidden power-user surfaces
+- [x] Docs updated for the consumer app
+  - [x] Tracker kept current
+  - [x] Consumer app doc explains isolation and direct-download assumptions
+  - [x] Safe local testing instructions included
+
+Gate to exit Worktree A:
+
+- [ ] Consumer app can coexist with founder app on the same Mac without sharing runtime state unintentionally
+- [x] Consumer default UX is materially simpler while advanced controls remain accessible
+- [x] Docs match the implemented consumer behavior
+
+Worktree A validation notes (2026-03-18):
+
+- Changed macOS sources parse cleanly with `swiftc -frontend -parse`.
+- Consumer-targeted smoke coverage was added for gateway-port isolation and settings-tab visibility.
+- Full `swift test --package-path apps/macos --filter SettingsViewSmokeTests` remains blocked by an external macro/plugin failure in `swiftui-math` (`SwiftUIMacros` / `PreviewsMacros` missing in this environment).
 
 ### Phase A: Branch convergence (blocking)
 
