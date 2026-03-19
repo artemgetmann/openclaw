@@ -41,7 +41,11 @@ import {
 import { dispatchPluginInteractiveHandler } from "../../../src/plugins/interactive.js";
 import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
-import { applyModelOverrideToSessionEntry } from "../../../src/sessions/model-overrides.js";
+import {
+  applyFutureThreadModelDefaultToSessionEntry,
+  applyModelOverrideToSessionEntry,
+} from "../../../src/sessions/model-overrides.js";
+import { resolveFutureThreadParentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
@@ -89,6 +93,10 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+import {
+  isTelegramTopicCreateServiceMessage,
+  seedTelegramThreadSessionOnTopicCreate,
+} from "./thread-session-seeding.js";
 
 const APPROVE_CALLBACK_DATA_RE =
   /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(allow-once|allow-always|deny)\b/i;
@@ -1507,6 +1515,27 @@ export const registerTelegramHandlers = ({
                   isDefault: isDefaultSelection,
                 },
               });
+
+              // Model-picker callbacks bypass directive handling, so we must
+              // mirror the same "future thread default" write here. Without
+              // this, selecting a model inside a Telegram topic only updates
+              // the current topic and new sibling topics keep the old default.
+              const parentSessionKey = resolveFutureThreadParentSessionKey({
+                sessionKey,
+                channelHint: "telegram",
+              });
+              if (parentSessionKey) {
+                const parentEntry = store[parentSessionKey] ?? {};
+                store[parentSessionKey] = parentEntry;
+                applyFutureThreadModelDefaultToSessionEntry({
+                  entry: parentEntry,
+                  selection: {
+                    provider: selection.provider,
+                    model: selection.model,
+                    isDefault: isDefaultSelection,
+                  },
+                });
+              }
             });
 
             // Update message to show success with visual feedback
@@ -1672,6 +1701,38 @@ export const registerTelegramHandlers = ({
           logger,
         });
         if (!dmAuthorized) {
+          return;
+        }
+      }
+
+      const isTopicCreateServiceMessage = isTelegramTopicCreateServiceMessage({
+        message: event.msg,
+        isGroup: event.isGroup,
+        resolvedThreadId,
+        dmThreadId,
+      });
+      if (isTopicCreateServiceMessage) {
+        // Snapshot future-thread defaults at Telegram topic creation time.
+        // Otherwise an older topic with no prior turns looks "new" later and
+        // incorrectly inherits newer parent defaults on first real message.
+        await seedTelegramThreadSessionOnTopicCreate({
+          cfg: loadConfig(),
+          accountId,
+          chatId: event.chatId,
+          isGroup: event.isGroup,
+          senderId: event.senderId,
+          resolvedThreadId,
+          dmThreadId,
+          topicAgentId: topicConfig?.agentId,
+        });
+
+        const hasRenderableTopicCreateContent =
+          Boolean(getTelegramTextParts(event.msg).text.trim()) || hasInboundMedia(event.msg);
+        if (!hasRenderableTopicCreateContent) {
+          // Pure topic-create service messages must stop here. Letting them
+          // flow into normal reply/session init overwrites the seeded snapshot
+          // with a blank child entry, which reintroduces retroactive
+          // inheritance for older topics.
           return;
         }
       }
