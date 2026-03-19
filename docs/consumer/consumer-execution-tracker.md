@@ -58,9 +58,10 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
 - `origin/main...upstream/main`: ahead 88, behind 220
 - Phase A merge and runtime validation are complete.
 - Phase B status now:
-  - `profile=user` is partially healthy on clean gateway (`status` passes), but `tabs`/`open` are blocked by Chrome MCP attach behavior in the current Chrome session.
+  - `profile=user` control lane passes when Chrome is launched with explicit CDP flags (`--remote-debugging-port`) and gateway uses that browser URL.
+  - `profile=user` still fails against the current UI-enabled `chrome://inspect` session (`/json/version` 404 or `list_pages` timeout).
   - `profile=openclaw` control lane passes on a clean direct-built gateway (`start`, `status`, `tabs`, `open https://example.com`).
-  - Gateway/browser control is healthy for managed profile; existing-session remains the active blocker.
+  - Gateway/browser control is healthy for both profiles under explicit CDP attach.
   - A benchmark-only runtime at `/tmp/openclaw-consumer-bench` disables Telegram and removes the stale `plugins.entries.openai` config noise so browser checks do not collide with shared bot traffic.
   - Local runner is no longer blocked: trivial `agent --local` prompt now returns `OK` reliably.
   - External probe confirms the same failure outside OpenClaw (`chrome-devtools-mcp list_pages` times out on `--autoConnect` against current Chrome session).
@@ -157,12 +158,12 @@ OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm opencla
 
 ## Benchmark tracker template
 
-| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                                                           |
-| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ----------------------------------------------------------------------------------------------- |
-| user (existing-session) | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | `status` passes, but Chrome MCP `list_pages` times out/attach fails with current Chrome session |
-| openclaw (managed)      | pending       | pending     | pending            | pending          | pending           | ready-for-runs     | control lane is healthy on clean gateway; benchmark task runs can proceed                       |
-| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                                                                        |
-| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                                                                                 |
+| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                                                               |
+| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | --------------------------------------------------------------------------------------------------- |
+| user (existing-session) | pending       | pending     | pending            | pending          | pending           | ready-with-cdp-url | control lane passes when Chrome exposes standard CDP endpoint (for example `http://127.0.0.1:9333`) |
+| openclaw (managed)      | pending       | pending     | pending            | pending          | pending           | ready-for-runs     | control lane is healthy on clean gateway; benchmark task runs can proceed                           |
+| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                                                                            |
+| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                                                                                     |
 
 ## Scope guardrails (week 1)
 
@@ -228,7 +229,7 @@ Out of scope:
   - Reproduced `profile=user` failure outside OpenClaw with direct MCP probe (`list_pages` timeout using `chrome-devtools-mcp --autoConnect`).
   - Created `/tmp/openclaw-consumer-bench` as a benchmark-only copy with Telegram disabled and stale `plugins.entries.openai` removed.
 - Blocked:
-  - `profile=user` existing-session path is still blocked by current Chrome MCP handshake behavior (`autoConnect` call timeout; `--browserUrl http://127.0.0.1:9222` returns `/json/version` 404).
+  - Existing desktop Chrome in `chrome://inspect` remote-debug mode still fails OpenClaw existing-session path (`/json/version` 404 on `127.0.0.1:9222`).
 - Evidence links:
   - `/tmp/openclaw-consumer-bench/.openclaw/openclaw.json`
   - `/tmp/openclaw/openclaw-2026-03-19.log`
@@ -236,6 +237,6 @@ Out of scope:
   - `/tmp/chrome-mcp-probe.log`
   - `/tmp/chrome-mcp-probe-browserurl.log`
 - Next 3 actions:
-  - Validate existing-session against a Chrome instance started with explicit CDP flags (`--remote-debugging-port`) and re-run `user` lane control checks.
+  - Capture and codify the exact existing-session prerequisite: launch Chrome with explicit CDP endpoint and point gateway Chrome MCP to it.
   - Run phase-B benchmark tasks on `profile=openclaw` immediately while existing-session is being stabilized.
   - Keep benchmark/debug runs on `node dist/entry.js ...` until the rebuild-churn path is out of the picture.
