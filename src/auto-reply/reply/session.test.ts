@@ -2186,7 +2186,6 @@ describe("initSessionState Telegram future-thread model defaults", () => {
         updatedAt: Date.now(),
         futureThreadProviderOverride: "openai-codex",
         futureThreadModelOverride: "gpt-5.3-codex",
-        futureThreadThinkingLevelOverride: "high",
       },
     });
 
@@ -2202,7 +2201,6 @@ describe("initSessionState Telegram future-thread model defaults", () => {
 
     expect(result.sessionEntry.providerOverride).toBe("openai-codex");
     expect(result.sessionEntry.modelOverride).toBe("gpt-5.3-codex");
-    expect(result.sessionEntry.thinkingLevel).toBe("high");
   });
 
   it("seeds new Telegram DM threaded sessions from parent future-thread defaults", async () => {
@@ -2215,7 +2213,6 @@ describe("initSessionState Telegram future-thread model defaults", () => {
         updatedAt: Date.now(),
         futureThreadProviderOverride: "openai-codex",
         futureThreadModelOverride: "gpt-5.3-codex",
-        futureThreadThinkingLevelOverride: "medium",
       },
     });
 
@@ -2231,7 +2228,6 @@ describe("initSessionState Telegram future-thread model defaults", () => {
 
     expect(result.sessionEntry.providerOverride).toBe("openai-codex");
     expect(result.sessionEntry.modelOverride).toBe("gpt-5.3-codex");
-    expect(result.sessionEntry.thinkingLevel).toBe("medium");
   });
 
   it("seeds new Telegram DM main-scoped thread sessions when channel context is telegram", async () => {
@@ -2244,7 +2240,6 @@ describe("initSessionState Telegram future-thread model defaults", () => {
         updatedAt: Date.now(),
         futureThreadProviderOverride: "openai-codex",
         futureThreadModelOverride: "gpt-5.3-codex",
-        futureThreadThinkingLevelOverride: "off",
       },
     });
 
@@ -2261,7 +2256,6 @@ describe("initSessionState Telegram future-thread model defaults", () => {
 
     expect(result.sessionEntry.providerOverride).toBe("openai-codex");
     expect(result.sessionEntry.modelOverride).toBe("gpt-5.3-codex");
-    expect(result.sessionEntry.thinkingLevel).toBe("off");
   });
 
   it("does not seed main-scoped thread sessions without telegram channel context", async () => {
@@ -2274,7 +2268,6 @@ describe("initSessionState Telegram future-thread model defaults", () => {
         updatedAt: Date.now(),
         futureThreadProviderOverride: "openai-codex",
         futureThreadModelOverride: "gpt-5.3-codex",
-        futureThreadThinkingLevelOverride: "high",
       },
     });
 
@@ -2290,7 +2283,6 @@ describe("initSessionState Telegram future-thread model defaults", () => {
 
     expect(result.sessionEntry.providerOverride).toBeUndefined();
     expect(result.sessionEntry.modelOverride).toBeUndefined();
-    expect(result.sessionEntry.thinkingLevel).toBeUndefined();
   });
 
   it("does not mutate existing thread sessions when parent future-thread defaults change", async () => {
@@ -2303,7 +2295,6 @@ describe("initSessionState Telegram future-thread model defaults", () => {
         updatedAt: Date.now(),
         futureThreadProviderOverride: "openai-codex",
         futureThreadModelOverride: "gpt-5.3-codex",
-        futureThreadThinkingLevelOverride: "high",
       },
       [topicSessionKey]: {
         sessionId: "existing-topic",
@@ -2324,7 +2315,6 @@ describe("initSessionState Telegram future-thread model defaults", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionEntry.providerOverride).toBeUndefined();
     expect(result.sessionEntry.modelOverride).toBeUndefined();
-    expect(result.sessionEntry.thinkingLevel).toBeUndefined();
   });
 });
 

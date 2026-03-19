@@ -53,14 +53,6 @@ final class AppState {
         }
     }
 
-    var showAdvancedSettings: Bool {
-        didSet {
-            self.ifNotPreview {
-                UserDefaults.standard.set(self.showAdvancedSettings, forKey: showAdvancedSettingsKey)
-            }
-        }
-    }
-
     var swabbleEnabled: Bool {
         didSet {
             self.ifNotPreview {
@@ -259,7 +251,6 @@ final class AppState {
         self.launchAtLogin = false
         self.onboardingSeen = onboardingSeen
         self.debugPaneEnabled = UserDefaults.standard.bool(forKey: debugPaneEnabledKey)
-        self.showAdvancedSettings = UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
         let savedVoiceWake = UserDefaults.standard.bool(forKey: swabbleEnabledKey)
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = UserDefaults.standard

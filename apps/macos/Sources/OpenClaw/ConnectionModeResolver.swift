@@ -43,7 +43,7 @@ enum ConnectionModeResolver {
             return EffectiveConnectionMode(mode: storedMode, source: .userDefaults)
         }
 
-        let seen = defaults.bool(forKey: onboardingSeenKey)
+        let seen = defaults.bool(forKey: "openclaw.onboardingSeen")
         return EffectiveConnectionMode(mode: seen ? .local : .unconfigured, source: .onboarding)
     }
 }

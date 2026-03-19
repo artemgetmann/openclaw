@@ -25,7 +25,6 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import {
-  clearSkillsRemoteState,
   primeRemoteSkillsCache,
   refreshRemoteBinsForConnectedNodes,
   setSkillsRemoteRegistry,
@@ -80,7 +79,7 @@ import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
-import { loadGatewayPlugins } from "./server-plugins.js";
+import { loadGatewayPlugins, setFallbackGatewayContext } from "./server-plugins.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -89,16 +88,8 @@ import { logGatewayStartup } from "./server-startup-log.js";
 import {
   runGatewayStartupAuthBootstrap,
   runGatewayStartupConfigPreflight,
-  runGatewayStartupControlUiRootPhase,
-  runGatewayStartupPluginBootstrapPhase,
-  runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
-  runGatewayStartupDiscoveryPhase,
   runGatewayStartupSecretsPrecheck,
-  runGatewayStartupSidecarPhase,
-  runGatewayStartupTailscaleExposurePhase,
-  runGatewayStartupTransportBootstrapPhase,
-  runGatewayStartupTlsRuntimePhase,
 } from "./server-startup-preflight.js";
 import { createGatewaySecretsActivationController } from "./server-startup-secrets.js";
 import { startGatewaySidecars } from "./server-startup.js";
@@ -106,7 +97,6 @@ import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
 import {
-  clearGatewayHealthRuntimeState,
   getHealthCache,
   getHealthVersion,
   getPresenceVersion,
@@ -389,15 +379,12 @@ export async function startGatewayServer(
   const emptyPluginRegistry = createEmptyPluginRegistry();
   const { pluginRegistry, gatewayMethods: baseGatewayMethods } = minimalTestGateway
     ? { pluginRegistry: emptyPluginRegistry, gatewayMethods: baseMethods }
-    : await runGatewayStartupPluginBootstrapPhase({
-        loadPlugins: () =>
-          loadGatewayPlugins({
-            cfg: cfgAtStart,
-            workspaceDir: defaultWorkspaceDir,
-            log,
-            coreGatewayHandlers,
-            baseMethods,
-          }),
+    : loadGatewayPlugins({
+        cfg: cfgAtStart,
+        workspaceDir: defaultWorkspaceDir,
+        log,
+        coreGatewayHandlers,
+        baseMethods,
       });
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
@@ -408,23 +395,19 @@ export async function startGatewayServer(
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
   const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
   let pluginServices: PluginServicesHandle | null = null;
-  const startupContextWithRuntimeConfig = await runGatewayStartupRuntimeConfigPhase({
-    context: startupContext,
-    resolveRuntimeConfig: async (config) =>
-      await resolveGatewayRuntimeConfig({
-        cfg: config,
-        port,
-        bind: opts.bind,
-        host: opts.host,
-        controlUiEnabled: opts.controlUiEnabled,
-        openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
-        openResponsesEnabled: opts.openResponsesEnabled,
-        auth: opts.auth,
-        tailscale: opts.tailscale,
-      }),
+  const runtimeConfig = await resolveGatewayRuntimeConfig({
+    cfg: cfgAtStart,
+    port,
+    bind: opts.bind,
+    host: opts.host,
+    controlUiEnabled: opts.controlUiEnabled,
+    openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
+    openResponsesEnabled: opts.openResponsesEnabled,
+    auth: opts.auth,
+    tailscale: opts.tailscale,
   });
-  startupContext = startupContextWithRuntimeConfig;
-  const runtimeConfig = startupContextWithRuntimeConfig.runtimeConfig;
+  // Persist runtime-derived startup data so later phases/tests can assert phase outputs explicitly.
+  startupContext = { ...startupContext, runtimeConfig };
   const {
     bindHost,
     controlUiEnabled,
@@ -448,41 +431,29 @@ export async function startGatewayServer(
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
 
-  const startupContextWithControlUiRoot = await runGatewayStartupControlUiRootPhase({
-    context: startupContextWithRuntimeConfig,
-    resolveControlUiRootState: async () =>
-      await resolveGatewayControlUiRootState({
-        controlUiEnabled,
-        controlUiRootOverride,
-        gatewayRuntime,
-        log,
-        runtimePathContext: {
-          moduleUrl: import.meta.url,
-          argv1: process.argv[1],
-          cwd: process.cwd(),
-        },
-      }),
+  const controlUiRootState = await resolveGatewayControlUiRootState({
+    controlUiEnabled,
+    controlUiRootOverride,
+    gatewayRuntime,
+    log,
+    runtimePathContext: {
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    },
   });
-  startupContext = startupContextWithControlUiRoot;
-  const controlUiRootState = startupContextWithControlUiRoot.controlUiRootState;
+  // Keep resolved control-ui startup state in the shared context for deterministic phase tracking.
+  startupContext = { ...startupContext, controlUiRootState };
 
   const wizardRunner = opts.wizardRunner ?? runSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
   let canvasHostServer: CanvasHostServer | null = null;
-  const gatewayTls = await runGatewayStartupTlsRuntimePhase({
-    loadTlsRuntime: async () => {
-      const resolvedGatewayTls = await loadGatewayTlsRuntime(
-        cfgAtStart.gateway?.tls,
-        log.child("tls"),
-      );
-      if (cfgAtStart.gateway?.tls?.enabled && !resolvedGatewayTls.enabled) {
-        throw new Error(resolvedGatewayTls.error ?? "gateway tls: failed to enable");
-      }
-      return resolvedGatewayTls;
-    },
-  });
+  const gatewayTls = await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
+  if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
+    throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
+  }
   const serverStartedAt = Date.now();
   const channelManager = createChannelManager({
     loadConfig,
@@ -513,36 +484,33 @@ export async function startGatewayServer(
     removeChatRun,
     chatAbortControllers,
     toolEventRecipients,
-  } = await runGatewayStartupTransportBootstrapPhase({
-    bootstrapTransport: async () =>
-      await createGatewayRuntimeState({
-        cfg: cfgAtStart,
-        bindHost,
-        port,
-        controlUiEnabled,
-        controlUiBasePath,
-        controlUiRoot: controlUiRootState,
-        openAiChatCompletionsEnabled,
-        openAiChatCompletionsConfig,
-        openResponsesEnabled,
-        openResponsesConfig,
-        strictTransportSecurityHeader,
-        resolvedAuth,
-        rateLimiter: authRateLimiter,
-        gatewayTls,
-        hooksConfig: () => hooksConfig,
-        getHookClientIpConfig: () => hookClientIpConfig,
-        pluginRegistry,
-        deps,
-        canvasRuntime,
-        canvasHostEnabled,
-        allowCanvasHostInTests: opts.allowCanvasHostInTests,
-        logCanvas,
-        log,
-        logHooks,
-        logPlugins,
-        getReadiness,
-      }),
+  } = await createGatewayRuntimeState({
+    cfg: cfgAtStart,
+    bindHost,
+    port,
+    controlUiEnabled,
+    controlUiBasePath,
+    controlUiRoot: controlUiRootState,
+    openAiChatCompletionsEnabled,
+    openAiChatCompletionsConfig,
+    openResponsesEnabled,
+    openResponsesConfig,
+    strictTransportSecurityHeader,
+    resolvedAuth,
+    rateLimiter: authRateLimiter,
+    gatewayTls,
+    hooksConfig: () => hooksConfig,
+    getHookClientIpConfig: () => hookClientIpConfig,
+    pluginRegistry,
+    deps,
+    canvasRuntime,
+    canvasHostEnabled,
+    allowCanvasHostInTests: opts.allowCanvasHostInTests,
+    logCanvas,
+    log,
+    logHooks,
+    logPlugins,
+    getReadiness,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();
@@ -577,20 +545,17 @@ export async function startGatewayServer(
 
   if (!minimalTestGateway) {
     const machineDisplayName = await getMachineDisplayName();
-    const discovery = await runGatewayStartupDiscoveryPhase({
-      startDiscovery: async () =>
-        await startGatewayDiscovery({
-          machineDisplayName,
-          port,
-          gatewayTls: gatewayTls.enabled
-            ? { enabled: true, fingerprintSha256: gatewayTls.fingerprintSha256 }
-            : undefined,
-          wideAreaDiscoveryEnabled: cfgAtStart.discovery?.wideArea?.enabled === true,
-          wideAreaDiscoveryDomain: cfgAtStart.discovery?.wideArea?.domain,
-          tailscaleMode,
-          mdnsMode: cfgAtStart.discovery?.mdns?.mode,
-          logDiscovery,
-        }),
+    const discovery = await startGatewayDiscovery({
+      machineDisplayName,
+      port,
+      gatewayTls: gatewayTls.enabled
+        ? { enabled: true, fingerprintSha256: gatewayTls.fingerprintSha256 }
+        : undefined,
+      wideAreaDiscoveryEnabled: cfgAtStart.discovery?.wideArea?.enabled === true,
+      wideAreaDiscoveryDomain: cfgAtStart.discovery?.wideArea?.domain,
+      tailscaleMode,
+      mdnsMode: cfgAtStart.discovery?.mdns?.mode,
+      logDiscovery,
     });
     bonjourStop = discovery.bonjourStop;
   }
@@ -795,7 +760,7 @@ export async function startGatewayServer(
   // Store the gateway context as a fallback for plugin subagent dispatch
   // in non-WS paths (Telegram polling, WhatsApp, etc.) where no per-request
   // scope is set via AsyncLocalStorage.
-  runtimeState.fallbackGatewayContext.set(gatewayRequestContext);
+  setFallbackGatewayContext(gatewayRequestContext);
 
   attachGatewayWsHandlers({
     wss,
@@ -842,32 +807,26 @@ export async function startGatewayServer(
       });
   const tailscaleCleanup = minimalTestGateway
     ? null
-    : await runGatewayStartupTailscaleExposurePhase({
-        startTailscaleExposure: async () =>
-          await startGatewayTailscaleExposure({
-            tailscaleMode,
-            resetOnExit: tailscaleConfig.resetOnExit,
-            port,
-            controlUiBasePath,
-            logTailscale,
-          }),
+    : await startGatewayTailscaleExposure({
+        tailscaleMode,
+        resetOnExit: tailscaleConfig.resetOnExit,
+        port,
+        controlUiBasePath,
+        logTailscale,
       });
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   if (!minimalTestGateway) {
-    ({ browserControl, pluginServices } = await runGatewayStartupSidecarPhase({
-      startSidecars: async () =>
-        await startGatewaySidecars({
-          cfg: cfgAtStart,
-          pluginRegistry,
-          defaultWorkspaceDir,
-          deps,
-          startChannels,
-          log,
-          logHooks,
-          logChannels,
-          logBrowser,
-        }),
+    ({ browserControl, pluginServices } = await startGatewaySidecars({
+      cfg: cfgAtStart,
+      pluginRegistry,
+      defaultWorkspaceDir,
+      deps,
+      startChannels,
+      log,
+      logHooks,
+      logChannels,
+      logBrowser,
     }));
   }
 
@@ -991,10 +950,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
-      clearGatewayHealthRuntimeState();
-      clearSkillsRemoteState();
       runtimeState.secretsRuntime.clear();
-      runtimeState.fallbackGatewayContext.clear();
       await close(opts);
     },
   };

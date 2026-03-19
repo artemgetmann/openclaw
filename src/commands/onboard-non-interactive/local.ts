@@ -4,16 +4,13 @@ import { resolveGatewayPort, writeConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
-import {
-  applyLocalSetupWorkspaceConfig,
-  resolveOnboardingWorkspaceDir,
-} from "../onboard-config.js";
-import { runGatewayReachabilityHealthWorkflow } from "../onboard-gateway-health.js";
+import { applyLocalSetupWorkspaceConfig } from "../onboard-config.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
   resolveControlUiLinks,
+  waitForGatewayReachable,
 } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { inferAuthChoiceFromFlags } from "./local/auth-choice-inference.js";
@@ -24,6 +21,7 @@ import {
   logNonInteractiveOnboardingJson,
 } from "./local/output.js";
 import { applyNonInteractiveSkillsConfig } from "./local/skills-config.js";
+import { resolveNonInteractiveWorkspaceDir } from "./local/workspace.js";
 
 const INSTALL_DAEMON_HEALTH_DEADLINE_MS = 45_000;
 const ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS = 15_000;
@@ -77,9 +75,9 @@ export async function runNonInteractiveLocalSetup(params: {
   const { opts, runtime, baseConfig } = params;
   const mode = "local" as const;
 
-  const workspaceDir = resolveOnboardingWorkspaceDir({
-    requestedWorkspace: opts.workspace,
-    configuredWorkspace: baseConfig.agents?.defaults?.workspace,
+  const workspaceDir = resolveNonInteractiveWorkspaceDir({
+    opts,
+    baseConfig,
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
 
@@ -192,15 +190,15 @@ export async function runNonInteractiveLocalSetup(params: {
   }
 
   if (!opts.skipHealth) {
+    const { healthCommand } = await import("../health.js");
     const links = resolveControlUiLinks({
       bind: gatewayResult.bind as "auto" | "lan" | "loopback" | "custom" | "tailnet",
       port: gatewayResult.port,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: undefined,
     });
-    const probe = await runGatewayReachabilityHealthWorkflow({
-      runtime,
-      wsUrl: links.wsUrl,
+    const probe = await waitForGatewayReachable({
+      url: links.wsUrl,
       token: gatewayResult.gatewayToken,
       deadlineMs: opts.installDaemon
         ? INSTALL_DAEMON_HEALTH_DEADLINE_MS
@@ -238,6 +236,7 @@ export async function runNonInteractiveLocalSetup(params: {
       runtime.exit(1);
       return;
     }
+    await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
   }
 
   logNonInteractiveOnboardingJson({
