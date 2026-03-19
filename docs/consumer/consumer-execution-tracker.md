@@ -82,7 +82,7 @@ Worktree A validation notes (2026-03-19):
 - Same-Mac isolation smoke passed with the founder gateway still active on `18789`:
   - consumer app process launched from `dist/OpenClaw Consumer.app`
   - consumer defaults plist written to `~/Library/Preferences/ai.openclaw.consumer.mac.debug.plist`
-  - consumer runtime socket created at `~/.openclaw-consumer/exec-approvals.sock`
+  - consumer runtime socket created at `~/Library/Application Support/OpenClaw Consumer/.openclaw/exec-approvals.sock`
   - consumer app held no TCP listener and did not take over the founder gateway launch label
 - Gateway auto-bootstrap on consumer port `19001` was not exercised in Worktree A; that remains Worktree B scope.
 

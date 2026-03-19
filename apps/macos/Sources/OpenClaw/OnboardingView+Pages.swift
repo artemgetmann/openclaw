@@ -29,13 +29,21 @@ extension OnboardingView {
     }
 
     func welcomePage() -> some View {
-        self.onboardingPage {
+        let consumerSecurityCopy = "\(AppFlavor.current.appName) can run apps, edit files, and take actions on your Mac when you allow it."
+        let standardSecurityCopy =
+            "The connected AI agent can trigger powerful actions on your Mac, " +
+            "including running commands, reading/writing files, and capturing screenshots — " +
+            "depending on the permissions you grant.\n\n" +
+            "Only enable \(AppFlavor.current.appName) if you understand the risks and trust the prompts and " +
+            "integrations you use."
+
+        return self.onboardingPage {
             VStack(spacing: 22) {
                 Text("Welcome to \(AppFlavor.current.appName)")
                     .font(.largeTitle.weight(.semibold))
                 Text(
                     AppFlavor.current.isConsumer
-                        ? "Set up your AI operator on this Mac. We keep the first run simple and hide the heavy machinery unless you ask for it."
+                        ? "Your AI operator for this Mac."
                         : "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
@@ -55,20 +63,35 @@ extension OnboardingView {
                             Text("Security notice")
                                 .font(.headline)
                             Text(
-                                "The connected AI agent can trigger powerful actions on your Mac, " +
-                                    "including running commands, reading/writing files, and capturing screenshots — " +
-                                    "depending on the permissions you grant.\n\n" +
-                                    "Only enable \(AppFlavor.current.appName) if you understand the risks and trust the prompts and " +
-                                    "integrations you use.")
+                                AppFlavor.current.isConsumer
+                                    ? consumerSecurityCopy
+                                    : standardSecurityCopy)
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
+
+                            if AppFlavor.current.isConsumer {
+                                Divider()
+                                    .padding(.vertical, 6)
+
+                                OnboardingWizardCardContent(
+                                    wizard: self.onboardingWizard,
+                                    isConsumer: true,
+                                    mode: self.state.connectionMode,
+                                    workspacePath: self.workspacePath)
+                            }
                         }
                     }
                 }
                 .frame(maxWidth: 520)
             }
             .padding(.top, 16)
+        }
+        .task {
+            guard AppFlavor.current.isConsumer else { return }
+            await self.onboardingWizard.startIfNeeded(
+                mode: self.state.connectionMode,
+                workspace: self.workspacePath.isEmpty ? nil : self.workspacePath)
         }
     }
 

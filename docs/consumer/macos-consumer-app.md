@@ -13,7 +13,8 @@ The consumer macOS app is the simplified local controller for the OpenClaw consu
 The consumer build is a separate app/runtime identity, not a separate repository.
 
 - App identity: separate bundle identifier and app variant metadata
-- State directory: `~/.openclaw-consumer`
+- State directory: `~/Library/Application Support/OpenClaw Consumer/.openclaw`
+- Legacy fallback: `~/.openclaw-consumer` is still read if it already exists from an older local test setup
 - Local gateway port: `19001`
 - Launch labels: `ai.openclaw.consumer.mac` and `ai.openclaw.consumer.gateway`
 - Logs: `/tmp/openclaw-consumer`

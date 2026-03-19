@@ -46,6 +46,14 @@ extension OnboardingView {
 
     func handleNext() {
         if self.isWizardBlocking { return }
+        if AppFlavor.current.isConsumer,
+           self.activePageIndex == 0,
+           self.state.connectionMode == .unconfigured
+        {
+            // Consumer onboarding defaults to local mode instead of making the
+            // user choose infrastructure on first launch.
+            self.selectLocalGateway()
+        }
         if self.currentPage < self.pageCount - 1 {
             withAnimation { self.currentPage += 1 }
         } else {
