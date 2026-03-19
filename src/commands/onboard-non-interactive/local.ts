@@ -13,8 +13,8 @@ import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
-  resolveControlUiLinks,
 } from "../onboard-helpers.js";
+import { resolveLocalGatewayReachabilityPlan } from "../onboard-local-gateway.js";
 import { createLocalSetupIntent, resolveLocalSetupExecutionPlan } from "../onboard-local-plan.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { inferAuthChoiceFromFlags } from "./local/auth-choice-inference.js";
@@ -25,9 +25,6 @@ import {
   logNonInteractiveOnboardingJson,
 } from "./local/output.js";
 import { applyNonInteractiveSkillsConfig } from "./local/skills-config.js";
-
-const INSTALL_DAEMON_HEALTH_DEADLINE_MS = 45_000;
-const ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS = 15_000;
 
 async function collectGatewayHealthFailureDiagnostics(): Promise<
   GatewayHealthFailureDiagnostics | undefined
@@ -139,6 +136,7 @@ export async function runNonInteractiveLocalSetup(params: {
     return;
   }
   nextConfig = gatewayResult.nextConfig;
+  const gatewayState = gatewayResult.state;
 
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
 
@@ -164,7 +162,7 @@ export async function runNonInteractiveLocalSetup(params: {
       nextConfig,
       opts,
       runtime,
-      port: gatewayResult.port,
+      port: gatewayState.port,
     });
     daemonInstallStatus = daemonInstall.installed
       ? {
@@ -207,20 +205,18 @@ export async function runNonInteractiveLocalSetup(params: {
   }
 
   if (executionPlan.shouldRunHealthCheck) {
-    const links = resolveControlUiLinks({
-      bind: gatewayResult.bind as "auto" | "lan" | "loopback" | "custom" | "tailnet",
-      port: gatewayResult.port,
-      customBindHost: nextConfig.gateway?.customBindHost,
-      basePath: undefined,
+    const reachabilityPlan = await resolveLocalGatewayReachabilityPlan({
+      state: gatewayState,
+      config: nextConfig,
+      env: process.env,
+      executionPlan,
     });
     const probe = await runGatewayReachabilityHealthWorkflow({
       runtime,
-      wsUrl: links.wsUrl,
-      token: gatewayResult.gatewayToken,
-      deadlineMs:
-        executionPlan.healthExpectation === "managed-gateway"
-          ? INSTALL_DAEMON_HEALTH_DEADLINE_MS
-          : ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS,
+      wsUrl: reachabilityPlan.wsUrl,
+      token: reachabilityPlan.token,
+      password: reachabilityPlan.password,
+      deadlineMs: reachabilityPlan.deadlineMs,
     });
     if (!probe.ok) {
       const diagnostics =
@@ -232,11 +228,11 @@ export async function runNonInteractiveLocalSetup(params: {
         runtime,
         mode,
         phase: "gateway-health",
-        message: `Gateway did not become reachable at ${links.wsUrl}.`,
+        message: `Gateway did not become reachable at ${reachabilityPlan.wsUrl}.`,
         detail: probe.detail,
         gateway: {
-          wsUrl: links.wsUrl,
-          httpUrl: links.httpUrl,
+          wsUrl: reachabilityPlan.wsUrl,
+          httpUrl: reachabilityPlan.httpUrl,
         },
         installDaemon: executionPlan.daemonDecision === "install",
         daemonInstall: daemonInstallStatus,
@@ -265,10 +261,10 @@ export async function runNonInteractiveLocalSetup(params: {
     workspaceDir,
     authChoice,
     gateway: {
-      port: gatewayResult.port,
-      bind: gatewayResult.bind,
-      authMode: gatewayResult.authMode,
-      tailscaleMode: gatewayResult.tailscaleMode,
+      port: gatewayState.port,
+      bind: gatewayState.bind,
+      authMode: gatewayState.authMode,
+      tailscaleMode: gatewayState.tailscaleMode,
     },
     installDaemon: executionPlan.daemonDecision === "install",
     daemonInstall: daemonInstallStatus,

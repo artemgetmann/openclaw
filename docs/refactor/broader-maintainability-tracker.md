@@ -17,7 +17,7 @@ Current status:
 - Stage 2B startup-threaded container seam complete
 - Stage 3A complete enough to pause (startup phases extracted, typed context threaded across early phases, startup failure classification unified across major boundaries)
 - Stage 3B initial seam in progress
-- Stages 4 to 5 not started
+- Stages 4 to 5 deferred until Stage 3B is complete
 
 ## Protected runtime slice
 
@@ -102,6 +102,8 @@ Do not edit these files under this plan:
 - [x] Extract shared gateway exposure safety normalization used by wizard and non-interactive local onboarding
 - [x] Reuse shared gateway exposure safety normalization in `configure.gateway`
 - [x] Thread a shared `LocalSetupIntent` and execution-plan seam through wizard and non-interactive local setup
+- [x] Extract shared `LocalGatewaySetupState` used by wizard and non-interactive local onboarding
+- [x] Derive shared local gateway reachability inputs from `LocalGatewaySetupState`
 - [ ] Define shared `OnboardingPlan` decision graph
 - [ ] Keep separate interactive and non-interactive executors
 - [ ] Add parity coverage for equivalent inputs
@@ -120,6 +122,7 @@ Do not edit these files under this plan:
 
 ## Notes
 
+- This maintainability pass ends at Stage 3B. Stages 4 and 5 are intentionally deferred into a separate follow-on initiative.
 - Keep runtime-worktree isolation strict.
 - If unrelated changes appear, work around them. Do not revert other contributors.
 - Do not touch `docs/zh-CN/**` unless explicitly requested.
