@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { loadConfig } from "../config/config.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
@@ -27,12 +29,14 @@ type ChromeMcpSession = {
 };
 
 type ChromeMcpSessionFactory = (profileName: string) => Promise<ChromeMcpSession>;
+type ChromeMcpCallOptions = {
+  timeoutMs?: number;
+};
 
 const DEFAULT_CHROME_MCP_COMMAND = "npx";
 const DEFAULT_CHROME_MCP_ARGS = [
   "-y",
   "chrome-devtools-mcp@latest",
-  "--autoConnect",
   // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
   "--experimentalStructuredContent",
   "--experimental-page-id-routing",
@@ -41,6 +45,124 @@ const DEFAULT_CHROME_MCP_ARGS = [
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
+const DEFAULT_CHROME_MCP_REQUEST_TIMEOUT_MS = 30_000;
+
+function traceChromeMcpStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only.
+  }
+}
+
+function resolveTimeoutMs(timeoutMs: number | undefined): number {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return DEFAULT_CHROME_MCP_REQUEST_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.floor(timeoutMs));
+}
+
+function parseAttachUrl(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (
+      parsed.protocol !== "http:" &&
+      parsed.protocol !== "https:" &&
+      parsed.protocol !== "ws:" &&
+      parsed.protocol !== "wss:"
+    ) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+type ChromeMcpAttachTarget = {
+  mode: "browserUrl" | "wsEndpoint";
+  flag: "--browserUrl" | "--wsEndpoint";
+  url: string;
+};
+
+function resolveAttachTarget(value: string | undefined): ChromeMcpAttachTarget | null {
+  const parsed = parseAttachUrl(value);
+  if (!parsed) {
+    return null;
+  }
+  const protocol = new URL(parsed).protocol;
+  if (protocol === "ws:" || protocol === "wss:") {
+    return {
+      mode: "wsEndpoint",
+      flag: "--wsEndpoint",
+      url: parsed,
+    };
+  }
+  return {
+    mode: "browserUrl",
+    flag: "--browserUrl",
+    url: parsed,
+  };
+}
+
+function resolveConfiguredAttachTarget(profileName: string): ChromeMcpAttachTarget | null {
+  const envWs = resolveAttachTarget(process.env.OPENCLAW_CHROME_MCP_WS_ENDPOINT);
+  if (envWs) {
+    return envWs;
+  }
+  const envBrowser = resolveAttachTarget(process.env.OPENCLAW_CHROME_MCP_BROWSER_URL);
+  if (envBrowser) {
+    return envBrowser;
+  }
+  try {
+    const cfg = loadConfig();
+    const profileTarget = resolveAttachTarget(cfg.browser?.profiles?.[profileName]?.cdpUrl);
+    if (profileTarget) {
+      return profileTarget;
+    }
+    return resolveAttachTarget(cfg.browser?.cdpUrl);
+  } catch {
+    return null;
+  }
+}
+
+function resolveChromeMcpArgs(profileName: string): string[] {
+  const attachTarget = resolveConfiguredAttachTarget(profileName);
+  if (attachTarget) {
+    traceChromeMcpStage(
+      `chrome-mcp-attach-mode profile=${profileName} mode=${attachTarget.mode} url=${attachTarget.url}`,
+    );
+    return [...DEFAULT_CHROME_MCP_ARGS, attachTarget.flag, attachTarget.url];
+  }
+  traceChromeMcpStage(`chrome-mcp-attach-mode profile=${profileName} mode=autoConnect`);
+  return [...DEFAULT_CHROME_MCP_ARGS, "--autoConnect"];
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  onTimeout: () => Error,
+): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => reject(onTimeout()), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -169,9 +291,10 @@ function extractJsonMessage(result: ChromeMcpToolResult): unknown {
 }
 
 async function createRealSession(profileName: string): Promise<ChromeMcpSession> {
+  const args = resolveChromeMcpArgs(profileName);
   const transport = new StdioClientTransport({
     command: DEFAULT_CHROME_MCP_COMMAND,
-    args: DEFAULT_CHROME_MCP_ARGS,
+    args,
     stderr: "pipe",
   });
   const client = new Client(
@@ -206,7 +329,12 @@ async function createRealSession(profileName: string): Promise<ChromeMcpSession>
   };
 }
 
-async function getSession(profileName: string): Promise<ChromeMcpSession> {
+async function getSession(
+  profileName: string,
+  options: ChromeMcpCallOptions = {},
+): Promise<ChromeMcpSession> {
+  const timeoutMs = resolveTimeoutMs(options.timeoutMs);
+  traceChromeMcpStage(`chrome-mcp-session-get-start profile=${profileName} timeoutMs=${timeoutMs}`);
   let session = sessions.get(profileName);
   if (session && session.transport.pid === null) {
     sessions.delete(profileName);
@@ -215,9 +343,11 @@ async function getSession(profileName: string): Promise<ChromeMcpSession> {
   if (!session) {
     let pending = pendingSessions.get(profileName);
     if (!pending) {
+      traceChromeMcpStage(`chrome-mcp-session-create-start profile=${profileName}`);
       pending = (async () => {
         const created = await (sessionFactory ?? createRealSession)(profileName);
         sessions.set(profileName, created);
+        traceChromeMcpStage(`chrome-mcp-session-create-done profile=${profileName}`);
         return created;
       })();
       pendingSessions.set(profileName, pending);
@@ -231,13 +361,19 @@ async function getSession(profileName: string): Promise<ChromeMcpSession> {
     }
   }
   try {
-    await session.ready;
+    await withTimeout(session.ready, timeoutMs, () => {
+      return new BrowserProfileUnavailableError(
+        `Chrome MCP attach timed out for profile "${profileName}" after ${timeoutMs}ms.`,
+      );
+    });
+    traceChromeMcpStage(`chrome-mcp-session-ready profile=${profileName}`);
     return session;
   } catch (err) {
     const current = sessions.get(profileName);
     if (current?.transport === session.transport) {
       sessions.delete(profileName);
     }
+    await session.client.close().catch(() => {});
     throw err;
   }
 }
@@ -246,14 +382,25 @@ async function callTool(
   profileName: string,
   name: string,
   args: Record<string, unknown> = {},
+  options: ChromeMcpCallOptions = {},
 ): Promise<ChromeMcpToolResult> {
-  const session = await getSession(profileName);
+  const timeoutMs = resolveTimeoutMs(options.timeoutMs);
+  traceChromeMcpStage(
+    `chrome-mcp-tool-start profile=${profileName} tool=${name} timeoutMs=${timeoutMs}`,
+  );
+  const session = await getSession(profileName, { timeoutMs });
   let result: ChromeMcpToolResult;
   try {
-    result = (await session.client.callTool({
-      name,
-      arguments: args,
-    })) as ChromeMcpToolResult;
+    result = (await session.client.callTool(
+      {
+        name,
+        arguments: args,
+      },
+      undefined,
+      {
+        timeout: timeoutMs,
+      },
+    )) as ChromeMcpToolResult;
   } catch (err) {
     // Transport/connection error — tear down session so it reconnects on next call
     sessions.delete(profileName);
@@ -265,6 +412,7 @@ async function callTool(
   if (result.isError) {
     throw new Error(extractToolErrorMessage(result, name));
   }
+  traceChromeMcpStage(`chrome-mcp-tool-done profile=${profileName} tool=${name}`);
   return result;
 }
 
@@ -287,8 +435,11 @@ async function findPageById(profileName: string, pageId: number): Promise<Chrome
   return page;
 }
 
-export async function ensureChromeMcpAvailable(profileName: string): Promise<void> {
-  await getSession(profileName);
+export async function ensureChromeMcpAvailable(
+  profileName: string,
+  options: ChromeMcpCallOptions = {},
+): Promise<void> {
+  await getSession(profileName, options);
 }
 
 export function getChromeMcpPid(profileName: string): number | null {
@@ -313,13 +464,19 @@ export async function stopAllChromeMcpSessions(): Promise<void> {
   }
 }
 
-export async function listChromeMcpPages(profileName: string): Promise<ChromeMcpStructuredPage[]> {
-  const result = await callTool(profileName, "list_pages");
+export async function listChromeMcpPages(
+  profileName: string,
+  options: ChromeMcpCallOptions = {},
+): Promise<ChromeMcpStructuredPage[]> {
+  const result = await callTool(profileName, "list_pages", {}, options);
   return extractStructuredPages(result);
 }
 
-export async function listChromeMcpTabs(profileName: string): Promise<BrowserTab[]> {
-  return toBrowserTabs(await listChromeMcpPages(profileName));
+export async function listChromeMcpTabs(
+  profileName: string,
+  options: ChromeMcpCallOptions = {},
+): Promise<BrowserTab[]> {
+  return toBrowserTabs(await listChromeMcpPages(profileName, options));
 }
 
 export async function openChromeMcpTab(profileName: string, url: string): Promise<BrowserTab> {
