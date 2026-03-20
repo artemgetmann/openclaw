@@ -814,20 +814,28 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       }
       const token = (account.token ?? "").trim();
       let telegramBotLabel = "";
-      try {
-        const probe = await getTelegramRuntime().channel.telegram.probeTelegram(token, 2500, {
-          accountId: account.accountId,
-          proxyUrl: account.config.proxy,
-          network: account.config.network,
-        });
-        const username = probe.ok ? probe.bot?.username?.trim() : null;
-        if (username) {
-          telegramBotLabel = ` (@${username})`;
+      // Consumer minimal startup prioritizes fast, deterministic bootstrap. Skip
+      // non-critical preflight bot probing and let provider startup/reporting own
+      // the token/network diagnostics to avoid probe stalls blocking the gateway.
+      const skipStartupProbe = process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP === "1";
+      if (!skipStartupProbe) {
+        try {
+          const probe = await getTelegramRuntime().channel.telegram.probeTelegram(token, 2500, {
+            accountId: account.accountId,
+            proxyUrl: account.config.proxy,
+            network: account.config.network,
+          });
+          const username = probe.ok ? probe.bot?.username?.trim() : null;
+          if (username) {
+            telegramBotLabel = ` (@${username})`;
+          }
+        } catch (err) {
+          if (getTelegramRuntime().logging.shouldLogVerbose()) {
+            ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+          }
         }
-      } catch (err) {
-        if (getTelegramRuntime().logging.shouldLogVerbose()) {
-          ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
-        }
+      } else if (getTelegramRuntime().logging.shouldLogVerbose()) {
+        ctx.log?.debug?.(`[${account.accountId}] skipping startup probe (consumer minimal mode)`);
       }
       ctx.log?.info(`[${account.accountId}] starting provider${telegramBotLabel}`);
       return getTelegramRuntime().channel.telegram.monitorTelegramProvider({

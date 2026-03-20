@@ -2,6 +2,16 @@ import AppKit
 import Foundation
 
 extension ChannelsStore {
+    func openTelegramSetupGuide() {
+        guard let raw = AppFlavor.current.telegramSetupGuideURL else { return }
+        self.openTelegramURL(raw)
+    }
+
+    func openTelegramSetupVideo() {
+        guard let raw = AppFlavor.current.telegramSetupVideoURL else { return }
+        self.openTelegramURL(raw)
+    }
+
     func openTelegramBotFather() {
         self.openTelegramURL("https://t.me/BotFather")
     }

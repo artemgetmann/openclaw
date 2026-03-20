@@ -295,12 +295,16 @@ function buildCommonServiceEnvironment(
   env: Record<string, string | undefined>,
   sharedEnv: SharedServiceEnvironmentFields,
 ): Record<string, string | undefined> {
+  const consumerMinimalStartup = env.OPENCLAW_CONSUMER_MINIMAL_STARTUP?.trim() || undefined;
   const serviceEnv: Record<string, string | undefined> = {
     HOME: env.HOME,
     TMPDIR: sharedEnv.tmpDir,
     ...sharedEnv.proxyEnv,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
+    // Consumer launch agents must keep this flag so gateway sidecars stay
+    // non-blocking and do not regress into founder-oriented startup behavior.
+    OPENCLAW_CONSUMER_MINIMAL_STARTUP: consumerMinimalStartup,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
     OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
   };

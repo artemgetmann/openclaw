@@ -27,11 +27,27 @@ The consumer app defaults to:
 
 - Local setup on this Mac
 - Minimal menu bar controls
-- Minimal settings tabs: General, Permissions, About
+- Core settings tabs: General, Channels, Permissions, About
+- Channels view defaults to Telegram-only in consumer mode
 - Remote configuration hidden behind **Advanced**
 - Power-user areas such as Skills, Config, Sessions, Cron, and Debug hidden by default
 
 The goal is to reduce cognitive overload without deleting advanced capabilities yet.
+
+## Telegram onboarding in-app
+
+The consumer path keeps Telegram setup inside the app:
+
+- Channels → Telegram includes a one-time BYOK wizard (BotFather -> token verify -> first DM capture).
+- The panel includes one-click links for:
+  - Written guide: `https://docs.openclaw.ai/channels/telegram`
+  - Video walkthrough: `https://docs.openclaw.ai/start/showcase` (overrideable later)
+- Runtime writes stay isolated under the consumer runtime root.
+
+To swap the video link without code changes during tests:
+
+- Set `OPENCLAW_CONSUMER_TELEGRAM_VIDEO_URL` before launching the app, or
+- Set `OpenClawConsumerTelegramVideoURL` in the app bundle `Info.plist`.
 
 ## Safe local testing
 

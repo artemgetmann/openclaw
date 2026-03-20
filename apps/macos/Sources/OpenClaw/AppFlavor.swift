@@ -95,4 +95,43 @@ enum AppFlavor: String {
             "openclaw-consumer"
         }
     }
+
+    var telegramSetupGuideURL: String? {
+        switch self {
+        case .standard:
+            nil
+        case .consumer:
+            "https://docs.openclaw.ai/channels/telegram"
+        }
+    }
+
+    var telegramSetupVideoURL: String? {
+        switch self {
+        case .standard:
+            nil
+        case .consumer:
+            // Keep a stable default walkthrough and allow override without another
+            // app patch when product swaps to a dedicated onboarding video.
+            self.consumerTelegramSetupVideoURLOverride ?? "https://docs.openclaw.ai/start/showcase"
+        }
+    }
+
+    private var consumerTelegramSetupVideoURLOverride: String? {
+        let env = ProcessInfo.processInfo.environment["OPENCLAW_CONSUMER_TELEGRAM_VIDEO_URL"]
+        if let env {
+            let trimmed = env.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+
+        if let raw = Bundle.main.infoDictionary?["OpenClawConsumerTelegramVideoURL"] as? String {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+
+        return nil
+    }
 }

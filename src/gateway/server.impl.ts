@@ -840,15 +840,12 @@ export async function startGatewayServer(
       ? null
       : tailscaleMode === "off"
         ? null
-        : await runGatewayStartupTailscaleExposurePhase({
-            startTailscaleExposure: async () =>
-              await startGatewayTailscaleExposure({
-                tailscaleMode,
-                resetOnExit: tailscaleConfig.resetOnExit,
-                port,
-                controlUiBasePath,
-                logTailscale,
-              }),
+        : await startGatewayTailscaleExposure({
+            tailscaleMode,
+            resetOnExit: tailscaleConfig.resetOnExit,
+            port,
+            controlUiBasePath,
+            logTailscale,
           });
   if (debugStartupPhasesRaw) {
     process.stderr.write("[startup/raw] tailscale await resolved\n");
@@ -876,19 +873,16 @@ export async function startGatewayServer(
       browserControl = null;
       pluginServices = null;
     } else {
-      ({ browserControl, pluginServices } = await runGatewayStartupSidecarPhase({
-        startSidecars: async () =>
-          await startGatewaySidecars({
-            cfg: cfgAtStart,
-            pluginRegistry,
-            defaultWorkspaceDir,
-            deps,
-            startChannels,
-            log,
-            logHooks,
-            logChannels,
-            logBrowser,
-          }),
+      ({ browserControl, pluginServices } = await startGatewaySidecars({
+        cfg: cfgAtStart,
+        pluginRegistry,
+        defaultWorkspaceDir,
+        deps,
+        startChannels,
+        log,
+        logHooks,
+        logChannels,
+        logBrowser,
       }));
     }
     if (debugStartupPhasesRaw) {

@@ -331,7 +331,9 @@ extension ChannelsSettings {
     }
 
     var orderedChannels: [ChannelItem] {
-        let fallback = ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage"]
+        let fallback = AppFlavor.current.isConsumer
+            ? ["telegram", "whatsapp", "discord", "googlechat", "slack", "signal", "imessage"]
+            : ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage"]
         let order = self.store.snapshot?.channelOrder ?? fallback
         let channels = order.enumerated().map { index, id in
             ChannelItem(
@@ -341,12 +343,23 @@ extension ChannelsSettings {
                 systemImage: self.resolveChannelSystemImage(id),
                 sortOrder: index)
         }
-        return channels.sorted { lhs, rhs in
+        let sorted = channels.sorted { lhs, rhs in
             let lhsEnabled = self.channelEnabled(lhs)
             let rhsEnabled = self.channelEnabled(rhs)
             if lhsEnabled != rhsEnabled { return lhsEnabled && !rhsEnabled }
             return lhs.sortOrder < rhs.sortOrder
         }
+
+        guard AppFlavor.current.isConsumer,
+              !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
+        else {
+            return sorted
+        }
+
+        // Normal consumer path is Telegram-first. Keep other channels available
+        // behind Advanced without removing them from the app/runtime codebase.
+        let simplified = sorted.filter { $0.id == "telegram" }
+        return simplified.isEmpty ? sorted : simplified
     }
 
     var enabledChannels: [ChannelItem] {

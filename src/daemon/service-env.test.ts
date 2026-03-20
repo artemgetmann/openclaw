@@ -299,6 +299,28 @@ describe("buildServiceEnvironment", () => {
     expect(env.TMPDIR).toBe(os.tmpdir());
   });
 
+  it("passes through consumer minimal startup flag for gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_CONSUMER_MINIMAL_STARTUP: "1",
+      },
+      port: 18789,
+    });
+    expect(env.OPENCLAW_CONSUMER_MINIMAL_STARTUP).toBe("1");
+  });
+
+  it("omits empty consumer minimal startup flag", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_CONSUMER_MINIMAL_STARTUP: "   ",
+      },
+      port: 18789,
+    });
+    expect(env.OPENCLAW_CONSUMER_MINIMAL_STARTUP).toBeUndefined();
+  });
+
   it("uses profile-specific unit and label", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", OPENCLAW_PROFILE: "work" },

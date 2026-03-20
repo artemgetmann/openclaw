@@ -91,7 +91,7 @@ extension ChannelsSettings {
     var telegramSetupSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             self.formSection("One-time setup") {
-                Text("1. Open BotFather and create a bot.")
+                Text("1. Open @BotFather, run /newbot, and copy the token.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("2. Paste the token here and verify it.")
@@ -100,6 +100,25 @@ extension ChannelsSettings {
                 Text("3. Send one private message so OpenClaw can lock your DM allow list.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Text("4. Keep groups enabled for longer or parallel work with topics.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 10) {
+                    if AppFlavor.current.telegramSetupGuideURL != nil {
+                        Button("Written guide") {
+                            self.store.openTelegramSetupGuide()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if AppFlavor.current.telegramSetupVideoURL != nil {
+                        Button("Video walkthrough") {
+                            self.store.openTelegramSetupVideo()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
 
                 TextField("BotFather token", text: self.$store.telegramSetupToken)
                     .textFieldStyle(.roundedBorder)

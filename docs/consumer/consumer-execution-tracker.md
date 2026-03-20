@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-19
+Last updated: 2026-03-20
 Owner: consumer execution team
 Status: Active
 
@@ -54,6 +54,30 @@ Notes:
 - `GatewayProcessManager` now skips redundant launch-agent ensure work while startup is already in progress, which reduced a packaged-app cold-start self-restart race.
 - The consumer gateway health path is verified; the remaining CLI quirk is that bare `gateway status` still assumes profile-derived launchd labels unless the explicit consumer gateway label is present in the env.
 - Consumer app runtime now sets `OPENCLAW_CONSUMER_MINIMAL_STARTUP=1`, which keeps first boot non-blocking by skipping founder-oriented sidecars (session lock cleanup, browser-control sidecar, Gmail watcher, internal hook loading, plugin services, memory backend bootstrap) and by backgrounding channel startup.
+- Draft PR is open for review:
+  - `https://github.com/artemgetmann/openclaw/pull/72`
+  - head: `codex/simplify-consumer-bootstrap-flow-telegram`
+  - base: `codex/consumer-openclaw-project`
+  - merge gate remains: Telegram BYOK E2E on isolated consumer runtime
+
+### 2026-03-20 runtime debug note
+
+- Added targeted diagnostics and hardening in this branch:
+  - startup path no longer references undefined gateway startup wrapper symbols
+  - consumer launchd service env now forwards `OPENCLAW_CONSUMER_MINIMAL_STARTUP=1`
+  - consumer minimal mode skips Telegram startup bot-probe preflight
+- Verification state:
+  - `pnpm build` passed
+  - `swift test --package-path apps/macos --filter SettingsViewSmokeTests` passed
+  - `swift test --package-path apps/macos --filter OnboardingViewSmokeTests` passed
+  - `pnpm test -- extensions/telegram/src/channel.test.ts` passed
+  - `pnpm test -- src/daemon/service-env.test.ts` passed
+  - `bash -n scripts/package-mac-app.sh` passed
+- Active blocker for final E2E sign-off:
+  - In this local environment, enabling Telegram on the consumer runtime can drive a high-CPU gateway hot loop and RPC timeouts.
+  - Paused stack sampling points to `jiti` module resolution while Telegram startup is active.
+  - Consumer runtime remains healthy when Telegram channel is disabled.
+  - Next required validation is a fresh Telegram BYOK run with a dedicated bot token (no parallel poller) and captured diagnostics.
 
 ## Current baseline snapshot
 
@@ -426,3 +450,28 @@ Out of scope:
 - Notes:
   - This addresses runtime cross-talk and keeps consumer/founder lanes isolated at app startup.
   - A separate node-service command warning (`Did you mean devices?`) still appears in logs and should be handled as a follow-up, but it no longer forces consumer to attach to founder runtime.
+
+### 2026-03-20 PR + consumer onboarding alignment
+
+- Done:
+  - Opened draft PR for this branch against `codex/consumer-openclaw-project`:
+    - https://github.com/artemgetmann/openclaw/pull/72
+  - Merged `codex/worktree-a-minimal` into this branch and resolved conflicts in consumer onboarding/runtime files.
+  - Fixed a merge regression in `Onboarding.pageOrder` (remote branch missing `return`).
+  - Aligned consumer settings navigation with Telegram onboarding:
+    - consumer now keeps `Channels` visible without forcing full Advanced mode
+    - normal consumer channel list is Telegram-only; other channels remain behind Advanced
+  - Added in-app Telegram setup help entry points:
+    - written guide button (docs link)
+    - video walkthrough button (default link + override seam)
+  - Updated consumer app doc to reflect current tabs and Telegram onboarding behavior.
+- Verified:
+  - `swift build --package-path apps/macos -c debug --product OpenClaw`
+  - `pnpm build`
+  - `bash -n scripts/package-mac-app.sh`
+- Blocked / pending:
+  - Full manual Telegram BYOK E2E as a real novice user flow is still in progress for this PR gate.
+- Next 3 actions:
+  - Run isolated runtime launch check on `19001` with founder runtime untouched.
+  - Walk full in-app Telegram BYOK flow (token verify + first DM capture) and collect logs/evidence.
+  - Update PR #72 checklist and switch from draft only after E2E is green.
