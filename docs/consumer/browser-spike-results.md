@@ -35,12 +35,12 @@ Legend:
 
 - `PASS`, `FAIL`, `BLOCKED`, `PENDING`
 
-| Approach                  | Task 1 Flight                       | Task 2 Form | Task 3 Web Summary                                  | Task 4 X Summary | Task 5 Multi-step | Notes                                                                                                                                          |
-| ------------------------- | ----------------------------------- | ----------- | --------------------------------------------------- | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user` (existing-session) | PASS (`r1`: `107.2s`; `r2` pending) | PENDING     | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | PENDING          | PENDING           | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL) |
-| `openclaw` (managed)      | PASS (`r1`: `85.4s`; `r2` pending)  | PENDING     | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PENDING          | PENDING           | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`)                                                          |
-| Claude-in-Chrome          | PENDING                             | PENDING     | PENDING                                             | PENDING          | PENDING           | Investigation/adaptation track                                                                                                                 |
-| Browserbase               | BLOCKED                             | BLOCKED     | BLOCKED                                             | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                                                                                             |
+| Approach                  | Task 1 Flight                                          | Task 2 Form          | Task 3 Web Summary                                  | Task 4 X Summary | Task 5 Multi-step | Notes                                                                                                                                          |
+| ------------------------- | ------------------------------------------------------ | -------------------- | --------------------------------------------------- | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user` (existing-session) | PASS (median `121.0s`; `r1`: `107.2s`, `r2`: `134.9s`) | PASS (`r1`: `63.1s`) | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | PENDING          | PENDING           | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL) |
+| `openclaw` (managed)      | PASS (median `69.9s`; `r1`: `85.4s`, `r2`: `54.5s`)    | PASS (`r1`: `78.8s`) | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PENDING          | PENDING           | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`)                                                          |
+| Claude-in-Chrome          | PENDING                                                | PENDING              | PENDING                                             | PENDING          | PENDING           | Investigation/adaptation track                                                                                                                 |
+| Browserbase               | BLOCKED                                                | BLOCKED              | BLOCKED                                             | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                                                                                             |
 
 ## Current blocker summary
 
@@ -64,7 +64,8 @@ Legend:
   - The copied home config was too "live"; a stable benchmark lane requires `bindings=[]` and all chat channels disabled.
   - Existing-session snapshot compatibility patch landed on this branch: selector/frame snapshot requests now degrade to full-page snapshot with a warning instead of failing the call.
   - `profile=user` Task 3 passed; the warning may still appear as compatibility guidance but is no longer a hard error path.
-  - `profile=openclaw` has the better Task 3 median so far (`33.9s` vs `39.0s` for `profile=user`).
+  - The desktop Consumer app owns port `19001`, so the isolated benchmark gateway now runs on `19011` to avoid token mismatches and cross-runtime noise.
+  - `profile=openclaw` is currently faster on the completed flight and web-summary tasks, but `profile=user` is now also passing real flight and form tasks on the dedicated CDP Chrome.
 
 Interpretation:
 
@@ -81,9 +82,9 @@ Artifact root:
 Validated setup:
 
 - benchmark runtime: `/tmp/openclaw-consumer-bench`
-- model: `openai-codex/gpt-5.1-codex-mini`
+- model: `openai-codex/gpt-5.4`
 - browser attach for `profile=user`: `OPENCLAW_CHROME_MCP_BROWSER_URL=http://127.0.0.1:9333`
-- gateway must stay alive in a persistent terminal session on port `19001`
+- gateway must stay alive in a persistent terminal session on an isolated port; current benchmark lane uses `19011` because `19001` is owned by the desktop Consumer app runtime
 
 Task 3, runs 1-2:
 
@@ -114,6 +115,32 @@ Task 1, run 1:
   - result: `PASS`
   - run 1: `85.4s`
   - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task1_r1/agent.json`
+
+Task 1, run 2:
+
+- `user`
+  - result: `PASS`
+  - run 2: `134.9s`
+  - median: `121.0s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task1_r2/agent.json`
+- `openclaw`
+  - result: `PASS`
+  - run 2: `54.5s`
+  - median: `69.9s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task1_r2/agent.json`
+
+Task 2, run 1:
+
+- `user`
+  - result: `PASS`
+  - run 1: `63.1s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task2_r1/agent.json`
+  - note: concrete public test target used: `https://www.selenium.dev/selenium/web/web-form.html`
+- `openclaw`
+  - result: `PASS`
+  - run 1: `78.8s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task2_r1/agent.json`
+  - note: concrete public test target used: `https://www.selenium.dev/selenium/web/web-form.html`
 
 ## Command-level benchmark runbook (week 1)
 

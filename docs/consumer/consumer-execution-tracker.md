@@ -67,11 +67,14 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
   - External probe confirms the same failure outside OpenClaw (`chrome-devtools-mcp list_pages` times out on `--autoConnect` against current Chrome session).
   - `pnpm openclaw ...` runs from a dirty tree can trigger rebuild churn via `scripts/run-node.mjs`; use the already-built `node dist/entry.js ...` path for clean benchmark/debug runs to avoid false negatives.
   - New benchmark evidence:
-    - Task 1 run 1 passed on both profiles (`user`: `107.2s`, `openclaw`: `85.4s`).
+    - Task 1 runs 1-2 passed on both profiles.
+    - Task 1 medians now favor `profile=openclaw` (`69.9s`) over `profile=user` (`121.0s`).
+    - Task 2 run 1 passed on both profiles (`user`: `63.1s`, `openclaw`: `78.8s`) when the task used a concrete public form target.
     - Task 3 runs 1-2 passed on `profile=user` with median `39.0s`.
     - Task 3 runs 1-2 passed on `profile=openclaw` with median `33.9s`.
     - Existing-session selector/frame snapshot requests now degrade to full-page snapshot with warning (compatibility patch landed on this branch), instead of failing the snapshot call.
     - The benchmark gateway must stay alive in a persistent terminal session; backgrounding it from a short-lived exec shell causes false "silent exit" failures.
+    - Port `19001` is currently owned by the desktop Consumer app runtime, so the isolated benchmark lane is now on `19011` to avoid token mismatch noise.
 
 ## Execution phases and gates
 
@@ -101,9 +104,9 @@ Phase A validation notes (2026-03-16):
 
 - [ ] Finalize benchmark matrix in `docs/consumer/browser-spike-results.md`
 - [ ] Run approach: `user` existing-session path
-  - Control lane verified on direct-built gateway; task execution now blocked by agent/model runtime timeout, not browser attach.
+  - Control lane verified on direct-built gateway; Tasks 1-3 now have passing evidence on the dedicated CDP Chrome lane.
 - [ ] Run approach: `openclaw` managed profile path
-  - Control lane verified on direct-built gateway; task execution now blocked by agent/model runtime timeout, not browser attach.
+  - Control lane verified on direct-built gateway; Tasks 1-3 now have passing evidence on the managed profile lane.
 - [ ] Run approach: Claude-in-Chrome investigation/adaptation
 - [ ] Mark Browserbase rows `credential-blocked` until credentials are available
 - [ ] Re-run Browserbase rows once credentials are provided
