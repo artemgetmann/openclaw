@@ -218,6 +218,14 @@
 ## Troubleshooting
 
 - Rebrand/migration issues or legacy config/service warnings: run `openclaw doctor` (see `docs/gateway/doctor.md`).
+- Timeout triage gate (mandatory before deep debugging):
+  - Before investigating any timeout (`gateway timeout`, `MCP request timed out`, stalled `agent --local`, browser hangs), first verify the expected fix code exists on the current branch/build.
+  - Required 2-minute checks:
+    - `git rev-parse --abbrev-ref HEAD`
+    - `git log --oneline -1`
+    - `rg` for expected patch signatures in touched files (for example env flags, new options, stage markers)
+  - If the signature is missing, stop runtime debugging and sync/cherry-pick/merge the missing commit first.
+  - In multi-worktree setups, never assume another worktree's fix exists here; prove code presence before chasing runtime behavior.
 
 ## Agent-Specific Notes
 
