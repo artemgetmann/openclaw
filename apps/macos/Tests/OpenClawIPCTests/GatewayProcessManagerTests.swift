@@ -6,6 +6,11 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
+    @Test func `skips launch agent ensure while gateway start is already in progress`() {
+        #expect(GatewayProcessManager._testShouldSkipLaunchAgentEnsure(for: .starting))
+        #expect(!GatewayProcessManager._testShouldSkipLaunchAgentEnsure(for: .stopped))
+    }
+
     @Test func `clears last failure when health succeeds`() async throws {
         let session = GatewayTestWebSocketSession(
             taskFactory: {

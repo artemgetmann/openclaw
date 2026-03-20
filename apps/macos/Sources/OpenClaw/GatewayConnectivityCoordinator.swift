@@ -9,7 +9,7 @@ final class GatewayConnectivityCoordinator {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway.connectivity")
     private var endpointTask: Task<Void, Never>?
-    private var lastResolvedURL: URL?
+    private var lastReadyState: GatewayEndpointState?
 
     private(set) var endpointState: GatewayEndpointState?
     private(set) var resolvedURL: URL?
@@ -43,15 +43,16 @@ final class GatewayConnectivityCoordinator {
             self.resolvedMode = mode
             self.resolvedURL = url
             self.resolvedHostLabel = Self.hostLabel(for: url)
-            let urlChanged = self.lastResolvedURL?.absoluteString != url.absoluteString
-            if urlChanged {
-                self.lastResolvedURL = url
+            let readyChanged = self.lastReadyState != state
+            self.lastReadyState = state
+            if readyChanged {
                 Task { await ControlChannel.shared.refreshEndpoint(reason: "endpoint changed") }
             }
         case let .connecting(mode, _):
             self.resolvedMode = mode
         case let .unavailable(mode, _):
             self.resolvedMode = mode
+            self.lastReadyState = nil
         }
     }
 

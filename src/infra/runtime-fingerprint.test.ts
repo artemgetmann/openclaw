@@ -57,6 +57,28 @@ describe("runtime-fingerprint", () => {
     );
   });
 
+  it("prefers an explicit darwin launchd label override", async () => {
+    const root = await createRepoFixture();
+    cleanupPaths.push(root);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "consumer",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.consumer.gateway",
+        OPENCLAW_STATE_DIR: path.join(root, ".state"),
+        OPENCLAW_CONFIG_PATH: path.join(root, "config", "openclaw.json"),
+      },
+      async () => {
+        const fingerprint = resolveRuntimeFingerprint({
+          cwd: root,
+          platform: "darwin",
+        });
+
+        expect(fingerprint.serviceLabel).toBe("ai.openclaw.consumer.gateway");
+      },
+    );
+  });
+
   it("falls back to HEAD for detached checkouts", async () => {
     const root = await createRepoFixture({ detached: true });
     cleanupPaths.push(root);

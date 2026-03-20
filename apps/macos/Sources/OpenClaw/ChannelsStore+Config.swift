@@ -28,7 +28,7 @@ extension ChannelsStore {
                 params: nil,
                 timeoutMs: 10000)
             self.configStatus = snap.valid == false
-                ? "Config invalid; fix it in ~/.openclaw/openclaw.json."
+                ? "Config invalid; fix it in the consumer config file."
                 : nil
             self.configRoot = snap.config?.mapValues { $0.foundationValue } ?? [:]
             self.configDraft = cloneConfigValue(self.configRoot) as? [String: Any] ?? self.configRoot

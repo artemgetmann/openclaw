@@ -381,6 +381,11 @@ extension ChannelsSettings {
     func channelSection(_ channel: ChannelItem) -> some View {
         if channel.id == "whatsapp" {
             self.whatsAppSection
+        } else if channel.id == "telegram" {
+            VStack(alignment: .leading, spacing: 16) {
+                self.telegramSetupSection
+                self.genericChannelSection(channel)
+            }
         } else {
             self.genericChannelSection(channel)
         }

@@ -2,8 +2,7 @@ import Foundation
 
 enum LaunchAgentManager {
     private static var plistURL: URL {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/ai.openclaw.mac.plist")
+        ConsumerRuntime.appLaunchAgentPlistURL
     }
 
     static func status() async -> Bool {
@@ -32,22 +31,36 @@ enum LaunchAgentManager {
         <plist version="1.0">
         <dict>
           <key>Label</key>
-          <string>ai.openclaw.mac</string>
+          <string>\(launchdLabel)</string>
           <key>ProgramArguments</key>
           <array>
             <string>\(bundlePath)/Contents/MacOS/OpenClaw</string>
           </array>
           <key>WorkingDirectory</key>
-          <string>\(FileManager().homeDirectoryForCurrentUser.path)</string>
+          <string>\(ConsumerRuntime.runtimeRootURL.path)</string>
           <key>RunAtLoad</key>
           <true/>
           <key>KeepAlive</key>
           <true/>
-          <key>EnvironmentVariables</key>
-          <dict>
-            <key>PATH</key>
-            <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
-          </dict>
+        <key>EnvironmentVariables</key>
+        <dict>
+          <key>PATH</key>
+          <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
+          <key>OPENCLAW_PROFILE</key>
+          <string>\(ConsumerRuntime.profile)</string>
+          <key>OPENCLAW_HOME</key>
+          <string>\(ConsumerRuntime.runtimeRootURL.path)</string>
+          <key>OPENCLAW_STATE_DIR</key>
+          <string>\(ConsumerRuntime.stateDirURL.path)</string>
+          <key>OPENCLAW_CONFIG_PATH</key>
+          <string>\(ConsumerRuntime.configURL.path)</string>
+          <key>OPENCLAW_GATEWAY_PORT</key>
+          <string>\(ConsumerRuntime.gatewayPort)</string>
+          <key>OPENCLAW_GATEWAY_BIND</key>
+          <string>\(ConsumerRuntime.gatewayBind)</string>
+          <key>OPENCLAW_LOG_DIR</key>
+          <string>\(ConsumerRuntime.logsDirURL.path)</string>
+        </dict>
           <key>StandardOutPath</key>
           <string>\(LogLocator.launchdLogPath)</string>
           <key>StandardErrorPath</key>

@@ -10,8 +10,7 @@ enum GatewayLaunchAgentManager {
     }
 
     private static var plistURL: URL {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
+        ConsumerRuntime.gatewayLaunchAgentPlistURL
     }
 
     static func isLaunchAgentWriteDisabled() -> Bool {
@@ -151,6 +150,13 @@ extension GatewayLaunchAgentManager {
             configRoot: ["gateway": ["mode": "local"]])
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        // The consumer app and consumer gateway intentionally use different launchd labels.
+        // If we let the CLI derive the label from OPENCLAW_PROFILE=consumer, it will install
+        // the gateway service as ai.openclaw.consumer and collide with the app's own label.
+        env["OPENCLAW_LAUNCHD_LABEL"] = gatewayLaunchdLabel
+        if let projectRoot = CommandResolver.projectRootEnvironmentHint() {
+            env["OPENCLAW_FORK_ROOT"] = projectRoot
+        }
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
         let parsed = self.parseDaemonJson(from: response.stdout) ?? self.parseDaemonJson(from: response.stderr)
         let ok = parsed?.object["ok"] as? Bool

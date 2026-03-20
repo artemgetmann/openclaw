@@ -26,6 +26,20 @@ Not a chatbot. Not another agent framework. A practical operator that does real 
 
 **Design philosophy:** Apple-style. Locked down and friendly on the surface, insanely capable underneath. If something is complicated, remove it — don't add more.
 
+## Consumer Runtime
+
+The consumer app owns its own runtime state. Keep it isolated from the founder bot and from the repo checkout:
+
+- Runtime root: `~/Library/Application Support/OpenClaw Consumer`
+- State/config: `~/Library/Application Support/OpenClaw Consumer/.openclaw`
+- Gateway port: `19001`
+- Do not read or migrate from the founder `~/.openclaw` path in week 1
+
+Why this shape:
+- The consumer branch is source code, not user data.
+- macOS app state belongs in Application Support so the app can own it cleanly.
+- That keeps the consumer runtime separate from both the repo checkout and the founder bot.
+
 ---
 
 ## Branch Rules
@@ -41,7 +55,7 @@ Not a chatbot. Not another agent framework. A practical operator that does real 
 ## Current Sprint (Week 1)
 
 **Goal:** Three things must be true by end of week:
-1. Consumer branch runs independently (separate OPENCLAW_HOME, port 19001)
+1. Consumer branch runs independently (separate consumer runtime root, port 19001)
 2. Browser spike complete — clear winner chosen with benchmark data
 3. Flight search works end-to-end from Telegram
 
@@ -77,7 +91,7 @@ Benchmark these 4 approaches on 5 tasks:
 
 ### Days 4-5: Consumer Branch Setup
 
-- Isolated test profile running on port 19001 (separate OPENCLAW_HOME)
+- Isolated test profile running on port 19001 (separate consumer runtime root)
 - Telegram bot connected and responding
 - Logs viewable (`openclaw logs --follow`)
 - Winning browser approach integrated
@@ -126,7 +140,7 @@ Your live bot at `~/.openclaw` stays untouched.
 
 | Decision | Choice |
 |----------|--------|
-| Telegram bot | Shared bot default + optional BYOK token |
+| Telegram bot | Guided BYOK now; managed/shared bot later if needed |
 | Desktop UX | Menu bar + simplified app (rework existing, don't rebuild) |
 | Model routing | Bundled keys + BYOK option (Cursor model) |
 | Safety mode | Power only for sprint |

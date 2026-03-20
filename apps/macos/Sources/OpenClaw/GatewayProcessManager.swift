@@ -71,6 +71,11 @@ final class GatewayProcessManager {
         self.desiredActive = active
         self.refreshEnvironmentStatus()
         if active {
+            let diagnostics = self.startupDiagnostics(context: "setActive")
+            self.appendLog("\(diagnostics)\n")
+            self.logger.info("\(diagnostics, privacy: .public)")
+        }
+        if active {
             self.startIfNeeded()
         } else {
             self.stop()
@@ -82,6 +87,11 @@ final class GatewayProcessManager {
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             self.appendLog("[gateway] launchd auto-enable skipped (attach-only)\n")
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
+            return
+        }
+        if Self.shouldSkipLaunchAgentEnsure(for: self.status) {
+            self.appendLog("[gateway] launchd auto-enable skipped (gateway startup already in progress)\n")
+            self.logger.debug("gateway launchd auto-enable skipped: startup already in progress")
             return
         }
         let enabled = await GatewayLaunchAgentManager.isLoaded()
@@ -324,10 +334,16 @@ final class GatewayProcessManager {
         let port = GatewayEnvironment.gatewayPort()
         self.appendLog("[gateway] enabling launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
         self.logger.info("gateway enabling launchd port=\(port)")
+        let diagnostics = self.startupDiagnostics(context: "enableLaunchd")
+        self.appendLog("\(diagnostics)\n")
+        self.logger.info("\(diagnostics, privacy: .public)")
         let err = await GatewayLaunchAgentManager.set(enabled: true, bundlePath: bundlePath, port: port)
         if let err {
             self.status = .failed(err)
             self.lastFailureReason = err
+            let failureDiagnostics = self.startupDiagnostics(context: "enableLaunchdFailed")
+            self.appendLog("\(failureDiagnostics)\n")
+            self.logger.error("\(failureDiagnostics, privacy: .public)")
             self.logger.error("gateway launchd enable failed: \(err)")
             return
         }
@@ -354,6 +370,10 @@ final class GatewayProcessManager {
         self.status = .failed("Gateway did not start in time")
         self.lastFailureReason = "launchd start timeout"
         self.logger.warning("gateway start timed out")
+        let timeoutDiagnostics = self.startupDiagnostics(context: "launchdStartTimeout")
+        self.appendLog("\(timeoutDiagnostics)\n")
+        self.logger.warning("\(timeoutDiagnostics, privacy: .public)")
+        await self.appendPortDiagnostics(context: "launchdStartTimeout")
     }
 
     private func appendLog(_ chunk: String) {
@@ -389,6 +409,10 @@ final class GatewayProcessManager {
         }
         self.appendLog("[gateway] readiness wait timed out\n")
         self.logger.warning("gateway readiness wait timed out")
+        let timeoutDiagnostics = self.startupDiagnostics(context: "waitForGatewayReadyTimeout")
+        self.appendLog("\(timeoutDiagnostics)\n")
+        self.logger.warning("\(timeoutDiagnostics, privacy: .public)")
+        await self.appendPortDiagnostics(context: "waitForGatewayReadyTimeout")
         return false
     }
 
@@ -413,12 +437,50 @@ final class GatewayProcessManager {
         if text.count <= limit { return text }
         return String(text.suffix(limit))
     }
+
+    private static func shouldSkipLaunchAgentEnsure(for status: Status) -> Bool {
+        switch status {
+        case .starting:
+            return true
+        case .stopped, .running, .attachedExisting, .failed:
+            return false
+        }
+    }
+
+    private func startupDiagnostics(context: String) -> String {
+        let mode = CommandResolver.connectionModeIsRemote() ? "remote" : "local"
+        let profile = ProcessInfo.processInfo.environment["OPENCLAW_PROFILE"] ?? "<unset>"
+        let forkRoot = ProcessInfo.processInfo.environment["OPENCLAW_FORK_ROOT"] ?? "<unset>"
+        let port = GatewayEnvironment.gatewayPort()
+        let configPath = OpenClawConfigFile.url().path
+        let stateDir = OpenClawConfigFile.stateDirURL().path
+        return "[gateway/diag] context=\(context) mode=\(mode) port=\(port) launchdLabel=\(gatewayLaunchdLabel) profile=\(profile) config=\(configPath) state=\(stateDir) forkRoot=\(forkRoot)"
+    }
+
+    private func appendPortDiagnostics(context: String) async {
+        let mode = AppStateStore.shared.connectionMode
+        let reports = await PortGuardian.shared.diagnose(mode: mode)
+        guard !reports.isEmpty else {
+            let line = "[gateway/diag] context=\(context) portguard=no-reports mode=\(mode.rawValue)"
+            self.appendLog("\(line)\n")
+            self.logger.warning("\(line, privacy: .public)")
+            return
+        }
+        let summary = reports.map(\.summary).joined(separator: " | ")
+        let line = "[gateway/diag] context=\(context) mode=\(mode.rawValue) portguard=\(summary)"
+        self.appendLog("\(line)\n")
+        self.logger.warning("\(line, privacy: .public)")
+    }
 }
 
 #if DEBUG
 extension GatewayProcessManager {
     func setTestingConnection(_ connection: GatewayConnection?) {
         self.testingConnection = connection
+    }
+
+    static func _testShouldSkipLaunchAgentEnsure(for status: Status) -> Bool {
+        self.shouldSkipLaunchAgentEnsure(for: status)
     }
 
     func setTestingDesiredActive(_ active: Bool) {

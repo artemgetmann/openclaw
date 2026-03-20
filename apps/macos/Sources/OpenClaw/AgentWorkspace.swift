@@ -157,24 +157,17 @@ enum AgentWorkspace {
 
     static func defaultTemplate() -> String {
         let fallback = """
-        # AGENTS.md - OpenClaw Workspace
+        # AGENTS.md - Consumer Workspace
 
         This folder is the assistant's working directory.
 
         ## First run (one-time)
-        - If BOOTSTRAP.md exists, follow its ritual and delete it once complete.
-        - Your agent identity lives in IDENTITY.md.
-        - Your profile lives in USER.md.
+        - If BOOTSTRAP.md exists, follow it once and delete it after the ritual is complete.
+        - Your identity lives in IDENTITY.md.
+        - The human profile lives in USER.md.
 
         ## Backup tip (recommended)
-        If you treat this workspace as the agent's "memory", make it a git repo (ideally private) so identity
-        and notes are backed up.
-
-        ```bash
-        git init
-        git add AGENTS.md
-        git commit -m "Add agent workspace"
-        ```
+        If you treat this workspace as memory, make it a private git repo so identity and notes are backed up.
 
         ## Safety defaults
         - Don't exfiltrate secrets or private data.
@@ -186,8 +179,10 @@ enum AgentWorkspace {
         - On session start, read today + yesterday if present.
         - Capture durable facts, preferences, and decisions; avoid secrets.
 
-        ## Customize
-        - Add your preferred style, rules, and "memory" here.
+        ## Consumer defaults
+        - Telegram is the normal surface.
+        - DMs are the simple path.
+        - Groups and topics are for longer or parallel work.
         """
         return self.loadTemplate(named: self.agentsFilename, fallback: fallback)
     }
@@ -201,6 +196,7 @@ enum AgentWorkspace {
         - Keep replies concise and direct.
         - Ask clarifying questions when needed.
         - Never send streaming/partial replies to external messaging surfaces.
+        - Telegram is the normal surface. DMs are the simplest path.
         """
         return self.loadTemplate(named: self.soulFilename, fallback: fallback)
     }
@@ -213,6 +209,7 @@ enum AgentWorkspace {
         - Creature:
         - Vibe:
         - Emoji:
+        - Telegram style:
         """
         return self.loadTemplate(named: self.identityFilename, fallback: fallback)
     }
@@ -223,6 +220,7 @@ enum AgentWorkspace {
 
         - Name:
         - Preferred address:
+        - Telegram handle:
         - Pronouns (optional):
         - Timezone (optional):
         - Notes:
@@ -237,20 +235,15 @@ enum AgentWorkspace {
         Hello. I was just born.
 
         ## Your mission
-        Start a short, playful conversation and learn:
+        Start a short conversation and learn:
         - Who am I?
-        - What am I?
+        - What should people call me?
         - Who are you?
-        - How should I call you?
+        - How should I speak?
 
-        ## How to ask (cute + helpful)
-        Say:
-        "Hello! I was just born. Who am I? What am I? Who are you? How should I call you?"
-
-        Then offer suggestions:
-        - 3-5 name ideas.
-        - 3-5 creature/vibe combos.
-        - 5 emoji ideas.
+        ## How to ask
+        Ask one question at a time.
+        If the user is unsure, offer 3 to 5 concrete options.
 
         ## Write these files
         After the user chooses, update:
@@ -260,16 +253,21 @@ enum AgentWorkspace {
         - Creature
         - Vibe
         - Emoji
+        - Telegram style
 
         2) USER.md
         - Name
         - Preferred address
+        - Telegram handle
         - Pronouns (optional)
         - Timezone (optional)
         - Notes
 
-        3) ~/.openclaw/openclaw.json
-        Set identity.name, identity.theme, identity.emoji to match IDENTITY.md.
+        3) openclaw.json
+        Keep the consumer defaults simple and local-first.
+
+        ## Telegram
+        Use Telegram DMs first. For long-running or parallel work, recommend groups and topics.
 
         ## Cleanup
         Delete BOOTSTRAP.md once this is complete.
@@ -310,6 +308,7 @@ enum AgentWorkspace {
         }
         let cwd = URL(fileURLWithPath: FileManager().currentDirectoryPath)
         urls.append(cwd.appendingPathComponent("docs")
+            .appendingPathComponent("reference")
             .appendingPathComponent(self.templateDirname)
             .appendingPathComponent(named))
         return urls
@@ -324,6 +323,7 @@ enum AgentWorkspace {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         return repoRoot.appendingPathComponent("docs")
+            .appendingPathComponent("reference")
             .appendingPathComponent(self.templateDirname)
             .appendingPathComponent(named)
     }

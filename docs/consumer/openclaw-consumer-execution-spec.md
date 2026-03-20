@@ -24,8 +24,8 @@ This means the refactor and the consumer build are the same work — not two sep
 ## 2) Decisions Made (All Open Questions Resolved)
 
 ### Bot Identity Strategy
-- **Decision:** Shared bot for easy onboarding + optional BYOK (Bring Your Own Bot token) for power users
-- **Note:** BotFather has no programmatic API — bot creation is manual chat-based. Shared bot is the pragmatic default. BYOK is a settings toggle, not an onboarding step.
+- **Decision:** Guided BYOK (Bring Your Own Bot token) for v1
+- **Note:** BotFather has no programmatic API — bot creation is manual chat-based. Managed/shared bot is a future product seam, not part of the first consumer build.
 
 ### Local App UX
 - **Decision:** Rework existing desktop app (likely Electron) — menu bar + simplified full app
@@ -70,7 +70,10 @@ This means the refactor and the consumer build are the same work — not two sep
 ### Structure
 - **Source clone:** `/Users/user/Programming_Projects/openclaw`
 - **Live bot (personal):** `~/.openclaw/workspace` — DO NOT TOUCH during consumer development
+- **Consumer runtime root:** `~/Library/Application Support/OpenClaw Consumer`
+- **Consumer state/config:** `~/Library/Application Support/OpenClaw Consumer/.openclaw`
 - **Consumer work:** `consumer` branch on `artemgetmann/openclaw`
+- **Boundary:** consumer setup does not read or migrate founder runtime state in week 1.
 
 ### Convergence Plan
 - Current `main` = your live personal bot (complicated, works, don't break it)
@@ -166,7 +169,7 @@ A markdown doc: `browser-spike-results.md` with:
 #### Tasks
 - [ ] Create `consumer` branch from `main`
 - [ ] Strip/simplify desktop app UI (if touching it this week — may defer)
-- [ ] Set up isolated test profile (port 19001, separate OPENCLAW_HOME)
+- [ ] Set up isolated test profile (port 19001, separate consumer runtime root)
 - [ ] Verify Telegram bot works on consumer build
 - [ ] Verify logging works and is easily viewable (`openclaw logs --follow`)
 - [ ] Integrate winning browser approach from spike
@@ -211,7 +214,7 @@ A markdown doc: `browser-spike-results.md` with:
 | WhatsApp channel | Cut | Phase 2 |
 | Managed Mac hosting | Cut | Phase 2 |
 | Legal/ToS | Cut | Before public launch |
-| BYOK (bot token or API keys) | Cut | Week 3+ |
+| BYOK (bot token or API keys) | Partially included | Telegram bot token setup is v1; API-key BYOK stays later |
 
 ---
 
@@ -254,7 +257,7 @@ Target: First value in < 10 minutes.
 
 1. **Legal counsel** — liability boundaries for autonomous agent actions
 2. **Billing integration** — Stripe setup, subscription management
-3. **Bot identity** — shared bot infrastructure at scale (rate limits, Telegram ToS)
+3. **Bot identity** — managed/shared bot infrastructure at scale (rate limits, Telegram ToS)
 4. **Hardware guidance** — finalize messaging around Mac Mini vs laptop trade-offs
 5. **Sensitive data policy** — what the agent should/shouldn't access, data retention
 

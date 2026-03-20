@@ -12,14 +12,13 @@ struct OpenClawApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var state: AppState
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app")
-    private let gatewayManager = GatewayProcessManager.shared
-    private let controlChannel = ControlChannel.shared
-    private let activityStore = WorkActivityStore.shared
-    private let connectivityCoordinator = GatewayConnectivityCoordinator.shared
+    private var gatewayManager: GatewayProcessManager { .shared }
+    private var controlChannel: ControlChannel { .shared }
+    private var activityStore: WorkActivityStore { .shared }
     @State private var statusItem: NSStatusItem?
     @State private var isMenuPresented = false
     @State private var isPanelVisible = false
-    @State private var tailscaleService = TailscaleService.shared
+    @State private var tailscaleService: TailscaleService
 
     @MainActor
     private func updateStatusHighlight() {
@@ -32,10 +31,15 @@ struct OpenClawApp: App {
     }
 
     init() {
+        // Bootstrap consumer runtime/env first so every singleton reads consumer paths/ports.
+        ConsumerRuntime.bootstrapProcessEnvironment()
         OpenClawLogging.bootstrapIfNeeded()
+        ConsumerBootstrap.bootstrapIfNeeded()
+        GatewayConnectivityCoordinator.shared.start()
 
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
+        _tailscaleService = State(initialValue: TailscaleService.shared)
     }
 
     var body: some Scene {

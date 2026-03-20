@@ -53,6 +53,6 @@ Write your results to `docs/consumer/browser-spike-results.md` with:
 - Document every failure — we need the failure data, not just successes
 
 ### After the spike
-Once results are documented, your next session will be Days 4-5: setting up the consumer branch to run independently as a gateway on port 19001 with a separate OPENCLAW_HOME.
+Once results are documented, your next session will be Days 4-5: setting up the consumer branch to run independently as a gateway on port 19001 with the consumer runtime root.
 
 Go.

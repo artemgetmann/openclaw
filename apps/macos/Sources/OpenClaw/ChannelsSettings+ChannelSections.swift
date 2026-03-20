@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 extension ChannelsSettings {
@@ -84,6 +85,75 @@ extension ChannelsSettings {
             }
 
             self.configEditorSection(channelId: "whatsapp")
+        }
+    }
+
+    var telegramSetupSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            self.formSection("One-time setup") {
+                Text("1. Open BotFather and create a bot.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("2. Paste the token here and verify it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("3. Send one private message so OpenClaw can lock your DM allow list.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextField("BotFather token", text: self.$store.telegramSetupToken)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+
+                HStack(spacing: 10) {
+                    Button("Open BotFather") {
+                        self.store.openTelegramBotFather()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Verify token") {
+                        Task { await self.store.verifyTelegramSetupToken() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.store.telegramBusy)
+
+                    if let username = self.store.telegramSetupBotUsername {
+                        Button("Open bot") {
+                            self.store.openTelegramBot(username: username)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Button("Capture first DM") {
+                        Task { await self.store.captureTelegramFirstDirectMessage() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.store.telegramBusy || self.store.telegramSetupBotUsername == nil)
+
+                    if self.store.telegramSetupWaitingForDM {
+                        ProgressView().controlSize(.small)
+                    }
+
+                    if let senderId = self.store.telegramSetupFirstSenderId {
+                        Text("First sender: \(senderId)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let status = self.store.telegramSetupStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Text("DMs start simple. Groups and topics stay available for longer or parallel work.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

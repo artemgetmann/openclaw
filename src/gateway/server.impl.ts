@@ -17,7 +17,7 @@ import {
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
-import { logAcceptedEnvOption } from "../infra/env.js";
+import { isTruthyEnvValue, logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -160,6 +160,18 @@ const logWsControl = log.child("ws");
 const logSecrets = log.child("secrets");
 const gatewayRuntime = runtimeForLogger(log);
 const canvasRuntime = runtimeForLogger(logCanvas);
+const debugStartupPhases = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_STARTUP_PHASES);
+const debugStartupPhasesRaw = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_STARTUP_PHASES_RAW);
+
+function logStartupPhase(message: string): void {
+  if (debugStartupPhasesRaw) {
+    process.stderr.write(`[startup/raw] ${message}\n`);
+  }
+  if (!debugStartupPhases) {
+    return;
+  }
+  log.info(`[startup] ${message}`);
+}
 
 type AuthRateLimitConfig = Parameters<typeof createAuthRateLimiter>[0];
 
@@ -563,6 +575,8 @@ export async function startGatewayServer(
     broadcast("voicewake.changed", { triggers }, { dropIfSlow: true });
   };
   const hasMobileNodeConnected = () => hasConnectedMobileNode(nodeRegistry);
+  const skipRuntimeObservers =
+    minimalTestGateway || isTruthyEnvValue(process.env.OPENCLAW_DEBUG_SKIP_RUNTIME_OBSERVERS);
   applyGatewayLaneConcurrency(cfgAtStart);
 
   let cronState = buildGatewayCronService({
@@ -575,7 +589,7 @@ export async function startGatewayServer(
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
 
-  if (!minimalTestGateway) {
+  if (!skipRuntimeObservers) {
     const machineDisplayName = await getMachineDisplayName();
     const discovery = await runGatewayStartupDiscoveryPhase({
       startDiscovery: async () =>
@@ -595,7 +609,7 @@ export async function startGatewayServer(
     bonjourStop = discovery.bonjourStop;
   }
 
-  if (!minimalTestGateway) {
+  if (!skipRuntimeObservers) {
     setSkillsRemoteRegistry(nodeRegistry);
     void primeRemoteSkillsCache();
   }
@@ -604,7 +618,7 @@ export async function startGatewayServer(
   // takes time to complete. A 30-second delay ensures we batch changes together.
   let skillsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const skillsRefreshDelayMs = 30_000;
-  const skillsChangeUnsub = minimalTestGateway
+  const skillsChangeUnsub = skipRuntimeObservers
     ? () => {}
     : registerSkillsChangeListener((event) => {
         if (event.reason === "remote-node") {
@@ -625,7 +639,7 @@ export async function startGatewayServer(
   let healthInterval = noopInterval();
   let dedupeCleanup = noopInterval();
   let mediaCleanup: ReturnType<typeof setInterval> | null = null;
-  if (!minimalTestGateway) {
+  if (!skipRuntimeObservers) {
     ({ tickInterval, healthInterval, dedupeCleanup, mediaCleanup } = startGatewayMaintenanceTimers({
       broadcast,
       nodeSendToAllSubscribed,
@@ -647,7 +661,7 @@ export async function startGatewayServer(
     }));
   }
 
-  const agentUnsub = minimalTestGateway
+  const agentUnsub = skipRuntimeObservers
     ? null
     : onAgentEvent(
         createAgentEventHandler({
@@ -662,13 +676,13 @@ export async function startGatewayServer(
         }),
       );
 
-  const heartbeatUnsub = minimalTestGateway
+  const heartbeatUnsub = skipRuntimeObservers
     ? null
     : onHeartbeatEvent((evt) => {
         broadcast("heartbeat", evt, { dropIfSlow: true });
       });
 
-  let heartbeatRunner: HeartbeatRunner = minimalTestGateway
+  let heartbeatRunner: HeartbeatRunner = skipRuntimeObservers
     ? {
         stop: () => {},
         updateConfig: () => {},
@@ -690,12 +704,16 @@ export async function startGatewayServer(
         ...(maxRestartsPerHour != null && { maxRestartsPerHour }),
       });
 
-  if (!minimalTestGateway) {
+  if (!skipRuntimeObservers && !isTruthyEnvValue(process.env.OPENCLAW_DEBUG_SKIP_CRON_START)) {
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
+  logStartupPhase("cron initialized");
 
   // Recover pending outbound deliveries from previous crash/restart.
-  if (!minimalTestGateway) {
+  if (
+    !skipRuntimeObservers &&
+    !isTruthyEnvValue(process.env.OPENCLAW_DEBUG_SKIP_DELIVERY_RECOVERY)
+  ) {
     void (async () => {
       const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
       const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
@@ -707,6 +725,7 @@ export async function startGatewayServer(
       });
     })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
   }
+  logStartupPhase("delivery recovery scheduled");
 
   const execApprovalManager = new ExecApprovalManager();
   const execApprovalForwarder = createExecApprovalForwarder();
@@ -737,6 +756,7 @@ export async function startGatewayServer(
       return { assignments, diagnostics, inactiveRefPaths };
     },
   });
+  logStartupPhase("exec approvals and secrets handlers ready");
 
   const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
@@ -820,6 +840,7 @@ export async function startGatewayServer(
     broadcast,
     context: gatewayRequestContext,
   });
+  logStartupPhase("ws handlers attached");
   logGatewayStartup({
     cfg: cfgAtStart,
     bindHost,
@@ -829,9 +850,12 @@ export async function startGatewayServer(
     log,
     isNixMode,
   });
+  logStartupPhase("startup banner logged");
   const stopGatewayUpdateCheck = minimalTestGateway
     ? () => {}
-    : scheduleGatewayUpdateCheck({
+    : isTruthyEnvValue(process.env.OPENCLAW_DEBUG_SKIP_UPDATE_CHECK)
+      ? () => {}
+      : scheduleGatewayUpdateCheck({
         cfg: cfgAtStart,
         log,
         isNixMode,
@@ -840,8 +864,17 @@ export async function startGatewayServer(
           broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
         },
       });
+  logStartupPhase("update check scheduled");
+  logStartupPhase(`tailscale exposure phase entering (mode=${tailscaleMode})`);
+  if (debugStartupPhasesRaw) {
+    process.stderr.write("[startup/raw] tailscale await begin\n");
+  }
   const tailscaleCleanup = minimalTestGateway
     ? null
+    : isTruthyEnvValue(process.env.OPENCLAW_DEBUG_SKIP_TAILSCALE_EXPOSURE)
+      ? null
+    : tailscaleMode === "off"
+      ? null
     : await runGatewayStartupTailscaleExposurePhase({
         startTailscaleExposure: async () =>
           await startGatewayTailscaleExposure({
@@ -852,24 +885,55 @@ export async function startGatewayServer(
             logTailscale,
           }),
       });
+  if (debugStartupPhasesRaw) {
+    process.stderr.write("[startup/raw] tailscale await resolved\n");
+  }
+  logStartupPhase("tailscale exposure phase complete");
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   if (!minimalTestGateway) {
-    ({ browserControl, pluginServices } = await runGatewayStartupSidecarPhase({
-      startSidecars: async () =>
-        await startGatewaySidecars({
-          cfg: cfgAtStart,
-          pluginRegistry,
-          defaultWorkspaceDir,
-          deps,
-          startChannels,
-          log,
-          logHooks,
-          logChannels,
-          logBrowser,
-        }),
-    }));
+    logStartupPhase("sidecar phase entering");
+    if (debugStartupPhasesRaw) {
+      process.stderr.write("[startup/raw] sidecar await begin\n");
+    }
+    if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_BYPASS_SIDECAR_RESULT)) {
+      await startGatewaySidecars({
+        cfg: cfgAtStart,
+        pluginRegistry,
+        defaultWorkspaceDir,
+        deps,
+        startChannels,
+        log,
+        logHooks,
+        logChannels,
+        logBrowser,
+      });
+      browserControl = null;
+      pluginServices = null;
+    } else {
+      ({ browserControl, pluginServices } = await runGatewayStartupSidecarPhase({
+        startSidecars: async () =>
+          await startGatewaySidecars({
+            cfg: cfgAtStart,
+            pluginRegistry,
+            defaultWorkspaceDir,
+            deps,
+            startChannels,
+            log,
+            logHooks,
+            logChannels,
+            logBrowser,
+          }),
+      }));
+    }
+    if (debugStartupPhasesRaw) {
+      process.stderr.write("[startup/raw] sidecar await resolved\n");
+    }
   }
+  if (debugStartupPhasesRaw) {
+    process.stderr.write("[startup/raw] about to log sidecars started\n");
+  }
+  logStartupPhase("sidecars started");
 
   // Run gateway_start plugin hook (fire-and-forget)
   if (!minimalTestGateway) {
@@ -883,6 +947,8 @@ export async function startGatewayServer(
 
   const configReloader = minimalTestGateway
     ? { stop: async () => {} }
+    : isTruthyEnvValue(process.env.OPENCLAW_DEBUG_SKIP_CONFIG_RELOADER)
+      ? { stop: async () => {} }
     : (() => {
         const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
           deps,
@@ -943,6 +1009,7 @@ export async function startGatewayServer(
           },
         });
       })();
+  logStartupPhase("config reloader ready");
 
   const close = createGatewayCloseHandler({
     bonjourStop,

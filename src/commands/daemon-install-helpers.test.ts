@@ -98,6 +98,29 @@ describe("buildGatewayInstallPlan", () => {
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
   });
 
+  it("preserves an explicit launchd label override", async () => {
+    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+
+    await buildGatewayInstallPlan({
+      env: {
+        OPENCLAW_PROFILE: "consumer",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.consumer.gateway",
+      },
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith({
+      env: {
+        OPENCLAW_PROFILE: "consumer",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.consumer.gateway",
+      },
+      port: 3000,
+      launchdLabel:
+        process.platform === "darwin" ? "ai.openclaw.consumer.gateway" : undefined,
+    });
+  });
+
   it("emits warnings when renderSystemNodeWarning returns one", async () => {
     const warn = vi.fn();
     mockNodeGatewayPlanFixture({

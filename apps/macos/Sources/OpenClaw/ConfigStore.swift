@@ -67,6 +67,12 @@ enum ConfigStore {
                 }
             }
         }
+
+        // Config writes can rotate the gateway token or move the effective endpoint.
+        // Refresh both the resolved endpoint state and the shared socket config immediately
+        // so the app does not keep reconnecting with stale credentials.
+        await GatewayEndpointStore.shared.refresh()
+        try? await GatewayConnection.shared.refresh()
     }
 
     @MainActor

@@ -234,6 +234,12 @@ final class ChannelsStore {
     var whatsappLoginConnected: Bool?
     var whatsappBusy = false
     var telegramBusy = false
+    var telegramSetupToken = ""
+    var telegramSetupStatus: String?
+    var telegramSetupBotId: Int?
+    var telegramSetupBotUsername: String?
+    var telegramSetupFirstSenderId: String?
+    var telegramSetupWaitingForDM = false
 
     var configStatus: String?
     var isSavingConfig = false

@@ -33,7 +33,7 @@ extension OnboardingView {
             VStack(spacing: 22) {
                 Text("Welcome to OpenClaw")
                     .font(.largeTitle.weight(.semibold))
-                Text("OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
+                Text("OpenClaw is a personal AI operator that runs on this Mac and connects through Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -75,8 +75,8 @@ extension OnboardingView {
             Text("Choose your Gateway")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "OpenClaw uses a single Gateway that stays running. Pick this Mac, " +
-                    "connect to a discovered gateway nearby, or configure later.")
+                "OpenClaw uses one local Gateway for the consumer build. This Mac is the normal path; " +
+                    "remote setup stays tucked under Advanced.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -101,14 +101,6 @@ extension OnboardingView {
                     if self.shouldShowRemoteConnectionSection {
                         Divider().padding(.vertical, 4)
                         self.remoteConnectionSection()
-                    }
-
-                    self.connectionChoiceButton(
-                        title: "Configure later",
-                        subtitle: "Don’t start the Gateway yet.",
-                        selected: self.state.connectionMode == .unconfigured)
-                    {
-                        self.selectUnconfiguredGateway()
                     }
 
                     self.advancedConnectionSection()
@@ -750,7 +742,7 @@ extension OnboardingView {
                                     let saved = await self.saveAgentWorkspace(AgentWorkspace.displayPath(for: url))
                                     if saved {
                                         self.workspaceStatus =
-                                            "Saved to ~/.openclaw/openclaw.json (agents.defaults.workspace)"
+                                            "Saved consumer workspace to openclaw.json (agents.defaults.workspace)"
                                     }
                                 }
                             }
@@ -784,7 +776,7 @@ extension OnboardingView {
                 .font(.largeTitle.weight(.semibold))
             Text(
                 "This is a dedicated onboarding chat. Your agent will introduce itself, " +
-                    "learn who you are, and help you connect WhatsApp or Telegram if you want.")
+                    "learn who you are, and guide the Telegram setup once the local runtime is ready.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -819,7 +811,7 @@ extension OnboardingView {
                         title: "Remote gateway checklist",
                         subtitle: """
                         On your gateway host: install/update the `openclaw` package and make sure credentials exist
-                        (typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.
+                        for that host. Then connect again if needed.
                         """,
                         systemImage: "network")
                     Divider()
@@ -830,13 +822,21 @@ extension OnboardingView {
                     subtitle: "Click the OpenClaw menu bar icon for quick chat and status.",
                     systemImage: "bubble.left.and.bubble.right")
                 self.featureActionRow(
-                    title: "Connect WhatsApp or Telegram",
-                    subtitle: "Open Settings → Channels to link channels and monitor status.",
+                    title: "Connect Telegram",
+                    subtitle: "Open Settings → Channels to add your bot token and finish the one-time setup.",
                     systemImage: "link",
                     buttonTitle: "Open Settings → Channels")
                 {
                     self.openSettings(tab: .channels)
                 }
+                self.featureRow(
+                    title: "Create the bot token",
+                    subtitle: "Use BotFather once, then paste the token into Settings → Channels. The app keeps the rest isolated.",
+                    systemImage: "message.badge")
+                self.featureRow(
+                    title: "Groups stay available",
+                    subtitle: "Use DM-first onboarding to start, then move long-running work into Telegram groups and topics.",
+                    systemImage: "person.2")
                 self.featureRow(
                     title: "Try Voice Wake",
                     subtitle: "Enable Voice Wake in Settings for hands-free commands with a live transcript overlay.",

@@ -81,8 +81,7 @@ enum GatewayEnvironment {
         if let configPort = OpenClawConfigFile.gatewayPort(), configPort > 0 {
             return configPort
         }
-        let stored = UserDefaults.standard.integer(forKey: "gatewayPort")
-        return stored > 0 ? stored : 18789
+        return ConsumerRuntime.gatewayPort
     }
 
     static func expectedGatewayVersion() -> Semver? {

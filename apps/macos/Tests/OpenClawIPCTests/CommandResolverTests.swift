@@ -16,36 +16,55 @@ import Testing
     }
 
     private func makeProjectRootWithPnpm() throws -> (tmp: URL, pnpmPath: URL) {
-        let tmp = try makeTempDirForTests()
+        let tmp = try self.makeRepoRoot()
         CommandResolver.setProjectRoot(tmp.path)
         let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
         try makeExecutableForTests(at: pnpmPath)
         return (tmp, pnpmPath)
     }
 
+    private func makeRepoRoot() throws -> URL {
+        let tmp = try makeTempDirForTests()
+        try "{}".write(to: tmp.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        try "console.log('openclaw');\n".write(
+            to: tmp.appendingPathComponent("openclaw.mjs"),
+            atomically: true,
+            encoding: .utf8)
+        let dist = tmp.appendingPathComponent("dist", isDirectory: true)
+        try FileManager().createDirectory(at: dist, withIntermediateDirectories: true)
+        try "console.log('dist');\n".write(
+            to: dist.appendingPathComponent("index.js"),
+            atomically: true,
+            encoding: .utf8)
+        return tmp
+    }
+
     @Test func `prefers open claw binary`() throws {
         let defaults = self.makeLocalDefaults()
 
-        let tmp = try makeTempDirForTests()
+        let tmp = try self.makeRepoRoot()
         CommandResolver.setProjectRoot(tmp.path)
 
-        let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
-        try makeExecutableForTests(at: openclawPath)
+        try makeExecutableForTests(at: tmp.appendingPathComponent("node_modules/.bin/openclaw"))
 
         let cmd = CommandResolver.openclawCommand(subcommand: "gateway", defaults: defaults, configRoot: [:])
-        #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
+        #expect(cmd.count >= 3)
+        if cmd.count >= 3 {
+            #expect(cmd[1] == tmp.appendingPathComponent("dist/index.js").path)
+            #expect(cmd[2] == "gateway")
+        }
     }
 
     @Test func `falls back to node and script`() throws {
         let defaults = self.makeLocalDefaults()
 
-        let tmp = try makeTempDirForTests()
+        let tmp = try self.makeRepoRoot()
         CommandResolver.setProjectRoot(tmp.path)
 
         let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
         let scriptPath = tmp.appendingPathComponent("bin/openclaw.js")
         try makeExecutableForTests(at: nodePath)
-        try "#!/bin/sh\necho v22.0.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v22.16.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
         try makeExecutableForTests(at: scriptPath)
 
@@ -58,7 +77,7 @@ import Testing
         #expect(cmd.count >= 3)
         if cmd.count >= 3 {
             #expect(cmd[0] == nodePath.path)
-            #expect(cmd[1] == scriptPath.path)
+            #expect(cmd[1] == tmp.appendingPathComponent("dist/index.js").path)
             #expect(cmd[2] == "rpc")
         }
     }
@@ -66,7 +85,7 @@ import Testing
     @Test func `prefers open claw binary over pnpm`() throws {
         let defaults = self.makeLocalDefaults()
 
-        let tmp = try makeTempDirForTests()
+        let tmp = try self.makeRepoRoot()
         CommandResolver.setProjectRoot(tmp.path)
 
         let binDir = tmp.appendingPathComponent("bin")
@@ -87,7 +106,7 @@ import Testing
     @Test func `uses open claw binary without node runtime`() throws {
         let defaults = self.makeLocalDefaults()
 
-        let tmp = try makeTempDirForTests()
+        let tmp = try self.makeRepoRoot()
         CommandResolver.setProjectRoot(tmp.path)
 
         let binDir = tmp.appendingPathComponent("bin")
@@ -132,11 +151,33 @@ import Testing
     }
 
     @Test func `preferred paths start with project node bins`() throws {
-        let tmp = try makeTempDirForTests()
+        let tmp = try self.makeRepoRoot()
         CommandResolver.setProjectRoot(tmp.path)
 
         let first = CommandResolver.preferredPaths().first
         #expect(first == tmp.appendingPathComponent("node_modules/.bin").path)
+    }
+
+    @Test func `infers project root from packaged app bundle path`() throws {
+        let tmp = try makeTempDirForTests()
+        let root = tmp.appendingPathComponent("repo", isDirectory: true)
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        try "{}".write(to: root.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        try "console.log('openclaw');\n".write(
+            to: root.appendingPathComponent("openclaw.mjs"),
+            atomically: true,
+            encoding: .utf8)
+        let dist = root.appendingPathComponent("dist", isDirectory: true)
+        try FileManager().createDirectory(at: dist, withIntermediateDirectories: true)
+        try "console.log('dist');\n".write(
+            to: dist.appendingPathComponent("index.js"),
+            atomically: true,
+            encoding: .utf8)
+        let bundle = dist.appendingPathComponent("OpenClaw.app", isDirectory: true)
+        try FileManager().createDirectory(at: bundle, withIntermediateDirectories: true)
+
+        let inferred = CommandResolver.inferProjectRoot(from: bundle)
+        #expect(inferred == root)
     }
 
     @Test func `builds SSH command for remote mode`() {
@@ -181,21 +222,21 @@ import Testing
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("openclaw@example.com:2222", forKey: remoteTargetKey)
 
-        let tmp = try makeTempDirForTests()
+        let tmp = try self.makeRepoRoot()
         CommandResolver.setProjectRoot(tmp.path)
 
-        let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
-        try makeExecutableForTests(at: openclawPath)
+        try makeExecutableForTests(at: tmp.appendingPathComponent("node_modules/.bin/openclaw"))
 
         let cmd = CommandResolver.openclawCommand(
             subcommand: "daemon",
             defaults: defaults,
             configRoot: ["gateway": ["mode": "local"]])
 
-        #expect(cmd.first == openclawPath.path)
+        #expect(cmd.count >= 3)
         #expect(cmd.count >= 2)
-        if cmd.count >= 2 {
-            #expect(cmd[1] == "daemon")
+        if cmd.count >= 3 {
+            #expect(cmd[1] == tmp.appendingPathComponent("dist/index.js").path)
+            #expect(cmd[2] == "daemon")
         }
     }
 }

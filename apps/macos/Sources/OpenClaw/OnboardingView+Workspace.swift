@@ -39,9 +39,10 @@ extension OnboardingView {
 
     var workspaceBootstrapCommand: String {
         let template = AgentWorkspace.defaultTemplate().trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspacePath = OpenClawConfigFile.defaultWorkspaceURL().path
         return """
-        mkdir -p ~/.openclaw/workspace
-        cat > ~/.openclaw/workspace/AGENTS.md <<'EOF'
+        mkdir -p '\(workspacePath)'
+        cat > '\(workspacePath)/AGENTS.md' <<'EOF'
         \(template)
         EOF
         """

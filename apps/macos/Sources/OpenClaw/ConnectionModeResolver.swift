@@ -43,6 +43,13 @@ enum ConnectionModeResolver {
             return EffectiveConnectionMode(mode: storedMode, source: .userDefaults)
         }
 
+        // Consumer builds should come up local-first even before the first config write lands.
+        if let profile = ProcessInfo.processInfo.environment["OPENCLAW_PROFILE"],
+           profile.hasPrefix(ConsumerRuntime.profile)
+        {
+            return EffectiveConnectionMode(mode: .local, source: .onboarding)
+        }
+
         let seen = defaults.bool(forKey: "openclaw.onboardingSeen")
         return EffectiveConnectionMode(mode: seen ? .local : .unconfigured, source: .onboarding)
     }

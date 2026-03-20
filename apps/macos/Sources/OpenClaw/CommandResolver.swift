@@ -3,6 +3,7 @@ import Foundation
 enum CommandResolver {
     private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
     private static let helperName = "openclaw"
+    private static let repoMarkers = ["openclaw.mjs", "package.json"]
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
@@ -49,13 +50,16 @@ enum CommandResolver {
     static func projectRoot() -> URL {
         if let stored = UserDefaults.standard.string(forKey: self.projectRootDefaultsKey),
            let url = self.expandPath(stored),
-           FileManager().fileExists(atPath: url.path)
+           self.isRepoRoot(url)
         {
             return url
         }
+        if let inferred = self.inferProjectRoot(from: Bundle.main.bundleURL) {
+            return inferred
+        }
         let fallback = FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent("Projects/openclaw")
-        if FileManager().fileExists(atPath: fallback.path) {
+        if self.isRepoRoot(fallback) {
             return fallback
         }
         return FileManager().homeDirectoryForCurrentUser
@@ -67,6 +71,11 @@ enum CommandResolver {
 
     static func projectRootPath() -> String {
         self.projectRoot().path
+    }
+
+    static func projectRootEnvironmentHint() -> String? {
+        let root = self.projectRoot()
+        return self.isRepoRoot(root) ? root.path : nil
     }
 
     static func preferredPaths() -> [String] {
@@ -100,18 +109,28 @@ enum CommandResolver {
     }
 
     private static func openclawManagedPaths(home: URL) -> [String] {
-        let bases = [
-            home.appendingPathComponent(".openclaw"),
-        ]
+        var bases: [URL] = []
+        if let rawStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawStateDir.isEmpty
+        {
+            bases.append(URL(fileURLWithPath: rawStateDir, isDirectory: true))
+        }
+        bases.append(home.appendingPathComponent(".openclaw"))
         var paths: [String] = []
+        var seen = Set<String>()
         for base in bases {
             let bin = base.appendingPathComponent("bin")
             let nodeBin = base.appendingPathComponent("tools/node/bin")
             if FileManager().fileExists(atPath: bin.path) {
-                paths.append(bin.path)
+                if seen.insert(bin.path).inserted {
+                    paths.append(bin.path)
+                }
             }
             if FileManager().fileExists(atPath: nodeBin.path) {
-                paths.append(nodeBin.path)
+                if seen.insert(nodeBin.path).inserted {
+                    paths.append(nodeBin.path)
+                }
             }
         }
         return paths
@@ -247,17 +266,13 @@ enum CommandResolver {
         }
 
         let root = self.projectRoot()
-        if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
-            return [openclawPath, subcommand] + extraArgs
-        }
-        if let openclawPath = self.openclawExecutable(searchPaths: searchPaths) {
-            return [openclawPath, subcommand] + extraArgs
-        }
-
         let runtimeResult = self.runtimeResolution(searchPaths: searchPaths)
         switch runtimeResult {
         case let .success(runtime):
             if let entry = self.gatewayEntrypoint(in: root) {
+                // When we know the current repo root, prefer its built entrypoint over any
+                // PATH-level wrapper. This keeps the mac app pinned to the active worktree
+                // instead of a stale hoisted/global `openclaw` package.
                 return self.makeRuntimeCommand(
                     runtime: runtime,
                     entrypoint: entry,
@@ -266,6 +281,13 @@ enum CommandResolver {
             }
         case .failure:
             break
+        }
+
+        if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
+            return [openclawPath, subcommand] + extraArgs
+        }
+        if let openclawPath = self.openclawExecutable(searchPaths: searchPaths) {
+            return [openclawPath, subcommand] + extraArgs
         }
 
         if let pnpm = self.findExecutable(named: "pnpm", searchPaths: searchPaths) {
@@ -519,6 +541,27 @@ enum CommandResolver {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return trimmed
+    }
+
+    private static func isRepoRoot(_ url: URL) -> Bool {
+        self.repoMarkers.allSatisfy { marker in
+            FileManager().fileExists(atPath: url.appendingPathComponent(marker).path)
+        }
+    }
+
+    static func inferProjectRoot(from bundleURL: URL) -> URL? {
+        var candidate = bundleURL.resolvingSymlinksInPath().deletingLastPathComponent()
+        for _ in 0..<8 {
+            if self.isRepoRoot(candidate),
+               self.gatewayEntrypoint(in: candidate) != nil
+            {
+                return candidate
+            }
+            let parent = candidate.deletingLastPathComponent()
+            if parent.path == candidate.path { break }
+            candidate = parent
+        }
+        return nil
     }
 
     private static func isValidSSHComponent(_ value: String, allowLeadingDash: Bool = false) -> Bool {

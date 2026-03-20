@@ -233,6 +233,16 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
+echo "📦 Copying consumer workspace templates"
+TEMPLATE_SRC="$ROOT_DIR/docs/reference/templates"
+TEMPLATE_DEST="$APP_ROOT/Contents/Resources/templates"
+if [ -d "$TEMPLATE_SRC" ]; then
+  rm -rf "$TEMPLATE_DEST"
+  cp -R "$TEMPLATE_SRC" "$TEMPLATE_DEST"
+else
+  echo "WARN: consumer template source missing at $TEMPLATE_SRC (continuing)" >&2
+fi
+
 echo "📦 Copying model catalog"
 MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@mariozechner/pi-ai/dist/models.generated.js"
 MODEL_CATALOG_DEST="$APP_ROOT/Contents/Resources/models.generated.js"
