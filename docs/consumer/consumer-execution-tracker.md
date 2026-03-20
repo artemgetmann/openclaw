@@ -59,6 +59,7 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
 - `origin/main...upstream/main`: ahead 88, behind 220
 - Phase A merge and runtime validation are complete.
 - Phase B status now:
+  <<<<<<< HEAD
   - `profile=user` control lane passes (`start/status/tabs`) after remote debugging enablement.
   - `profile=openclaw` control lane passes (`start/status/tabs`) on isolated runtime.
   - Local `agent --local` prompt execution now exits cleanly in the isolated runtime after teardown fixes.
@@ -67,7 +68,15 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
     - `openai-codex:notblockedamazon` returns `API rate limit reached`.
     - lower-priority Codex OAuth profiles previously surfaced `refresh_token_reused`.
     - Anthropic fallback previously surfaced `overloaded`.
-  - LaunchAgent route was tested and reverted: it binds `19001` but runs against `~/.openclaw` state instead of `/tmp/openclaw-consumer`, so isolated auth/state checks fail.
+  - # LaunchAgent route was tested and reverted: it binds `19001` but runs against `~/.openclaw` state instead of `/tmp/openclaw-consumer`, so isolated auth/state checks fail.
+  - `profile=user` is partially healthy on clean gateway (`status` passes), but `tabs`/`open` are blocked by Chrome MCP attach behavior in the current Chrome session.
+  - `profile=openclaw` control lane passes on a clean direct-built gateway (`start`, `status`, `tabs`, `open https://example.com`).
+  - Gateway/browser control is healthy for managed profile; existing-session remains the active blocker.
+  - A benchmark-only runtime at `/tmp/openclaw-consumer-bench` disables Telegram and removes the stale `plugins.entries.openai` config noise so browser checks do not collide with shared bot traffic.
+  - Local runner is no longer blocked: trivial `agent --local` prompt now returns `OK` reliably.
+  - External probe confirms the same failure outside OpenClaw (`chrome-devtools-mcp list_pages` times out on `--autoConnect` against current Chrome session).
+  - `pnpm openclaw ...` runs from a dirty tree can trigger rebuild churn via `scripts/run-node.mjs`; use the already-built `node dist/entry.js ...` path for clean benchmark/debug runs to avoid false negatives.
+    > > > > > > > 7e0dacea11 (fix(browser): improve chrome-mcp attach reliability and diagnostics)
 
 ## Execution phases and gates
 
@@ -200,12 +209,22 @@ OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm opencla
 
 ## Benchmark tracker template
 
-| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                                                        |
+<<<<<<< HEAD
+| Approach | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status | Notes |
 | ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | -------------------------------------------------------------------------------------------- |
-| user (existing-session) | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | control lane passes; local agent run works; current blocker is model rate limits/auth health |
-| openclaw (managed)      | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | control lane passes; local agent run works; current blocker is model rate limits/auth health |
-| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                                                                     |
-| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                                                                              |
+| user (existing-session) | blocked | blocked | blocked | blocked | blocked | blocked | control lane passes; local agent run works; current blocker is model rate limits/auth health |
+| openclaw (managed) | blocked | blocked | blocked | blocked | blocked | blocked | control lane passes; local agent run works; current blocker is model rate limits/auth health |
+| Claude-in-Chrome | TODO | TODO | TODO | TODO | TODO | pending | feasibility + adaptation |
+| Browserbase | blocked | blocked | blocked | blocked | blocked | credential-blocked | run after creds |
+=======
+| Approach | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status | Notes |
+| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ----------------------------------------------------------------------------------------------- |
+| user (existing-session) | blocked | blocked | blocked | blocked | blocked | blocked | `status` passes, but Chrome MCP `list_pages` times out/attach fails with current Chrome session |
+| openclaw (managed) | pending | pending | pending | pending | pending | ready-for-runs | control lane is healthy on clean gateway; benchmark task runs can proceed |
+| Claude-in-Chrome | TODO | TODO | TODO | TODO | TODO | pending | feasibility + adaptation |
+| Browserbase | blocked | blocked | blocked | blocked | blocked | credential-blocked | run after creds |
+
+> > > > > > > 7e0dacea11 (fix(browser): improve chrome-mcp attach reliability and diagnostics)
 
 ## Scope guardrails (week 1)
 
@@ -259,3 +278,28 @@ Out of scope:
   - Keep only the least-bad Codex profiles in isolated auth order so future runs skip known-bad refresh tokens.
   - Update `docs/consumer/browser-spike-results.md` so benchmark state reflects provider-auth blockage rather than browser failure.
   - If credentials remain unhealthy, request reauth or a non-Codex API-key-backed model for isolated runtime smoke.
+    <<<<<<< HEAD
+    =======
+
+### 2026-03-19
+
+- Done:
+  - Proved gateway/browser control works on a clean direct-built runtime rather than the rebuild-prone `pnpm openclaw ...` path.
+  - Landed startup-path performance fixes so local runner no longer stalls on trivial prompts (`agent --local ... -> OK`).
+  - Verified `profile=openclaw` passes `start`, `status`, `tabs`, and `open https://example.com` on the clean bench gateway.
+  - Added Chrome MCP attach diagnostics/timeouts so failures are explicit (no blind 45s gateway timeout).
+  - Reproduced `profile=user` failure outside OpenClaw with direct MCP probe (`list_pages` timeout using `chrome-devtools-mcp --autoConnect`).
+  - Created `/tmp/openclaw-consumer-bench` as a benchmark-only copy with Telegram disabled and stale `plugins.entries.openai` removed.
+- Blocked:
+  - `profile=user` existing-session path is still blocked by current Chrome MCP handshake behavior (`autoConnect` call timeout; `--browserUrl http://127.0.0.1:9222` returns `/json/version` 404).
+- Evidence links:
+  - `/tmp/openclaw-consumer-bench/.openclaw/openclaw.json`
+  - `/tmp/openclaw/openclaw-2026-03-19.log`
+  - `/tmp/openclaw-stage.log`
+  - `/tmp/chrome-mcp-probe.log`
+  - `/tmp/chrome-mcp-probe-browserurl.log`
+- Next 3 actions:
+  - Validate existing-session against a Chrome instance started with explicit CDP flags (`--remote-debugging-port`) and re-run `user` lane control checks.
+  - Run phase-B benchmark tasks on `profile=openclaw` immediately while existing-session is being stabilized.
+  - Keep benchmark/debug runs on `node dist/entry.js ...` until the rebuild-churn path is out of the picture.
+    > > > > > > > 7e0dacea11 (fix(browser): improve chrome-mcp attach reliability and diagnostics)
