@@ -17,6 +17,17 @@ enum OpenClawPaths {
     private static let configPathEnv = ["OPENCLAW_CONFIG_PATH"]
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
 
+    private static func legacyStateDirURL(home: URL) -> URL {
+        home.appendingPathComponent(AppFlavor.current.defaultStateDirName, isDirectory: true)
+    }
+
+    private static func consumerPreferredStateDirURL(home: URL) -> URL {
+        home
+            .appendingPathComponent("Library/Application Support", isDirectory: true)
+            .appendingPathComponent(AppFlavor.current.appName, isDirectory: true)
+            .appendingPathComponent(".openclaw", isDirectory: true)
+    }
+
     static var stateDirURL: URL {
         for key in self.stateDirEnv {
             if let override = OpenClawEnv.path(key) {

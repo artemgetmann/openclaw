@@ -50,7 +50,7 @@ enum ConnectionModeResolver {
             return EffectiveConnectionMode(mode: .local, source: .onboarding)
         }
 
-        let seen = defaults.bool(forKey: "openclaw.onboardingSeen")
+        let seen = defaults.bool(forKey: onboardingSeenKey)
         return EffectiveConnectionMode(mode: seen ? .local : .unconfigured, source: .onboarding)
     }
 }

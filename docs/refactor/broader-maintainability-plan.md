@@ -84,17 +84,16 @@ No user-facing CLI flag removals in stages 1 to 3.
 - Stage 0: complete.
 - Stage 1A: complete with shared preflight helper used by route-first and Commander hooks.
 - Stage 1B: complete with runtime fingerprint diagnostics integrated into startup and status paths.
-- Stage 2A: complete with deterministic read and mutation seam splits in config paths, including no-repair plugin validation reads to avoid discovery-side chmod writes during config validation, read-only daemon status config loads, daemon status env-isolated read contexts, and dotenv hydration into read-only env snapshots instead of `process.env`.
-- Stage 2B: complete with `RuntimeStateContainer` seams threaded through startup/runtime overrides, including fallback gateway context lifecycle ownership, remote skills state cleanup, and gateway health runtime-state reset hardening (cache reset plus stale in-flight refresh guard) during shutdown.
-- Stage 3A: complete enough to pause with startup phase extractions for config preflight, secrets precheck, auth bootstrap, runtime policy, explicit runtime-config and control-ui-root helpers, plugin bootstrap, TLS runtime, transport bootstrap, sidecar startup, discovery startup, and Tailscale exposure classification seams, secrets activation controller, and runtime config reloader wiring; early-phase typed startup context handoff and shared startup phase failure reporting now includes secrets-precheck/auth-bootstrap/runtime-policy/plugin-bootstrap/tls-runtime/transport-bootstrap/sidecar-startup/discovery-startup/tailscale-exposure/runtime-config/control-ui-root classification.
-- Stage 3B: started with a shared gateway reachability and health-check workflow, a shared workspace resolution and workspace-config seam, a shared gateway mode probe summary, and shared gateway exposure safety normalization reused across onboarding flows.
-- Stages 4 to 5: not started.
+- Stage 2A: complete with deterministic read and mutation seam splits in config paths.
+- Stage 2B: complete with `RuntimeStateContainer` seams threaded through startup/runtime overrides.
+- Stage 3A: in progress with startup phase extractions for config preflight, secrets precheck, auth bootstrap, runtime policy, control-ui root resolution, secrets activation controller, and runtime config reloader wiring; early-phase typed startup context handoff and shared startup preflight failure reporting are now in place.
+- Stages 3B to 5: not started.
 
 ## Highest leverage next steps
 
-1. Stage 3B: define the first real `OnboardingPlan` inputs and outputs around mode, workspace, auth, daemon install, and health expectations.
-2. Stage 3B: reuse shared gateway exposure safety normalization in remaining gateway configuration surfaces that still hand-roll the same rules.
-3. Stage 3B: reuse shared gateway mode probe and control-UI reachability summaries anywhere setup/configure still hand-roll those hints.
+1. Stage 3A: extend typed startup context through runtime config and control-ui-root phase outputs, then classify additional startup-phase failures (beyond preflight) with explicit phase labels.
+2. Stage 3B: define shared `OnboardingPlan` decision graph and keep interactive and non-interactive executors separate.
+3. Stage 4: extract route index matcher and cache boundaries, then narrow plugin runtime surface behind capability subfacades.
 
 ## Verification note
 

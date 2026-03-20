@@ -13,6 +13,7 @@ Use these documents in this order when there is any ambiguity:
 3. `docs/consumer/CODEX-PROMPT.md` (browser-spike task framing)
 4. `docs/consumer/openclaw-consumer-brutal-execution-board.md` (30-day cadence)
 5. `docs/consumer/openclaw-consumer-go-to-market-plan.md` (architecture and launch context)
+6. `docs/consumer/macos-consumer-app.md` (consumer macOS app identity, UX, and distribution assumptions)
 
 ## Locked decisions
 
@@ -73,6 +74,46 @@ Notes:
   - LaunchAgent route was tested and reverted: it binds `19001` but runs against `~/.openclaw` state instead of the consumer runtime root, so isolated auth/state checks fail.
 
 ## Execution phases and gates
+
+### Worktree A: Consumer macOS app simplification and isolation
+
+- [x] Consumer app uses a separate app/runtime identity
+  - [x] Separate bundle/app identity documented
+  - [x] Separate state dir + port defaults implemented
+  - [x] Separate launch labels/log roots implemented
+- [x] Consumer onboarding is local-first
+  - [x] Remote setup hidden behind Advanced
+  - [x] Consumer-facing copy avoids gateway jargon in the main flow
+- [x] Consumer default surface is simplified
+  - [x] Menu bar trimmed to status/chat/settings/pause/quit
+  - [x] Default settings tabs reduced to General/Permissions/About
+  - [x] Advanced toggle reveals hidden power-user surfaces
+- [x] Docs updated for the consumer app
+  - [x] Tracker kept current
+  - [x] Consumer app doc explains isolation and direct-download assumptions
+  - [x] Safe local testing instructions included
+
+Gate to exit Worktree A:
+
+- [x] Consumer app can coexist with founder app on the same Mac without sharing runtime state unintentionally
+- [x] Consumer default UX is materially simpler while advanced controls remain accessible
+- [x] Docs match the implemented consumer behavior
+
+Worktree A validation notes (2026-03-19):
+
+- `swift build -c debug --product OpenClaw --build-path .build --arch arm64 -Xlinker -rpath -Xlinker @executable_path/../Frameworks` passed after fixing a missing `return` in `OnboardingView+Pages.swift`.
+- `swift test --package-path apps/macos --filter GatewayEnvironmentTests` passed.
+- `swift test --package-path apps/macos --filter SettingsViewSmokeTests` passed.
+- A consumer bundle was packaged manually at `dist/OpenClaw Consumer.app` with:
+  - bundle identifier `ai.openclaw.consumer.mac.debug`
+  - URL scheme `openclaw-consumer`
+  - app variant `consumer`
+- Same-Mac isolation smoke passed with the founder gateway still active on `18789`:
+  - consumer app process launched from `dist/OpenClaw Consumer.app`
+  - consumer defaults plist written to `~/Library/Preferences/ai.openclaw.consumer.mac.debug.plist`
+  - consumer runtime socket created at `~/Library/Application Support/OpenClaw Consumer/.openclaw/exec-approvals.sock`
+  - consumer app held no TCP listener and did not take over the founder gateway launch label
+- Gateway auto-bootstrap on consumer port `19001` was not exercised in Worktree A; that remains Worktree B scope.
 
 ### Phase A: Branch convergence (blocking)
 

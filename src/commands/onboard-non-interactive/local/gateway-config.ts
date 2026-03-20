@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { isValidEnvSecretRefId } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
-import { normalizeGatewayExposureSafety } from "../../onboard-gateway-exposure.js";
 import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
@@ -41,11 +40,15 @@ export function applyNonInteractiveGatewayConfig(params: {
   const tailscaleMode = opts.tailscale ?? "off";
   const tailscaleResetOnExit = Boolean(opts.tailscaleResetOnExit);
 
-  ({ bind, authMode } = normalizeGatewayExposureSafety({
-    bind,
-    authMode,
-    tailscaleMode,
-  }));
+  // Tighten config to safe combos:
+  // - If Tailscale is on, force loopback bind (the tunnel handles external access).
+  // - If using Tailscale Funnel, require password auth.
+  if (tailscaleMode !== "off" && bind !== "loopback") {
+    bind = "loopback";
+  }
+  if (tailscaleMode === "funnel" && authMode !== "password") {
+    authMode = "password";
+  }
 
   let nextConfig = params.nextConfig;
   const explicitGatewayToken = normalizeGatewayTokenInput(opts.gatewayToken);

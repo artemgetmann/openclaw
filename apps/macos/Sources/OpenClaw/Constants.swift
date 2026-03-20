@@ -1,48 +1,51 @@
 import Foundation
 
-// Stable identifiers used for the macOS LaunchAgent labels and Nix-managed defaults suite.
-// nix-openclaw writes app defaults into this suite to survive app bundle identifier churn.
+private var defaultsPrefix: String { AppFlavor.current.defaultsPrefix }
+
+// Keep runtime/service labels pinned to the consumer runtime authority so this branch
+// cannot silently fall back to founder labels when flavor metadata is missing.
 let launchdLabel = ConsumerRuntime.launchdLabel
 let gatewayLaunchdLabel = ConsumerRuntime.gatewayLaunchdLabel
-let onboardingVersionKey = "openclaw.onboardingVersion"
-let onboardingSeenKey = "openclaw.onboardingSeen"
+var onboardingVersionKey: String { "\(defaultsPrefix).onboardingVersion" }
+var onboardingSeenKey: String { "\(defaultsPrefix).onboardingSeen" }
 let currentOnboardingVersion = 7
-let pauseDefaultsKey = "openclaw.pauseEnabled"
-let iconAnimationsEnabledKey = "openclaw.iconAnimationsEnabled"
-let swabbleEnabledKey = "openclaw.swabbleEnabled"
-let swabbleTriggersKey = "openclaw.swabbleTriggers"
-let voiceWakeTriggerChimeKey = "openclaw.voiceWakeTriggerChime"
-let voiceWakeSendChimeKey = "openclaw.voiceWakeSendChime"
-let showDockIconKey = "openclaw.showDockIcon"
+var pauseDefaultsKey: String { "\(defaultsPrefix).pauseEnabled" }
+var iconAnimationsEnabledKey: String { "\(defaultsPrefix).iconAnimationsEnabled" }
+var swabbleEnabledKey: String { "\(defaultsPrefix).swabbleEnabled" }
+var swabbleTriggersKey: String { "\(defaultsPrefix).swabbleTriggers" }
+var voiceWakeTriggerChimeKey: String { "\(defaultsPrefix).voiceWakeTriggerChime" }
+var voiceWakeSendChimeKey: String { "\(defaultsPrefix).voiceWakeSendChime" }
+var showDockIconKey: String { "\(defaultsPrefix).showDockIcon" }
 let defaultVoiceWakeTriggers = ["openclaw"]
 let voiceWakeMaxWords = 32
 let voiceWakeMaxWordLength = 64
-let voiceWakeMicKey = "openclaw.voiceWakeMicID"
-let voiceWakeMicNameKey = "openclaw.voiceWakeMicName"
-let voiceWakeLocaleKey = "openclaw.voiceWakeLocaleID"
-let voiceWakeAdditionalLocalesKey = "openclaw.voiceWakeAdditionalLocaleIDs"
-let voicePushToTalkEnabledKey = "openclaw.voicePushToTalkEnabled"
-let talkEnabledKey = "openclaw.talkEnabled"
-let iconOverrideKey = "openclaw.iconOverride"
-let connectionModeKey = "openclaw.connectionMode"
-let remoteTargetKey = "openclaw.remoteTarget"
-let remoteIdentityKey = "openclaw.remoteIdentity"
-let remoteProjectRootKey = "openclaw.remoteProjectRoot"
-let remoteCliPathKey = "openclaw.remoteCliPath"
-let canvasEnabledKey = "openclaw.canvasEnabled"
-let cameraEnabledKey = "openclaw.cameraEnabled"
-let systemRunPolicyKey = "openclaw.systemRunPolicy"
-let systemRunAllowlistKey = "openclaw.systemRunAllowlist"
-let systemRunEnabledKey = "openclaw.systemRunEnabled"
-let locationModeKey = "openclaw.locationMode"
-let locationPreciseKey = "openclaw.locationPreciseEnabled"
-let peekabooBridgeEnabledKey = "openclaw.peekabooBridgeEnabled"
-let deepLinkKeyKey = "openclaw.deepLinkKey"
-let modelCatalogPathKey = "openclaw.modelCatalogPath"
-let modelCatalogReloadKey = "openclaw.modelCatalogReload"
-let cliInstallPromptedVersionKey = "openclaw.cliInstallPromptedVersion"
-let heartbeatsEnabledKey = "openclaw.heartbeatsEnabled"
-let debugPaneEnabledKey = "openclaw.debugPaneEnabled"
-let debugFileLogEnabledKey = "openclaw.debug.fileLogEnabled"
-let appLogLevelKey = "openclaw.debug.appLogLevel"
+var voiceWakeMicKey: String { "\(defaultsPrefix).voiceWakeMicID" }
+var voiceWakeMicNameKey: String { "\(defaultsPrefix).voiceWakeMicName" }
+var voiceWakeLocaleKey: String { "\(defaultsPrefix).voiceWakeLocaleID" }
+var voiceWakeAdditionalLocalesKey: String { "\(defaultsPrefix).voiceWakeAdditionalLocaleIDs" }
+var voicePushToTalkEnabledKey: String { "\(defaultsPrefix).voicePushToTalkEnabled" }
+var talkEnabledKey: String { "\(defaultsPrefix).talkEnabled" }
+var iconOverrideKey: String { "\(defaultsPrefix).iconOverride" }
+var connectionModeKey: String { "\(defaultsPrefix).connectionMode" }
+var remoteTargetKey: String { "\(defaultsPrefix).remoteTarget" }
+var remoteIdentityKey: String { "\(defaultsPrefix).remoteIdentity" }
+var remoteProjectRootKey: String { "\(defaultsPrefix).remoteProjectRoot" }
+var remoteCliPathKey: String { "\(defaultsPrefix).remoteCliPath" }
+var canvasEnabledKey: String { "\(defaultsPrefix).canvasEnabled" }
+var cameraEnabledKey: String { "\(defaultsPrefix).cameraEnabled" }
+var systemRunPolicyKey: String { "\(defaultsPrefix).systemRunPolicy" }
+var systemRunAllowlistKey: String { "\(defaultsPrefix).systemRunAllowlist" }
+var systemRunEnabledKey: String { "\(defaultsPrefix).systemRunEnabled" }
+var locationModeKey: String { "\(defaultsPrefix).locationMode" }
+var locationPreciseKey: String { "\(defaultsPrefix).locationPreciseEnabled" }
+var peekabooBridgeEnabledKey: String { "\(defaultsPrefix).peekabooBridgeEnabled" }
+var deepLinkKeyKey: String { "\(defaultsPrefix).deepLinkKey" }
+var modelCatalogPathKey: String { "\(defaultsPrefix).modelCatalogPath" }
+var modelCatalogReloadKey: String { "\(defaultsPrefix).modelCatalogReload" }
+var cliInstallPromptedVersionKey: String { "\(defaultsPrefix).cliInstallPromptedVersion" }
+var heartbeatsEnabledKey: String { "\(defaultsPrefix).heartbeatsEnabled" }
+var debugPaneEnabledKey: String { "\(defaultsPrefix).debugPaneEnabled" }
+var debugFileLogEnabledKey: String { "\(defaultsPrefix).debug.fileLogEnabled" }
+var appLogLevelKey: String { "\(defaultsPrefix).debug.appLogLevel" }
+var showAdvancedSettingsKey: String { "\(defaultsPrefix).showAdvancedSettings" }
 let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
