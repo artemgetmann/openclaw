@@ -156,4 +156,31 @@ struct ChannelsSettingsSmokeTests {
         let view = ChannelsSettings(store: store)
         _ = view.body
     }
+
+    @Test func `consumer ordered channels falls back when snapshot order is empty`() async {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.snapshot = ChannelsStatusSnapshot(
+                ts: 1_700_000_000_000,
+                channelOrder: [],
+                channelLabels: [:],
+                channelDetailLabels: nil,
+                channelSystemImages: nil,
+                channelMeta: nil,
+                channels: [
+                    "telegram": SnapshotAnyCodable([
+                        "configured": false,
+                        "running": false,
+                    ]),
+                ],
+                channelAccounts: [:],
+                channelDefaultAccountId: [:])
+
+            let view = ChannelsSettings(store: store)
+            #expect(view.orderedChannels.first?.id == "telegram")
+            #expect(!view.orderedChannels.isEmpty)
+        }
+    }
 }

@@ -334,7 +334,8 @@ extension ChannelsSettings {
         let fallback = AppFlavor.current.isConsumer
             ? ["telegram", "whatsapp", "discord", "googlechat", "slack", "signal", "imessage"]
             : ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage"]
-        let order = self.store.snapshot?.channelOrder ?? fallback
+        let snapshotOrder = self.store.snapshot?.channelOrder ?? []
+        let order = snapshotOrder.isEmpty ? fallback : snapshotOrder
         let channels = order.enumerated().map { index, id in
             ChannelItem(
                 id: id,

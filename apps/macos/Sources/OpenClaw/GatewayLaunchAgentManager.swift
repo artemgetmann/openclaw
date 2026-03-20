@@ -146,15 +146,9 @@ extension GatewayLaunchAgentManager {
             extraArgs: self.withJsonFlag(args),
             // Launchd management must always run locally, even if remote mode is configured.
             configRoot: ["gateway": ["mode": "local"]])
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
-        // The consumer app and consumer gateway intentionally use different launchd labels.
-        // If we let the CLI derive the label from OPENCLAW_PROFILE=consumer, it will install
-        // the gateway service as ai.openclaw.consumer and collide with the app's own label.
-        env["OPENCLAW_LAUNCHD_LABEL"] = gatewayLaunchdLabel
-        if let projectRoot = CommandResolver.projectRootEnvironmentHint() {
-            env["OPENCLAW_FORK_ROOT"] = projectRoot
-        }
+        let env = self.daemonCommandEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            projectRootHint: CommandResolver.projectRootEnvironmentHint())
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
         let parsed = self.parseDaemonJson(from: response.stdout) ?? self.parseDaemonJson(from: response.stderr)
         let ok = parsed?.object["ok"] as? Bool
@@ -176,6 +170,30 @@ extension GatewayLaunchAgentManager {
             ?? "Gateway daemon command failed (\(exit))"
         self.logger.error("\(fullMessage, privacy: .public)")
         return CommandResult(success: false, payload: payload, message: detail)
+    }
+
+    static func daemonCommandEnvironment(
+        base: [String: String],
+        projectRootHint: String?) -> [String: String]
+    {
+        var env = base
+        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        env["OPENCLAW_PROFILE"] = ConsumerRuntime.profile
+        env["OPENCLAW_HOME"] = ConsumerRuntime.runtimeRootURL.path
+        env["OPENCLAW_STATE_DIR"] = ConsumerRuntime.stateDirURL.path
+        env["OPENCLAW_CONFIG_PATH"] = ConsumerRuntime.configURL.path
+        env["OPENCLAW_GATEWAY_PORT"] = "\(ConsumerRuntime.gatewayPort)"
+        env["OPENCLAW_GATEWAY_BIND"] = ConsumerRuntime.gatewayBind
+        env["OPENCLAW_LOG_DIR"] = ConsumerRuntime.logsDirURL.path
+        env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] = "1"
+        // The consumer app and consumer gateway intentionally use different launchd labels.
+        // If we let the CLI derive the label from OPENCLAW_PROFILE=consumer, it will install
+        // the gateway service as ai.openclaw.consumer and collide with the app's own label.
+        env["OPENCLAW_LAUNCHD_LABEL"] = gatewayLaunchdLabel
+        if let projectRootHint, !projectRootHint.isEmpty {
+            env["OPENCLAW_FORK_ROOT"] = projectRootHint
+        }
+        return env
     }
 
     private static func withJsonFlag(_ args: [String]) -> [String] {
