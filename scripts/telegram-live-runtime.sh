@@ -545,6 +545,29 @@ sync_runtime_auth_profiles() {
     return
   fi
 
+  purge_runtime_auth_profiles() {
+    local auth_path=""
+    while IFS= read -r auth_path || [[ -n "$auth_path" ]]; do
+      [[ -z "$auth_path" ]] && continue
+      rm -f "$auth_path"
+    done < <(
+      find "$RUNTIME_STATE_DIR/agents" \
+        \( -path "*/agent/auth-profiles.json" -o -path "*/agent/auth.json" \) \
+        -type f 2>/dev/null
+    )
+  }
+
+  # Telegram live tester lanes should be able to run with fully isolated auth.
+  # When this flag is set we intentionally do not inherit any auth-profiles
+  # from the shared ~/.openclaw agent state, which avoids OAuth refresh-token
+  # races between the tester runtime and the user's main runtime.
+  if [[ "${OPENCLAW_TELEGRAM_LIVE_SKIP_AUTH_SYNC:-0}" == "1" ]]; then
+    # Scrub any stale inherited auth that might already be sitting in the
+    # runtime state from an earlier non-isolated run.
+    purge_runtime_auth_profiles
+    return
+  fi
+
   # Worktree runtimes keep isolated state, but they still need the operator's
   # existing auth profiles copied in so inbound Telegram messages can actually
   # execute the same agent models as the stable runtime.
@@ -635,6 +658,7 @@ start_isolated_runtime() {
       OPENCLAW_SKIP_CANVAS_HOST=1 \
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1 \
       OPENCLAW_DISABLE_BONJOUR=1 \
+      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_SKIP_AUTH_SYNC:-0}" \
       node scripts/run-node.mjs gateway run --bind loopback --port "$RUNTIME_PORT" --force --allow-unconfigured \
       >"$RUNTIME_LOG_PATH" 2>&1 &
   ); then
