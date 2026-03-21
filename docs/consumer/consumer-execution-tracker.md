@@ -144,6 +144,7 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 - [ ] Run Browser Use as the first external comparison lane once a usable model/API key is available
 - [ ] Keep Agent S3 documented as a later experiment, not a week-1 gate
 - [ ] Productize Chrome profile detection/setup so end users do not need manual `chrome://version` inspection
+- [ ] Teach the browser prompt/skill routing which browser lane to prefer by task shape (for example signed-in hostile travel flow vs clean generic browsing)
 
 ### Immediate next 7 actions
 
@@ -156,6 +157,7 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 7. Decide whether week-1 primary browser recommendation becomes:
    - cloned real-Chrome state for signed-in travel/browser tasks
    - `openclaw` managed browser as fallback
+8. Add browser-lane guidance to the system prompt / browser skill layer so the agent chooses the right lane automatically instead of treating all browser tasks as equivalent.
 
 ### Auth and rate-limit sanity checks
 
