@@ -107,10 +107,9 @@ struct OpenClawApp: App {
             return
         }
         Task {
-            _ = await GatewayLaunchAgentManager.set(
-                enabled: false,
-                bundlePath: Bundle.main.bundlePath,
-                port: GatewayEnvironment.gatewayPort())
+            // Attach-only is the explicit destructive path: unregister the launch agent so the
+            // consumer app cannot auto-start its gateway in the background.
+            _ = await GatewayLaunchAgentManager.uninstall()
         }
         Self.logger.info("attach-only flag enabled")
     }

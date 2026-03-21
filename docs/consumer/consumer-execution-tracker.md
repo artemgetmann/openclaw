@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-20
+Last updated: 2026-03-21
 Owner: consumer execution team
 Status: Active
 
@@ -38,6 +38,7 @@ Use this mini-checklist for the runtime/bootstrap work in this branch:
 - Runtime isolation: implemented and verified on the isolated consumer runtime
 - Bootstrap automation: implemented and verified through packaged app/bootstrap artifact checks
 - Telegram onboarding: implemented as guided BYOK seam, awaiting live bot validation
+- Telegram onboarding: live BYOK validation mostly green; final remaining issues are gateway lifecycle / stale health state polish
 - Seeded templates/default config: implemented and verified in the consumer runtime/workspace
 - Verification/E2E notes: in progress
 
@@ -46,6 +47,7 @@ Notes:
 - Keep the normal consumer path local-first.
 - Do not touch founder `~/.openclaw` while validating consumer setup.
 - Write down any setup decisions here before moving on to PR prep.
+- The current merge + validation checklist lives in `docs/consumer/consumer-next-pass-plan.md`.
 - Launchd identities are split now: the app autostart job uses `ai.openclaw.consumer`, and the gateway job uses `ai.openclaw.consumer.gateway`.
 - The consumer runtime root is app-owned Application Support, not the repo checkout.
 - Full Xcode (not just Command Line Tools) is required on this Mac for real macOS app packaging and E2E.
@@ -59,6 +61,25 @@ Notes:
   - head: `codex/simplify-consumer-bootstrap-flow-telegram`
   - base: `codex/consumer-openclaw-project`
   - merge gate remains: Telegram BYOK E2E on isolated consumer runtime
+
+### 2026-03-21 Telegram BYOK E2E status
+
+- Live consumer Telegram setup now persists correctly on the isolated runtime:
+  - `channels.telegram.enabled = true`
+  - `channels.telegram.dmPolicy = "allowlist"`
+  - `channels.telegram.allowFrom` contains the captured consumer tester user
+  - `channels.telegram.groupPolicy = "open"`
+- Guarded consumer app packaging/opening remains the required launch path:
+  - `scripts/package-consumer-mac-app.sh`
+  - `scripts/open-consumer-mac-app.sh`
+- Current blocker is no longer Telegram config persistence.
+- Current blocker is the consumer macOS app lifecycle/status surface:
+  - General can still show stale gateway failure even while `19001` is healthy
+  - Channels can still paint `Checking...` while Telegram is already saved locally
+  - `Retry now` needed to be upgraded from "just re-probe" to actual local gateway recovery
+- Regression coverage added for:
+  - forced gateway recovery bypassing stale running state
+  - consumer Telegram fallback staying configured when the latest snapshot is missing
 
 ### 2026-03-20 Worktree A handoff
 
@@ -168,6 +189,7 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
   - [x] Tracker kept current
   - [x] Consumer app doc explains isolation and direct-download assumptions
   - [x] Safe local testing instructions included
+  - [x] Dedicated consumer package/open wrappers documented so we stop launching the wrong app bundle
 
 Gate to exit Worktree A:
 
@@ -190,6 +212,16 @@ Worktree A validation notes (2026-03-19):
   - consumer runtime socket created at `~/Library/Application Support/OpenClaw Consumer/.openclaw/exec-approvals.sock`
   - consumer app held no TCP listener and did not take over the founder gateway launch label
 - Gateway auto-bootstrap on consumer port `19001` was not exercised in Worktree A; that remains Worktree B scope.
+
+Consumer packaging hardening note (2026-03-20):
+
+- Added `scripts/package-consumer-mac-app.sh` to package the consumer app with the correct:
+  - display name `OpenClaw Consumer`
+  - bundle id `ai.openclaw.consumer.mac.debug`
+  - app variant `consumer`
+- Added `scripts/open-consumer-mac-app.sh` to refuse opening any bundle that does not match those consumer identifiers.
+- This closes the repeated operator error where `dist/OpenClaw.app` was launched by accident during consumer E2E.
+- Deferred Telegram/setup polish is tracked in `docs/consumer/telegram-setup-followups.md`.
 
 ### Phase A: Branch convergence (blocking)
 

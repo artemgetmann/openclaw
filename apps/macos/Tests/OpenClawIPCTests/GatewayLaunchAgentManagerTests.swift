@@ -54,4 +54,16 @@ struct GatewayLaunchAgentManagerTests {
         #expect(env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] == "1")
         #expect(env["OPENCLAW_FORK_ROOT"] == "/tmp/openclaw-worktree")
     }
+
+    @Test func `preferred enable action restarts loaded service`() {
+        #expect(GatewayLaunchAgentManager._testDesiredEnableAction(loaded: true, hasPlist: true) == .restart)
+    }
+
+    @Test func `preferred enable action starts existing plist before reinstall`() {
+        #expect(GatewayLaunchAgentManager._testDesiredEnableAction(loaded: false, hasPlist: true) == .start)
+    }
+
+    @Test func `preferred enable action installs when service is absent`() {
+        #expect(GatewayLaunchAgentManager._testDesiredEnableAction(loaded: nil, hasPlist: false) == .install)
+    }
 }

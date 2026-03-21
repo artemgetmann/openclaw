@@ -183,4 +183,104 @@ struct ChannelsSettingsSmokeTests {
             #expect(!view.orderedChannels.isEmpty)
         }
     }
+
+    @Test func `consumer telegram fallback stays configured when snapshot is missing`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.configDraft = [
+                "channels": [
+                    "telegram": [
+                        "enabled": true,
+                        "botToken": "123456:test-token",
+                        "dmPolicy": "allowlist",
+                        "allowFrom": ["42"],
+                    ],
+                ],
+            ]
+
+            let view = ChannelsSettings(store: store)
+            let telegram = try #require(view.orderedChannels.first)
+            #expect(telegram.id == "telegram")
+            #expect(view.channelEnabled(telegram))
+            #expect(view.telegramSummary == "Configured")
+            #expect(view.telegramDetails == "Telegram DM allowlist saved locally.")
+        }
+    }
+
+    @Test func `consumer telegram live section builds when telegram is already running`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.snapshot = ChannelsStatusSnapshot(
+                ts: 1_700_000_000_000,
+                channelOrder: ["telegram"],
+                channelLabels: ["telegram": "Telegram"],
+                channelDetailLabels: nil,
+                channelSystemImages: nil,
+                channelMeta: nil,
+                channels: [
+                    "telegram": SnapshotAnyCodable([
+                        "configured": true,
+                        "tokenSource": "config",
+                        "running": true,
+                        "mode": "polling",
+                        "probe": [
+                            "ok": true,
+                            "status": 200,
+                            "bot": ["id": 123, "username": "jarvis_consumer_bot"],
+                        ],
+                    ]),
+                ],
+                channelAccounts: [:],
+                channelDefaultAccountId: ["telegram": "default"])
+            store.telegramSetupStatus = "Saving Telegram setup..."
+            store.telegramSetupPhase = .idle
+
+            let view = ChannelsSettings(store: store)
+            let telegram = try #require(view.orderedChannels.first)
+            _ = view.channelSection(telegram)
+            #expect(view.telegramSummary == "Running")
+        }
+    }
+
+    @Test func `consumer telegram live section wins even if setup phase is stale`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.snapshot = ChannelsStatusSnapshot(
+                ts: 1_700_000_000_000,
+                channelOrder: ["telegram"],
+                channelLabels: ["telegram": "Telegram"],
+                channelDetailLabels: nil,
+                channelSystemImages: nil,
+                channelMeta: nil,
+                channels: [
+                    "telegram": SnapshotAnyCodable([
+                        "configured": true,
+                        "tokenSource": "config",
+                        "running": true,
+                        "mode": "polling",
+                        "probe": [
+                            "ok": true,
+                            "status": 200,
+                            "bot": ["id": 123, "username": "jarvis_consumer_bot"],
+                        ],
+                    ]),
+                ],
+                channelAccounts: [:],
+                channelDefaultAccountId: ["telegram": "default"])
+            store.telegramSetupStatus = "Saving Telegram setup..."
+            store.telegramSetupPhase = .savingSetup
+            store.telegramSetupWaitingForDM = true
+
+            let view = ChannelsSettings(store: store)
+            let telegram = try #require(view.orderedChannels.first)
+            _ = view.channelSection(telegram)
+            #expect(view.telegramSummary == "Running")
+        }
+    }
 }

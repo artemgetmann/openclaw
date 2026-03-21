@@ -27,15 +27,12 @@ extension ChannelsStore {
                 method: .configGet,
                 params: nil,
                 timeoutMs: 10000)
-            self.configStatus = snap.valid == false
-                ? "Config invalid; fix it in the consumer config file."
-                : nil
-            self.configRoot = snap.config?.mapValues { $0.foundationValue } ?? [:]
-            self.configDraft = cloneConfigValue(self.configRoot) as? [String: Any] ?? self.configRoot
-            self.configDirty = false
-            self.configLoaded = true
-
-            self.applyUIConfig(snap)
+            let root = snap.config?.mapValues { $0.foundationValue } ?? [:]
+            self.applyLoadedConfigRoot(
+                root,
+                status: snap.valid == false
+                    ? "Config invalid; fix it in the consumer config file."
+                    : nil)
         } catch {
             self.configStatus = error.localizedDescription
         }
@@ -43,8 +40,41 @@ extension ChannelsStore {
 
     private func applyUIConfig(_ snap: ConfigSnapshot) {
         let ui = snap.config?["ui"]?.dictionaryValue
-        let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.applyUIConfig(root: ui?.mapValues { $0.foundationValue } ?? [:], isUIBranch: true)
+    }
+
+    private func applyUIConfig(root: [String: Any], isUIBranch: Bool = false) {
+        let ui: [String: Any]?
+        if isUIBranch {
+            ui = root
+        } else {
+            ui = root["ui"] as? [String: Any]
+        }
+        let rawSeam = (ui?["seamColor"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
+    }
+
+    private func applyLoadedConfigRoot(_ root: [String: Any], status: String? = nil) {
+        self.configStatus = status
+        self.configRoot = root
+        self.configDraft = cloneConfigValue(root) as? [String: Any] ?? root
+        self.configDirty = false
+        self.configLoaded = true
+        self.applyUIConfig(root: root)
+    }
+
+    func restoreConfigDraftFromCurrentSource() async {
+        // Telegram bootstrap must merge onto the latest config root, not whatever
+        // stale/redacted draft happened to be in memory when the pane first loaded.
+        var root = await ConfigStore.load()
+        if root.isEmpty {
+            root = OpenClawConfigFile.loadDict()
+        }
+        if AppFlavor.current.isConsumer {
+            _ = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+        }
+        self.applyLoadedConfigRoot(root)
     }
 
     func channelConfigSchema(for channelId: String) -> ConfigSchemaNode? {
@@ -71,14 +101,42 @@ extension ChannelsStore {
         self.configDirty = true
     }
 
+    @discardableResult
+    func saveConfigDraftOrThrow() async throws -> [String: Any] {
+        try await ConfigStore.save(self.configDraft)
+        let refreshed = await ConfigStore.load()
+        self.applyLoadedConfigRoot(refreshed)
+        return refreshed
+    }
+
+    @discardableResult
+    func saveConfigDraftLocallyAndRefresh() async -> [String: Any] {
+        // Consumer Telegram bootstrap runs while the local gateway is actively
+        // reloading channels. Writing the app-owned local config file directly is
+        // more reliable than round-tripping the full config through gateway RPC at
+        // that exact moment, and the gateway file watcher will pick the change up.
+        //
+        // Do not block the caller on endpoint/socket refresh here. The config write
+        // is the source of truth; waiting inline on gateway reconnect work is what
+        // caused the setup UI to get stuck on "Saving Telegram setup..." even after
+        // the allowlist had already been persisted locally.
+        OpenClawConfigFile.saveDict(self.configDraft)
+        let refreshed = OpenClawConfigFile.loadDict()
+        self.applyLoadedConfigRoot(refreshed)
+        Task {
+            await GatewayEndpointStore.shared.refresh()
+            try? await GatewayConnection.shared.refresh()
+        }
+        return refreshed
+    }
+
     func saveConfigDraft() async {
         guard !self.isSavingConfig else { return }
         self.isSavingConfig = true
         defer { self.isSavingConfig = false }
 
         do {
-            try await ConfigStore.save(self.configDraft)
-            await self.loadConfig()
+            _ = try await self.saveConfigDraftOrThrow()
         } catch {
             self.configStatus = error.localizedDescription
         }

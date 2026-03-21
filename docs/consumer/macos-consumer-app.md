@@ -51,18 +51,19 @@ To swap the video link without code changes during tests:
 
 ## Safe local testing
 
-Package the consumer app with a separate app identity:
+Package the consumer app with the dedicated wrapper:
 
 ```bash
-APP_NAME="OpenClaw Consumer" \
-APP_BUNDLE_NAME="OpenClaw Consumer.app" \
-BUNDLE_ID="ai.openclaw.consumer.mac.debug" \
-APP_VARIANT=consumer \
-URL_SCHEME=openclaw-consumer \
-scripts/package-mac-app.sh
+scripts/package-consumer-mac-app.sh
 ```
 
-This produces a consumer-flavored app bundle that can be tested alongside the founder app.
+Open the packaged app with the matching preflight:
+
+```bash
+scripts/open-consumer-mac-app.sh
+```
+
+These wrappers fail fast unless the bundle name, bundle identifier, and app variant all match the consumer app. That prevents accidentally launching the generic founder/dev shell during consumer testing.
 
 ## Distribution assumption
 

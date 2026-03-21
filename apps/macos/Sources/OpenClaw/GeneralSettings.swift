@@ -565,7 +565,7 @@ extension GeneralSettings {
 
             HStack(spacing: 10) {
                 Button("Retry now") {
-                    Task { await HealthStore.shared.refresh(onDemand: true) }
+                    Task { await self.retryGatewayAndHealth() }
                 }
                 .disabled(self.healthStore.isRefreshing)
 
@@ -575,6 +575,21 @@ extension GeneralSettings {
             }
             .font(.caption)
         }
+    }
+
+    @MainActor
+    private func retryGatewayAndHealth() async {
+        // "Retry now" must do more than re-measure a dead gateway. In local mode,
+        // kick the consumer launchd lane first, then refresh the endpoint/control
+        // channel, then re-run health + channels so the UI has a chance to recover.
+        if self.state.connectionMode == .local {
+            GatewayProcessManager.shared.recoverAfterConnectionLoss(reason: "manual retry")
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            await GatewayEndpointStore.shared.refresh()
+            await ControlChannel.shared.configure()
+            await ChannelsStore.shared.refresh(probe: true)
+        }
+        await HealthStore.shared.refresh(onDemand: true)
     }
 
     @MainActor

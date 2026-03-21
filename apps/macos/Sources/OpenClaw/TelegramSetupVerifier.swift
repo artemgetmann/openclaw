@@ -16,6 +16,7 @@ enum TelegramSetupVerifierError: LocalizedError {
     case malformedToken
     case transport(String)
     case api(String)
+    case conflict
     case noDirectMessage
 
     var errorDescription: String? {
@@ -26,6 +27,8 @@ enum TelegramSetupVerifierError: LocalizedError {
             return "Telegram API request failed: \(message)"
         case let .api(message):
             return message
+        case .conflict:
+            return "This bot is already being used by another OpenClaw Telegram poller. Stop the other runtime, or let setup pause Telegram before trying again."
         case .noDirectMessage:
             return "No Telegram DM arrived yet. Ask the user to send the bot a private message, then try again."
         }
@@ -33,7 +36,37 @@ enum TelegramSetupVerifierError: LocalizedError {
 }
 
 enum TelegramSetupVerifier {
-    private static let session = URLSession(configuration: .ephemeral)
+    private static let session: URLSession = {
+        // Telegram token verification should feel instant. Keep request/resource
+        // timeouts short so the UI never sits in a fake "checking..." state for a
+        // minute just because DNS/TLS/network is unhappy.
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 15
+        return URLSession(configuration: configuration)
+    }()
+    private static let invalidTokenMessage =
+        "Telegram did not accept that token. Paste the exact BotFather token for this bot and try again."
+
+    static func normalizeToken(_ raw: String) -> String {
+        // BotFather tokens never need quotes, whitespace, control chars, or invisible
+        // formatting marks. Stripping them makes copy/paste from rich clients resilient.
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let unquoted = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        let filteredScalars = unquoted.unicodeScalars.filter { scalar in
+            if CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                return false
+            }
+            if CharacterSet.controlCharacters.contains(scalar) {
+                return false
+            }
+            if scalar.properties.generalCategory == .format {
+                return false
+            }
+            return true
+        }
+        return String(String.UnicodeScalarView(filteredScalars))
+    }
 
     static func verifyBot(token: String) async throws -> TelegramSetupBotInfo {
         let response: TelegramBotUser = try await self.request(
@@ -98,23 +131,26 @@ enum TelegramSetupVerifier {
         method: String,
         queryItems: [URLQueryItem]
     ) async throws -> Response {
-        guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let normalizedToken = self.normalizeToken(token)
+        guard !normalizedToken.isEmpty else {
             throw TelegramSetupVerifierError.malformedToken
         }
 
-        let url = try self.url(token: token, method: method, queryItems: queryItems)
+        let url = try self.requestURL(token: normalizedToken, method: method, queryItems: queryItems)
         let (data, response) = try await self.session.data(from: url)
         guard let http = response as? HTTPURLResponse else {
             throw TelegramSetupVerifierError.transport("missing HTTP response")
         }
         guard (200..<300).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
-            throw TelegramSetupVerifierError.transport(body)
+            throw self.httpError(statusCode: http.statusCode, data: data)
         }
 
         do {
             let decoded = try JSONDecoder().decode(TelegramAPIEnvelope<Response>.self, from: data)
             guard decoded.ok else {
+                if decoded.errorCode == 409 {
+                    throw TelegramSetupVerifierError.conflict
+                }
                 throw TelegramSetupVerifierError.api(decoded.description ?? "Telegram rejected the request.")
             }
             return decoded.result
@@ -125,19 +161,27 @@ enum TelegramSetupVerifier {
         }
     }
 
-    private static func url(token: String, method: String, queryItems: [URLQueryItem]) throws -> URL {
-        guard let encodedToken = token.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
-            throw TelegramSetupVerifierError.malformedToken
-        }
+    static func requestURL(token: String, method: String, queryItems: [URLQueryItem]) throws -> URL {
         var components = URLComponents()
         components.scheme = "https"
         components.host = "api.telegram.org"
-        components.path = "/bot\(encodedToken)/\(method)"
+        // Telegram expects the raw bot token path segment, including the colon between
+        // bot id and secret. Encoding the full token turns ":" into "%3A" and makes a
+        // valid token look invalid to the Telegram API.
+        components.path = "/bot\(token)/\(method)"
         components.queryItems = queryItems.isEmpty ? nil : queryItems
         guard let url = components.url else {
             throw TelegramSetupVerifierError.malformedToken
         }
         return url
+    }
+
+    private static func httpError(statusCode: Int, data: Data) -> TelegramSetupVerifierError {
+        let body = String(data: data, encoding: .utf8) ?? "HTTP \(statusCode)"
+        if statusCode == 401 || statusCode == 404 {
+            return .api(self.invalidTokenMessage)
+        }
+        return .transport(body)
     }
 }
 
@@ -145,6 +189,14 @@ private struct TelegramAPIEnvelope<Result: Decodable>: Decodable {
     let ok: Bool
     let result: Result
     let description: String?
+    let errorCode: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case result
+        case description
+        case errorCode = "error_code"
+    }
 }
 
 private struct TelegramBotUser: Decodable {

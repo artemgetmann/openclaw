@@ -110,9 +110,7 @@ enum AppFlavor: String {
         case .standard:
             nil
         case .consumer:
-            // Keep a stable default walkthrough and allow override without another
-            // app patch when product swaps to a dedicated onboarding video.
-            self.consumerTelegramSetupVideoURLOverride ?? "https://docs.openclaw.ai/start/showcase"
+            self.consumerTelegramSetupVideoURLOverride
         }
     }
 

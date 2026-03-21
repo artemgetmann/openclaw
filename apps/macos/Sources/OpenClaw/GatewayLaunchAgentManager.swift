@@ -3,6 +3,14 @@ import Foundation
 enum GatewayLaunchAgentManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
 
+    enum DesiredAction: Equatable {
+        case install
+        case start
+        case restart
+        case stop
+        case uninstall
+    }
+
     private static var disableLaunchAgentMarkerURL: URL {
         OpenClawPaths.stateDirURL.appendingPathComponent("disable-launchagent")
     }
@@ -59,23 +67,39 @@ enum GatewayLaunchAgentManager {
         }
 
         if enabled {
-            self.logger.info("launchd enable requested via CLI port=\(port)")
-            return await self.runDaemonCommand([
-                "install",
-                "--force",
-                "--port",
-                "\(port)",
-                "--runtime",
-                "node",
-            ])
+            let action = await self.desiredEnableAction()
+            self.logger.info("launchd enable requested action=\(String(describing: action), privacy: .public) port=\(port)")
+            switch action {
+            case .restart:
+                if let error = await self.runDaemonCommand(["restart"], timeout: 20, quiet: true) {
+                    self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
+                } else {
+                    return nil
+                }
+            case .start:
+                if let error = await self.runDaemonCommand(["start"], timeout: 20, quiet: true) {
+                    self.logger.warning("launchd start failed; falling back to install: \(error, privacy: .public)")
+                } else {
+                    return nil
+                }
+            case .install, .stop, .uninstall:
+                break
+            }
+
+            return await self.install(port: port)
         }
 
-        self.logger.info("launchd disable requested via CLI")
-        return await self.runDaemonCommand(["uninstall"])
+        self.logger.info("launchd stop requested via CLI")
+        return await self.runDaemonCommand(["stop"], timeout: 20)
     }
 
     static func kickstart() async {
         _ = await self.runDaemonCommand(["restart"], timeout: 20)
+    }
+
+    static func uninstall() async -> String? {
+        self.logger.info("launchd uninstall requested via CLI")
+        return await self.runDaemonCommand(["uninstall"], timeout: 20)
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
@@ -113,6 +137,38 @@ extension GatewayLaunchAgentManager {
             return nil
         }
         return loaded
+    }
+
+    private static func desiredEnableAction() async -> DesiredAction {
+        let loaded = await self.readDaemonLoaded()
+        let action = self._testDesiredEnableAction(
+            loaded: loaded,
+            hasPlist: self.launchdConfigSnapshot() != nil)
+        switch action {
+        case .restart:
+            // If the service is already registered and loaded, reinstalling it is needlessly
+            // destructive: launchd will terminate the running gateway and we briefly lose the
+            // listener on 19001. Prefer an in-place restart.
+            return .restart
+        case .start:
+            // A plist already exists under the consumer label. Try a normal start first so we
+            // re-use the registered service instead of churning install/uninstall state.
+            return .start
+        case .install, .stop, .uninstall:
+            return .install
+        }
+    }
+
+    private static func install(port: Int) async -> String? {
+        self.logger.info("launchd install requested via CLI port=\(port)")
+        return await self.runDaemonCommand([
+            "install",
+            "--force",
+            "--port",
+            "\(port)",
+            "--runtime",
+            "node",
+        ])
     }
 
     private struct CommandResult {
@@ -210,3 +266,13 @@ extension GatewayLaunchAgentManager {
         TextSummarySupport.summarizeLastLine(text)
     }
 }
+
+#if DEBUG
+extension GatewayLaunchAgentManager {
+    static func _testDesiredEnableAction(loaded: Bool?, hasPlist: Bool) -> DesiredAction {
+        if loaded == true { return .restart }
+        if hasPlist { return .start }
+        return .install
+    }
+}
+#endif
