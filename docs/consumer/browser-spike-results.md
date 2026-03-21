@@ -19,7 +19,7 @@ Status: In progress
   1. `user` (existing-session / Chrome MCP)
   2. `openclaw` (managed browser profile)
   3. Claude-in-Chrome investigation
-  4. Browserbase (credential-blocked until keys are provided)
+  4. Browserbase (remote CDP fallback; credentials now verified)
 
 ## Scoring rubric (fixed)
 
@@ -40,7 +40,7 @@ Legend:
 | `user` (existing-session) | PASS (median `121.0s`; `r1`: `107.2s`, `r2`: `134.9s`) | PASS (`r1`: `63.1s`) | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | FAIL (`r1`: `40.3s`) | FAIL (`r1`: `59.3s`)  | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL); heavier social/travel flows still time out early |
 | `openclaw` (managed)      | PASS (median `69.9s`; `r1`: `85.4s`, `r2`: `54.5s`)    | PASS (`r1`: `78.8s`) | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PASS (`r1`: `66.5s`) | FAIL (`r1`: `126.2s`) | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`); survives more sites than `user` but still times out in long multi-step travel workflows                   |
 | Claude-in-Chrome          | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Investigation/adaptation track                                                                                                                                                                   |
-| Browserbase               | BLOCKED                                                | BLOCKED              | BLOCKED                                             | BLOCKED              | BLOCKED               | Credential-blocked (no Browserbase key configured)                                                                                                                                               |
+| Browserbase               | PENDING                                                | PENDING              | FAIL (`r1`: `24.0s`)                                | PENDING              | PENDING               | Transport smoke passes only when Browserbase sessions are created with `keepAlive: true`; current local-agent Task 3 still fails on remote-CDP reachability inside the browser-tool path         |
 
 ## Current blocker summary
 
@@ -69,6 +69,15 @@ Legend:
   - 2026-03-21 hardening reruns moved the blocker deeper:
     - `profile=user` no longer dies first on browser attach or `new_page`; the latest Emirates rerun instead failed later with `LLM request timed out`.
     - `profile=openclaw` reaches real interaction attempts on Emirates, but still hits repeated-field ambiguity (`Selector "button" matched 248 elements`) plus element interaction timeouts before the flow completes.
+  - Browserbase findings on 2026-03-21:
+    - Credentials are valid and Browserbase session creation works.
+    - Direct OpenClaw browser smoke now passes (`status`, `open https://example.com`, `tabs`) when Browserbase sessions are created with `keepAlive: true`.
+    - Default Browserbase sessions (`keepAlive: false`) are incompatible with OpenClaw's probe/connect pattern because the session dies after disconnect and the next action hits a dead `connectUrl`.
+    - Browserbase account currently has a very small concurrent-session cap (`3`), so probe leaks quickly trigger `429 Too Many Requests`.
+    - The first Browserbase agent-backed Task 3 attempt still failed with `Remote CDP for profile "browserbase" is not reachable`, so the transport lane is unblocked but the local agent/browser-tool path is not benchmark-ready yet.
+  - Browser Use findings on 2026-03-21:
+    - Side-lane setup research is complete.
+    - Practical benchmarking is currently blocked because this machine does not expose any of the plain model/API keys Browser Use expects (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `BROWSER_USE_API_KEY`, or related fallbacks).
 
 Interpretation:
 
@@ -118,6 +127,43 @@ Task 1, run 1:
   - result: `PASS`
   - run 1: `85.4s`
   - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task1_r1/agent.json`
+
+## 2026-03-21 Browserbase compatibility evidence
+
+Artifact roots:
+
+- `.artifacts/browser-spike-20260321-browserbase-smoke`
+
+Validated setup:
+
+- benchmark runtime: `/tmp/openclaw-consumer-bench`
+- model: `openai-codex/gpt-5.4`
+- Browserbase session creation: `POST /v1/sessions`
+- required provider flag: `keepAlive: true`
+
+Transport proof:
+
+- raw Browserbase session creation succeeds with provided credentials
+- raw `playwright-core.connectOverCDP(...)` succeeds immediately against a fresh Browserbase `connectUrl`
+- OpenClaw browser CLI smoke succeeds when the Browserbase session is created with `keepAlive: true`
+  - `status`: `PASS`
+  - `open https://example.com`: `PASS`
+  - `tabs`: `PASS`
+
+Critical compatibility rule:
+
+- Browserbase sessions created with the provider default (`keepAlive: false`) are not stable for OpenClaw's attach/probe pattern.
+- With `keepAlive: false`, OpenClaw can connect once, then the session is completed and the next action fails on a dead `connectUrl`.
+- Browserbase's concurrent-session limit is currently `3`; leaked probe sessions quickly trigger `429 Too Many Requests`.
+
+Task 3, run 1:
+
+- `browserbase`
+  - result: `FAIL`
+  - run 1: `24.0s`
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task3_r1/agent.json`
+  - note: file is polluted by a leading `[browser/service] ...` line, but the payload content is still readable and reports a browser-tool failure: `Remote CDP for profile "browserbase" is not reachable`
+  - interpretation: Browserbase transport is now proven viable, but the local-agent/browser-tool path still needs a Browserbase-specific hardening pass before the lane is benchmark-ready
 
 Task 1, run 2:
 

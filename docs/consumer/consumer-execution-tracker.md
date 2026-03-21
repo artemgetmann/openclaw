@@ -94,6 +94,13 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
     - Browserbase remains the official remote-CDP fallback for the week-1 decision once creds are available.
     - Browser Use is a real open-source direct-CDP competitor and should be benchmarked before Agent S3.
     - Agent S3 stays on the board, but later; it is a computer-use lane, not a clean browser-native replacement.
+  - External-lane execution status (2026-03-21 update):
+    - Browserbase credentials are now verified.
+    - Browserbase transport is viable only when sessions are created with `keepAlive: true`; the provider default (`keepAlive: false`) is not compatible with OpenClaw's current probe/connect lifecycle.
+    - Direct OpenClaw Browserbase CLI smoke now passes (`status`, `open`, `tabs`) with `keepAlive: true`.
+    - The first Browserbase local-agent Task 3 run still fails on remote-CDP reachability inside the browser-tool path, so Browserbase is unblocked but not benchmark-ready yet.
+    - Browserbase account concurrency is currently very tight (`3` concurrent sessions), so leaked probe sessions quickly trigger `429 Too Many Requests`.
+    - Browser Use setup research is done, but execution is honestly blocked on missing model/API keys on this machine.
 
 ## Phase B hardening tracker
 
@@ -113,8 +120,9 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 - [ ] Capture one clean `profile=openclaw` Emirates result artifact on the latest dist
 - [ ] Clean up benchmark artifact capture so JSON results are not polluted by service log lines
 - [ ] Decide whether remaining failures are browser-lane bugs or benchmark-harness bugs
-- [ ] Unblock Browserbase creds and run the official remote-CDP comparison lane
-- [ ] Run Browser Use as the first external comparison lane
+- [ ] Harden Browserbase local-agent/browser-tool path now that transport smoke is passing with `keepAlive: true`
+- [ ] Re-run Browserbase benchmark tasks after clearing leaked provider sessions / avoiding 429 concurrency caps
+- [ ] Run Browser Use as the first external comparison lane once a usable model/API key is available
 - [ ] Keep Agent S3 documented as a later experiment, not a week-1 gate
 
 ### Immediate next 7 actions
@@ -124,8 +132,8 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 3. Keep benchmark lane on `/tmp/openclaw-consumer-bench` and port `19011`; do not reuse the desktop Consumer app runtime.
 4. Re-run screenshots-first Emirates flow on `profile=openclaw` as the stability baseline once the harness is trustworthy.
 5. Re-run screenshots-first Emirates flow on `profile=user` only after the harness is trustworthy and Chrome CDP is explicitly healthy.
-6. Unblock Browserbase creds from the external Jarvis thread and run the official remote-CDP lane as soon as creds are available.
-7. Run Browser Use on the smallest 2-3 task smoke set before Agent S3.
+6. Re-run Browserbase with fresh `keepAlive: true` sessions and isolate the remaining local-agent/browser-tool failure mode.
+7. Run Browser Use on the smallest 2-3 task smoke set once a usable model/API key is available, before Agent S3.
 
 ### Auth and rate-limit sanity checks
 
@@ -168,9 +176,9 @@ Phase A validation notes (2026-03-16):
   - Control lane verified on direct-built gateway; Tasks 1-3 now have passing evidence on the managed profile lane.
 - [ ] Run approach: `user` existing-session path
   - Control lane verified on direct-built gateway; Tasks 1-3 now have passing evidence on the dedicated CDP Chrome lane.
-- [ ] Mark Browserbase rows `credential-blocked` until credentials are available
-- [ ] Re-run Browserbase rows once credentials are provided
-- [ ] Run side experiment: Browser Use on 2-3 benchmark tasks
+- [ ] Replace old Browserbase `credential-blocked` notes with the new `keepAlive: true` compatibility rule
+- [ ] Re-run Browserbase rows once the local-agent/browser-tool path is stable and concurrent-session noise is under control
+- [ ] Run side experiment: Browser Use on 2-3 benchmark tasks once model/API key access exists
 - [ ] Record side experiment: Agent S3 deferred until after Browser Use
 - [ ] Run approach: Claude-in-Chrome investigation/adaptation only if it still looks useful after the direct-CDP comparisons
 - [ ] Select primary + fallback browser architecture
