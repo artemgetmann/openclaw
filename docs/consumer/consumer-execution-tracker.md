@@ -39,12 +39,12 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
 
 ### Active workstreams
 
-| WS-ID                | Phase focus | Owner | Branch                             | Status      | No-touch files                                                                                                                                        | PR  |
-| -------------------- | ----------- | ----- | ---------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
-| WS-B-CORE            | Phase B     | codex | `codex/consumer-openclaw-smoke`    | in-progress | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
-| WS-C-PREP            | Phase C     | open  | `codex/consumer-phase-c-prep`      | unassigned  | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
-| WS-D-PREP            | Phase D     | open  | `codex/consumer-phase-d-prep`      | unassigned  | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
-| WS-B-SIDE (optional) | Phase B     | open  | `codex/consumer-phase-b-side-lane` | parked      | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
+| WS-ID                | Phase focus | Owner | Branch                               | Status      | No-touch files                                                                                                                                        | PR  |
+| -------------------- | ----------- | ----- | ------------------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
+| WS-B-CORE            | Phase B     | codex | `codex/consumer-browser-improvement` | in-progress | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
+| WS-C-PREP            | Phase C     | open  | `codex/consumer-phase-c-prep`        | unassigned  | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
+| WS-D-PREP            | Phase D     | open  | `codex/consumer-phase-d-prep`        | unassigned  | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
+| WS-B-SIDE (optional) | Phase B     | open  | `codex/consumer-phase-b-side-lane`   | parked      | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
 
 ### Delegation protocol
 
@@ -55,9 +55,9 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
 
 ## Current baseline snapshot
 
-- Branch: `codex/consumer-openclaw-smoke`
+- Branch: `codex/consumer-browser-improvement`
 - `consumer...origin/main`: ahead 17, behind 27
-- `codex/consumer-openclaw-smoke...origin/main`: ahead 22, behind 5
+- `codex/consumer-browser-improvement...origin/main`: ahead 46, behind 20
 - `origin/main...upstream/main`: ahead 88, behind 220
 - Phase A merge and runtime validation are complete.
 - Phase B status now:
@@ -98,7 +98,8 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
     - Browserbase credentials are now verified.
     - Browserbase transport is viable only when sessions are created with `keepAlive: true`; the provider default (`keepAlive: false`) is not compatible with OpenClaw's current probe/connect lifecycle.
     - Direct OpenClaw Browserbase CLI smoke now passes (`status`, `open`, `tabs`) with `keepAlive: true`.
-    - Browserbase local-agent Task 3 reruns (`r1`, `r2`) both still fail on remote-CDP reachability inside the browser-tool path, even though direct Browserbase CLI smoke (`status`, `open`, `tabs`) succeeds on the same lane.
+    - A fresh-session minimal local-agent Browserbase run also passes, so the local-agent/browser-tool path is not universally broken.
+    - Browserbase Task 3 rerun `r3` gets past attach/open and fails later on browser-tool timeout while inspecting article contents for summarization.
     - Browserbase account concurrency is currently very tight (`3` concurrent sessions), so leaked probe sessions quickly trigger `429 Too Many Requests`.
     - Browser Use setup research is done, but execution is honestly blocked on missing model/API keys on this machine.
 
@@ -120,7 +121,7 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 - [ ] Capture one clean `profile=openclaw` Emirates result artifact on the latest dist
 - [ ] Clean up benchmark artifact capture so JSON results are not polluted by service log lines
 - [ ] Decide whether remaining failures are browser-lane bugs or benchmark-harness bugs
-- [ ] Harden Browserbase local-agent/browser-tool path now that transport smoke is passing with `keepAlive: true`
+- [ ] Benchmark Browserbase on another real task using the fresh-session pattern now that minimal local-agent smoke passes
 - [ ] Re-run Browserbase benchmark tasks after clearing leaked provider sessions / avoiding 429 concurrency caps
 - [ ] Run Browser Use as the first external comparison lane once a usable model/API key is available
 - [ ] Keep Agent S3 documented as a later experiment, not a week-1 gate
@@ -132,7 +133,7 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 3. Keep benchmark lane on `/tmp/openclaw-consumer-bench` and port `19011`; do not reuse the desktop Consumer app runtime.
 4. Re-run screenshots-first Emirates flow on `profile=openclaw` as the stability baseline once the harness is trustworthy.
 5. Re-run screenshots-first Emirates flow on `profile=user` only after the harness is trustworthy and Chrome CDP is explicitly healthy.
-6. Re-run Browserbase with fresh `keepAlive: true` sessions and isolate the remaining local-agent/browser-tool failure mode.
+6. Re-run Browserbase with fresh `keepAlive: true` sessions and isolate the remaining deeper browser-tool inspection timeout on real tasks.
 7. Run Browser Use on the smallest 2-3 task smoke set once a usable model/API key is available, before Agent S3.
 
 ### Auth and rate-limit sanity checks
@@ -177,7 +178,7 @@ Phase A validation notes (2026-03-16):
 - [ ] Run approach: `user` existing-session path
   - Control lane verified on direct-built gateway; Tasks 1-3 now have passing evidence on the dedicated CDP Chrome lane.
 - [ ] Replace old Browserbase `credential-blocked` notes with the new `keepAlive: true` compatibility rule
-- [ ] Re-run Browserbase rows once the local-agent/browser-tool path is stable and concurrent-session noise is under control
+- [ ] Re-run Browserbase rows using the fresh-session pattern and concurrent-session cleanup discipline
 - [ ] Run side experiment: Browser Use on 2-3 benchmark tasks once model/API key access exists
 - [ ] Record side experiment: Agent S3 deferred until after Browser Use
 - [ ] Run approach: Claude-in-Chrome investigation/adaptation only if it still looks useful after the direct-CDP comparisons
@@ -238,14 +239,14 @@ OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm opencla
 
 ## Benchmark tracker template
 
-| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                                                                                   |
-| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| user (existing-session) | pending       | pending     | pending            | pending          | pending           | ready-with-cdp-url | control lane passes when Chrome exposes standard CDP endpoint (for example `http://127.0.0.1:9333`)                     |
-| openclaw (managed)      | pending       | pending     | pending            | pending          | pending           | ready-for-runs     | control lane is healthy on clean gateway; benchmark task runs can proceed                                               |
-| Browserbase             | pending       | pending     | fail (`r1`,`r2`)   | pending          | pending           | transport-proven   | creds verified; `keepAlive: true` required; direct CLI smoke passes, but local-agent/browser-tool still needs hardening |
-| Browser Use             | pending       | pending     | pending            | pending          | pending           | side-experiment    | direct-CDP external comparison; promote only if it materially beats current lanes                                       |
-| Agent S3                | later         | later       | later              | later            | later             | deferred           | computer-use comparison, not part of the default week-1 gate                                                            |
-| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | revisit only if the direct-CDP paths still leave a clear gap                                                            |
+| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary    | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                                                                                                                       |
+| ----------------------- | ------------- | ----------- | --------------------- | ---------------- | ----------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| user (existing-session) | pending       | pending     | pending               | pending          | pending           | ready-with-cdp-url | control lane passes when Chrome exposes standard CDP endpoint (for example `http://127.0.0.1:9333`)                                                         |
+| openclaw (managed)      | pending       | pending     | pending               | pending          | pending           | ready-for-runs     | control lane is healthy on clean gateway; benchmark task runs can proceed                                                                                   |
+| Browserbase             | pending       | pending     | fail (`r1`,`r2`,`r3`) | pending          | pending           | transport-proven   | creds verified; `keepAlive: true` required; direct CLI smoke passes and minimal local-agent smoke passes, but real article inspection still times out later |
+| Browser Use             | pending       | pending     | pending               | pending          | pending           | side-experiment    | direct-CDP external comparison; promote only if it materially beats current lanes                                                                           |
+| Agent S3                | later         | later       | later                 | later            | later             | deferred           | computer-use comparison, not part of the default week-1 gate                                                                                                |
+| Claude-in-Chrome        | TODO          | TODO        | TODO                  | TODO             | TODO              | pending            | revisit only if the direct-CDP paths still leave a clear gap                                                                                                |
 
 ## Scope guardrails (week 1)
 
