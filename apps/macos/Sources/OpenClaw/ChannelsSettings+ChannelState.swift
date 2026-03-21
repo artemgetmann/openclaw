@@ -40,7 +40,12 @@ extension ChannelsSettings {
         {
             return username
         }
-        return self.store.telegramSetupBotUsername
+        if let username = self.store.telegramSetupBotUsername, !username.isEmpty {
+            return username
+        }
+        let persisted = UserDefaults.standard.string(
+            forKey: ChannelsStore.consumerTelegramBotUsernameDefaultsKey)
+        return (persisted?.isEmpty == false) ? persisted : nil
     }
 
     private func channelStatus<T: Decodable>(

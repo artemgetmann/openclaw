@@ -39,15 +39,40 @@ The goal is to reduce cognitive overload without deleting advanced capabilities 
 The consumer path keeps Telegram setup inside the app:
 
 - Channels → Telegram includes a one-time BYOK wizard (BotFather -> token verify -> first DM capture).
-- The panel includes one-click links for:
-  - Written guide: `https://docs.openclaw.ai/channels/telegram`
-  - Video walkthrough: `https://docs.openclaw.ai/start/showcase` (overrideable later)
+- The panel includes a placeholder video walkthrough entry that can be rewired later without changing the onboarding flow.
 - Runtime writes stay isolated under the consumer runtime root.
 
 To swap the video link without code changes during tests:
 
 - Set `OPENCLAW_CONSUMER_TELEGRAM_VIDEO_URL` before launching the app, or
 - Set `OpenClawConsumerTelegramVideoURL` in the app bundle `Info.plist`.
+
+Current default consumer settings shape:
+
+- `General`: active, launch at login, dock icon, advanced toggle, quit
+- `Permissions`: a guided recommended-permissions flow plus an optional section for non-core permissions
+- `About`: consumer branding, version, website, documentation
+
+Current recommended permission set:
+
+- Screen Recording
+- Accessibility
+- Notifications
+- Automation (AppleScript)
+- Microphone
+- Location
+
+Optional permission set:
+
+- Camera
+- Speech Recognition
+
+macOS caveat:
+
+- Accessibility and Screen Recording can remain visually pending until the app restarts, even after the user grants them in System Settings.
+- Screen Recording may open System Settings directly instead of showing an in-app prompt.
+- The consumer permissions screen should explain this plainly and offer a restart path instead of showing only a stale pending state.
+- Current known gap: the Screen Recording fallback behaves as expected, but Accessibility granted-state detection is still not fully reliable in the consumer app and needs follow-up.
 
 ## Safe local testing
 

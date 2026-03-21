@@ -2,6 +2,8 @@ import AppKit
 import Foundation
 
 extension ChannelsStore {
+    static let consumerTelegramBotUsernameDefaultsKey = "OpenClawConsumerTelegramBotUsername"
+
     func resetTelegramSetupProgressForEditedToken() {
         self.telegramSetupStatus = nil
         self.telegramSetupBotId = nil
@@ -53,6 +55,11 @@ extension ChannelsStore {
             let bot = try await TelegramSetupVerifier.verifyBot(token: token)
             self.telegramSetupBotId = bot.id
             self.telegramSetupBotUsername = bot.username
+            if let username = bot.username, !username.isEmpty {
+                UserDefaults.standard.set(
+                    username,
+                    forKey: Self.consumerTelegramBotUsernameDefaultsKey)
+            }
             self.telegramSetupStatus = self.telegramVerificationStatus(botUsername: bot.username)
         } catch {
             self.telegramSetupBotId = nil

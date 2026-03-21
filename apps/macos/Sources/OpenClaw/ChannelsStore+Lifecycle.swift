@@ -164,8 +164,11 @@ extension ChannelsStore {
         self.telegramSetupWaitingForDM = false
         self.telegramSetupPhase = .idle
 
-        if self.telegramSetupBotUsername == nil {
-            self.telegramSetupBotUsername = status.probe?.bot?.username
+        if let username = status.probe?.bot?.username, !username.isEmpty {
+            self.telegramSetupBotUsername = username
+            UserDefaults.standard.set(
+                username,
+                forKey: ChannelsStore.consumerTelegramBotUsernameDefaultsKey)
         }
 
         if self.telegramSetupStatus == nil

@@ -223,6 +223,28 @@ Consumer packaging hardening note (2026-03-20):
 - This closes the repeated operator error where `dist/OpenClaw.app` was launched by accident during consumer E2E.
 - Deferred Telegram/setup polish is tracked in `docs/consumer/telegram-setup-followups.md`.
 
+Worktree A follow-up notes (2026-03-20):
+
+- Consumer settings were reduced again after live review:
+  - `General` now keeps only active, launch-at-login, dock icon, advanced toggle, and quit.
+  - `Permissions` now defaults to a simple recommended checklist plus an optional disclosure for non-core permissions.
+  - `About` now uses consumer branding/copy instead of the upstream project presentation.
+- Consumer permission UX now reflects current macOS behavior more honestly:
+  - recommended set includes `Screen Recording`, `Accessibility`, `Notifications`, `Automation`, `Microphone`, and `Location`
+  - optional set currently includes `Camera` and `Speech Recognition`
+  - Accessibility and Screen Recording may still require an app restart before status flips to granted
+  - Screen Recording now opens the relevant System Settings pane directly because the native prompt is inconsistent on recent macOS releases
+  - permission requests now fall back to the relevant System Settings panes when prompts do not appear
+- Manual consumer-app check status:
+  - Screen Recording flow now works and opens the expected System Settings path
+  - Accessibility can be granted in System Settings, but the app still sometimes fails to reflect the granted state reliably even after refresh/restart guidance
+- Remaining Worktree A cleanup before considering this surface final:
+  - [ ] fix Accessibility granted-state detection / refresh behavior in the consumer app
+  - [ ] verify the new `Grant recommended permissions` flow manually end to end on a clean machine/profile
+  - [ ] verify Screen Recording fallback opens the correct System Settings pane on a fresh machine/profile
+  - [ ] decide whether consumer onboarding needs an inline accessibility help link/video for MVP
+  - [ ] decide whether `Show Dock icon` belongs in default General or should move behind Advanced
+
 ### Phase A: Branch convergence (blocking)
 
 - [x] Merge `origin/main` into `consumer`
@@ -314,31 +336,12 @@ OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm opencla
 
 ## Benchmark tracker template
 
-<<<<<<< HEAD
-| Approach | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status | Notes |
+| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                                                        |
 | ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | -------------------------------------------------------------------------------------------- |
-| user (existing-session) | blocked | blocked | blocked | blocked | blocked | blocked | control lane passes; local agent run works; current blocker is model rate limits/auth health |
-| openclaw (managed) | blocked | blocked | blocked | blocked | blocked | blocked | control lane passes; local agent run works; current blocker is model rate limits/auth health |
-| Claude-in-Chrome | TODO | TODO | TODO | TODO | TODO | pending | feasibility + adaptation |
-| Browserbase | blocked | blocked | blocked | blocked | blocked | credential-blocked | run after creds |
-=======
-| Approach | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status | Notes |
-| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ----------------------------------------------------------------------------------------------- |
-| user (existing-session) | blocked | blocked | blocked | blocked | blocked | blocked | `status` passes, but Chrome MCP `list_pages` times out/attach fails with current Chrome session |
-| openclaw (managed) | pending | pending | pending | pending | pending | ready-for-runs | control lane is healthy on clean gateway; benchmark task runs can proceed |
-| Claude-in-Chrome | TODO | TODO | TODO | TODO | TODO | pending | feasibility + adaptation |
-| Browserbase | blocked | blocked | blocked | blocked | blocked | credential-blocked | run after creds |
-
-> > > > > > > 7e0dacea11 (fix(browser): improve chrome-mcp attach reliability and diagnostics)
-
-## Scope guardrails (week 1)
-
-In scope:
-
-- Branch/runtime isolation
-- Browser spike and recommendation
-- Telegram end-to-end loop
-- Flight killer task reliability
+| user (existing-session) | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | control lane passes; local agent run works; current blocker is model rate limits/auth health |
+| openclaw (managed)      | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | control lane passes; local agent run works; current blocker is model rate limits/auth health |
+| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                                                                     |
+| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                                                                              |
 
 Out of scope:
 
