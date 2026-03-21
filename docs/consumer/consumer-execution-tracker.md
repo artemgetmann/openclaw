@@ -37,8 +37,12 @@ Use this mini-checklist for the runtime/bootstrap work in this branch:
 
 - Runtime isolation: implemented and verified on the isolated consumer runtime
 - Bootstrap automation: implemented and verified through packaged app/bootstrap artifact checks
-- Telegram onboarding: implemented as guided BYOK seam, awaiting live bot validation
-- Telegram onboarding: live BYOK validation mostly green; final remaining issues are gateway lifecycle / stale health state polish
+- Telegram onboarding: implemented as guided BYOK seam and live-validated on the isolated consumer runtime
+- Telegram onboarding: live BYOK validation is green enough to treat the lane as working
+- First real Telegram reply: self-verified through the repo Telegram userbot harness
+  - a real DM was sent to `@jarvis_consumer_bot`
+  - the bot replied in the same DM
+  - the reply asked bootstrap/identity questions instead of dying before first turn
 - Seeded templates/default config: implemented and verified in the consumer runtime/workspace
 - Verification/E2E notes: in progress
 
@@ -48,6 +52,17 @@ Notes:
 - Do not touch founder `~/.openclaw` while validating consumer setup.
 - Write down any setup decisions here before moving on to PR prep.
 - The current merge + validation checklist lives in `docs/consumer/consumer-next-pass-plan.md`.
+- Defer provider/auth account strategy until the onboarding flow is stable:
+  - founder-managed shared credentials for early testers
+  - user-owned ChatGPT / Claude auth
+  - dedicated project-owned test accounts
+  - API-key versus account-auth tradeoffs
+- Browser also needs to work in the first-install path, but keep that as a
+  later setup-validation step once Telegram/bootstrap is stable.
+- Telegram consumer UX still needs command-surface reduction:
+  - normal users should only see the essential slash commands
+  - the long tail should move behind `/help`, `/commands`, or another advanced
+    discoverability path
 - Launchd identities are split now: the app autostart job uses `ai.openclaw.consumer`, and the gateway job uses `ai.openclaw.consumer.gateway`.
 - The consumer runtime root is app-owned Application Support, not the repo checkout.
 - Full Xcode (not just Command Line Tools) is required on this Mac for real macOS app packaging and E2E.
@@ -73,10 +88,19 @@ Notes:
   - `scripts/package-consumer-mac-app.sh`
   - `scripts/open-consumer-mac-app.sh`
 - Current blocker is no longer Telegram config persistence.
+- Current blocker is no longer "first real agent reply does not work."
+- First-turn Telegram reply is now self-verified:
+  - a repo userbot session sent a fresh DM to `@jarvis_consumer_bot`
+  - `scripts/telegram-e2e/userbot_wait.py` observed the bot reply after that
+    message
+  - the reply content confirmed consumer bootstrap/identity behavior
 - Current blocker is the consumer macOS app lifecycle/status surface:
   - General can still show stale gateway failure even while `19001` is healthy
   - Channels can still paint `Checking...` while Telegram is already saved locally
   - `Retry now` needed to be upgraded from "just re-probe" to actual local gateway recovery
+- New practical next step:
+  - run one full fresh-user walkthrough on the packaged consumer app and record
+    friction in the app shell, setup copy, first reply, and post-setup affordances
 - Regression coverage added for:
   - forced gateway recovery bypassing stale running state
   - consumer Telegram fallback staying configured when the latest snapshot is missing
@@ -161,6 +185,26 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
     - `openai-codex:notblockedamazon` returns `API rate limit reached`.
     - lower-priority Codex OAuth profiles previously surfaced `refresh_token_reused`.
     - Anthropic fallback previously surfaced `overloaded`.
+  - Consumer Telegram onboarding is now materially healthy:
+    - token verify works,
+    - first-DM capture persists the Telegram allowlist,
+    - the live card now settles into a steady configured/running state,
+    - the live card exposes `Open your bot`,
+    - and a self-driven Telegram userbot E2E has proven the first real reply
+      can come back from the consumer runtime.
+- Remaining blocker after that win:
+  - `General` can still report stale health failures or status nonsense while
+    the Telegram lane is already healthy.
+  - 2026-03-21 root cause isolated for the most haunted failures:
+    - `~/Library/LaunchAgents/ai.openclaw.consumer.gateway.plist` had drifted
+      to another worktree's `dist/index.js`
+    - that let launchd resurrect the wrong consumer gateway even while the
+      correct app bundle was open
+    - current branch now forces a reinstall whenever an existing consumer
+      LaunchAgent does not point at this worktree's entrypoint
+  - Browser must be part of the first-install validation checklist in a later
+    pass, but it remains a parked follow-up until the first-turn reply path is
+    stable.
   - LaunchAgent route was tested and reverted in the benchmark lane: it could bind `19001`, but that path was not yet honoring the intended isolated consumer runtime state, so auth/state checks failed.
   - `profile=user` is partially healthy on clean gateway (`status` passes), but `tabs`/`open` are blocked by Chrome MCP attach behavior in the current Chrome session.
   - `profile=openclaw` control lane passes on a clean direct-built gateway (`start`, `status`, `tabs`, `open https://example.com`).

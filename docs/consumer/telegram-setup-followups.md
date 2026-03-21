@@ -1,6 +1,6 @@
 # Consumer Telegram Setup Follow-ups
 
-Last updated: 2026-03-20
+Last updated: 2026-03-21
 Scope: consumer macOS Telegram onboarding polish and adjacent consumer-shell cleanup
 
 ## Immediate follow-ups
@@ -47,6 +47,32 @@ Scope: consumer macOS Telegram onboarding polish and adjacent consumer-shell cle
   - Current behavior: the app can activate in the menu bar without surfacing the settings window.
   - Why it matters: this feels broken to normal users.
 
+- Verify whether the live Telegram card should also show a "test reply" affordance or other post-setup action.
+  - Why it matters: the user still needs to validate that the agent actually replies, not just that the token/poller is healthy.
+  - Current reality: the first real reply is now proven through the Telegram
+    userbot harness, but the app still does not give the user a dead-simple
+    way to trigger or confirm that behavior after setup.
+
+- After `Capture first message`, automatically trigger the first real bot reply instead of waiting for the user to send a second message.
+  - Proposed behavior: once the first inbound Telegram DM is captured, use that message to kick off the first bootstrap/identity response.
+  - Why it matters: the user has already done the hard part. Making them send another message is wasted friction.
+  - Important behavior detail: this should work for any first inbound DM, not
+    only `/start` or `hi`.
+
+- Simplify the Telegram slash-command surface for consumers.
+  - Proposed behavior: show only the few consumer-relevant commands by default
+    and gate the rest behind `/help`, `/commands`, or a similar advanced path.
+  - Why it matters: a giant command list makes the product feel like a dev tool
+    instead of a consumer app.
+
+- Keep the consumer LaunchAgent pinned to the current worktree.
+  - Current failure mode: `~/Library/LaunchAgents/ai.openclaw.consumer.gateway.plist`
+    can drift to another worktree's `dist/index.js`.
+  - Why it matters: launchd can revive the wrong gateway and make the app look
+    randomly inconsistent even when the current bundle is correct.
+  - Current status: fixed in this branch, but keep it on the follow-up list
+    until it survives the next clean E2E pass.
+
 - Clean up the leftover old `Permissions` internals that still leak into the simplified consumer shell.
   - Why it matters: the shell should not look partially simplified.
 
@@ -58,3 +84,7 @@ Scope: consumer macOS Telegram onboarding polish and adjacent consumer-shell cle
 
 - Do not reopen a broad UI redesign while Telegram setup persistence is still being fixed.
 - The hard blocker remains: one clean consumer Telegram BYOK flow that persists allowlist state on the isolated consumer runtime.
+- The next real product check is a fresh-user walkthrough that verifies:
+  - the seeded workspace/bootstrap files are correct,
+  - the app ships the consumer defaults it claims to ship,
+  - the bot actually replies on the first real Telegram turn.

@@ -141,9 +141,12 @@ extension GatewayLaunchAgentManager {
 
     private static func desiredEnableAction() async -> DesiredAction {
         let loaded = await self.readDaemonLoaded()
+        let launchAgentMatchesCurrentEntrypoint = self.launchAgentMatchesCurrentEntrypoint(
+            snapshot: self.launchdConfigSnapshot())
         let action = self._testDesiredEnableAction(
             loaded: loaded,
-            hasPlist: self.launchdConfigSnapshot() != nil)
+            hasPlist: self.launchdConfigSnapshot() != nil,
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
         switch action {
         case .restart:
             // If the service is already registered and loaded, reinstalling it is needlessly
@@ -169,6 +172,15 @@ extension GatewayLaunchAgentManager {
             "--runtime",
             "node",
         ])
+    }
+
+    private static func launchAgentMatchesCurrentEntrypoint(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
+        guard let snapshot else { return false }
+        guard let expectedRoot = CommandResolver.projectRootEnvironmentHint() else { return false }
+        let expectedEntrypoint = URL(fileURLWithPath: expectedRoot, isDirectory: true)
+            .appendingPathComponent("dist/index.js")
+            .path
+        return snapshot.programArguments.contains(expectedEntrypoint)
     }
 
     private struct CommandResult {
@@ -269,7 +281,12 @@ extension GatewayLaunchAgentManager {
 
 #if DEBUG
 extension GatewayLaunchAgentManager {
-    static func _testDesiredEnableAction(loaded: Bool?, hasPlist: Bool) -> DesiredAction {
+    static func _testDesiredEnableAction(
+        loaded: Bool?,
+        hasPlist: Bool,
+        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
+    {
+        if hasPlist, !launchAgentMatchesCurrentEntrypoint { return .install }
         if loaded == true { return .restart }
         if hasPlist { return .start }
         return .install
