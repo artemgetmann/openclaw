@@ -79,8 +79,14 @@ Legend:
     - Browserbase Task 1 split rerun shows the same pattern: on a fresh `keepAlive: true` session, direct `status` and `open https://www.google.com/travel/flights` pass first, and the next concrete failure moves downstream to Google Flights field interaction (`locator.fill` timeout) rather than initial remote-CDP attachment.
     - A fresh Browserbase Task 1 rerun on this worktree still fails much earlier on Google Flights with `Remote CDP ... not reachable`, even though a tiny same-session smoke (`open https://example.com`) still passes.
 - Browser Use findings on 2026-03-21:
-  - Side-lane setup research is complete.
-  - Practical benchmarking is currently blocked because this machine does not expose any of the plain model/API keys Browser Use expects (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `BROWSER_USE_API_KEY`, or related fallbacks).
+  - Side-lane setup is now complete enough to benchmark without more local environment work:
+    - repo-local Browser Use venv created at `.venv-browser-use`
+    - pinned Browser Use CLI installed and runnable
+    - cloned real-Chrome profile prepared at `/tmp/browser-use-profile4-clone`
+    - Browser Use `doctor` passes `4/5` checks
+  - The only honest blocker is secrets:
+    - this machine does not expose any of the plain model/API keys Browser Use expects (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `BROWSER_USE_API_KEY`, or related fallbacks)
+    - Browser Use config dir `~/.browser-use` is absent, so there is no preexisting login to reuse
 - Real-Chrome findings on 2026-03-21:
   - Chrome will not allow CDP on the user's live default data dir/profile directly; it requires a non-default `--user-data-dir`.
   - The workable compromise is a cloned real-profile lane:

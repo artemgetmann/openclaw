@@ -108,7 +108,12 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
     - Browserbase Task 1 split rerun on this worktree is more precise: `r1` still fails early on Google Flights with `Remote CDP ... not reachable`, but a fresh-session warm-up run (`status` + `open https://www.google.com/travel/flights`) succeeds on the same lane and then moves the next concrete blocker downstream to a Google Flights `locator.fill` timeout.
     - Browserbase account concurrency is currently very tight (`3` concurrent sessions), so leaked probe sessions quickly trigger `429 Too Many Requests`.
     - Browserbase is temporarily blocked again by account credits: fresh session creation now returns HTTP `402 Payment Required` (`Free plan browser minutes limit reached`).
-    - Browser Use setup research is done, but execution is honestly blocked on missing model/API keys on this machine.
+    - Browser Use local setup is now done:
+      - repo-local venv `.venv-browser-use` exists
+      - pinned Browser Use CLI is installed and runnable
+      - cloned Chrome profile prep works via `scripts/repro/browser-use-profile4-clone.sh prepare-profile`
+      - Browser Use `doctor` passes `4/5` checks locally
+    - Browser Use execution is still honestly blocked on missing model/API keys on this machine.
   - Real-Chrome execution status (2026-03-21 update):
     - Chrome will not allow CDP on the user's live daily data dir directly; it requires a non-default `--user-data-dir`.
     - The practical "real browser state" lane is therefore a cloned-profile lane:
@@ -142,8 +147,8 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 - [ ] Capture one clean Browserbase Task 1 artifact now that the split rerun has moved the blocker from attach to field interaction
 - [ ] Re-run Browserbase benchmark tasks after clearing leaked provider sessions / avoiding 429 concurrency caps
 - [ ] Run Browser Use as the first external comparison lane once a usable model/API key is available
+- [ ] Productize Chrome profile detection/setup so users do not need manual `chrome://version` discovery for cloned-profile lanes
 - [ ] Keep Agent S3 documented as a later experiment, not a week-1 gate
-- [ ] Productize Chrome profile detection/setup so end users do not need manual `chrome://version` inspection
 - [ ] Teach the browser prompt/skill routing which browser lane to prefer by task shape (for example signed-in hostile travel flow vs clean generic browsing)
 
 ### Immediate next 7 actions
