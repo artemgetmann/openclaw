@@ -212,6 +212,31 @@ describe("chrome MCP page parsing", () => {
     expect(result).toBe(123);
   });
 
+  it("forwards timeout overrides to evaluate_script", async () => {
+    const { session, callTool } = createFakeSessionBundle();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await evaluateChromeMcpScript({
+      profileName: "chrome-live",
+      targetId: "1",
+      fn: "() => 123",
+      timeoutMs: 18_000,
+    });
+
+    expect(callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "evaluate_script",
+        arguments: expect.objectContaining({
+          function: "() => 123",
+          timeout: 18_000,
+        }),
+      }),
+      undefined,
+      expect.objectContaining({ timeout: 18_000 }),
+    );
+  });
+
   it("surfaces MCP tool errors instead of JSON parse noise", async () => {
     const factory: ChromeMcpSessionFactory = async () => {
       const session = createFakeSession();

@@ -505,11 +505,32 @@ export function registerBrowserAgentActRoutes(
             const modifiers = parsedModifiers.modifiers;
             if (isExistingSession) {
               if (selector) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session click does not support selector targeting yet; use ref.",
-                );
+                if (doubleClick) {
+                  return jsonError(
+                    res,
+                    501,
+                    "existing-session selector click does not support doubleClick yet; use ref.",
+                  );
+                }
+                // Existing-session Chrome MCP clicks are ref-based, but the agent can still
+                // surface CSS selectors on hostile sites. Fall back to page-context clicking
+                // so we can keep moving instead of hard-failing on selector-only actions.
+                await evaluateChromeMcpScript({
+                  profileName,
+                  targetId: tab.targetId,
+                  fn: `(selector) => {
+                    const el = document.querySelector(selector);
+                    if (!(el instanceof HTMLElement)) {
+                      throw new Error(\`No element matches selector: \${selector}\`);
+                    }
+                    el.scrollIntoView({ block: "center", inline: "center" });
+                    el.click();
+                    return true;
+                  }`,
+                  args: [selector],
+                  timeoutMs: timeoutMs ?? undefined,
+                });
+                return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
               }
               if ((button && button !== "left") || (modifiers && modifiers.length > 0)) {
                 return jsonError(
@@ -981,18 +1002,12 @@ export function registerBrowserAgentActRoutes(
             const ref = toStringOrEmpty(body.ref) || undefined;
             const evalTimeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
-              if (evalTimeoutMs !== undefined) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session evaluate does not support timeoutMs overrides.",
-                );
-              }
               const result = await evaluateChromeMcpScript({
                 profileName,
                 targetId: tab.targetId,
                 fn,
                 args: ref ? [ref] : undefined,
+                timeoutMs: evalTimeoutMs ?? undefined,
               });
               return res.json({
                 ok: true,

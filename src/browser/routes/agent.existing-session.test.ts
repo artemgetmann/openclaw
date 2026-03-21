@@ -22,6 +22,7 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const chromeMcpMocks = vi.hoisted(() => ({
+  clickChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
@@ -36,7 +37,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
-  clickChromeMcpElement: vi.fn(async () => {}),
+  clickChromeMcpElement: chromeMcpMocks.clickChromeMcpElement,
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
@@ -129,6 +130,7 @@ function getActPostHandler() {
 describe("existing-session browser routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
+    chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
@@ -274,6 +276,55 @@ describe("existing-session browser routes", () => {
       profileName: "chrome-live",
       targetId: "7",
       fn: "() => window.location.href",
+    });
+  });
+
+  it("falls back to evaluate-based selector clicks for existing-session profiles", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "click", selector: "button[type='submit']", timeoutMs: 12_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.clickChromeMcpElement).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("document.querySelector"),
+      args: ["button[type='submit']"],
+      timeoutMs: 12_000,
+    });
+  });
+
+  it("passes timeout overrides through existing-session evaluate", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "evaluate", fn: "() => 123", timeoutMs: 9_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7", result: true });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: "() => 123",
+      args: undefined,
+      timeoutMs: 9_000,
     });
   });
 });

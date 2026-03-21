@@ -732,12 +732,21 @@ export async function evaluateChromeMcpScript(params: {
   targetId: string;
   fn: string;
   args?: string[];
+  timeoutMs?: number;
 }): Promise<unknown> {
-  const result = await callTool(params.profileName, "evaluate_script", {
-    pageId: parsePageId(params.targetId),
-    function: params.fn,
-    ...(params.args?.length ? { args: params.args } : {}),
-  });
+  const timeoutOptions =
+    typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined;
+  const result = await callTool(
+    params.profileName,
+    "evaluate_script",
+    {
+      pageId: parsePageId(params.targetId),
+      function: params.fn,
+      ...(params.args?.length ? { args: params.args } : {}),
+      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
+    },
+    timeoutOptions,
+  );
   return extractJsonMessage(result);
 }
 
