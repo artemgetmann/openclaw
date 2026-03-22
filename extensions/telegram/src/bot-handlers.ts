@@ -57,12 +57,14 @@ import {
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
 import {
+  buildTelegramThreadParams,
   getTelegramTextParts,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramInboundThreadId,
+  resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import {
@@ -1012,6 +1014,17 @@ export const registerTelegramHandlers = ({
     try {
       media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
     } catch (mediaErr) {
+      const isGroupChat = msg.chat.type === "group" || msg.chat.type === "supergroup";
+      const isForumChat = msg.chat.is_forum === true;
+      const messageThreadId = resolveTelegramInboundThreadId(msg);
+      const threadParams =
+        buildTelegramThreadParams(
+          resolveTelegramThreadSpec({
+            isGroup: isGroupChat,
+            isForum: isForumChat,
+            messageThreadId,
+          }),
+        ) ?? {};
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
@@ -1021,6 +1034,7 @@ export const registerTelegramHandlers = ({
             fn: () =>
               bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
                 reply_to_message_id: msg.message_id,
+                ...threadParams,
               }),
           }).catch(() => {});
         }
@@ -1034,6 +1048,7 @@ export const registerTelegramHandlers = ({
         fn: () =>
           bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
             reply_to_message_id: msg.message_id,
+            ...threadParams,
           }),
       }).catch(() => {});
       return;
@@ -1162,17 +1177,6 @@ export const registerTelegramHandlers = ({
         }
         return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
       };
-      const replyToCallbackChat = async (
-        text: string,
-        params?: Parameters<typeof bot.api.sendMessage>[2],
-      ) => {
-        const replyFn = (ctx as { reply?: unknown }).reply;
-        if (typeof replyFn === "function") {
-          return await ctx.reply(text, params);
-        }
-        return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
-      };
-
       const chatId = callbackMessage.chat.id;
       const isGroup =
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
@@ -1202,6 +1206,28 @@ export const registerTelegramHandlers = ({
 
       const messageThreadId = resolveTelegramInboundThreadId(callbackMessage);
       const isForum = callbackMessage.chat.is_forum === true;
+      const callbackThreadParams =
+        buildTelegramThreadParams(
+          resolveTelegramThreadSpec({
+            isGroup,
+            isForum,
+            messageThreadId,
+          }),
+        ) ?? {};
+      const replyToCallbackChat = async (
+        text: string,
+        params?: Parameters<typeof bot.api.sendMessage>[2],
+      ) => {
+        const mergedParams = {
+          ...callbackThreadParams,
+          ...(params ?? {}),
+        };
+        const replyFn = (ctx as { reply?: unknown }).reply;
+        if (typeof replyFn === "function") {
+          return await ctx.reply(text, mergedParams);
+        }
+        return await bot.api.sendMessage(callbackMessage.chat.id, text, mergedParams);
+      };
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId,
         isGroup,
