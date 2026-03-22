@@ -18,8 +18,8 @@ Use these documents in this order when there is any ambiguity:
 
 - Week 1 scope follows `CONSUMER.md` + execution spec (power mode, no safety-profile build in week 1).
 - Browser strategy is split into core decision lanes and side experiments:
-  1. Core lane: `browser profile=openclaw` (managed isolated browser, reliability baseline)
-  2. Core lane: `browser profile=user` (existing-session / Chrome MCP, ideal signed-in browser path)
+  1. Core lane: cloned real-Chrome state in a separate browser window for signed-in and hostile tasks
+  2. Core lane: `browser profile=openclaw` (managed isolated browser, reliability baseline and fallback)
   3. Side investigation: Claude for Chrome extension (Chrome-specific control path, separate from generic desktop computer use)
   4. Core remote-infra fallback: `Kernel` / `Steel` before paid Browserbase
   5. Side experiment: Browser Use (agent-on-agent external comparison lane)
@@ -34,6 +34,13 @@ Use these documents in this order when there is any ambiguity:
   - cloned real-profile Chrome
   - live daily Chrome process
     Chrome behavior differs across these, so collapsing them into one "user browser" bucket causes fake debugging loops.
+- Auth/session portability is a first-class follow-up workstream:
+  - credential broker
+  - login skill
+  - MFA strategy
+  - future 1Password integration
+  - one-time post-update user education for new credential tooling so users understand what changed and how to turn it on
+  - the goal is to let signed-in tasks work even when the user is away from the computer, without coupling that flow to the live daily Chrome process
 
 ## Workstream registry (single source)
 
@@ -187,20 +194,41 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 7. Delay Browserbase spend until after we learn whether `Kernel` or `Steel` cover the same anti-bot/session problem space for free or cheaper.
 8. Keep Claude for Chrome extension on the board as a browser-specific control comparison, but do not conflate it with Anthropic desktop computer-use.
 9. Design a user-facing Chrome setup flow that can discover or guide selection of the correct profile instead of relying on manual `chrome://version` inspection.
-10. Decide whether week-1 primary browser recommendation becomes:
+10. Keep the week-1 primary browser recommendation explicit:
     - cloned real-Chrome state for signed-in travel/browser tasks
     - `openclaw` managed browser as fallback
 11. Add browser-lane guidance to the system prompt / browser skill layer so the agent chooses the right lane automatically instead of treating all browser tasks as equivalent.
-12. Treat Kernel as infra-validated and integration-deferred until the current OpenClaw lanes have been benchmarked on the next task set.
-13. Use the repo-local Kernel smoke helper instead of ad-hoc shell experiments:
+12. Treat auth/session portability as a product follow-up:
+    - credential broker
+    - login skill
+    - MFA strategy
+    - future 1Password integration
+    - one-time post-update announcement / setup education for credential tooling
+13. Treat Kernel as infra-validated and integration-deferred until the current OpenClaw lanes have been benchmarked on the next task set.
+14. Use the repo-local Kernel smoke helper instead of ad-hoc shell experiments:
     - `scripts/repro/kernel-browser-smoke.sh doctor`
     - `scripts/repro/kernel-browser-smoke.sh smoke-open https://example.com`
     - `scripts/repro/kernel-browser-smoke.sh open-emirates`
-14. Execute the next benchmark wave with exact tasks instead of vague categories:
+15. Execute the next benchmark wave with exact tasks instead of vague categories:
     - Gmail read-first-email on a sacrificial account
     - Reddit DM/reply on a throwaway or low-risk account
     - Google Sign-In on a throwaway account
     - Emirates `DPS -> DXB` on `2026-03-22`
+
+### Current benchmark wave status (2026-03-22)
+
+- Completed once on both lanes:
+  - Gmail read-first-email
+  - Google Sign-In first visible decision point
+  - Reddit DM/reply access
+  - Emirates `DPS -> DXB` on `2026-03-22`
+- Current directional result:
+  - cloned real-Chrome state is winning the signed-in and hostile flows
+  - `openclaw` managed browser remains the clean fallback but is currently losing on session reuse and Reddit anti-bot friction
+  - Emirates is now also a current-loss case for the managed lane due to booking-flow instability / error-page collapse
+- Next decision point:
+  - either execute second runs for median timing on the four-task matrix
+  - or lock the MVP browser recommendation now and treat second runs as confidence-building rather than decision-making
 
 ### Auth and rate-limit sanity checks
 

@@ -173,16 +173,128 @@ Execution rule:
 - Run the two OpenClaw lanes first.
 - Only return to Kernel after the direct OpenClaw comparison is complete and documented.
 
+## 2026-03-22 current benchmark wave
+
+Environment used:
+
+- benchmark runtime: `/tmp/openclaw-consumer-bench-lite`
+- model: `openai-codex/gpt-5.4`
+- browser attach for `profile=user`: `OPENCLAW_CHROME_MCP_BROWSER_URL=http://127.0.0.1:9333`
+- gateway port: `19011`
+
+Gmail read-first-email:
+
+- `user`
+  - result: `PASS`
+  - duration: `42.6s`
+  - outcome:
+    - inbox access already available
+    - first visible message opened successfully
+    - sender: `Grab <no-reply@grab.com>`
+    - subject: `Your Grab E-Receipt`
+  - note:
+    - the run completed on `openai-codex/gpt-5.4`
+    - pre-run logs still showed `refresh_token_reused`, so this auth lane is usable but fragile
+- `openclaw`
+  - result: `FAIL`
+  - duration: `42.6s`
+  - outcome:
+    - Gmail opened to the Google sign-in screen
+    - no inbox/session state was present in the managed browser
+    - the run stopped immediately as required
+  - blocker: `login required`
+  - note:
+    - this is expected for the isolated managed browser lane unless we explicitly sign Google into that profile
+
+Google Sign-In:
+
+- `user`
+  - result: `PASS`
+  - duration: `28.2s`
+  - outcome:
+    - opening the Google sign-in URL immediately landed on an already signed-in Google Account page
+    - no credentials were entered
+  - details: `already signed in`
+- `openclaw`
+  - result: `PASS`
+  - duration: `15.9s`
+  - outcome:
+    - opening the Google sign-in URL reached the visible `Email or phone` entry field
+    - the run stopped there as required without entering credentials
+  - details: `reached email field`
+
+Reddit DM / reply access:
+
+- `user`
+  - result: `PASS`
+  - duration: `144.3s`
+  - outcome:
+    - Reddit was already accessible in the signed-in user browser profile
+    - the run navigated into the chat / DM area
+    - a readable direct conversation thread opened successfully
+    - a visible draft-capable message composer was on screen
+  - details: `direct chat thread with Sufficient-Row-7951 open and visible message composer`
+- `openclaw`
+  - result: `FAIL`
+  - duration: `21.3s`
+  - outcome:
+    - opening Reddit in the managed browser immediately triggered a `Prove your humanity` screen
+    - access was blocked by a visible reCAPTCHA challenge before inbox/messages/DM UI was reachable
+  - blocker: `Reddit "Prove your humanity" reCAPTCHA challenge blocked access`
+
+Emirates `DPS -> DXB` for `2026-03-22`:
+
+- `user`
+  - result: `PASS`
+  - duration: `119.5s`
+  - outcome:
+    - one-way search results loaded successfully for Sunday, 22 March 2026
+    - one visible outbound option was shown
+  - details:
+    - `EK369` nonstop
+    - `DPS 19:50 -> DXB 01:10+1`
+    - `9h 20m`
+    - `A380`
+    - `Economy from IDR 8,053,600`
+  - obvious constraints:
+    - Indonesia site / IDR pricing
+    - only 1 visible option on that date in the captured state
+- `openclaw`
+  - result: `FAIL`
+  - duration: `150.0s`
+  - outcome:
+    - Emirates loaded and the booking flow started
+    - the managed browser hit brittle interaction errors during the search flow
+    - the run ended on an Emirates booking error page instead of visible flight choices
+  - blocker:
+    - `Sorry, something went wrong`
+    - `Please start a new search below`
+    - `Sorry, we couldn't complete your search. Please try searching again.`
+
 ## Current recommendation
 
-- Primary lane for MVP:
-  - OpenClaw real-browser / cloned-real-Chrome state for signed-in and hostile tasks
-- Reliability fallback:
+- Primary MVP lane:
+  - cloned real-Chrome state in a separate browser window for signed-in and hostile tasks
+  - this preserves the user's real session state without hijacking the live daily browser process
+- Fallback lane:
   - OpenClaw managed browser
+  - use this when the task does not need the user's signed-in state or when isolation matters more than session reuse
 - Side lane only:
   - Browser Use
 - Later remote infra comparison:
   - `Kernel` or `Steel` before paying to continue Browserbase
+- Auth/session portability follow-up:
+  - credential broker
+  - login skill
+  - MFA strategy
+  - future 1Password integration
+  - one-time post-update user education for new credential tooling so users understand what changed and why it matters
+- Current benchmark signal:
+  - cloned real-Chrome state is winning all completed signed-in / hostile checks in this wave
+  - `openclaw` managed browser remains the clean fallback, but it is currently losing on:
+    - session reuse
+    - Reddit anti-bot friction
+    - Emirates booking-flow robustness
 - Real-Chrome findings on 2026-03-21:
   - Chrome will not allow CDP on the user's live default data dir/profile directly; it requires a non-default `--user-data-dir`.
   - The workable compromise is a cloned real-profile lane:
