@@ -859,9 +859,9 @@ extension OnboardingView {
                         .padding(.vertical, 6)
                 }
                 self.featureRow(
-                    title: "Open the menu bar panel",
-                    subtitle: "Click the \(AppFlavor.current.appName) menu bar icon for quick chat and status.",
-                    systemImage: "bubble.left.and.bubble.right")
+                    title: "Open the app",
+                    subtitle: "Click the \(AppFlavor.current.appName) menu bar icon to open settings and check status.",
+                    systemImage: "app.badge")
                 if AppFlavor.current.isConsumer {
                     self.featureActionRow(
                         title: "Connect Telegram",
@@ -884,9 +884,9 @@ extension OnboardingView {
                         subtitle: "Enable Voice Wake in Settings for hands-free commands with a live transcript overlay.",
                         systemImage: "waveform.circle")
                     self.featureRow(
-                        title: "Use the panel + Canvas",
-                        subtitle: "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
-                        systemImage: "rectangle.inset.filled.and.person.filled")
+                        title: "Talk in Telegram",
+                        subtitle: "Use Telegram as the consumer chat surface. The app handles setup and status.",
+                        systemImage: "paperplane")
                     self.featureActionRow(
                         title: "Give your agent more powers",
                         subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",

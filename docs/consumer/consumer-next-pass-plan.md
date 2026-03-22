@@ -29,7 +29,13 @@ without reopening random architecture debates.
      - `scripts/open-consumer-mac-app.sh`
    - Why: this is the only reliable way to avoid launching the wrong app bundle.
 
-4. Verify what is actually seeded into the consumer runtime.
+4. Run a GUI-control stability pass on the consumer macOS app.
+   - Validate tab switches, retries, status refreshes, post-setup actions, and
+     Dock/menu-window behavior under normal use.
+   - Why: the app can still feel broken even when the runtime and Telegram lane
+     are technically healthy.
+
+5. Verify what is actually seeded into the consumer runtime.
    - Check the consumer runtime root at
      `~/Library/Application Support/OpenClaw Consumer/.openclaw`.
    - Confirm which workspace files are seeded automatically.
@@ -38,7 +44,7 @@ without reopening random architecture debates.
    - Why: the product claim needs to match reality before we run the full
      walkthrough.
 
-5. Run one fresh-user walkthrough.
+6. Run one fresh-user walkthrough.
    - Start from the packaged consumer app.
    - Walk the Telegram flow exactly as a new user would see it.
    - Reuse the existing consumer Telegram bot for speed unless a clean-bot run
@@ -60,6 +66,19 @@ without reopening random architecture debates.
        right consumer UX and whether the surrounding app states still lie.
    - Capture any friction points, confusing copy, stale health/UI state, or
      missing bootstrap behavior.
+   - Explicitly reject any dev-tool leakage in the Telegram conversation.
+     - Example: the bot should not mention Git repos, commits, branches, or
+       workspace internals during consumer setup.
+     - Why: the setup should read like a product, not like an internal agent
+       debug log.
+   - Explicitly reject prompt/debug leakage in the visible chat.
+     - Example: system metadata, bootstrap suggestion payloads, and internal
+       helper blocks must never render into the user-facing Telegram thread.
+     - Why: this is a hard product-break, not a minor polish issue.
+   - Explicitly reject internal prompt/debug leakage in chat.
+     - Example: the user should never see hidden bootstrap suggestion blocks,
+       raw JSON, system metadata, or prompt scaffolding.
+     - Why: this is a hard product-quality failure, not a cosmetic nit.
    - Current infrastructure bug to resolve during this pass:
      - the consumer LaunchAgent can still point at a stale sibling worktree
        (for example `f65c`) instead of this worktree's `dist/index.js`
@@ -74,7 +93,7 @@ without reopening random architecture debates.
    - Why: dumping a giant slash-command menu on first-time users is product
      sabotage, not power.
 
-6. Record the findings before any more polish.
+7. Record the findings before any more polish.
    - Update the tracker and Telegram follow-ups doc with what still feels
      clunky.
    - Why: if context compacts, the next pass should not depend on memory.
@@ -110,14 +129,39 @@ without reopening random architecture debates.
    - Validation question:
      - should the first reply always start the `BOOTSTRAP.md` ritual, or should
        it only do that when the workspace still looks uninitialized?
+   - Branding requirement for that ritual:
+     - the first identity prompt should not feel like generic `OpenClaw`
+       boilerplate
+     - it should suggest a default branded name such as `Jarvis`, while still
+       letting the human rename it
+   - example shape: "You can call me Jarvis, or give me another name."
+   - current follow-up from live testing:
+     - once the human answers with the bot name, the ritual currently stops too
+       early
+     - after writing `IDENTITY.md` / `USER.md`, the bot replies with only
+       `Good. I'm Jarvis now.`
+     - fix that so the first-run conversation continues until the bootstrap
+       fields we actually care about are settled
+   - naming simplification:
+     - prefer `Jarvis` as the obvious default
+     - keep "something else" as the escape hatch
+     - do not present a grab bag of equally-weighted alternate names by default
 
 2. Clarify what "pre-bundled skills" means in consumer.
    - Today:
      - the consumer config seeds a curated bundled-skill allowlist
      - the consumer workspace does not currently expose a `skills/` folder
+     - the consumer workspace also does not currently seed `MEMORY.md`, even
+       though the agent can use it as a durable notes file when present
    - Decision needed:
      - keep the runtime-managed allowlist model
      - or ship visible/editable consumer skill files too
+     - seed an empty `MEMORY.md` by default so the first-run workspace includes
+       the full long-term-memory surface
+     - audit the actual starter set against the skills the founder is using in
+       practice, including `himalaya`
+     - audit missing useful defaults such as `himalaya` and other
+       high-frequency founder skills for consumer inclusion
 
 3. Defer provider/auth strategy until onboarding flow is stable.
    - Do not mix billing/auth architecture work into the current onboarding pass.
@@ -132,10 +176,28 @@ without reopening random architecture debates.
        onboarding on its own merits
    - Verified current state:
      - consumer main agent auth was re-authenticated successfully
-     - a self-driven Telegram userbot E2E now proves the consumer runtime can
-       generate a first real reply after setup
+   - a self-driven Telegram userbot E2E now proves the consumer runtime can
+     generate a first real reply after setup
+   - Current runtime default still points at `openai-codex/gpt-5.4`.
+   - Product follow-up:
+     - evaluate whether the consumer default should switch to Claude Sonnet 4.6
+       thinking-adaptive instead
+     - do not change the default mid-onboarding pass without verifying the
+       first-reply lane again on the new provider
 
 4. Add browser reliability to the first-install checklist later.
-   - Browser should be part of the initial consumer setup validation path.
-   - Why: a "working" install is not actually working if the browser lane is dead.
-   - Not the next blocker; keep it parked until Telegram/bootstrap is stable.
+
+- Browser should be part of the initial consumer setup validation path.
+- Why: a "working" install is not actually working if the browser lane is dead.
+- Not the next blocker; keep it parked until Telegram/bootstrap is stable.
+
+5. Make the macOS consumer shell feel like a product, not an internal tool.
+   - Focus areas:
+     - menubar app surface
+     - settings wording
+     - diagnostics visibility
+     - post-setup Telegram state
+     - hide the local menubar chat surface for MVP so Telegram is the only
+       visible consumer conversation lane
+   - Why: even with a working bot, the product still feels half-internal if the
+     shell keeps leaking engineering surfaces.

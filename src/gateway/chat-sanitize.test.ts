@@ -90,4 +90,24 @@ describe("stripEnvelopeFromMessage", () => {
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("hello");
   });
+
+  test("strips bootstrap suggestion scaffolding and source receipts from user messages", () => {
+    const input = {
+      role: "user",
+      content:
+        '[Source Receipt]\nbridge=openclaw-acp\n[/Source Receipt]\n\nBootstrap name suggestions (derived from untrusted sender metadata; use these exact options if BOOTSTRAP.md is still active):\n```json\n{"suggestions":["Artem","Art","Artem Getman","something else"],"source":"sender_name"}\n```\n\nhello',
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("hello");
+  });
+
+  test("strips local system preamble lines from user messages", () => {
+    const input = {
+      role: "user",
+      content:
+        "System: [2026-03-22 13:05:01 GMT+8] Node: MacBook Pro (JetBook) (192.168.25.137) · app 2026.3.14 (2026031490) · mode local\n\nhi",
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("hi");
+  });
 });

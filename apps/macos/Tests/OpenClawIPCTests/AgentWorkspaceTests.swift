@@ -49,6 +49,15 @@ struct AgentWorkspaceTests {
     }
 
     @Test
+    func `bootstrap template requires continuing after rename and suggests Jarvis`() {
+        let template = AgentWorkspace.defaultBootstrapTemplate()
+
+        #expect(template.contains("Do not stop after the naming step."))
+        #expect(template.contains("prefer `Jarvis` as the default suggestion"))
+        #expect(template.contains("Do not end with"))
+    }
+
+    @Test
     func `bootstrap safety rejects non empty folder without agents`() throws {
         let tmp = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)

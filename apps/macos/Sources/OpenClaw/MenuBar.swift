@@ -27,7 +27,10 @@ struct OpenClawApp: App {
 
     @MainActor
     private func updateHoverHUDSuppression() {
-        HoverHUDController.shared.setSuppressed(self.isMenuPresented || self.isPanelVisible)
+        // Consumer mode talks through Telegram for now. Keep the menu bar focused on
+        // lifecycle/settings until we have a coherent local-chat product surface.
+        let shouldSuppress = AppFlavor.current.isConsumer || self.isMenuPresented || self.isPanelVisible
+        HoverHUDController.shared.setSuppressed(shouldSuppress)
     }
 
     init() {
@@ -152,7 +155,11 @@ struct OpenClawApp: App {
         handler.translatesAutoresizingMaskIntoConstraints = false
         handler.onLeftClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemClick")
-            self.toggleWebChatPanel()
+            if AppFlavor.current.isConsumer {
+                SettingsWindowOpener.shared.open()
+            } else {
+                self.toggleWebChatPanel()
+            }
         }
         handler.onRightClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemRightClick")

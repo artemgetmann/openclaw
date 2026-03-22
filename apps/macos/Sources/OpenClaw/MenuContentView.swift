@@ -108,14 +108,6 @@ struct MenuContent: View {
 
     @ViewBuilder
     private var consumerActions: some View {
-        Button {
-            Task { @MainActor in
-                let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                WebChatManager.shared.show(sessionKey: sessionKey)
-            }
-        } label: {
-            Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
-        }
         Button("Settings…") { self.open(tab: .general) }
             .keyboardShortcut(",", modifiers: [.command])
         Button("About \(AppFlavor.current.appName)") { self.open(tab: .about) }

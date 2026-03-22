@@ -57,8 +57,14 @@ Notes:
   - user-owned ChatGPT / Claude auth
   - dedicated project-owned test accounts
   - API-key versus account-auth tradeoffs
+  - current consumer default model is still `openai-codex/gpt-5.4`
+  - follow-up decision pending: switch the consumer default to Claude Sonnet
+    4.6 thinking-adaptive or keep Codex for now
 - Browser also needs to work in the first-install path, but keep that as a
   later setup-validation step once Telegram/bootstrap is stable.
+- Add a dedicated GUI-control stability pass to the later validation checklist:
+  - validate tab switches, retries, status refreshes, Dock/window behavior,
+    and post-setup actions as a product surface, not just backend health
 - Telegram consumer UX still needs command-surface reduction:
   - normal users should only see the essential slash commands
   - the long tail should move behind `/help`, `/commands`, or another advanced
@@ -192,6 +198,10 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
     - the live card exposes `Open your bot`,
     - and a self-driven Telegram userbot E2E has proven the first real reply
       can come back from the consumer runtime.
+  - Current UI simplification direction:
+    - consumer local menubar chat is being hidden for MVP so Telegram remains
+      the single visible conversation surface
+    - threaded mode remains tracked for a later pass after the chat-bar cleanup
 - Remaining blocker after that win:
   - `General` can still report stale health failures or status nonsense while
     the Telegram lane is already healthy.

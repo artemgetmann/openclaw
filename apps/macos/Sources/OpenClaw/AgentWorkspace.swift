@@ -245,6 +245,12 @@ enum AgentWorkspace {
         Ask one question at a time.
         If the user is unsure, offer 3 to 5 concrete options.
 
+        Do not stop after the naming step.
+        - If the user tells you what to call them, confirm it briefly and continue.
+        - If the user tells you what you should be called, prefer Jarvis as the default suggestion unless they choose something else.
+        - Keep going until all four first-run questions are answered well enough to write the files below.
+        - Do not end with "Good. I'm Jarvis now." unless the ritual is actually complete.
+
         ## Write these files
         After the user chooses, update:
 
@@ -265,6 +271,11 @@ enum AgentWorkspace {
 
         3) openclaw.json
         Keep the consumer defaults simple and local-first.
+
+        Before you consider the ritual complete:
+        - IDENTITY.md should have a name, persona/vibe, and Telegram style.
+        - USER.md should have the user's preferred name/address and Telegram identity.
+        - SOUL.md should be updated if the user gave durable tone or behavior preferences.
 
         ## Telegram
         Use Telegram DMs first. For long-running or parallel work, recommend groups and topics.

@@ -74,6 +74,7 @@ import {
   updateSessionStore,
 } from "../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import { stripEnvelopeFromMessage } from "../gateway/chat-sanitize.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -293,9 +294,19 @@ async function persistAcpTurnTranscript(params: {
   });
 
   if (promptText) {
-    sessionManager.appendMessage({
+    const sanitizedPromptMessage = stripEnvelopeFromMessage({
       role: "user",
       content: promptText,
+    }) as { content?: unknown };
+    sessionManager.appendMessage({
+      role: "user",
+      // ACP uses an agent-facing prompt body that can include hidden metadata
+      // blocks. Persist only the user-visible content so local/session UIs
+      // never replay bootstrap scaffolding back to the user.
+      content:
+        typeof sanitizedPromptMessage.content === "string"
+          ? sanitizedPromptMessage.content
+          : promptText,
       timestamp: Date.now(),
     });
   }
