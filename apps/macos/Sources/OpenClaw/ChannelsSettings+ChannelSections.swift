@@ -2,6 +2,10 @@ import AppKit
 import SwiftUI
 
 extension ChannelsSettings {
+    private var isConsumerSimpleTelegramPath: Bool {
+        AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
+    }
+
     func formSection(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         GroupBox(title) {
             VStack(alignment: .leading, spacing: 10) {
@@ -21,7 +25,7 @@ extension ChannelsSettings {
                 .disabled(self.store.whatsappBusy)
             }
 
-            if channel.id == "telegram" {
+            if channel.id == "telegram", !self.isConsumerSimpleTelegramPath {
                 Button("Logout") {
                     Task { await self.store.logoutTelegram() }
                 }
@@ -29,17 +33,19 @@ extension ChannelsSettings {
                 .disabled(self.store.telegramBusy)
             }
 
-            Button {
-                Task { await self.store.refresh(probe: true) }
-            } label: {
-                if self.store.isRefreshing {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Refresh")
+            if !(channel.id == "telegram" && self.isConsumerSimpleTelegramPath) {
+                Button {
+                    Task { await self.store.refresh(probe: true) }
+                } label: {
+                    if self.store.isRefreshing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Refresh")
+                    }
                 }
+                .buttonStyle(.bordered)
+                .disabled(self.store.isRefreshing)
             }
-            .buttonStyle(.bordered)
-            .disabled(self.store.isRefreshing)
         }
         .controlSize(.small)
     }
@@ -91,74 +97,75 @@ extension ChannelsSettings {
     var telegramSetupSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             self.formSection("One-time setup") {
-                Text("1. Open @BotFather, run /newbot, and copy the token.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("2. Paste the token here and verify it.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("3. Send one private message so OpenClaw can lock your DM allow list.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("4. Keep groups enabled for longer or parallel work with topics.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("1. Open @BotFather.")
+                        .font(.callout)
 
-                HStack(spacing: 10) {
-                    if AppFlavor.current.telegramSetupGuideURL != nil {
-                        Button("Written guide") {
-                            self.store.openTelegramSetupGuide()
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    if AppFlavor.current.telegramSetupVideoURL != nil {
-                        Button("Video walkthrough") {
-                            self.store.openTelegramSetupVideo()
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-
-                TextField("BotFather token", text: self.$store.telegramSetupToken)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-
-                HStack(spacing: 10) {
                     Button("Open BotFather") {
                         self.store.openTelegramBotFather()
                     }
                     .buttonStyle(.bordered)
 
-                    Button("Verify token") {
-                        Task { await self.store.verifyTelegramSetupToken() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.store.telegramBusy)
+                    Text("2. Send /newbot and follow the prompts.")
+                        .font(.callout)
 
-                    if let username = self.store.telegramSetupBotUsername {
-                        Button("Open bot") {
-                            self.store.openTelegramBot(username: username)
+                    Text("3. Copy the bot token from BotFather.")
+                        .font(.callout)
+
+                    Text("4. Paste the token here and click Verify token.")
+                        .font(.callout)
+
+                    TextField("BotFather token", text: self.$store.telegramSetupToken)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                        .onChange(of: self.store.telegramSetupToken) { _, _ in
+                            self.store.resetTelegramSetupProgressForEditedToken()
+                        }
+
+                    HStack(spacing: 10) {
+                        Button("Verify token") {
+                            Task { await self.store.verifyTelegramSetupToken() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(self.store.telegramBusy || self.store.telegramSetupPhase == .savingSetup)
+
+                        if self.store.telegramSetupPhase == .verifyingToken {
+                            ProgressView().controlSize(.small)
+                        }
+
+                        Button("Video walkthrough") {
+                            self.store.openTelegramSetupVideo()
                         }
                         .buttonStyle(.bordered)
-                    }
-                }
-
-                HStack(spacing: 10) {
-                    Button("Capture first DM") {
-                        Task { await self.store.captureTelegramFirstDirectMessage() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.store.telegramBusy || self.store.telegramSetupBotUsername == nil)
-
-                    if self.store.telegramSetupWaitingForDM {
-                        ProgressView().controlSize(.small)
+                        .disabled(AppFlavor.current.telegramSetupVideoURL == nil)
                     }
 
-                    if let senderId = self.store.telegramSetupFirstSenderId {
-                        Text("First sender: \(senderId)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    Text("5. Click Open your bot, send your bot one message, then click Capture first message.")
+                        .font(.callout)
+
+                    HStack(spacing: 10) {
+                        if let username = self.store.telegramSetupBotUsername {
+                            Button("Open your bot") {
+                                self.store.openTelegramBot(username: username)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        Button("Capture first message") {
+                            Task { await self.store.captureTelegramFirstDirectMessage() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(self.store.telegramBusy || self.store.telegramSetupBotUsername == nil)
+
+                        if self.store.telegramSetupWaitingForDM || self.store.telegramSetupPhase == .savingSetup {
+                            ProgressView().controlSize(.small)
+                        }
+
+                        if let senderId = self.store.telegramSetupFirstSenderId {
+                            Text("Captured: \(senderId)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -169,9 +176,46 @@ extension ChannelsSettings {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Text("DMs start simple. Groups and topics stay available for longer or parallel work.")
-                    .font(.caption)
+                Text(
+                    "Optional but recommended: in BotFather -> your bot -> Bot Settings, enable Threaded Mode for a better experience.")
+                    .font(.callout)
+                    .foregroundStyle(.primary)
+
+                Text(
+                    "Power users: for multiple tasks at once, add the bot to a Telegram group and use topics to keep each task separate.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    var consumerTelegramLiveSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            self.formSection("Telegram is live") {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(
+                        self.consumerTelegramBotUsername.map {
+                            "Your bot is connected and running as @\($0)."
+                        } ?? "Your bot is connected and running.")
+                        .font(.callout)
+
+                    if let username = self.consumerTelegramBotUsername {
+                        Button("Open your bot") {
+                            self.store.openTelegramBot(username: username)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
+                    Text(
+                        "Optional but recommended: in BotFather -> your bot -> Bot Settings, enable Threaded Mode for a better experience.")
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+
+                    Text(
+                        "Power users: for multiple tasks at once, add the bot to a Telegram group and use topics to keep each task separate.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }

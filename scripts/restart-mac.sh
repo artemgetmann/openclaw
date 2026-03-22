@@ -191,11 +191,6 @@ choose_app_bundle() {
     return 0
   fi
 
-  if [[ -d "/Applications/OpenClaw.app" ]]; then
-    APP_BUNDLE="/Applications/OpenClaw.app"
-    return 0
-  fi
-
   if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
     APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
     if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
@@ -204,10 +199,19 @@ choose_app_bundle() {
     return 0
   fi
 
+  # Prefer the freshly packaged bundle from this worktree. Falling back to the
+  # installed app means "restart" can silently reopen a stale binary and make us
+  # debug the wrong build.
+  if [[ -d "/Applications/OpenClaw.app" ]]; then
+    APP_BUNDLE="/Applications/OpenClaw.app"
+    return 0
+  fi
+
   fail "App bundle not found. Set OPENCLAW_APP_BUNDLE to your installed OpenClaw.app"
 }
 
 choose_app_bundle
+log "==> Using app bundle: ${APP_BUNDLE}"
 
 # When signed, clear any previous launchagent override marker.
 if [[ "$NO_SIGN" -ne 1 && "$ATTACH_ONLY" -ne 1 && -f "${LAUNCHAGENT_DISABLE_MARKER}" ]]; then

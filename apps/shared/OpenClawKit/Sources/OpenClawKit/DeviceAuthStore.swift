@@ -14,6 +14,16 @@ public struct DeviceAuthEntry: Codable, Sendable {
     }
 }
 
+public struct DeviceAuthStoreSnapshot: Sendable {
+    public let deviceId: String
+    public let roles: [String]
+
+    public init(deviceId: String, roles: [String]) {
+        self.deviceId = deviceId
+        self.roles = roles
+    }
+}
+
 private struct DeviceAuthStoreFile: Codable {
     var version: Int
     var deviceId: String
@@ -62,6 +72,13 @@ public enum DeviceAuthStore {
         guard store.tokens[normalizedRole] != nil else { return }
         store.tokens.removeValue(forKey: normalizedRole)
         writeStore(store)
+    }
+
+    public static func snapshot() -> DeviceAuthStoreSnapshot? {
+        guard let store = readStore() else { return nil }
+        return DeviceAuthStoreSnapshot(
+            deviceId: store.deviceId,
+            roles: Array(store.tokens.keys).sorted())
     }
 
     private static func normalizeRole(_ role: String) -> String {

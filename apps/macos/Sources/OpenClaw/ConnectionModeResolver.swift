@@ -44,9 +44,7 @@ enum ConnectionModeResolver {
         }
 
         // Consumer builds should come up local-first even before the first config write lands.
-        if let profile = ProcessInfo.processInfo.environment["OPENCLAW_PROFILE"],
-           profile.hasPrefix(ConsumerRuntime.profile)
-        {
+        if AppFlavor.current.isConsumer {
             return EffectiveConnectionMode(mode: .local, source: .onboarding)
         }
 

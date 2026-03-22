@@ -56,7 +56,14 @@ export function shouldAllowSilentLocalPairing(params: {
   return (
     params.isLocalClient &&
     (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
-    (params.reason === "not-paired" || params.reason === "scope-upgrade")
+    // Local-first clients on the same machine should not need manual approval just
+    // because the app reports newer metadata or needs the embedded node lane after
+    // the operator UI has already been trusted locally. Keep the restriction to local
+    // clients only; remote/browser-origin callers still go through explicit pairing.
+    (params.reason === "not-paired" ||
+      params.reason === "role-upgrade" ||
+      params.reason === "scope-upgrade" ||
+      params.reason === "metadata-upgrade")
   );
 }
 

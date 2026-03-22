@@ -4,29 +4,45 @@ enum AppFlavor: String {
     case standard
     case consumer
 
+    private static func parse(_ raw: String?) -> AppFlavor? {
+        guard let raw else { return nil }
+        return Self(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    static func resolve(
+        environment: [String: String],
+        infoDictionary: [String: Any]?,
+        bundleIdentifier: String?,
+        bundleURL: URL?
+    ) -> AppFlavor {
+        let envFlavor = self.parse(environment["OPENCLAW_APP_VARIANT"])
+        let infoFlavor = self.parse(infoDictionary?["OpenClawAppVariant"] as? String)
+        let bundleFlavor: AppFlavor?
+        if let bundleIdentifier {
+            bundleFlavor = bundleIdentifier.lowercased().contains(".consumer") ? .consumer : nil
+        } else {
+            bundleFlavor = nil
+        }
+        let isBundledApp = bundleURL?.pathExtension.lowercased() == "app"
+
+        if isBundledApp {
+            // A real signed app bundle should trust its own metadata before ambient shell env.
+            // Otherwise a stale consumer override can make the standard app bootstrap the wrong
+            // runtime before it gets a chance to clean the process environment.
+            return infoFlavor ?? bundleFlavor ?? envFlavor ?? .standard
+        }
+
+        // Tests and non-bundled tooling still need the env override so we can force a flavor
+        // without having to forge app bundle metadata in-process.
+        return envFlavor ?? infoFlavor ?? bundleFlavor ?? .standard
+    }
+
     static var current: AppFlavor {
-        // Resolve the flavor in override order so packaging/tests can force consumer mode
-        // without relying on the final signed bundle metadata being present.
-        if let env = ProcessInfo.processInfo.environment["OPENCLAW_APP_VARIANT"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased(),
-           let flavor = Self(rawValue: env)
-        {
-            return flavor
-        }
-
-        if let raw = Bundle.main.infoDictionary?["OpenClawAppVariant"] as? String,
-           let flavor = Self(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
-        {
-            return flavor
-        }
-
-        let bundleID = Bundle.main.bundleIdentifier?.lowercased() ?? ""
-        if bundleID.contains(".consumer") {
-            return .consumer
-        }
-
-        return .standard
+        self.resolve(
+            environment: ProcessInfo.processInfo.environment,
+            infoDictionary: Bundle.main.infoDictionary,
+            bundleIdentifier: Bundle.main.bundleIdentifier,
+            bundleURL: Bundle.main.bundleURL)
     }
 
     var isConsumer: Bool {
@@ -60,6 +76,15 @@ enum AppFlavor: String {
         }
     }
 
+    var appLaunchLabel: String {
+        switch self {
+        case .standard:
+            "ai.openclaw"
+        case .consumer:
+            "ai.openclaw.consumer"
+        }
+    }
+
     var gatewayLaunchLabel: String {
         switch self {
         case .standard:
@@ -87,6 +112,10 @@ enum AppFlavor: String {
         }
     }
 
+    var defaultGatewayBind: String {
+        "loopback"
+    }
+
     var defaultLogDirName: String {
         switch self {
         case .standard:
@@ -110,9 +139,7 @@ enum AppFlavor: String {
         case .standard:
             nil
         case .consumer:
-            // Keep a stable default walkthrough and allow override without another
-            // app patch when product swaps to a dedicated onboarding video.
-            self.consumerTelegramSetupVideoURLOverride ?? "https://docs.openclaw.ai/start/showcase"
+            self.consumerTelegramSetupVideoURLOverride
         }
     }
 

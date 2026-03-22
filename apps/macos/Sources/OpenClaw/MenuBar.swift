@@ -31,10 +31,15 @@ struct OpenClawApp: App {
     }
 
     init() {
-        // Bootstrap consumer runtime/env first so every singleton reads consumer paths/ports.
-        ConsumerRuntime.bootstrapProcessEnvironment()
+        // Both flavors seed their own canonical runtime env before any shared auth/config code
+        // spins up. Consumer gets an isolated runtime; standard gets the founder/default lane.
+        if AppFlavor.current.isConsumer {
+            ConsumerRuntime.bootstrapProcessEnvironment()
+            ConsumerBootstrap.bootstrapIfNeeded()
+        } else {
+            StandardRuntime.bootstrapProcessEnvironment()
+        }
         OpenClawLogging.bootstrapIfNeeded()
-        ConsumerBootstrap.bootstrapIfNeeded()
         GatewayConnectivityCoordinator.shared.start()
 
         Self.applyAttachOnlyOverrideIfNeeded()
@@ -107,10 +112,9 @@ struct OpenClawApp: App {
             return
         }
         Task {
-            _ = await GatewayLaunchAgentManager.set(
-                enabled: false,
-                bundlePath: Bundle.main.bundlePath,
-                port: GatewayEnvironment.gatewayPort())
+            // Attach-only is the explicit destructive path: unregister the launch agent so the
+            // consumer app cannot auto-start its gateway in the background.
+            _ = await GatewayLaunchAgentManager.uninstall()
         }
         Self.logger.info("attach-only flag enabled")
     }

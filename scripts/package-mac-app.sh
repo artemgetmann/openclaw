@@ -296,8 +296,11 @@ else
   fi
 fi
 
-echo "⏹  Stopping any running OpenClaw"
-killall -q OpenClaw 2>/dev/null || true
+echo "⏹  Stopping running main-app processes only"
+# Both the founder and consumer bundles currently use the same binary name ("OpenClaw"), so
+# `killall OpenClaw` takes out the consumer lane too. Target only the standard app bundles here.
+pkill -f '/Applications/OpenClaw\.app/Contents/MacOS/OpenClaw' 2>/dev/null || true
+pkill -f "$ROOT_DIR/dist/OpenClaw.app/Contents/MacOS/OpenClaw" 2>/dev/null || true
 
 echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"

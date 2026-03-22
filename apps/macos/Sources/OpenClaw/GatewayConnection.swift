@@ -181,7 +181,16 @@ actor GatewayConnection {
             let mode = await MainActor.run { AppStateStore.shared.connectionMode }
             switch mode {
             case .local:
-                await MainActor.run { GatewayProcessManager.shared.setActive(true) }
+                let recoveryReason = (error as NSError).localizedDescription
+                await MainActor.run {
+                    // A normal cold start can briefly fail requests while launchd is still
+                    // bringing the gateway up. Do not turn those transient misses into a second
+                    // restart/recovery loop; only recover after the manager has left .starting.
+                    if case .starting = GatewayProcessManager.shared.status {
+                        return
+                    }
+                    GatewayProcessManager.shared.recoverAfterConnectionLoss(reason: recoveryReason)
+                }
 
                 var lastError: Error = error
                 for delayMs in [150, 400, 900] {

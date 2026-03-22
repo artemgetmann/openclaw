@@ -106,7 +106,25 @@ struct OpenClawConfigFileTests {
             "OPENCLAW_APP_VARIANT": "consumer",
         ]) {
             let path = OpenClawConfigFile.stateDirURL().path
-            #expect(path.contains("Library/Application Support/OpenClaw Consumer/.openclaw"))
+            #expect(
+                path.contains("Library/Application Support/OpenClaw Consumer/.openclaw") ||
+                    path.hasSuffix("/.openclaw-consumer"))
+        }
+    }
+
+    @Test
+    func `standard flavor defaults to founder state dir`() async {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_HOME": nil,
+            "OPENCLAW_APP_VARIANT": "standard",
+        ]) {
+            let path = OpenClawConfigFile.stateDirURL().path
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            #expect(path == "\(home)/.openclaw")
+            #expect(OpenClawConfigFile.url().path == "\(home)/.openclaw/openclaw.json")
+            #expect(OpenClawConfigFile.defaultWorkspaceURL().path == "\(home)/.openclaw/workspace")
         }
     }
 

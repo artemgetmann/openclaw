@@ -17,14 +17,34 @@ public struct DeviceIdentity: Codable, Sendable {
 
 enum DeviceIdentityPaths {
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
+    private static let configPathEnv = ["OPENCLAW_CONFIG_PATH"]
+    private static let homeEnv = ["OPENCLAW_HOME"]
+
+    private static func envPath(_ key: String) -> String? {
+        guard let raw = getenv(key) else { return nil }
+        let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        return value
+    }
 
     static func stateDirURL() -> URL {
         for key in self.stateDirEnv {
-            if let raw = getenv(key) {
-                let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !value.isEmpty {
-                    return URL(fileURLWithPath: value, isDirectory: true)
-                }
+            if let value = self.envPath(key) {
+                return URL(fileURLWithPath: value, isDirectory: true)
+            }
+        }
+
+        for key in self.configPathEnv {
+            if let value = self.envPath(key) {
+                let configURL = URL(fileURLWithPath: value, isDirectory: false)
+                return configURL.deletingLastPathComponent()
+            }
+        }
+
+        for key in self.homeEnv {
+            if let value = self.envPath(key) {
+                return URL(fileURLWithPath: value, isDirectory: true)
+                    .appendingPathComponent(".openclaw", isDirectory: true)
             }
         }
 

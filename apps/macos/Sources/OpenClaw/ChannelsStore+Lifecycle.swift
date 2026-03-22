@@ -37,6 +37,7 @@ extension ChannelsStore {
                 params: params,
                 timeoutMs: 12000)
             self.snapshot = snap
+            self.reconcileTelegramSetupProgress(with: snap)
             self.lastSuccess = Date()
             self.lastError = nil
         } catch {
@@ -142,6 +143,46 @@ extension ChannelsStore {
             self.configStatus = error.localizedDescription
         }
         await self.refresh(probe: true)
+    }
+}
+
+extension ChannelsStore {
+    private func reconcileTelegramSetupProgress(with snap: ChannelsStatusSnapshot) {
+        guard AppFlavor.current.isConsumer else { return }
+        guard let status = snap.decodeChannel("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
+        else { return }
+
+        let probeOK = status.probe?.ok == true
+        let botRunning = status.running || probeOK
+        let localConfig = self.configDraft.isEmpty ? OpenClawConfigFile.loadDict() : self.configDraft
+        let telegram = ((localConfig["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
+        let allowFrom = (telegram["allowFrom"] as? [String]) ?? []
+        let localBootstrapComplete = !allowFrom.isEmpty || self.telegramSetupFirstSenderId != nil
+        guard status.configured, (botRunning || localBootstrapComplete) else { return }
+
+        // Once the consumer Telegram lane is configured and healthy, the setup
+        // wizard should stop showing stale "waiting/saving" states. The config on
+        // disk is already the source of truth at this point, so the UI should move
+        // into a stable "bot is live" state instead of pretending onboarding is
+        // still in progress. Do not require a fully healthy runtime probe before
+        // cleaning this up; persistence beats a late snapshot.
+        self.telegramSetupWaitingForDM = false
+        self.telegramSetupPhase = .idle
+
+        if self.telegramSetupBotUsername == nil {
+            self.telegramSetupBotUsername = status.probe?.bot?.username
+        }
+
+        if self.telegramSetupStatus == nil
+            || self.telegramSetupStatus == "Waiting for the first message to the bot..."
+            || self.telegramSetupStatus == "Saving Telegram setup..."
+            || self.telegramSetupStatus?.hasPrefix("Token verified") == true
+        {
+            let username = status.probe?.bot?.username ?? self.telegramSetupBotUsername
+            self.telegramSetupStatus = username.map {
+                "Telegram bot is live as @\($0)."
+            } ?? "Telegram bot is live."
+        }
     }
 }
 

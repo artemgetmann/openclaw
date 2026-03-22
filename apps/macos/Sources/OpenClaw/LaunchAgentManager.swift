@@ -2,7 +2,8 @@ import Foundation
 
 enum LaunchAgentManager {
     private static var plistURL: URL {
-        ConsumerRuntime.appLaunchAgentPlistURL
+        FileManager().homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(launchdLabel).plist")
     }
 
     static func status() async -> Bool {
@@ -25,6 +26,13 @@ enum LaunchAgentManager {
     }
 
     private static func writePlist(bundlePath: String) {
+        let flavor = AppFlavor.current
+        let stateDir = OpenClawPaths.canonicalStateDirURL(for: flavor)
+        let configURL = OpenClawPaths.canonicalConfigURL(for: flavor)
+        let logsDir = OpenClawPaths.canonicalLogsDirURL(for: flavor)
+        let workingDirectory = stateDir.deletingLastPathComponent().path
+        let gatewayPort = OpenClawConfigFile.gatewayPort() ?? flavor.defaultGatewayPort
+        let env = self.launchAgentEnvironment()
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -37,7 +45,7 @@ enum LaunchAgentManager {
             <string>\(bundlePath)/Contents/MacOS/OpenClaw</string>
           </array>
           <key>WorkingDirectory</key>
-          <string>\(ConsumerRuntime.runtimeRootURL.path)</string>
+          <string>\(workingDirectory)</string>
           <key>RunAtLoad</key>
           <true/>
           <key>KeepAlive</key>
@@ -46,20 +54,19 @@ enum LaunchAgentManager {
         <dict>
           <key>PATH</key>
           <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
-          <key>OPENCLAW_PROFILE</key>
-          <string>\(ConsumerRuntime.profile)</string>
-          <key>OPENCLAW_HOME</key>
-          <string>\(ConsumerRuntime.runtimeRootURL.path)</string>
+          <key>OPENCLAW_APP_VARIANT</key>
+          <string>\(flavor.rawValue)</string>
           <key>OPENCLAW_STATE_DIR</key>
-          <string>\(ConsumerRuntime.stateDirURL.path)</string>
+          <string>\(stateDir.path)</string>
           <key>OPENCLAW_CONFIG_PATH</key>
-          <string>\(ConsumerRuntime.configURL.path)</string>
+          <string>\(configURL.path)</string>
           <key>OPENCLAW_GATEWAY_PORT</key>
-          <string>\(ConsumerRuntime.gatewayPort)</string>
+          <string>\(gatewayPort)</string>
           <key>OPENCLAW_GATEWAY_BIND</key>
-          <string>\(ConsumerRuntime.gatewayBind)</string>
+          <string>\(flavor.defaultGatewayBind)</string>
           <key>OPENCLAW_LOG_DIR</key>
-          <string>\(ConsumerRuntime.logsDirURL.path)</string>
+          <string>\(logsDir.path)</string>
+        \(env)
         </dict>
           <key>StandardOutPath</key>
           <string>\(LogLocator.launchdLogPath)</string>
@@ -69,6 +76,18 @@ enum LaunchAgentManager {
         </plist>
         """
         try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
+    }
+
+    private static func launchAgentEnvironment() -> String {
+        guard AppFlavor.current.isConsumer else { return "" }
+        return """
+          <key>OPENCLAW_PROFILE</key>
+          <string>\(ConsumerRuntime.profile)</string>
+          <key>OPENCLAW_HOME</key>
+          <string>\(ConsumerRuntime.runtimeRootURL.path)</string>
+          <key>OPENCLAW_CONSUMER_MINIMAL_STARTUP</key>
+          <string>1</string>
+        """
     }
 
     @discardableResult

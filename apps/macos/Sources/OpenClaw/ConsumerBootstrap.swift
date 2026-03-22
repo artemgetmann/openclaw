@@ -14,6 +14,11 @@ enum ConsumerBootstrap {
         "summarize",
         "weather",
     ]
+    // Consumer bootstrap should never inherit the repo-wide Anthropic fallback.
+    // This branch ships an app-owned local runtime with Codex auth seeded under
+    // the consumer agent directory, so default to the matching provider/model.
+    private static let consumerDefaultModelRef = "openai-codex/gpt-5.4"
+    private static let consumerDefaultModelAlias = "GPT"
 
     static func bootstrapIfNeeded() {
         self.ensureConsumerDirectories()
@@ -63,6 +68,17 @@ enum ConsumerBootstrap {
             in: &root,
             path: ["agents", "defaults", "workspace"],
             value: ConsumerRuntime.workspaceURL.path) || changed
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["agents", "defaults", "model", "primary"],
+            value: Self.consumerDefaultModelRef) || changed
+        // Keep the allowlist/model catalog aligned with the seeded primary model so
+        // runtime model resolution does not fall back to anthropic/claude-opus-4-6
+        // just because the consumer config started empty.
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["agents", "defaults", "models", Self.consumerDefaultModelRef, "alias"],
+            value: Self.consumerDefaultModelAlias) || changed
         changed = self.setDefaultValue(
             in: &root,
             path: ["skills", "install", "nodeManager"],

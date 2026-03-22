@@ -48,14 +48,17 @@ enum CommandResolver {
     }
 
     static func projectRoot() -> URL {
+        // For packaged dev builds, the bundle path is the most trustworthy source of the
+        // current worktree. A stale saved root can silently point launchd back at an old
+        // checkout, so prefer the bundle-derived repo whenever we can prove it is valid.
+        if let inferred = self.inferProjectRoot(from: Bundle.main.bundleURL) {
+            return inferred
+        }
         if let stored = UserDefaults.standard.string(forKey: self.projectRootDefaultsKey),
            let url = self.expandPath(stored),
            self.isRepoRoot(url)
         {
             return url
-        }
-        if let inferred = self.inferProjectRoot(from: Bundle.main.bundleURL) {
-            return inferred
         }
         let fallback = FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent("Projects/openclaw")

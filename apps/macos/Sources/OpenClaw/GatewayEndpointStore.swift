@@ -1,5 +1,6 @@
 import ConcurrencyExtras
 import Foundation
+import OpenClawKit
 import OSLog
 
 enum GatewayEndpointState: Equatable {
@@ -31,6 +32,11 @@ actor GatewayEndpointStore {
 
     private static let envOverrideWarnings = LockIsolated((token: false, password: false))
 
+    private enum LocalControlCredentialDecision: Equatable {
+        case pairedDeviceAuth
+        case fallbackSharedCredentials(reason: String)
+    }
+
     struct Deps {
         let mode: @Sendable () async -> AppState.ConnectionMode
         let token: @Sendable () -> String?
@@ -45,20 +51,36 @@ actor GatewayEndpointStore {
             token: {
                 let root = OpenClawConfigFile.loadDict()
                 let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
-                return GatewayEndpointStore.resolveGatewayToken(
-                    isRemote: isRemote,
+                let env = ProcessInfo.processInfo.environment
+                let launchdSnapshot = GatewayLaunchAgentManager.launchdConfigSnapshot()
+                if isRemote {
+                    return GatewayEndpointStore.resolveGatewayToken(
+                        isRemote: true,
+                        root: root,
+                        env: env,
+                        launchdSnapshot: launchdSnapshot)
+                }
+                return GatewayEndpointStore.resolveLocalControlToken(
                     root: root,
-                    env: ProcessInfo.processInfo.environment,
-                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
+                    env: env,
+                    launchdSnapshot: launchdSnapshot)
             },
             password: {
                 let root = OpenClawConfigFile.loadDict()
                 let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
-                return GatewayEndpointStore.resolveGatewayPassword(
-                    isRemote: isRemote,
+                let env = ProcessInfo.processInfo.environment
+                let launchdSnapshot = GatewayLaunchAgentManager.launchdConfigSnapshot()
+                if isRemote {
+                    return GatewayEndpointStore.resolveGatewayPassword(
+                        isRemote: true,
+                        root: root,
+                        env: env,
+                        launchdSnapshot: launchdSnapshot)
+                }
+                return GatewayEndpointStore.resolveLocalControlPassword(
                     root: root,
-                    env: ProcessInfo.processInfo.environment,
-                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
+                    env: env,
+                    launchdSnapshot: launchdSnapshot)
             },
             localPort: { GatewayEnvironment.gatewayPort() },
             localHost: {
@@ -608,6 +630,77 @@ actor GatewayEndpointStore {
 }
 
 extension GatewayEndpointStore {
+    private static func localControlCredentialDecision() -> LocalControlCredentialDecision {
+        guard AppFlavor.current == .standard else {
+            return .fallbackSharedCredentials(reason: "non-standard app flavor")
+        }
+
+        // The standard app should prefer native device auth for localhost control.
+        // If the device identity/auth store is corrupted or stale, we temporarily fall back
+        // to the shared gateway token/password so the next successful connect can heal the
+        // device-auth cache instead of getting trapped in token_missing forever.
+        let identity = DeviceIdentityStore.loadOrCreate()
+        guard let snapshot = DeviceAuthStore.snapshot() else {
+            return .fallbackSharedCredentials(reason: "device-auth store missing")
+        }
+        guard snapshot.deviceId == identity.deviceId else {
+            return .fallbackSharedCredentials(
+                reason: "device-auth store deviceId mismatch identity=\(identity.deviceId) store=\(snapshot.deviceId)")
+        }
+        guard snapshot.roles.contains("operator") else {
+            return .fallbackSharedCredentials(
+                reason: "device-auth store missing operator token roles=\(snapshot.roles.joined(separator: ","))")
+        }
+        return .pairedDeviceAuth
+    }
+
+    private static func resolveLocalControlToken(
+        root: [String: Any],
+        env: [String: String],
+        launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
+    {
+        let resolved = self.resolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: env,
+            launchdSnapshot: launchdSnapshot)
+        guard AppFlavor.current == .standard else {
+            return resolved
+        }
+        switch self.localControlCredentialDecision() {
+        case .pairedDeviceAuth:
+            Self.staticLogger.notice("local control auth strategy=paired-device-auth")
+            return nil
+        case let .fallbackSharedCredentials(reason):
+            let hasSharedToken = resolved?.isEmpty == false
+            Self.staticLogger.error(
+                "local control auth strategy=fallback-shared-token hasSharedToken=\(hasSharedToken, privacy: .public) " +
+                    "reason=\(reason, privacy: .public)")
+            return resolved
+        }
+    }
+
+    private static func resolveLocalControlPassword(
+        root: [String: Any],
+        env: [String: String],
+        launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
+    {
+        let resolved = self.resolveGatewayPassword(
+            isRemote: false,
+            root: root,
+            env: env,
+            launchdSnapshot: launchdSnapshot)
+        guard AppFlavor.current == .standard else {
+            return resolved
+        }
+        switch self.localControlCredentialDecision() {
+        case .pairedDeviceAuth:
+            return nil
+        case .fallbackSharedCredentials:
+            return resolved
+        }
+    }
+
     static func localConfig() -> GatewayConnection.Config {
         self.localConfig(
             root: OpenClawConfigFile.loadDict(),
@@ -630,13 +723,8 @@ extension GatewayEndpointStore {
             bindMode: bind,
             customBindHost: customBindHost,
             tailscaleIP: tailscaleIP)
-        let token = self.resolveGatewayToken(
-            isRemote: false,
-            root: root,
-            env: env,
-            launchdSnapshot: launchdSnapshot)
-        let password = self.resolveGatewayPassword(
-            isRemote: false,
+        let token = self.resolveLocalControlToken(root: root, env: env, launchdSnapshot: launchdSnapshot)
+        let password = self.resolveLocalControlPassword(
             root: root,
             env: env,
             launchdSnapshot: launchdSnapshot)

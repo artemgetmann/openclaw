@@ -41,7 +41,7 @@ struct GatewayEnvironmentTests {
             defaults: ["gatewayPort": nil])
         {
             let defaultPort = GatewayEnvironment.gatewayPort()
-            #expect(defaultPort == ConsumerRuntime.gatewayPort)
+            #expect(defaultPort == 18789)
         }
 
         await TestIsolation.withEnvValues(["OPENCLAW_GATEWAY_PORT": "19999"]) {

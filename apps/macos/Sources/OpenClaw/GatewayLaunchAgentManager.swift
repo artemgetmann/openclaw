@@ -3,12 +3,21 @@ import Foundation
 enum GatewayLaunchAgentManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
 
+    enum DesiredAction: Equatable {
+        case install
+        case start
+        case restart
+        case stop
+        case uninstall
+    }
+
     private static var disableLaunchAgentMarkerURL: URL {
         OpenClawPaths.stateDirURL.appendingPathComponent("disable-launchagent")
     }
 
     private static var plistURL: URL {
-        ConsumerRuntime.gatewayLaunchAgentPlistURL
+        FileManager().homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
     }
 
     static func isLaunchAgentWriteDisabled() -> Bool {
@@ -59,23 +68,39 @@ enum GatewayLaunchAgentManager {
         }
 
         if enabled {
-            self.logger.info("launchd enable requested via CLI port=\(port)")
-            return await self.runDaemonCommand([
-                "install",
-                "--force",
-                "--port",
-                "\(port)",
-                "--runtime",
-                "node",
-            ])
+            let action = await self.desiredEnableAction()
+            self.logger.info("launchd enable requested action=\(String(describing: action), privacy: .public) port=\(port)")
+            switch action {
+            case .restart:
+                if let error = await self.runDaemonCommand(["restart"], timeout: 20, quiet: true) {
+                    self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
+                } else {
+                    return nil
+                }
+            case .start:
+                if let error = await self.runDaemonCommand(["start"], timeout: 20, quiet: true) {
+                    self.logger.warning("launchd start failed; falling back to install: \(error, privacy: .public)")
+                } else {
+                    return nil
+                }
+            case .install, .stop, .uninstall:
+                break
+            }
+
+            return await self.install(port: port)
         }
 
-        self.logger.info("launchd disable requested via CLI")
-        return await self.runDaemonCommand(["uninstall"])
+        self.logger.info("launchd stop requested via CLI")
+        return await self.runDaemonCommand(["stop"], timeout: 20)
     }
 
     static func kickstart() async {
         _ = await self.runDaemonCommand(["restart"], timeout: 20)
+    }
+
+    static func uninstall() async -> String? {
+        self.logger.info("launchd uninstall requested via CLI")
+        return await self.runDaemonCommand(["uninstall"], timeout: 20)
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
@@ -113,6 +138,51 @@ extension GatewayLaunchAgentManager {
             return nil
         }
         return loaded
+    }
+
+    private static func desiredEnableAction() async -> DesiredAction {
+        let loaded = await self.readDaemonLoaded()
+        let snapshot = self.launchdConfigSnapshot()
+        let matchesExpectedEntrypoint = self.launchdSnapshotMatchesExpectedEntrypoint(snapshot)
+        let action = self._testDesiredEnableAction(
+            loaded: loaded,
+            hasPlist: snapshot != nil,
+            matchesExpectedEntrypoint: matchesExpectedEntrypoint)
+        switch action {
+        case .restart:
+            // Hard restart is reserved for explicit recovery. Normal "enable" on app startup
+            // should not SIGTERM a launchd-managed gateway that is already loaded.
+            return .start
+        case .start:
+            // Re-use the registered service instead of churning install/uninstall state.
+            return .start
+        case .install, .stop, .uninstall:
+            return .install
+        }
+    }
+
+    private static func launchdSnapshotMatchesExpectedEntrypoint(_ snapshot: LaunchAgentPlistSnapshot?) -> Bool {
+        guard let snapshot else { return true }
+        guard let expectedEntrypoint = CommandResolver.gatewayEntrypoint(in: CommandResolver.projectRoot()) else {
+            // If we cannot determine the expected entrypoint, avoid destructive churn and let
+            // the normal restart/start path handle the current service state.
+            return true
+        }
+        let normalizedExpected = (expectedEntrypoint as NSString).standardizingPath
+        let normalizedArguments = Set(snapshot.programArguments.map { ($0 as NSString).standardizingPath })
+        return normalizedArguments.contains(normalizedExpected)
+    }
+
+    private static func install(port: Int) async -> String? {
+        self.logger.info("launchd install requested via CLI port=\(port)")
+        return await self.runDaemonCommand([
+            "install",
+            "--force",
+            "--port",
+            "\(port)",
+            "--runtime",
+            "node",
+        ])
     }
 
     private struct CommandResult {
@@ -177,19 +247,42 @@ extension GatewayLaunchAgentManager {
         projectRootHint: String?) -> [String: String]
     {
         var env = base
+        let flavor = AppFlavor.current
+        let stateDir = OpenClawPaths.canonicalStateDirURL(for: flavor)
+        let configURL = OpenClawPaths.canonicalConfigURL(for: flavor)
+        let logsDir = OpenClawPaths.canonicalLogsDirURL(for: flavor)
+        let gatewayPort = OpenClawConfigFile.gatewayPort() ?? flavor.defaultGatewayPort
+
+        // The app process can inherit stale env from whatever terminal/worktree launched it.
+        // Normalize the launchd command env explicitly so the standard app never leaks consumer
+        // state, and consumer keeps its isolated lane.
+        for key in [
+            "OPENCLAW_PROFILE",
+            "OPENCLAW_HOME",
+            "OPENCLAW_STATE_DIR",
+            "OPENCLAW_CONFIG_PATH",
+            "OPENCLAW_GATEWAY_PORT",
+            "OPENCLAW_GATEWAY_BIND",
+            "OPENCLAW_LOG_DIR",
+            "OPENCLAW_CONSUMER_MINIMAL_STARTUP",
+            "OPENCLAW_LAUNCHD_LABEL",
+        ] {
+            env.removeValue(forKey: key)
+        }
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
-        env["OPENCLAW_PROFILE"] = ConsumerRuntime.profile
-        env["OPENCLAW_HOME"] = ConsumerRuntime.runtimeRootURL.path
-        env["OPENCLAW_STATE_DIR"] = ConsumerRuntime.stateDirURL.path
-        env["OPENCLAW_CONFIG_PATH"] = ConsumerRuntime.configURL.path
-        env["OPENCLAW_GATEWAY_PORT"] = "\(ConsumerRuntime.gatewayPort)"
-        env["OPENCLAW_GATEWAY_BIND"] = ConsumerRuntime.gatewayBind
-        env["OPENCLAW_LOG_DIR"] = ConsumerRuntime.logsDirURL.path
-        env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] = "1"
-        // The consumer app and consumer gateway intentionally use different launchd labels.
-        // If we let the CLI derive the label from OPENCLAW_PROFILE=consumer, it will install
-        // the gateway service as ai.openclaw.consumer and collide with the app's own label.
+        env["OPENCLAW_STATE_DIR"] = stateDir.path
+        env["OPENCLAW_CONFIG_PATH"] = configURL.path
+        env["OPENCLAW_GATEWAY_PORT"] = "\(gatewayPort)"
+        env["OPENCLAW_GATEWAY_BIND"] = flavor.defaultGatewayBind
+        env["OPENCLAW_LOG_DIR"] = logsDir.path
+        // Force the CLI to target the app flavor's gateway label instead of deriving a stale
+        // label from inherited profile/env state.
         env["OPENCLAW_LAUNCHD_LABEL"] = gatewayLaunchdLabel
+        if flavor.isConsumer {
+            env["OPENCLAW_PROFILE"] = ConsumerRuntime.profile
+            env["OPENCLAW_HOME"] = ConsumerRuntime.runtimeRootURL.path
+            env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] = "1"
+        }
         if let projectRootHint, !projectRootHint.isEmpty {
             env["OPENCLAW_FORK_ROOT"] = projectRootHint
         }
@@ -210,3 +303,20 @@ extension GatewayLaunchAgentManager {
         TextSummarySupport.summarizeLastLine(text)
     }
 }
+
+#if DEBUG
+extension GatewayLaunchAgentManager {
+    static func _testDesiredEnableAction(
+        loaded: Bool?,
+        hasPlist: Bool,
+        matchesExpectedEntrypoint: Bool = true) -> DesiredAction
+    {
+        // A stale plist is worse than a missing plist because it quietly boots the wrong
+        // worktree. Force reinstall before considering restart/start.
+        if hasPlist, !matchesExpectedEntrypoint { return .install }
+        if loaded == true { return .start }
+        if hasPlist { return .start }
+        return .install
+    }
+}
+#endif

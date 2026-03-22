@@ -61,7 +61,7 @@ enum CLIInstaller {
     }
 
     private static func installPrefix() -> String {
-        ConsumerRuntime.installPrefixURL.path
+        OpenClawPaths.canonicalStateDirURL(for: AppFlavor.current).path
     }
 
     private static func installScriptCommand(version: String, prefix: String) -> [String] {

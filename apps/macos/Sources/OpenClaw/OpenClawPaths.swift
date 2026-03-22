@@ -17,15 +17,54 @@ enum OpenClawPaths {
     private static let configPathEnv = ["OPENCLAW_CONFIG_PATH"]
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
 
-    private static func legacyStateDirURL(home: URL) -> URL {
-        home.appendingPathComponent(AppFlavor.current.defaultStateDirName, isDirectory: true)
+    private static func legacyStateDirURL(home: URL, flavor: AppFlavor) -> URL {
+        home.appendingPathComponent(flavor.defaultStateDirName, isDirectory: true)
     }
 
-    private static func consumerPreferredStateDirURL(home: URL) -> URL {
+    private static func consumerPreferredStateDirURL(home: URL, flavor: AppFlavor) -> URL {
         home
             .appendingPathComponent("Library/Application Support", isDirectory: true)
-            .appendingPathComponent(AppFlavor.current.appName, isDirectory: true)
+            .appendingPathComponent(flavor.appName, isDirectory: true)
             .appendingPathComponent(".openclaw", isDirectory: true)
+    }
+
+    private static func defaultStateDirURL(home: URL, flavor: AppFlavor) -> URL {
+        switch flavor {
+        case .standard:
+            // The standard macOS app shares the founder/default CLI runtime on ~/.openclaw.
+            // That is the lane the main app and main bot are supposed to control together.
+            return self.legacyStateDirURL(home: home, flavor: flavor)
+        case .consumer:
+            // Consumer moved to Application Support to avoid colliding with founder state.
+            // Keep reading the older ~/.openclaw-consumer path if it already exists so local
+            // tests don't silently fork themselves into a second consumer runtime root.
+            let preferred = self.consumerPreferredStateDirURL(home: home, flavor: flavor)
+            let legacy = self.legacyStateDirURL(home: home, flavor: flavor)
+            if FileManager.default.fileExists(atPath: legacy.path) {
+                return legacy
+            }
+            return preferred
+        }
+    }
+
+    static func canonicalStateDirURL(for flavor: AppFlavor) -> URL {
+        self.defaultStateDirURL(home: FileManager.default.homeDirectoryForCurrentUser, flavor: flavor)
+    }
+
+    static func canonicalConfigURL(for flavor: AppFlavor) -> URL {
+        let dir = self.canonicalStateDirURL(for: flavor)
+        if let existing = self.resolveConfigCandidate(in: dir) {
+            return existing
+        }
+        return dir.appendingPathComponent("openclaw.json", isDirectory: false)
+    }
+
+    static func canonicalWorkspaceURL(for flavor: AppFlavor) -> URL {
+        self.canonicalStateDirURL(for: flavor).appendingPathComponent("workspace", isDirectory: true)
+    }
+
+    static func canonicalLogsDirURL(for flavor: AppFlavor) -> URL {
+        self.canonicalStateDirURL(for: flavor).appendingPathComponent("logs", isDirectory: true)
     }
 
     static var stateDirURL: URL {
@@ -38,7 +77,7 @@ enum OpenClawPaths {
             return URL(fileURLWithPath: home, isDirectory: true)
                 .appendingPathComponent(".openclaw", isDirectory: true)
         }
-        return ConsumerRuntime.stateDirURL
+        return self.canonicalStateDirURL(for: AppFlavor.current)
     }
 
     private static func resolveConfigCandidate(in dir: URL) -> URL? {
@@ -57,10 +96,14 @@ enum OpenClawPaths {
         if let existing = self.resolveConfigCandidate(in: self.stateDirURL) {
             return existing
         }
-        return ConsumerRuntime.configURL
+        return self.stateDirURL.appendingPathComponent("openclaw.json", isDirectory: false)
     }
 
     static var workspaceURL: URL {
-        ConsumerRuntime.workspaceURL
+        self.stateDirURL.appendingPathComponent("workspace", isDirectory: true)
+    }
+
+    static var logsDirURL: URL {
+        self.stateDirURL.appendingPathComponent("logs", isDirectory: true)
     }
 }

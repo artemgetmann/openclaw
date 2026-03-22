@@ -7,7 +7,7 @@ enum LogLocator {
         {
             return URL(fileURLWithPath: override)
         }
-        return ConsumerRuntime.logsDirURL
+        return OpenClawPaths.logsDirURL
     }
 
     private static var stdoutLog: URL {

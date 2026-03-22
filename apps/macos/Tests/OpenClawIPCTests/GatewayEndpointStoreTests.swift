@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -24,6 +25,13 @@ struct GatewayEndpointStoreTests {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return defaults
+    }
+
+    private func makeTempStateDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-gateway-endpoint-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
     }
 
     @Test func `resolve gateway token prefers env and falls back to launchd`() {
@@ -90,70 +98,109 @@ struct GatewayEndpointStoreTests {
         #expect(password == "launchd-pass")
     }
 
-    @Test func `connection mode resolver prefers config mode over defaults`() {
+    @MainActor
+    @Test func `connection mode resolver prefers config mode over defaults`() async {
         let defaults = self.makeDefaults()
-        defaults.set("remote", forKey: connectionModeKey)
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "standard",
+        ]) {
+            defaults.set("remote", forKey: connectionModeKey)
 
-        let root: [String: Any] = [
-            "gateway": [
-                "mode": " local ",
-            ],
-        ]
-
-        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
-        #expect(resolved.mode == .local)
-    }
-
-    @Test func `connection mode resolver trims config mode`() {
-        let defaults = self.makeDefaults()
-        defaults.set("local", forKey: connectionModeKey)
-
-        let root: [String: Any] = [
-            "gateway": [
-                "mode": " remote ",
-            ],
-        ]
-
-        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
-        #expect(resolved.mode == .remote)
-    }
-
-    @Test func `connection mode resolver falls back to defaults when missing config`() {
-        let defaults = self.makeDefaults()
-        defaults.set("remote", forKey: connectionModeKey)
-
-        let resolved = ConnectionModeResolver.resolve(root: [:], defaults: defaults)
-        #expect(resolved.mode == .remote)
-    }
-
-    @Test func `connection mode resolver falls back to defaults on unknown config`() {
-        let defaults = self.makeDefaults()
-        defaults.set("local", forKey: connectionModeKey)
-
-        let root: [String: Any] = [
-            "gateway": [
-                "mode": "staging",
-            ],
-        ]
-
-        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
-        #expect(resolved.mode == .local)
-    }
-
-    @Test func `connection mode resolver prefers remote URL when mode missing`() {
-        let defaults = self.makeDefaults()
-        defaults.set("local", forKey: connectionModeKey)
-
-        let root: [String: Any] = [
-            "gateway": [
-                "remote": [
-                    "url": " ws://umbrel:18789 ",
+            let root: [String: Any] = [
+                "gateway": [
+                    "mode": " local ",
                 ],
-            ],
-        ]
+            ]
 
-        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
-        #expect(resolved.mode == .remote)
+            let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+            #expect(resolved.mode == .local)
+        }
+    }
+
+    @MainActor
+    @Test func `connection mode resolver trims config mode`() async {
+        let defaults = self.makeDefaults()
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "standard",
+        ]) {
+            defaults.set("local", forKey: connectionModeKey)
+
+            let root: [String: Any] = [
+                "gateway": [
+                    "mode": " remote ",
+                ],
+            ]
+
+            let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+            #expect(resolved.mode == .remote)
+        }
+    }
+
+    @MainActor
+    @Test func `connection mode resolver falls back to defaults when missing config`() async {
+        let defaults = self.makeDefaults()
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "standard",
+        ]) {
+            defaults.set("remote", forKey: connectionModeKey)
+
+            let resolved = ConnectionModeResolver.resolve(root: [:], defaults: defaults)
+            #expect(resolved.mode == .remote)
+        }
+    }
+
+    @MainActor
+    @Test func `connection mode resolver falls back to defaults on unknown config`() async {
+        let defaults = self.makeDefaults()
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "standard",
+        ]) {
+            defaults.set("local", forKey: connectionModeKey)
+
+            let root: [String: Any] = [
+                "gateway": [
+                    "mode": "staging",
+                ],
+            ]
+
+            let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+            #expect(resolved.mode == .local)
+        }
+    }
+
+    @MainActor
+    @Test func `connection mode resolver prefers remote URL when mode missing`() async {
+        let defaults = self.makeDefaults()
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "standard",
+        ]) {
+            defaults.set("local", forKey: connectionModeKey)
+
+            let root: [String: Any] = [
+                "gateway": [
+                    "remote": [
+                        "url": " ws://umbrel:18789 ",
+                    ],
+                ],
+            ]
+
+            let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+            #expect(resolved.mode == .remote)
+        }
+    }
+
+    @MainActor
+    @Test func `connection mode resolver keeps consumer onboarding local without profile env`() async {
+        let defaults = self.makeDefaults()
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_PROFILE": nil,
+        ]) {
+            let resolved = ConnectionModeResolver.resolve(root: [:], defaults: defaults)
+            #expect(resolved.mode == .local)
+            #expect(resolved.source == .onboarding)
+        }
     }
 
     @Test func `resolve local gateway host uses loopback for auto even with tailnet`() {
@@ -192,7 +239,8 @@ struct GatewayEndpointStoreTests {
         #expect(host == "192.168.1.10")
     }
 
-    @Test func `local config uses local gateway auth and host resolution`() {
+    @MainActor
+    @Test func `standard local config suppresses shared token and keeps host resolution`() async {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: [:],
             token: "launchd-token",
@@ -208,15 +256,115 @@ struct GatewayEndpointStoreTests {
             ],
         ]
 
-        let config = GatewayEndpointStore._testLocalConfig(
-            root: root,
-            env: [:],
-            launchdSnapshot: snapshot,
-            tailscaleIP: "100.64.1.8")
+        let stateDir = try! self.makeTempStateDir()
+        try? FileManager.default.removeItem(at: stateDir)
+        try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
 
-        #expect(config.url.absoluteString == "wss://100.64.1.8:18789")
-        #expect(config.token == "launchd-token")
-        #expect(config.password == "launchd-pass")
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "standard",
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_HOME": nil,
+            "OPENCLAW_CONFIG_PATH": nil,
+        ]) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: "paired-token")
+
+            let config = GatewayEndpointStore._testLocalConfig(
+                root: root,
+                env: [:],
+                launchdSnapshot: snapshot,
+                tailscaleIP: "100.64.1.8")
+
+            #expect(config.url.absoluteString == "wss://100.64.1.8:18789")
+            #expect(config.token == nil)
+            #expect(config.password == nil)
+        }
+    }
+
+    @MainActor
+    @Test func `standard local config falls back to shared token when device auth store is mismatched`() async {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: [:],
+            token: "launchd-token",
+            password: "launchd-pass")
+        let root: [String: Any] = [
+            "gateway": [
+                "bind": "loopback",
+            ],
+        ]
+
+        let stateDir = try! self.makeTempStateDir()
+        try? FileManager.default.removeItem(at: stateDir)
+        try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+
+        try! await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "standard",
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_HOME": nil,
+            "OPENCLAW_CONFIG_PATH": nil,
+        ]) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            let authURL = stateDir
+                .appendingPathComponent("identity", isDirectory: true)
+                .appendingPathComponent("device-auth.json", isDirectory: false)
+            try FileManager.default.createDirectory(
+                at: authURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let mismatched: [String: Any] = [
+                "version": 1,
+                "deviceId": "\(identity.deviceId)-stale",
+                "tokens": [
+                    "operator": [
+                        "token": "stale-paired-token",
+                        "role": "operator",
+                        "scopes": [],
+                        "updatedAtMs": 1,
+                    ],
+                ],
+            ]
+            let data = try JSONSerialization.data(withJSONObject: mismatched, options: [.sortedKeys])
+            try data.write(to: authURL, options: [.atomic])
+
+            let config = GatewayEndpointStore._testLocalConfig(
+                root: root,
+                env: [:],
+                launchdSnapshot: snapshot,
+                tailscaleIP: nil)
+
+            #expect(config.url.absoluteString == "ws://127.0.0.1:18789")
+            #expect(config.token == "launchd-token")
+            #expect(config.password == "launchd-pass")
+        }
+    }
+
+    @MainActor
+    @Test func `consumer local config still uses shared token`() async {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: [:],
+            token: "launchd-token",
+            password: "launchd-pass")
+        let root: [String: Any] = [
+            "gateway": [
+                "bind": "loopback",
+            ],
+        ]
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let config = GatewayEndpointStore._testLocalConfig(
+                root: root,
+                env: [:],
+                launchdSnapshot: snapshot,
+                tailscaleIP: nil)
+
+            #expect(config.url.absoluteString == "ws://127.0.0.1:19001")
+            #expect(config.token == "launchd-token")
+            #expect(config.password == "launchd-pass")
+        }
     }
 
     @Test func `dashboard URL uses local base path in local mode`() throws {

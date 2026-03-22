@@ -423,7 +423,9 @@ struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let failure = self.gatewayManager.lastFailureReason {
+            if self.gatewayStatus.kind != .ok,
+               let failure = self.gatewayManager.lastFailureReason
+            {
                 Text("Last failure: \(failure)")
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -448,6 +450,12 @@ struct GeneralSettings: View {
                 GatewayEnvironment.check()
             }.value
             self.gatewayStatus = status
+            // When the environment probe says the gateway lane is healthy again, clear any
+            // stale failure copy from earlier recovery attempts so the General pane stops
+            // showing contradictory red warnings next to a healthy backend.
+            if status.kind == .ok {
+                self.gatewayManager.clearLastFailure()
+            }
         }
     }
 
@@ -565,7 +573,7 @@ extension GeneralSettings {
 
             HStack(spacing: 10) {
                 Button("Retry now") {
-                    Task { await HealthStore.shared.refresh(onDemand: true) }
+                    Task { await self.retryGatewayAndHealth() }
                 }
                 .disabled(self.healthStore.isRefreshing)
 
@@ -575,6 +583,21 @@ extension GeneralSettings {
             }
             .font(.caption)
         }
+    }
+
+    @MainActor
+    private func retryGatewayAndHealth() async {
+        // "Retry now" must do more than re-measure a dead gateway. In local mode,
+        // kick the consumer launchd lane first, then refresh the endpoint/control
+        // channel, then re-run health + channels so the UI has a chance to recover.
+        if self.state.connectionMode == .local {
+            GatewayProcessManager.shared.recoverAfterConnectionLoss(reason: "manual retry")
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            await GatewayEndpointStore.shared.refresh()
+            await ControlChannel.shared.configure()
+            await ChannelsStore.shared.refresh(probe: true)
+        }
+        await HealthStore.shared.refresh(onDemand: true)
     }
 
     @MainActor

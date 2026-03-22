@@ -508,6 +508,12 @@ public actor GatewayChannelActor {
             (includeDeviceIdentity && deviceId != nil)
                 ? DeviceAuthStore.loadToken(deviceId: deviceId!, role: role)?.token
                 : nil
+        let shouldAttachStoredDeviceToken =
+            includeDeviceIdentity &&
+            storedToken != nil &&
+            explicitToken != nil &&
+            explicitPassword == nil &&
+            self.isTrustedDeviceRetryEndpoint()
         let shouldUseDeviceRetryToken =
             includeDeviceIdentity && self.pendingDeviceTokenRetry &&
             storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
@@ -516,7 +522,11 @@ public actor GatewayChannelActor {
                 (includeDeviceIdentity && explicitPassword == nil &&
                     (explicitBootstrapToken == nil || storedToken != nil) ? storedToken : nil)
         let authBootstrapToken = authToken == nil ? explicitBootstrapToken : nil
-        let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
+        // For trusted localhost control lanes, attach the paired device token on the first
+        // connect attempt too. This keeps the main app recoverable when a stale shared token
+        // exists in config/env, without forcing an immediate hard cut-over away from shared-token
+        // auth for healthy founder setups.
+        let authDeviceToken = (shouldUseDeviceRetryToken || shouldAttachStoredDeviceToken) ? storedToken : nil
         let authSource: GatewayAuthSource
         if authDeviceToken != nil || (explicitToken == nil && authToken != nil) {
             authSource = .deviceToken
