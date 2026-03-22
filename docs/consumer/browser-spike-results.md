@@ -124,6 +124,14 @@ Legend:
       1. `doctor`
       2. `smoke-open https://example.com`
       3. `open-emirates`
+  - Kernel status is now: infra validated, agent integration deferred.
+    - `doctor` passes with expected config.
+    - remote session creation + CDP attach works.
+    - page-open smoke works for both `https://example.com` and `https://www.emirates.com/english/`.
+    - this is enough proof to keep Kernel on the board without spending time on integration before the current browser lanes are benchmarked harder.
+  - Kernel should not be benchmarked further with handcrafted DOM scripts.
+    - that would measure our Playwright scripting, not OpenClaw agent capability.
+    - if we revisit Kernel seriously, the next step is a minimal OpenClaw integration, not a one-off scraper.
 
 ## Recommended next benchmark set
 
@@ -135,6 +143,35 @@ Legend:
   - purpose: SSO friction, popup/tab handling, anti-bot/login challenge behavior
 - Emirates baseline
   - purpose: keep the already-proven hostile travel benchmark as the reference lane
+
+## Next benchmark matrix to execute
+
+Use this exact comparison order before expanding scope:
+
+1. `profile=user` cloned-real-Chrome lane
+2. `profile=openclaw` managed lane
+3. `Kernel` stays infra-validated only; do not count it as an agent benchmark lane yet
+
+Use these exact task definitions:
+
+- Gmail read-first-email
+  - account: sacrificial Google account only
+  - success: inbox loads, first visible email is opened, sender + subject are reported
+- Reddit DM / reply
+  - account: throwaway or low-risk account only
+  - success: inbox/DM UI loads, one target thread opens, draft or safe reply action reaches visible composer state
+- Google Sign-In
+  - account: throwaway Google account only
+  - success: sign-in flow reaches logged-in destination page without ambiguous stuck state
+- Emirates baseline
+  - route: `DPS -> DXB`
+  - date: `2026-03-22`
+  - success: visible flight options load and top visible options are reported
+
+Execution rule:
+
+- Run the two OpenClaw lanes first.
+- Only return to Kernel after the direct OpenClaw comparison is complete and documented.
 
 ## Current recommendation
 
