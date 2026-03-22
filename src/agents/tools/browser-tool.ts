@@ -308,8 +308,9 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
-      'For the logged-in user browser on the local host, use profile="user". Chrome (v144+) must be running. Use only when existing logins/cookies matter and the user is present.',
+      'Browser choice: prefer profile="user" for signed-in sites, hostile sites, or any flow where existing cookies/logins matter.',
+      'Use profile="openclaw" for public browsing, clean isolated runs, or as an explicit fallback when session reuse is not required.',
+      'For the logged-in user browser on the local host, use profile="user". Chrome (v144+) must be running. Do not silently fall back to profile="openclaw" when the task depends on existing logins/cookies; surface the blocker instead.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',

@@ -41,6 +41,12 @@ Use these documents in this order when there is any ambiguity:
   - future 1Password integration
   - one-time post-update user education for new credential tooling so users understand what changed and how to turn it on
   - the goal is to let signed-in tasks work even when the user is away from the computer, without coupling that flow to the live daily Chrome process
+- Browser setup UX is a separate follow-up workstream:
+  - what to do when Google Chrome is not installed
+  - how to detect the right Chrome profile without asking users to inspect internals
+  - how to handle ambiguous multi-profile setups cleanly
+  - how the app should explain cloned-browser behavior and isolation in Apple-simple language
+  - whether setup should be app-driven, agent-guided, or a hybrid
 
 ## Workstream registry (single source)
 
@@ -204,16 +210,27 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
     - MFA strategy
     - future 1Password integration
     - one-time post-update announcement / setup education for credential tooling
-13. Treat Kernel as infra-validated and integration-deferred until the current OpenClaw lanes have been benchmarked on the next task set.
-14. Use the repo-local Kernel smoke helper instead of ad-hoc shell experiments:
+13. Treat browser setup UX as a product follow-up:
+    - detect when Chrome is missing
+    - guide install cleanly
+    - detect or help choose the right profile
+    - keep the setup flow Apple-simple for non-technical users
+    - explain cloned-browser isolation in simple language
+    - recover cleanly if no usable signed-in browser lane exists
+14. After the consumer prompt/routing update lands, run an end-to-end check on the founder's main Jarvis Claw bot to verify it actually prefers the cloned Chrome lane in live usage.
+15. Treat Kernel as infra-validated and integration-deferred until the current OpenClaw lanes have been benchmarked on the next task set.
+16. Use the repo-local Kernel smoke helper instead of ad-hoc shell experiments:
     - `scripts/repro/kernel-browser-smoke.sh doctor`
     - `scripts/repro/kernel-browser-smoke.sh smoke-open https://example.com`
     - `scripts/repro/kernel-browser-smoke.sh open-emirates`
-15. Execute the next benchmark wave with exact tasks instead of vague categories:
+17. Execute the next benchmark wave with exact tasks instead of vague categories:
     - Gmail read-first-email on a sacrificial account
     - Reddit DM/reply on a throwaway or low-risk account
     - Google Sign-In on a throwaway account
     - Emirates `DPS -> DXB` on `2026-03-22`
+18. Keep fallback behavior simple:
+    - do not silently switch from `profile="user"` to `profile="openclaw"` when the task depends on existing login state
+    - surface the blocker and offer the fallback explicitly instead
 
 ### Current benchmark wave status (2026-03-22)
 
