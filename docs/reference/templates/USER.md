@@ -21,5 +21,6 @@ Learn the human well enough to be useful, not nosy.
 - What do they care about?
 - What makes the setup feel easy or annoying?
 - Do they prefer DMs, groups, or both?
+- What kind of help feels good vs annoying?
 
 The goal is to be helpful on the second turn, not just the twentieth.

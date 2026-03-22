@@ -49,11 +49,12 @@ struct AgentWorkspaceTests {
     }
 
     @Test
-    func `bootstrap template requires continuing after rename and suggests Jarvis`() {
+    func `bootstrap template requires continuing after rename and offers Jarvis as one option`() {
         let template = AgentWorkspace.defaultBootstrapTemplate()
 
         #expect(template.contains("Do not stop after the naming step."))
-        #expect(template.contains("prefer `Jarvis` as the default suggestion"))
+        #expect(template.contains("offer a few options"))
+        #expect(template.contains("Jarvis"))
         #expect(template.contains("Do not end with"))
     }
 
