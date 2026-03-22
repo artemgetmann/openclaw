@@ -119,7 +119,9 @@ prepare_clone() {
 
   # Chrome requires a non-default user-data-dir for remote debugging on macOS.
   # We point it at the clone and keep the original profile name inside that dir.
-  open -na "Google Chrome" --args \
+  # Use the explicit Chrome binary path instead of `open -na` so this helper
+  # works predictably from non-interactive shells and sandboxed tool runs.
+  "${CHROME_BIN}" \
     --remote-debugging-port="${DEBUG_CHROME_PORT}" \
     --user-data-dir="${CLONE_CHROME_DIR}" \
     --profile-directory="${SOURCE_PROFILE_NAME}" \
