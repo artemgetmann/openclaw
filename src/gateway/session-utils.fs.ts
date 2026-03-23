@@ -14,7 +14,7 @@ import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
-import { stripEnvelope } from "./chat-sanitize.js";
+import { stripEnvelope, stripEnvelopeFromMessage } from "./chat-sanitize.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
 type SessionTitleFields = {
@@ -92,7 +92,10 @@ export function readSessionMessages(
     try {
       const parsed = JSON.parse(line);
       if (parsed?.message) {
-        messages.push(parsed.message);
+        // Scrub previously persisted user-visible messages on read so old
+        // polluted transcripts stop leaking internal prompt scaffolding in
+        // local/web/macOS chat surfaces.
+        messages.push(stripEnvelopeFromMessage(parsed.message));
         continue;
       }
 

@@ -202,6 +202,34 @@ describe("telegramPlugin duplicate token guard", () => {
     );
   });
 
+  it("skips startup probe in consumer minimal mode", async () => {
+    const prev = process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP;
+    process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP = "1";
+    try {
+      const { monitorTelegramProvider, probeTelegram } = installGatewayRuntime({
+        probeOk: true,
+        botUsername: "opsbot",
+      });
+
+      await telegramPlugin.gateway!.startAccount!(
+        createStartAccountCtx({
+          cfg: createCfg(),
+          accountId: "ops",
+          runtime: createRuntimeEnv(),
+        }),
+      );
+
+      expect(probeTelegram).not.toHaveBeenCalled();
+      expect(monitorTelegramProvider).toHaveBeenCalledTimes(1);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP;
+      } else {
+        process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP = prev;
+      }
+    }
+  });
+
   it("logs startup bot identity, token source, and fingerprint", async () => {
     installGatewayRuntime({
       probeOk: true,

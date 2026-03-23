@@ -33,6 +33,19 @@ Sender labels:
 example
 <<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`;
 
+const BOOTSTRAP_NAME_SUGGESTIONS_BLOCK = `Bootstrap name suggestions (derived from untrusted sender metadata; use these exact options if BOOTSTRAP.md is still active):
+\`\`\`json
+{
+  "suggestions": ["Artem", "Art", "Artem Getman", "something else"],
+  "source": "sender_name"
+}
+\`\`\``;
+
+const SOURCE_RECEIPT_BLOCK = `[Source Receipt]
+bridge=openclaw-acp
+originHost=jetbook
+[/Source Receipt]`;
+
 describe("stripInboundMetadata", () => {
   it("fast-path: returns same string when no sentinels present", () => {
     const text = "Hello, how are you?";
@@ -66,6 +79,7 @@ describe("stripInboundMetadata", () => {
       "Replied message (untrusted, for context):",
       "Forwarded message context (untrusted metadata):",
       "Chat history since last reply (untrusted, for context):",
+      "Bootstrap name suggestions (derived from untrusted sender metadata; use these exact options if BOOTSTRAP.md is still active):",
     ];
     for (const sentinel of sentinels) {
       const input = `${sentinel}\n\`\`\`json\n{"x": 1}\n\`\`\`\n\nUser message`;
@@ -95,6 +109,21 @@ describe("stripInboundMetadata", () => {
   it("strips trailing Untrusted context metadata suffix blocks", () => {
     const input = `Actual message body\n\n${UNTRUSTED_CONTEXT_BLOCK}`;
     expect(stripInboundMetadata(input)).toBe("Actual message body");
+  });
+
+  it("strips a leading source receipt block", () => {
+    const input = `${SOURCE_RECEIPT_BLOCK}\n\nhello`;
+    expect(stripInboundMetadata(input)).toBe("hello");
+  });
+
+  it("strips the local system preamble line before user text", () => {
+    const input = `System: [2026-03-22 13:05:01 GMT+8] Node: MacBook Pro (JetBook) (192.168.25.137) · app 2026.3.14 (2026031490) · mode local\n\nhello`;
+    expect(stripInboundMetadata(input)).toBe("hello");
+  });
+
+  it("strips combined source receipt, bootstrap suggestions, and system preamble", () => {
+    const input = `${SOURCE_RECEIPT_BLOCK}\n\nSystem: [2026-03-22 13:05:01 GMT+8] Node: MacBook Pro (JetBook) (192.168.25.137) · app 2026.3.14 (2026031490) · mode local\n\n${BOOTSTRAP_NAME_SUGGESTIONS_BLOCK}\n\nhi`;
+    expect(stripInboundMetadata(input)).toBe("hi");
   });
 
   it("does not strip plain user text that starts with untrusted context words", () => {

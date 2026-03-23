@@ -3,13 +3,20 @@ import Foundation
 enum GatewayLaunchAgentManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
 
+    enum DesiredAction: Equatable {
+        case install
+        case start
+        case restart
+        case stop
+        case uninstall
+    }
+
     private static var disableLaunchAgentMarkerURL: URL {
         OpenClawPaths.stateDirURL.appendingPathComponent("disable-launchagent")
     }
 
     private static var plistURL: URL {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
+        ConsumerRuntime.gatewayLaunchAgentPlistURL
     }
 
     static func isLaunchAgentWriteDisabled() -> Bool {
@@ -60,23 +67,39 @@ enum GatewayLaunchAgentManager {
         }
 
         if enabled {
-            self.logger.info("launchd enable requested via CLI port=\(port)")
-            return await self.runDaemonCommand([
-                "install",
-                "--force",
-                "--port",
-                "\(port)",
-                "--runtime",
-                "node",
-            ])
+            let action = await self.desiredEnableAction()
+            self.logger.info("launchd enable requested action=\(String(describing: action), privacy: .public) port=\(port)")
+            switch action {
+            case .restart:
+                if let error = await self.runDaemonCommand(["restart"], timeout: 20, quiet: true) {
+                    self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
+                } else {
+                    return nil
+                }
+            case .start:
+                if let error = await self.runDaemonCommand(["start"], timeout: 20, quiet: true) {
+                    self.logger.warning("launchd start failed; falling back to install: \(error, privacy: .public)")
+                } else {
+                    return nil
+                }
+            case .install, .stop, .uninstall:
+                break
+            }
+
+            return await self.install(port: port)
         }
 
-        self.logger.info("launchd disable requested via CLI")
-        return await self.runDaemonCommand(["uninstall"])
+        self.logger.info("launchd stop requested via CLI")
+        return await self.runDaemonCommand(["stop"], timeout: 20)
     }
 
     static func kickstart() async {
         _ = await self.runDaemonCommand(["restart"], timeout: 20)
+    }
+
+    static func uninstall() async -> String? {
+        self.logger.info("launchd uninstall requested via CLI")
+        return await self.runDaemonCommand(["uninstall"], timeout: 20)
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
@@ -116,6 +139,50 @@ extension GatewayLaunchAgentManager {
         return loaded
     }
 
+    private static func desiredEnableAction() async -> DesiredAction {
+        let loaded = await self.readDaemonLoaded()
+        let launchAgentMatchesCurrentEntrypoint = self.launchAgentMatchesCurrentEntrypoint(
+            snapshot: self.launchdConfigSnapshot())
+        let action = self._testDesiredEnableAction(
+            loaded: loaded,
+            hasPlist: self.launchdConfigSnapshot() != nil,
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
+        switch action {
+        case .restart:
+            // If the service is already registered and loaded, reinstalling it is needlessly
+            // destructive: launchd will terminate the running gateway and we briefly lose the
+            // listener on 19001. Prefer an in-place restart.
+            return .restart
+        case .start:
+            // A plist already exists under the consumer label. Try a normal start first so we
+            // re-use the registered service instead of churning install/uninstall state.
+            return .start
+        case .install, .stop, .uninstall:
+            return .install
+        }
+    }
+
+    private static func install(port: Int) async -> String? {
+        self.logger.info("launchd install requested via CLI port=\(port)")
+        return await self.runDaemonCommand([
+            "install",
+            "--force",
+            "--port",
+            "\(port)",
+            "--runtime",
+            "node",
+        ])
+    }
+
+    private static func launchAgentMatchesCurrentEntrypoint(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
+        guard let snapshot else { return false }
+        guard let expectedRoot = CommandResolver.projectRootEnvironmentHint() else { return false }
+        let expectedEntrypoint = URL(fileURLWithPath: expectedRoot, isDirectory: true)
+            .appendingPathComponent("dist/index.js")
+            .path
+        return snapshot.programArguments.contains(expectedEntrypoint)
+    }
+
     private struct CommandResult {
         let success: Bool
         let payload: Data?
@@ -147,8 +214,9 @@ extension GatewayLaunchAgentManager {
             extraArgs: self.withJsonFlag(args),
             // Launchd management must always run locally, even if remote mode is configured.
             configRoot: ["gateway": ["mode": "local"]])
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        let env = self.daemonCommandEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            projectRootHint: CommandResolver.projectRootEnvironmentHint())
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
         let parsed = self.parseDaemonJson(from: response.stdout) ?? self.parseDaemonJson(from: response.stderr)
         let ok = parsed?.object["ok"] as? Bool
@@ -172,6 +240,30 @@ extension GatewayLaunchAgentManager {
         return CommandResult(success: false, payload: payload, message: detail)
     }
 
+    static func daemonCommandEnvironment(
+        base: [String: String],
+        projectRootHint: String?) -> [String: String]
+    {
+        var env = base
+        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        env["OPENCLAW_PROFILE"] = ConsumerRuntime.profile
+        env["OPENCLAW_HOME"] = ConsumerRuntime.runtimeRootURL.path
+        env["OPENCLAW_STATE_DIR"] = ConsumerRuntime.stateDirURL.path
+        env["OPENCLAW_CONFIG_PATH"] = ConsumerRuntime.configURL.path
+        env["OPENCLAW_GATEWAY_PORT"] = "\(ConsumerRuntime.gatewayPort)"
+        env["OPENCLAW_GATEWAY_BIND"] = ConsumerRuntime.gatewayBind
+        env["OPENCLAW_LOG_DIR"] = ConsumerRuntime.logsDirURL.path
+        env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] = "1"
+        // The consumer app and consumer gateway intentionally use different launchd labels.
+        // If we let the CLI derive the label from OPENCLAW_PROFILE=consumer, it will install
+        // the gateway service as ai.openclaw.consumer and collide with the app's own label.
+        env["OPENCLAW_LAUNCHD_LABEL"] = gatewayLaunchdLabel
+        if let projectRootHint, !projectRootHint.isEmpty {
+            env["OPENCLAW_FORK_ROOT"] = projectRootHint
+        }
+        return env
+    }
+
     private static func withJsonFlag(_ args: [String]) -> [String] {
         if args.contains("--json") { return args }
         return args + ["--json"]
@@ -186,3 +278,18 @@ extension GatewayLaunchAgentManager {
         TextSummarySupport.summarizeLastLine(text)
     }
 }
+
+#if DEBUG
+extension GatewayLaunchAgentManager {
+    static func _testDesiredEnableAction(
+        loaded: Bool?,
+        hasPlist: Bool,
+        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
+    {
+        if hasPlist, !launchAgentMatchesCurrentEntrypoint { return .install }
+        if loaded == true { return .restart }
+        if hasPlist { return .start }
+        return .install
+    }
+}
+#endif

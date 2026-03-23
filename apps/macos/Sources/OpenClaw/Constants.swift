@@ -2,10 +2,10 @@ import Foundation
 
 private var defaultsPrefix: String { AppFlavor.current.defaultsPrefix }
 
-// Stable identifier used for both the macOS LaunchAgent label and Nix-managed defaults suite.
-// Consumer builds use a separate suite so they can coexist with the founder app on one Mac.
-var launchdLabel: String { AppFlavor.current.stableSuiteName }
-var gatewayLaunchdLabel: String { AppFlavor.current.gatewayLaunchLabel }
+// Keep runtime/service labels pinned to the consumer runtime authority so this branch
+// cannot silently fall back to founder labels when flavor metadata is missing.
+let launchdLabel = ConsumerRuntime.launchdLabel
+let gatewayLaunchdLabel = ConsumerRuntime.gatewayLaunchdLabel
 var onboardingVersionKey: String { "\(defaultsPrefix).onboardingVersion" }
 var onboardingSeenKey: String { "\(defaultsPrefix).onboardingSeen" }
 let currentOnboardingVersion = 7

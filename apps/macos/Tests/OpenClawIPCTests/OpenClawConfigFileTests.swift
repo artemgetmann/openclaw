@@ -91,6 +91,7 @@ struct OpenClawConfigFileTests {
         await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": nil,
             "OPENCLAW_STATE_DIR": dir,
+            "OPENCLAW_HOME": nil,
         ]) {
             #expect(OpenClawConfigFile.stateDirURL().path == dir)
             #expect(OpenClawConfigFile.url().path == "\(dir)/openclaw.json")

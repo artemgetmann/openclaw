@@ -24,19 +24,23 @@ This means the refactor and the consumer build are the same work — not two sep
 ## 2) Decisions Made (All Open Questions Resolved)
 
 ### Bot Identity Strategy
-- **Decision:** Shared bot for easy onboarding + optional BYOK (Bring Your Own Bot token) for power users
-- **Note:** BotFather has no programmatic API — bot creation is manual chat-based. Shared bot is the pragmatic default. BYOK is a settings toggle, not an onboarding step.
+
+- **Decision:** Guided BYOK (Bring Your Own Bot token) for v1
+- **Note:** BotFather has no programmatic API — bot creation is manual chat-based. Managed/shared bot is a future product seam, not part of the first consumer build.
 
 ### Local App UX
+
 - **Decision:** Rework existing desktop app (likely Electron) — menu bar + simplified full app
 - **Style:** Apple-level simplicity. Strip it down, don't add features.
 - **No web dashboard** for MVP. Telegram is the primary interface.
 
 ### Model Routing
+
 - **Decision:** Bundled API keys included in subscription + BYOK option (Cursor/Windsurf model)
 - **Not in week-1 scope.** For now, your own API keys.
 
 ### Sleep/Wake Strategy
+
 - **Decision:** Smart sleep prevention during active tasks + user education + Telegram notification when agent goes offline
 - **Implementation:** macOS power assertions (caffeinate-style) during task execution. Telegram push when agent loses connection.
 - **Messaging to users:**
@@ -45,22 +49,28 @@ This means the refactor and the consumer build are the same work — not two sep
   - "For 24/7 availability, we recommend a dedicated Mac (Mac Mini works great)"
 
 ### Safety Profiles
+
 - **Decision:** Power mode only for week-1 sprint. No confirmation gates.
 - **Later:** Add Balanced (confirm irreversible actions) and Safe profiles.
 
 ### Legal/Liability
+
 - **Decision:** Needs legal counsel. Must resolve before public launch. Not blocking for private beta.
 
 ### Billing
+
 - **Decision:** Stripe (probably). Not in scope until product works. Free during beta.
 
 ### Privacy/Data Scope
+
 - **Decision:** Avoid sensitive data for MVP. Scope to non-sensitive tasks (travel, research, drafting). User responsibility for what they expose.
 
 ### Support Model
+
 - **Decision:** Founder-led. You personally onboard and support every early user.
 
 ### Managed Mac Hosting
+
 - **Decision:** Strictly phase 2. Not in MVP scope.
 
 ---
@@ -68,24 +78,32 @@ This means the refactor and the consumer build are the same work — not two sep
 ## 3) Fork & Development Strategy
 
 ### Structure
+
 - **Source clone:** `/Users/user/Programming_Projects/openclaw`
 - **Live bot (personal):** `~/.openclaw/workspace` — DO NOT TOUCH during consumer development
+- **Consumer runtime root:** `~/Library/Application Support/OpenClaw Consumer`
+- **Consumer state/config:** `~/Library/Application Support/OpenClaw Consumer/.openclaw`
 - **Consumer work:** `consumer` branch on `artemgetmann/openclaw`
+- **Boundary:** consumer setup does not read or migrate founder runtime state in week 1.
 
 ### Convergence Plan
+
 - Current `main` = your live personal bot (complicated, works, don't break it)
 - `consumer` branch = the simplified rebuild (also becomes your personal bot when ready)
 - When `consumer` is stable → switch `~/.openclaw` to run from `consumer` → retire `main` as your daily driver
 - You end up with ONE bot, ONE codebase, that is both your personal agent AND the product
 
 ### Refactor Strategy
+
 The refactor doesn't happen on `main`. It happens as part of building `consumer`.
+
 - Branch off current `main` (so you have its working code as a starting point)
 - Aggressively simplify on `consumer` — remove everything not needed for the core loop
 - Your live bot on `main` stays untouched and working throughout
 - Periodically cherry-pick genuinely useful improvements from `main` into `consumer`
 
 ### Workflow
+
 ```sh
 # Create consumer branch (one-time)
 cd ~/Programming_Projects/openclaw
@@ -107,6 +125,7 @@ git checkout consumer && git merge main
 ```
 
 ### Rule
+
 Your personal bot stays on `main`. Consumer branch is the product. Only switch your personal bot to `consumer` when it's proven stable.
 
 ---
@@ -114,7 +133,9 @@ Your personal bot stays on `main`. Consumer branch is the product. Only switch y
 ## 4) The Week — 7-Day Sprint Plan
 
 ### Definition of Done
+
 All three must be true:
+
 1. ✅ Consumer branch exists and runs independently on port 19001
 2. ✅ Browser spike has a clear winner with benchmark data
 3. ✅ At least one killer task (flight search from Telegram) works end-to-end
@@ -126,12 +147,14 @@ All three must be true:
 **Goal:** Benchmark 4 browser approaches on 5 real tasks. Pick a winner.
 
 #### Approaches to Test
+
 1. **Browserbase** — Cloud-hosted Chrome, handles CAPTCHAs, session persistence
 2. **OpenClaw Chrome Extension** (improved) — Controls user's real Chrome, currently unreliable
 3. **Computer-use vision** (screenshots + clicks) — Like Claude Chrome under the hood
 4. **Claude Chrome approach** (investigate) — Study implementation, see what can be adapted (some sites blocked)
 
 #### Benchmark Tasks (run each on all 4 approaches)
+
 1. **Flight search + price comparison** — Search Google Flights/Kayak, compare 3+ options, report back
 2. **Fill out a web form** — Navigate to a booking/signup form, fill fields, handle dropdowns, submit
 3. **Read + summarize a webpage** — Navigate to URL, extract content, return summary
@@ -139,6 +162,7 @@ All three must be true:
 5. **Multi-step: search → compare → act** — Full workflow: search, compare 3 options, take action (add to cart, save, etc.)
 
 #### Scoring Criteria (priority order)
+
 1. **Can use user's real browser sessions?** (highest priority — logged-in state matters)
 2. **Speed** — Time to complete each task
 3. **Reliability** — % of tasks completed without failure/manual intervention
@@ -146,12 +170,15 @@ All three must be true:
 5. **Session persistence** — Does login state survive between tasks?
 
 #### Decision Framework
+
 - **Primary:** User's real Chrome browser (extension or vision-based)
 - **Fallback:** Cloud browser (Browserbase) for when local browser isn't available or fails
 - If no approach hits >80% reliability on the 5 tasks → week is about fixing the best candidate, not moving to MVP
 
 #### Spike Output
+
 A markdown doc: `browser-spike-results.md` with:
+
 - Pass/fail + time for each task × each approach
 - Screenshots of failures
 - Recommendation with rationale
@@ -164,9 +191,10 @@ A markdown doc: `browser-spike-results.md` with:
 **Goal:** Consumer branch running independently, Telegram working.
 
 #### Tasks
+
 - [ ] Create `consumer` branch from `main`
 - [ ] Strip/simplify desktop app UI (if touching it this week — may defer)
-- [ ] Set up isolated test profile (port 19001, separate OPENCLAW_HOME)
+- [ ] Set up isolated test profile (port 19001, separate consumer runtime root)
 - [ ] Verify Telegram bot works on consumer build
 - [ ] Verify logging works and is easily viewable (`openclaw logs --follow`)
 - [ ] Integrate winning browser approach from spike
@@ -179,6 +207,7 @@ A markdown doc: `browser-spike-results.md` with:
 **Goal:** "Find me flights NYC to London in April" via Telegram → get real, compared results back.
 
 #### Flow
+
 1. User sends message to Telegram bot
 2. Agent parses intent (flight search)
 3. Agent opens browser (winning approach), navigates to flight search site
@@ -188,6 +217,7 @@ A markdown doc: `browser-spike-results.md` with:
 7. (Future: user approves, agent books — not in week 1)
 
 #### Success Criteria
+
 - Works 3 out of 3 consecutive attempts
 - Results are accurate and formatted readably
 - Total time from message to results: < 3 minutes
@@ -197,27 +227,28 @@ A markdown doc: `browser-spike-results.md` with:
 
 ## 5) What's Cut from Week 1
 
-| Feature | Status | When |
-|---------|--------|------|
-| Safety profiles (Safe/Balanced) | Cut | Week 2-3 |
-| Irreversible action confirmation gate | Cut | Week 2-3 |
-| Activity timeline UI | Cut | Week 3+ |
-| Panic pause button | Cut | Week 2 |
-| Billing / Stripe integration | Cut | After product works |
-| Onboarding wizard | Cut | Week 3 |
-| Desktop app simplification | Cut (or minimal) | Week 2-3 |
-| Sleep/wake smart handling | Cut | Week 2 |
-| Telegram offline notification | Cut | Week 2 |
-| WhatsApp channel | Cut | Phase 2 |
-| Managed Mac hosting | Cut | Phase 2 |
-| Legal/ToS | Cut | Before public launch |
-| BYOK (bot token or API keys) | Cut | Week 3+ |
+| Feature                               | Status             | When                                                     |
+| ------------------------------------- | ------------------ | -------------------------------------------------------- |
+| Safety profiles (Safe/Balanced)       | Cut                | Week 2-3                                                 |
+| Irreversible action confirmation gate | Cut                | Week 2-3                                                 |
+| Activity timeline UI                  | Cut                | Week 3+                                                  |
+| Panic pause button                    | Cut                | Week 2                                                   |
+| Billing / Stripe integration          | Cut                | After product works                                      |
+| Onboarding wizard                     | Cut                | Week 3                                                   |
+| Desktop app simplification            | Cut (or minimal)   | Week 2-3                                                 |
+| Sleep/wake smart handling             | Cut                | Week 2                                                   |
+| Telegram offline notification         | Cut                | Week 2                                                   |
+| WhatsApp channel                      | Cut                | Phase 2                                                  |
+| Managed Mac hosting                   | Cut                | Phase 2                                                  |
+| Legal/ToS                             | Cut                | Before public launch                                     |
+| BYOK (bot token or API keys)          | Partially included | Telegram bot token setup is v1; API-key BYOK stays later |
 
 ---
 
 ## 6) Onboarding Vision (Post Week 1)
 
 Guided wizard with interactive "try this" tasks:
+
 1. Connect Telegram → verify bot responds
 2. Choose from curated first tasks:
    - "Find me flights to [destination]"
@@ -232,11 +263,11 @@ Target: First value in < 10 minutes.
 
 ## 7) Pricing (Unchanged from Brief — Not Active Yet)
 
-| Tier | Price | Scope |
-|------|-------|-------|
-| Starter (Local) | $29/mo | 1 device, Telegram, bundled API |
-| Pro (Local+) | $79/mo | 2-3 devices, priority, BYOK |
-| Concierge (Managed Mac) | $249-499/mo | Phase 2 |
+| Tier                    | Price       | Scope                           |
+| ----------------------- | ----------- | ------------------------------- |
+| Starter (Local)         | $29/mo      | 1 device, Telegram, bundled API |
+| Pro (Local+)            | $79/mo      | 2-3 devices, priority, BYOK     |
+| Concierge (Managed Mac) | $249-499/mo | Phase 2                         |
 
 ---
 
@@ -254,7 +285,7 @@ Target: First value in < 10 minutes.
 
 1. **Legal counsel** — liability boundaries for autonomous agent actions
 2. **Billing integration** — Stripe setup, subscription management
-3. **Bot identity** — shared bot infrastructure at scale (rate limits, Telegram ToS)
+3. **Bot identity** — managed/shared bot infrastructure at scale (rate limits, Telegram ToS)
 4. **Hardware guidance** — finalize messaging around Mac Mini vs laptop trade-offs
 5. **Sensitive data policy** — what the agent should/shouldn't access, data retention
 

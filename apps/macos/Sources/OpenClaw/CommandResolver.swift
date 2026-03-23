@@ -112,18 +112,28 @@ enum CommandResolver {
     }
 
     private static func openclawManagedPaths(home: URL) -> [String] {
-        let bases = [
-            home.appendingPathComponent(".openclaw"),
-        ]
+        var bases: [URL] = []
+        if let rawStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawStateDir.isEmpty
+        {
+            bases.append(URL(fileURLWithPath: rawStateDir, isDirectory: true))
+        }
+        bases.append(home.appendingPathComponent(".openclaw"))
         var paths: [String] = []
+        var seen = Set<String>()
         for base in bases {
             let bin = base.appendingPathComponent("bin")
             let nodeBin = base.appendingPathComponent("tools/node/bin")
             if FileManager().fileExists(atPath: bin.path) {
-                paths.append(bin.path)
+                if seen.insert(bin.path).inserted {
+                    paths.append(bin.path)
+                }
             }
             if FileManager().fileExists(atPath: nodeBin.path) {
-                paths.append(nodeBin.path)
+                if seen.insert(nodeBin.path).inserted {
+                    paths.append(nodeBin.path)
+                }
             }
         }
         return paths
@@ -259,17 +269,13 @@ enum CommandResolver {
         }
 
         let root = self.projectRoot()
-        if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
-            return [openclawPath, subcommand] + extraArgs
-        }
-        if let openclawPath = self.openclawExecutable(searchPaths: searchPaths) {
-            return [openclawPath, subcommand] + extraArgs
-        }
-
         let runtimeResult = self.runtimeResolution(searchPaths: searchPaths)
         switch runtimeResult {
         case let .success(runtime):
             if let entry = self.gatewayEntrypoint(in: root) {
+                // When we know the current repo root, prefer its built entrypoint over any
+                // PATH-level wrapper. This keeps the mac app pinned to the active worktree
+                // instead of a stale hoisted/global `openclaw` package.
                 return self.makeRuntimeCommand(
                     runtime: runtime,
                     entrypoint: entry,
@@ -278,6 +284,13 @@ enum CommandResolver {
             }
         case .failure:
             break
+        }
+
+        if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
+            return [openclawPath, subcommand] + extraArgs
+        }
+        if let openclawPath = self.openclawExecutable(searchPaths: searchPaths) {
+            return [openclawPath, subcommand] + extraArgs
         }
 
         if let pnpm = self.findExecutable(named: "pnpm", searchPaths: searchPaths) {

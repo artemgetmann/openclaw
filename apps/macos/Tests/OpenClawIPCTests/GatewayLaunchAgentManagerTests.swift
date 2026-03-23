@@ -38,4 +38,52 @@ struct GatewayLaunchAgentManagerTests {
         #expect(snapshot.port == 18789)
         #expect(snapshot.bind == nil)
     }
+
+    @Test func `daemon command environment pins consumer runtime paths`() {
+        let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
+            base: [:],
+            projectRootHint: "/tmp/openclaw-worktree")
+
+        #expect(env["OPENCLAW_PROFILE"] == ConsumerRuntime.profile)
+        #expect(env["OPENCLAW_HOME"] == ConsumerRuntime.runtimeRootURL.path)
+        #expect(env["OPENCLAW_STATE_DIR"] == ConsumerRuntime.stateDirURL.path)
+        #expect(env["OPENCLAW_CONFIG_PATH"] == ConsumerRuntime.configURL.path)
+        #expect(env["OPENCLAW_GATEWAY_PORT"] == "\(ConsumerRuntime.gatewayPort)")
+        #expect(env["OPENCLAW_GATEWAY_BIND"] == ConsumerRuntime.gatewayBind)
+        #expect(env["OPENCLAW_LAUNCHD_LABEL"] == gatewayLaunchdLabel)
+        #expect(env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] == "1")
+        #expect(env["OPENCLAW_FORK_ROOT"] == "/tmp/openclaw-worktree")
+    }
+
+    @Test func `preferred enable action restarts loaded service`() {
+        #expect(
+            GatewayLaunchAgentManager._testDesiredEnableAction(
+                loaded: true,
+                hasPlist: true,
+                launchAgentMatchesCurrentEntrypoint: true) == .restart)
+    }
+
+    @Test func `preferred enable action starts existing plist before reinstall`() {
+        #expect(
+            GatewayLaunchAgentManager._testDesiredEnableAction(
+                loaded: false,
+                hasPlist: true,
+                launchAgentMatchesCurrentEntrypoint: true) == .start)
+    }
+
+    @Test func `preferred enable action installs when service is absent`() {
+        #expect(
+            GatewayLaunchAgentManager._testDesiredEnableAction(
+                loaded: nil,
+                hasPlist: false,
+                launchAgentMatchesCurrentEntrypoint: true) == .install)
+    }
+
+    @Test func `preferred enable action reinstalls stale worktree launch agent`() {
+        #expect(
+            GatewayLaunchAgentManager._testDesiredEnableAction(
+                loaded: true,
+                hasPlist: true,
+                launchAgentMatchesCurrentEntrypoint: false) == .install)
+    }
 }

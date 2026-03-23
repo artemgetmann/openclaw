@@ -7,7 +7,7 @@ enum LogLocator {
         {
             return URL(fileURLWithPath: override)
         }
-        return URL(fileURLWithPath: "/tmp/\(AppFlavor.current.defaultLogDirName)")
+        return ConsumerRuntime.logsDirURL
     }
 
     private static var stdoutLog: URL {
@@ -26,7 +26,7 @@ enum LogLocator {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 
-    /// Returns the newest log file under /tmp/openclaw/ (rolling or stdout), or nil if none exist.
+    /// Returns the newest log file under the consumer log dir (rolling or stdout), or nil if none exist.
     static func bestLogFile() -> URL? {
         self.ensureLogDirExists()
         let fm = FileManager()

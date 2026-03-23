@@ -5,6 +5,7 @@ import Observation
 @Observable
 final class GatewayProcessManager {
     static let shared = GatewayProcessManager()
+    private static let gatewayStartupTimeout: TimeInterval = 15
 
     enum Status: Equatable {
         case stopped
@@ -71,6 +72,11 @@ final class GatewayProcessManager {
         self.desiredActive = active
         self.refreshEnvironmentStatus()
         if active {
+            let diagnostics = self.startupDiagnostics(context: "setActive")
+            self.appendLog("\(diagnostics)\n")
+            self.logger.info("\(diagnostics, privacy: .public)")
+        }
+        if active {
             self.startIfNeeded()
         } else {
             self.stop()
@@ -82,6 +88,11 @@ final class GatewayProcessManager {
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             self.appendLog("[gateway] launchd auto-enable skipped (attach-only)\n")
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
+            return
+        }
+        if Self.shouldSkipLaunchAgentEnsure(for: self.status) {
+            self.appendLog("[gateway] launchd auto-enable skipped (gateway startup already in progress)\n")
+            self.logger.debug("gateway launchd auto-enable skipped: startup already in progress")
             return
         }
         let enabled = await GatewayLaunchAgentManager.isLoaded()
@@ -96,6 +107,18 @@ final class GatewayProcessManager {
     }
 
     func startIfNeeded() {
+        self.startIfNeeded(forceRecovery: false)
+    }
+
+    func recoverAfterConnectionLoss(reason: String) {
+        guard !CommandResolver.connectionModeIsRemote() else { return }
+        self.desiredActive = true
+        self.appendLog("[gateway] recovering after connection loss (\(reason))\n")
+        self.logger.warning("gateway recovering after connection loss reason=\(reason)")
+        self.startIfNeeded(forceRecovery: true)
+    }
+
+    private func startIfNeeded(forceRecovery: Bool) {
         guard self.desiredActive else { return }
         // Do not spawn in remote mode (the gateway should run on the remote host).
         guard !CommandResolver.connectionModeIsRemote() else {
@@ -103,15 +126,14 @@ final class GatewayProcessManager {
             return
         }
         // Many surfaces can call `setActive(true)` in quick succession (startup, Canvas, health checks).
-        // Avoid spawning multiple concurrent "start" tasks that can thrash launchd and flap the port.
-        switch self.status {
-        case .starting, .running, .attachedExisting:
+        // Avoid spawning multiple concurrent "start" tasks that can thrash launchd and flap the
+        // port. When the control channel has already observed a real connection failure, we
+        // intentionally ignore stale `.running` / `.attachedExisting` state and force recovery.
+        if Self.shouldSkipGatewayStart(for: self.status, forceRecovery: forceRecovery) {
             return
-        case .stopped, .failed:
-            break
         }
         self.status = .starting
-        self.logger.debug("gateway start requested")
+        self.logger.debug("gateway start requested forceRecovery=\(forceRecovery)")
 
         // First try to latch onto an already-running gateway to avoid spawning a duplicate.
         Task { [weak self] in
@@ -119,7 +141,7 @@ final class GatewayProcessManager {
             if await self.attachExistingGatewayIfAvailable() {
                 return
             }
-            await self.enableLaunchdGateway()
+            await self.enableLaunchdGateway(preferKickstart: forceRecovery)
         }
     }
 
@@ -132,11 +154,14 @@ final class GatewayProcessManager {
         if CommandResolver.connectionModeIsRemote() {
             return
         }
-        let bundlePath = Bundle.main.bundleURL.path
         Task {
+            // "Stop" should stop the supervised gateway, not tear out the launch agent
+            // registration. Uninstalling here makes the consumer service disappear after
+            // routine mode changes or startup races, which is exactly the flapping we are
+            // debugging.
             _ = await GatewayLaunchAgentManager.set(
                 enabled: false,
-                bundlePath: bundlePath,
+                bundlePath: Bundle.main.bundleURL.path,
                 port: GatewayEnvironment.gatewayPort())
         }
     }
@@ -297,7 +322,7 @@ final class GatewayProcessManager {
         return lower.contains("unauthorized") || lower.contains("auth")
     }
 
-    private func enableLaunchdGateway() async {
+    private func enableLaunchdGateway(preferKickstart: Bool = false) async {
         self.existingGatewayDetails = nil
         let resolution = await Task.detached(priority: .utility) {
             GatewayEnvironment.resolveGatewayCommand()
@@ -322,20 +347,48 @@ final class GatewayProcessManager {
 
         let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()
+        let diagnostics = self.startupDiagnostics(context: "enableLaunchd")
+        self.appendLog("\(diagnostics)\n")
+        self.logger.info("\(diagnostics, privacy: .public)")
+
+        // When a LaunchAgent plist already exists, prefer the CLI restart/bootstrap path first.
+        // That path already knows how to recover a booted-out/missing launchd label without
+        // rewriting the plist and SIGTERM-churning a healthy gateway process.
+        if preferKickstart || GatewayLaunchAgentManager.launchdConfigSnapshot() != nil {
+            self.appendLog("[gateway] restarting launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
+            self.logger.info("gateway restarting existing launchd job port=\(port)")
+            await GatewayLaunchAgentManager.kickstart()
+            if await self.waitForLaunchdGatewayToAcceptConnections(port: port, context: "launchdRestart") {
+                return
+            }
+
+            self.appendLog("[gateway] launchd restart did not recover the listener; falling back to install/start\n")
+            self.logger.warning("gateway launchd restart did not recover listener; falling back to install/start")
+        }
+
         self.appendLog("[gateway] enabling launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
         self.logger.info("gateway enabling launchd port=\(port)")
         let err = await GatewayLaunchAgentManager.set(enabled: true, bundlePath: bundlePath, port: port)
         if let err {
             self.status = .failed(err)
             self.lastFailureReason = err
+            let failureDiagnostics = self.startupDiagnostics(context: "enableLaunchdFailed")
+            self.appendLog("\(failureDiagnostics)\n")
+            self.logger.error("\(failureDiagnostics, privacy: .public)")
             self.logger.error("gateway launchd enable failed: \(err)")
             return
         }
 
-        // Best-effort: wait for the gateway to accept connections.
-        let deadline = Date().addingTimeInterval(6)
+        _ = await self.waitForLaunchdGatewayToAcceptConnections(port: port, context: "launchdStartTimeout")
+    }
+
+    private func waitForLaunchdGatewayToAcceptConnections(port: Int, context: String) async -> Bool {
+        // The consumer gateway can take a while to become responsive after launchd has accepted
+        // the job, especially on this machine when multiple OpenClaw lanes are chewing CPU.
+        // Give recovery the full timeout window before we declare failure and poison the UI.
+        let deadline = Date().addingTimeInterval(Self.gatewayStartupTimeout)
         while Date() < deadline {
-            if !self.desiredActive { return }
+            if !self.desiredActive { return false }
             do {
                 _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
                 let instance = await PortGuardian.shared.describe(port: port)
@@ -345,7 +398,7 @@ final class GatewayProcessManager {
                 self.logger.info("gateway started details=\(details ?? "ok")")
                 self.refreshControlChannelIfNeeded(reason: "gateway started")
                 self.refreshLog()
-                return
+                return true
             } catch {
                 try? await Task.sleep(nanoseconds: 400_000_000)
             }
@@ -354,6 +407,11 @@ final class GatewayProcessManager {
         self.status = .failed("Gateway did not start in time")
         self.lastFailureReason = "launchd start timeout"
         self.logger.warning("gateway start timed out")
+        let timeoutDiagnostics = self.startupDiagnostics(context: context)
+        self.appendLog("\(timeoutDiagnostics)\n")
+        self.logger.warning("\(timeoutDiagnostics, privacy: .public)")
+        await self.appendPortDiagnostics(context: context)
+        return false
     }
 
     private func appendLog(_ chunk: String) {
@@ -389,6 +447,10 @@ final class GatewayProcessManager {
         }
         self.appendLog("[gateway] readiness wait timed out\n")
         self.logger.warning("gateway readiness wait timed out")
+        let timeoutDiagnostics = self.startupDiagnostics(context: "waitForGatewayReadyTimeout")
+        self.appendLog("\(timeoutDiagnostics)\n")
+        self.logger.warning("\(timeoutDiagnostics, privacy: .public)")
+        await self.appendPortDiagnostics(context: "waitForGatewayReadyTimeout")
         return false
     }
 
@@ -413,12 +475,65 @@ final class GatewayProcessManager {
         if text.count <= limit { return text }
         return String(text.suffix(limit))
     }
+
+    private static func shouldSkipLaunchAgentEnsure(for status: Status) -> Bool {
+        switch status {
+        case .starting:
+            return true
+        case .stopped, .running, .attachedExisting, .failed:
+            return false
+        }
+    }
+
+    private static func shouldSkipGatewayStart(for status: Status, forceRecovery: Bool) -> Bool {
+        switch status {
+        case .starting:
+            return true
+        case .running, .attachedExisting:
+            return !forceRecovery
+        case .stopped, .failed:
+            return false
+        }
+    }
+
+    private func startupDiagnostics(context: String) -> String {
+        let mode = CommandResolver.connectionModeIsRemote() ? "remote" : "local"
+        let profile = ProcessInfo.processInfo.environment["OPENCLAW_PROFILE"] ?? "<unset>"
+        let forkRoot = ProcessInfo.processInfo.environment["OPENCLAW_FORK_ROOT"] ?? "<unset>"
+        let port = GatewayEnvironment.gatewayPort()
+        let configPath = OpenClawConfigFile.url().path
+        let stateDir = OpenClawConfigFile.stateDirURL().path
+        return "[gateway/diag] context=\(context) mode=\(mode) port=\(port) launchdLabel=\(gatewayLaunchdLabel) profile=\(profile) config=\(configPath) state=\(stateDir) forkRoot=\(forkRoot)"
+    }
+
+    private func appendPortDiagnostics(context: String) async {
+        let mode = AppStateStore.shared.connectionMode
+        let reports = await PortGuardian.shared.diagnose(mode: mode)
+        guard !reports.isEmpty else {
+            let line = "[gateway/diag] context=\(context) portguard=no-reports mode=\(mode.rawValue)"
+            self.appendLog("\(line)\n")
+            self.logger.warning("\(line, privacy: .public)")
+            return
+        }
+        let summary = reports.map(\.summary).joined(separator: " | ")
+        let line = "[gateway/diag] context=\(context) mode=\(mode.rawValue) portguard=\(summary)"
+        self.appendLog("\(line)\n")
+        self.logger.warning("\(line, privacy: .public)")
+    }
 }
 
 #if DEBUG
 extension GatewayProcessManager {
     func setTestingConnection(_ connection: GatewayConnection?) {
         self.testingConnection = connection
+    }
+
+    static func _testShouldSkipLaunchAgentEnsure(for status: Status) -> Bool {
+        self.shouldSkipLaunchAgentEnsure(for: status)
+    }
+
+    static func _testShouldSkipGatewayStart(for status: Status, forceRecovery: Bool) -> Bool {
+        self.shouldSkipGatewayStart(for: status, forceRecovery: forceRecovery)
     }
 
     func setTestingDesiredActive(_ active: Bool) {
