@@ -53,9 +53,13 @@ struct AgentWorkspaceTests {
         let template = AgentWorkspace.defaultBootstrapTemplate()
 
         #expect(template.contains("Do not stop after the naming step."))
+        #expect(template.contains("use those exact options first"))
         #expect(template.contains("offer a few options"))
         #expect(template.contains("Jarvis"))
         #expect(template.contains("Do not end with"))
+        #expect(!template.contains("openclaw.json"))
+        #expect(!template.contains("private git repo"))
+        #expect(!template.contains("Saved consumer workspace"))
     }
 
     @Test

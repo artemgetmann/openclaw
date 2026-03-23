@@ -14,11 +14,11 @@ extension OnboardingView {
             }
             guard self.onboardingChatModel.messages.isEmpty else { return }
             let kickoff =
-                "Hi! I just installed OpenClaw and you’re my brand‑new agent. " +
-                "Please start the first‑run ritual from BOOTSTRAP.md, ask one question at a time, " +
-                "and visit SOUL.md with me to craft how you should behave. Then guide me through " +
-                "the Telegram setup, explain that DMs are the simple starting point, and note that " +
-                "groups/topics are better for longer or parallel work."
+                "Hi! I just installed OpenClaw and you’re my brand-new agent. " +
+                "Start with BOOTSTRAP.md and ask one question at a time so we can figure out your name, " +
+                "what to call me, and how you should talk. Use IDENTITY.md, USER.md, and SOUL.md as needed, " +
+                "but keep the conversation simple and non-technical. Then walk me through Telegram setup, " +
+                "start with DMs, and mention groups or topics only if they’ll actually help."
             self.onboardingChatModel.input = kickoff
             self.onboardingChatModel.send()
         }

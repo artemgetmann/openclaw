@@ -781,8 +781,7 @@ extension OnboardingView {
                                     let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
                                     let saved = await self.saveAgentWorkspace(AgentWorkspace.displayPath(for: url))
                                     if saved {
-                                        self.workspaceStatus =
-                                            "Saved consumer workspace to openclaw.json (agents.defaults.workspace)"
+                                        self.workspaceStatus = "Saved your agent home."
                                     }
                                 }
                             }
@@ -798,9 +797,8 @@ extension OnboardingView {
                             .lineLimit(2)
                     } else {
                         Text(
-                            "Tip: edit AGENTS.md in this folder to shape the assistant’s behavior. " +
-                                "For backup, make the workspace a private git repo so your agent’s " +
-                                "“memory” is versioned.")
+                            "Tip: this folder is your agent’s home. AGENTS.md shapes behavior, and " +
+                                "notes saved here help it stay consistent from one session to the next.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
