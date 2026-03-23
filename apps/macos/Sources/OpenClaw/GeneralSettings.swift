@@ -499,9 +499,14 @@ struct GeneralSettings: View {
 
     private func refreshGatewayStatus() {
         Task {
-            let status = await Task.detached(priority: .utility) {
-                GatewayEnvironment.check()
-            }.value
+            let status: GatewayEnvironmentStatus
+            if self.isConsumer {
+                status = await GatewayEnvironment.checkConsumerLane()
+            } else {
+                status = await Task.detached(priority: .utility) {
+                    GatewayEnvironment.check()
+                }.value
+            }
             self.gatewayStatus = status
         }
     }

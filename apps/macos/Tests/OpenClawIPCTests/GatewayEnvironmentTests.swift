@@ -70,4 +70,51 @@ struct GatewayEnvironmentTests {
             patch: 11))
         #expect(GatewayEnvironment.expectedGatewayVersion(from: nil) == nil)
     }
+
+    @Test func `consumer lane status reports healthy consumer endpoint without global install checks`() throws {
+        let status = GatewayEnvironment.describeConsumerLaneStatus(.init(
+            launchdPlistExists: true,
+            launchdLoaded: true,
+            launchdPort: ConsumerRuntime.gatewayPort,
+            endpointURL: try #require(URL(string: "ws://127.0.0.1:19001")),
+            endpointHealthy: true,
+            endpointFailure: nil))
+
+        #expect(status.kind == .ok)
+        #expect(status.message.contains("Consumer gateway responding"))
+        #expect(status.message.contains("127.0.0.1:19001"))
+    }
+
+    @Test func `consumer lane status flags stale launchd port mismatch`() throws {
+        let status = GatewayEnvironment.describeConsumerLaneStatus(.init(
+            launchdPlistExists: true,
+            launchdLoaded: true,
+            launchdPort: 18789,
+            endpointURL: try #require(URL(string: "ws://127.0.0.1:19001")),
+            endpointHealthy: false,
+            endpointFailure: "consumer control endpoint is not listening"))
+
+        switch status.kind {
+        case let .error(detail):
+            #expect(detail.contains("18789"))
+            #expect(detail.contains("19001"))
+        default:
+            Issue.record("Expected an explicit stale-port error for consumer launchd mismatch")
+        }
+        #expect(status.message == "Consumer launchd lane is targeting the wrong port.")
+    }
+
+    @Test func `consumer lane status ignores missing global install when consumer lane is absent`() throws {
+        let status = GatewayEnvironment.describeConsumerLaneStatus(.init(
+            launchdPlistExists: false,
+            launchdLoaded: false,
+            launchdPort: nil,
+            endpointURL: try #require(URL(string: "ws://127.0.0.1:19001")),
+            endpointHealthy: false,
+            endpointFailure: "consumer control endpoint is not listening"))
+
+        #expect(status.kind == .missingGateway)
+        #expect(status.message == "Consumer gateway lane is not installed yet.")
+        #expect(status.gatewayVersion == nil)
+    }
 }
