@@ -628,6 +628,9 @@ Out of scope:
   - `bash -n scripts/package-mac-app.sh`
 - Blocked / pending:
   - Full manual Telegram BYOK E2E as a real novice user flow is still in progress for this PR gate.
+- Follow-up note:
+  - `macos-app` CI on the fork PR is currently noisy and failing in unrelated `apps/macos/Sources/Clawdis/*` formatting/lint paths rather than the consumer `apps/macos/Sources/OpenClaw/*` files touched in this lane.
+  - Treat that lane as separate cleanup work after merging this consumer branch line forward.
 - Next 3 actions:
   - Run isolated runtime launch check on `19001` with founder runtime untouched.
   - Walk full in-app Telegram BYOK flow (token verify + first DM capture) and collect logs/evidence.
