@@ -317,7 +317,7 @@ Common parameters:
 - Requires `browser.enabled=true` (default is `true`; set `false` to disable).
 - All actions accept optional `profile` parameter for multi-instance support.
 - Omit `profile` for the safe default: isolated OpenClaw-managed browser (`openclaw`).
-- Use `profile="user"` for the real local host browser when existing logins/cookies matter and the user is present to click/approve any attach prompt.
+- Use `profile="user"` for the host-local cloned Chrome lane when existing logins/cookies matter.
 - `profile="user"` is host-only; do not combine it with sandbox/node targets.
 - When `profile` is omitted, uses `browser.defaultProfile` (defaults to `openclaw`).
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).

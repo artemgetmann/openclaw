@@ -25,7 +25,7 @@ Back to the main browser docs: [Browser](/tools/browser).
 
 OpenClaw can use two browser lanes:
 
-- `user`: your signed-in Chrome lane when existing cookies/session matter
+- `user`: your signed-in cloned Chrome lane when existing cookies/session matter
 - `openclaw`: a dedicated Chrome profile (orange-tinted UI) isolated from your daily browser
 
 For agent browser tool calls:
@@ -37,7 +37,7 @@ For agent browser tool calls:
 
 Two easy ways to access it:
 
-1. **Ask the agent to open the browser** and then log in yourself.
+1. **Ask the agent to open the browser** and then log in yourself if needed.
 2. **Open it via CLI**:
 
 ```bash
@@ -45,7 +45,8 @@ openclaw browser start
 openclaw browser open https://x.com
 ```
 
-If you have multiple profiles, pass `--browser-profile <name>` (the default is `openclaw`).
+If you have multiple profiles, configure the source Chrome profile once instead
+of having the agent guess. The default managed profile remains `openclaw`.
 
 ## X/Twitter: recommended flow
 

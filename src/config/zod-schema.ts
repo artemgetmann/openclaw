@@ -362,6 +362,9 @@ export const OpenClawSchema = z
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
                   .optional(),
+                cloneFromUserProfile: z.boolean().optional(),
+                sourceChromeDir: z.string().optional(),
+                sourceProfileName: z.string().optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })

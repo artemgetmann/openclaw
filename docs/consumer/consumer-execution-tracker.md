@@ -186,6 +186,7 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 - [x] Run the new Kernel repro helper (`doctor` -> `smoke-open` -> `open-emirates`) once `KERNEL_API_KEY` exists
 - [x] Document Kernel as infra-validated but integration-deferred in the benchmark matrix and recommendation block
 - [ ] Productize Chrome profile detection/setup so users do not need manual `chrome://version` discovery for cloned-profile lanes
+- [ ] Parallel workstream in progress: Chrome-only onboarding MVP spec is being explored in a separate AI thread. Keep that work scoped to onboarding UX/state machine/profile chooser/settings copy. Do not let it rewrite the runtime browser-lane semantics underneath the current cloned-session implementation work.
 - [ ] Keep Agent S3 documented as a later experiment, not a week-1 gate
 - [ ] Teach the browser prompt/skill routing which browser lane to prefer by task shape (for example signed-in hostile travel flow vs clean generic browsing)
 

@@ -292,7 +292,7 @@ function shouldPreferHostForProfile(profileName: string | undefined) {
     return false;
   }
   const capabilities = getBrowserProfileCapabilities(profile);
-  return capabilities.usesChromeMcp;
+  return capabilities.usesChromeMcp || profile.cloneFromUserProfile;
 }
 
 export function createBrowserTool(opts?: {
@@ -310,7 +310,9 @@ export function createBrowserTool(opts?: {
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       'Browser choice: prefer profile="user" for signed-in sites, hostile sites, or any flow where existing cookies/logins matter.',
       'Use profile="openclaw" for public browsing, clean isolated runs, or as an explicit fallback when session reuse is not required.',
-      'For the logged-in user browser on the local host, use profile="user". Chrome (v144+) must be running. Do not silently fall back to profile="openclaw" when the task depends on existing logins/cookies; surface the blocker instead.',
+      'Do not silently fall back to profile="openclaw" when the task depends on existing logins/cookies; surface the blocker instead.',
+      "profile=\"user\" launches a separate host-local Chrome window seeded from the user's signed-in Chrome state; it should not take over the user's current live tabs by default.",
+      'Do not mention the removed Browser Relay extension path. If profile="user" fails, describe the actual blocker (for example clone setup, Chrome availability, or signed-in state) instead of suggesting relay fixes.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
@@ -329,7 +331,9 @@ export function createBrowserTool(opts?: {
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
-      // User-browser profiles (existing-session) are host-only.
+      // The signed-in user lane is host-only whether it is a live attach profile
+      // or a cloned-session launch. Sandbox/node routing would lose access to the
+      // user's local Chrome state, so keep this lane anchored to the host.
       const isUserBrowserProfile = shouldPreferHostForProfile(profile);
       if (isUserBrowserProfile) {
         if (requestedNode || target === "node") {

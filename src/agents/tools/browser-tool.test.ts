@@ -85,6 +85,7 @@ const browserConfigMocks = vi.hoisted(() => ({
       cdpHost: "127.0.0.1",
       cdpIsLoopback: true,
       color: typeof profile.color === "string" ? profile.color : "#FF4500",
+      cloneFromUserProfile: profile.cloneFromUserProfile === true,
       attachOnly: profile.attachOnly === true,
     };
   }),
@@ -284,7 +285,16 @@ describe("browser tool snapshot maxChars", () => {
 
   it("defaults to host when using profile=user (even in sandboxed sessions)", async () => {
     setResolvedBrowserProfiles({
-      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      user: {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
     });
     const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
     await tool.execute?.("call-1", {
@@ -322,7 +332,16 @@ describe("browser tool snapshot maxChars", () => {
 
   it('rejects profile="user" with target="sandbox"', async () => {
     setResolvedBrowserProfiles({
-      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      user: {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
     });
     const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
 
@@ -413,7 +432,16 @@ describe("browser tool snapshot maxChars", () => {
   it("keeps user profile on host when node proxy is available", async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
-      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      user: {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
     });
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", profile: "user" });

@@ -28,6 +28,7 @@ import {
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
   type BrowserExecutable,
+  resolveGoogleChromeExecutableForPlatform,
   resolveBrowserExecutableForPlatform,
 } from "./chrome.executables.js";
 import {
@@ -77,8 +78,100 @@ function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecu
   return resolveBrowserExecutableForPlatform(resolved, process.platform);
 }
 
+function resolveBrowserExecutableForProfile(
+  resolved: ResolvedBrowserConfig,
+  profile: ResolvedBrowserProfile,
+): BrowserExecutable | null {
+  // The cloned signed-in lane copies Google Chrome profile state. Launching a
+  // different Chromium family member against that copied data is a correctness
+  // bug, not just a UX nit, so pin this path to Google Chrome explicitly.
+  if (profile.cloneFromUserProfile) {
+    return resolveGoogleChromeExecutableForPlatform(process.platform);
+  }
+  return resolveBrowserExecutable(resolved);
+}
+
 export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
   return path.join(CONFIG_DIR, "browser", profileName, "user-data");
+}
+
+function resolveDefaultChromeUserDataDir() {
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "Google", "Chrome");
+  }
+  if (process.platform === "win32") {
+    const localAppData =
+      process.env.LOCALAPPDATA?.trim() || path.join(os.homedir(), "AppData", "Local");
+    return path.join(localAppData, "Google", "Chrome", "User Data");
+  }
+  return path.join(os.homedir(), ".config", "google-chrome");
+}
+
+function readJsonFile(filePath: string): unknown {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function detectChromeSourceProfileName(sourceChromeDir: string) {
+  const localStatePath = path.join(sourceChromeDir, "Local State");
+  const parsed = readJsonFile(localStatePath);
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  const profile = (parsed as Record<string, unknown>).profile;
+  if (!profile || typeof profile !== "object") {
+    return null;
+  }
+  const profileRecord = profile as Record<string, unknown>;
+  const lastUsed =
+    typeof profileRecord.last_used === "string" ? profileRecord.last_used.trim() : "";
+  if (lastUsed) {
+    return lastUsed;
+  }
+  const lastActiveProfiles = Array.isArray(profileRecord.last_active_profiles)
+    ? profileRecord.last_active_profiles
+    : [];
+  for (const entry of lastActiveProfiles) {
+    if (typeof entry === "string" && entry.trim()) {
+      return entry.trim();
+    }
+  }
+  return fs.existsSync(path.join(sourceChromeDir, "Default")) ? "Default" : null;
+}
+
+function seedClonedChromeProfile(profile: ResolvedBrowserProfile, userDataDir: string) {
+  const sourceChromeDir = profile.sourceChromeDir?.trim() || resolveDefaultChromeUserDataDir();
+  const sourceProfileName =
+    profile.sourceProfileName?.trim() || detectChromeSourceProfileName(sourceChromeDir);
+
+  if (!sourceProfileName) {
+    throw new Error(
+      `Could not determine a source Chrome profile for cloned browser profile "${profile.name}".`,
+    );
+  }
+
+  const sourceProfileDir = path.join(sourceChromeDir, sourceProfileName);
+  if (!fs.existsSync(sourceProfileDir)) {
+    throw new Error(
+      `Source Chrome profile "${sourceProfileName}" not found at ${sourceProfileDir} for cloned profile "${profile.name}".`,
+    );
+  }
+
+  fs.rmSync(userDataDir, { recursive: true, force: true });
+  fs.mkdirSync(userDataDir, { recursive: true });
+
+  const localStatePath = path.join(sourceChromeDir, "Local State");
+  if (fs.existsSync(localStatePath)) {
+    fs.copyFileSync(localStatePath, path.join(userDataDir, "Local State"));
+  }
+
+  fs.cpSync(sourceProfileDir, path.join(userDataDir, "Default"), {
+    recursive: true,
+    force: true,
+  });
 }
 
 function cdpUrlForPort(cdpPort: number) {
@@ -262,15 +355,21 @@ export async function launchOpenClawChrome(
   }
   await ensurePortAvailable(profile.cdpPort);
 
-  const exe = resolveBrowserExecutable(resolved);
+  const exe = resolveBrowserExecutableForProfile(resolved, profile);
   if (!exe) {
     throw new Error(
-      "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
+      profile.cloneFromUserProfile
+        ? "Google Chrome is required for the signed-in cloned browser lane on this host."
+        : "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
     );
   }
 
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
-  fs.mkdirSync(userDataDir, { recursive: true });
+  if (profile.cloneFromUserProfile) {
+    seedClonedChromeProfile(profile, userDataDir);
+  } else {
+    fs.mkdirSync(userDataDir, { recursive: true });
+  }
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,
@@ -283,6 +382,7 @@ export async function launchOpenClawChrome(
     const args: string[] = [
       `--remote-debugging-port=${profile.cdpPort}`,
       `--user-data-dir=${userDataDir}`,
+      "--profile-directory=Default",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-sync",

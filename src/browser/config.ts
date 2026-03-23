@@ -14,7 +14,7 @@ import {
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { CDP_PORT_RANGE_START } from "./profiles.js";
+import { allocateCdpPort, CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
@@ -46,6 +46,9 @@ export type ResolvedBrowserProfile = {
   cdpIsLoopback: boolean;
   color: string;
   driver: "openclaw" | "existing-session";
+  cloneFromUserProfile?: boolean;
+  sourceChromeDir?: string;
+  sourceProfileName?: string;
   attachOnly: boolean;
 };
 
@@ -179,18 +182,24 @@ function ensureDefaultProfile(
 }
 
 /**
- * Ensure a built-in "user" profile exists for Chrome's existing-session attach flow.
+ * Ensure a built-in "user" profile exists for the signed-in cloned Chrome lane.
+ *
+ * This is intentionally different from the explicit existing-session / live-attach
+ * flow. The default consumer-safe behavior is a separate managed browser window
+ * seeded from the user's Chrome state rather than taking over the live browser.
  */
 function ensureDefaultUserBrowserProfile(
   profiles: Record<string, BrowserProfileConfig>,
+  range?: { start: number; end: number },
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
   if (result.user) {
     return result;
   }
+  const cdpPort = allocateCdpPort(getUsedPorts(result), range) ?? CDP_PORT_RANGE_START + 1;
   result.user = {
-    driver: "existing-session",
-    attachOnly: true,
+    cdpPort,
+    cloneFromUserProfile: true,
     color: "#00AA00",
   };
   return result;
@@ -263,6 +272,7 @@ export function resolveBrowserConfig(
       cdpPortRangeStart,
       legacyCdpUrl,
     ),
+    { start: cdpPortRangeStart, end: cdpPortRangeEnd },
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
 
@@ -330,6 +340,7 @@ export function resolveProfile(
       cdpIsLoopback: true,
       color: profile.color,
       driver,
+      cloneFromUserProfile: false,
       attachOnly: true,
     };
   }
@@ -353,6 +364,9 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
+    cloneFromUserProfile: profile.cloneFromUserProfile === true,
+    sourceChromeDir: profile.sourceChromeDir?.trim() || undefined,
+    sourceProfileName: profile.sourceProfileName?.trim() || undefined,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
 }
