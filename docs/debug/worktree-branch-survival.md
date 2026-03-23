@@ -9,12 +9,15 @@ Most lost-work incidents are not real data loss. They are state confusion.
 There are three different truths:
 
 1. Remote truth
+
 - what GitHub has, like `origin/main`
 
 2. Local truth
+
 - what your local branch points to, like `main`
 
 3. Runtime truth
+
 - what code the live process is actually running
 
 Those can all disagree.
@@ -24,18 +27,22 @@ Those can all disagree.
 Changes usually live in one of four places:
 
 1. Working tree
+
 - uncommitted file edits
 - these exist only in this checkout/worktree folder
 
 2. Local commits
+
 - committed on your machine
 - not necessarily pushed yet
 
 3. Remote branch
+
 - pushed to GitHub
 - not necessarily merged
 
 4. Merged target branch
+
 - landed in `main`
 - not necessarily pulled locally
 - not necessarily running live

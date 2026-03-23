@@ -42,8 +42,30 @@ const discoveryCache = new Map<string, { expiresAt: number; result: PluginDiscov
 // Keep a short cache window to collapse bursty reloads during startup flows.
 const DEFAULT_DISCOVERY_CACHE_MS = 1000;
 
+function tracePluginDiscoveryStage(env: NodeJS.ProcessEnv, stage: string): void {
+  const stageLogPath = env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    fs.appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only. Never let debug logging change runtime behavior.
+  }
+}
+
 export function clearPluginDiscoveryCache(): void {
   discoveryCache.clear();
+}
+
+function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return undefined;
+  }
+  const normalized = [...new Set(ids.map((id) => id.trim()).filter(Boolean))].toSorted((a, b) =>
+    a.localeCompare(b),
+  );
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function resolveDiscoveryCacheMs(env: NodeJS.ProcessEnv): number {
@@ -73,6 +95,8 @@ function buildDiscoveryCacheKey(params: {
   workspaceDir?: string;
   extraPaths?: string[];
   ownershipUid?: number | null;
+  repairBundledPermissions: boolean;
+  onlyPluginIds?: string[];
   env: NodeJS.ProcessEnv;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
@@ -84,7 +108,7 @@ function buildDiscoveryCacheKey(params: {
   const configExtensionsRoot = roots.global ?? "";
   const bundledRoot = roots.stock ?? "";
   const ownershipUid = params.ownershipUid ?? currentUid();
-  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(loadPaths)}`;
+  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${params.repairBundledPermissions ? "repair" : "no-repair"}::${JSON.stringify(loadPaths)}::${JSON.stringify(params.onlyPluginIds ?? [])}`;
 }
 
 function currentUid(overrideUid?: number | null): number | null {
@@ -145,6 +169,7 @@ function checkPathStatAndPermissions(params: {
   rootDir: string;
   origin: PluginOrigin;
   uid: number | null;
+  repairBundledPermissions: boolean;
 }): CandidateBlockIssue | null {
   if (process.platform === "win32") {
     return null;
@@ -167,7 +192,11 @@ function checkPathStatAndPermissions(params: {
       };
     }
     let modeBits = stat.mode & 0o777;
-    if ((modeBits & 0o002) !== 0 && params.origin === "bundled") {
+    if (
+      (modeBits & 0o002) !== 0 &&
+      params.origin === "bundled" &&
+      params.repairBundledPermissions
+    ) {
       // npm/global installs can create package-managed extension dirs without
       // directory entries in the tarball, which may widen them to 0777.
       // Tighten bundled dirs in place before applying the normal safety gate.
@@ -222,6 +251,7 @@ function findCandidateBlockIssue(params: {
   rootDir: string;
   origin: PluginOrigin;
   ownershipUid?: number | null;
+  repairBundledPermissions?: boolean;
 }): CandidateBlockIssue | null {
   const escaped = checkSourceEscapesRoot({
     source: params.source,
@@ -235,6 +265,7 @@ function findCandidateBlockIssue(params: {
     rootDir: params.rootDir,
     origin: params.origin,
     uid: currentUid(params.ownershipUid),
+    repairBundledPermissions: params.repairBundledPermissions !== false,
   });
 }
 
@@ -257,12 +288,14 @@ function isUnsafePluginCandidate(params: {
   origin: PluginOrigin;
   diagnostics: PluginDiagnostic[];
   ownershipUid?: number | null;
+  repairBundledPermissions?: boolean;
 }): boolean {
   const issue = findCandidateBlockIssue({
     source: params.source,
     rootDir: params.rootDir,
     origin: params.origin,
     ownershipUid: params.ownershipUid,
+    repairBundledPermissions: params.repairBundledPermissions,
   });
   if (!issue) {
     return false;
@@ -365,6 +398,7 @@ function addCandidate(params: {
   workspaceDir?: string;
   manifest?: PackageManifest | null;
   packageDir?: string;
+  repairBundledPermissions?: boolean;
 }) {
   const resolved = path.resolve(params.source);
   if (params.seen.has(resolved)) {
@@ -378,6 +412,7 @@ function addCandidate(params: {
       origin: params.origin,
       diagnostics: params.diagnostics,
       ownershipUid: params.ownershipUid,
+      repairBundledPermissions: params.repairBundledPermissions,
     })
   ) {
     return;
@@ -405,6 +440,7 @@ function discoverBundleInRoot(params: {
   rootDir: string;
   origin: PluginOrigin;
   ownershipUid?: number | null;
+  repairBundledPermissions?: boolean;
   workspaceDir?: string;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
@@ -438,6 +474,7 @@ function discoverBundleInRoot(params: {
     format: "bundle",
     bundleFormat,
     ownershipUid: params.ownershipUid,
+    repairBundledPermissions: params.repairBundledPermissions,
     workspaceDir: params.workspaceDir,
   });
   return "added";
@@ -474,6 +511,7 @@ function discoverInDirectory(params: {
   dir: string;
   origin: PluginOrigin;
   ownershipUid?: number | null;
+  repairBundledPermissions?: boolean;
   workspaceDir?: string;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
@@ -509,6 +547,7 @@ function discoverInDirectory(params: {
         rootDir: path.dirname(fullPath),
         origin: params.origin,
         ownershipUid: params.ownershipUid,
+        repairBundledPermissions: params.repairBundledPermissions,
         workspaceDir: params.workspaceDir,
       });
     }
@@ -561,6 +600,7 @@ function discoverInDirectory(params: {
           rootDir: fullPath,
           origin: params.origin,
           ownershipUid: params.ownershipUid,
+          repairBundledPermissions: params.repairBundledPermissions,
           workspaceDir: params.workspaceDir,
           manifest,
           packageDir: fullPath,
@@ -573,6 +613,7 @@ function discoverInDirectory(params: {
       rootDir: fullPath,
       origin: params.origin,
       ownershipUid: params.ownershipUid,
+      repairBundledPermissions: params.repairBundledPermissions,
       workspaceDir: params.workspaceDir,
       candidates: params.candidates,
       diagnostics: params.diagnostics,
@@ -596,6 +637,7 @@ function discoverInDirectory(params: {
         rootDir: fullPath,
         origin: params.origin,
         ownershipUid: params.ownershipUid,
+        repairBundledPermissions: params.repairBundledPermissions,
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: fullPath,
@@ -608,6 +650,7 @@ function discoverFromPath(params: {
   rawPath: string;
   origin: PluginOrigin;
   ownershipUid?: number | null;
+  repairBundledPermissions?: boolean;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   candidates: PluginCandidate[];
@@ -643,6 +686,7 @@ function discoverFromPath(params: {
       rootDir: path.dirname(resolved),
       origin: params.origin,
       ownershipUid: params.ownershipUid,
+      repairBundledPermissions: params.repairBundledPermissions,
       workspaceDir: params.workspaceDir,
     });
     return;
@@ -691,6 +735,7 @@ function discoverFromPath(params: {
           rootDir: resolved,
           origin: params.origin,
           ownershipUid: params.ownershipUid,
+          repairBundledPermissions: params.repairBundledPermissions,
           workspaceDir: params.workspaceDir,
           manifest,
           packageDir: resolved,
@@ -703,6 +748,7 @@ function discoverFromPath(params: {
       rootDir: resolved,
       origin: params.origin,
       ownershipUid: params.ownershipUid,
+      repairBundledPermissions: params.repairBundledPermissions,
       workspaceDir: params.workspaceDir,
       candidates: params.candidates,
       diagnostics: params.diagnostics,
@@ -727,6 +773,7 @@ function discoverFromPath(params: {
         rootDir: resolved,
         origin: params.origin,
         ownershipUid: params.ownershipUid,
+        repairBundledPermissions: params.repairBundledPermissions,
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: resolved,
@@ -738,6 +785,7 @@ function discoverFromPath(params: {
       dir: resolved,
       origin: params.origin,
       ownershipUid: params.ownershipUid,
+      repairBundledPermissions: params.repairBundledPermissions,
       workspaceDir: params.workspaceDir,
       candidates: params.candidates,
       diagnostics: params.diagnostics,
@@ -747,19 +795,79 @@ function discoverFromPath(params: {
   }
 }
 
+function discoverScopedPluginCandidates(params: {
+  onlyPluginIds: string[];
+  roots: Array<{
+    dir?: string;
+    origin: PluginOrigin;
+    workspaceDir?: string;
+  }>;
+  ownershipUid?: number | null;
+  repairBundledPermissions?: boolean;
+  env: NodeJS.ProcessEnv;
+  candidates: PluginCandidate[];
+  diagnostics: PluginDiagnostic[];
+  seen: Set<string>;
+}): string[] {
+  const unresolved = new Set(params.onlyPluginIds);
+  tracePluginDiscoveryStage(
+    params.env,
+    `plugin-discovery-scoped-start count=${params.onlyPluginIds.length}`,
+  );
+
+  for (const pluginId of params.onlyPluginIds) {
+    for (const root of params.roots) {
+      if (!root.dir) {
+        continue;
+      }
+      const candidateDir = path.join(root.dir, pluginId);
+      if (!fs.existsSync(candidateDir)) {
+        continue;
+      }
+      const beforeCount = params.candidates.length;
+      discoverFromPath({
+        rawPath: candidateDir,
+        origin: root.origin,
+        ownershipUid: params.ownershipUid,
+        repairBundledPermissions: params.repairBundledPermissions,
+        workspaceDir: root.workspaceDir,
+        env: params.env,
+        candidates: params.candidates,
+        diagnostics: params.diagnostics,
+        seen: params.seen,
+      });
+      if (params.candidates.length > beforeCount) {
+        unresolved.delete(pluginId);
+      }
+    }
+  }
+
+  tracePluginDiscoveryStage(
+    params.env,
+    `plugin-discovery-scoped-complete unresolved=${unresolved.size}`,
+  );
+  return [...unresolved].toSorted((a, b) => a.localeCompare(b));
+}
+
 export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
   ownershipUid?: number | null;
+  repairBundledPermissions?: boolean;
   cache?: boolean;
   env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
 }): PluginDiscoveryResult {
   const env = params.env ?? process.env;
+  const repairBundledPermissions = params.repairBundledPermissions !== false;
+  const onlyPluginIds = normalizeScopedPluginIds(params.onlyPluginIds);
   const cacheEnabled = params.cache !== false && shouldUseDiscoveryCache(env);
   const cacheKey = buildDiscoveryCacheKey({
     workspaceDir: params.workspaceDir,
     extraPaths: params.extraPaths,
     ownershipUid: params.ownershipUid,
+    repairBundledPermissions,
+    onlyPluginIds,
     env,
   });
   if (cacheEnabled) {
@@ -789,6 +897,7 @@ export function discoverOpenClawPlugins(params: {
       rawPath: trimmed,
       origin: "config",
       ownershipUid: params.ownershipUid,
+      repairBundledPermissions,
       workspaceDir: workspaceDir?.trim() || undefined,
       env,
       candidates,
@@ -796,11 +905,47 @@ export function discoverOpenClawPlugins(params: {
       seen,
     });
   }
-  if (roots.workspace && workspaceRoot) {
+
+  const unresolvedScopedPluginIds =
+    onlyPluginIds && onlyPluginIds.length > 0
+      ? discoverScopedPluginCandidates({
+          onlyPluginIds,
+          roots: [
+            {
+              dir: roots.workspace,
+              origin: "workspace",
+              workspaceDir: workspaceRoot,
+            },
+            {
+              dir: roots.stock,
+              origin: "bundled",
+            },
+            {
+              dir: roots.global,
+              origin: "global",
+            },
+          ],
+          ownershipUid: params.ownershipUid,
+          repairBundledPermissions,
+          env,
+          candidates,
+          diagnostics,
+          seen,
+        })
+      : [];
+  const shouldFallbackToFullScan = unresolvedScopedPluginIds.length > 0;
+  if (shouldFallbackToFullScan) {
+    tracePluginDiscoveryStage(
+      env,
+      `plugin-discovery-scoped-fallback unresolved=${unresolvedScopedPluginIds.join(",")}`,
+    );
+  }
+  if ((!onlyPluginIds || shouldFallbackToFullScan) && roots.workspace && workspaceRoot) {
     discoverInDirectory({
       dir: roots.workspace,
       origin: "workspace",
       ownershipUid: params.ownershipUid,
+      repairBundledPermissions,
       workspaceDir: workspaceRoot,
       candidates,
       diagnostics,
@@ -808,11 +953,12 @@ export function discoverOpenClawPlugins(params: {
     });
   }
 
-  if (roots.stock) {
+  if ((!onlyPluginIds || shouldFallbackToFullScan) && roots.stock) {
     discoverInDirectory({
       dir: roots.stock,
       origin: "bundled",
       ownershipUid: params.ownershipUid,
+      repairBundledPermissions,
       candidates,
       diagnostics,
       seen,
@@ -821,14 +967,17 @@ export function discoverOpenClawPlugins(params: {
 
   // Keep auto-discovered global extensions behind bundled plugins.
   // Users can still intentionally override via plugins.load.paths (origin=config).
-  discoverInDirectory({
-    dir: roots.global,
-    origin: "global",
-    ownershipUid: params.ownershipUid,
-    candidates,
-    diagnostics,
-    seen,
-  });
+  if (!onlyPluginIds || shouldFallbackToFullScan) {
+    discoverInDirectory({
+      dir: roots.global,
+      origin: "global",
+      ownershipUid: params.ownershipUid,
+      repairBundledPermissions,
+      candidates,
+      diagnostics,
+      seen,
+    });
+  }
 
   const result = { candidates, diagnostics };
   if (cacheEnabled) {

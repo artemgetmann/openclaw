@@ -505,11 +505,32 @@ export function registerBrowserAgentActRoutes(
             const modifiers = parsedModifiers.modifiers;
             if (isExistingSession) {
               if (selector) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session click does not support selector targeting yet; use ref.",
-                );
+                if (doubleClick) {
+                  return jsonError(
+                    res,
+                    501,
+                    "existing-session selector click does not support doubleClick yet; use ref.",
+                  );
+                }
+                // Existing-session Chrome MCP clicks are ref-based, but the agent can still
+                // surface CSS selectors on hostile sites. Fall back to page-context clicking
+                // so we can keep moving instead of hard-failing on selector-only actions.
+                await evaluateChromeMcpScript({
+                  profileName,
+                  targetId: tab.targetId,
+                  fn: `(selector) => {
+                    const el = document.querySelector(selector);
+                    if (!(el instanceof HTMLElement)) {
+                      throw new Error(\`No element matches selector: \${selector}\`);
+                    }
+                    el.scrollIntoView({ block: "center", inline: "center" });
+                    el.click();
+                    return true;
+                  }`,
+                  args: [selector],
+                  timeoutMs: timeoutMs ?? undefined,
+                });
+                return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
               }
               if ((button && button !== "left") || (modifiers && modifiers.length > 0)) {
                 return jsonError(
@@ -523,6 +544,7 @@ export function registerBrowserAgentActRoutes(
                 targetId: tab.targetId,
                 uid: ref!,
                 doubleClick,
+                timeoutMs: timeoutMs ?? undefined,
               });
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
             }
@@ -589,12 +611,14 @@ export function registerBrowserAgentActRoutes(
                 targetId: tab.targetId,
                 uid: ref!,
                 value: text,
+                timeoutMs: timeoutMs ?? undefined,
               });
               if (submit) {
                 await pressChromeMcpKey({
                   profileName,
                   targetId: tab.targetId,
                   key: "Enter",
+                  timeoutMs: timeoutMs ?? undefined,
                 });
               }
               return res.json({ ok: true, targetId: tab.targetId });
@@ -628,11 +652,17 @@ export function registerBrowserAgentActRoutes(
               return jsonError(res, 400, "key is required");
             }
             const delayMs = toNumber(body.delayMs);
+            const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
               if (delayMs) {
                 return jsonError(res, 501, "existing-session press does not support delayMs.");
               }
-              await pressChromeMcpKey({ profileName, targetId: tab.targetId, key });
+              await pressChromeMcpKey({
+                profileName,
+                targetId: tab.targetId,
+                key,
+                timeoutMs: timeoutMs ?? undefined,
+              });
               return res.json({ ok: true, targetId: tab.targetId });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
@@ -662,14 +692,12 @@ export function registerBrowserAgentActRoutes(
                   "existing-session hover does not support selector targeting yet; use ref.",
                 );
               }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session hover does not support timeoutMs overrides.",
-                );
-              }
-              await hoverChromeMcpElement({ profileName, targetId: tab.targetId, uid: ref! });
+              await hoverChromeMcpElement({
+                profileName,
+                targetId: tab.targetId,
+                uid: ref!,
+                timeoutMs: timeoutMs ?? undefined,
+              });
               return res.json({ ok: true, targetId: tab.targetId });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
@@ -755,18 +783,12 @@ export function registerBrowserAgentActRoutes(
                   "existing-session drag does not support selector targeting yet; use startRef/endRef.",
                 );
               }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session drag does not support timeoutMs overrides.",
-                );
-              }
               await dragChromeMcpElement({
                 profileName,
                 targetId: tab.targetId,
                 fromUid: startRef!,
                 toUid: endRef!,
+                timeoutMs: timeoutMs ?? undefined,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
@@ -808,18 +830,12 @@ export function registerBrowserAgentActRoutes(
                   "existing-session select currently supports a single value only.",
                 );
               }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session select does not support timeoutMs overrides.",
-                );
-              }
               await fillChromeMcpElement({
                 profileName,
                 targetId: tab.targetId,
                 uid: ref!,
                 value: values[0] ?? "",
+                timeoutMs: timeoutMs ?? undefined,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
@@ -852,21 +868,57 @@ export function registerBrowserAgentActRoutes(
             }
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session fill does not support timeoutMs overrides.",
-                );
+              const refFields = fields.filter(
+                (field): field is BrowserFormField & { ref: string } =>
+                  typeof field.ref === "string",
+              );
+              const selectorFields = fields.filter(
+                (field): field is BrowserFormField & { selector: string } =>
+                  typeof field.selector === "string" && field.selector.trim().length > 0,
+              );
+              if (refFields.length) {
+                await fillChromeMcpForm({
+                  profileName,
+                  targetId: tab.targetId,
+                  elements: refFields.map((field) => ({
+                    uid: field.ref,
+                    value: String(field.value ?? ""),
+                  })),
+                  timeoutMs: timeoutMs ?? undefined,
+                });
               }
-              await fillChromeMcpForm({
-                profileName,
-                targetId: tab.targetId,
-                elements: fields.map((field) => ({
-                  uid: field.ref,
-                  value: String(field.value ?? ""),
-                })),
-              });
+              for (const field of selectorFields) {
+                // Existing-session Chrome MCP only fills by ref. When the agent only has a
+                // selector, use page-context DOM writes so we do not discard an otherwise
+                // valid form action.
+                await evaluateChromeMcpScript({
+                  profileName,
+                  targetId: tab.targetId,
+                  fn: `(selector, rawValue) => {
+                    const el = document.querySelector(selector);
+                    if (!(el instanceof HTMLElement)) {
+                      throw new Error(\`No element matches selector: \${selector}\`);
+                    }
+                    const value = rawValue == null ? "" : String(rawValue);
+                    if (el instanceof HTMLInputElement) {
+                      if (el.type === "checkbox" || el.type === "radio") {
+                        el.checked = value === "true" || value === "1";
+                      } else {
+                        el.value = value;
+                      }
+                    } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+                      el.value = value;
+                    } else {
+                      el.setAttribute("value", value);
+                    }
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                    el.dispatchEvent(new Event("change", { bubbles: true }));
+                    return true;
+                  }`,
+                  args: [field.selector, String(field.value ?? "")],
+                  timeoutMs: timeoutMs ?? undefined,
+                });
+              }
               return res.json({ ok: true, targetId: tab.targetId });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
@@ -992,18 +1044,12 @@ export function registerBrowserAgentActRoutes(
             const ref = toStringOrEmpty(body.ref) || undefined;
             const evalTimeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
-              if (evalTimeoutMs !== undefined) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session evaluate does not support timeoutMs overrides.",
-                );
-              }
               const result = await evaluateChromeMcpScript({
                 profileName,
                 targetId: tab.targetId,
                 fn,
                 args: ref ? [ref] : undefined,
+                timeoutMs: evalTimeoutMs ?? undefined,
               });
               return res.json({
                 ok: true,

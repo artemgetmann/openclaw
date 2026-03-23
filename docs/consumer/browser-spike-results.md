@@ -1,6 +1,6 @@
 # Browser Spike Results (Week 1)
 
-Last updated: 2026-03-19
+Last updated: 2026-03-22
 Owner: consumer execution team
 Status: In progress
 
@@ -13,13 +13,13 @@ Status: In progress
 
 ## Baseline snapshot
 
-- Runtime branch: `codex/consumer-openclaw-smoke`
+- Runtime branch: `codex/consumer-browser-improvement`
 - Synced base: `consumer` merged with `origin/main` on 2026-03-16
 - Browser priority order:
   1. `user` (existing-session / Chrome MCP)
   2. `openclaw` (managed browser profile)
-  3. Claude-in-Chrome investigation
-  4. Browserbase (credential-blocked until keys are provided)
+  3. Claude for Chrome extension investigation
+  4. Remote browser infra fallback (`Kernel` / `Steel` before paid Browserbase)
 
 ## Scoring rubric (fixed)
 
@@ -35,33 +35,562 @@ Legend:
 
 - `PASS`, `FAIL`, `BLOCKED`, `PENDING`
 
-| Approach                  | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Notes                                                                                                     |
-| ------------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | --------------------------------------------------------------------------------------------------------- |
-| `user` (existing-session) | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | `status` passes, but `tabs/open` fail due Chrome MCP attach/list_pages behavior in current Chrome session |
-| `openclaw` (managed)      | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`)                     |
-| Claude-in-Chrome          | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Investigation/adaptation track                                                                            |
-| Browserbase               | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                                                        |
+| Approach                  | Task 1 Flight                                          | Task 2 Form          | Task 3 Web Summary                                  | Task 4 X Summary     | Task 5 Multi-step     | Notes                                                                                                                                                                                                                                                                                                      |
+| ------------------------- | ------------------------------------------------------ | -------------------- | --------------------------------------------------- | -------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user` (existing-session) | PASS (median `121.0s`; `r1`: `107.2s`, `r2`: `134.9s`) | PASS (`r1`: `63.1s`) | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | FAIL (`r1`: `40.3s`) | FAIL (`r1`: `59.3s`)  | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL); heavier social/travel flows still time out early                                                                                                           |
+| `openclaw` (managed)      | PASS (median `69.9s`; `r1`: `85.4s`, `r2`: `54.5s`)    | PASS (`r1`: `78.8s`) | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PASS (`r1`: `66.5s`) | FAIL (`r1`: `126.2s`) | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`); survives more sites than `user` but still times out in long multi-step travel workflows. On Emirates `DPS -> DXB` for `2026-03-22`, this lane failed to keep the booking widget stable long enough to load results. |
+| Claude for Chrome         | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Separate category from Anthropic computer-use. It is Chrome-integrated browser control, not generic desktop control, and should be evaluated on its own terms if we can get access and a reproducible test path.                                                                                           |
+| Kernel                    | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Next remote-infra lane. Cleaner architecture comparison than Browser Use because it exposes remote browser infrastructure instead of another agent loop.                                                                                                                                                   |
+| Browserbase               | FAIL (`r1`: `12.2s`)                                   | PENDING              | FAIL (`r1`: `24.0s`, `r2`: `41.6s`, `r3`: `83.6s`)  | PENDING              | PENDING               | Still relevant for anti-bot/CAPTCHA/Cloudflare, but now a later paid comparison lane because cheaper/free infra lanes should be tested first. Transport is healthy only with fresh `keepAlive: true` sessions; real benchmark tasks still fail deeper in the stack.                                        |
 
 ## Current blocker summary
 
-- Browser attach is now profile-specific:
+- Browser attach outcome depends on Chrome runtime mode:
   - `openclaw` profile is healthy (`start`, `status`, `tabs`, `open https://example.com` all succeed).
-  - `user` existing-session is still blocked after attach handoff (`status` passes; `tabs/open` fail).
+  - `user` existing-session is healthy when Chrome is started with explicit CDP flags and attached via browser URL.
+  - `user` existing-session still fails against the current `chrome://inspect` UI-enabled `127.0.0.1:9222` endpoint (`/json/version` returns 404).
 - The benchmark-specific runtime now lives at `/tmp/openclaw-consumer-bench`:
   - copied from `/tmp/openclaw-consumer`
   - `channels.telegram.enabled=false`
   - stale `plugins.entries.openai` removed
 - Local runner startup blocker is resolved:
   - `agent --local --message 'Reply with exactly OK and nothing else.' --timeout 120` returns `OK` on bench runtime.
-- Existing-session failure reproduces outside OpenClaw (direct MCP probe):
-  - `chrome-devtools-mcp --autoConnect`: `list_pages` request times out.
+- Existing-session findings reproduced outside OpenClaw (direct MCP probe):
+  - `chrome-devtools-mcp --autoConnect` against current desktop Chrome: `list_pages` request times out.
   - `chrome-devtools-mcp --browserUrl http://127.0.0.1:9222`: returns error content because `/json/version` is HTTP 404.
+  - Launching a separate Chrome with `--remote-debugging-port=9333` exposes standard CDP (`/json/version` works), and OpenClaw `user` lane then passes `status`, `tabs`, and `open`.
+- Current benchmark harness findings:
+  - The benchmark gateway must run in a persistent terminal session; backgrounding it from a short-lived exec shell causes false "silent exit" failures because the child process gets reaped with the shell.
+  - The benchmark runtime must carry `agents/main/agent/auth-profiles.json` and `auth.json`; copying only `openclaw.json` is not enough for `agent --local`.
+  - The copied home config was too "live"; a stable benchmark lane requires `bindings=[]` and all chat channels disabled.
+  - Existing-session snapshot compatibility patch landed on this branch: selector/frame snapshot requests now degrade to full-page snapshot with a warning instead of failing the call.
+  - `profile=user` Task 3 passed; the warning may still appear as compatibility guidance but is no longer a hard error path.
+  - The desktop Consumer app owns port `19001`, so the isolated benchmark gateway now runs on `19011` to avoid token mismatches and cross-runtime noise.
+  - `profile=openclaw` is currently faster on the completed flight and web-summary tasks, but `profile=user` is now also passing real flight and form tasks on the dedicated CDP Chrome.
+  - 2026-03-21 hardening reruns moved the blocker deeper:
+    - `profile=user` no longer dies first on browser attach or `new_page`; the latest Emirates rerun instead failed later with `LLM request timed out`.
+    - `profile=openclaw` reaches real interaction attempts on Emirates, but still hits repeated-field ambiguity (`Selector "button" matched 248 elements`) plus element interaction timeouts before the flow completes.
+  - Browserbase findings on 2026-03-21:
+    - Credentials are valid and Browserbase session creation works.
+    - Direct OpenClaw browser smoke passes (`status`, `open https://example.com`, `tabs`) when Browserbase sessions are created with `keepAlive: true`.
+    - A fresh-session minimal local-agent browser task also passes on Browserbase (`open https://example.com`).
+    - Default Browserbase sessions (`keepAlive: false`) are incompatible with OpenClaw's probe/connect pattern because the session dies after disconnect and the next action hits a dead `connectUrl`.
+    - Browserbase account currently has a very small concurrent-session cap (`3`), so leaked probe sessions quickly trigger `429 Too Many Requests`.
+    - The latest Browserbase Task 3 rerun no longer fails at remote-CDP reachability; it opens the target article and then times out later when the browser tool tries to inspect page contents for summarization.
+    - Browserbase Task 1 split rerun shows the same pattern: on a fresh `keepAlive: true` session, direct `status` and `open https://www.google.com/travel/flights` pass first, and the next concrete failure moves downstream to Google Flights field interaction (`locator.fill` timeout) rather than initial remote-CDP attachment.
+    - A fresh Browserbase Task 1 rerun on this worktree still fails much earlier on Google Flights with `Remote CDP ... not reachable`, even though a tiny same-session smoke (`open https://example.com`) still passes.
+- Browser Use findings on 2026-03-22:
+  - Side-lane setup is now complete enough to benchmark without more local environment work:
+    - repo-local Browser Use venv created at `.venv-browser-use`
+    - pinned Browser Use CLI installed and runnable
+    - cloned real-Chrome profile prepared at `/tmp/browser-use-profile4-clone`
+    - Browser Use `doctor` passes `4/5` checks
+  - Local secrets are no longer the main blocker:
+    - local Browser Use `open` now works with `OPENAI_API_KEY` on a fresh profile name
+    - Browser Use does not appear to attach directly to the live Chrome root the way OpenClaw's cloned real-Chrome lane does
+  - Corrected behavior model:
+    - Browser Use local real-browser mode launches Chrome with its own temp `--user-data-dir`
+    - the provided `--profile` value becomes the profile directory name inside that temp browser root
+    - this means the current CLI path is not a true "use my existing Profile 4 state directly" lane
+  - Fresh proof:
+    - `browser-use --session fresh1 -b real --headed --profile BrowserUseFresh open https://example.com`
+    - result: `PASS`
+  - Current blocker split:
+    - `Profile 4` still fails early in Browser Use local real-browser mode with `BrowserStartEvent ... timed out after 30.0s`
+    - fresh-profile `run` gets further, but the Emirates task currently fails differently: the CLI times out on its local socket wait, and the session is left without a usable root CDP client (`Root CDP client not initialized`)
+  - Interpretation:
+    - Browser Use itself is not dead; simple local real-browser control works
+    - but the current CLI/local-session path is not yet trustworthy for the Emirates benchmark
+    - and it should not be described as "cloned real-profile state" because that is not what the local CLI is actually running
+
+- Claude for Chrome findings / correction on 2026-03-22:
+  - This should be treated as a separate lane from Anthropic's generic computer-use API.
+  - The user is specifically referring to the Chrome extension / Chrome connector path, where Claude operates inside Google Chrome with browser-specific integration.
+  - That matters because it is closer to "control Chrome directly" than to generic desktop screenshot+mouse automation.
+  - Official references:
+    - Anthropic launch note: `https://www.anthropic.com/news/claude-for-chrome/`
+    - Claude for Chrome landing page: `https://claude.com/chrome`
+
+- Remote browser infra prioritization update on 2026-03-22:
+  - Browserbase should no longer be the first remote infra lane we reach for, because it currently requires paid credits to continue useful testing on this account.
+  - Cheaper/free remote infra candidates should be tested before paying for more Browserbase minutes:
+    - `Kernel` first if we want to evaluate non-CDP computer-controls + managed auth claims
+    - `Steel` first if we want to evaluate session/auth persistence and credentials handling
+  - Browserbase still matters if we explicitly want to test Cloudflare Signed Agents / CAPTCHA / anti-bot claims.
+  - Kernel prep is now repo-local:
+    - dependency added: `@onkernel/sdk`
+    - helper added: `scripts/repro/kernel-browser-smoke.sh`
+    - first evaluation order:
+      1. `doctor`
+      2. `smoke-open https://example.com`
+      3. `open-emirates`
+  - Kernel status is now: infra validated, agent integration deferred.
+    - `doctor` passes with expected config.
+    - remote session creation + CDP attach works.
+    - page-open smoke works for both `https://example.com` and `https://www.emirates.com/english/`.
+    - this is enough proof to keep Kernel on the board without spending time on integration before the current browser lanes are benchmarked harder.
+  - Kernel should not be benchmarked further with handcrafted DOM scripts.
+    - that would measure our Playwright scripting, not OpenClaw agent capability.
+    - if we revisit Kernel seriously, the next step is a minimal OpenClaw integration, not a one-off scraper.
+
+## Recommended next benchmark set
+
+- Gmail read on a sacrificial test account
+  - purpose: signed-in mail UI, auth persistence, hostile/high-value state
+- Reddit DM / reply task
+  - purpose: hostile logged-in consumer UI, popups, composer behavior, policy constraints
+- Google Sign-In on a throwaway account
+  - purpose: SSO friction, popup/tab handling, anti-bot/login challenge behavior
+- Emirates baseline
+  - purpose: keep the already-proven hostile travel benchmark as the reference lane
+
+## Next benchmark matrix to execute
+
+Use this exact comparison order before expanding scope:
+
+1. `profile=user` cloned-real-Chrome lane
+2. `profile=openclaw` managed lane
+3. `Kernel` stays infra-validated only; do not count it as an agent benchmark lane yet
+
+Use these exact task definitions:
+
+- Gmail read-first-email
+  - account: sacrificial Google account only
+  - success: inbox loads, first visible email is opened, sender + subject are reported
+- Reddit DM / reply
+  - account: throwaway or low-risk account only
+  - success: inbox/DM UI loads, one target thread opens, draft or safe reply action reaches visible composer state
+- Google Sign-In
+  - account: throwaway Google account only
+  - success: sign-in flow reaches logged-in destination page without ambiguous stuck state
+- Emirates baseline
+  - route: `DPS -> DXB`
+  - date: `2026-03-22`
+  - success: visible flight options load and top visible options are reported
+
+Execution rule:
+
+- Run the two OpenClaw lanes first.
+- Only return to Kernel after the direct OpenClaw comparison is complete and documented.
+
+## 2026-03-22 current benchmark wave
+
+Environment used:
+
+- benchmark runtime: `/tmp/openclaw-consumer-bench-lite`
+- model: `openai-codex/gpt-5.4`
+- browser attach for `profile=user`: `OPENCLAW_CHROME_MCP_BROWSER_URL=http://127.0.0.1:9333`
+- gateway port: `19011`
+
+Gmail read-first-email:
+
+- `user`
+  - result: `PASS`
+  - duration: `42.6s`
+  - outcome:
+    - inbox access already available
+    - first visible message opened successfully
+    - sender: `Grab <no-reply@grab.com>`
+    - subject: `Your Grab E-Receipt`
+  - note:
+    - the run completed on `openai-codex/gpt-5.4`
+    - pre-run logs still showed `refresh_token_reused`, so this auth lane is usable but fragile
+- `openclaw`
+  - result: `FAIL`
+  - duration: `42.6s`
+  - outcome:
+    - Gmail opened to the Google sign-in screen
+    - no inbox/session state was present in the managed browser
+    - the run stopped immediately as required
+  - blocker: `login required`
+  - note:
+    - this is expected for the isolated managed browser lane unless we explicitly sign Google into that profile
+
+Google Sign-In:
+
+- `user`
+  - result: `PASS`
+  - duration: `28.2s`
+  - outcome:
+    - opening the Google sign-in URL immediately landed on an already signed-in Google Account page
+    - no credentials were entered
+  - details: `already signed in`
+- `openclaw`
+  - result: `PASS`
+  - duration: `15.9s`
+  - outcome:
+    - opening the Google sign-in URL reached the visible `Email or phone` entry field
+    - the run stopped there as required without entering credentials
+  - details: `reached email field`
+
+Reddit DM / reply access:
+
+- `user`
+  - result: `PASS`
+  - duration: `144.3s`
+  - outcome:
+    - Reddit was already accessible in the signed-in user browser profile
+    - the run navigated into the chat / DM area
+    - a readable direct conversation thread opened successfully
+    - a visible draft-capable message composer was on screen
+  - details: `direct chat thread with Sufficient-Row-7951 open and visible message composer`
+- `openclaw`
+  - result: `FAIL`
+  - duration: `21.3s`
+  - outcome:
+    - opening Reddit in the managed browser immediately triggered a `Prove your humanity` screen
+    - access was blocked by a visible reCAPTCHA challenge before inbox/messages/DM UI was reachable
+  - blocker: `Reddit "Prove your humanity" reCAPTCHA challenge blocked access`
+
+Emirates `DPS -> DXB` for `2026-03-22`:
+
+- `user`
+  - result: `PASS`
+  - duration: `119.5s`
+  - outcome:
+    - one-way search results loaded successfully for Sunday, 22 March 2026
+    - one visible outbound option was shown
+  - details:
+    - `EK369` nonstop
+    - `DPS 19:50 -> DXB 01:10+1`
+    - `9h 20m`
+    - `A380`
+    - `Economy from IDR 8,053,600`
+  - obvious constraints:
+    - Indonesia site / IDR pricing
+    - only 1 visible option on that date in the captured state
+- `openclaw`
+  - result: `FAIL`
+  - duration: `150.0s`
+  - outcome:
+    - Emirates loaded and the booking flow started
+    - the managed browser hit brittle interaction errors during the search flow
+    - the run ended on an Emirates booking error page instead of visible flight choices
+  - blocker:
+    - `Sorry, something went wrong`
+    - `Please start a new search below`
+    - `Sorry, we couldn't complete your search. Please try searching again.`
+
+## Current recommendation
+
+- Primary MVP lane:
+  - cloned real-Chrome state in a separate browser window for signed-in and hostile tasks
+  - this preserves the user's real session state without hijacking the live daily browser process
+- Fallback lane:
+  - OpenClaw managed browser
+  - use this when the task does not need the user's signed-in state or when isolation matters more than session reuse
+- Side lane only:
+  - Browser Use
+- Later remote infra comparison:
+  - `Kernel` or `Steel` before paying to continue Browserbase
+- Auth/session portability follow-up:
+  - credential broker
+  - login skill
+  - MFA strategy
+  - future 1Password integration
+  - one-time post-update user education for new credential tooling so users understand what changed and why it matters
+- Current benchmark signal:
+  - cloned real-Chrome state is winning all completed signed-in / hostile checks in this wave
+  - `openclaw` managed browser remains the clean fallback, but it is currently losing on:
+    - session reuse
+    - Reddit anti-bot friction
+    - Emirates booking-flow robustness
+- Real-Chrome findings on 2026-03-21:
+  - Chrome will not allow CDP on the user's live default data dir/profile directly; it requires a non-default `--user-data-dir`.
+  - The workable compromise is a cloned real-profile lane:
+    - source profile detected via `chrome://version`
+    - current founder profile: `Profile 4`
+    - clone path: throwaway temp dir
+    - launch Chrome against the clone with `--remote-debugging-port=9333`
+  - This cloned-profile lane preserves real-ish cookies/session state without hijacking the user's day-to-day Chrome runtime.
+  - The one-shot repro helper for this lane is `scripts/repro/consumer-user-profile4-clone-emirates.sh`.
 
 Interpretation:
 
 - This is not a gateway/local-runner timeout issue anymore.
-- Existing-session instability is currently a Chrome MCP handshake/attach issue with the current Chrome runtime.
+- Existing-session instability is currently tied to the current Chrome runtime mode, not OpenClaw gateway routing.
 - Benchmark execution can proceed immediately on `openclaw` managed profile while existing-session is being stabilized.
+
+## 2026-03-20 partial benchmark evidence
+
+Artifact root:
+
+- `.artifacts/browser-spike-20260320-114824`
+
+Validated setup:
+
+- benchmark runtime: `/tmp/openclaw-consumer-bench`
+- model: `openai-codex/gpt-5.4`
+- browser attach for `profile=user`: `OPENCLAW_CHROME_MCP_BROWSER_URL=http://127.0.0.1:9333`
+- gateway must stay alive in a persistent terminal session on an isolated port; current benchmark lane uses `19011` because `19001` is owned by the desktop Consumer app runtime
+
+Task 3, runs 1-2:
+
+- `user`
+  - result: `PASS`
+  - run 1: `49.2s`
+  - run 2: `28.7s`
+  - median: `39.0s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task3_r1/agent.json`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task3_r2/agent.json`
+  - note: run completed, but stderr showed `selector/frame snapshots are not supported for existing-session profiles`
+- `openclaw`
+  - result: `PASS`
+  - run 1: `29.1s`
+  - run 2: `38.6s`
+  - median: `33.9s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task3_r1/agent.json`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task3_r2/agent.json`
+  - note: no matching browser snapshot warning on run 1
+
+Task 1, run 1:
+
+- `user`
+  - result: `PASS`
+  - run 1: `107.2s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task1_r1/agent.json`
+- `openclaw`
+  - result: `PASS`
+  - run 1: `85.4s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task1_r1/agent.json`
+
+## 2026-03-21 Browserbase compatibility evidence
+
+Artifact roots:
+
+- `.artifacts/browser-spike-20260321-browserbase-smoke`
+- `.artifacts/browserbase-fresh-20260321-165522`
+
+Validated setup:
+
+- benchmark runtime: `/tmp/openclaw-consumer-bench`
+- model: `openai-codex/gpt-5.4`
+- Browserbase session creation: `POST /v1/sessions`
+- required provider flag: `keepAlive: true`
+
+Transport proof:
+
+- raw Browserbase session creation succeeds with provided credentials
+- raw `playwright-core.connectOverCDP(...)` succeeds immediately against a fresh Browserbase `connectUrl`
+- OpenClaw browser CLI smoke succeeds when the Browserbase session is created with `keepAlive: true`
+  - `status`: `PASS`
+  - `open https://example.com`: `PASS`
+  - `tabs`: `PASS`
+- OpenClaw local-agent browser-tool smoke also succeeds on the same fresh-session pattern
+  - task: open `https://example.com`
+  - result: `PASS`
+  - artifact: `.artifacts/browserbase-fresh-20260321-165522/agent.json`
+- OpenClaw local-agent browser-tool smoke also succeeds from the current worktree/runtime pairing
+  - task: open `https://example.com`
+  - result: `PASS`
+  - artifact: `.artifacts/browserbase-fresh-20260321-4c26-smoke/agent.json`
+
+Critical compatibility rule:
+
+- Browserbase sessions created with the provider default (`keepAlive: false`) are not stable for OpenClaw's attach/probe pattern.
+- With `keepAlive: false`, OpenClaw can connect once, then the session is completed and the next action fails on a dead `connectUrl`.
+- Browserbase's concurrent-session limit is currently `3`; leaked probe sessions quickly trigger `429 Too Many Requests`.
+
+Task 3, runs 1-3:
+
+- `browserbase`
+  - result: `FAIL`
+  - run 1: `24.0s`
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task3_r1/agent.json`
+  - note: file is polluted by a leading `[browser/service] ...` line, but the payload content is still readable and reports a browser-tool failure: `Remote CDP for profile "browserbase" is not reachable`
+  - run 2: `41.6s`
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task3_r2/agent.json`
+  - note: second rerun still failed on the old remote-CDP reachability path
+  - run 3: `83.6s`
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task3_r3/agent.json`
+  - stderr: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task3_r3/agent.stderr.log`
+  - note: this rerun opened the target public article successfully, then timed out later when the browser tool attempted to inspect page contents for summarization
+  - interpretation: Browserbase transport is proven viable, and the local-agent/browser-tool path can work on fresh sessions; the remaining instability is in deeper browser-tool inspection/snapshot behavior, not initial remote-CDP attachment
+
+Task 1, run 1:
+
+- `browserbase`
+  - result: `FAIL`
+  - run 1: `12.2s`
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r1/agent.json`
+  - stderr: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r1/agent.stderr.log`
+  - note: direct Browserbase `status` still passed immediately before the run, but the real Google Flights task failed early with `Remote CDP for profile "browserbase" is not reachable`
+
+Task 1, run 2:
+
+- `user`
+  - result: `PASS`
+  - run 2: `134.9s`
+  - median: `121.0s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task1_r2/agent.json`
+- `openclaw`
+  - result: `PASS`
+  - run 2: `54.5s`
+  - median: `69.9s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task1_r2/agent.json`
+
+Browserbase Task 1 split proof, runs 1-2:
+
+- `browserbase`
+  - run 1: fresh-session direct task attempt
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r1/agent.json`
+  - stderr: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r1/agent.stderr.log`
+  - result: `FAIL`
+  - note: this run still failed at initial Browserbase remote-CDP reachability on a fresh session
+  - run 2: fresh-session split warm-up (`status` + `open`) before agent task
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r2b/direct-status.txt`
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r2b/direct-open.txt`
+  - stderr: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r2b/agent.stderr.log`
+  - result: `PARTIAL`
+  - note: Browserbase transport passed on the same session (`status`, `open https://www.google.com/travel/flights`), and the next concrete blocker became a Google Flights field fill timeout: `TimeoutError: locator.fill: Timeout 5000ms exceeded` while waiting on `locator('aria-ref=ax194')`
+
+Task 2, run 1:
+
+- `user`
+  - result: `PASS`
+  - run 1: `63.1s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task2_r1/agent.json`
+  - note: concrete public test target used: `https://www.selenium.dev/selenium/web/web-form.html`
+- `openclaw`
+  - result: `PASS`
+  - run 1: `78.8s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task2_r1/agent.json`
+  - note: concrete public test target used: `https://www.selenium.dev/selenium/web/web-form.html`
+
+Task 4, run 1:
+
+- `user`
+  - result: `FAIL`
+  - run 1: `40.3s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task4_r1/agent.json`
+  - note: opening the requested X post timed out immediately and the browser tool advised not to retry
+- `openclaw`
+  - result: `PASS`
+  - run 1: `66.5s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task4_r1/agent.json`
+  - note: requested post URL looked unavailable, so the run fell back to another visible public `@OpenAI` post and summarized that instead
+
+Supplemental real-site commerce smoke, early read:
+
+- `user` on Emirates booking flow:
+  - result: `FAIL`
+  - run 1: `44.9s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task6_r1/agent.json`
+  - note: `emirates.com` timed out on the initial open step
+- `openclaw` on Emirates booking flow:
+  - status: `INCOMPLETE`
+  - note: run 1 reached the booking form, then hit selector ambiguity on repeated airport fields before a clean completion/failure summary was produced; run 2 used an explicit screenshot/snapshot-first prompt and avoided the immediate selector failure, but still did not finish cleanly inside the benchmark window
+
+## 2026-03-21 Emirates comparison: cloned real Chrome vs managed browser
+
+Task:
+
+- one-way `Denpasar (DPS) -> Dubai (DXB)`
+- date: `2026-03-22`
+- stop when visible flight options load
+
+Cloned real-Chrome lane (`user`, cloned `Profile 4`):
+
+- result: `PASS`
+- run time: `127.0s`
+- launch mode:
+  - clone real profile into a throwaway `--user-data-dir`
+  - launch Chrome with `--remote-debugging-port=9333`
+  - attach OpenClaw `profile=user` to that CDP endpoint
+- artifact summary:
+  - visible page showed `Choose your outbound flight`
+  - `Sunday, 22 March 2026`
+  - `(5 options)`
+  - top visible nonstop options:
+    - `EK399`, `B777`, `00:25 -> 05:45`, `9h 20m`, `IDR 8,053,600`
+    - `EK369`, `A380`, `19:50 -> 01:10+1`, `9h 20m`, `IDR 8,053,600`
+  - slower one-stop options were visible below and marked worse or sold out
+- interpretation:
+  - cloned real-Chrome state currently beats the managed `openclaw` browser on this travel site
+  - this is the closest working version of the intended "use my real browser state" architecture
+
+Managed browser lane (`openclaw`):
+
+- result: `FAIL`
+- run time: `169.3s`
+- artifact summary:
+  - initial click/fill attempts timed out
+  - booking widget became unstable
+  - page regressed to the static `Book a flight` / `How to book a flight ticket with Emirates` content
+  - no safe visible result list loaded
+- interpretation:
+  - this lane is still viable for some sites, but on Emirates it is currently worse than the cloned real-Chrome lane
+
+## 2026-03-21 hardening reruns
+
+Artifact root:
+
+- `.artifacts/browser-spike-20260321-emirates-clean`
+
+Validated setup:
+
+- benchmark runtime: `/tmp/openclaw-consumer-bench`
+- gateway: `ws://127.0.0.1:19011`
+- browser control: `http://127.0.0.1:19013`
+- `profile=user` attach target: `OPENCLAW_CHROME_MCP_BROWSER_URL=http://127.0.0.1:9333`
+- screenshots/snapshots were explicitly required before each major step
+
+Hardening verified before reruns:
+
+- isolated bench sessions no longer reuse stale absolute `sessionFile` paths from the shared Consumer app runtime
+- browser availability/status checks were widened so healthy browsers stop being marked unavailable too aggressively
+- existing-session `new_page` forwards the larger timeout budget and now gets past the old early-navigation failure mode
+- existing-session action tools (`click`, `fill`, `fill_form`, `hover`, `drag`, `press`) now forward `timeoutMs` instead of silently falling back to a short default
+
+Emirates rerun status:
+
+- `user`
+  - artifact: `.artifacts/browser-spike-20260321-emirates-clean/runs/user_task6_final_r2/`
+  - result: `FAIL`
+  - note: this rerun no longer failed on browser attach or the first `new_page`; it failed later with repeated `LLM request timed out`, so the active blocker shifted from browser transport to model/runtime completion on the heavy prompt
+  - latest spot check: `.artifacts/browser-spike-20260321-emirates-clean/runs/user_task6_final_r3/`
+  - latest spot-check note: the lane is still non-deterministic; a fresh rerun regressed to `Chrome MCP attach timed out for profile "user" after 15000ms`
+- `openclaw`
+  - artifact: `.artifacts/browser-spike-20260321-emirates-clean/runs/openclaw_task6_final/`
+  - result: `FAIL`
+  - note: browser actions progressed further than before, but the run still collapsed under real booking-page ambiguity and interaction limits (`Selector "button" matched 248 elements`, `locator.fill: Timeout 5000ms exceeded`, `locator.click: Timeout 5000ms exceeded`)
+
+Current read:
+
+- `profile=user` is materially healthier than it was on 2026-03-20, but the Emirates end-to-end is still non-deterministic: one rerun reached model/runtime timeout after getting past earlier browser failures, while a later spot check still regressed to attach timeout.
+- `profile=openclaw` remains the more reliable interaction baseline, but still needs better repeated-field disambiguation for real commerce/travel sites.
+
+Proof-oriented reruns (same task, stricter stop-and-prove prompt):
+
+- `user`
+  - artifact: `.artifacts/browser-spike-20260321-emirates-clean/runs/user_task6_proof_r8/agent.json`
+  - result: `FAIL`
+  - duration: `107.7s`
+  - note: this rerun did not reach passenger details or payment. It stopped on the visible `Flights to London (LON)` booking widget with validation text including `Please fill all mandatory fields` and `Please choose a departure date`, while the visible button remained `Search flights`.
+- `openclaw`
+  - artifact: `.artifacts/browser-spike-20260321-emirates-clean/runs/openclaw_task6_proof_r1/agent.json`
+  - result: `FAIL`
+  - duration: `235.1s`
+  - note: this rerun got farther than `user`, reaching the visible `Book a flight` multi-city form with visible `Flight 1` / `Flight 2` sections and one departure date set to `21 Mar 26`, but it still failed before passenger details because Emirates airport autocomplete/selection remained unresolved (`Please choose a destination`, `Please choose an origin`).
+
+Corrected interpretation after proof reruns:
+
+- The earlier `user_task6_final_r7` `PASS` is not strong enough to claim passenger-details progress. The stronger proof-oriented rerun contradicted it.
+- Neither browser lane currently has proof that it reached passenger details or payment on Emirates.
+- `openclaw` currently appears to get farther than `user` on this exact hostile commerce flow, but it still does not complete the safe pre-payment path.
+
+Task 5, run 1:
+
+- `user`
+  - result: `FAIL`
+  - run 1: `59.3s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task5_r1/agent.json`
+  - note: failed on the first page open while trying to start the flight search/comparison flow
+- `openclaw`
+  - result: `FAIL`
+  - run 1: `126.2s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task5_r1/agent.json`
+  - note: opened the flight search page, but a later required snapshot timed out before the compare-and-open-details flow could finish
 
 ## Command-level benchmark runbook (week 1)
 
