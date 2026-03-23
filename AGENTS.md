@@ -250,8 +250,14 @@ Verify recovery: `openclaw gateway status --deep` and `openclaw channels status 
   - If you need to automate DM threaded E2E, inspect recent MTProto messages to find topic-create anchors, or create a fresh DM topic with MTProto `messages.CreateForumTopicRequest` before sending `/model` into it. Do not guess anchors from visible text messages.
 
 - Worktree credential bootstrap (Telegram live checks):
+  - Preferred worktree lifecycle entrypoint: `bash scripts/new-worktree.sh <feature-name>`.
+  - Preferred stale-claim cleanup entrypoint: `bash scripts/gc-worktrees.sh` first, then `bash scripts/gc-worktrees.sh --auto` only after reviewing the dry-run table.
+  - Preferred isolated mac app entrypoint per worktree: `bash scripts/dev-launch-mac.sh`.
+  - Preferred automatic GC installer: `bash scripts/install-worktree-gc.sh install` (check with `status`, inspect with `install --dry-run`).
+  - The automatic GC scheduler targets the main checkout by default so it survives feature-worktree deletion; override only when that is intentional.
+  - For the full worktree automation flow and scheduler details, read `scripts/telegram-e2e/README.md` section `Worktree automation workflow`.
   - Source of truth is the main checkout at `/Users/user/Programming_Projects/openclaw`.
-  - Preferred: run `bash scripts/bootstrap-worktree-telegram.sh` in each new worktree.
+  - Use `bash scripts/bootstrap-worktree-telegram.sh` only when you intentionally need the lower-level bootstrap step without the higher-level worktree helper.
   - For every new worktree, run:
     - `cp /Users/user/Programming_Projects/openclaw/.env.bots ./.env.bots`
     - `scripts/telegram-live-runtime.sh ensure` (auto-claims/retains this worktree tester bot token)
