@@ -9,7 +9,13 @@ enum ConsumerBootstrap {
         "bear-notes",
         "camsnap",
         "canvas",
+        // Google Workspace covers common consumer operator tasks like Gmail,
+        // Calendar, Drive, and Docs without forcing users into multiple skills.
+        "gog",
         "goplaces",
+        // Email is a core operator surface; keep one provider-agnostic inbox
+        // skill bundled so early users can read, draft, and triage mail.
+        "himalaya",
         "peekaboo",
         "summarize",
         "weather",
