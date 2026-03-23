@@ -79,6 +79,25 @@ extension OnboardingView {
                                     isConsumer: true,
                                     mode: self.state.connectionMode,
                                     workspacePath: self.workspacePath)
+
+                                Divider()
+                                    .padding(.vertical, 6)
+
+                                if self.onboardingWizard.isComplete {
+                                    BrowserSetupCardContent(
+                                        model: self.browserSetup,
+                                        presentation: .onboarding)
+                                } else {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Chrome comes next")
+                                            .font(.headline)
+                                        Text(
+                                            "After OpenClaw finishes local setup, you’ll connect the Chrome profile it should use for browser work.")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
                             }
                         }
                     }

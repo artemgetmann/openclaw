@@ -15,6 +15,7 @@ struct GeneralSettings: View {
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
+    @State private var browserSetup = BrowserSetupModel()
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -86,6 +87,10 @@ struct GeneralSettings: View {
                         binding: self.$state.debugPaneEnabled)
 
                     if self.isConsumer {
+                        self.browserSection
+                    }
+
+                    if self.isConsumer {
                         SettingsToggleRow(
                             title: "Show advanced settings",
                             subtitle: "Reveal the full operator controls without removing them from the app.",
@@ -128,6 +133,8 @@ struct GeneralSettings: View {
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
+                    self.browserSection
+
                     SettingsToggleRow(
                         title: "\(AppFlavor.current.appName) active",
                         subtitle: "Pause to stop your AI operator on this Mac.",
@@ -159,6 +166,28 @@ struct GeneralSettings: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 22)
             .padding(.bottom, 16)
+        }
+    }
+
+    private var browserSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Browser")
+                .font(.title3.weight(.semibold))
+            Text("OpenClaw is designed to use a separate copy of your Chrome profile, not your live Chrome windows.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 12) {
+                BrowserSetupCardContent(model: self.browserSetup, presentation: .settings)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor)))
+        }
+        .task {
+            await self.browserSetup.refreshIfNeeded()
         }
     }
 
