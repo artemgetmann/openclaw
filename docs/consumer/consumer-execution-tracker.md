@@ -82,6 +82,9 @@ Notes:
   - head: `codex/simplify-consumer-bootstrap-flow-telegram`
   - base: `codex/consumer-openclaw-project`
   - merge gate remains: Telegram BYOK E2E on isolated consumer runtime
+- Parallel follow-up work should start only from `codex/consumer-openclaw-project`.
+- Reusable scoped prompts for future parallel agents live in:
+  - `docs/consumer/parallel-agent-prompts.md`
 
 ### 2026-03-21 Telegram BYOK E2E status
 
