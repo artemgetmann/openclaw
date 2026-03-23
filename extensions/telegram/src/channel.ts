@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedAllowlistConfigEditor,
@@ -68,6 +69,11 @@ type TelegramSendFn = ReturnType<
 >["channel"]["telegram"]["sendMessageTelegram"];
 
 const meta = getChatChannelMeta("telegram");
+
+function maskTelegramTokenFingerprint(token: string): string {
+  // Keep bot identity debuggable without ever printing the raw token.
+  return createHash("sha256").update(token).digest("hex").slice(0, 12);
+}
 
 function findTelegramTokenOwnerAccountId(params: {
   cfg: OpenClawConfig;
@@ -814,6 +820,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       }
       const token = (account.token ?? "").trim();
       let telegramBotLabel = "";
+      let startupBotIdentity = "unknown";
       // Consumer minimal startup prioritizes fast, deterministic bootstrap. Skip
       // non-critical preflight bot probing and let provider startup/reporting own
       // the token/network diagnostics to avoid probe stalls blocking the gateway.
@@ -825,7 +832,17 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
             proxyUrl: account.config.proxy,
             network: account.config.network,
           });
+          const botId = probe.ok ? (probe.bot?.id ?? null) : null;
           const username = probe.ok ? probe.bot?.username?.trim() : null;
+          const probeSummary = [
+            username ? `@${username}` : null,
+            botId != null ? `id=${botId}` : null,
+          ]
+            .filter(Boolean)
+            .join(" ");
+          if (probeSummary) {
+            startupBotIdentity = probeSummary;
+          }
           if (username) {
             telegramBotLabel = ` (@${username})`;
           }
@@ -837,7 +854,15 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       } else if (getTelegramRuntime().logging.shouldLogVerbose()) {
         ctx.log?.debug?.(`[${account.accountId}] skipping startup probe (consumer minimal mode)`);
       }
-      ctx.log?.info(`[${account.accountId}] starting provider${telegramBotLabel}`);
+      ctx.log?.info(
+        [
+          `[${account.accountId}] starting provider${telegramBotLabel}`,
+          `currentLaneBot=${startupBotIdentity}`,
+          `tokenSource=${account.tokenSource}`,
+          `tokenFingerprint=${token ? maskTelegramTokenFingerprint(token) : "missing"}`,
+          `accountName=${account.name?.trim() || "unnamed"}`,
+        ].join(" "),
+      );
       return getTelegramRuntime().channel.telegram.monitorTelegramProvider({
         token,
         accountId: account.accountId,

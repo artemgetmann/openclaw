@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
@@ -71,7 +72,10 @@ import { resolveModelAsync } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
-import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import {
+  buildEmbeddedRunPayloads,
+  resolveEmbeddedRunPayloadErrorAssistant,
+} from "./run/payloads.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
@@ -105,6 +109,18 @@ const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
+
+function traceEmbeddedRunStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only. Never let debug logging change runtime behavior.
+  }
+}
 
 function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
@@ -299,10 +315,12 @@ export async function runEmbeddedPiAgent(
           `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
         );
       }
+      traceEmbeddedRunStage("run-pre-ensure-runtime-plugins");
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: resolvedWorkspace,
       });
+      traceEmbeddedRunStage("run-post-ensure-runtime-plugins");
       const prevCwd = process.cwd();
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
@@ -313,7 +331,9 @@ export async function runEmbeddedPiAgent(
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       });
+      traceEmbeddedRunStage("run-pre-ensure-models-json");
       await ensureOpenClawModelsJson(params.config, agentDir);
+      traceEmbeddedRunStage("run-post-ensure-models-json");
 
       // Run before_model_resolve hooks early so plugins can override the
       // provider/model before resolveModel().
@@ -334,20 +354,24 @@ export async function runEmbeddedPiAgent(
       };
       if (hookRunner?.hasHooks("before_model_resolve")) {
         try {
+          traceEmbeddedRunStage("run-pre-before-model-resolve-hook");
           modelResolveOverride = await hookRunner.runBeforeModelResolve(
             { prompt: params.prompt },
             hookCtx,
           );
+          traceEmbeddedRunStage("run-post-before-model-resolve-hook");
         } catch (hookErr) {
           log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
         }
       }
       if (hookRunner?.hasHooks("before_agent_start")) {
         try {
+          traceEmbeddedRunStage("run-pre-before-agent-start-hook");
           legacyBeforeAgentStartResult = await hookRunner.runBeforeAgentStart(
             { prompt: params.prompt },
             hookCtx,
           );
+          traceEmbeddedRunStage("run-post-before-agent-start-hook");
           modelResolveOverride = {
             providerOverride:
               modelResolveOverride?.providerOverride ??
@@ -370,12 +394,14 @@ export async function runEmbeddedPiAgent(
         log.info(`[hooks] model overridden to ${modelId}`);
       }
 
+      traceEmbeddedRunStage(`run-pre-resolve-model provider=${provider} model=${modelId}`);
       const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
         provider,
         modelId,
         agentDir,
         params.config,
       );
+      traceEmbeddedRunStage(`run-post-resolve-model found=${model ? "yes" : "no"}`);
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
           reason: "model_not_found",
@@ -924,6 +950,9 @@ export async function runEmbeddedPiAgent(
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
 
+          traceEmbeddedRunStage(
+            `run-pre-attempt profile=${lastProfileId ?? "default"} think=${thinkLevel}`,
+          );
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -1597,6 +1626,7 @@ export async function runEmbeddedPiAgent(
             assistantTexts: attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
+            lastErroredAssistant: attempt.lastErroredAssistant,
             lastToolError: attempt.lastToolError,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
@@ -1610,6 +1640,33 @@ export async function runEmbeddedPiAgent(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
           });
+          const surfacedErrorAssistant = resolveEmbeddedRunPayloadErrorAssistant({
+            assistantTexts: attempt.assistantTexts,
+            toolMetas: attempt.toolMetas,
+            lastAssistant: attempt.lastAssistant,
+            lastErroredAssistant: attempt.lastErroredAssistant,
+            lastToolError: attempt.lastToolError,
+            config: params.config,
+            sessionKey: params.sessionKey ?? params.sessionId,
+            provider: activeErrorContext.provider,
+            model: activeErrorContext.model,
+            verboseLevel: params.verboseLevel,
+            reasoningLevel: params.reasoningLevel,
+            toolResultFormat: resolvedToolResultFormat,
+            suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+            inlineToolResultsAllowed: false,
+            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+          });
+          const surfacedPriorAssistantError =
+            surfacedErrorAssistant != null &&
+            surfacedErrorAssistant === attempt.lastErroredAssistant &&
+            surfacedErrorAssistant !== attempt.lastAssistant;
+          if (surfacedPriorAssistantError) {
+            log.warn(
+              "[embedded-run-error-recovery] surfaced prior assistant error after trailing tool-use masked the terminal failure",
+            );
+          }
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
@@ -1655,6 +1712,9 @@ export async function runEmbeddedPiAgent(
               agentDir: params.agentDir,
             });
           }
+          traceEmbeddedRunStage(
+            `run-post-attempt aborted=${aborted ? "yes" : "no"} profile=${lastProfileId ?? "default"}`,
+          );
           return {
             payloads: payloads.length ? payloads : undefined,
             meta: {
@@ -1669,7 +1729,9 @@ export async function runEmbeddedPiAgent(
                 ? "tool_calls"
                 : attempt.yieldDetected
                   ? "end_turn"
-                  : (lastAssistant?.stopReason as string | undefined),
+                  : surfacedPriorAssistantError
+                    ? "error"
+                    : (lastAssistant?.stopReason as string | undefined),
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {

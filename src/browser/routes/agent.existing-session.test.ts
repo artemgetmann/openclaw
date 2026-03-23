@@ -22,6 +22,7 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const chromeMcpMocks = vi.hoisted(() => ({
+  clickChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
@@ -36,7 +37,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
-  clickChromeMcpElement: vi.fn(async () => {}),
+  clickChromeMcpElement: chromeMcpMocks.clickChromeMcpElement,
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
@@ -129,6 +130,7 @@ function getActPostHandler() {
 describe("existing-session browser routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
+    chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
@@ -156,6 +158,33 @@ describe("existing-session browser routes", () => {
       targetId: "7",
     });
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
+  });
+
+  it("falls back to full-page snapshots when selector/frame is requested for existing-session profiles", async () => {
+    const handler = getSnapshotGetHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: { format: "ai", selector: "#submit", frame: "iframe[name=checkout]" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      format: "ai",
+      warnings: [
+        expect.stringContaining(
+          "selector/frame snapshots are not supported for existing-session profiles",
+        ),
+      ],
+    });
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+    });
   });
 
   it("allows ref screenshots for existing-session profiles", async () => {
@@ -247,6 +276,84 @@ describe("existing-session browser routes", () => {
       profileName: "chrome-live",
       targetId: "7",
       fn: "() => window.location.href",
+    });
+  });
+
+  it("falls back to evaluate-based selector clicks for existing-session profiles", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "click", selector: "button[type='submit']", timeoutMs: 12_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.clickChromeMcpElement).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("document.querySelector"),
+      args: ["button[type='submit']"],
+      timeoutMs: 12_000,
+    });
+  });
+
+  it("passes timeout overrides through existing-session evaluate", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "evaluate", fn: "() => 123", timeoutMs: 9_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7", result: true });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: "() => 123",
+      args: undefined,
+      timeoutMs: 9_000,
+    });
+  });
+
+  it("fills selector-only fields for existing-session profiles via evaluate fallback", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "fill",
+          timeoutMs: 11_000,
+          fields: [{ selector: "input[name='arrival']", value: "DXB" }],
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("document.querySelector"),
+      args: ["input[name='arrival']", "DXB"],
+      timeoutMs: 11_000,
     });
   });
 });

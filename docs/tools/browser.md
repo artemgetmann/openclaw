@@ -50,9 +50,13 @@ Gateway.
 
 For agent browser tool calls:
 
-- Default: use the isolated `openclaw` browser.
-- Prefer `profile="user"` when existing logged-in sessions matter and the user
-  is at the computer to click/approve any attach prompt.
+- Prefer `profile="user"` for signed-in sites, hostile sites, or flows where
+  existing cookies/session matter.
+- Use `profile="openclaw"` for public browsing, clean isolated runs, or as an
+  explicit fallback when session reuse is not required.
+- If the task clearly depends on existing login state and `profile="user"` is
+  unavailable, stop and surface the blocker instead of silently switching to a
+  clean isolated browser.
 - `profile` is the explicit override when you want a specific browser mode.
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.

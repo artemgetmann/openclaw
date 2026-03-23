@@ -97,6 +97,23 @@ import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
+const TRACE_GATEWAY_CONNECT = process.env.OPENCLAW_TRACE_GATEWAY_CONNECT === "1";
+
+function logGatewayConnectTrace(
+  logWsControl: SubsystemLogger,
+  connId: string,
+  stage: string,
+  startedAt: number,
+  meta?: Record<string, unknown>,
+): void {
+  if (!TRACE_GATEWAY_CONNECT) {
+    return;
+  }
+  const suffix = meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : "";
+  logWsControl.info(
+    `[TRACE_GATEWAY_CONNECT] conn=${connId} stage=${stage} elapsedMs=${Date.now() - startedAt}${suffix}`,
+  );
+}
 
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
@@ -342,6 +359,7 @@ export function attachGatewayWsMessageHandler(params: {
 
         const frame = parsed;
         const connectParams = frame.params as ConnectParams;
+        const handshakeStartedAt = Date.now();
         const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
         const clientMeta = {
           client: connectParams.client.id,
@@ -455,6 +473,20 @@ export function attachGatewayWsMessageHandler(params: {
           deviceRaw,
         });
         const device = controlUiAuthPolicy.device;
+        logGatewayConnectTrace(
+          logWsControl,
+          connId,
+          "pre-resolve-connect-auth-state",
+          handshakeStartedAt,
+          {
+            clientId: connectParams.client.id,
+            clientMode: connectParams.client.mode,
+            hasDeviceIdentity: Boolean(device),
+            hasSharedAuth,
+            isLocalClient,
+            hasBrowserOriginHeader,
+          },
+        );
 
         let {
           authResult,
@@ -474,6 +506,18 @@ export function attachGatewayWsMessageHandler(params: {
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
         });
+        logGatewayConnectTrace(
+          logWsControl,
+          connId,
+          "post-resolve-connect-auth-state",
+          handshakeStartedAt,
+          {
+            authOk,
+            authMethod,
+            sharedAuthOk,
+            authReason: authResult.reason,
+          },
+        );
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
           const { authProvided, canRetryWithDeviceToken, recommendedNextStep } =
             resolveUnauthorizedHandshakeContext({
@@ -569,6 +613,17 @@ export function attachGatewayWsMessageHandler(params: {
         if (!handleMissingDeviceIdentity()) {
           return;
         }
+        logGatewayConnectTrace(
+          logWsControl,
+          connId,
+          "post-handle-missing-device-identity",
+          handshakeStartedAt,
+          {
+            authOk,
+            authMethod,
+            hasDeviceIdentity: Boolean(device),
+          },
+        );
         if (device) {
           const rejectDeviceAuthInvalid = (reason: string, message: string) => {
             setHandshakeState("failed");
@@ -662,6 +717,17 @@ export function attachGatewayWsMessageHandler(params: {
             }),
           verifyDeviceToken,
         }));
+        logGatewayConnectTrace(
+          logWsControl,
+          connId,
+          "post-resolve-connect-auth-decision",
+          handshakeStartedAt,
+          {
+            authOk,
+            authMethod,
+            authReason: authResult.reason,
+          },
+        );
         if (!authOk) {
           rejectUnauthorized(authResult);
           return;
@@ -689,6 +755,16 @@ export function attachGatewayWsMessageHandler(params: {
             resolvedAuth.mode,
           );
         if (device && devicePublicKey && !skipPairing) {
+          logGatewayConnectTrace(
+            logWsControl,
+            connId,
+            "pre-device-pairing-checks",
+            handshakeStartedAt,
+            {
+              deviceId: device.id,
+              skipPairing,
+            },
+          );
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
               return "<none>";
@@ -795,6 +871,16 @@ export function attachGatewayWsMessageHandler(params: {
           };
 
           const paired = await getPairedDevice(device.id);
+          logGatewayConnectTrace(
+            logWsControl,
+            connId,
+            "post-get-paired-device",
+            handshakeStartedAt,
+            {
+              deviceId: device.id,
+              paired: Boolean(paired),
+            },
+          );
           const isPaired = paired?.publicKey === devicePublicKey;
           if (!isPaired) {
             const ok = await requirePairing("not-paired");
@@ -883,9 +969,29 @@ export function attachGatewayWsMessageHandler(params: {
           }
         }
 
+        logGatewayConnectTrace(
+          logWsControl,
+          connId,
+          "pre-ensure-device-token",
+          handshakeStartedAt,
+          {
+            hasDeviceIdentity: Boolean(device),
+            role,
+            scopeCount: scopes.length,
+          },
+        );
         const deviceToken = device
           ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
           : null;
+        logGatewayConnectTrace(
+          logWsControl,
+          connId,
+          "post-ensure-device-token",
+          handshakeStartedAt,
+          {
+            hasDeviceToken: Boolean(deviceToken),
+          },
+        );
 
         if (role === "node") {
           const cfg = loadConfig();
@@ -940,7 +1046,20 @@ export function attachGatewayWsMessageHandler(params: {
           incrementPresenceVersion();
         }
 
+        logGatewayConnectTrace(
+          logWsControl,
+          connId,
+          "pre-build-gateway-snapshot",
+          handshakeStartedAt,
+          { presenceKey },
+        );
         const snapshot = buildGatewaySnapshot();
+        logGatewayConnectTrace(
+          logWsControl,
+          connId,
+          "post-build-gateway-snapshot",
+          handshakeStartedAt,
+        );
         const cachedHealth = getHealthCache();
         if (cachedHealth) {
           snapshot.health = cachedHealth;
@@ -980,6 +1099,10 @@ export function attachGatewayWsMessageHandler(params: {
           },
         };
 
+        logGatewayConnectTrace(logWsControl, connId, "pre-send-hello-ok", handshakeStartedAt, {
+          hasCanvasHostUrl: Boolean(scopedCanvasHostUrl),
+          hasDeviceToken: Boolean(deviceToken),
+        });
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,
@@ -1053,6 +1176,7 @@ export function attachGatewayWsMessageHandler(params: {
         });
 
         send({ type: "res", id: frame.id, ok: true, payload: helloOk });
+        logGatewayConnectTrace(logWsControl, connId, "post-send-hello-ok", handshakeStartedAt);
         void refreshGatewayHealthSnapshot({ probe: true }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );

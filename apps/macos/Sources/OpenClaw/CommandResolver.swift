@@ -57,12 +57,15 @@ enum CommandResolver {
         if let inferred = self.inferProjectRoot(from: Bundle.main.bundleURL) {
             return inferred
         }
-        let fallback = FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Projects/openclaw")
-        if self.isRepoRoot(fallback) {
+        let home = FileManager().homeDirectoryForCurrentUser
+        let fallbacks = [
+            home.appendingPathComponent("Programming_Projects/openclaw"),
+            home.appendingPathComponent("Projects/openclaw"),
+        ]
+        for fallback in fallbacks where self.isRepoRoot(fallback) {
             return fallback
         }
-        return FileManager().homeDirectoryForCurrentUser
+        return home
     }
 
     static func setProjectRoot(_ path: String) {
