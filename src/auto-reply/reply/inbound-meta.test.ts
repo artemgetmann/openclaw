@@ -26,6 +26,16 @@ function parseSenderInfoPayload(text: string): Record<string, unknown> {
   return JSON.parse(match[1]) as Record<string, unknown>;
 }
 
+function parseBootstrapNameSuggestionsPayload(text: string): Record<string, unknown> {
+  const match = text.match(
+    /Bootstrap name suggestions \(derived from untrusted sender metadata; use these exact options if BOOTSTRAP\.md is still active\):\n```json\n([\s\S]*?)\n```/,
+  );
+  if (!match?.[1]) {
+    throw new Error("missing bootstrap name suggestions json block");
+  }
+  return JSON.parse(match[1]) as Record<string, unknown>;
+}
+
 describe("buildInboundMetaSystemPrompt", () => {
   it("includes session-stable routing fields", () => {
     const prompt = buildInboundMetaSystemPrompt({
@@ -98,6 +108,19 @@ describe("buildInboundMetaSystemPrompt", () => {
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["sender_id"]).toBeUndefined();
+  });
+
+  it("tells BOOTSTRAP to use exact name suggestions when available", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      SenderName: "Artem Getman",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    expect(prompt).toContain("Bootstrap name suggestions");
+    expect(prompt).toContain("use those exact options");
   });
 });
 
@@ -204,6 +227,29 @@ describe("buildInboundUserContextPrefix", () => {
     const senderInfo = parseSenderInfoPayload(text);
     expect(senderInfo["label"]).toBe("Tyler (+15551234567)");
     expect(senderInfo["id"]).toBe("+15551234567");
+  });
+
+  it("derives deterministic bootstrap name suggestions from sender name metadata", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      SenderName: "Artem Getman",
+      SenderUsername: "artemgetmann",
+    } as TemplateContext);
+
+    const suggestions = parseBootstrapNameSuggestionsPayload(text);
+    expect(suggestions["source"]).toBe("sender_name");
+    expect(suggestions["suggestions"]).toEqual(["Artem", "Art", "Artem Getman", "something else"]);
+  });
+
+  it("falls back to username-only bootstrap suggestions when sender name is missing", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      SenderUsername: "artemgetmann",
+    } as TemplateContext);
+
+    const suggestions = parseBootstrapNameSuggestionsPayload(text);
+    expect(suggestions["source"]).toBe("sender_username");
+    expect(suggestions["suggestions"]).toEqual(["artemgetmann", "something else"]);
   });
 
   it("includes formatted timestamp in conversation info when provided", () => {

@@ -61,9 +61,7 @@ enum CLIInstaller {
     }
 
     private static func installPrefix() -> String {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(".openclaw")
-            .path
+        ConsumerRuntime.installPrefixURL.path
     }
 
     private static func installScriptCommand(version: String, prefix: String) -> [String] {

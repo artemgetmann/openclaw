@@ -601,6 +601,54 @@ describe("abortChatRun", () => {
   });
 });
 
+describe("sendChatMessage", () => {
+  it("scrubs bootstrap/debug scaffolding from the optimistic local echo", async () => {
+    const request = vi.fn().mockResolvedValue({ status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const rawMessage = [
+      "[Source Receipt]",
+      "source: telegram",
+      "[/Source Receipt]",
+      "",
+      "System: [2026-03-22 13:05:01 GMT+8] Node: MacBook Pro (JetBook) mode local",
+      "",
+      "Bootstrap name suggestions (derived from untrusted sender metadata; use these exact options if BOOTSTRAP.md is still active):",
+      "```json",
+      JSON.stringify(
+        {
+          suggestions: ["Artem", "Art", "Artem Getman", "something else"],
+          source: "sender_name",
+        },
+        null,
+        2,
+      ),
+      "```",
+      "",
+      "hey",
+    ].join("\n");
+
+    const runId = await sendChatMessage(state, rawMessage);
+
+    expect(runId).toEqual(expect.any(String));
+    expect(state.chatMessages.at(-1)).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "hey" }],
+      timestamp: expect.any(Number),
+    });
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: rawMessage,
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: undefined,
+    });
+  });
+});
+
 describe("loadChatHistory", () => {
   it("filters assistant NO_REPLY messages and keeps user NO_REPLY messages", async () => {
     const request = vi.fn().mockResolvedValue({

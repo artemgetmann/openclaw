@@ -6,8 +6,8 @@ extension ProcessInfo {
         return String(cString: raw) == "1"
     }
 
-    /// Nix deployments may write defaults into a stable suite (`ai.openclaw.mac`) even if the shipped
-    /// app bundle identifier changes (and therefore `UserDefaults.standard` domain changes).
+    /// Nix deployments may write defaults into a stable suite keyed by the launchd label even if the
+    /// shipped app bundle identifier changes (and therefore `UserDefaults.standard` domain changes).
     static func resolveNixMode(
         environment: [String: String],
         standard: UserDefaults,

@@ -22,6 +22,12 @@ struct SettingsRootView: View {
         !AppFlavor.current.isConsumer || self.state.showAdvancedSettings
     }
 
+    private var showsChannelsTab: Bool {
+        // Consumer onboarding depends on in-app Telegram setup, so keep Channels
+        // visible even while other power-user tabs stay hidden.
+        AppFlavor.current.isConsumer || self.showsAdvancedSettings
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if self.isNixMode {
@@ -32,11 +38,13 @@ struct SettingsRootView: View {
                     .tabItem { Label("General", systemImage: "gearshape") }
                     .tag(SettingsTab.general)
 
-                if self.showsAdvancedSettings {
+                if self.showsChannelsTab {
                     ChannelsSettings()
                         .tabItem { Label("Channels", systemImage: "link") }
                         .tag(SettingsTab.channels)
+                }
 
+                if self.showsAdvancedSettings {
                     VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
                         .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
                         .tag(SettingsTab.voiceWake)
@@ -230,9 +238,9 @@ extension SettingsRootView {
         // We keep the deeper tabs in the binary so advanced users can reveal them
         // without forcing a second app codebase.
         let advancedVisible = !isConsumer || showAdvancedSettings
-        var tabs: [SettingsTab] = [.general]
+        var tabs: [SettingsTab] = [.general, .channels]
         if advancedVisible {
-            tabs += [.channels, .voiceWake, .config, .instances, .sessions, .cron, .skills]
+            tabs += [.voiceWake, .config, .instances, .sessions, .cron, .skills]
         }
         tabs += [.permissions]
         if advancedVisible, debugPaneEnabled {

@@ -91,7 +91,7 @@ flowchart LR
 ## Must ship (P0)
 
 1. **Installer + setup wizard on macOS**
-2. **Telegram channel setup (guided BotFather flow, manual step)**
+2. **Telegram channel setup (guided BotFather flow now, managed/shared later)**
 3. **Runtime health checks + auto-reconnect**
 4. **Safety profiles (Safe/Balanced/Power)**
 5. **Irreversible action confirmation gate**
@@ -182,7 +182,7 @@ If these are healthy, scale. If not, fix onboarding + reliability first.
 ## 7) Open questions to resolve now
 
 1. **Bot identity strategy**
-   - User-owned bot token vs shared bot + tenant routing
+   - User-owned bot token now; shared bot + tenant routing is a later product decision
 2. **Policy explainability UX**
    - How to clearly explain why an action was blocked/requested
 3. **Local app UX**

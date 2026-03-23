@@ -12,61 +12,47 @@ Read `CONSUMER.md` in the repo root first — it has full context on what we're 
 
 Read `docs/consumer/openclaw-consumer-execution-spec.md` for the full execution plan.
 
-**Your job for this session is to continue the consumer browser decision work without reopening already-settled debates.**
+**Your job for this session is Week 1, Days 1-3: the Browser Spike.**
 
 ### What to do
 
-We already have directional evidence that the cloned real-Chrome lane is the MVP winner for signed-in and hostile tasks, with the managed `openclaw` browser as the fallback. Your job is to preserve that decision, tighten the prompt/routing behavior, and avoid wasting cycles on side-lane tooling unless there is a specific unresolved gap.
+We need to benchmark 4 browser automation approaches against 5 real tasks to determine which one to use as the primary browser for the consumer product. The winner becomes the foundation of the product.
 
-**Current browser lane rule:**
+**Approaches to test:**
+1. Browserbase (cloud Chrome — sign up at browserbase.com if needed, check if there's an existing API key in env/config)
+2. OpenClaw's built-in Chrome Extension (connects to user's real Chrome — find it in `extensions/`, test if it can be improved for reliability)
+3. Computer-use vision (screenshots + clicks — OpenClaw already has this capability, test it as-is)
+4. Investigate the Claude-in-Chrome MCP approach (used by Claude Code — understand how it works, see what can be adapted)
 
-1. Prefer cloned real-Chrome state for signed-in or hostile tasks.
-2. Use managed `openclaw` browser for public/generic tasks or when clean isolation matters more than session reuse.
-3. Do not silently switch from the cloned lane to the managed lane when that would change auth/session semantics. Surface the blocker first.
+**Tasks to test each approach on:**
+1. Search Google Flights for flights NYC → London in April, extract and compare top 3 results
+2. Navigate to a real booking/signup form, fill it out with test data
+3. Navigate to a URL, extract and summarize the content
+4. Read and summarize a Twitter/X post (test this specifically — it's a differentiator vs ChatGPT)
+5. Multi-step: search for something, compare 3 results, take an action (e.g., add to cart or save)
 
-**Current benchmark set:**
-
-1. Gmail read-first-email
-2. Google Sign-In first visible decision point
-3. Reddit DM/reply access
-4. Emirates `DPS -> DXB` on `2026-03-22`
-
-**What still matters:**
-
-1. Signed-in session reuse
-2. Reliability on hostile sites
-3. Clear fallback behavior
-4. Setup UX for non-technical users
-5. Auth/session portability roadmap
+**Scoring each approach (priority order):**
+1. Can it access the user's real logged-in browser sessions? (most important)
+2. Speed — how long does each task take?
+3. Reliability — does it complete without failure?
+4. Bot protection handling — can it get past CAPTCHAs?
+5. Session persistence — does login state survive between tasks?
 
 ### Output
 
 Write your results to `docs/consumer/browser-spike-results.md` with:
-
-- Updated benchmark results and failure notes
-- A clear recommendation: primary lane, fallback lane, and when not to auto-fallback
-- Follow-up work for auth/session portability and browser setup UX
+- A table: each approach × each task, with pass/fail + time
+- Screenshots or notes on failure modes
+- A clear recommendation: which approach to use as primary, which as fallback
+- Any quick wins identified (e.g., "the Chrome extension just needs X to be reliable")
 
 ### Rules
-
 - Work on the `consumer` branch only — never commit to `main`
-- Prefer the smallest repo surface that changes real behavior
-- Browser routing guidance belongs in the browser tool / prompt seam, not a giant new prompt block
-- Document every failure — failures are product evidence, not noise
+- Keep changes isolated to browser testing/research — don't refactor core OpenClaw code yet
+- If you need to install new packages (e.g., Browserbase SDK), add them to a new `package.json` in a consumer-specific location, don't pollute the root
+- Document every failure — we need the failure data, not just successes
 
-### Follow-up direction
-
-Once the lane decision is locked, the next workstreams are:
-
-1. auth/session portability:
-   - credential broker
-   - login skill
-   - MFA strategy
-   - future 1Password integration
-2. browser setup UX:
-   - what to do if Chrome is missing
-   - how to detect or choose the right profile without making users inspect internals
-3. founder live validation:
-   - end-to-end test on the main Jarvis Claw bot after the routing update lands
+### After the spike
+Once results are documented, your next session will be Days 4-5: setting up the consumer branch to run independently as a gateway on port 19001 with the consumer runtime root.
 
 Go.

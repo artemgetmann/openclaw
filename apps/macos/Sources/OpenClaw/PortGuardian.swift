@@ -370,12 +370,23 @@ actor PortGuardian {
         case .local:
             // The gateway daemon may listen as `openclaw` or as its runtime (`node`, `bun`, etc).
             if full.contains("gateway-daemon") { return true }
+            // Launchd and direct local runs typically look like `node dist/index.js gateway --port …`.
+            // Treat those as expected so the consumer app does not kill its own isolated gateway.
+            if self.isExpectedRuntimeGatewayCommand(command: cmd, fullCommand: full) { return true }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
             return false
         case .unconfigured:
             return false
         }
+    }
+
+    private static func isExpectedRuntimeGatewayCommand(command: String, fullCommand: String) -> Bool {
+        let runtimeCommands = ["node", "bun", "tsx"]
+        guard runtimeCommands.contains(where: { command.contains($0) }) else { return false }
+        guard fullCommand.contains(" gateway") || fullCommand.hasSuffix("gateway") else { return false }
+        let entryMarkers = ["dist/index.js", "openclaw.mjs", "bin/openclaw.js"]
+        return entryMarkers.contains(where: { fullCommand.contains($0) })
     }
 
     private func probeGatewayHealthIfNeeded(
@@ -421,6 +432,10 @@ extension PortGuardian {
     {
         let listener = Listener(pid: 0, command: command, fullCommand: fullCommand, user: nil)
         return Self.isExpected(listener, port: port, mode: mode)
+    }
+
+    static func _testIsExpectedRuntimeGatewayCommand(command: String, fullCommand: String) -> Bool {
+        Self.isExpectedRuntimeGatewayCommand(command: command, fullCommand: fullCommand)
     }
 
     static func _testBuildReport(

@@ -6,6 +6,19 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
+    @Test func `skips launch agent ensure while gateway start is already in progress`() {
+        #expect(GatewayProcessManager._testShouldSkipLaunchAgentEnsure(for: .starting))
+        #expect(!GatewayProcessManager._testShouldSkipLaunchAgentEnsure(for: .stopped))
+    }
+
+    @Test func `forced recovery bypasses stale running state`() {
+        #expect(GatewayProcessManager._testShouldSkipGatewayStart(for: .running(details: nil), forceRecovery: false))
+        #expect(!GatewayProcessManager._testShouldSkipGatewayStart(for: .running(details: nil), forceRecovery: true))
+        #expect(GatewayProcessManager._testShouldSkipGatewayStart(for: .attachedExisting(details: "pid 1"), forceRecovery: false))
+        #expect(!GatewayProcessManager._testShouldSkipGatewayStart(for: .attachedExisting(details: "pid 1"), forceRecovery: true))
+        #expect(GatewayProcessManager._testShouldSkipGatewayStart(for: .starting, forceRecovery: true))
+    }
+
     @Test func `clears last failure when health succeeds`() async throws {
         let session = GatewayTestWebSocketSession(
             taskFactory: {

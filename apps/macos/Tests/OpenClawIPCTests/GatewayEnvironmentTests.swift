@@ -31,7 +31,7 @@ struct GatewayEnvironmentTests {
         #expect(Semver(major: 1, minor: 9, patch: 9).compatible(with: required) == false)
     }
 
-    @Test func `gateway port defaults and respects override`() async {
+    @Test func `gateway port defaults and respects env override`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(
             env: [
@@ -41,10 +41,10 @@ struct GatewayEnvironmentTests {
             defaults: ["gatewayPort": nil])
         {
             let defaultPort = GatewayEnvironment.gatewayPort()
-            #expect(defaultPort == 18789)
+            #expect(defaultPort == ConsumerRuntime.gatewayPort)
+        }
 
-            UserDefaults.standard.set(19999, forKey: "gatewayPort")
-            defer { UserDefaults.standard.removeObject(forKey: "gatewayPort") }
+        await TestIsolation.withEnvValues(["OPENCLAW_GATEWAY_PORT": "19999"]) {
             #expect(GatewayEnvironment.gatewayPort() == 19999)
         }
     }

@@ -27,11 +27,25 @@ The consumer app defaults to:
 
 - Local setup on this Mac
 - Minimal menu bar controls
-- Minimal settings tabs: General, Permissions, About
+- Core settings tabs: General, Channels, Permissions, About
+- Channels view defaults to Telegram-only in consumer mode
 - Remote configuration hidden behind **Advanced**
 - Power-user areas such as Skills, Config, Sessions, Cron, and Debug hidden by default
 
 The goal is to reduce cognitive overload without deleting advanced capabilities yet.
+
+## Telegram onboarding in-app
+
+The consumer path keeps Telegram setup inside the app:
+
+- Channels → Telegram includes a one-time BYOK wizard (BotFather -> token verify -> first DM capture).
+- The panel includes a placeholder video walkthrough entry that can be rewired later without changing the onboarding flow.
+- Runtime writes stay isolated under the consumer runtime root.
+
+To swap the video link without code changes during tests:
+
+- Set `OPENCLAW_CONSUMER_TELEGRAM_VIDEO_URL` before launching the app, or
+- Set `OpenClawConsumerTelegramVideoURL` in the app bundle `Info.plist`.
 
 Current default consumer settings shape:
 
@@ -62,18 +76,19 @@ macOS caveat:
 
 ## Safe local testing
 
-Package the consumer app with a separate app identity:
+Package the consumer app with the dedicated wrapper:
 
 ```bash
-APP_NAME="OpenClaw Consumer" \
-APP_BUNDLE_NAME="OpenClaw Consumer.app" \
-BUNDLE_ID="ai.openclaw.consumer.mac.debug" \
-APP_VARIANT=consumer \
-URL_SCHEME=openclaw-consumer \
-scripts/package-mac-app.sh
+scripts/package-consumer-mac-app.sh
 ```
 
-This produces a consumer-flavored app bundle that can be tested alongside the founder app.
+Open the packaged app with the matching preflight:
+
+```bash
+scripts/open-consumer-mac-app.sh
+```
+
+These wrappers fail fast unless the bundle name, bundle identifier, and app variant all match the consumer app. That prevents accidentally launching the generic founder/dev shell during consumer testing.
 
 ## Distribution assumption
 

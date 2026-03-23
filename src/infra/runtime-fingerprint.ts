@@ -89,9 +89,10 @@ function resolveGatewayServiceLabel(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
 ): string {
+  const explicitLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
   const profile = env.OPENCLAW_PROFILE;
   if (platform === "darwin") {
-    return resolveGatewayLaunchAgentLabel(profile);
+    return explicitLabel || resolveGatewayLaunchAgentLabel(profile);
   }
   if (platform === "win32") {
     return resolveGatewayWindowsTaskName(profile);

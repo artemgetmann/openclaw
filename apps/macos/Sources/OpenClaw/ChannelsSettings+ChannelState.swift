@@ -2,6 +2,52 @@ import OpenClawProtocol
 import SwiftUI
 
 extension ChannelsSettings {
+    private var isConsumerSimpleTelegramPath: Bool {
+        AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
+    }
+
+    private var consumerTelegramConfigFallback: (configured: Bool, lockedSenderId: String?) {
+        guard self.isConsumerSimpleTelegramPath else { return (false, nil) }
+
+        // The consumer Telegram lane should stay legible even while the gateway is
+        // still reconnecting. Fall back to the locally persisted config instead of
+        // pretending Telegram has vanished just because the latest status probe has
+        // not landed yet.
+        let root = self.store.configDraft.isEmpty ? OpenClawConfigFile.loadDict() : self.store.configDraft
+        let telegram = ((root["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
+        let enabled = telegram["enabled"] as? Bool ?? false
+        let token = TelegramSetupVerifier.normalizeToken((telegram["botToken"] as? String) ?? "")
+        let allowFrom = (telegram["allowFrom"] as? [String]) ?? []
+        return (enabled && !token.isEmpty, allowFrom.first)
+    }
+
+    private var consumerTelegramLooksLive: Bool {
+        guard self.isConsumerSimpleTelegramPath else { return false }
+        if let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self) {
+            if status.configured && (status.running || status.probe?.ok == true) {
+                return true
+            }
+        }
+        let fallback = self.consumerTelegramConfigFallback
+        return fallback.configured && fallback.lockedSenderId != nil
+    }
+
+    var consumerTelegramBotUsername: String? {
+        if let username = self.channelStatus(
+            "telegram",
+            as: ChannelsStatusSnapshot.TelegramStatus.self)?.probe?.bot?.username,
+           !username.isEmpty
+        {
+            return username
+        }
+        if let username = self.store.telegramSetupBotUsername, !username.isEmpty {
+            return username
+        }
+        let persisted = UserDefaults.standard.string(
+            forKey: ChannelsStore.consumerTelegramBotUsernameDefaultsKey)
+        return (persisted?.isEmpty == false) ? persisted : nil
+    }
+
     private func channelStatus<T: Decodable>(
         _ id: String,
         as type: T.Type) -> T?
@@ -106,7 +152,11 @@ extension ChannelsSettings {
 
     var telegramTint: Color {
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
-        else { return .secondary }
+        else {
+            let fallback = self.consumerTelegramConfigFallback
+            guard fallback.configured else { return .secondary }
+            return fallback.lockedSenderId == nil ? .orange : .green
+        }
         return self.configuredChannelTint(
             configured: status.configured,
             running: status.running,
@@ -165,7 +215,11 @@ extension ChannelsSettings {
 
     var telegramSummary: String {
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
-        else { return "Checking…" }
+        else {
+            let fallback = self.consumerTelegramConfigFallback
+            if fallback.configured { return "Configured" }
+            return "Checking…"
+        }
         return self.configuredChannelSummary(configured: status.configured, running: status.running)
     }
 
@@ -226,7 +280,19 @@ extension ChannelsSettings {
 
     var telegramDetails: String? {
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
-        else { return nil }
+        else {
+            if let status = self.store.telegramSetupStatus, !status.isEmpty {
+                return status
+            }
+            let fallback = self.consumerTelegramConfigFallback
+            if fallback.lockedSenderId != nil {
+                return "Telegram DM allowlist saved locally."
+            }
+            if fallback.configured {
+                return "Telegram token saved locally."
+            }
+            return nil
+        }
         var lines: [String] = []
         if let source = status.tokenSource {
             lines.append("Token source: \(source)")
@@ -331,8 +397,11 @@ extension ChannelsSettings {
     }
 
     var orderedChannels: [ChannelItem] {
-        let fallback = ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage"]
-        let order = self.store.snapshot?.channelOrder ?? fallback
+        let fallback = AppFlavor.current.isConsumer
+            ? ["telegram", "whatsapp", "discord", "googlechat", "slack", "signal", "imessage"]
+            : ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage"]
+        let snapshotOrder = self.store.snapshot?.channelOrder ?? []
+        let order = snapshotOrder.isEmpty ? fallback : snapshotOrder
         let channels = order.enumerated().map { index, id in
             ChannelItem(
                 id: id,
@@ -341,12 +410,23 @@ extension ChannelsSettings {
                 systemImage: self.resolveChannelSystemImage(id),
                 sortOrder: index)
         }
-        return channels.sorted { lhs, rhs in
+        let sorted = channels.sorted { lhs, rhs in
             let lhsEnabled = self.channelEnabled(lhs)
             let rhsEnabled = self.channelEnabled(rhs)
             if lhsEnabled != rhsEnabled { return lhsEnabled && !rhsEnabled }
             return lhs.sortOrder < rhs.sortOrder
         }
+
+        guard AppFlavor.current.isConsumer,
+              !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
+        else {
+            return sorted
+        }
+
+        // Normal consumer path is Telegram-first. Keep other channels available
+        // behind Advanced without removing them from the app/runtime codebase.
+        let simplified = sorted.filter { $0.id == "telegram" }
+        return simplified.isEmpty ? sorted : simplified
     }
 
     var enabledChannels: [ChannelItem] {
@@ -374,6 +454,11 @@ extension ChannelsSettings {
         let connected = status?["connected"]?.boolValue ?? false
         let accountActive = self.store.snapshot?.channelAccounts[channel.id]?.contains(
             where: { $0.configured == true || $0.running == true || $0.connected == true }) ?? false
+        if channel.id == "telegram", !configured, !running, !connected, !accountActive,
+           self.consumerTelegramConfigFallback.configured
+        {
+            return true
+        }
         return configured || running || connected || accountActive
     }
 
@@ -381,6 +466,24 @@ extension ChannelsSettings {
     func channelSection(_ channel: ChannelItem) -> some View {
         if channel.id == "whatsapp" {
             self.whatsAppSection
+        } else if channel.id == "telegram" {
+            if AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey) {
+                // Once the consumer Telegram lane is already configured and healthy,
+                // always prefer the steady-state "bot is live" card over the setup
+                // wizard. The setup phase can lag behind reality when background
+                // refreshes or launchd restarts finish out of order, and showing the
+                // wizard again just makes a working bot look broken.
+                if self.consumerTelegramLooksLive {
+                    self.consumerTelegramLiveSection
+                } else {
+                    self.telegramSetupSection
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 16) {
+                    self.telegramSetupSection
+                    self.genericChannelSection(channel)
+                }
+            }
         } else {
             self.genericChannelSection(channel)
         }

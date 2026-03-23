@@ -219,6 +219,13 @@ struct ConfigSnapshot: Codable {
     let issues: [Issue]?
 }
 
+enum TelegramSetupPhase: Equatable {
+    case idle
+    case verifyingToken
+    case capturingFirstMessage
+    case savingSetup
+}
+
 @MainActor
 @Observable
 final class ChannelsStore {
@@ -234,6 +241,13 @@ final class ChannelsStore {
     var whatsappLoginConnected: Bool?
     var whatsappBusy = false
     var telegramBusy = false
+    var telegramSetupToken = ""
+    var telegramSetupStatus: String?
+    var telegramSetupBotId: Int?
+    var telegramSetupBotUsername: String?
+    var telegramSetupFirstSenderId: String?
+    var telegramSetupWaitingForDM = false
+    var telegramSetupPhase: TelegramSetupPhase = .idle
 
     var configStatus: String?
     var isSavingConfig = false

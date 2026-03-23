@@ -423,7 +423,7 @@ struct DebugSettings: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             } else {
-                                Text("Used by the CLI session loader; stored in ~/.openclaw/openclaw.json.")
+                                Text("Used by the CLI session loader; stored in the consumer config file.")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }

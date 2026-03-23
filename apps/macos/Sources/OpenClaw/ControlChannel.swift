@@ -125,6 +125,10 @@ final class ControlChannel {
         } catch {
             let message = self.friendlyGatewayMessage(error)
             self.state = .degraded(message)
+            let endpoint = Self.describeEndpointState(GatewayConnectivityCoordinator.shared.endpointState)
+            self.logger.error(
+                "control channel refresh failed reason=\(reason, privacy: .public) " +
+                    "endpoint=\(endpoint, privacy: .public) message=\(message, privacy: .public)")
         }
     }
 
@@ -417,6 +421,20 @@ final class ControlChannel {
             return decoded
         }
         return nil
+    }
+
+    private static func describeEndpointState(_ state: GatewayEndpointState?) -> String {
+        guard let state else { return "unknown" }
+        switch state {
+        case let .ready(mode, url, _, _):
+            return "ready:\(mode.rawValue):\(url.absoluteString)"
+        case let .connecting(mode, detail):
+            let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "connecting:\(mode.rawValue):\(trimmed)"
+        case let .unavailable(mode, reason):
+            let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "unavailable:\(mode.rawValue):\(trimmed)"
+        }
     }
 }
 

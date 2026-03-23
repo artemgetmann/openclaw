@@ -12,14 +12,13 @@ struct OpenClawApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var state: AppState
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app")
-    private let gatewayManager = GatewayProcessManager.shared
-    private let controlChannel = ControlChannel.shared
-    private let activityStore = WorkActivityStore.shared
-    private let connectivityCoordinator = GatewayConnectivityCoordinator.shared
+    private var gatewayManager: GatewayProcessManager { .shared }
+    private var controlChannel: ControlChannel { .shared }
+    private var activityStore: WorkActivityStore { .shared }
     @State private var statusItem: NSStatusItem?
     @State private var isMenuPresented = false
     @State private var isPanelVisible = false
-    @State private var tailscaleService = TailscaleService.shared
+    @State private var tailscaleService: TailscaleService
 
     @MainActor
     private func updateStatusHighlight() {
@@ -28,14 +27,22 @@ struct OpenClawApp: App {
 
     @MainActor
     private func updateHoverHUDSuppression() {
-        HoverHUDController.shared.setSuppressed(self.isMenuPresented || self.isPanelVisible)
+        // Consumer mode talks through Telegram for now. Keep the menu bar focused on
+        // lifecycle/settings until we have a coherent local-chat product surface.
+        let shouldSuppress = AppFlavor.current.isConsumer || self.isMenuPresented || self.isPanelVisible
+        HoverHUDController.shared.setSuppressed(shouldSuppress)
     }
 
     init() {
+        // Bootstrap consumer runtime/env first so every singleton reads consumer paths/ports.
+        ConsumerRuntime.bootstrapProcessEnvironment()
         OpenClawLogging.bootstrapIfNeeded()
+        ConsumerBootstrap.bootstrapIfNeeded()
+        GatewayConnectivityCoordinator.shared.start()
 
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
+        _tailscaleService = State(initialValue: TailscaleService.shared)
     }
 
     var body: some Scene {
@@ -103,10 +110,9 @@ struct OpenClawApp: App {
             return
         }
         Task {
-            _ = await GatewayLaunchAgentManager.set(
-                enabled: false,
-                bundlePath: Bundle.main.bundlePath,
-                port: GatewayEnvironment.gatewayPort())
+            // Attach-only is the explicit destructive path: unregister the launch agent so the
+            // consumer app cannot auto-start its gateway in the background.
+            _ = await GatewayLaunchAgentManager.uninstall()
         }
         Self.logger.info("attach-only flag enabled")
     }
@@ -149,7 +155,11 @@ struct OpenClawApp: App {
         handler.translatesAutoresizingMaskIntoConstraints = false
         handler.onLeftClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemClick")
-            self.toggleWebChatPanel()
+            if AppFlavor.current.isConsumer {
+                SettingsWindowOpener.shared.open()
+            } else {
+                self.toggleWebChatPanel()
+            }
         }
         handler.onRightClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemRightClick")

@@ -43,7 +43,7 @@ extension OnboardingView {
                     .font(.largeTitle.weight(.semibold))
                 Text(
                     AppFlavor.current.isConsumer
-                        ? "Your AI operator for this Mac."
+                        ? "OpenClaw is a personal AI operator for this Mac. Next we will connect your Telegram bot."
                         : "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
@@ -101,7 +101,7 @@ extension OnboardingView {
                 .font(.largeTitle.weight(.semibold))
             Text(
                 AppFlavor.current.isConsumer
-                    ? "The default is this Mac. That keeps setup fast and makes the app feel like your own operator instead of a server console."
+                    ? "OpenClaw uses one local Gateway for the consumer build. This Mac is the normal path; remote setup stays tucked under Advanced."
                     : "OpenClaw uses a single Gateway that stays running. Pick this Mac, connect to a discovered gateway nearby, or configure later.")
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -128,14 +128,6 @@ extension OnboardingView {
                     if self.shouldShowRemoteConnectionSection {
                         Divider().padding(.vertical, 4)
                         self.remoteConnectionSection()
-                    }
-
-                    self.connectionChoiceButton(
-                        title: "Configure later",
-                        subtitle: "Don’t start the Gateway yet.",
-                        selected: self.state.connectionMode == .unconfigured)
-                    {
-                        self.selectUnconfiguredGateway()
                     }
 
                     self.advancedConnectionSection()
@@ -790,7 +782,7 @@ extension OnboardingView {
                                     let saved = await self.saveAgentWorkspace(AgentWorkspace.displayPath(for: url))
                                     if saved {
                                         self.workspaceStatus =
-                                            "Saved to ~/.openclaw/openclaw.json (agents.defaults.workspace)"
+                                            "Saved consumer workspace to openclaw.json (agents.defaults.workspace)"
                                     }
                                 }
                             }
@@ -824,7 +816,7 @@ extension OnboardingView {
                 .font(.largeTitle.weight(.semibold))
             Text(
                 AppFlavor.current.isConsumer
-                    ? "This is a dedicated setup chat. Your agent can introduce itself and help with the next steps without mixing into your normal conversations."
+                    ? "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and guide the Telegram setup once the local runtime is ready."
                     : "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect WhatsApp or Telegram if you want.")
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -860,17 +852,51 @@ extension OnboardingView {
                         title: "Remote gateway checklist",
                         subtitle: """
                         On your gateway host: install/update the `openclaw` package and make sure credentials exist
-                        (typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.
+                        for that host. Then connect again if needed.
                         """,
                         systemImage: "network")
                     Divider()
                         .padding(.vertical, 6)
                 }
                 self.featureRow(
-                    title: "Open the menu bar panel",
-                    subtitle: "Click the \(AppFlavor.current.appName) menu bar icon for quick chat and status.",
-                    systemImage: "bubble.left.and.bubble.right")
-                if !AppFlavor.current.isConsumer || self.state.showAdvancedSettings {
+                    title: "Open the app",
+                    subtitle: "Click the \(AppFlavor.current.appName) menu bar icon to open settings and check status.",
+                    systemImage: "app.badge")
+                if AppFlavor.current.isConsumer {
+                    self.featureActionRow(
+                        title: "Connect Telegram",
+                        subtitle: "Open Settings → Channels to add your bot token and finish the one-time setup.",
+                        systemImage: "link",
+                        buttonTitle: "Open Settings → Channels")
+                    {
+                        self.openSettings(tab: .channels)
+                    }
+                    self.featureRow(
+                        title: "Create the bot token",
+                        subtitle: "Use BotFather once, then paste the token into Settings → Channels. The app keeps the rest isolated.",
+                        systemImage: "message.badge")
+                    self.featureRow(
+                        title: "Groups stay available",
+                        subtitle: "Use DM-first onboarding to start, then move long-running work into Telegram groups and topics.",
+                        systemImage: "person.2")
+                    self.featureRow(
+                        title: "Try Voice Wake",
+                        subtitle: "Enable Voice Wake in Settings for hands-free commands with a live transcript overlay.",
+                        systemImage: "waveform.circle")
+                    self.featureRow(
+                        title: "Talk in Telegram",
+                        subtitle: "Use Telegram as the consumer chat surface. The app handles setup and status.",
+                        systemImage: "paperplane")
+                    self.featureActionRow(
+                        title: "Give your agent more powers",
+                        subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
+                        systemImage: "sparkles",
+                        buttonTitle: "Open Settings → Skills")
+                    {
+                        self.openSettings(tab: .skills)
+                    }
+                    self.skillsOverview
+                } else if self.state.showAdvancedSettings {
                     self.featureActionRow(
                         title: "Connect channels",
                         subtitle: "Open Settings → Channels to link channels and monitor status.",

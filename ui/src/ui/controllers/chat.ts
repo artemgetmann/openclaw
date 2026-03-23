@@ -6,6 +6,23 @@ import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const UI_SOURCE_RECEIPT_BLOCK_RE = /^\s*\[Source Receipt\][\s\S]*?\[\/Source Receipt\]\s*/u;
+const UI_SYSTEM_PREAMBLE_RE = /^\s*System:\s*\[[^\n]+\]\s+Node:\s+[^\n]*\bmode\b[^\n]*\n*/u;
+const UI_BOOTSTRAP_SUGGESTIONS_RE =
+  /^\s*Bootstrap name suggestions \(derived from untrusted sender metadata; use these exact options if BOOTSTRAP\.md is still active\):\s*```json[\s\S]*?```\s*/u;
+
+/**
+ * Scrub agent-facing bootstrap/debug scaffolding from the optimistic local
+ * echo. The server/history path already sanitizes persisted messages, but the
+ * UI appends a user bubble immediately before the round-trip completes.
+ */
+function sanitizeVisibleOutgoingText(text: string): string {
+  let next = text;
+  next = next.replace(UI_SOURCE_RECEIPT_BLOCK_RE, "");
+  next = next.replace(UI_SYSTEM_PREAMBLE_RE, "");
+  next = next.replace(UI_BOOTSTRAP_SUGGESTIONS_RE, "");
+  return next.trim();
+}
 
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
@@ -159,6 +176,7 @@ export async function sendChatMessage(
     return null;
   }
   const msg = message.trim();
+  const displayMsg = sanitizeVisibleOutgoingText(msg);
   const hasAttachments = attachments && attachments.length > 0;
   if (!msg && !hasAttachments) {
     return null;
@@ -168,8 +186,8 @@ export async function sendChatMessage(
 
   // Build user message content blocks
   const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
-  if (msg) {
-    contentBlocks.push({ type: "text", text: msg });
+  if (displayMsg) {
+    contentBlocks.push({ type: "text", text: displayMsg });
   }
   // Add image previews to the message for display
   if (hasAttachments) {
