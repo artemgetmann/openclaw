@@ -1,6 +1,10 @@
 import SwiftUI
 
 extension ChannelsSettings {
+    private var isConsumerSimpleTelegramPath: Bool {
+        AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             self.sidebar
@@ -21,14 +25,20 @@ extension ChannelsSettings {
         SettingsSidebarScroll {
             LazyVStack(alignment: .leading, spacing: 8) {
                 if !self.enabledChannels.isEmpty {
-                    self.sidebarSectionHeader("Configured")
+                    if !self.isConsumerSimpleTelegramPath {
+                        self.sidebarSectionHeader("Connected")
+                    }
+                    // Consumer mode intentionally keeps the simple channel list feeling like
+                    // setup/status, not a generic admin console with infrastructure groupings.
                     ForEach(self.enabledChannels) { channel in
                         self.sidebarRow(channel)
                     }
                 }
 
                 if !self.availableChannels.isEmpty {
-                    self.sidebarSectionHeader("Available")
+                    if !self.isConsumerSimpleTelegramPath {
+                        self.sidebarSectionHeader("Set up next")
+                    }
                     ForEach(self.availableChannels) { channel in
                         self.sidebarRow(channel)
                     }
@@ -52,7 +62,10 @@ extension ChannelsSettings {
         VStack(alignment: .leading, spacing: 8) {
             Text("Channels")
                 .font(.title3.weight(.semibold))
-            Text("Select a channel to view status and settings.")
+            Text(
+                self.isConsumerSimpleTelegramPath
+                    ? "Set up Telegram here so your AI operator can talk to you."
+                    : "Select a channel to view status and settings.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }

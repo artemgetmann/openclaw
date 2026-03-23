@@ -169,6 +169,11 @@ extension ChannelsStore {
         persistedRoot: [String: Any]
     ) -> String {
         _ = persistedRoot
+        if AppFlavor.current.isConsumer {
+            return dm.senderUsername.map {
+                "Connected to @\($0). You can start chatting with your AI operator in Telegram now."
+            } ?? "Telegram setup is finished. You can start chatting with your AI operator now."
+        }
         return dm.senderUsername.map {
             "Locked to @\($0). For multiple parallel tasks, add the bot to a Telegram group and use topics."
         } ?? "Locked to Telegram user ID \(dm.senderId). For multiple parallel tasks, add the bot to a Telegram group and use topics."

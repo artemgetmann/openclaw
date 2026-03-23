@@ -15,9 +15,9 @@ final class CLIInstallPrompter {
         UserDefaults.standard.set(version, forKey: cliInstallPromptedVersionKey)
 
         let alert = NSAlert()
-        alert.messageText = "Install OpenClaw CLI?"
-        alert.informativeText = "Local mode needs the CLI so launchd can run the gateway."
-        alert.addButton(withTitle: "Install CLI")
+        alert.messageText = self.promptTitle
+        alert.informativeText = self.promptMessage
+        alert.addButton(withTitle: self.installButtonTitle)
         alert.addButton(withTitle: "Not now")
         alert.addButton(withTitle: "Open Settings")
         let response = alert.runModal()
@@ -52,10 +52,31 @@ final class CLIInstallPrompter {
         }
         if let message = await status.get() {
             let alert = NSAlert()
-            alert.messageText = "CLI install finished"
+            alert.messageText = AppFlavor.current.isConsumer ? "Local setup finished" : "CLI install finished"
             alert.informativeText = message
             alert.runModal()
         }
+    }
+
+    private var promptTitle: String {
+        if AppFlavor.current.isConsumer {
+            return "Finish local setup on this Mac?"
+        }
+        return "Install OpenClaw CLI?"
+    }
+
+    private var promptMessage: String {
+        if AppFlavor.current.isConsumer {
+            return "\(AppFlavor.current.appName) needs its local helper installed so it can stay available after you sign in."
+        }
+        return "Local mode needs the CLI so launchd can run the gateway."
+    }
+
+    private var installButtonTitle: String {
+        if AppFlavor.current.isConsumer {
+            return "Install now"
+        }
+        return "Install CLI"
     }
 
     private func openSettings(tab: SettingsTab) {
