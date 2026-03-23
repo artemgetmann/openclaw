@@ -66,7 +66,7 @@ struct PermissionsSettings: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Grant the permissions OpenClaw needs to help on this Mac.")
+                    Text("Grant the permissions \(AppFlavor.current.appName) needs to help on this Mac.")
                         .font(.title3.weight(.semibold))
                     Text("Click once to go through the recommended permissions. Accessibility and Screen Recording may open System Settings instead of showing a prompt.")
                         .font(.callout)
@@ -97,7 +97,7 @@ struct PermissionsSettings: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("If Accessibility or Screen Recording still look pending after you enabled them in System Settings, quit and reopen OpenClaw once. macOS can keep those states stale until restart.")
+                    Text("If Accessibility or Screen Recording still look pending after you enabled them in System Settings, quit and reopen \(AppFlavor.current.appName) once. macOS can keep those states stale until restart.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -105,7 +105,7 @@ struct PermissionsSettings: View {
                     Button {
                         DebugActions.restartApp()
                     } label: {
-                        Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
+                        Label("Restart \(AppFlavor.current.appName)", systemImage: "arrow.counterclockwise")
                     }
                     .buttonStyle(.bordered)
                     .disabled(self.requestingRecommended)

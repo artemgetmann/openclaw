@@ -217,8 +217,18 @@ extension ChannelsSettings {
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else {
             let fallback = self.consumerTelegramConfigFallback
+            if self.isConsumerSimpleTelegramPath {
+                if fallback.lockedSenderId != nil { return "Live" }
+                if fallback.configured { return "Setup complete" }
+                return "Setup needed"
+            }
             if fallback.configured { return "Configured" }
             return "Checking…"
+        }
+        if self.isConsumerSimpleTelegramPath {
+            if status.configured && (status.running || status.probe?.ok == true) { return "Live" }
+            if status.configured { return "Setup complete" }
+            return "Setup needed"
         }
         return self.configuredChannelSummary(configured: status.configured, running: status.running)
     }
@@ -286,18 +296,22 @@ extension ChannelsSettings {
             }
             let fallback = self.consumerTelegramConfigFallback
             if fallback.lockedSenderId != nil {
-                return "Telegram DM allowlist saved locally."
+                return self.isConsumerSimpleTelegramPath
+                    ? "Telegram access is saved on this Mac."
+                    : "Telegram DM allowlist saved locally."
             }
             if fallback.configured {
-                return "Telegram token saved locally."
+                return self.isConsumerSimpleTelegramPath
+                    ? "Telegram setup is saved on this Mac."
+                    : "Telegram token saved locally."
             }
             return nil
         }
         var lines: [String] = []
-        if let source = status.tokenSource {
+        if let source = status.tokenSource, !self.isConsumerSimpleTelegramPath {
             lines.append("Token source: \(source)")
         }
-        if let mode = status.mode {
+        if let mode = status.mode, !self.isConsumerSimpleTelegramPath {
             lines.append("Mode: \(mode)")
         }
         if let probe = status.probe {

@@ -124,7 +124,7 @@ struct GeneralSettings: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("OpenClaw runs quietly in your menu bar.")
+                    Text("Your AI operator runs quietly in your menu bar.")
                         .font(.title3.weight(.semibold))
                     Text("Keep the basics here. Anything technical stays out of the way unless you explicitly ask for it.")
                         .font(.callout)
@@ -142,7 +142,7 @@ struct GeneralSettings: View {
 
                     SettingsToggleRow(
                         title: "Launch at login",
-                        subtitle: "Automatically start OpenClaw after you sign in.",
+                        subtitle: "Automatically start \(AppFlavor.current.appName) after you sign in.",
                         binding: self.$state.launchAtLogin)
 
                     SettingsToggleRow(
