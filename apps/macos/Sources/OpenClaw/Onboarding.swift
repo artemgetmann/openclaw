@@ -84,6 +84,7 @@ struct OnboardingView: View {
     @State var suppressRemoteProbeReset = false
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: OpenClawChatViewModel
+    @State var browserSetup = BrowserSetupModel()
     @State var onboardingSkillsModel = SkillsSettingsModel()
     @State var onboardingWizard = OnboardingWizardModel()
     @State var didLoadOnboardingSkills = false
@@ -148,7 +149,7 @@ struct OnboardingView: View {
     var buttonTitle: String {
         if AppFlavor.current.isConsumer {
             if self.pageCount == 1, self.activePageIndex == 0 {
-                return self.onboardingWizard.isComplete ? "Finish" : "Setting Up…"
+                return self.onboardingWizard.isComplete && self.browserSetup.isComplete ? "Finish" : "Setting Up…"
             }
             if self.activePageIndex == self.wizardPageIndex, self.onboardingWizard.isComplete {
                 return "Finish"
@@ -172,8 +173,16 @@ struct OnboardingView: View {
             !self.onboardingWizard.isComplete
     }
 
+    var isBrowserSetupBlocking: Bool {
+        AppFlavor.current.isConsumer &&
+            self.pageCount == 1 &&
+            self.state.connectionMode == .local &&
+            self.onboardingWizard.isComplete &&
+            !self.browserSetup.isComplete
+    }
+
     var canAdvance: Bool {
-        !self.isWizardBlocking && !self.isConsumerInlineSetupBlocking
+        !self.isWizardBlocking && !self.isConsumerInlineSetupBlocking && !self.isBrowserSetupBlocking
     }
 
     var devLinkCommand: String {

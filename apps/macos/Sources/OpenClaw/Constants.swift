@@ -8,7 +8,7 @@ var launchdLabel: String { AppFlavor.current.stableSuiteName }
 var gatewayLaunchdLabel: String { AppFlavor.current.gatewayLaunchLabel }
 var onboardingVersionKey: String { "\(defaultsPrefix).onboardingVersion" }
 var onboardingSeenKey: String { "\(defaultsPrefix).onboardingSeen" }
-let currentOnboardingVersion = 7
+let currentOnboardingVersion = 8
 var pauseDefaultsKey: String { "\(defaultsPrefix).pauseEnabled" }
 var iconAnimationsEnabledKey: String { "\(defaultsPrefix).iconAnimationsEnabled" }
 var swabbleEnabledKey: String { "\(defaultsPrefix).swabbleEnabled" }
@@ -48,4 +48,6 @@ var debugPaneEnabledKey: String { "\(defaultsPrefix).debugPaneEnabled" }
 var debugFileLogEnabledKey: String { "\(defaultsPrefix).debug.fileLogEnabled" }
 var appLogLevelKey: String { "\(defaultsPrefix).debug.appLogLevel" }
 var showAdvancedSettingsKey: String { "\(defaultsPrefix).showAdvancedSettings" }
+var browserSelectedChromeProfileIDKey: String { "\(defaultsPrefix).browser.selectedChromeProfileID" }
+var browserSelectedChromeProfileNameKey: String { "\(defaultsPrefix).browser.selectedChromeProfileName" }
 let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
