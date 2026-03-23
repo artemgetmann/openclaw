@@ -10,7 +10,12 @@ title: "Browser Login"
 
 ## Manual login (recommended)
 
-When a site requires login, **sign in manually** in the **host** browser profile (the openclaw browser).
+When a site requires login, use the **signed-in user browser lane** first if it is available.
+
+If the task depends on existing cookies or logged-in sessions, prefer the
+**user** browser profile over the isolated `openclaw` browser. If that lane is
+not available, surface the blocker instead of silently switching to a clean
+browser that will just ask for login again.
 
 Do **not** give the model your credentials. Automated logins often trigger anti‑bot defenses and can lock the account.
 
@@ -18,17 +23,21 @@ Back to the main browser docs: [Browser](/tools/browser).
 
 ## Which Chrome profile is used?
 
-OpenClaw controls a **dedicated Chrome profile** (named `openclaw`, orange‑tinted UI). This is separate from your daily browser profile.
+OpenClaw can use two browser lanes:
+
+- `user`: your signed-in cloned Chrome lane when existing cookies/session matter
+- `openclaw`: a dedicated Chrome profile (orange-tinted UI) isolated from your daily browser
 
 For agent browser tool calls:
 
-- Default choice: the agent should use its isolated `openclaw` browser.
-- Use `profile="user"` only when existing logged-in sessions matter and the user is at the computer to click/approve any attach prompt.
+- Prefer `profile="user"` for signed-in sites, hostile sites, and flows where existing cookies/session matter.
+- Use `profile="openclaw"` for public browsing, clean isolated runs, or as an explicit fallback.
+- If `profile="user"` is required for the task and is unavailable, stop and report the blocker instead of silently switching to `openclaw`.
 - If you have multiple user-browser profiles, specify the profile explicitly instead of guessing.
 
 Two easy ways to access it:
 
-1. **Ask the agent to open the browser** and then log in yourself.
+1. **Ask the agent to open the browser** and then log in yourself if needed.
 2. **Open it via CLI**:
 
 ```bash
@@ -36,12 +45,13 @@ openclaw browser start
 openclaw browser open https://x.com
 ```
 
-If you have multiple profiles, pass `--browser-profile <name>` (the default is `openclaw`).
+If you have multiple profiles, configure the source Chrome profile once instead
+of having the agent guess. The default managed profile remains `openclaw`.
 
 ## X/Twitter: recommended flow
 
-- **Read/search/threads:** use the **host** browser (manual login).
-- **Post updates:** use the **host** browser (manual login).
+- **Read/search/threads:** prefer the signed-in **user** browser lane.
+- **Post updates:** prefer the signed-in **user** browser lane.
 
 ## Sandboxing + host browser access
 

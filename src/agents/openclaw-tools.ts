@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
@@ -26,6 +27,18 @@ import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
+
+function traceOpenClawToolStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only.
+  }
+}
 
 export function createOpenClawTools(
   options?: {
@@ -216,6 +229,7 @@ export function createOpenClawTools(
     ...(pdfTool ? [pdfTool] : []),
   ];
 
+  traceOpenClawToolStage("openclaw-tools-pre-plugin-tools");
   const pluginTools = resolvePluginTools({
     context: {
       config: options?.config,
@@ -236,6 +250,7 @@ export function createOpenClawTools(
     existingToolNames: new Set(tools.map((tool) => tool.name)),
     toolAllowlist: options?.pluginToolAllowlist,
   });
+  traceOpenClawToolStage(`openclaw-tools-post-plugin-tools count=${pluginTools.length}`);
 
   return [...tools, ...pluginTools];
 }

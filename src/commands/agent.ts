@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
@@ -124,6 +125,18 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "fallbackNoticeReason",
   "claudeCliSessionId",
 ];
+
+function traceAgentCommandStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only. Never let debug logging change runtime behavior.
+  }
+}
 
 async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
   const persisted = await updateSessionStore(params.storePath, (store) => {
@@ -506,6 +519,7 @@ async function prepareAgentCommandExecution(
   opts: AgentCommandOpts & { senderIsOwner: boolean },
   runtime: RuntimeEnv,
 ) {
+  traceAgentCommandStage("agent-prepare-start");
   const message = opts.message ?? "";
   if (!message.trim()) {
     throw new Error("Message (--message) is required");
@@ -515,6 +529,7 @@ async function prepareAgentCommandExecution(
   }
 
   const loadedRaw = loadConfig();
+  traceAgentCommandStage("agent-prepare-post-load-config");
   const sourceConfig = await (async () => {
     try {
       const { snapshot } = await readConfigFileSnapshotForWrite();
@@ -531,6 +546,7 @@ async function prepareAgentCommandExecution(
     commandName: "agent",
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
   });
+  traceAgentCommandStage("agent-prepare-post-secret-refs");
   setRuntimeConfigSnapshot(cfg, sourceConfig);
   const normalizedSpawned = normalizeSpawnedRunMetadata({
     spawnedBy: opts.spawnedBy,
@@ -608,6 +624,7 @@ async function prepareAgentCommandExecution(
     sessionKey: opts.sessionKey,
     agentId: agentIdOverride,
   });
+  traceAgentCommandStage("agent-prepare-post-resolve-session");
 
   const {
     sessionId,
@@ -653,6 +670,7 @@ async function prepareAgentCommandExecution(
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
+  traceAgentCommandStage("agent-prepare-post-ensure-workspace");
   const workspaceDir = workspace.dir;
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
@@ -695,7 +713,9 @@ async function agentCommandInternal(
   runtime: RuntimeEnv = defaultRuntime,
   deps: CliDeps = createDefaultDeps(),
 ) {
+  traceAgentCommandStage("agent-command-start");
   const prepared = await prepareAgentCommandExecution(opts, runtime);
+  traceAgentCommandStage("agent-command-post-prepare");
   const {
     body,
     cfg,
@@ -891,6 +911,9 @@ async function agentCommandInternal(
     const needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot;
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
+    traceAgentCommandStage(
+      `agent-command-pre-skills-snapshot needs=${needsSkillsSnapshot ? "yes" : "no"}`,
+    );
     const skillsSnapshot = needsSkillsSnapshot
       ? buildWorkspaceSkillSnapshot(workspaceDir, {
           config: cfg,
@@ -899,8 +922,12 @@ async function agentCommandInternal(
           skillFilter,
         })
       : sessionEntry?.skillsSnapshot;
+    traceAgentCommandStage(
+      `agent-command-post-skills-snapshot present=${skillsSnapshot ? "yes" : "no"}`,
+    );
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
+      traceAgentCommandStage("agent-command-pre-persist-skills-snapshot");
       const current = sessionEntry ?? {
         sessionId,
         updatedAt: Date.now(),
@@ -918,10 +945,12 @@ async function agentCommandInternal(
         entry: next,
       });
       sessionEntry = next;
+      traceAgentCommandStage("agent-command-post-persist-skills-snapshot");
     }
 
     // Persist explicit /command overrides to the session store when we have a key.
     if (sessionStore && sessionKey) {
+      traceAgentCommandStage("agent-command-pre-persist-overrides");
       const entry = sessionStore[sessionKey] ??
         sessionEntry ?? { sessionId, updatedAt: Date.now() };
       const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
@@ -936,6 +965,7 @@ async function agentCommandInternal(
         entry: next,
       });
       sessionEntry = next;
+      traceAgentCommandStage("agent-command-post-persist-overrides");
     }
 
     const configuredDefaultRef = resolveDefaultModelForAgent({
@@ -959,7 +989,9 @@ async function agentCommandInternal(
     let allowAnyModel = false;
 
     if (needsModelCatalog) {
+      traceAgentCommandStage("agent-command-pre-load-model-catalog");
       modelCatalog = await loadModelCatalog({ config: cfg });
+      traceAgentCommandStage("agent-command-post-load-model-catalog");
       const allowed = buildAllowedModelSet({
         cfg,
         catalog: modelCatalog,
@@ -1037,7 +1069,9 @@ async function agentCommandInternal(
     if (!resolvedThinkLevel) {
       let catalogForThinking = modelCatalog ?? allowedModelCatalog;
       if (!catalogForThinking || catalogForThinking.length === 0) {
+        traceAgentCommandStage("agent-command-pre-load-thinking-catalog");
         modelCatalog = await loadModelCatalog({ config: cfg });
+        traceAgentCommandStage("agent-command-post-load-thinking-catalog");
         catalogForThinking = modelCatalog;
       }
       resolvedThinkLevel = resolveThinkingDefault({
@@ -1067,6 +1101,7 @@ async function agentCommandInternal(
     }
     let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {
+      traceAgentCommandStage("agent-command-pre-resolve-session-file-store");
       const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey,
@@ -1078,8 +1113,10 @@ async function agentCommandInternal(
       });
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
+      traceAgentCommandStage("agent-command-post-resolve-session-file-store");
     }
     if (!sessionFile) {
+      traceAgentCommandStage("agent-command-pre-resolve-session-file-direct");
       const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey: sessionKey ?? sessionId,
@@ -1089,6 +1126,7 @@ async function agentCommandInternal(
       });
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
+      traceAgentCommandStage("agent-command-post-resolve-session-file-direct");
     }
 
     const startedAt = Date.now();
@@ -1115,6 +1153,7 @@ async function agentCommandInternal(
       // Track model fallback attempts so retries on an existing session don't
       // re-inject the original prompt as a duplicate user message.
       let fallbackAttemptIndex = 0;
+      traceAgentCommandStage("agent-command-pre-run-attempt");
       const fallbackResult = await runWithModelFallback({
         cfg,
         provider,
@@ -1167,6 +1206,7 @@ async function agentCommandInternal(
       result = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      traceAgentCommandStage("agent-command-post-run-attempt");
       if (!lifecycleEnded) {
         const stopReason = result.meta.stopReason;
         if (stopReason && stopReason !== "end_turn") {

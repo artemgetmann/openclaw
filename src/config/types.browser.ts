@@ -5,6 +5,12 @@ export type BrowserProfileConfig = {
   cdpUrl?: string;
   /** Profile driver (default: openclaw). */
   driver?: "openclaw" | "clawd" | "existing-session";
+  /** If true, seed this profile by cloning a local Chrome profile before launch. */
+  cloneFromUserProfile?: boolean;
+  /** Optional source Chrome user-data root for cloneFromUserProfile. */
+  sourceChromeDir?: string;
+  /** Optional source Chrome profile directory name (for example "Default" or "Profile 4"). */
+  sourceProfileName?: string;
   /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
   attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */

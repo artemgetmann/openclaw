@@ -1,13 +1,10 @@
+import { appendFileSync } from "node:fs";
 import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
-import {
-  closeChromeMcpSession,
-  ensureChromeMcpAvailable,
-  listChromeMcpTabs,
-} from "./chrome-mcp.js";
+import { closeChromeMcpSession, ensureChromeMcpAvailable } from "./chrome-mcp.js";
 import {
   isChromeCdpReady,
   isChromeReachable,
@@ -52,6 +49,27 @@ export function createProfileAvailability({
   setProfileRunning,
 }: AvailabilityDeps): AvailabilityOps {
   const capabilities = getBrowserProfileCapabilities(profile);
+  const traceAvailabilityStage = (stage: string) => {
+    const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+    if (!stageLogPath) {
+      return;
+    }
+    try {
+      appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+    } catch {
+      // Best-effort tracing only.
+    }
+  };
+  const resolveChromeMcpReadyTimeoutMs = (timeoutMs: number | undefined) => {
+    // Existing-session Chrome MCP attach can take materially longer when the
+    // browser is backgrounded or the first attach spins up the MCP bridge.
+    // Keep status/availability checks out of the "false negative" zone.
+    const minimumReadyTimeoutMs = 15_000;
+    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+      return minimumReadyTimeoutMs;
+    }
+    return Math.max(minimumReadyTimeoutMs, Math.floor(timeoutMs));
+  };
   const resolveTimeouts = (timeoutMs: number | undefined) =>
     resolveCdpReachabilityTimeouts({
       profileIsLoopback: profile.cdpIsLoopback,
@@ -62,8 +80,18 @@ export function createProfileAvailability({
 
   const isReachable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
-      // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required
-      await listChromeMcpTabs(profile.name);
+      const readyTimeoutMs = resolveChromeMcpReadyTimeoutMs(timeoutMs);
+      traceAvailabilityStage(
+        `browser-availability-reachable-check profile=${profile.name} transport=chrome-mcp timeoutMs=${readyTimeoutMs}`,
+      );
+      // Chrome MCP startup/attach often takes longer than CDP ping windows.
+      // Clamp to a sane minimum so status/list checks avoid false negatives.
+      await ensureChromeMcpAvailable(profile.name, {
+        timeoutMs: readyTimeoutMs,
+      });
+      traceAvailabilityStage(
+        `browser-availability-reachable-ok profile=${profile.name} transport=chrome-mcp timeoutMs=${readyTimeoutMs}`,
+      );
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
@@ -153,7 +181,14 @@ export function createProfileAvailability({
   const ensureBrowserAvailable = async (): Promise<void> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
-      await ensureChromeMcpAvailable(profile.name);
+      const readyTimeoutMs = resolveChromeMcpReadyTimeoutMs(undefined);
+      traceAvailabilityStage(
+        `browser-availability-ensure profile=${profile.name} transport=chrome-mcp timeoutMs=${readyTimeoutMs}`,
+      );
+      await ensureChromeMcpAvailable(profile.name, { timeoutMs: readyTimeoutMs });
+      traceAvailabilityStage(
+        `browser-availability-ensure-ok profile=${profile.name} transport=chrome-mcp timeoutMs=${readyTimeoutMs}`,
+      );
       return;
     }
     const current = state();

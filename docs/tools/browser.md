@@ -18,7 +18,7 @@ Beginner view:
 - Think of it as a **separate, agent-only browser**.
 - The `openclaw` profile does **not** touch your personal browser profile.
 - The agent can **open tabs, read pages, click, and type** in a safe lane.
-- The built-in `user` profile attaches to your real signed-in Chrome session via Chrome MCP.
+- The built-in `user` profile launches a separate host-local Chrome window seeded from your signed-in Chrome state.
 
 ## What you get
 
@@ -45,14 +45,19 @@ Gateway.
 ## Profiles: `openclaw` vs `user`
 
 - `openclaw`: managed, isolated browser (no extension required).
-- `user`: built-in Chrome MCP attach profile for your **real signed-in Chrome**
-  session.
+- `user`: host-local cloned-session lane for your signed-in Chrome state without taking over the live browser process.
 
 For agent browser tool calls:
 
-- Default: use the isolated `openclaw` browser.
-- Prefer `profile="user"` when existing logged-in sessions matter and the user
-  is at the computer to click/approve any attach prompt.
+- Prefer `profile="user"` for signed-in sites, hostile sites, or flows where
+  existing cookies/session matter.
+- Use `profile="openclaw"` for public browsing, clean isolated runs, or as an
+  explicit fallback when session reuse is not required.
+- If the task clearly depends on existing login state and `profile="user"` is
+  unavailable, stop and surface the blocker instead of silently switching to a
+  clean isolated browser.
+- Do not suggest the removed Browser Relay extension path for `profile="user"`
+  failures. Report the actual blocker instead.
 - `profile` is the explicit override when you want a specific browser mode.
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
@@ -84,8 +89,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
       user: {
-        driver: "existing-session",
-        attachOnly: true,
+        cdpPort: 18801,
+        cloneFromUserProfile: true,
         color: "#00AA00",
       },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
@@ -109,11 +114,12 @@ Notes:
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
-- Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "user"` to opt into the signed-in user browser.
+- Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "user"` to opt into the signed-in cloned user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
-- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do
-  not set `cdpUrl` for that driver.
+- `driver: "existing-session"` is now the explicit live-Chrome attach mode for
+  advanced use cases. The built-in `user` lane should stay on cloned-session
+  mode for normal consumer flows.
 
 ## Use Brave (or another Chromium-based browser)
 

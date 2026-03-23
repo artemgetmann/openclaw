@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw browser` (profiles, tabs, actions, Chrome 
 read_when:
   - You use `openclaw browser` and want examples for common tasks
   - You want to control a browser running on another machine via a node host
-  - You want to attach to your local signed-in Chrome via Chrome MCP
+  - You want to use a separate browser window seeded from your signed-in Chrome state
 title: "browser"
 ---
 
@@ -37,7 +37,7 @@ openclaw browser --browser-profile openclaw snapshot
 Profiles are named browser routing configs. In practice:
 
 - `openclaw`: launches or attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
-- `user`: controls your existing signed-in Chrome session via Chrome DevTools MCP.
+- `user`: launches a separate OpenClaw-managed Chrome window seeded from your signed-in Chrome state.
 - custom CDP profiles: point at a local or remote CDP endpoint.
 
 ```bash
@@ -84,9 +84,9 @@ openclaw browser click <ref>
 openclaw browser type <ref> "hello"
 ```
 
-## Existing Chrome via MCP
+## Signed-in Chrome lane vs live Chrome attach
 
-Use the built-in `user` profile, or create your own `existing-session` profile:
+Use the built-in `user` profile for the default signed-in cloned-session lane, or create your own `existing-session` profile when you explicitly want live Chrome attach:
 
 ```bash
 openclaw browser --browser-profile user tabs
@@ -94,7 +94,7 @@ openclaw browser create-profile --name chrome-live --driver existing-session
 openclaw browser --browser-profile chrome-live tabs
 ```
 
-This path is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
+The default `user` lane is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
 
 ## Remote browser control (node host proxy)
 

@@ -85,6 +85,7 @@ const browserConfigMocks = vi.hoisted(() => ({
       cdpHost: "127.0.0.1",
       cdpIsLoopback: true,
       color: typeof profile.color === "string" ? profile.color : "#FF4500",
+      cloneFromUserProfile: profile.cloneFromUserProfile === true,
       attachOnly: profile.attachOnly === true,
     };
   }),
@@ -284,7 +285,16 @@ describe("browser tool snapshot maxChars", () => {
 
   it("defaults to host when using profile=user (even in sandboxed sessions)", async () => {
     setResolvedBrowserProfiles({
-      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      user: {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
     });
     const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
     await tool.execute?.("call-1", {
@@ -322,7 +332,16 @@ describe("browser tool snapshot maxChars", () => {
 
   it('rejects profile="user" with target="sandbox"', async () => {
     setResolvedBrowserProfiles({
-      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      user: {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
     });
     const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
 
@@ -360,12 +379,12 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 25000 },
+      { timeoutMs: 55000 },
       expect.objectContaining({
         nodeId: "node-1",
         command: "browser.proxy",
         params: expect.objectContaining({
-          timeoutMs: 20000,
+          timeoutMs: 45000,
         }),
       }),
     );
@@ -389,10 +408,10 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 25000 },
+      { timeoutMs: 55000 },
       expect.objectContaining({
         params: expect.objectContaining({
-          timeoutMs: 20000,
+          timeoutMs: 45000,
         }),
       }),
     );
@@ -413,7 +432,16 @@ describe("browser tool snapshot maxChars", () => {
   it("keeps user profile on host when node proxy is available", async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
-      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      user: {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
     });
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", profile: "user" });
@@ -474,6 +502,21 @@ describe("browser tool url alias support", () => {
     );
   });
 
+  it("passes timeoutMs through for open", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "open",
+      url: "https://example.com",
+      timeoutMs: 60000,
+    });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ profile: undefined, timeoutMs: 60000 }),
+    );
+  });
+
   it("tracks opened tabs when session context is available", async () => {
     browserClientMocks.browserOpenTab.mockResolvedValueOnce({
       targetId: "tab-123",
@@ -505,6 +548,26 @@ describe("browser tool url alias support", () => {
         url: "https://example.com",
         targetId: "tab-1",
         profile: undefined,
+      }),
+    );
+  });
+
+  it("passes timeoutMs through for navigate", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "navigate",
+      url: "https://example.com",
+      targetId: "tab-1",
+      timeoutMs: 60000,
+    });
+
+    expect(browserActionsMocks.browserNavigate).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        url: "https://example.com",
+        targetId: "tab-1",
+        profile: undefined,
+        timeoutMs: 60000,
       }),
     );
   });

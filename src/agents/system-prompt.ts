@@ -250,7 +250,8 @@ export function buildAgentSystemPrompt(params: {
     web_search: "Search the web (Brave API)",
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
-    browser: "Control web browser",
+    browser:
+      'Control web browser; prefer profile="user" for signed-in or hostile tasks because it uses a separate host-local Chrome window seeded from the user\'s Chrome state, use profile="openclaw" for isolated public tasks, and do not silently switch lanes when session semantics would change',
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",

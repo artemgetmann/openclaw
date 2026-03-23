@@ -23,9 +23,10 @@ describe("browser config", () => {
     expect(openclaw?.cdpPort).toBe(18800);
     expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:18800");
     const user = resolveProfile(resolved, "user");
-    expect(user?.driver).toBe("existing-session");
-    expect(user?.cdpPort).toBe(0);
-    expect(user?.cdpUrl).toBe("");
+    expect(user?.driver).toBe("openclaw");
+    expect(user?.cdpPort).toBe(18801);
+    expect(user?.cdpUrl).toBe("http://127.0.0.1:18801");
+    expect(user?.cloneFromUserProfile).toBe(true);
     // chrome-relay is no longer auto-created
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);

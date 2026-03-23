@@ -262,6 +262,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
   "browser.profiles.*.driver":
     'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for host-local Chrome MCP attachment.',
+  "browser.profiles.*.cloneFromUserProfile":
+    "Seeds this profile by cloning the user's local Chrome state before launch. Use for separate signed-in browser windows that should reuse cookies without taking over the live Chrome process.",
+  "browser.profiles.*.sourceChromeDir":
+    "Optional source Chrome user-data root used when cloneFromUserProfile is enabled. Leave unset to auto-detect the standard Chrome data directory for the current OS.",
+  "browser.profiles.*.sourceProfileName":
+    "Optional source Chrome profile directory name used when cloneFromUserProfile is enabled. Leave unset to auto-detect the most recently used Chrome profile from Local State.",
   "browser.profiles.*.attachOnly":
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.profiles.*.color":

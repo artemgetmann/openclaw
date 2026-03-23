@@ -5,7 +5,11 @@ import { isRestartEnabled } from "../../config/commands.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
+import {
+  isLocalRestartScriptAvailable,
+  scheduleGatewaySigusr1Restart,
+  triggerOpenClawRestart,
+} from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
@@ -609,6 +613,34 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       shouldContinue: false,
       reply: {
         text: "⚠️ /restart is disabled (commands.restart=false).",
+      },
+    };
+  }
+  const preferLocalScriptRestart =
+    process.platform === "darwin" && isTelegramSurface(params) && isLocalRestartScriptAvailable();
+  // Telegram /restart is often invoked from the same process tree as the
+  // gateway itself on macOS dev setups. Prefer the detached local restart
+  // script so we can acknowledge the command before launchctl tears us down.
+  if (preferLocalScriptRestart) {
+    const restartMethod = triggerOpenClawRestart({ preferLocalScript: true });
+    if (!restartMethod.ok) {
+      const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `⚠️ Restart failed (${restartMethod.method}).${detail}`,
+        },
+      };
+    }
+    const usedLocalScript =
+      typeof restartMethod.detail === "string" &&
+      restartMethod.detail.startsWith("scheduled local restart script:");
+    return {
+      shouldContinue: false,
+      reply: {
+        text: usedLocalScript
+          ? "⚙️ Restarting OpenClaw via local restart script; give me a few seconds to come back online."
+          : `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
       },
     };
   }

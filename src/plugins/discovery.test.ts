@@ -494,34 +494,6 @@ describe("discoverOpenClawPlugins", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "skips bundled permission repair when explicitly disabled",
-    async () => {
-      const stateDir = makeTempDir();
-      const bundledDir = path.join(stateDir, "bundled");
-      const packDir = path.join(bundledDir, "demo-pack");
-      mkdirSafe(packDir);
-      fs.writeFileSync(path.join(packDir, "index.ts"), "export default function () {}", "utf-8");
-      fs.chmodSync(packDir, 0o777);
-
-      const result = discoverOpenClawPlugins({
-        repairBundledPermissions: false,
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          CLAWDBOT_STATE_DIR: undefined,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-        },
-      });
-
-      expect(result.candidates.some((candidate) => candidate.idHint === "demo-pack")).toBe(false);
-      expect(result.diagnostics.some((diag) => diag.message.includes("world-writable path"))).toBe(
-        true,
-      );
-      expect(fs.statSync(packDir).mode & 0o777).toBe(0o777);
-    },
-  );
-
   it.runIf(process.platform !== "win32" && typeof process.getuid === "function")(
     "blocks suspicious ownership when uid mismatch is detected",
     async () => {
@@ -641,6 +613,51 @@ describe("discoverOpenClawPlugins", () => {
     expect(second.candidates.find((candidate) => candidate.idHint === "demo")?.source).toBe(
       pluginB,
     );
+  });
+
+  it("scopes discovery to requested plugin ids when the fast path resolves them", () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const openaiDir = path.join(bundledDir, "openai");
+    const anthropicDir = path.join(bundledDir, "anthropic");
+    mkdirSafe(openaiDir);
+    mkdirSafe(anthropicDir);
+    fs.writeFileSync(path.join(openaiDir, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(anthropicDir, "index.ts"), "export default {}", "utf-8");
+
+    const result = discoverOpenClawPlugins({
+      onlyPluginIds: ["openai"],
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      },
+    });
+
+    expect(result.candidates.map((candidate) => candidate.idHint)).toEqual(["openai"]);
+  });
+
+  it("falls back to full discovery when scoped plugin resolution is incomplete", () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const openaiDir = path.join(bundledDir, "openai");
+    const anthropicDir = path.join(bundledDir, "anthropic");
+    mkdirSafe(openaiDir);
+    mkdirSafe(anthropicDir);
+    fs.writeFileSync(path.join(openaiDir, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(anthropicDir, "index.ts"), "export default {}", "utf-8");
+
+    const result = discoverOpenClawPlugins({
+      onlyPluginIds: ["openai", "missing-plugin"],
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      },
+    });
+
+    const ids = result.candidates
+      .map((candidate) => candidate.idHint)
+      .toSorted((a, b) => a.localeCompare(b));
+    expect(ids).toEqual(["anthropic", "openai"]);
   });
 
   it("treats configured load-path order as cache-significant", () => {

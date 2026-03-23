@@ -1,7 +1,15 @@
+> **CONSUMER PRODUCT:** Read `CONSUMER.md` before starting any work. This repo path is being used for the OpenClaw consumer product, not the upstream open-source project. Different rules apply.
+
+## Consumer Branch Target
+
+- The main consumer integration branch is `codex/consumer-openclaw-project`.
+- For consumer-product work, open PRs against `codex/consumer-openclaw-project` and merge there.
+- Treat `consumer` as a legacy branch. Do not target new consumer PRs there unless the user explicitly asks.
+- If consumer work was landed on the wrong branch by mistake, sync it forward into `codex/consumer-openclaw-project` and continue from there.
+
 # Repository Guidelines
 
-- Primary repo (fork): https://github.com/artemgetmann/openclaw
-- Upstream repo (backup/maintainer PR target): https://github.com/openclaw/openclaw
+- Repo: https://github.com/openclaw/openclaw
 - In chat replies, file references must be repo-root relative only (example: `extensions/bluebubbles/src/channel.ts:80`); never absolute paths or `~/...`.
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 - GitHub comment footgun: never use `gh issue/pr comment -b "..."` when body contains backticks or shell chars. Always use single-quoted heredoc (`-F - <<'EOF'`) so no command substitution/escaping corruption.
@@ -90,21 +98,6 @@
   `pkill -9 -f openclaw-gateway || true; nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
 - Verify: `openclaw channels status --probe`, `ss -ltnp | rg 18789`, `tail -n 120 /tmp/openclaw-gateway.log`.
 
-## Gateway Recovery (macOS multi-worktree)
-
-If the main gateway is down and not responding — **before spending time debugging** — check the runbook first: `docs/gateway/troubleshooting.md` section "Gateway starts but exits silently after a few minutes".
-
-The most common silent-exit pattern on macOS dev setups:
-
-1. **Config-reload triggered `process.exit()`**: The gateway's file watcher detected a config change, built a reload plan with `restartGateway=true`, and called `process.exit()`. If the LaunchAgent is disabled, no restart happens and the gateway stays down silently.
-   - Fix: `openclaw config set gateway.reload.mode hot` then `openclaw gateway install` to re-enable the service.
-
-2. **Wrong gateway owns the runtime**: In a multi-worktree setup, a worktree gateway may have grabbed the main config lock. Check lock files at `$TMPDIR/openclaw-$(id -u)/gateway.*.lock` — each contains the `configPath` and PID. Only kill the process whose `configPath` matches `~/.openclaw/openclaw.json`; leave worktree gateways (different configPaths/ports) alone.
-
-3. **LaunchAgent disabled**: Run `openclaw gateway install` — do NOT use manual `launchctl enable` from a shell (fails with error 125 from a non-GUI session). If a stale lock blocks startup, add `--force`.
-
-Verify recovery: `openclaw gateway status --deep` and `openclaw channels status --probe`.
-
 ## Build, Test, and Development Commands
 
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
@@ -114,6 +107,7 @@ Verify recovery: `openclaw gateway status --deep` and `openclaw channels status 
 - Also supported: `bun install` (keep `pnpm-lock.yaml` + Bun patching in sync when touching deps/patches).
 - Prefer Bun for TypeScript execution (scripts, dev, tests): `bun <file.ts>` / `bunx <tool>`.
 - Run CLI in dev: `pnpm openclaw ...` (bun) or `pnpm dev`.
+- For local-fork pinning (especially in worktrees), use `pnpm openclaw:preflight` and `pnpm openclaw:local ...` so commands cannot silently fall back to another checkout/global PATH entry.
 - Node remains supported for running built output (`dist/*`) and production installs.
 - Mac packaging (dev): `scripts/package-mac-app.sh` defaults to current arch.
 - Type-check/build: `pnpm build`
@@ -167,9 +161,12 @@ Verify recovery: `openclaw gateway status --deep` and `openclaw channels status 
 **Full maintainer PR workflow (optional):** If you want the repo's end-to-end maintainer workflow (triage order, quality bar, rebase rules, commit/changelog conventions, co-contributor policy, and the `review-pr` > `prepare-pr` > `merge-pr` pipeline), see `.agents/skills/PR_WORKFLOW.md`. Maintainers may use other workflows; when a maintainer specifies a workflow, follow that. If no workflow is specified, default to PR_WORKFLOW.
 
 - `/landpr` lives in the global Codex prompts (`~/.codex/prompts/landpr.md`); when landing or merging any PR, always follow that `/landpr` process.
+- Before opening or updating any PR, read `CONTRIBUTING.md` from the target repo and explicitly align the PR title/body/checklists with it (including AI-assistance transparency requirements when present).
+- PR validation baseline (unless user explicitly scopes narrower): run `pnpm build && pnpm check && pnpm test`, then report exactly what was/was not verified.
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
+- PR requests must include a clear **why it matters** explanation (user impact/business value), not only an implementation summary.
 - PR submission template (canonical): `.github/pull_request_template.md`
 - Issue submission templates (canonical): `.github/ISSUE_TEMPLATE/`
 
@@ -229,25 +226,27 @@ Verify recovery: `openclaw gateway status --deep` and `openclaw channels status 
 ## Troubleshooting
 
 - Rebrand/migration issues or legacy config/service warnings: run `openclaw doctor` (see `docs/gateway/doctor.md`).
+- Timeout triage gate (mandatory before deep debugging):
+  - Before investigating any timeout (`gateway timeout`, `MCP request timed out`, stalled `agent --local`, browser hangs), first verify the expected fix code exists on the current branch/build.
+  - Required 2-minute checks:
+    - `git rev-parse --abbrev-ref HEAD`
+    - `git log --oneline -1`
+    - `rg` for expected patch signatures in touched files (for example env flags, new options, stage markers)
+  - If the signature is missing, stop runtime debugging and sync/cherry-pick/merge the missing commit first.
+  - In multi-worktree setups, never assume another worktree's fix exists here; prove code presence before chasing runtime behavior.
 
 ## Agent-Specific Notes
 
 - Pre-Live Telegram Check (REQUIRED before any live Telegram validation):
-  - You MUST run `bash scripts/telegram-e2e/lane-up.sh` before live Telegram E2E.
   - You MUST confirm the current git branch is named and NOT `HEAD`.
   - You MUST confirm gateway runtime is owned by the current worktree path.
-  - Use the canonical gate: `scripts/telegram-live-runtime.sh ensure` (it enforces ownership + health proof and isolated runtime).
-  - Token claiming happens on first `ensure` run; do not pre-claim at worktree creation time.
+  - If runtime path mismatches, you MUST restart gateway from the current worktree and re-check runtime ownership before testing.
+  - If `.env.local` is missing, you MUST run `bash scripts/assign-bot.sh` before starting gateway.
   - You MUST NOT print raw token values.
-  - You MUST emit proof lines in logs/output: `branch=<...>`, `runtime_worktree=<...>`, `runtime_state_dir=<...>`, `runtime_port=<...>`, masked `token_fingerprint=<...>`, and `agent_auth_profiles=<yes|no>`.
-  - You MUST NOT use the shared default gateway/profile for parallel Telegram tests.
-  - One lane = one token slot = one profile = one port.
-  - In shells where LaunchAgent is unavailable, lane-up may fall back to a lane-scoped direct `gateway run` process with PID file in that lane state dir.
+  - You MUST emit proof lines in logs/output: `branch=<...>` and `runtime_worktree=<...>`.
 
 - Known Failure Pattern (Telegram live checks):
   - Code/tests can be correct while live results are false if Telegram is handled by the wrong runtime process (not the current worktree). Always verify runtime ownership first.
-  - DM threaded E2E does not use plain DM message ids as thread ids. The real DM thread anchor is the topic-create service message (`MessageActionTopicCreate`), and thread-scoped commands/replies carry that anchor in `reply_to_top_id`.
-  - If you need to automate DM threaded E2E, inspect recent MTProto messages to find topic-create anchors, or create a fresh DM topic with MTProto `messages.CreateForumTopicRequest` before sending `/model` into it. Do not guess anchors from visible text messages.
 
 - Worktree credential bootstrap (Telegram live checks):
   - Preferred worktree lifecycle entrypoint: `bash scripts/new-worktree.sh <feature-name>`.
@@ -260,13 +259,7 @@ Verify recovery: `openclaw gateway status --deep` and `openclaw channels status 
   - Use `bash scripts/bootstrap-worktree-telegram.sh` only when you intentionally need the lower-level bootstrap step without the higher-level worktree helper.
   - For every new worktree, run:
     - `cp /Users/user/Programming_Projects/openclaw/.env.bots ./.env.bots`
-    - `scripts/telegram-live-runtime.sh ensure` (auto-claims/retains this worktree tester bot token)
-  - When a worktree is no longer needed for Telegram live testing, run:
-    - `scripts/telegram-live-runtime.sh release`
-  - Do not use the stable/main bot for worktree live tests.
-  - Do not release a tester bot based on PR merge or chat archive; claims are worktree-scoped.
-  - If stale-claim cleanup becomes necessary, implement garbage collection only for deleted/inactive worktrees.
-  - For full operational details, scaling notes, and live-runner behavior, read `scripts/telegram-e2e/README.md`.
+    - `bash scripts/assign-bot.sh` (creates `.env.local` with this worktree's bot token)
   - If Telegram userbot E2E is needed, copy local-only files (do not commit):
     - `mkdir -p scripts/telegram-e2e/tmp`
     - `cp /Users/user/Programming_Projects/openclaw/scripts/telegram-e2e/.env scripts/telegram-e2e/.env` (if present)
@@ -353,7 +346,6 @@ Verify recovery: `openclaw gateway status --deep` and `openclaw channels status 
 - Lobster seam: use the shared CLI palette in `src/terminal/palette.ts` (no hardcoded colors); apply palette to onboarding/config prompts and other TTY UI output as needed.
 - **Multi-agent safety:** focus reports on your edits; avoid guard-rail disclaimers unless truly blocked; when multiple agents touch the same file, continue if safe; end with a brief “other files present” note only if relevant.
 - Bug investigations: read source code of relevant npm dependencies and all related local code before concluding; aim for high-confidence root cause.
-- Debugging verification rule: do not claim a fix or root cause from CLI/chat output alone; confirm with runtime evidence in logs (`gateway` logs and per-agent `sessions/*.jsonl` toolCall/toolResult when applicable) and include the exact signal that proves the behavior.
 - Code style: add brief comments for tricky logic; keep files under ~500 LOC when feasible (split/refactor as needed).
 - Tool schema guardrails (google-antigravity): avoid `Type.Union` in tool input schemas; no `anyOf`/`oneOf`/`allOf`. Use `stringEnum`/`optionalStringEnum` (Type.Unsafe enum) for string lists, and `Type.Optional(...)` instead of `... | null`. Keep top-level tool schema as `type: "object"` with `properties`.
 - Tool schema guardrails: avoid raw `format` property names in tool schemas; some validators treat `format` as a reserved keyword and reject the schema.
@@ -394,10 +386,11 @@ Verify recovery: `openclaw gateway status --deep` and `openclaw channels status 
 
 BEFORE starting the bot in any worktree:
 
-1. Run: `scripts/telegram-live-runtime.sh ensure`
-2. This auto-claims (first run) or retains (later runs) a dedicated test bot token for this worktree
-3. Always start/testing through that canonical ensure gate
-4. NEVER use the production token for testing
-5. When done with this worktree, you can delete `.env.local` to free the token
+1. Check if `.env.local` exists in this worktree
+2. If NOT, run: `bash scripts/assign-bot.sh`
+3. This assigns a dedicated test bot token to this worktree
+4. Always start the bot — it will use the assigned token automatically
+5. NEVER use the production token for testing
+6. When done with this worktree, you can delete `.env.local` to free the token
 
 DO NOT share tokens between worktrees. Each worktree = one bot.
