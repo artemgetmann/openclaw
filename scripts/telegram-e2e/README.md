@@ -84,6 +84,115 @@ Use one source of truth in your main checkout, then copy into each worktree.
 4. Smoke check from that worktree:
    - `scripts/telegram-e2e/userbot-send-live.sh --chat "<chat-id-or-username>" --text "handoff smoke"`
 
+## Worktree automation workflow
+
+Use these helpers instead of ad-hoc `git worktree add`, manual `.env` copying,
+or hand-written `open -n` commands.
+
+### Create a new worktree the repo-native way
+
+```bash
+bash scripts/new-worktree.sh my-feature
+```
+
+What it does:
+
+1. Fetches `origin`.
+2. Creates `.claude/worktrees/my-feature` on `claude/my-feature` from `origin/main`.
+3. Runs `bash scripts/bootstrap-worktree-telegram.sh`.
+4. Attempts a bounded `scripts/telegram-live-runtime.sh ensure` so worktree creation does not hang for minutes waiting on runtime health.
+5. Writes `.dev-launch.env` with a deterministic `OPENCLAW_STATE_DIR` and `OPENCLAW_GATEWAY_PORT`.
+
+If live Telegram runtime health still matters after creation, rerun:
+
+```bash
+scripts/telegram-live-runtime.sh ensure
+```
+
+from inside that new worktree.
+
+### Launch an isolated macOS app instance for that worktree
+
+```bash
+bash scripts/dev-launch-mac.sh
+```
+
+This reads `.dev-launch.env` from the current worktree root and launches
+`dist/OpenClaw.app` with a clean `env -i` environment so the app state and
+gateway port stay isolated from other worktrees.
+
+Fast failure-mode check:
+
+```bash
+bash scripts/dev-launch-mac.sh --no-build
+```
+
+### Inspect or clean stale worktrees
+
+Dry-run first:
+
+```bash
+bash scripts/gc-worktrees.sh
+```
+
+Apply cleanup only after reviewing the table:
+
+```bash
+bash scripts/gc-worktrees.sh --auto
+```
+
+What `--auto` removes by default:
+
+- prunable worktrees
+- merged worktrees
+
+What it does **not** remove by default:
+
+- detached worktrees (`--include-detached` is explicit)
+- the current checkout
+
+When a removable worktree still exists on disk and has a claimed tester token,
+the GC helper first runs:
+
+```bash
+bash scripts/telegram-live-runtime.sh release
+```
+
+inside that worktree before removing it.
+
+### Make GC automatic
+
+Install the scheduler once:
+
+```bash
+bash scripts/install-worktree-gc.sh install
+```
+
+Platform behavior:
+
+- macOS: installs a LaunchAgent that runs `scripts/gc-worktrees.sh --auto` hourly
+- Linux: installs a crontab entry that runs the same command hourly
+
+By default the scheduler anchors to the main checkout at
+`/Users/user/Programming_Projects/openclaw` so it survives feature-worktree
+deletion. Override with `OPENCLAW_WORKTREE_GC_REPO_ROOT` only if you
+intentionally want another root.
+
+Useful commands:
+
+```bash
+bash scripts/install-worktree-gc.sh status
+bash scripts/install-worktree-gc.sh install --dry-run
+bash scripts/install-worktree-gc.sh run-now
+bash scripts/install-worktree-gc.sh uninstall
+```
+
+For safety, the automatic path still uses the same default GC policy:
+
+- dry review is still available via `bash scripts/gc-worktrees.sh`
+- detached cleanup is still opt-in
+- current checkout is still skipped
+
 ## Required values and anchors
 
 `scripts/telegram-e2e/.env.local` keys:

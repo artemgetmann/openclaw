@@ -2,7 +2,7 @@ import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { streamSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -2877,6 +2877,13 @@ export async function runEmbeddedAttempt(
         .slice()
         .toReversed()
         .find((m) => m.role === "assistant");
+      const lastErroredAssistant = messagesSnapshot
+        .slice()
+        .toReversed()
+        .find(
+          (message): message is AssistantMessage =>
+            message.role === "assistant" && message.stopReason === "error",
+        );
 
       const toolMetasNormalized = toolMetas
         .filter(
@@ -2925,6 +2932,7 @@ export async function runEmbeddedAttempt(
         assistantTexts,
         toolMetas: toolMetasNormalized,
         lastAssistant,
+        lastErroredAssistant,
         lastToolError: getLastToolError?.(),
         didSendViaMessagingTool: didSendViaMessagingTool(),
         messagingToolSentTexts: getMessagingToolSentTexts(),
