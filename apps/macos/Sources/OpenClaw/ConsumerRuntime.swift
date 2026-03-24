@@ -2,32 +2,52 @@ import Darwin
 import Foundation
 
 enum ConsumerRuntime {
-    static let profile = "consumer"
-    static let runtimeHomeName = "OpenClaw Consumer"
-    static let gatewayPort = 19001
-    static let gatewayBind = "loopback"
-    static let launchdLabel = "ai.openclaw.consumer"
-    static let gatewayLaunchdLabel = "ai.openclaw.consumer.gateway"
+    private static var instance: ConsumerInstance {
+        .current
+    }
 
     static var runtimeRootURL: URL {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/\(runtimeHomeName)", isDirectory: true)
+        self.instance.runtimeRootURL
     }
 
     static var stateDirURL: URL {
-        self.runtimeRootURL.appendingPathComponent(".openclaw", isDirectory: true)
+        self.instance.stateDirURL
     }
 
     static var configURL: URL {
-        self.stateDirURL.appendingPathComponent("openclaw.json")
+        self.instance.configURL
     }
 
     static var workspaceURL: URL {
-        self.stateDirURL.appendingPathComponent("workspace", isDirectory: true)
+        self.instance.workspaceURL
     }
 
     static var logsDirURL: URL {
-        self.stateDirURL.appendingPathComponent("logs", isDirectory: true)
+        self.instance.logsDirURL
+    }
+
+    static var runtimeHomeName: String {
+        self.instance.runtimeHomeName
+    }
+
+    static var profile: String {
+        self.instance.profile
+    }
+
+    static var gatewayPort: Int {
+        self.instance.gatewayPort
+    }
+
+    static var gatewayBind: String {
+        self.instance.gatewayBind
+    }
+
+    static var launchdLabel: String {
+        self.instance.appLaunchdLabel
+    }
+
+    static var gatewayLaunchdLabel: String {
+        self.instance.gatewayLaunchdLabel
     }
 
     static var appLaunchAgentPlistURL: URL {
@@ -41,19 +61,26 @@ enum ConsumerRuntime {
     }
 
     static var installPrefixURL: URL {
-        self.stateDirURL
+        self.instance.installPrefixURL
     }
 
     static func bootstrapProcessEnvironment() {
+        let instance = self.instance
         // Keep the app, launch agents, and any child CLI processes pointed at the
         // consumer-owned runtime before any config/state loaders spin up.
-        self.setEnv("OPENCLAW_PROFILE", value: Self.profile)
-        self.setEnv("OPENCLAW_HOME", value: Self.runtimeRootURL.path)
-        self.setEnv("OPENCLAW_STATE_DIR", value: Self.stateDirURL.path)
-        self.setEnv("OPENCLAW_CONFIG_PATH", value: Self.configURL.path)
-        self.setEnv("OPENCLAW_GATEWAY_PORT", value: String(Self.gatewayPort))
-        self.setEnv("OPENCLAW_GATEWAY_BIND", value: Self.gatewayBind)
-        self.setEnv("OPENCLAW_LOG_DIR", value: Self.logsDirURL.path)
+        self.setEnv("OPENCLAW_PROFILE", value: instance.profile)
+        self.setEnv("OPENCLAW_HOME", value: instance.runtimeRootURL.path)
+        self.setEnv("OPENCLAW_STATE_DIR", value: instance.stateDirURL.path)
+        self.setEnv("OPENCLAW_CONFIG_PATH", value: instance.configURL.path)
+        self.setEnv("OPENCLAW_GATEWAY_PORT", value: String(instance.gatewayPort))
+        self.setEnv("OPENCLAW_GATEWAY_BIND", value: instance.gatewayBind)
+        self.setEnv("OPENCLAW_LOG_DIR", value: instance.logsDirURL.path)
+        self.setEnv("OPENCLAW_LAUNCHD_LABEL", value: instance.gatewayLaunchdLabel)
+        if let id = instance.id {
+            self.setEnv(ConsumerInstance.envKey, value: id)
+        } else {
+            unsetenv(ConsumerInstance.envKey)
+        }
         // Keep the consumer lane focused on core Telegram startup.
         // This avoids founder-oriented sidecar phases from blocking first boot.
         self.setEnv("OPENCLAW_CONSUMER_MINIMAL_STARTUP", value: "1")

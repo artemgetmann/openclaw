@@ -1,7 +1,7 @@
 import Foundation
 
 enum CommandResolver {
-    private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
+    private static var projectRootDefaultsKey: String { consumerDefaultsKey("gatewayProjectRootPath") }
     private static let helperName = "openclaw"
     private static let repoMarkers = ["openclaw.mjs", "package.json"]
 

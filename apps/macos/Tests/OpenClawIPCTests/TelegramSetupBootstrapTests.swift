@@ -19,7 +19,7 @@ struct TelegramSetupBootstrapTests {
             ],
         ]
 
-        try await withConfigStoreOverrides(
+        try await TestIsolation.withConfigStoreOverrides(
             .init(
                 isRemoteMode: { false },
                 loadLocal: { currentRoot },
@@ -60,7 +60,7 @@ struct TelegramSetupBootstrapTests {
         ]
         var currentRoot = baselineRoot
 
-        try await withConfigStoreOverrides(
+        try await TestIsolation.withConfigStoreOverrides(
             .init(
                 isRemoteMode: { false },
                 loadLocal: { currentRoot },
@@ -77,21 +77,5 @@ struct TelegramSetupBootstrapTests {
                             allowFrom: ["42"])
                     }
                 }
-    }
-}
-
-@MainActor
-private func withConfigStoreOverrides<T>(
-    _ overrides: ConfigStore.Overrides,
-    body: @MainActor () async throws -> T
-) async throws -> T {
-    await ConfigStore._testSetOverrides(overrides)
-    do {
-        let value = try await body()
-        await ConfigStore._testClearOverrides()
-        return value
-    } catch {
-        await ConfigStore._testClearOverrides()
-        throw error
     }
 }

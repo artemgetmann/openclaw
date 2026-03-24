@@ -38,6 +38,15 @@ struct OpenClawApp: App {
         ConsumerRuntime.bootstrapProcessEnvironment()
         OpenClawLogging.bootstrapIfNeeded()
         ConsumerBootstrap.bootstrapIfNeeded()
+        let instanceID = ConsumerInstance.current.id ?? "default"
+        Self.logger.info(
+            """
+            consumer app bootstrap instance=\(instanceID, privacy: .public) \
+            state=\(ConsumerRuntime.stateDirURL.path, privacy: .public) \
+            port=\(ConsumerRuntime.gatewayPort, privacy: .public) \
+            appLabel=\(ConsumerRuntime.launchdLabel, privacy: .public) \
+            gatewayLabel=\(ConsumerRuntime.gatewayLaunchdLabel, privacy: .public)
+            """)
         GatewayConnectivityCoordinator.shared.start()
 
         Self.applyAttachOnlyOverrideIfNeeded()

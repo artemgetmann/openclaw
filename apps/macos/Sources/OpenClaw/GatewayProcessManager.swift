@@ -498,12 +498,13 @@ final class GatewayProcessManager {
 
     private func startupDiagnostics(context: String) -> String {
         let mode = CommandResolver.connectionModeIsRemote() ? "remote" : "local"
+        let instanceID = ConsumerInstance.current.id ?? "default"
         let profile = ProcessInfo.processInfo.environment["OPENCLAW_PROFILE"] ?? "<unset>"
         let forkRoot = ProcessInfo.processInfo.environment["OPENCLAW_FORK_ROOT"] ?? "<unset>"
         let port = GatewayEnvironment.gatewayPort()
         let configPath = OpenClawConfigFile.url().path
         let stateDir = OpenClawConfigFile.stateDirURL().path
-        return "[gateway/diag] context=\(context) mode=\(mode) port=\(port) launchdLabel=\(gatewayLaunchdLabel) profile=\(profile) config=\(configPath) state=\(stateDir) forkRoot=\(forkRoot)"
+        return "[gateway/diag] context=\(context) instance=\(instanceID) mode=\(mode) port=\(port) launchdLabel=\(gatewayLaunchdLabel) profile=\(profile) config=\(configPath) state=\(stateDir) forkRoot=\(forkRoot)"
     }
 
     private func appendPortDiagnostics(context: String) async {

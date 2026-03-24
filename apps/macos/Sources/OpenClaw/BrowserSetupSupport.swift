@@ -153,7 +153,11 @@ final class BrowserSetupModel {
         self.statusLine = "Saving your Chrome profile…"
         defer { self.isApplyingSelection = false }
 
-        self.persistSelection(profile)
+        guard self.persistSelection(profile) else {
+            self.phase = .failed("OpenClaw could not save your Chrome profile inside this instance.")
+            self.statusLine = "OpenClaw could not save your Chrome profile."
+            return
+        }
         self.phase = .ready(profile)
         self.statusLine = "Connected to \(profile.displayName)."
     }
@@ -282,20 +286,60 @@ final class BrowserSetupModel {
     }
 
     private func restoreSelection(from profiles: [ChromeProfileCandidate]) -> ChromeProfileCandidate? {
+        // Config is the runtime source of truth. If we only trust UserDefaults here,
+        // the setup sheet can claim success while the actual browser runtime stays global.
+        if let selectedID = OpenClawConfigFile.selectedChromeProfileDirectoryName(),
+           let selected = profiles.first(where: { $0.directoryName == selectedID })
+        {
+            self.persistDefaultsSelection(selected)
+            return selected
+        }
+
         guard let selectedID = self.defaults.string(forKey: browserSelectedChromeProfileIDKey) else {
             return nil
         }
-        return profiles.first(where: { $0.directoryName == selectedID })
+        guard let selected = profiles.first(where: { $0.directoryName == selectedID }) else {
+            return nil
+        }
+
+        // Backfill legacy defaults-only selections into the instance-scoped config so
+        // existing users do not have to re-pick their Chrome profile after upgrading.
+        _ = self.persistRuntimeSelection(selected)
+        return selected
     }
 
-    private func persistSelection(_ profile: ChromeProfileCandidate) {
+    private func persistSelection(_ profile: ChromeProfileCandidate) -> Bool {
+        self.persistDefaultsSelection(profile)
+        return self.persistRuntimeSelection(profile)
+    }
+
+    private func persistDefaultsSelection(_ profile: ChromeProfileCandidate) {
         self.defaults.set(profile.directoryName, forKey: browserSelectedChromeProfileIDKey)
         self.defaults.set(profile.displayName, forKey: browserSelectedChromeProfileNameKey)
+    }
+
+    private func persistRuntimeSelection(_ profile: ChromeProfileCandidate) -> Bool {
+        guard OpenClawConfigFile.setSelectedChromeProfileDirectoryName(profile.directoryName) else {
+            return false
+        }
+
+        let userDataDir = OpenClawConfigFile.managedBrowserUserDataDirURL()
+        do {
+            // Create the instance-scoped browser root immediately so local QA can verify
+            // browser isolation before the Node runtime launches Chrome for the first time.
+            try FileManager.default.createDirectory(
+                at: userDataDir,
+                withIntermediateDirectories: true)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func clearSelection() {
         self.defaults.removeObject(forKey: browserSelectedChromeProfileIDKey)
         self.defaults.removeObject(forKey: browserSelectedChromeProfileNameKey)
+        _ = OpenClawConfigFile.clearSelectedChromeProfileDirectoryName()
     }
 
     private static func detectChromeExecutable() -> URL? {

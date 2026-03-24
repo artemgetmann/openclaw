@@ -1,4 +1,5 @@
 import Foundation
+@testable import OpenClaw
 
 actor TestIsolationLock {
     static let shared = TestIsolationLock()
@@ -102,6 +103,24 @@ enum TestIsolation {
         _ body: () async throws -> T) async rethrows -> T
     {
         try await self.withIsolatedState(env: [:], defaults: values, body)
+    }
+
+    static func withConfigStoreOverrides<T>(
+        _ overrides: ConfigStore.Overrides,
+        _ body: () async throws -> T) async rethrows -> T
+    {
+        await TestIsolationLock.shared.acquire()
+        await ConfigStore._testSetOverrides(overrides)
+        do {
+            let value = try await body()
+            await ConfigStore._testClearOverrides()
+            await TestIsolationLock.shared.release()
+            return value
+        } catch {
+            await ConfigStore._testClearOverrides()
+            await TestIsolationLock.shared.release()
+            throw error
+        }
     }
 
     nonisolated static func tempConfigPath() -> String {

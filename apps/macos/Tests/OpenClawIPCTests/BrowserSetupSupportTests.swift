@@ -39,24 +39,36 @@ struct BrowserSetupSupportTests {
 
     @Test func `refresh restores persisted profile selection`() async {
         let defaults = self.makeDefaults()
-        defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)
-        defaults.set("Artem", forKey: browserSelectedChromeProfileNameKey)
         let selected = ChromeProfileCandidate(
             directoryName: "Profile 4",
             displayName: "Artem",
             subtitle: "artem@example.com",
             lastUsedAt: nil,
             isDefaultProfile: false)
-        let model = BrowserSetupModel(
-            defaults: defaults,
-            detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
-            loadProfiles: { [selected] })
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
 
-        await model.refresh()
+        defer { try? FileManager.default.removeItem(at: stateDir) }
 
-        #expect(model.phase == .ready(selected))
-        #expect(model.isComplete)
-        #expect(model.selectedProfileName == "Artem")
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] })
+
+            await model.refresh()
+
+            #expect(model.phase == .ready(selected))
+            #expect(model.isComplete)
+            #expect(model.selectedProfileName == "Artem")
+            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
+            #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
+        }
     }
 
     @Test func `choose profile persists selection and marks ready`() async {
@@ -73,19 +85,108 @@ struct BrowserSetupSupportTests {
             subtitle: nil,
             lastUsedAt: nil,
             isDefaultProfile: false)
-        let model = BrowserSetupModel(
-            defaults: defaults,
-            detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
-            loadProfiles: { [personal, work] })
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
 
-        await model.refresh()
-        #expect(model.phase == .choose([personal, work]))
+        defer { try? FileManager.default.removeItem(at: stateDir) }
 
-        await model.chooseProfile(work)
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [personal, work] })
 
-        #expect(model.phase == .ready(work))
-        #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
-        #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
+            await model.refresh()
+            #expect(model.phase == .choose([personal, work]))
+
+            await model.chooseProfile(work)
+
+            #expect(model.phase == .ready(work))
+            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
+            #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
+            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
+
+            let root = OpenClawConfigFile.loadDict()
+            let browser = root["browser"] as? [String: Any]
+            let profiles = browser?["profiles"] as? [String: Any]
+            let userProfile = profiles?["user"] as? [String: Any]
+            #expect(browser?["defaultProfile"] as? String == "user")
+            #expect(userProfile?["cloneFromUserProfile"] as? Bool == true)
+            #expect(userProfile?["sourceProfileName"] as? String == "Profile 4")
+
+            let userDataDir = OpenClawConfigFile.managedBrowserUserDataDirURL()
+            #expect(FileManager.default.fileExists(atPath: userDataDir.path))
+        }
+    }
+
+    @Test func `refresh migrates legacy defaults selection into config`() async {
+        let defaults = self.makeDefaults()
+        defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)
+        defaults.set("Artem", forKey: browserSelectedChromeProfileNameKey)
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] })
+
+            await model.refresh()
+
+            #expect(model.phase == .ready(selected))
+            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
+            #expect(FileManager.default.fileExists(atPath: OpenClawConfigFile.managedBrowserUserDataDirURL().path))
+        }
+    }
+
+    @Test func `clear profile selection removes config backed browser selection`() async {
+        let defaults = self.makeDefaults()
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] })
+
+            await model.chooseProfile(selected)
+            model.clearProfileSelection()
+
+            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == nil)
+            #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == nil)
+            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == nil)
+
+            let root = OpenClawConfigFile.loadDict()
+            let browser = root["browser"] as? [String: Any]
+            #expect((browser?["defaultProfile"] as? String) == nil)
+        }
     }
 
     private func makeDefaults() -> UserDefaults {

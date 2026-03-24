@@ -35,6 +35,8 @@
     </array>
     <key>OpenClawAppVariant</key>
     <string>standard</string>
+    <key>OpenClawConsumerInstanceID</key>
+    <string></string>
     <key>LSMinimumSystemVersion</key>
     <string>15.0</string>
     <key>LSUIElement</key>

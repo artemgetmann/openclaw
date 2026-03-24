@@ -38,7 +38,11 @@ enum OpenClawPaths {
             return URL(fileURLWithPath: home, isDirectory: true)
                 .appendingPathComponent(".openclaw", isDirectory: true)
         }
-        return ConsumerRuntime.stateDirURL
+        if AppFlavor.current.isConsumer {
+            return ConsumerRuntime.stateDirURL
+        }
+        let home = FileManager().homeDirectoryForCurrentUser
+        return self.legacyStateDirURL(home: home)
     }
 
     private static func resolveConfigCandidate(in dir: URL) -> URL? {
@@ -57,10 +61,10 @@ enum OpenClawPaths {
         if let existing = self.resolveConfigCandidate(in: self.stateDirURL) {
             return existing
         }
-        return ConsumerRuntime.configURL
+        return self.stateDirURL.appendingPathComponent("openclaw.json")
     }
 
     static var workspaceURL: URL {
-        ConsumerRuntime.workspaceURL
+        self.stateDirURL.appendingPathComponent("workspace", isDirectory: true)
     }
 }
