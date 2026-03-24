@@ -869,3 +869,67 @@ Out of scope:
   - Run phase-B benchmark tasks on `profile=openclaw` immediately while existing-session is being stabilized.
   - Keep benchmark/debug runs on `node dist/entry.js ...` until the rebuild-churn path is out of the picture. > > > > > > > 7e0dacea11 (fix(browser): improve chrome-mcp attach reliability and diagnostics)
     > > > > > > > origin/codex/consumer-openclaw-project
+
+### 2026-03-24 first-run activation pass landed
+
+- Merged:
+  - PR #113 into `codex/consumer-openclaw-project`
+  - https://github.com/artemgetmann/openclaw/pull/113
+- What landed:
+  - consumer app/runtime isolation is now worktree-aware by default
+    - package/open scripts derive a named consumer instance from the checkout
+    - app bundle id, launchd labels, state dir, and gateway port now stay lane-specific
+  - browser setup now reports the real truth instead of stale nonsense
+    - onboarding writes the actual consumer runtime browser config
+    - browser readiness only passes after the isolated runtime can really use the chosen Chrome profile
+  - AI readiness is explicit in the onboarding flow
+    - setup now stops at `AI is ready` / `AI still needs attention` instead of letting the first real task discover auth drift
+  - Telegram setup/live surfaces were simplified
+    - plain-language conflict handling instead of raw gateway / websocket garbage
+    - reduced duplicated `Telegram live` / `Token verified` clutter
+  - bootstrap naming now prefers `Jarvis` as the default assistant name
+  - new lane-health command:
+    - `pnpm consumer:preflight`
+- Why this pass mattered:
+  - local debugging had been wasting time on fake failures caused by shared state
+  - the real problem was often another worktree/runtime owning the gateway or the Telegram bot token
+  - we needed one command that proves which lane owns what before anyone starts clicking around in the app
+- New operating rules for consumer work:
+  - one worktree = one consumer instance
+  - one Telegram bot token = one active runtime
+  - terminal preflight first, GUI second
+- New preflight proof set:
+  - `branch`
+  - `worktree`
+  - `instance_id`
+  - `runtime_root`
+  - `gateway_port`
+  - `gateway_launchd_label`
+  - `gateway_status`
+  - `default_model`
+  - `oauth_providers`
+  - `telegram_token_fingerprint`
+  - `telegram_token_collisions`
+  - `telegram_active_owner`
+- Human verification completed on the isolated lane `openclaw-consumer-wt-20260324-105054`:
+  - packaged app reached `Chrome connected`
+  - packaged app reached `AI is ready`
+  - Telegram bot token verified in the isolated consumer lane
+  - Telegram DM roundtrip replied successfully after reauth
+- Key diagnosis we do not want to rediscover:
+  - earlier Telegram replies were coming from another local consumer runtime that already owned the same bot token
+  - browser failures were sometimes actually gateway/pairing/runtime-lane failures
+  - reused OAuth refresh tokens can make setup look broken even after the UI path is otherwise healthy
+- Current remaining pain after #113:
+  - shared founder-managed auth still needs a better rotation/update story
+  - signed-in browser behavior is still weaker than public-page fallback
+  - `web search isn't configured here` is still bad consumer-product copy/behavior and should be fixed in a separate lane
+  - the repo still has unrelated baseline debt:
+    - `pnpm build` prints existing `skipWaitForIdle` TypeScript errors in `src/agents/pi-embedded-runner/run/attempt.ts`
+    - `pnpm check` still fails on unrelated formatting in:
+      - `docs/consumer/openclaw-consumer-brutal-execution-board.md`
+      - `docs/consumer/openclaw-consumer-investor-brief-1page.md`
+- Next 3 actions:
+  - Add the same `consumer:preflight` expectation to any future consumer smoke/runbook steps so agents stop debugging screenshots first.
+  - Run a separate lane for shared-auth hardening so early users do not hit surprise OAuth refresh failures.
+  - Run a separate lane for signed-in browser reliability and the public-web-search fallback experience.
