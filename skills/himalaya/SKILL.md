@@ -37,6 +37,14 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 2. A configuration file at `~/.config/himalaya/config.toml`
 3. IMAP/SMTP credentials configured (password stored securely)
 
+## Automation Rule
+
+- For local macOS/email checks, prefer read-only commands first:
+  `himalaya account list`, `himalaya folder list`, `himalaya envelope list`.
+- If configuration is missing, do not dump raw CLI noise back to the user.
+  Explain that email is not connected yet and guide setup.
+- Treat send/reply/forward as higher-risk actions; prove read-only access first.
+
 ## Configuration Setup
 
 Run the interactive wizard to set up an account:
@@ -44,6 +52,15 @@ Run the interactive wizard to set up an account:
 ```bash
 himalaya account configure
 ```
+
+If the user asks to check email and setup is missing, give them a short action
+plan such as:
+
+1. Install `himalaya` if needed.
+2. Run `himalaya account configure`.
+3. Add IMAP/SMTP credentials for their provider.
+4. Re-run the email request once `himalaya account list` and
+   `himalaya folder list` succeed.
 
 Or create `~/.config/himalaya/config.toml` manually:
 
@@ -77,6 +94,9 @@ message.send.backend.auth.cmd = "pass show email/smtp"
 ```bash
 himalaya folder list
 ```
+
+If `himalaya` says it cannot find configuration, treat that as a setup-needed
+state, not as a hard product failure.
 
 ### List Emails
 

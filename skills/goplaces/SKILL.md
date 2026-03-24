@@ -36,6 +36,13 @@ Config
 - `GOOGLE_PLACES_API_KEY` required.
 - Optional: `GOOGLE_PLACES_BASE_URL` for testing/proxying.
 
+Automation notes
+
+- If `GOOGLE_PLACES_API_KEY` is missing, do not pretend the skill works.
+- For a consumer product build, this can be a product-provided secret instead
+  of user setup. Distinguish `missing product secret` from `missing user setup`.
+- Prefer `--json` when verifying search results in automation.
+
 Common commands
 
 - Search: `goplaces search "coffee" --open-now --min-rating 4 --limit 5`

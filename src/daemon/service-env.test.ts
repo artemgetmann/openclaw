@@ -365,6 +365,20 @@ describe("buildServiceEnvironment", () => {
     expect(env.all_proxy).toBe("socks5://proxy.local:1080");
   });
 
+  it("forwards allowlisted skill environment variables for launchd/systemd runtime", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        GOOGLE_PLACES_API_KEY: "  test-google-places-key  ",
+        HIMALAYA_CONFIG: "  /tmp/himalaya-empty.toml  ",
+      },
+      port: 18789,
+    });
+
+    expect(env.GOOGLE_PLACES_API_KEY).toBe("test-google-places-key");
+    expect(env.HIMALAYA_CONFIG).toBe("/tmp/himalaya-empty.toml");
+  });
+
   it("omits PATH on Windows so Scheduled Tasks can inherit the current shell path", () => {
     const env = buildServiceEnvironment({
       env: {

@@ -113,6 +113,8 @@ if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
     TMPDIR="${TMPDIR:-/tmp}" \
     PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
     LANG="${LANG:-en_US.UTF-8}" \
+    GOOGLE_PLACES_API_KEY="${GOOGLE_PLACES_API_KEY:-}" \
+    HIMALAYA_CONFIG="${HIMALAYA_CONFIG:-}" \
     OPENCLAW_CONSUMER_INSTANCE_ID="$NORMALIZED_INSTANCE_ID" \
     /usr/bin/open -n "$APP_PATH"
 else
@@ -123,6 +125,8 @@ else
     TMPDIR="${TMPDIR:-/tmp}" \
     PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
     LANG="${LANG:-en_US.UTF-8}" \
+    GOOGLE_PLACES_API_KEY="${GOOGLE_PLACES_API_KEY:-}" \
+    HIMALAYA_CONFIG="${HIMALAYA_CONFIG:-}" \
     /usr/bin/open -n "$APP_PATH"
 fi
 

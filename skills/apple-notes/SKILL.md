@@ -23,37 +23,96 @@ metadata:
   }
 ---
 
-# Apple Notes CLI
+# Apple Notes
 
-Use `memo notes` to manage Apple Notes directly from the terminal. Create, view, edit, delete, search, move notes between folders, and export to HTML/Markdown.
+Use Apple Notes on macOS. `memo` is useful for browsing/searching existing
+notes, but its create/edit/delete flows are interactive and can drop into Vim.
+For automation or agent use, prefer direct AppleScript on the local macOS host.
+
+## Automation Rule
+
+- On a local macOS machine, use the local host directly. Do not route Notes
+  actions through `nodes run` / `system.run`.
+- For deterministic create/delete, prefer `osascript` over `memo`.
+- Use `memo` mainly for listing/searching/exporting notes.
 
 Setup
 
 - Install (Homebrew): `brew tap antoniorodr/memo && brew install antoniorodr/memo/memo`
 - Manual (pip): `pip install .` (after cloning the repo)
+- Current upstream release is `v0.5.2`; older `0.3.x` builds are stale.
 - macOS-only; if prompted, grant Automation access to Notes.app.
+
+## Deterministic Create/Delete
+
+Create a note in the default `Notes` folder:
+
+```bash
+osascript <<'EOF'
+tell application "Notes"
+  tell folder "Notes"
+    make new note with properties {body:"<h1>Note Title</h1><p>Body text here.</p>"}
+  end tell
+end tell
+EOF
+```
+
+That returns a note id such as `x-coredata://...`. Use that exact id to delete
+the note later:
+
+```bash
+osascript <<'EOF'
+tell application "Notes"
+  delete note id "x-coredata://REPLACE_ME"
+end tell
+EOF
+```
+
+If you need to verify the note exists after creation, use `memo` to list notes
+in the folder and confirm the title appears:
+
+```bash
+memo notes --folder Notes
+```
+
+If AppleScript is unavailable and you still need to create a note through
+`memo`, drive the `$EDITOR` hook non-interactively with a wrapper script:
+
+```bash
+cat >/tmp/memo-editor.sh <<'EOF'
+#!/bin/sh
+printf '%s\n' '# Note Title' '' 'Body line 1' 'Body line 2' > "$1"
+EOF
+chmod +x /tmp/memo-editor.sh
+EDITOR=/tmp/memo-editor.sh memo notes -a -f "Notes"
+```
+
+That path works for create, but it is less deterministic than AppleScript and
+should not be your first choice for cleanup or repeated automation.
 
 View Notes
 
 - List all notes: `memo notes`
-- Filter by folder: `memo notes -f "Folder Name"`
-- Search notes (fuzzy): `memo notes -s "query"`
+- Filter by folder: `memo notes --folder "Folder Name"`
+- Search notes interactively: `memo notes -s`
 
 Create Notes
 
-- Add a new note: `memo notes -a`
-  - Opens an interactive editor to compose the note.
-- Quick add with title: `memo notes -a "Note Title"`
+- Avoid `memo notes -a` for automation. It is interactive and can hang while
+  waiting for an editor.
+- Use AppleScript create for agent/local automation.
 
 Edit Notes
 
-- Edit existing note: `memo notes -e`
-  - Interactive selection of note to edit.
+- `memo notes -e` is interactive.
+- For consumer-safe automation, prefer creating a replacement note or use
+  AppleScript/JXA with an exact note id when possible.
 
 Delete Notes
 
-- Delete a note: `memo notes -d`
-  - Interactive selection of note to delete.
+- `memo notes -d` is interactive and expects a list ordinal, not the visible
+  note id shown by `memo`.
+- For deterministic cleanup, use AppleScript delete by exact note id.
 
 Move Notes
 
@@ -68,7 +127,8 @@ Export Notes
 Limitations
 
 - Cannot edit notes containing images or attachments.
-- Interactive prompts may require terminal access.
+- `memo` create/edit/delete prompts may require terminal access and an editor.
+- AppleScript create/delete is better for consumer-agent automation on macOS.
 
 Notes
 
