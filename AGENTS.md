@@ -264,6 +264,9 @@
   - Preferred Codex/tmux recovery entrypoint after session loss: `bash scripts/codex-recover.sh` (use `--all` when the default ranked view hides stale but still interesting history).
   - Preferred stale-claim cleanup entrypoint: `bash scripts/gc-worktrees.sh` first, then `bash scripts/gc-worktrees.sh --auto` only after reviewing the dry-run table.
   - Preferred isolated mac app entrypoint per worktree: `bash scripts/dev-launch-mac.sh`.
+  - Consumer mac app parallel-testing entrypoint: `bash scripts/package-consumer-mac-app.sh --instance <id>` then `bash scripts/open-consumer-mac-app.sh --instance <id>`.
+  - Replacing one consumer instance without killing others: `bash scripts/open-consumer-mac-app.sh --instance <id> --replace`.
+  - Consumer isolation reference: `docs/consumer/macos-consumer-app.md` section `Parallel worktree testing`.
   - Preferred automatic GC installer: `bash scripts/install-worktree-gc.sh install` (check with `status`, inspect with `install --dry-run`).
   - The automatic GC scheduler targets the main checkout by default so it survives feature-worktree deletion; override only when that is intentional.
   - For the full worktree automation flow and scheduler details, read `scripts/telegram-e2e/README.md` section `Worktree automation workflow`.

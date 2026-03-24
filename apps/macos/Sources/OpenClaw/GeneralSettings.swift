@@ -520,6 +520,13 @@ struct GeneralSettings: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+
+            Text(
+                "Instance: \(ConsumerInstance.current.id ?? "default") • Runtime: \(OpenClawConfigFile.stateDirURL().path)"
+            )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
         }
         .padding(12)
         .background(Color.gray.opacity(0.08))

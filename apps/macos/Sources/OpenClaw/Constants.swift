@@ -1,11 +1,15 @@
 import Foundation
 
+func consumerDefaultsKey(_ suffix: String) -> String {
+    "\(AppFlavor.current.defaultsPrefix).\(suffix)"
+}
+
 private var defaultsPrefix: String { AppFlavor.current.defaultsPrefix }
 
 // Keep runtime/service labels pinned to the consumer runtime authority so this branch
 // cannot silently fall back to founder labels when flavor metadata is missing.
-let launchdLabel = ConsumerRuntime.launchdLabel
-let gatewayLaunchdLabel = ConsumerRuntime.gatewayLaunchdLabel
+var launchdLabel: String { ConsumerRuntime.launchdLabel }
+var gatewayLaunchdLabel: String { ConsumerRuntime.gatewayLaunchdLabel }
 var onboardingVersionKey: String { "\(defaultsPrefix).onboardingVersion" }
 var onboardingSeenKey: String { "\(defaultsPrefix).onboardingSeen" }
 let currentOnboardingVersion = 8

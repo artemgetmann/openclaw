@@ -13,10 +13,13 @@ The consumer macOS app is the simplified local controller for the OpenClaw consu
 The consumer build is a separate app/runtime identity, not a separate repository.
 
 - App identity: separate bundle identifier and app variant metadata
-- State directory: `~/Library/Application Support/OpenClaw Consumer/.openclaw`
+- Default state directory: `~/Library/Application Support/OpenClaw Consumer/.openclaw`
+- Named instance state directory: `~/Library/Application Support/OpenClaw Consumer/instances/<instance-id>/.openclaw`
 - Legacy fallback: `~/.openclaw-consumer` is still read if it already exists from an older local test setup
-- Local gateway port: `19001`
-- Launch labels: `ai.openclaw.consumer.mac` and `ai.openclaw.consumer.gateway`
+- Default local gateway port: `19001`
+- Named instance gateway port: deterministic FNV-based offset from the instance id
+- Default launch labels: `ai.openclaw.consumer` and `ai.openclaw.consumer.gateway`
+- Named instance launch labels: `ai.openclaw.consumer.<instance-id>` and `ai.openclaw.consumer.<instance-id>.gateway`
 - Logs: `/tmp/openclaw-consumer`
 
 This keeps consumer testing from silently reusing the founder runtime.
@@ -89,6 +92,42 @@ scripts/open-consumer-mac-app.sh
 ```
 
 These wrappers fail fast unless the bundle name, bundle identifier, and app variant all match the consumer app. That prevents accidentally launching the generic founder/dev shell during consumer testing.
+
+## Parallel worktree testing
+
+Use named consumer instances when multiple agents or worktrees need to run the
+consumer app on one Mac without sharing state.
+
+Package two isolated instances:
+
+```bash
+scripts/package-consumer-mac-app.sh --instance ux-audit
+scripts/package-consumer-mac-app.sh --instance agent-a
+```
+
+Open them in parallel:
+
+```bash
+scripts/open-consumer-mac-app.sh --instance ux-audit
+scripts/open-consumer-mac-app.sh --instance agent-a
+```
+
+What changes per instance:
+
+- runtime root under `~/Library/Application Support/OpenClaw Consumer/instances/<instance-id>`
+- config, logs, workspace, and app persistence namespace
+- gateway port
+- launch labels
+- packaged debug app name and debug bundle identifier
+
+Use `--replace` only when you want to recycle the same named instance:
+
+```bash
+scripts/open-consumer-mac-app.sh --instance ux-audit --replace
+```
+
+That path targets the matching bundle binary only. It does not broad-kill other
+consumer app instances.
 
 ## Distribution assumption
 

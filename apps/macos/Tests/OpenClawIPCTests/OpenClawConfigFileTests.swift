@@ -100,13 +100,34 @@ struct OpenClawConfigFileTests {
 
     @Test
     func `consumer flavor prefers application support state dir`() async {
-        await TestIsolation.withEnvValues([
-            "OPENCLAW_CONFIG_PATH": nil,
-            "OPENCLAW_STATE_DIR": nil,
-            "OPENCLAW_APP_VARIANT": "consumer",
-        ]) {
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_CONFIG_PATH": nil,
+                "OPENCLAW_STATE_DIR": nil,
+                "OPENCLAW_HOME": nil,
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+            ])
+        {
             let path = OpenClawConfigFile.stateDirURL().path
             #expect(path.contains("Library/Application Support/OpenClaw Consumer/.openclaw"))
+        }
+    }
+
+    @Test
+    func `named consumer instance prefers instance scoped application support state dir`() async {
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_CONFIG_PATH": nil,
+                "OPENCLAW_STATE_DIR": nil,
+                "OPENCLAW_HOME": nil,
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: "agent-a",
+            ])
+        {
+            let path = OpenClawConfigFile.stateDirURL().path
+            #expect(path.contains("Library/Application Support/OpenClaw Consumer/instances/agent-a/.openclaw"))
+            #expect(OpenClawConfigFile.url().path.hasSuffix("/instances/agent-a/.openclaw/openclaw.json"))
         }
     }
 

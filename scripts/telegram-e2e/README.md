@@ -156,6 +156,19 @@ Fast failure-mode check:
 bash scripts/dev-launch-mac.sh --no-build
 ```
 
+Consumer app note:
+
+- `scripts/dev-launch-mac.sh` is the founder/dev shell path.
+- For consumer app parallel testing, package and open a named instance instead:
+
+```bash
+bash scripts/package-consumer-mac-app.sh --instance ux-audit
+bash scripts/open-consumer-mac-app.sh --instance ux-audit
+```
+
+- Use a different `--instance` value per worktree or agent.
+- Use `--replace` only when you want to recycle that same named consumer lane.
+
 ### Inspect or clean stale worktrees
 
 Dry-run first:

@@ -4,6 +4,7 @@ import OpenClawProtocol
 enum OpenClawConfigFile {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
     private static let configAuditFileName = "config-audit.jsonl"
+    private static let managedBrowserProfileName = "user"
 
     static func url() -> URL {
         OpenClawPaths.configURL
@@ -124,6 +125,86 @@ enum OpenClawConfigFile {
         root["browser"] = browser
         self.saveDict(root)
         self.logger.debug("browser control updated enabled=\(enabled)")
+    }
+
+    static func selectedChromeProfileDirectoryName() -> String? {
+        let root = self.loadDict()
+        guard let browser = root["browser"] as? [String: Any],
+              let profiles = browser["profiles"] as? [String: Any],
+              let userProfile = profiles[self.managedBrowserProfileName] as? [String: Any],
+              let raw = userProfile["sourceProfileName"] as? String
+        else {
+            return nil
+        }
+
+        let selected = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selected.isEmpty else { return nil }
+        return selected
+    }
+
+    static func setSelectedChromeProfileDirectoryName(_ directoryName: String) -> Bool {
+        let trimmed = directoryName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        // Browser setup only needs to persist which real Chrome profile should seed the managed
+        // "user" lane. The runtime already derives browser control + CDP ports from the instance
+        // scoped gateway port, so duplicating those numbers here would be drift-prone busywork.
+        var root = self.loadDict()
+        var browser = root["browser"] as? [String: Any] ?? [:]
+        browser["defaultProfile"] = self.managedBrowserProfileName
+        var profiles = browser["profiles"] as? [String: Any] ?? [:]
+        var userProfile = profiles[self.managedBrowserProfileName] as? [String: Any] ?? [:]
+        userProfile["cloneFromUserProfile"] = true
+        userProfile["sourceProfileName"] = trimmed
+        profiles[self.managedBrowserProfileName] = userProfile
+        browser["profiles"] = profiles
+        root["browser"] = browser
+        self.saveDict(root)
+        return self.selectedChromeProfileDirectoryName() == trimmed
+    }
+
+    static func clearSelectedChromeProfileDirectoryName() -> Bool {
+        var root = self.loadDict()
+        guard var browser = root["browser"] as? [String: Any] else { return true }
+
+        if var profiles = browser["profiles"] as? [String: Any],
+           var userProfile = profiles[self.managedBrowserProfileName] as? [String: Any]
+        {
+            userProfile.removeValue(forKey: "sourceProfileName")
+            if userProfile.isEmpty {
+                profiles.removeValue(forKey: self.managedBrowserProfileName)
+            } else {
+                profiles[self.managedBrowserProfileName] = userProfile
+            }
+
+            if profiles.isEmpty {
+                browser.removeValue(forKey: "profiles")
+            } else {
+                browser["profiles"] = profiles
+            }
+        }
+
+        if (browser["defaultProfile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            == self.managedBrowserProfileName
+        {
+            browser.removeValue(forKey: "defaultProfile")
+        }
+
+        if browser.isEmpty {
+            root.removeValue(forKey: "browser")
+        } else {
+            root["browser"] = browser
+        }
+
+        self.saveDict(root)
+        return self.selectedChromeProfileDirectoryName() == nil
+    }
+
+    static func managedBrowserUserDataDirURL(profileName: String = "user") -> URL {
+        self.stateDirURL()
+            .appendingPathComponent("browser", isDirectory: true)
+            .appendingPathComponent(profileName, isDirectory: true)
+            .appendingPathComponent("user-data", isDirectory: true)
     }
 
     static func agentWorkspace() -> String? {

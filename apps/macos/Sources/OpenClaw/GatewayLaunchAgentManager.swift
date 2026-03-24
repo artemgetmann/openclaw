@@ -244,20 +244,26 @@ extension GatewayLaunchAgentManager {
         base: [String: String],
         projectRootHint: String?) -> [String: String]
     {
+        let instance = ConsumerInstance.current
         var env = base
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
-        env["OPENCLAW_PROFILE"] = ConsumerRuntime.profile
-        env["OPENCLAW_HOME"] = ConsumerRuntime.runtimeRootURL.path
-        env["OPENCLAW_STATE_DIR"] = ConsumerRuntime.stateDirURL.path
-        env["OPENCLAW_CONFIG_PATH"] = ConsumerRuntime.configURL.path
-        env["OPENCLAW_GATEWAY_PORT"] = "\(ConsumerRuntime.gatewayPort)"
-        env["OPENCLAW_GATEWAY_BIND"] = ConsumerRuntime.gatewayBind
-        env["OPENCLAW_LOG_DIR"] = ConsumerRuntime.logsDirURL.path
+        env["OPENCLAW_PROFILE"] = instance.profile
+        env["OPENCLAW_HOME"] = instance.runtimeRootURL.path
+        env["OPENCLAW_STATE_DIR"] = instance.stateDirURL.path
+        env["OPENCLAW_CONFIG_PATH"] = instance.configURL.path
+        env["OPENCLAW_GATEWAY_PORT"] = "\(instance.gatewayPort)"
+        env["OPENCLAW_GATEWAY_BIND"] = instance.gatewayBind
+        env["OPENCLAW_LOG_DIR"] = instance.logsDirURL.path
         env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] = "1"
+        if let id = instance.id {
+            env[ConsumerInstance.envKey] = id
+        } else {
+            env.removeValue(forKey: ConsumerInstance.envKey)
+        }
         // Keep every child CLI command pinned to the dedicated consumer gateway lane.
         // The app and gateway intentionally use different launchd labels, and the explicit
         // env keeps status/install/restart commands from drifting across authorities.
-        env["OPENCLAW_LAUNCHD_LABEL"] = gatewayLaunchdLabel
+        env["OPENCLAW_LAUNCHD_LABEL"] = instance.gatewayLaunchdLabel
         if let projectRootHint, !projectRootHint.isEmpty {
             env["OPENCLAW_FORK_ROOT"] = projectRootHint
         }

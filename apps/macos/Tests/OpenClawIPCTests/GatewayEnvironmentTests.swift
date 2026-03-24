@@ -35,8 +35,12 @@ struct GatewayEnvironmentTests {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(
             env: [
+                "OPENCLAW_GATEWAY_PORT": nil,
                 "OPENCLAW_CONFIG_PATH": configPath,
+                "OPENCLAW_STATE_DIR": nil,
+                "OPENCLAW_HOME": nil,
                 "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
             ],
             defaults: ["gatewayPort": nil])
         {
@@ -53,8 +57,12 @@ struct GatewayEnvironmentTests {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(
             env: [
+                "OPENCLAW_GATEWAY_PORT": nil,
                 "OPENCLAW_CONFIG_PATH": configPath,
+                "OPENCLAW_STATE_DIR": nil,
+                "OPENCLAW_HOME": nil,
                 "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
             ],
             defaults: ["gatewayPort": nil])
         {

@@ -34,11 +34,17 @@ enum AppFlavor: String {
     }
 
     var appName: String {
-        switch self {
+        if let raw = Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return switch self {
         case .standard:
             "OpenClaw"
         case .consumer:
-            "OpenClaw Consumer"
+            ConsumerInstance.current.debugAppName
         }
     }
 
@@ -47,7 +53,7 @@ enum AppFlavor: String {
         case .standard:
             "openclaw"
         case .consumer:
-            "openclaw.consumer"
+            ConsumerInstance.current.defaultsPrefix
         }
     }
 
@@ -56,7 +62,7 @@ enum AppFlavor: String {
         case .standard:
             "ai.openclaw.mac"
         case .consumer:
-            "ai.openclaw.consumer.mac"
+            ConsumerInstance.current.stableSuiteName
         }
     }
 
@@ -65,7 +71,7 @@ enum AppFlavor: String {
         case .standard:
             "ai.openclaw.gateway"
         case .consumer:
-            "ai.openclaw.consumer.gateway"
+            ConsumerInstance.current.gatewayLaunchdLabel
         }
     }
 
@@ -83,7 +89,7 @@ enum AppFlavor: String {
         case .standard:
             18789
         case .consumer:
-            19001
+            ConsumerInstance.current.gatewayPort
         }
     }
 

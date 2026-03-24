@@ -25,6 +25,16 @@ enum LaunchAgentManager {
     }
 
     private static func writePlist(bundlePath: String) {
+        let instance = ConsumerInstance.current
+        let instanceEnvLines: String
+        if let id = instance.id {
+            instanceEnvLines = """
+          <key>\(ConsumerInstance.envKey)</key>
+          <string>\(id)</string>
+        """
+        } else {
+            instanceEnvLines = ""
+        }
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -60,6 +70,9 @@ enum LaunchAgentManager {
           <string>\(ConsumerRuntime.gatewayBind)</string>
           <key>OPENCLAW_LOG_DIR</key>
           <string>\(ConsumerRuntime.logsDirURL.path)</string>
+          <key>OPENCLAW_LAUNCHD_LABEL</key>
+          <string>\(ConsumerRuntime.gatewayLaunchdLabel)</string>
+          \(instanceEnvLines)
         </dict>
           <key>StandardOutPath</key>
           <string>\(LogLocator.launchdLogPath)</string>

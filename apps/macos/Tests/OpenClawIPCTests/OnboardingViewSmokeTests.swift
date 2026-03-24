@@ -7,25 +7,40 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct OnboardingViewSmokeTests {
-    @Test func `onboarding view builds body`() {
-        let state = AppState(preview: true)
-        let view = OnboardingView(
-            state: state,
-            permissionMonitor: PermissionMonitor.shared,
-            discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
-        _ = view.body
+    @Test func `onboarding view builds body`() async {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "standard",
+            ConsumerInstance.envKey: nil,
+        ]) {
+            let state = AppState(preview: true)
+            let view = OnboardingView(
+                state: state,
+                permissionMonitor: PermissionMonitor.shared,
+                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
+            _ = view.body
+        }
     }
 
-    @Test func `page order skips manual CLI steps`() {
-        let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
-        #expect(!order.contains(3))
-        #expect(!order.contains(6))
-        #expect(order.contains(5))
+    @Test func `page order skips manual CLI steps`() async {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "standard",
+            ConsumerInstance.envKey: nil,
+        ]) {
+            let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
+            #expect(!order.contains(3))
+            #expect(!order.contains(6))
+            #expect(order.contains(5))
+        }
     }
 
-    @Test func `page order omits onboarding chat when identity known`() {
-        let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
-        #expect(!order.contains(8))
+    @Test func `page order omits onboarding chat when identity known`() async {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "standard",
+            ConsumerInstance.envKey: nil,
+        ]) {
+            let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
+            #expect(!order.contains(8))
+        }
     }
 
     @Test func `consumer local onboarding collapses to welcome and setup`() async {

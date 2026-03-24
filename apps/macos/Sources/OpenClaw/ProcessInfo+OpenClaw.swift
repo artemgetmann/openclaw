@@ -26,7 +26,7 @@ extension ProcessInfo {
 
     var isNixMode: Bool {
         let isAppBundle = Bundle.main.bundleURL.pathExtension == "app"
-        let stableSuite = UserDefaults(suiteName: launchdLabel)
+        let stableSuite = UserDefaults(suiteName: AppFlavor.current.stableSuiteName)
         return Self.resolveNixMode(
             environment: self.environment,
             standard: .standard,
