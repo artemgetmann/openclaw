@@ -133,7 +133,7 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "Chrome connected",
-                body: "OpenClaw is set to use a separate copy of \(profile.displayName) for browser work. If a site needs login, you will sign in yourself in the OpenClaw browser.")
+                body: "OpenClaw can now use \(profile.displayName) for browser tasks on this Mac. If a site needs your account, OpenClaw will open the page and wait for you to sign in.")
 
             self.profileCard(profile, selected: true, action: nil)
 
@@ -153,7 +153,7 @@ struct BrowserSetupCardContent: View {
                 .padding(.vertical, 2)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("If browser work fails")
+                Text("If a website needs extra help")
                     .font(.subheadline.weight(.semibold))
                 ForEach(BrowserRuntimeFailureTemplateKind.allCases, id: \.self) { kind in
                     VStack(alignment: .leading, spacing: 2) {

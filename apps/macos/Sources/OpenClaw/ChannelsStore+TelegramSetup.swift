@@ -109,9 +109,11 @@ extension ChannelsStore {
                 allowFrom: [String(dm.senderId)])
             restoredByFinalBootstrap = true
             self.telegramSetupFirstSenderId = String(dm.senderId)
+            let autoReplyError = await self.triggerConsumerTelegramFirstReplyIfNeeded(dm: dm)
             self.telegramSetupStatus = self.telegramCaptureStatus(
                 dm: dm,
-                persistedRoot: persisted)
+                persistedRoot: persisted,
+                autoReplyError: autoReplyError)
         } catch {
             self.telegramSetupWaitingForDM = false
             if pausedPollingProvider && !restoredByFinalBootstrap {
@@ -166,17 +168,49 @@ extension ChannelsStore {
 
     private func telegramCaptureStatus(
         dm: TelegramSetupDirectMessage,
-        persistedRoot: [String: Any]
+        persistedRoot: [String: Any],
+        autoReplyError: String?
     ) -> String {
         _ = persistedRoot
         if AppFlavor.current.isConsumer {
+            if let autoReplyError {
+                _ = autoReplyError
+                // Consumer setup should explain the next human step, not dump raw
+                // gateway/auth internals into the UI. The detailed failure still
+                // lives in logs and channel status surfaces for debugging.
+                return dm.senderUsername.map {
+                    "Connected to @\($0). If the first reply did not appear, open your bot and send any message."
+                } ?? "Telegram setup is finished. If the first reply did not appear, open your bot and send any message."
+            }
             return dm.senderUsername.map {
-                "Connected to @\($0). You can start chatting with your AI operator in Telegram now."
-            } ?? "Telegram setup is finished. You can start chatting with your AI operator now."
+                "Connected to @\($0). OpenClaw already started the first reply in Telegram."
+            } ?? "Telegram setup is finished. OpenClaw already started the first reply in Telegram."
         }
         return dm.senderUsername.map {
             "Locked to @\($0). For multiple parallel tasks, add the bot to a Telegram group and use topics."
         } ?? "Locked to Telegram user ID \(dm.senderId). For multiple parallel tasks, add the bot to a Telegram group and use topics."
+    }
+
+    private func triggerConsumerTelegramFirstReplyIfNeeded(
+        dm: TelegramSetupDirectMessage
+    ) async -> String? {
+        guard AppFlavor.current.isConsumer else { return nil }
+
+        let rawMessage = dm.messageText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let bootstrapMessage = rawMessage.isEmpty
+            ? "Hi"
+            : rawMessage
+
+        let sessionKey = await GatewayConnection.shared.mainSessionKey()
+        let result = await GatewayConnection.shared.sendAgent(
+            GatewayAgentInvocation(
+                message: bootstrapMessage,
+                sessionKey: sessionKey,
+                thinking: "default",
+                deliver: true,
+                to: "telegram:\(dm.senderId)",
+                channel: .telegram))
+        return result.ok ? nil : (result.error ?? "Agent request failed.")
     }
 
     private func assertPersistedTelegramBootstrap(

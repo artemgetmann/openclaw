@@ -34,22 +34,22 @@ enum BrowserRuntimeFailureTemplateKind: CaseIterable {
     var title: String {
         switch self {
         case .publicTaskFallback:
-            return "Public task fallback"
+            return "Public sites still work"
         case .signedInTaskStopped:
-            return "Signed-in task protection"
+            return "Your logged-in sites stay protected"
         case .signInRequired:
-            return "Manual sign-in only"
+            return "You sign in yourself"
         }
     }
 
     var body: String {
         switch self {
         case .publicTaskFallback:
-            return "If your Chrome copy is unavailable for a public page, OpenClaw can switch to an isolated browser and tell you it did."
+            return "If a page does not need your account, OpenClaw can still open it in its own browser and tell you what happened."
         case .signedInTaskStopped:
-            return "If a task depends on your account, OpenClaw stops and explains the issue instead of silently switching browser identity."
+            return "If a task needs one of your logged-in sites, OpenClaw stops and explains the problem instead of guessing."
         case .signInRequired:
-            return "If a site needs login, OpenClaw opens the sign-in page and waits for you to log in yourself."
+            return "If a site needs you to log in, OpenClaw opens the page and waits for you."
         }
     }
 }
@@ -75,16 +75,31 @@ final class BrowserSetupModel {
     private let defaults: UserDefaults
     private let detectChromeExecutable: () -> URL?
     private let loadProfiles: () -> [ChromeProfileCandidate]
+    private let persistSelectionToConfig: (ChromeProfileCandidate) -> Void
+    private let clearSelectionFromConfig: () -> Void
+    private let verifySelectionReadiness: (ChromeProfileCandidate) async -> String?
     private var detectedProfiles: [ChromeProfileCandidate] = []
 
     init(
         defaults: UserDefaults = .standard,
         detectChromeExecutable: (() -> URL?)? = nil,
-        loadProfiles: (() -> [ChromeProfileCandidate])? = nil)
+        loadProfiles: (() -> [ChromeProfileCandidate])? = nil,
+        persistSelectionToConfig: ((ChromeProfileCandidate) -> Void)? = nil,
+        clearSelectionFromConfig: (() -> Void)? = nil,
+        verifySelectionReadiness: ((ChromeProfileCandidate) async -> String?)? = nil)
     {
         self.defaults = defaults
         self.detectChromeExecutable = detectChromeExecutable ?? { BrowserSetupModel.detectChromeExecutable() }
         self.loadProfiles = loadProfiles ?? { BrowserSetupModel.loadChromeProfiles() }
+        self.persistSelectionToConfig = persistSelectionToConfig ?? { profile in
+            BrowserSetupModel.persistConsumerBrowserSelection(profile)
+        }
+        self.clearSelectionFromConfig = clearSelectionFromConfig ?? {
+            BrowserSetupModel.clearConsumerBrowserSelectionFromConfig()
+        }
+        self.verifySelectionReadiness = verifySelectionReadiness ?? { profile in
+            await BrowserSetupModel.verifyConsumerBrowserSelection(expectedProfile: profile)
+        }
     }
 
     var isComplete: Bool {
@@ -117,6 +132,7 @@ final class BrowserSetupModel {
         guard self.detectChromeExecutable() != nil else {
             self.detectedProfiles = []
             self.clearSelection()
+            self.clearSelectionFromConfig()
             self.phase = .chromeMissing
             self.statusLine = "Google Chrome is required for browser setup."
             return
@@ -127,14 +143,21 @@ final class BrowserSetupModel {
 
         guard !profiles.isEmpty else {
             self.clearSelection()
+            self.clearSelectionFromConfig()
             self.phase = .noProfiles
             self.statusLine = "Open Chrome once on this Mac so OpenClaw can find your profile."
             return
         }
 
         if let selected = self.restoreSelection(from: profiles) {
+            self.statusLine = "Checking browser readiness…"
+            if let failure = await self.verifySelectionReadiness(selected) {
+                self.phase = .failed(failure)
+                self.statusLine = failure
+                return
+            }
             self.phase = .ready(selected)
-            self.statusLine = "Connected to \(selected.displayName)."
+            self.statusLine = "Connected to \(selected.displayName). OpenClaw can use its own Chrome copy when needed."
             return
         }
 
@@ -158,12 +181,21 @@ final class BrowserSetupModel {
             self.statusLine = "OpenClaw could not save your Chrome profile."
             return
         }
+        self.persistSelectionToConfig(profile)
+        self.statusLine = "Checking browser readiness…"
+
+        if let failure = await self.verifySelectionReadiness(profile) {
+            self.phase = .failed(failure)
+            self.statusLine = failure
+            return
+        }
         self.phase = .ready(profile)
-        self.statusLine = "Connected to \(profile.displayName)."
+        self.statusLine = "Connected to \(profile.displayName). OpenClaw can use its own Chrome copy when needed."
     }
 
     func clearProfileSelection() {
         self.clearSelection()
+        self.clearSelectionFromConfig()
         if self.detectedProfiles.count == 1, let first = self.detectedProfiles.first {
             self.phase = .confirm(first)
             self.statusLine = "We found one Chrome profile."

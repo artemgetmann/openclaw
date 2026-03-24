@@ -10,6 +10,7 @@ struct TelegramSetupDirectMessage: Sendable, Equatable {
     let senderId: Int
     let senderUsername: String?
     let senderFirstName: String?
+    let messageText: String?
 }
 
 enum TelegramSetupVerifierError: LocalizedError {
@@ -28,7 +29,7 @@ enum TelegramSetupVerifierError: LocalizedError {
         case let .api(message):
             return message
         case .conflict:
-            return "This bot is already being used by another OpenClaw Telegram poller. Stop the other runtime, or let setup pause Telegram before trying again."
+            return "This bot is already active in another OpenClaw window or worktree on this Mac. Close the other runtime or use a different bot token here."
         case .noDirectMessage:
             return "No Telegram DM arrived yet. Ask the user to send the bot a private message, then try again."
         }
@@ -111,7 +112,8 @@ enum TelegramSetupVerifier {
             updateId: update.updateId,
             senderId: sender.id,
             senderUsername: sender.username,
-            senderFirstName: sender.firstName)
+            senderFirstName: sender.firstName,
+            messageText: message.text)
     }
 
     private static func updatesQueryItems(offset: Int?) -> [URLQueryItem] {
@@ -217,10 +219,12 @@ private struct TelegramUpdate: Decodable {
 private struct TelegramMessage: Decodable {
     let from: TelegramUser?
     let chat: TelegramChat
+    let text: String?
 
     private enum CodingKeys: String, CodingKey {
         case from
         case chat
+        case text
     }
 }
 

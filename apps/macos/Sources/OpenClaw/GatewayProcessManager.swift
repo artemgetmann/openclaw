@@ -39,10 +39,13 @@ final class GatewayProcessManager {
     private(set) var environmentStatus: GatewayEnvironmentStatus = .checking
     private(set) var existingGatewayDetails: String?
     private(set) var lastFailureReason: String?
+    private(set) var lastReadinessFailureReason: String?
     private var desiredActive = false
+    private var lifecycleGeneration = 0
     private var environmentRefreshTask: Task<Void, Never>?
     private var lastEnvironmentRefresh: Date?
     private var logRefreshTask: Task<Void, Never>?
+    private var stopTask: Task<Void, Never>?
     #if DEBUG
     private var testingConnection: GatewayConnection?
     #endif
@@ -59,6 +62,14 @@ final class GatewayProcessManager {
     }
 
     func setActive(_ active: Bool) {
+        self.lifecycleGeneration += 1
+        if active {
+            // Consumer onboarding flips from `.unconfigured` to `.local` very early on first run.
+            // Cancel any previously scheduled async stop so the stale shutdown cannot kill the
+            // gateway a moment after the newer local-start request wins.
+            self.stopTask?.cancel()
+            self.stopTask = nil
+        }
         // Remote mode should never spawn a local gateway; treat as stopped.
         if CommandResolver.connectionModeIsRemote() {
             self.desiredActive = false
@@ -154,7 +165,21 @@ final class GatewayProcessManager {
         if CommandResolver.connectionModeIsRemote() {
             return
         }
-        Task {
+        let stopGeneration = self.lifecycleGeneration
+        self.stopTask?.cancel()
+        self.stopTask = Task { [weak self] in
+            // Yield once so an immediate `.local` recovery can cancel this stale stop before it
+            // reaches the CLI and tears down the freshly started launchd job.
+            await Task.yield()
+            guard let self else { return }
+            guard !Task.isCancelled else { return }
+            let shouldRun = await MainActor.run {
+                Self.shouldExecuteScheduledStop(
+                    desiredActive: self.desiredActive,
+                    currentGeneration: self.lifecycleGeneration,
+                    scheduledGeneration: stopGeneration)
+            }
+            guard shouldRun else { return }
             // "Stop" should stop the supervised gateway, not tear out the launch agent
             // registration. Uninstalling here makes the consumer service disappear after
             // routine mode changes or startup races, which is exactly the flapping we are
@@ -163,6 +188,11 @@ final class GatewayProcessManager {
                 enabled: false,
                 bundlePath: Bundle.main.bundleURL.path,
                 port: GatewayEnvironment.gatewayPort())
+            await MainActor.run {
+                if self.lifecycleGeneration == stopGeneration {
+                    self.stopTask = nil
+                }
+            }
         }
     }
 
@@ -434,14 +464,26 @@ final class GatewayProcessManager {
     }
 
     func waitForGatewayReady(timeout: TimeInterval = 6) async -> Bool {
+        self.lastReadinessFailureReason = nil
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if !self.desiredActive { return false }
             do {
                 _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
                 self.clearLastFailure()
+                self.lastReadinessFailureReason = nil
                 return true
             } catch {
+                if self.isGatewayAuthFailure(error) {
+                    let reason = """
+                    OpenClaw reached its local runtime, but this app still needs pairing approval. \
+                    Approve the pending device repair request and try again.
+                    """
+                    self.lastReadinessFailureReason = reason
+                    self.lastFailureReason = reason
+                    self.logger.warning("gateway readiness blocked by auth/pairing")
+                    return false
+                }
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
         }
@@ -496,6 +538,14 @@ final class GatewayProcessManager {
         }
     }
 
+    private static func shouldExecuteScheduledStop(
+        desiredActive: Bool,
+        currentGeneration: Int,
+        scheduledGeneration: Int) -> Bool
+    {
+        !desiredActive && currentGeneration == scheduledGeneration
+    }
+
     private func startupDiagnostics(context: String) -> String {
         let mode = CommandResolver.connectionModeIsRemote() ? "remote" : "local"
         let instanceID = ConsumerInstance.current.id ?? "default"
@@ -543,6 +593,17 @@ extension GatewayProcessManager {
 
     func setTestingLastFailureReason(_ reason: String?) {
         self.lastFailureReason = reason
+    }
+
+    static func _testShouldExecuteScheduledStop(
+        desiredActive: Bool,
+        currentGeneration: Int,
+        scheduledGeneration: Int) -> Bool
+    {
+        self.shouldExecuteScheduledStop(
+            desiredActive: desiredActive,
+            currentGeneration: currentGeneration,
+            scheduledGeneration: scheduledGeneration)
     }
 }
 #endif

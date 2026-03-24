@@ -258,6 +258,8 @@
 
 ## Agent-Specific Notes
 
+- Consumer macOS GUI testing: run `pnpm consumer:preflight` before opening the app. That command is the source of truth for lane identity, gateway/auth health, and Telegram token collisions. Read `docs/consumer/consumer-runtime-preflight.md` before trying to debug consumer setup from screenshots alone.
+
 - Pre-Live Telegram Check (REQUIRED before any live Telegram validation):
   - You MUST confirm the current git branch is named and NOT `HEAD`.
   - You MUST confirm gateway runtime is owned by the current worktree path.

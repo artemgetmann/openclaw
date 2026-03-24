@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-23
+Last updated: 2026-03-24
 Owner: consumer execution team
 Status: Active
 
@@ -89,6 +89,46 @@ Notes:
   - head: `codex/simplify-consumer-bootstrap-flow-telegram`
   - base: `codex/consumer-openclaw-project`
   - merge gate remains: Telegram BYOK E2E on isolated consumer runtime
+
+### 2026-03-24 first-run activation pass
+
+- This pass was scoped to install-to-first-task friction, not new capability.
+- Highest-friction setup bugs fixed in the consumer macOS app:
+  - browser setup now persists the real runtime config instead of only app-local selection state
+  - browser setup now runs a real readiness check before claiming success
+  - consumer onboarding now blocks on model readiness via `openclaw models status --json --check`
+  - Telegram first-DM capture now auto-starts the first assistant reply
+  - consumer workspace bootstrap now seeds `MEMORY.md`
+- Default first-run path is now:
+  1. open the app
+  2. finish the identity/bootstrap prompt
+  3. connect Chrome
+  4. pass AI readiness
+  5. verify Telegram token
+  6. send one DM to the bot
+  7. capture that DM and let OpenClaw start the first reply automatically
+- Product truth after this pass:
+  - browser path is honest now; it either becomes ready or fails with a concrete reason
+  - AI readiness is no longer hidden behind the first real task
+  - consumer bootstrap no longer ships without durable memory
+- Canonical first successful task for this pass:
+  - send this Telegram DM after setup:
+    `Find the latest price and flight time for New York to London next month and summarize the best public option.`
+  - success means:
+    - Telegram reply comes back in the same DM
+    - the reply contains a concrete public-web answer
+    - or the failure names the next recovery step plainly
+- Verification evidence captured for the 2026-03-24 pass:
+  - `swift test --package-path apps/macos --filter AgentWorkspaceTests` -> passed
+  - `swift test --package-path apps/macos --filter BrowserSetupSupportTests` -> passed
+  - `swift test --package-path apps/macos --filter ConsumerBootstrapTests` -> passed
+  - `swift test --package-path apps/macos --filter OnboardingViewSmokeTests` -> passed
+  - `swift test --package-path apps/macos --filter TelegramSetupVerifierTests` -> passed
+  - `swift test --package-path apps/macos --filter TelegramSetupBootstrapTests` -> passed
+  - `pnpm build` initially failed because this worktree had no `node_modules`
+  - `pnpm install` completed successfully
+  - rerun `pnpm build` progressed normally and then failed on unrelated existing TypeScript errors in `src/agents/pi-embedded-runner/run/attempt.ts` (`skipWaitForIdle` not in type)
+- Remaining pain is documented in `docs/consumer/first-run-friction-report.md`.
 
 ### 2026-03-21 Telegram BYOK E2E status
 

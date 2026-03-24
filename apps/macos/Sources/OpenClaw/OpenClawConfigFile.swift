@@ -4,6 +4,9 @@ import OpenClawProtocol
 enum OpenClawConfigFile {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
     private static let configAuditFileName = "config-audit.jsonl"
+    private static let defaultBrowserControlPort = 18_791
+    private static let defaultBrowserCdpRangeStart = 18_800
+    private static let defaultManagedUserBrowserCdpPort = 18_801
     private static let managedBrowserProfileName = "user"
 
     static func url() -> URL {
@@ -154,6 +157,8 @@ enum OpenClawConfigFile {
         browser["defaultProfile"] = self.managedBrowserProfileName
         var profiles = browser["profiles"] as? [String: Any] ?? [:]
         var userProfile = profiles[self.managedBrowserProfileName] as? [String: Any] ?? [:]
+        userProfile["cdpPort"] = self.managedUserBrowserCdpPort(root: root)
+        userProfile["driver"] = "openclaw"
         userProfile["cloneFromUserProfile"] = true
         userProfile["sourceProfileName"] = trimmed
         profiles[self.managedBrowserProfileName] = userProfile
@@ -205,6 +210,38 @@ enum OpenClawConfigFile {
             .appendingPathComponent("browser", isDirectory: true)
             .appendingPathComponent(profileName, isDirectory: true)
             .appendingPathComponent("user-data", isDirectory: true)
+    }
+
+    static func managedBrowserUserCdpPort() -> Int {
+        self.managedUserBrowserCdpPort(root: self.loadDict())
+    }
+
+    private static func managedUserBrowserCdpPort(root: [String: Any]) -> Int {
+        let gateway = root["gateway"] as? [String: Any]
+        let gatewayPort = self.parsePort(gateway?["port"])
+        let browserControlPort = gatewayPort.map { $0 + 2 } ?? self.defaultBrowserControlPort
+        let browserCdpRangeStart = browserControlPort + 9
+        let openClawDefaultPort = browserCdpRangeStart > 0 ? browserCdpRangeStart : self.defaultBrowserCdpRangeStart
+        let managedUserPort = openClawDefaultPort + 1
+        return managedUserPort > 0 && managedUserPort <= 65_535
+            ? managedUserPort
+            : self.defaultManagedUserBrowserCdpPort
+    }
+
+    private static func parsePort(_ raw: Any?) -> Int? {
+        if let port = raw as? Int, port > 0 {
+            return port
+        }
+        if let number = raw as? NSNumber, number.intValue > 0 {
+            return number.intValue
+        }
+        if let string = raw as? String,
+           let parsed = Int(string.trimmingCharacters(in: .whitespacesAndNewlines)),
+           parsed > 0
+        {
+            return parsed
+        }
+        return nil
     }
 
     static func agentWorkspace() -> String? {

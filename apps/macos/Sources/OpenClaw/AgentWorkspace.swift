@@ -8,6 +8,7 @@ enum AgentWorkspace {
     static let identityFilename = "IDENTITY.md"
     static let userFilename = "USER.md"
     static let bootstrapFilename = "BOOTSTRAP.md"
+    static let memoryFilename = "MEMORY.md"
     private static let templateDirname = "templates"
     private static let ignoredEntries: Set<String> = [".DS_Store", ".git", ".gitignore"]
     private static let templateEntries: Set<String> = [
@@ -16,6 +17,7 @@ enum AgentWorkspace {
         AgentWorkspace.identityFilename,
         AgentWorkspace.userFilename,
         AgentWorkspace.bootstrapFilename,
+        AgentWorkspace.memoryFilename,
     ]
     struct BootstrapSafety: Equatable {
         let unsafeReason: String?
@@ -113,6 +115,11 @@ enum AgentWorkspace {
         if !FileManager().fileExists(atPath: userURL.path) {
             try self.defaultUserTemplate().write(to: userURL, atomically: true, encoding: .utf8)
             self.logger.info("Created USER.md at \(userURL.path, privacy: .public)")
+        }
+        let memoryURL = workspaceURL.appendingPathComponent(self.memoryFilename)
+        if !FileManager().fileExists(atPath: memoryURL.path) {
+            try self.defaultMemoryTemplate().write(to: memoryURL, atomically: true, encoding: .utf8)
+            self.logger.info("Created MEMORY.md at \(memoryURL.path, privacy: .public)")
         }
         let bootstrapURL = workspaceURL.appendingPathComponent(self.bootstrapFilename)
         if shouldSeedBootstrap, !FileManager().fileExists(atPath: bootstrapURL.path) {
@@ -252,7 +259,7 @@ enum AgentWorkspace {
         Do not stop after the naming step.
         - If the user tells you what to call them, confirm it briefly and continue.
         - If exact name suggestions are provided from Telegram profile metadata, use those exact options first and keep their order unchanged.
-        - If the user tells you what you should be called, offer a few options. Jarvis can be one of them, but not the only one.
+        - If the user tells you what you should be called, lead with Jarvis as the default suggestion, then offer a few nearby alternatives if needed.
         - Keep going until all four first-run questions are answered well enough to write the files below.
         - Do not end with "Good. I'm Jarvis now." unless the ritual is actually complete.
 
@@ -287,6 +294,22 @@ enum AgentWorkspace {
         Delete BOOTSTRAP.md once this is complete.
         """
         return self.loadTemplate(named: self.bootstrapFilename, fallback: fallback)
+    }
+
+    static func defaultMemoryTemplate() -> String {
+        let fallback = """
+        # MEMORY.md - Durable Notes
+
+        Use this file for stable facts and preferences that should survive across sessions.
+
+        Keep it short and useful:
+        - long-term preferences
+        - recurring priorities
+        - important context worth remembering
+
+        Do not store secrets here.
+        """
+        return self.loadTemplate(named: self.memoryFilename, fallback: fallback)
     }
 
     private static func loadTemplate(named: String, fallback: String) -> String {

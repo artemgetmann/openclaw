@@ -6,6 +6,22 @@ extension ChannelsSettings {
         AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
     }
 
+    private func consumerTelegramConflictMessage(_ raw: String?) -> String? {
+        guard self.isConsumerSimpleTelegramPath else { return nil }
+        let normalized = raw?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        guard !normalized.isEmpty else { return nil }
+        if normalized.contains("terminated by other getupdates request")
+            || normalized.contains("already being used by another openclaw telegram poller")
+        {
+            // Telegram returns a raw 409 string here, but consumer users need the
+            // actual meaning: some other local OpenClaw lane already owns this bot.
+            return "This bot is already active in another OpenClaw window or worktree on this Mac. Close the other runtime or use a different bot token here."
+        }
+        return nil
+    }
+
     private var consumerTelegramConfigFallback: (configured: Bool, lockedSenderId: String?) {
         guard self.isConsumerSimpleTelegramPath else { return (false, nil) }
 
@@ -216,6 +232,9 @@ extension ChannelsSettings {
     var telegramSummary: String {
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else {
+            if self.consumerTelegramConflictMessage(self.store.telegramSetupStatus) != nil {
+                return "Busy elsewhere"
+            }
             let fallback = self.consumerTelegramConfigFallback
             if self.isConsumerSimpleTelegramPath {
                 if fallback.lockedSenderId != nil { return "Live" }
@@ -226,6 +245,7 @@ extension ChannelsSettings {
             return "Checking…"
         }
         if self.isConsumerSimpleTelegramPath {
+            if self.consumerTelegramConflictMessage(status.lastError) != nil { return "Busy elsewhere" }
             if status.configured && (status.running || status.probe?.ok == true) { return "Live" }
             if status.configured { return "Setup complete" }
             return "Setup needed"
@@ -291,6 +311,15 @@ extension ChannelsSettings {
     var telegramDetails: String? {
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else {
+            if let conflict = self.consumerTelegramConflictMessage(self.store.telegramSetupStatus) {
+                return conflict
+            }
+            if self.isConsumerSimpleTelegramPath {
+                // Consumer setup already shows inline status inside the setup/live
+                // card. Repeating the same copy again in the header just creates
+                // duplicate noise above the real controls.
+                return nil
+            }
             if let status = self.store.telegramSetupStatus, !status.isEmpty {
                 return status
             }
@@ -308,6 +337,12 @@ extension ChannelsSettings {
             return nil
         }
         var lines: [String] = []
+        if let conflict = self.consumerTelegramConflictMessage(status.lastError) {
+            return conflict
+        }
+        if self.isConsumerSimpleTelegramPath {
+            return nil
+        }
         if let source = status.tokenSource, !self.isConsumerSimpleTelegramPath {
             lines.append("Token source: \(source)")
         }

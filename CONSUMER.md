@@ -35,12 +35,19 @@ The consumer app owns its own runtime state. Keep it isolated from the founder b
 - State/config: `~/Library/Application Support/OpenClaw Consumer/.openclaw`
 - Gateway port: `19001`
 - Do not read or migrate from the founder `~/.openclaw` path in week 1
+- Before any consumer GUI test, run `pnpm consumer:preflight`
 
 Why this shape:
 
 - The consumer branch is source code, not user data.
 - macOS app state belongs in Application Support so the app can own it cleanly.
 - That keeps the consumer runtime separate from both the repo checkout and the founder bot.
+
+Consumer debugging rule:
+
+- one worktree = one consumer instance
+- one Telegram bot token = one active runtime
+- terminal preflight first, GUI second
 
 ---
 
@@ -148,7 +155,7 @@ Your live bot at `~/.openclaw` stays untouched.
 | ------------------ | ---------------------------------------------------------- |
 | Telegram bot       | Guided BYOK now; managed/shared bot later if needed        |
 | Desktop UX         | Menu bar + simplified app (rework existing, don't rebuild) |
-| Model routing      | Bundled keys + BYOK option (Cursor model)                  |
+| Model routing      | Founder-managed shared model by default + BYOK fallback    |
 | Safety mode        | Power only for sprint                                      |
 | Billing            | Stripe, after product works, not in sprint                 |
 | Legal              | Needs counsel before public launch                         |

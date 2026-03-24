@@ -101,4 +101,17 @@ struct GatewayLaunchAgentManagerTests {
                 hasPlist: true,
                 launchAgentMatchesCurrentEntrypoint: false) == .install)
     }
+
+    @Test func `bringup treats not loaded result as not ready`() {
+        #expect(
+            !GatewayLaunchAgentManager._testShouldTreatBringupResultAsReady(
+                """
+                {"ok":true,"result":"not-loaded","message":"Gateway service not loaded.","service":{"loaded":false}}
+                """))
+        #expect(
+            GatewayLaunchAgentManager._testShouldTreatBringupResultAsReady(
+                """
+                {"ok":true,"result":"started","service":{"loaded":true}}
+                """))
+    }
 }

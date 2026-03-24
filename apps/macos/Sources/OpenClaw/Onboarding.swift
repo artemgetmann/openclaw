@@ -85,6 +85,7 @@ struct OnboardingView: View {
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var browserSetup = BrowserSetupModel()
+    @State var modelSetup = ConsumerModelSetupModel()
     @State var onboardingSkillsModel = SkillsSettingsModel()
     @State var onboardingWizard = OnboardingWizardModel()
     @State var didLoadOnboardingSkills = false
@@ -148,7 +149,9 @@ struct OnboardingView: View {
     var buttonTitle: String {
         if AppFlavor.current.isConsumer {
             if self.pageCount == 1, self.activePageIndex == 0 {
-                return self.onboardingWizard.isComplete && self.browserSetup.isComplete ? "Finish" : "Setting Up…"
+                return self.onboardingWizard.isComplete && self.browserSetup.isComplete && self.modelSetup.isComplete
+                    ? "Finish"
+                    : "Setting Up…"
             }
             if self.activePageIndex == self.wizardPageIndex, self.onboardingWizard.isComplete {
                 return "Finish"
@@ -175,13 +178,25 @@ struct OnboardingView: View {
     var isBrowserSetupBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode == .local &&
+            self.state.connectionMode != .remote &&
             self.onboardingWizard.isComplete &&
             !self.browserSetup.isComplete
     }
 
+    var isModelSetupBlocking: Bool {
+        AppFlavor.current.isConsumer &&
+            self.pageCount == 1 &&
+            self.state.connectionMode != .remote &&
+            self.onboardingWizard.isComplete &&
+            self.browserSetup.isComplete &&
+            !self.modelSetup.isComplete
+    }
+
     var canAdvance: Bool {
-        !self.isWizardBlocking && !self.isConsumerInlineSetupBlocking && !self.isBrowserSetupBlocking
+        !self.isWizardBlocking &&
+            !self.isConsumerInlineSetupBlocking &&
+            !self.isBrowserSetupBlocking &&
+            !self.isModelSetupBlocking
     }
 
     var devLinkCommand: String {
