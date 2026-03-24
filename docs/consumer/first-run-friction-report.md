@@ -30,6 +30,9 @@ Scope: install -> permissions -> browser -> Telegram -> first delegated task
   - If the auto-start fails, the user gets a plain fallback instruction instead of silent failure.
 - Consumer workspace bootstrap now seeds `MEMORY.md`.
   - Durable notes exist from the first run without extra setup.
+- Consumer local testing now has a dedicated lane-health command.
+  - `pnpm consumer:preflight` prints the exact consumer instance, runtime paths, gateway health, model-auth health, and Telegram token collisions before GUI testing starts.
+  - This is now the required first step before anyone debugs consumer setup from screenshots.
 
 ## What still hurts
 
@@ -40,6 +43,7 @@ Scope: install -> permissions -> browser -> Telegram -> first delegated task
 - Browser readiness is now honest, not fully magical.
   - Chrome still has to be installed.
   - Signed-in tasks still depend on the user being logged into the relevant site inside Chrome.
+  - The public fallback works, but signed-in browser behavior still needs a dedicated reliability pass.
 - Starter skills are seeded, but they are not all equally ready on a clean Mac.
   - Ready now after the core app permissions:
     - `summarize`
@@ -80,6 +84,18 @@ Scope: install -> permissions -> browser -> Telegram -> first delegated task
   - app should clear the stale selection and ask the user to choose again
 - Signed-in task requires login:
   - app should tell the user to log in manually in the OpenClaw browser window
+
+## Debugging rules we learned the hard way
+
+- One worktree equals one consumer instance.
+- One Telegram bot token equals one active runtime.
+- Terminal preflight comes before GUI testing.
+
+If those rules are skipped, the app can appear broken for fake reasons:
+
+- another worktree may own the gateway
+- another runtime may own the Telegram bot token
+- the UI may show a browser/setup failure that is actually a runtime-lane collision
 
 ## What should be next
 
