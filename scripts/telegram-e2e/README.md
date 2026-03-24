@@ -38,7 +38,7 @@ cd tg
 go build -o tg .
 ```
 
-### 2) Prepare Telethon (user-side sends)
+### 2) Prepare Telegram user tooling
 
 ```bash
 cd scripts/telegram-e2e
@@ -47,20 +47,43 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Manual setup is optional now. `userbot-send-live.sh` auto-bootstraps `.venv` only when missing/broken and stays quiet when healthy.
+Manual setup is optional now. `pnpm openclaw:local telegram-user ...` auto-bootstraps `.venv` only when missing/broken and stays quiet when healthy.
 
-First login will ask for Telegram code in your app:
+### Preferred CLI path
+
+Use the repo-local CLI for normal operator work and automation:
 
 ```bash
-python3 userbot_send.py \
-  --api-id "$TELEGRAM_API_ID" \
-  --api-hash "$TELEGRAM_API_HASH" \
-  --chat "<chat-id-or-username>" \
-  --reply-to <thread-anchor-message-id> \
-  --text "hello from userbot"
+pnpm openclaw:local telegram-user precheck --chat @jarvis_tester_1_bot
+
+pnpm openclaw:local telegram-user send \
+  --chat @jarvis_tester_1_bot \
+  --message "hello from the Telegram user CLI" \
+  --json
+
+pnpm openclaw:local telegram-user read \
+  --chat @jarvis_tester_1_bot \
+  --limit 5 \
+  --json
+
+pnpm openclaw:local telegram-user wait \
+  --chat @jarvis_tester_1_bot \
+  --after-id 12345 \
+  --sender-id 67890 \
+  --thread-anchor 7001 \
+  --json
 ```
 
-Canonical userbot path for reliability checks:
+Why this is the preferred path:
+
+1. one command surface for send/read/wait instead of scattered scripts
+2. shared thread matching for `reply_to_top_id`, `reply_to_msg_id`, and DM topic ids
+3. session locking so parallel probes fail loudly instead of corrupting Telethon state
+4. secrets stay in env and env-files, not process arguments
+
+### Compatibility wrapper
+
+Keep this only if some older local workflow still expects a bash entrypoint:
 
 ```bash
 scripts/telegram-e2e/userbot-send-live.sh \
@@ -71,10 +94,13 @@ scripts/telegram-e2e/userbot-send-live.sh \
 
 What it does:
 
-1. Loads `scripts/telegram-e2e/.env.local` when present.
-2. Resolves/bootstraps Python deps only if needed.
-3. Runs `userbot_precheck.py` (creds/session/chat checks).
-4. Sends message with `userbot_send.py` only if precheck passes.
+1. Maps the older `--text` flag to CLI `--message`.
+2. Calls `pnpm openclaw:local telegram-user send ...`.
+3. Keeps humans and scripts on one operator surface instead of reviving direct Python entrypoints.
+
+### Internal Python backend
+
+The Python files under `scripts/telegram-e2e/` still exist, but they are now transport internals for the repo-local CLI, not the intended operator UX.
 
 ### 3) Create local env file
 
@@ -95,7 +121,7 @@ Use one source of truth in your main checkout, then copy into each worktree.
 3. For every new worktree, run:
    - `bash scripts/bootstrap-worktree-telegram.sh`
 4. Smoke check from that worktree:
-   - `scripts/telegram-e2e/userbot-send-live.sh --chat "<chat-id-or-username>" --text "handoff smoke"`
+   - `pnpm openclaw:local telegram-user send --chat "<chat-id-or-username>" --message "handoff smoke"`
 5. First runtime claim happens on first canonical ensure run:
    - `scripts/telegram-live-runtime.sh ensure`
    - This auto-claims a tester bot token for the worktree (or hard-fails if none are available).
@@ -338,6 +364,31 @@ scripts/telegram-e2e/.venv/bin/python scripts/telegram-e2e/probe_dm_thread_inher
   --target-model "anthropic/claude-sonnet-4-6"
 ```
 
+## First-reply smoke
+
+Preferred future-facing command flow:
+
+```bash
+scripts/telegram-live-runtime.sh ensure
+
+pnpm openclaw:local telegram-user send \
+  --chat @jarvis_tester_1_bot \
+  --message "codex smoke $(date +%s)" \
+  --json
+
+pnpm openclaw:local telegram-user wait \
+  --chat @jarvis_tester_1_bot \
+  --after-id <sent_message_id> \
+  --sender-id <bot_user_id> \
+  --json
+```
+
+Or use the bundled wrapper:
+
+```bash
+scripts/telegram-e2e/run-consumer-first-reply-smoke.sh --chat @jarvis_tester_1_bot
+```
+
 Despite the name, this probe is also used for Telegram forum-topic inheritance
 checks. The filename is legacy.
 
@@ -438,15 +489,15 @@ Scope note:
 ## Known behavior and failure recovery
 
 - `409 Conflict` from `tg poll` is expected when gateway owns `getUpdates`.
-  - Runner auto-falls back to MTProto assertion (`userbot_wait.py`), no action needed.
+  - Runner auto-falls back to the repo-local Telegram user CLI wait path, no action needed.
 - `tg poll returned non-JSON output` means `tg` is not configured for polling in that shell.
   - Set `TG_BOT_TOKEN` in `.env.local` (recommended) or configure `tg bot add`.
-- `userbot_send failed: EOF when reading a line` means Telethon session is not authenticated.
-  - Re-run `userbot_send.py` once interactively to refresh login.
+- `E_UNAUTHORIZED_SESSION` during `telegram-user precheck/send/read/wait` means the Telethon session is not authenticated.
+  - Re-auth once through the internal Python backend if needed, then go back to the CLI.
 - `E_MISSING_SESSION`: no session file at canonical path.
   - Sync `scripts/telegram-e2e/tmp/userbot.session` or set `USERBOT_SESSION`.
 - `E_UNAUTHORIZED_SESSION`: session exists but is not logged in.
-  - Re-auth once with interactive `userbot_send.py`.
+  - Re-auth once through the internal Python backend, then retry the CLI command.
 - `E_CHAT_NOT_RESOLVABLE`: precheck cannot resolve `--chat`.
   - Verify chat id/username and account access.
 - `E_AMBIGUOUS_SESSION`: both legacy and canonical session files exist.

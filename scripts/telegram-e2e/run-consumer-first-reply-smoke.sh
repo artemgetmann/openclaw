@@ -1,19 +1,35 @@
 #!/usr/bin/env bash
 
 # Consumer Telegram first-reply smoke test.
-# This uses the existing MTProto userbot session so we can verify a real
-# user-to-bot roundtrip without fighting Bot API long-poll conflicts.
-# The success condition is intentionally simple:
-# - send one fresh DM to the target bot as the user
+# This intentionally uses the repo-local `telegram-user` CLI so the smoke lane
+# exercises the same operator surface humans and scripts should rely on.
+# The success condition stays intentionally simple:
+# - send one fresh DM to the target bot as the user account
 # - wait for any non-empty reply from that bot after the sent message id
-# This proves the "first real reply" lane works end-to-end on the current
-# consumer runtime, even if the exact wording evolves.
+# That proves the current runtime is answering real Telegram traffic end-to-end.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=scripts/telegram-e2e/userbot-common.sh
-source "${SCRIPT_DIR}/userbot-common.sh"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+extract_json_payload() {
+  RAW_OUTPUT="$1" python3 - <<'PY'
+import json
+import os
+import sys
+
+raw = os.environ["RAW_OUTPUT"]
+start = raw.find("{")
+if start < 0:
+  print(raw, file=sys.stderr)
+  raise SystemExit("Could not find JSON payload in command output.")
+
+payload = raw[start:].strip()
+data = json.loads(payload)
+print(json.dumps(data, ensure_ascii=True))
+PY
+}
 
 usage() {
   cat <<'USAGE'
@@ -67,79 +83,69 @@ if [[ -z "${text}" ]]; then
   text="codex-consumer-smoke $(date +%s) who are you and what should I call you?"
 fi
 
-load_userbot_env_if_present
-require_userbot_credentials
-python_bin="$(ensure_userbot_python)"
-session_path="$(resolve_userbot_session_path)"
-
 # Precheck first so session/chat failures are explicit instead of looking like
-# "the bot ignored me" when the userbot lane was never healthy.
-run_userbot_precheck "${python_bin}" "${session_path}" "${chat}" >/dev/null
-
-send_json="$(
-  run_userbot_send "${python_bin}" "${session_path}" "${chat}" "0" "${text}"
+# "the bot ignored me" when the Telegram user lane was never healthy.
+precheck_output="$(
+  cd "${REPO_ROOT}"
+  pnpm openclaw:local telegram-user precheck --chat "${chat}" --json
 )"
+precheck_json="$(extract_json_payload "${precheck_output}")"
+
+send_output="$(
+  cd "${REPO_ROOT}" &&
+    pnpm openclaw:local telegram-user send \
+      --chat "${chat}" \
+      --message "${text}" \
+      --json
+)"
+send_json="$(extract_json_payload "${send_output}")"
 after_id="$(
   SEND_JSON="${send_json}" python3 - <<'PY'
 import json, os
-print(json.loads(os.environ["SEND_JSON"])["message_id"])
+print(json.loads(os.environ["SEND_JSON"])["message"]["message_id"])
 PY
 )"
 
-# Ask Telegram who the bot is so the wait step only accepts a real reply from
-# that bot, not our own outbound message or another message in the chat.
-bot_meta="$(
-  TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}" TG_BOT_TOKEN="${TG_BOT_TOKEN:-}" python3 - <<'PY'
-import json, os, sys, urllib.request
-token = (
-  os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-  or os.environ.get("TG_BOT_TOKEN", "").strip()
-)
-if not token:
-  print("Missing TELEGRAM_BOT_TOKEN/TG_BOT_TOKEN for Telegram smoke", file=sys.stderr)
-  raise SystemExit(1)
-with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getMe", timeout=15) as resp:
-  data = json.load(resp)
-if not data.get("ok"):
-  print(json.dumps(data), file=sys.stderr)
-  raise SystemExit(1)
-result = data["result"]
-print(json.dumps({"id": result["id"], "username": result.get("username")}, ensure_ascii=True))
-PY
-)"
 bot_id="$(
-  BOT_META="${bot_meta}" python3 - <<'PY'
+  PRECHECK_JSON="${precheck_json}" python3 - <<'PY'
 import json, os
-print(json.loads(os.environ["BOT_META"])["id"])
+print(json.loads(os.environ["PRECHECK_JSON"])["chat"]["chat_id"])
 PY
 )"
 
 echo "Waiting for a reply from ${chat} after message ${after_id} (timeout ${timeout}s)..." >&2
 
-reply_json="$(
-  "${python_bin}" "${SCRIPT_DIR}/userbot_wait.py" \
-    --api-id "${TELEGRAM_API_ID:-}" \
-    --api-hash "${TELEGRAM_API_HASH:-}" \
-    --session "${session_path}" \
-    --chat "${chat}" \
-    --after-id "${after_id}" \
-    --contains "" \
-    --sender-id "${bot_id}" \
-    --timeout "${timeout}"
+reply_output="$(
+  cd "${REPO_ROOT}" &&
+    pnpm openclaw:local telegram-user wait \
+      --chat "${chat}" \
+      --after-id "${after_id}" \
+      --contains "" \
+      --sender-id "${bot_id}" \
+      --timeout-ms "$(( timeout * 1000 ))" \
+      --json
 )"
+reply_json="$(extract_json_payload "${reply_output}")"
 
-SEND_JSON="${send_json}" BOT_META="${bot_meta}" REPLY_JSON="${reply_json}" python3 - <<'PY'
+SEND_JSON="${send_json}" PRECHECK_JSON="${precheck_json}" REPLY_JSON="${reply_json}" python3 - <<'PY'
 import json, os
 send = json.loads(os.environ["SEND_JSON"])
-bot = json.loads(os.environ["BOT_META"])
+precheck = json.loads(os.environ["PRECHECK_JSON"])
 reply = json.loads(os.environ["REPLY_JSON"])
 summary = {
-  "chat_id": send["chat_id"],
-  "sent_message_id": send["message_id"],
-  "bot_id": bot["id"],
-  "bot_username": bot.get("username"),
-  "reply_message_id": reply["message_id"],
-  "reply_text": reply["text"],
+  "chat_id": send["message"]["chat_id"],
+  "sent_message_id": send["message"]["message_id"],
+  "bot_id": precheck["chat"]["chat_id"],
+  "bot_username": precheck["chat"].get("username"),
+  "reply_message_id": reply["matched"]["message_id"],
+  "reply_text": reply["matched"]["text"],
+  "reply_sender_id": reply["matched"]["sender_id"],
+  "reply_to_msg_id": reply["matched"]["reply_to_msg_id"],
+  "reply_to_top_id": reply["matched"]["reply_to_top_id"],
+  "direct_messages_topic.topic_id": (
+    reply["matched"].get("direct_messages_topic", {}) or {}
+  ).get("topic_id"),
+  "matched_by": reply["matched_by"],
 }
 print(json.dumps(summary, ensure_ascii=True, indent=2))
 PY

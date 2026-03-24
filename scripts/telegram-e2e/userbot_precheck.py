@@ -80,7 +80,7 @@ async def run() -> int:
   except Exception:
     return fail(
       "E_TELETHON_MISSING",
-      "telethon is not installed. Run scripts/telegram-e2e/userbot-send-live.sh to auto-bootstrap.",
+      "telethon is not installed. Run pnpm openclaw:local telegram-user precheck to auto-bootstrap.",
       EXIT_TELETHON_MISSING,
     )
 
@@ -94,7 +94,7 @@ async def run() -> int:
     if not await client.is_user_authorized():
       return fail(
         "E_UNAUTHORIZED_SESSION",
-        "userbot session is not authorized. Re-auth once via interactive userbot_send.py run.",
+        "userbot session is not authorized. Re-auth once via the internal Python backend, then retry the CLI.",
         EXIT_UNAUTHORIZED,
       )
 
