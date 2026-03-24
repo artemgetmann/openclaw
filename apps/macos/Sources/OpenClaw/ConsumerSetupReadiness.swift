@@ -12,18 +12,41 @@ private struct ConsumerShellCommandResult {
 }
 
 private enum ConsumerSetupCommandRunner {
+    private static func consumerCommandEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        // Shell-outs used during onboarding must target the exact consumer lane
+        // currently shown in the app. Relying on ambient machine state lets a
+        // different worktree/default install answer the question instead.
+        env["OPENCLAW_PROFILE"] = ConsumerRuntime.profile
+        env["OPENCLAW_HOME"] = ConsumerRuntime.runtimeRootURL.path
+        env["OPENCLAW_STATE_DIR"] = ConsumerRuntime.stateDirURL.path
+        env["OPENCLAW_CONFIG_PATH"] = ConsumerRuntime.configURL.path
+        env["OPENCLAW_GATEWAY_PORT"] = String(ConsumerRuntime.gatewayPort)
+        env["OPENCLAW_GATEWAY_BIND"] = ConsumerRuntime.gatewayBind
+        env["OPENCLAW_LOG_DIR"] = ConsumerRuntime.logsDirURL.path
+        env["OPENCLAW_LAUNCHD_LABEL"] = ConsumerRuntime.gatewayLaunchdLabel
+        if let id = ConsumerInstance.current.id {
+            env[ConsumerInstance.envKey] = id
+        } else {
+            env.removeValue(forKey: ConsumerInstance.envKey)
+        }
+        if let projectRoot = CommandResolver.projectRootEnvironmentHint() {
+            env["OPENCLAW_FORK_ROOT"] = projectRoot
+        }
+        return env
+    }
+
     static func runOpenClaw(
         subcommand: String,
         extraArgs: [String],
         timeout: Double
     ) async -> ConsumerShellCommandResult {
         let command = CommandResolver.openclawCommand(subcommand: subcommand, extraArgs: extraArgs)
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         let result = await ShellExecutor.runDetailed(
             command: command,
             cwd: nil,
-            env: env,
+            env: self.consumerCommandEnvironment(),
             timeout: timeout)
         return ConsumerShellCommandResult(
             stdout: result.stdout,
@@ -185,6 +208,9 @@ extension BrowserSetupModel {
         // Consumer browser onboarding must write the real runtime config, not only
         // app-local defaults, otherwise the product claims a browser is connected
         // while the gateway still has no idea which Chrome profile to clone.
+        let managedUserCdpPort = OpenClawConfigFile.managedBrowserUserCdpPort()
+        user["cdpPort"] = managedUserCdpPort
+        user["driver"] = "openclaw"
         user["cloneFromUserProfile"] = true
         user["sourceProfileName"] = profile.directoryName
         user["color"] = (user["color"] as? String) ?? "#00AA00"
@@ -228,6 +254,18 @@ extension BrowserSetupModel {
                 return "OpenClaw saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."
             }
         }
+
+        // Browser readiness depends on the local consumer gateway. During first-run
+        // onboarding we have seen the UI ask for browser verification while the app
+        // was still transitioning from `.unconfigured`, which can leave 19001 dead.
+        // Start the local gateway explicitly here so the readiness check validates
+        // the real dependency chain instead of failing on a missing runtime.
+        GatewayProcessManager.shared.setActive(true)
+        guard await GatewayProcessManager.shared.waitForGatewayReady(timeout: 12) else {
+            return GatewayProcessManager.shared.lastReadinessFailureReason
+                ?? "OpenClaw could not start its local runtime. Try again in a moment. If it keeps failing, reopen the app."
+        }
+
         let result = await ConsumerSetupCommandRunner.runOpenClaw(
             subcommand: "browser",
             extraArgs: ["--json", "--browser-profile", consumerBrowserProfileName, "status"],

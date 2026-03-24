@@ -7,12 +7,26 @@ NODE="${OPENCLAW_NODE_BIN:-$(command -v node)}"
 CLI="$ROOT/openclaw.mjs"
 EXPECTED_ENTRY="$ROOT/dist/index.js"
 PREFLIGHT="$ROOT/scripts/local-runtime-preflight.sh"
-PLIST="$HOME/Library/LaunchAgents/ai.openclaw.gateway.plist"
-LAUNCHD_DOMAIN="gui/${UID}"
-LAUNCHD_LABEL="ai.openclaw.gateway"
-LAUNCHD_TARGET="${LAUNCHD_DOMAIN}/${LAUNCHD_LABEL}"
 DEFERRED_RESTART_DELAY_SECONDS="${OPENCLAW_DEFERRED_RESTART_DELAY_SECONDS:-1}"
 HELPER_LOG_PATH="${OPENCLAW_RESTART_HELPER_LOG:-/tmp/openclaw-restart-helper.log}"
+source "$ROOT/scripts/lib/consumer-instance.sh"
+
+NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "${OPENCLAW_CONSUMER_INSTANCE_ID:-}")"
+if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
+  export OPENCLAW_PROFILE="${OPENCLAW_PROFILE:-$(consumer_instance_profile "$NORMALIZED_INSTANCE_ID")}"
+  export OPENCLAW_HOME="${OPENCLAW_HOME:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")}"
+  export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")}"
+  export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$(consumer_instance_config_path "$NORMALIZED_INSTANCE_ID")}"
+  export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-$(consumer_instance_gateway_port "$NORMALIZED_INSTANCE_ID")}"
+  export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
+  export OPENCLAW_LOG_DIR="${OPENCLAW_LOG_DIR:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")/logs}"
+  export OPENCLAW_LAUNCHD_LABEL="${OPENCLAW_LAUNCHD_LABEL:-$(consumer_instance_gateway_launchd_label "$NORMALIZED_INSTANCE_ID")}"
+fi
+
+LAUNCHD_DOMAIN="gui/${UID}"
+LAUNCHD_LABEL="${OPENCLAW_LAUNCHD_LABEL:-ai.openclaw.gateway}"
+PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
+LAUNCHD_TARGET="${LAUNCHD_DOMAIN}/${LAUNCHD_LABEL}"
 
 if [[ ! -x "$NODE" ]]; then
   echo "ERROR: node runtime not found. Install Node 22+ or set OPENCLAW_NODE_BIN." >&2

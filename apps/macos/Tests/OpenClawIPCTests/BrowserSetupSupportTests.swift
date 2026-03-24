@@ -97,7 +97,7 @@ struct BrowserSetupSupportTests {
         }
     }
 
-    @Test func `refresh rejects stale persisted profile when runtime readiness fails`() async {
+    @Test func `refresh preserves persisted profile when runtime readiness fails`() async {
         let defaults = self.makeDefaults()
         let selected = ChromeProfileCandidate(
             directoryName: "Profile 4",
@@ -127,9 +127,9 @@ struct BrowserSetupSupportTests {
             await model.refresh()
 
             #expect(model.phase == .failed("Chrome is still unavailable."))
-            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == nil)
-            #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == nil)
-            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == nil)
+            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
+            #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
+            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
         }
     }
 
@@ -185,7 +185,7 @@ struct BrowserSetupSupportTests {
         }
     }
 
-    @Test func `choose profile fails when runtime browser readiness fails`() async {
+    @Test func `choose profile preserves selection when runtime browser readiness fails`() async {
         let defaults = self.makeDefaults()
         let work = ChromeProfileCandidate(
             directoryName: "Profile 4",
@@ -217,10 +217,10 @@ struct BrowserSetupSupportTests {
 
             #expect(model.phase == .failed("Chrome is still unavailable."))
             #expect(model.isComplete == false)
-            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == nil)
-            #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == nil)
+            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
+            #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
             #expect(verifiedProfileName == "Profile 4")
-            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == nil)
+            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
         }
     }
 

@@ -191,12 +191,12 @@ extension ChannelsSettings {
 
     var consumerTelegramLiveSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            self.formSection("Telegram is live") {
+            self.formSection("Connected bot") {
                 VStack(alignment: .leading, spacing: 14) {
                     Text(
                         self.consumerTelegramBotUsername.map {
-                            "Your bot is connected and running as @\($0)."
-                        } ?? "Your bot is connected and running.")
+                            "Connected as @\($0)."
+                        } ?? "Bot connected.")
                         .font(.callout)
 
                     if let username = self.consumerTelegramBotUsername {

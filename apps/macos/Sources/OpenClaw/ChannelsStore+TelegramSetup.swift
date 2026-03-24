@@ -174,7 +174,13 @@ extension ChannelsStore {
         _ = persistedRoot
         if AppFlavor.current.isConsumer {
             if let autoReplyError {
-                return "Telegram setup is finished, but OpenClaw could not start the first reply automatically. Open your bot and send any message. \(autoReplyError)"
+                _ = autoReplyError
+                // Consumer setup should explain the next human step, not dump raw
+                // gateway/auth internals into the UI. The detailed failure still
+                // lives in logs and channel status surfaces for debugging.
+                return dm.senderUsername.map {
+                    "Connected to @\($0). If the first reply did not appear, open your bot and send any message."
+                } ?? "Telegram setup is finished. If the first reply did not appear, open your bot and send any message."
             }
             return dm.senderUsername.map {
                 "Connected to @\($0). OpenClaw already started the first reply in Telegram."

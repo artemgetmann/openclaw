@@ -31,6 +31,27 @@ import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
+export function resolveGatewaySidecarStartupPolicy(env: NodeJS.ProcessEnv) {
+  const consumerMinimalStartup = isTruthyEnvValue(env.OPENCLAW_CONSUMER_MINIMAL_STARTUP);
+  return {
+    consumerMinimalStartup,
+    skipSessionLockCleanup:
+      consumerMinimalStartup || isTruthyEnvValue(env.OPENCLAW_DEBUG_SKIP_SESSION_LOCK_CLEANUP),
+    // Consumer onboarding depends on browser readiness. Keep the browser control server
+    // available even in "minimal startup" mode so the first-run path can actually verify
+    // the selected Chrome profile instead of failing every browser.request as UNAVAILABLE.
+    skipBrowserControl: isTruthyEnvValue(env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER),
+    skipGmailWatcher:
+      consumerMinimalStartup || isTruthyEnvValue(env.OPENCLAW_DEBUG_SKIP_GMAIL_WATCHER_PHASE),
+    skipInternalHookLoading:
+      consumerMinimalStartup || isTruthyEnvValue(env.OPENCLAW_DEBUG_SKIP_INTERNAL_HOOK_LOADING),
+    skipPluginServices:
+      consumerMinimalStartup || isTruthyEnvValue(env.OPENCLAW_DEBUG_SKIP_PLUGIN_SERVICES),
+    skipMemoryBackendStartup:
+      consumerMinimalStartup || isTruthyEnvValue(env.OPENCLAW_DEBUG_SKIP_MEMORY_BACKEND_STARTUP),
+  };
+}
+
 export async function startGatewaySidecars(params: {
   cfg: ReturnType<typeof loadConfig>;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
@@ -48,22 +69,14 @@ export async function startGatewaySidecars(params: {
 }) {
   const debugStartupPhases = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_STARTUP_PHASES);
   const debugStartupPhasesRaw = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_STARTUP_PHASES_RAW);
-  const consumerMinimalStartup = isTruthyEnvValue(process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP);
-  const skipSessionLockCleanup =
-    consumerMinimalStartup ||
-    isTruthyEnvValue(process.env.OPENCLAW_DEBUG_SKIP_SESSION_LOCK_CLEANUP);
-  const skipBrowserControl =
-    consumerMinimalStartup || isTruthyEnvValue(process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER);
-  const skipGmailWatcher =
-    consumerMinimalStartup || isTruthyEnvValue(process.env.OPENCLAW_DEBUG_SKIP_GMAIL_WATCHER_PHASE);
-  const skipInternalHookLoading =
-    consumerMinimalStartup ||
-    isTruthyEnvValue(process.env.OPENCLAW_DEBUG_SKIP_INTERNAL_HOOK_LOADING);
-  const skipPluginServices =
-    consumerMinimalStartup || isTruthyEnvValue(process.env.OPENCLAW_DEBUG_SKIP_PLUGIN_SERVICES);
-  const skipMemoryBackendStartup =
-    consumerMinimalStartup ||
-    isTruthyEnvValue(process.env.OPENCLAW_DEBUG_SKIP_MEMORY_BACKEND_STARTUP);
+  const policy = resolveGatewaySidecarStartupPolicy(process.env);
+  const consumerMinimalStartup = policy.consumerMinimalStartup;
+  const skipSessionLockCleanup = policy.skipSessionLockCleanup;
+  const skipBrowserControl = policy.skipBrowserControl;
+  const skipGmailWatcher = policy.skipGmailWatcher;
+  const skipInternalHookLoading = policy.skipInternalHookLoading;
+  const skipPluginServices = policy.skipPluginServices;
+  const skipMemoryBackendStartup = policy.skipMemoryBackendStartup;
   const logPhase = (message: string) => {
     if (debugStartupPhasesRaw) {
       process.stderr.write(`[startup/sidecars/raw] ${message}\n`);

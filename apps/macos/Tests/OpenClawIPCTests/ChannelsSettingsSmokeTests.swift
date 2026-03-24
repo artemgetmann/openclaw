@@ -204,8 +204,8 @@ struct ChannelsSettingsSmokeTests {
             let telegram = try #require(view.orderedChannels.first)
             #expect(telegram.id == "telegram")
             #expect(view.channelEnabled(telegram))
-            #expect(view.telegramSummary == "Configured")
-            #expect(view.telegramDetails == "Telegram DM allowlist saved locally.")
+            #expect(view.telegramSummary == "Live")
+            #expect(view.telegramDetails == nil)
         }
     }
 
@@ -242,7 +242,7 @@ struct ChannelsSettingsSmokeTests {
             let view = ChannelsSettings(store: store)
             let telegram = try #require(view.orderedChannels.first)
             _ = view.channelSection(telegram)
-            #expect(view.telegramSummary == "Running")
+            #expect(view.telegramSummary == "Live")
         }
     }
 
@@ -280,7 +280,37 @@ struct ChannelsSettingsSmokeTests {
             let view = ChannelsSettings(store: store)
             let telegram = try #require(view.orderedChannels.first)
             _ = view.channelSection(telegram)
-            #expect(view.telegramSummary == "Running")
+            #expect(view.telegramSummary == "Live")
+        }
+    }
+
+    @Test func `consumer telegram conflict gets plain language summary and details`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.snapshot = ChannelsStatusSnapshot(
+                ts: 1_700_000_000_000,
+                channelOrder: ["telegram"],
+                channelLabels: ["telegram": "Telegram"],
+                channelDetailLabels: nil,
+                channelSystemImages: nil,
+                channelMeta: nil,
+                channels: [
+                    "telegram": SnapshotAnyCodable([
+                        "configured": false,
+                        "running": false,
+                        "lastError": "Conflict: terminated by other getUpdates request; make sure that only one bot instance is running",
+                    ]),
+                ],
+                channelAccounts: [:],
+                channelDefaultAccountId: ["telegram": "default"])
+
+            let view = ChannelsSettings(store: store)
+            #expect(view.telegramSummary == "Busy elsewhere")
+            #expect(
+                view.telegramDetails
+                    == "This bot is already active in another OpenClaw window or worktree on this Mac. Close the other runtime or use a different bot token here.")
         }
     }
 }

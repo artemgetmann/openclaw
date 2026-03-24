@@ -164,10 +164,13 @@ scripts/package-consumer-mac-app.sh
 Open the packaged app with the matching preflight:
 
 ```bash
+pnpm consumer:preflight
 scripts/open-consumer-mac-app.sh
 ```
 
 These wrappers fail fast unless the bundle name, bundle identifier, and app variant all match the consumer app. That prevents accidentally launching the generic founder/dev shell during consumer testing.
+
+For the full lane-health checklist, see `docs/consumer/consumer-runtime-preflight.md`.
 
 ## Parallel worktree testing
 
@@ -188,6 +191,13 @@ scripts/open-consumer-mac-app.sh --instance ux-audit
 scripts/open-consumer-mac-app.sh --instance agent-a
 ```
 
+Before opening either app, run preflight for that exact lane:
+
+```bash
+OPENCLAW_CONSUMER_INSTANCE_ID=ux-audit pnpm consumer:preflight
+OPENCLAW_CONSUMER_INSTANCE_ID=agent-a pnpm consumer:preflight
+```
+
 What changes per instance:
 
 - runtime root under `~/Library/Application Support/OpenClaw Consumer/instances/<instance-id>`
@@ -204,6 +214,11 @@ scripts/open-consumer-mac-app.sh --instance ux-audit --replace
 
 That path targets the matching bundle binary only. It does not broad-kill other
 consumer app instances.
+
+Telegram warning:
+
+- one bot token can only be owned by one active runtime
+- preflight will print token collisions before you waste time on `409 getUpdates`
 
 ## Distribution assumption
 

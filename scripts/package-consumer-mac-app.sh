@@ -34,6 +34,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -z "$INSTANCE_ID" ]]; then
+  # Linked git worktrees should not silently share the default consumer runtime.
+  # Derive a stable per-worktree instance id so parallel app lanes get their own
+  # bundle id, launchd label, state dir, and gateway port by default.
+  INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT_DIR")"
+fi
+
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
 APP_NAME="${APP_NAME:-$(consumer_instance_app_name "$NORMALIZED_INSTANCE_ID")}"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"

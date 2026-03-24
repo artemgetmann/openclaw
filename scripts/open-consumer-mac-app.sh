@@ -59,6 +59,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -z "$INSTANCE_ID" ]]; then
+  # Match packaging defaults so a linked worktree opens its own isolated
+  # consumer instance unless the caller explicitly opts into another lane.
+  INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT_DIR")"
+fi
+
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
 EXPECTED_NAME="$(consumer_instance_app_name "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_BUNDLE_ID="$(consumer_instance_bundle_id "$NORMALIZED_INSTANCE_ID")"
@@ -119,6 +125,17 @@ else
     LANG="${LANG:-en_US.UTF-8}" \
     /usr/bin/open -n "$APP_PATH"
 fi
+
+# Consumer builds are menu bar apps (`LSUIElement=true`), so plain `open` can
+# leave the right instance running without surfacing its window. Reopen+activate
+# the exact bundle id so "open the app" actually brings the intended lane
+# forward instead of a random existing consumer variant.
+/usr/bin/osascript <<EOF >/dev/null 2>&1 || true
+tell application id "$actual_bundle_id"
+  reopen
+  activate
+end tell
+EOF
 
 echo "Opened consumer app:"
 echo "  path=$APP_PATH"

@@ -16,6 +16,21 @@ consumer_instance_normalize_id() {
   ' -- "$raw"
 }
 
+consumer_instance_default_id_for_checkout() {
+  local root_dir="$1"
+  local absolute_git_dir=""
+  local inferred=""
+
+  absolute_git_dir="$(git -C "$root_dir" rev-parse --absolute-git-dir 2>/dev/null || true)"
+  if [[ "$absolute_git_dir" == *"/worktrees/"* ]]; then
+    inferred="$(basename "$root_dir")"
+    consumer_instance_normalize_id "$inferred"
+    return
+  fi
+
+  printf ''
+}
+
 consumer_instance_gateway_port() {
   local normalized="${1:-}"
   if [[ -z "$normalized" ]]; then
@@ -76,4 +91,33 @@ consumer_instance_gateway_launchd_label() {
     return
   fi
   printf 'ai.openclaw.consumer.%s.gateway' "$normalized"
+}
+
+consumer_instance_runtime_root() {
+  local normalized="${1:-}"
+  local base="${HOME}/Library/Application Support/OpenClaw Consumer"
+  if [[ -z "$normalized" ]]; then
+    printf '%s' "$base"
+    return
+  fi
+  printf '%s/instances/%s' "$base" "$normalized"
+}
+
+consumer_instance_state_dir() {
+  local normalized="${1:-}"
+  printf '%s/.openclaw' "$(consumer_instance_runtime_root "$normalized")"
+}
+
+consumer_instance_config_path() {
+  local normalized="${1:-}"
+  printf '%s/openclaw.json' "$(consumer_instance_state_dir "$normalized")"
+}
+
+consumer_instance_profile() {
+  local normalized="${1:-}"
+  if [[ -z "$normalized" ]]; then
+    printf 'consumer'
+    return
+  fi
+  printf 'consumer-%s' "$normalized"
 }

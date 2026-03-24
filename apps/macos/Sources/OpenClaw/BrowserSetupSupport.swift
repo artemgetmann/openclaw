@@ -34,22 +34,22 @@ enum BrowserRuntimeFailureTemplateKind: CaseIterable {
     var title: String {
         switch self {
         case .publicTaskFallback:
-            return "Public task fallback"
+            return "Public sites still work"
         case .signedInTaskStopped:
-            return "Signed-in task protection"
+            return "Your logged-in sites stay protected"
         case .signInRequired:
-            return "Manual sign-in only"
+            return "You sign in yourself"
         }
     }
 
     var body: String {
         switch self {
         case .publicTaskFallback:
-            return "If your Chrome copy is unavailable for a public page, OpenClaw can switch to an isolated browser and tell you it did."
+            return "If a page does not need your account, OpenClaw can still open it in its own browser and tell you what happened."
         case .signedInTaskStopped:
-            return "If a task depends on your account, OpenClaw stops and explains the issue instead of silently switching browser identity."
+            return "If a task needs one of your logged-in sites, OpenClaw stops and explains the problem instead of guessing."
         case .signInRequired:
-            return "If a site needs login, OpenClaw opens the sign-in page and waits for you to log in yourself."
+            return "If a site needs you to log in, OpenClaw opens the page and waits for you."
         }
     }
 }
@@ -152,8 +152,6 @@ final class BrowserSetupModel {
         if let selected = self.restoreSelection(from: profiles) {
             self.statusLine = "Checking browser readiness…"
             if let failure = await self.verifySelectionReadiness(selected) {
-                self.clearSelection()
-                self.clearSelectionFromConfig()
                 self.phase = .failed(failure)
                 self.statusLine = failure
                 return
@@ -187,8 +185,6 @@ final class BrowserSetupModel {
         self.statusLine = "Checking browser readiness…"
 
         if let failure = await self.verifySelectionReadiness(profile) {
-            self.clearSelection()
-            self.clearSelectionFromConfig()
             self.phase = .failed(failure)
             self.statusLine = failure
             return

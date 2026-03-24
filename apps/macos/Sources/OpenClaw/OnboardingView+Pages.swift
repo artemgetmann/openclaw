@@ -128,6 +128,12 @@ extension OnboardingView {
         }
         .task {
             guard AppFlavor.current.isConsumer else { return }
+            if self.state.connectionMode == .unconfigured {
+                // Consumer onboarding now exposes local setup directly on the welcome page.
+                // Flip into local mode before any wizard/browser work starts so the page
+                // does not try to talk to a gateway that `.unconfigured` immediately stops.
+                self.selectLocalGateway()
+            }
             await self.onboardingWizard.startIfNeeded(
                 mode: self.state.connectionMode,
                 workspace: self.workspacePath.isEmpty ? nil : self.workspacePath)

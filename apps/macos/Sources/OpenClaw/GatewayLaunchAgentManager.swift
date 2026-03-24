@@ -71,13 +71,13 @@ enum GatewayLaunchAgentManager {
             self.logger.info("launchd enable requested action=\(String(describing: action), privacy: .public) port=\(port)")
             switch action {
             case .restart:
-                if let error = await self.runDaemonCommand(["restart"], timeout: 20, quiet: true) {
+                if let error = await self.runServiceBringupCommand(["restart"], timeout: 20) {
                     self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
                 } else {
                     return nil
                 }
             case .start:
-                if let error = await self.runDaemonCommand(["start"], timeout: 20, quiet: true) {
+                if let error = await self.runServiceBringupCommand(["start"], timeout: 20) {
                     self.logger.warning("launchd start failed; falling back to install: \(error, privacy: .public)")
                 } else {
                     return nil
@@ -240,6 +240,18 @@ extension GatewayLaunchAgentManager {
         return CommandResult(success: false, payload: payload, message: detail)
     }
 
+    private static func runServiceBringupCommand(
+        _ args: [String],
+        timeout: Double) async -> String?
+    {
+        let result = await self.runDaemonCommandResult(args, timeout: timeout, quiet: true)
+        guard result.success else { return result.message ?? "Gateway daemon command failed" }
+        guard self.shouldTreatBringupResultAsReady(result.payload) else {
+            return self.bringupNotReadyMessage(from: result.payload) ?? "Gateway service is still not loaded"
+        }
+        return nil
+    }
+
     static func daemonCommandEnvironment(
         base: [String: String],
         projectRootHint: String?) -> [String: String]
@@ -280,6 +292,30 @@ extension GatewayLaunchAgentManager {
         return ParsedDaemonJson(text: parsed.text, object: parsed.object)
     }
 
+    private static func shouldTreatBringupResultAsReady(_ payload: Data?) -> Bool {
+        guard let object = self.parseDaemonObject(payload) else { return true }
+        if let result = object["result"] as? String, result == "not-loaded" {
+            return false
+        }
+        if let service = object["service"] as? [String: Any],
+           let loaded = service["loaded"] as? Bool,
+           loaded == false
+        {
+            return false
+        }
+        return true
+    }
+
+    private static func bringupNotReadyMessage(from payload: Data?) -> String? {
+        guard let object = self.parseDaemonObject(payload) else { return nil }
+        return (object["message"] as? String) ?? (object["error"] as? String)
+    }
+
+    private static func parseDaemonObject(_ payload: Data?) -> [String: Any]? {
+        guard let payload else { return nil }
+        return (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
+    }
+
     private static func summarize(_ text: String) -> String? {
         TextSummarySupport.summarizeLastLine(text)
     }
@@ -296,6 +332,10 @@ extension GatewayLaunchAgentManager {
         if loaded == true { return .restart }
         if hasPlist { return .start }
         return .install
+    }
+
+    static func _testShouldTreatBringupResultAsReady(_ payload: String) -> Bool {
+        self.shouldTreatBringupResultAsReady(payload.data(using: .utf8))
     }
 }
 #endif
