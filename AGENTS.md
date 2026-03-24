@@ -1,5 +1,15 @@
 > **CONSUMER PRODUCT:** Read `CONSUMER.md` before starting any work. This repo path is being used for the OpenClaw consumer product, not the upstream open-source project. Different rules apply.
 
+## Fork vs Consumer vs Upstream
+
+- Keep these three things separate:
+- `artemgetmann/openclaw` is the working fork for consumer-product delivery.
+- `codex/consumer-openclaw-project` is the active consumer integration branch on that fork.
+- `openclaw/openclaw` is upstream. Do not treat upstream `main` or any upstream branch as the consumer source of truth.
+- For consumer work, branch from the fork's `codex/consumer-openclaw-project`, open PRs back into that same fork branch, and merge there first.
+- Do not open consumer PRs against upstream unless the user explicitly asks for an upstream sync/export step.
+- If fork and upstream instructions conflict for consumer work, the fork + `codex/consumer-openclaw-project` wins.
+
 ## Consumer Branch Target
 
 - The main consumer integration branch is `codex/consumer-openclaw-project`.
