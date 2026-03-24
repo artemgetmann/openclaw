@@ -254,9 +254,9 @@ extension GatewayLaunchAgentManager {
         env["OPENCLAW_GATEWAY_BIND"] = ConsumerRuntime.gatewayBind
         env["OPENCLAW_LOG_DIR"] = ConsumerRuntime.logsDirURL.path
         env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] = "1"
-        // The consumer app and consumer gateway intentionally use different launchd labels.
-        // If we let the CLI derive the label from OPENCLAW_PROFILE=consumer, it will install
-        // the gateway service as ai.openclaw.consumer and collide with the app's own label.
+        // Keep every child CLI command pinned to the dedicated consumer gateway lane.
+        // The app and gateway intentionally use different launchd labels, and the explicit
+        // env keeps status/install/restart commands from drifting across authorities.
         env["OPENCLAW_LAUNCHD_LABEL"] = gatewayLaunchdLabel
         if let projectRootHint, !projectRootHint.isEmpty {
             env["OPENCLAW_FORK_ROOT"] = projectRootHint

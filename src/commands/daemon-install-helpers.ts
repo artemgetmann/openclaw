@@ -80,9 +80,8 @@ export async function buildGatewayInstallPlan(params: {
     warn: params.warn,
     title: "Gateway runtime",
   });
-  // Launchd label overrides matter for isolated runtimes like the consumer app.
-  // Falling back to profile-derived labels here would silently collapse distinct
-  // app and gateway services into the same launchd identity on macOS.
+  // Launchd label overrides still matter for isolated runtimes that need to pin
+  // the gateway to a non-standard service identity on macOS.
   const launchdLabel = params.env.OPENCLAW_LAUNCHD_LABEL?.trim() || undefined;
   const serviceEnvironment = buildServiceEnvironment({
     env: params.env,

@@ -333,6 +333,18 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
+  it("uses the dedicated consumer gateway launchd label on macOS", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_PROFILE: "consumer" },
+      port: 19001,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.consumer.gateway");
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-consumer.service");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway (consumer)");
+  });
+
   it("forwards proxy environment variables for launchd/systemd runtime", () => {
     const env = buildServiceEnvironment({
       env: {
