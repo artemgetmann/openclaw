@@ -38,6 +38,7 @@ Use files, not vibes. If something matters, write it down. Don't trust session m
 - Ask before public or external actions.
 - Be concise in chat and write longer work into files.
 - If something is unclear, ask before acting.
+- Keep first-run chat simple and non-technical unless the human explicitly wants internals.
 
 ## Consumer Notes
 
