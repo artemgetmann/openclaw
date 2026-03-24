@@ -141,8 +141,14 @@ repo, so there was nothing to commit`.
   - Expected behavior:
     - compare the shipped allowlist against the real consumer/founder-used skill
       set
-    - add missing essentials such as `himalaya` if they belong in the starter
-      pack
+    - keep the current bundled baseline explicit:
+      `apple-notes`, `apple-reminders`, `bear-notes`, `camsnap`, `canvas`,
+      `gog`, `goplaces`, `himalaya`, `peekaboo`, `summarize`, `weather`
+    - keep `himalaya` in the starter pack because consumer email triage/drafting
+      is too core to leave out of the default surface
+    - keep `gog` in the starter pack because Gmail/Calendar/Drive/Docs maps
+      directly to consumer operator tasks like email draft replies and calendar
+      draft creation
   - Why it matters: setup can look correct while the product still feels weak
     if key skills are absent.
 
@@ -177,11 +183,13 @@ suggestions...` and system metadata can appear in the visible chat stream.
 
 - Expand the consumer bundled-skill set to include the useful default skills we
   actually expect early testers to need.
-  - Current gap: some useful skills, including `himalaya`, are not yet clearly
-    part of the consumer bundled-skill baseline.
+  - Current baseline now includes:
+    `apple-notes`, `apple-reminders`, `bear-notes`, `camsnap`, `canvas`,
+    `gog`, `goplaces`, `himalaya`, `peekaboo`, `summarize`, `weather`
   - Expected behavior:
-    - audit the current consumer bundled-skill allowlist
-    - add missing high-value defaults used in the founder flow
+    - treat `himalaya` as the default provider-agnostic email lane
+    - treat `gog` as the default Google Workspace lane for Gmail/Calendar/Drive
+      work
     - keep the list curated rather than dumping every skill into consumer
   - Why it matters: onboarding feels incomplete if the bot is live but missing
     obvious built-in capabilities.

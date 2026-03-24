@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-21
+Last updated: 2026-03-23
 Owner: consumer execution team
 Status: Active
 
@@ -44,6 +44,13 @@ Use this mini-checklist for the runtime/bootstrap work in this branch:
   - the bot replied in the same DM
   - the reply asked bootstrap/identity questions instead of dying before first turn
 - Seeded templates/default config: implemented and verified in the consumer runtime/workspace
+- Bundled starter skills: audited and pinned in consumer bootstrap
+  - current seeded allowlist:
+    `apple-notes`, `apple-reminders`, `bear-notes`, `camsnap`, `canvas`,
+    `gog`, `goplaces`, `himalaya`, `peekaboo`, `summarize`, `weather`
+  - rationale:
+    keep the baseline curated, but include email and Google Workspace because
+    consumer operator value is weak without inbox/calendar surfaces
 - Verification/E2E notes: in progress
 
 Notes:

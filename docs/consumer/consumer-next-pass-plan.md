@@ -149,7 +149,9 @@ without reopening random architecture debates.
 
 2. Clarify what "pre-bundled skills" means in consumer.
    - Today:
-     - the consumer config seeds a curated bundled-skill allowlist
+     - the consumer config seeds a curated bundled-skill allowlist:
+       `apple-notes`, `apple-reminders`, `bear-notes`, `camsnap`, `canvas`,
+       `gog`, `goplaces`, `himalaya`, `peekaboo`, `summarize`, `weather`
      - the consumer workspace does not currently expose a `skills/` folder
      - the consumer workspace also does not currently seed `MEMORY.md`, even
        though the agent can use it as a durable notes file when present
@@ -158,10 +160,11 @@ without reopening random architecture debates.
      - or ship visible/editable consumer skill files too
      - seed an empty `MEMORY.md` by default so the first-run workspace includes
        the full long-term-memory surface
-     - audit the actual starter set against the skills the founder is using in
-       practice, including `himalaya`
-     - audit missing useful defaults such as `himalaya` and other
-       high-frequency founder skills for consumer inclusion
+     - keep `himalaya` in the default pack as the provider-agnostic email lane
+     - keep `gog` in the default pack as the Google Workspace lane for Gmail,
+       Calendar, Drive, and Docs
+     - keep the list curated rather than expanding it into the full bundled
+       catalog
 
 3. Defer provider/auth strategy until onboarding flow is stable.
    - Do not mix billing/auth architecture work into the current onboarding pass.
