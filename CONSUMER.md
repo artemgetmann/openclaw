@@ -148,7 +148,7 @@ Your live bot at `~/.openclaw` stays untouched.
 | ------------------ | ---------------------------------------------------------- |
 | Telegram bot       | Guided BYOK now; managed/shared bot later if needed        |
 | Desktop UX         | Menu bar + simplified app (rework existing, don't rebuild) |
-| Model routing      | Bundled keys + BYOK option (Cursor model)                  |
+| Model routing      | Founder-managed shared model by default + BYOK fallback    |
 | Safety mode        | Power only for sprint                                      |
 | Billing            | Stripe, after product works, not in sprint                 |
 | Legal              | Needs counsel before public launch                         |

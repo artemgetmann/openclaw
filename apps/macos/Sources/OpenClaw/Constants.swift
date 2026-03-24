@@ -12,7 +12,7 @@ var launchdLabel: String { ConsumerRuntime.launchdLabel }
 var gatewayLaunchdLabel: String { ConsumerRuntime.gatewayLaunchdLabel }
 var onboardingVersionKey: String { "\(defaultsPrefix).onboardingVersion" }
 var onboardingSeenKey: String { "\(defaultsPrefix).onboardingSeen" }
-let currentOnboardingVersion = 8
+let currentOnboardingVersion = 9
 var pauseDefaultsKey: String { "\(defaultsPrefix).pauseEnabled" }
 var iconAnimationsEnabledKey: String { "\(defaultsPrefix).iconAnimationsEnabled" }
 var swabbleEnabledKey: String { "\(defaultsPrefix).swabbleEnabled" }

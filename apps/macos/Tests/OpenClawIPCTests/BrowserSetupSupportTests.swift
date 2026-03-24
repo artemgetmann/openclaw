@@ -7,15 +7,20 @@ import Testing
 struct BrowserSetupSupportTests {
     @Test func `refresh reports chrome missing when not installed`() async {
         let defaults = self.makeDefaults()
+        var clearedRuntimeConfig = false
         let model = BrowserSetupModel(
             defaults: defaults,
             detectChromeExecutable: { nil },
-            loadProfiles: { [] })
+            loadProfiles: { [] },
+            persistSelectionToConfig: { _ in },
+            clearSelectionFromConfig: { clearedRuntimeConfig = true },
+            verifySelectionReadiness: { _ in nil })
 
         await model.refresh()
 
         #expect(model.phase == .chromeMissing)
         #expect(model.isComplete == false)
+        #expect(clearedRuntimeConfig)
     }
 
     @Test func `refresh confirms single detected profile`() async {
@@ -29,12 +34,32 @@ struct BrowserSetupSupportTests {
         let model = BrowserSetupModel(
             defaults: defaults,
             detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
-            loadProfiles: { [onlyProfile] })
+            loadProfiles: { [onlyProfile] },
+            persistSelectionToConfig: { _ in },
+            clearSelectionFromConfig: {},
+            verifySelectionReadiness: { _ in nil })
 
         await model.refresh()
 
         #expect(model.phase == .confirm(onlyProfile))
         #expect(model.isComplete == false)
+    }
+
+    @Test func `refresh clears runtime browser config when no profiles are found`() async {
+        let defaults = self.makeDefaults()
+        var clearedRuntimeConfig = false
+        let model = BrowserSetupModel(
+            defaults: defaults,
+            detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+            loadProfiles: { [] },
+            persistSelectionToConfig: { _ in },
+            clearSelectionFromConfig: { clearedRuntimeConfig = true },
+            verifySelectionReadiness: { _ in nil })
+
+        await model.refresh()
+
+        #expect(model.phase == .noProfiles)
+        #expect(clearedRuntimeConfig)
     }
 
     @Test func `refresh restores persisted profile selection`() async {
@@ -59,7 +84,8 @@ struct BrowserSetupSupportTests {
             let model = BrowserSetupModel(
                 defaults: defaults,
                 detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
-                loadProfiles: { [selected] })
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in nil })
 
             await model.refresh()
 
@@ -68,6 +94,42 @@ struct BrowserSetupSupportTests {
             #expect(model.selectedProfileName == "Artem")
             #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
             #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
+        }
+    }
+
+    @Test func `refresh rejects stale persisted profile when runtime readiness fails`() async {
+        let defaults = self.makeDefaults()
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)
+            defaults.set("Artem", forKey: browserSelectedChromeProfileNameKey)
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in "Chrome is still unavailable." })
+
+            await model.refresh()
+
+            #expect(model.phase == .failed("Chrome is still unavailable."))
+            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == nil)
+            #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == nil)
+            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == nil)
         }
     }
 
@@ -97,7 +159,8 @@ struct BrowserSetupSupportTests {
             let model = BrowserSetupModel(
                 defaults: defaults,
                 detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
-                loadProfiles: { [personal, work] })
+                loadProfiles: { [personal, work] },
+                verifySelectionReadiness: { _ in nil })
 
             await model.refresh()
             #expect(model.phase == .choose([personal, work]))
@@ -119,6 +182,45 @@ struct BrowserSetupSupportTests {
 
             let userDataDir = OpenClawConfigFile.managedBrowserUserDataDirURL()
             #expect(FileManager.default.fileExists(atPath: userDataDir.path))
+        }
+    }
+
+    @Test func `choose profile fails when runtime browser readiness fails`() async {
+        let defaults = self.makeDefaults()
+        let work = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        var verifiedProfileName: String?
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [work] },
+                verifySelectionReadiness: { profile in
+                    verifiedProfileName = profile.directoryName
+                    return "Chrome is still unavailable."
+                })
+
+            await model.refresh()
+            await model.chooseProfile(work)
+
+            #expect(model.phase == .failed("Chrome is still unavailable."))
+            #expect(model.isComplete == false)
+            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == nil)
+            #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == nil)
+            #expect(verifiedProfileName == "Profile 4")
+            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == nil)
         }
     }
 
@@ -144,7 +246,8 @@ struct BrowserSetupSupportTests {
             let model = BrowserSetupModel(
                 defaults: defaults,
                 detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
-                loadProfiles: { [selected] })
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in nil })
 
             await model.refresh()
 
@@ -174,7 +277,8 @@ struct BrowserSetupSupportTests {
             let model = BrowserSetupModel(
                 defaults: defaults,
                 detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
-                loadProfiles: { [selected] })
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in nil })
 
             await model.chooseProfile(selected)
             model.clearProfileSelection()

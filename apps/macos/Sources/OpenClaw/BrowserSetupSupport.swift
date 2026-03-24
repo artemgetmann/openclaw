@@ -75,16 +75,31 @@ final class BrowserSetupModel {
     private let defaults: UserDefaults
     private let detectChromeExecutable: () -> URL?
     private let loadProfiles: () -> [ChromeProfileCandidate]
+    private let persistSelectionToConfig: (ChromeProfileCandidate) -> Void
+    private let clearSelectionFromConfig: () -> Void
+    private let verifySelectionReadiness: (ChromeProfileCandidate) async -> String?
     private var detectedProfiles: [ChromeProfileCandidate] = []
 
     init(
         defaults: UserDefaults = .standard,
         detectChromeExecutable: (() -> URL?)? = nil,
-        loadProfiles: (() -> [ChromeProfileCandidate])? = nil)
+        loadProfiles: (() -> [ChromeProfileCandidate])? = nil,
+        persistSelectionToConfig: ((ChromeProfileCandidate) -> Void)? = nil,
+        clearSelectionFromConfig: (() -> Void)? = nil,
+        verifySelectionReadiness: ((ChromeProfileCandidate) async -> String?)? = nil)
     {
         self.defaults = defaults
         self.detectChromeExecutable = detectChromeExecutable ?? { BrowserSetupModel.detectChromeExecutable() }
         self.loadProfiles = loadProfiles ?? { BrowserSetupModel.loadChromeProfiles() }
+        self.persistSelectionToConfig = persistSelectionToConfig ?? { profile in
+            BrowserSetupModel.persistConsumerBrowserSelection(profile)
+        }
+        self.clearSelectionFromConfig = clearSelectionFromConfig ?? {
+            BrowserSetupModel.clearConsumerBrowserSelectionFromConfig()
+        }
+        self.verifySelectionReadiness = verifySelectionReadiness ?? { profile in
+            await BrowserSetupModel.verifyConsumerBrowserSelection(expectedProfile: profile)
+        }
     }
 
     var isComplete: Bool {
@@ -117,6 +132,7 @@ final class BrowserSetupModel {
         guard self.detectChromeExecutable() != nil else {
             self.detectedProfiles = []
             self.clearSelection()
+            self.clearSelectionFromConfig()
             self.phase = .chromeMissing
             self.statusLine = "Google Chrome is required for browser setup."
             return
@@ -127,14 +143,23 @@ final class BrowserSetupModel {
 
         guard !profiles.isEmpty else {
             self.clearSelection()
+            self.clearSelectionFromConfig()
             self.phase = .noProfiles
             self.statusLine = "Open Chrome once on this Mac so OpenClaw can find your profile."
             return
         }
 
         if let selected = self.restoreSelection(from: profiles) {
+            self.statusLine = "Checking browser readiness…"
+            if let failure = await self.verifySelectionReadiness(selected) {
+                self.clearSelection()
+                self.clearSelectionFromConfig()
+                self.phase = .failed(failure)
+                self.statusLine = failure
+                return
+            }
             self.phase = .ready(selected)
-            self.statusLine = "Connected to \(selected.displayName)."
+            self.statusLine = "Connected to \(selected.displayName). OpenClaw can use its own Chrome copy when needed."
             return
         }
 
@@ -158,12 +183,23 @@ final class BrowserSetupModel {
             self.statusLine = "OpenClaw could not save your Chrome profile."
             return
         }
+        self.persistSelectionToConfig(profile)
+        self.statusLine = "Checking browser readiness…"
+
+        if let failure = await self.verifySelectionReadiness(profile) {
+            self.clearSelection()
+            self.clearSelectionFromConfig()
+            self.phase = .failed(failure)
+            self.statusLine = failure
+            return
+        }
         self.phase = .ready(profile)
-        self.statusLine = "Connected to \(profile.displayName)."
+        self.statusLine = "Connected to \(profile.displayName). OpenClaw can use its own Chrome copy when needed."
     }
 
     func clearProfileSelection() {
         self.clearSelection()
+        self.clearSelectionFromConfig()
         if self.detectedProfiles.count == 1, let first = self.detectedProfiles.first {
             self.phase = .confirm(first)
             self.statusLine = "We found one Chrome profile."

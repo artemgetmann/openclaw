@@ -37,11 +37,55 @@ The consumer app defaults to:
 
 The goal is to reduce cognitive overload without deleting advanced capabilities yet.
 
+## First-run path
+
+The default consumer setup path should be:
+
+1. Open the app.
+2. Finish the identity/bootstrap prompt.
+3. Connect Chrome.
+4. Pass AI readiness.
+5. Verify the Telegram bot token.
+6. Send the bot one direct message.
+7. Capture that message and let OpenClaw start the first reply automatically.
+
+Important product rules for this path:
+
+- The browser step is not complete until the real runtime config is written and a browser readiness check passes.
+- The AI step is not complete until the bundled default model is actually usable.
+- Telegram setup should feel like one continuous setup flow, not "configure now, maybe chat later."
+
+## AI model path
+
+Consumer MVP defaults to a founder-managed shared model path.
+
+- Default behavior: the packaged build tries to use the app-owned shared credential path first.
+- Advanced fallback: users can still switch to their own model setup later.
+- UX rule: if the shared credential is missing, expired, or rate-limited, the app must say that plainly before setup finishes.
+
+This keeps the first-run path simple for demo users while preserving a BYOK escape hatch.
+
+## Browser readiness outcomes
+
+The browser step should end in one of these explicit states:
+
+- Chrome missing:
+  - tell the user to install Google Chrome
+- Chrome installed but no profile found:
+  - tell the user to open Chrome once, then retry
+- Profile selected and readiness passes:
+  - browser setup is complete
+- Profile selected but readiness fails:
+  - clear the stale selection and ask the user to choose again
+- Signed-in task later needs login:
+  - open the OpenClaw browser and ask the user to log in manually
+
 ## Telegram onboarding in-app
 
 The consumer path keeps Telegram setup inside the app:
 
 - Channels → Telegram includes a one-time BYOK wizard (BotFather -> token verify -> first DM capture).
+- After the first DM is captured, the consumer runtime should auto-start the first assistant reply instead of waiting for a second user message.
 - The panel includes a placeholder video walkthrough entry that can be rewired later without changing the onboarding flow.
 - Runtime writes stay isolated under the consumer runtime root.
 
@@ -69,6 +113,38 @@ Optional permission set:
 
 - Camera
 - Speech Recognition
+
+## Default bootstrap assets
+
+Consumer workspace bootstrap now seeds the core files the runtime expects from the first run:
+
+- `AGENTS.md`
+- `BOOTSTRAP.md`
+- `IDENTITY.md`
+- `USER.md`
+- `MEMORY.md`
+
+`MEMORY.md` is the durable-notes file for long-term preferences and stable user facts. It should exist even before the first task.
+
+## Starter skills reality
+
+Bundled skills are intentionally curated, not universal.
+
+- Ready now after the normal permissions flow:
+  - `summarize`
+  - `weather`
+  - `peekaboo`
+  - `apple-notes`
+  - `apple-reminders`
+- Available but needs account or app setup:
+  - `gog`
+  - `goplaces`
+  - `himalaya`
+  - `bear-notes`
+- Not part of the clean first-run promise for this MVP:
+  - WhatsApp CLI
+  - extra Google CLI setup beyond the seeded Google lane
+  - manually provisioned founder-only skills
 
 macOS caveat:
 

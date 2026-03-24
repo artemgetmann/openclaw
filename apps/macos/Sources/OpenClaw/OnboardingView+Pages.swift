@@ -87,6 +87,26 @@ extension OnboardingView {
                                     BrowserSetupCardContent(
                                         model: self.browserSetup,
                                         presentation: .onboarding)
+
+                                    if self.browserSetup.isComplete {
+                                        Divider()
+                                            .padding(.vertical, 6)
+
+                                        ConsumerModelSetupCardContent(model: self.modelSetup)
+                                    } else {
+                                        Divider()
+                                            .padding(.vertical, 6)
+
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("AI comes last")
+                                                .font(.headline)
+                                            Text(
+                                                "After Chrome is connected, OpenClaw checks that this build can actually use its AI model before finishing setup.")
+                                                .font(.subheadline)
+                                                .foregroundStyle(.secondary)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
                                 } else {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text("Chrome comes next")

@@ -39,10 +39,16 @@ struct AgentWorkspaceTests {
 
         let identityURL = tmp.appendingPathComponent(AgentWorkspace.identityFilename)
         let userURL = tmp.appendingPathComponent(AgentWorkspace.userFilename)
+        let memoryURL = tmp.appendingPathComponent(AgentWorkspace.memoryFilename)
         let bootstrapURL = tmp.appendingPathComponent(AgentWorkspace.bootstrapFilename)
         #expect(FileManager().fileExists(atPath: identityURL.path))
         #expect(FileManager().fileExists(atPath: userURL.path))
+        #expect(FileManager().fileExists(atPath: memoryURL.path))
         #expect(FileManager().fileExists(atPath: bootstrapURL.path))
+
+        let memoryContents = try String(contentsOf: memoryURL, encoding: .utf8)
+        #expect(memoryContents.contains("Durable Notes"))
+        #expect(memoryContents.contains("Do not store secrets here."))
 
         let second = try AgentWorkspace.bootstrap(workspaceURL: tmp)
         #expect(second == agentsURL)

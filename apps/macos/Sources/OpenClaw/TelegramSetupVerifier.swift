@@ -10,6 +10,7 @@ struct TelegramSetupDirectMessage: Sendable, Equatable {
     let senderId: Int
     let senderUsername: String?
     let senderFirstName: String?
+    let messageText: String?
 }
 
 enum TelegramSetupVerifierError: LocalizedError {
@@ -111,7 +112,8 @@ enum TelegramSetupVerifier {
             updateId: update.updateId,
             senderId: sender.id,
             senderUsername: sender.username,
-            senderFirstName: sender.firstName)
+            senderFirstName: sender.firstName,
+            messageText: message.text)
     }
 
     private static func updatesQueryItems(offset: Int?) -> [URLQueryItem] {
@@ -217,10 +219,12 @@ private struct TelegramUpdate: Decodable {
 private struct TelegramMessage: Decodable {
     let from: TelegramUser?
     let chat: TelegramChat
+    let text: String?
 
     private enum CodingKeys: String, CodingKey {
         case from
         case chat
+        case text
     }
 }
 
