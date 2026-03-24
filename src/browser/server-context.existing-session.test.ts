@@ -74,13 +74,16 @@ describe("browser server-context existing-session profile", () => {
         { targetId: "7", title: "", url: "https://example.com", type: "page" },
       ])
       .mockResolvedValueOnce([
-        { targetId: "8", title: "", url: "https://openclaw.ai", type: "page" },
-      ])
-      .mockResolvedValueOnce([
-        { targetId: "8", title: "", url: "https://openclaw.ai", type: "page" },
+        { targetId: "7", title: "", url: "https://example.com", type: "page" },
       ])
       .mockResolvedValueOnce([
         { targetId: "7", title: "", url: "https://example.com", type: "page" },
+      ])
+      .mockResolvedValueOnce([
+        { targetId: "7", title: "", url: "https://example.com", type: "page" },
+      ])
+      .mockResolvedValueOnce([
+        { targetId: "8", title: "", url: "https://openclaw.ai", type: "page" },
       ]);
 
     await live.ensureBrowserAvailable();
@@ -99,6 +102,7 @@ describe("browser server-context existing-session profile", () => {
     expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
       "chrome-live",
       "/tmp/brave-profile",
+      expect.objectContaining({ timeoutMs: 15_000 }),
     );
     expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith("chrome-live", "/tmp/brave-profile");
     expect(chromeMcp.openChromeMcpTab).toHaveBeenCalledWith(

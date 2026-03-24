@@ -258,7 +258,10 @@ export function createProfileTabOps({
 
     if (capabilities.usesChromeMcp) {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
-      const page = await openChromeMcpTab(profile.name, url, profile.userDataDir, { timeoutMs });
+      const page =
+        typeof timeoutMs === "number"
+          ? await openChromeMcpTab(profile.name, url, profile.userDataDir, { timeoutMs })
+          : await openChromeMcpTab(profile.name, url, profile.userDataDir);
       const profileState = getProfileState();
       profileState.lastTargetId = page.targetId;
       await assertBrowserNavigationResultAllowed({ url: page.url, ...ssrfPolicyOpts });
