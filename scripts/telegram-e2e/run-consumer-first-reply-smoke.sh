@@ -89,11 +89,14 @@ PY
 # Ask Telegram who the bot is so the wait step only accepts a real reply from
 # that bot, not our own outbound message or another message in the chat.
 bot_meta="$(
-  TG_BOT_TOKEN="${TG_BOT_TOKEN:-}" python3 - <<'PY'
+  TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}" TG_BOT_TOKEN="${TG_BOT_TOKEN:-}" python3 - <<'PY'
 import json, os, sys, urllib.request
-token = os.environ.get("TG_BOT_TOKEN", "").strip()
+token = (
+  os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+  or os.environ.get("TG_BOT_TOKEN", "").strip()
+)
 if not token:
-  print("Missing TG_BOT_TOKEN in scripts/telegram-e2e/.env.local", file=sys.stderr)
+  print("Missing TELEGRAM_BOT_TOKEN/TG_BOT_TOKEN for Telegram smoke", file=sys.stderr)
   raise SystemExit(1)
 with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getMe", timeout=15) as resp:
   data = json.load(resp)
