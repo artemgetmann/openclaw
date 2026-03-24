@@ -170,6 +170,17 @@
 
 **Full maintainer PR workflow (optional):** If you want the repo's end-to-end maintainer workflow (triage order, quality bar, rebase rules, commit/changelog conventions, co-contributor policy, and the `review-pr` > `prepare-pr` > `merge-pr` pipeline), see `.agents/skills/PR_WORKFLOW.md`. Maintainers may use other workflows; when a maintainer specifies a workflow, follow that. If no workflow is specified, default to PR_WORKFLOW.
 
+- Default execution order for runtime-facing changes:
+  1. Create a dedicated worktree + branch.
+  2. Implement the change.
+  3. Run the cheap local gates first (`pnpm build`, `pnpm check`, targeted/unit tests, syntax checks).
+  4. Run live/manual E2E before opening a non-draft PR when the change affects user-visible runtime behavior (browser, Telegram, gateway, onboarding, auth, packaging, installers).
+  5. If E2E fails, keep fixing on the same branch until it passes.
+  6. Commit with `scripts/committer` only after the branch is proven.
+  7. Push, open the PR, and report exactly what was and was not verified.
+  8. Address review feedback, then merge.
+  9. After merge, fast-forward the canonical local checkout and re-verify the live runtime/worktree ownership when the code is expected to be running live.
+- Draft PR exception: opening a draft PR before live E2E is fine when you explicitly say it is unvalidated. Merging before runtime validation is not fine for user-facing changes.
 - `/landpr` lives in the global Codex prompts (`~/.codex/prompts/landpr.md`); when landing or merging any PR, always follow that `/landpr` process.
 - Before opening or updating any PR, read `CONTRIBUTING.md` from the target repo and explicitly align the PR title/body/checklists with it (including AI-assistance transparency requirements when present).
 - PR validation baseline (unless user explicitly scopes narrower): run `pnpm build && pnpm check && pnpm test`, then report exactly what was/was not verified.
