@@ -267,6 +267,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "telegram-user",
+    description: "Operator-grade Telegram user MTProto tooling for local E2E",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../telegram-user-cli.js");
+      mod.registerTelegramUserCli(program);
+    },
+  },
+  {
     name: "security",
     description: "Security tools and local config audits",
     hasSubcommands: true,

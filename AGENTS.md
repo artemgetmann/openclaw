@@ -280,6 +280,8 @@
     - `cp /Users/user/Programming_Projects/openclaw/scripts/telegram-e2e/.env scripts/telegram-e2e/.env` (if present)
     - `cp /Users/user/Programming_Projects/openclaw/scripts/telegram-e2e/.env.local scripts/telegram-e2e/.env.local` (if present)
     - `cp /Users/user/Programming_Projects/openclaw/scripts/telegram-e2e/tmp/userbot.session scripts/telegram-e2e/tmp/userbot.session` (if present)
+  - Preferred Telegram user E2E operator path: `pnpm openclaw:local telegram-user <precheck|send|read|wait> ...`
+  - Repo-local usage details live in `scripts/telegram-e2e/README.md` and the Telegram docs page.
   - Never print raw token values in logs, test output, or chat replies.
 
 - Vocabulary: "makeup" = "mac app".

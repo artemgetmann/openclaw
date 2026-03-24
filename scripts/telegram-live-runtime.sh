@@ -378,6 +378,30 @@ NODE
 }
 
 ensure_tester_bot_claim() {
+  local env_local="${REPO_ROOT}/.env.local"
+  local env_bots="${REPO_ROOT}/.env.bots"
+  local token=""
+
+  # If this worktree already owns a tester token, reuse it. Re-running `ensure`
+  # should be idempotent even when the shared pool is full.
+  if [[ -f "$env_local" ]]; then
+    token="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
+  fi
+
+  if [[ -n "$token" ]]; then
+    TOKEN_PRESENT="yes"
+    ASSIGNED_BOT_TOKEN="$token"
+    TOKEN_FINGERPRINT="$(mask_token "$token")"
+    RUNTIME_TOKEN_SOURCE="repo_env_local"
+    TOKEN_ORIGIN_HINT="repo_env_local"
+    resolve_token_claims "$token"
+    resolve_bot_identity
+    if [[ "${ASSIGNED_BOT_USERNAME}" != "unknown" ]]; then
+      CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
+    elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
+      CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
+    fi
+  else
   if [[ ! -x "$ASSIGN_BOT_SCRIPT" ]]; then
     add_failure "assign_bot_script_missing:${ASSIGN_BOT_SCRIPT}"
     return
@@ -388,8 +412,6 @@ ensure_tester_bot_claim() {
     return
   fi
 
-  local env_local="${REPO_ROOT}/.env.local"
-  local env_bots="${REPO_ROOT}/.env.bots"
   if [[ ! -f "$env_local" ]]; then
     add_failure "env_local_missing_after_assign"
     return
@@ -417,6 +439,12 @@ ensure_tester_bot_claim() {
     CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
   elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
     CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
+  fi
+  fi
+
+  if [[ ! -f "$env_bots" ]]; then
+    add_failure "env_bots_missing_after_assign"
+    return
   fi
 
   local in_pool="no"
