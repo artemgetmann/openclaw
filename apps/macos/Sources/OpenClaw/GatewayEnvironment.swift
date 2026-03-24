@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import OpenClawIPC
 import OSLog
@@ -69,6 +70,15 @@ struct GatewayCommandResolution {
     let command: [String]?
 }
 
+struct ConsumerGatewayLaneStatusSnapshot {
+    let launchdPlistExists: Bool
+    let launchdLoaded: Bool
+    let launchdPort: Int?
+    let endpointURL: URL
+    let endpointHealthy: Bool
+    let endpointFailure: String?
+}
+
 enum GatewayEnvironment {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.env")
     private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
@@ -97,6 +107,65 @@ enum GatewayEnvironment {
     /// Exposed for tests so we can inject fake version checks without rewriting bundle metadata.
     static func expectedGatewayVersion(from versionString: String?) -> Semver? {
         Semver.parse(versionString)
+    }
+
+    static func checkConsumerLane() async -> GatewayEnvironmentStatus {
+        // The consumer General pane must answer one question only:
+        // can the consumer-owned gateway lane answer on the consumer endpoint?
+        // Do not consult global PATH/package state here or we reintroduce the
+        // exact false negatives this branch is trying to eliminate.
+        let start = Date()
+        defer {
+            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+            if elapsedMs > 500 {
+                self.logger.warning("consumer gateway probe slow (\(elapsedMs, privacy: .public)ms)")
+            } else {
+                self.logger.debug("consumer gateway probe ok (\(elapsedMs, privacy: .public)ms)")
+            }
+        }
+
+        let launchdSnapshot = GatewayLaunchAgentManager.launchdConfigSnapshot()
+        let launchdLoaded = await self.isConsumerGatewayLaunchdLoaded()
+        let config = GatewayEndpointStore.localConfig(
+            root: OpenClawConfigFile.loadDict(),
+            env: ProcessInfo.processInfo.environment,
+            launchdSnapshot: launchdSnapshot,
+            tailscaleIP: TailscaleService.fallbackTailnetIPv4())
+
+        let probe = GatewayConnection(configProvider: { config })
+        let endpointHealthy: Bool
+        let endpointFailure: String?
+        do {
+            endpointHealthy = try await probe.healthOK(timeoutMs: 2000)
+            endpointFailure = endpointHealthy ? nil : "gateway health returned not ok"
+        } catch {
+            endpointHealthy = false
+            endpointFailure = self.describeConsumerEndpointFailure(error)
+        }
+        await probe.shutdown()
+
+        let snapshot = ConsumerGatewayLaneStatusSnapshot(
+            launchdPlistExists: launchdSnapshot != nil,
+            launchdLoaded: launchdLoaded,
+            launchdPort: launchdSnapshot?.port,
+            endpointURL: config.url,
+            endpointHealthy: endpointHealthy,
+            endpointFailure: endpointFailure)
+        let status = self.describeConsumerLaneStatus(snapshot)
+
+        if case let .error(message) = status.kind {
+            self.logger.warning(
+                """
+                consumer gateway probe failed \
+                loaded=\(launchdLoaded, privacy: .public) \
+                plist=\(launchdSnapshot != nil, privacy: .public) \
+                launchdPort=\(launchdSnapshot?.port ?? -1, privacy: .public) \
+                endpoint=\(config.url.absoluteString, privacy: .public) \
+                detail=\(message, privacy: .public)
+                """)
+        }
+
+        return status
     }
 
     static func check() -> GatewayEnvironmentStatus {
@@ -205,6 +274,91 @@ enum GatewayEnvironment {
         }
 
         return GatewayCommandResolution(status: status, command: nil)
+    }
+
+    private static func isConsumerGatewayLaunchdLoaded() async -> Bool {
+        let target = "gui/\(getuid())/\(gatewayLaunchdLabel)"
+        let result = await Launchctl.run(["print", target])
+        return result.status == 0
+    }
+
+    private static func describeConsumerEndpointFailure(_ error: Error) -> String {
+        let nsError = error as NSError
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .cannotConnectToHost, .cannotFindHost:
+                return "consumer control endpoint is not listening"
+            case .timedOut:
+                return "consumer control endpoint timed out"
+            case .networkConnectionLost:
+                return "consumer control endpoint dropped the connection"
+            case .cancelled:
+                return "consumer control endpoint closed the connection"
+            default:
+                break
+            }
+        }
+
+        let detail = nsError.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        return detail.isEmpty ? "consumer control endpoint probe failed" : detail
+    }
+
+    static func describeConsumerLaneStatus(_ snapshot: ConsumerGatewayLaneStatusSnapshot) -> GatewayEnvironmentStatus {
+        let endpointLabel = self.describeEndpoint(snapshot.endpointURL)
+
+        if snapshot.endpointHealthy {
+            let laneState = snapshot.launchdLoaded ? "launchd active" : "direct endpoint"
+            return GatewayEnvironmentStatus(
+                kind: .ok,
+                nodeVersion: nil,
+                gatewayVersion: nil,
+                requiredGateway: nil,
+                message: "Consumer gateway responding on \(endpointLabel) (\(laneState))")
+        }
+
+        if let launchdPort = snapshot.launchdPort, launchdPort != ConsumerRuntime.gatewayPort {
+            return GatewayEnvironmentStatus(
+                kind: .error(
+                    "Consumer launchd lane points at port \(launchdPort), but this app expects \(ConsumerRuntime.gatewayPort)."),
+                nodeVersion: nil,
+                gatewayVersion: nil,
+                requiredGateway: nil,
+                message: "Consumer launchd lane is targeting the wrong port.")
+        }
+
+        if !snapshot.launchdPlistExists {
+            return GatewayEnvironmentStatus(
+                kind: .missingGateway,
+                nodeVersion: nil,
+                gatewayVersion: nil,
+                requiredGateway: nil,
+                message: "Consumer gateway lane is not installed yet.")
+        }
+
+        if !snapshot.launchdLoaded {
+            return GatewayEnvironmentStatus(
+                kind: .error("Consumer gateway launchd lane is not loaded."),
+                nodeVersion: nil,
+                gatewayVersion: nil,
+                requiredGateway: nil,
+                message: "Consumer gateway launchd lane is not loaded.")
+        }
+
+        let detail = snapshot.endpointFailure ?? "consumer control endpoint probe failed"
+        return GatewayEnvironmentStatus(
+            kind: .error("Consumer gateway did not answer on \(endpointLabel): \(detail)"),
+            nodeVersion: nil,
+            gatewayVersion: nil,
+            requiredGateway: nil,
+            message: "Consumer gateway did not answer on \(endpointLabel).")
+    }
+
+    private static func describeEndpoint(_ url: URL) -> String {
+        let host = url.host ?? url.absoluteString
+        if let port = url.port {
+            return "\(host):\(port)"
+        }
+        return host
     }
 
     private static func preferredGatewayBind() -> String? {
