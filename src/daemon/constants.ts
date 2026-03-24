@@ -1,5 +1,6 @@
 // Default service labels (canonical + legacy compatibility)
 export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
+export const CONSUMER_GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.consumer.gateway";
 export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
 export const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
 export const GATEWAY_SERVICE_MARKER = "openclaw";
@@ -34,6 +35,12 @@ export function resolveGatewayLaunchAgentLabel(profile?: string): string {
   const normalized = normalizeGatewayProfile(profile);
   if (!normalized) {
     return GATEWAY_LAUNCH_AGENT_LABEL;
+  }
+  // The consumer mac app owns its own launchd app label (`ai.openclaw.consumer`).
+  // Keep the gateway on a distinct lane so CLI status/install/restart probes do not
+  // collide with the app process or fall back to the legacy/global gateway lane.
+  if (normalized === "consumer") {
+    return CONSUMER_GATEWAY_LAUNCH_AGENT_LABEL;
   }
   return `ai.openclaw.${normalized}`;
 }

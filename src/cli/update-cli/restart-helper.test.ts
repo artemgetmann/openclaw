@@ -184,6 +184,17 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
+    it("uses the consumer gateway launchd label on macOS", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 503;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "consumer",
+      });
+      expect(content).toContain("gui/503/ai.openclaw.consumer.gateway");
+      await cleanupScript(scriptPath);
+    });
+
     it("uses custom profile in Windows task name", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
 

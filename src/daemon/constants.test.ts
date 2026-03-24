@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONSUMER_GATEWAY_LAUNCH_AGENT_LABEL,
   formatGatewayServiceDescription,
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SYSTEMD_SERVICE_NAME,
@@ -38,6 +39,11 @@ describe("resolveGatewayLaunchAgentLabel", () => {
   it("returns profile-specific label when profile is set", () => {
     const result = resolveGatewayLaunchAgentLabel("dev");
     expect(result).toBe("ai.openclaw.dev");
+  });
+
+  it("keeps the consumer gateway on its dedicated launchd lane", () => {
+    const result = resolveGatewayLaunchAgentLabel("consumer");
+    expect(result).toBe(CONSUMER_GATEWAY_LAUNCH_AGENT_LABEL);
   });
 });
 
