@@ -787,7 +787,7 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `--buttons` for inline keyboards when `channels.telegram.capabilities.inlineButtons` allows it
     - `--force-document` to send outbound images and GIFs as documents instead of compressed photo or animated-media uploads
 
-    For local Telegram user-account E2E, prefer the repo-local MTProto CLI instead of ad-hoc Python helpers:
+    For local Telegram user-account E2E, prefer the repo-local MTProto CLI instead of ad-hoc Python helpers. The old bash wrappers are compatibility shims only.
 
 ```bash
 pnpm openclaw:local telegram-user send --chat @jarvis_tester_1_bot --message "hi" --json
