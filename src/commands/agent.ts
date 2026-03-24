@@ -127,6 +127,16 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "claudeCliSessionId",
 ];
 
+function areSkillSnapshotsEquivalent(
+  left: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined,
+  right: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined,
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function traceAgentCommandStage(stage: string): void {
   const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
   if (!stageLogPath) {
@@ -919,20 +929,24 @@ async function agentCommandInternal(
       });
     }
 
-    const needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot;
+    const previousSkillsSnapshot = sessionEntry?.skillsSnapshot;
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
     traceAgentCommandStage(
-      `agent-command-pre-skills-snapshot needs=${needsSkillsSnapshot ? "yes" : "no"}`,
+      `agent-command-pre-skills-snapshot previous=${previousSkillsSnapshot ? "yes" : "no"}`,
     );
-    const skillsSnapshot = needsSkillsSnapshot
-      ? buildWorkspaceSkillSnapshot(workspaceDir, {
-          config: cfg,
-          eligibility: { remote: getRemoteSkillEligibility() },
-          snapshotVersion: skillsSnapshotVersion,
-          skillFilter,
-        })
-      : sessionEntry?.skillsSnapshot;
+    // Skill eligibility can change when runtime env changes (for example API keys injected into
+    // the supervised gateway) without touching any watched SKILL.md files. Rebuild the snapshot
+    // for every run so the agent prompt reflects current runtime truth, then persist only when
+    // the snapshot actually changed.
+    const skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      config: cfg,
+      eligibility: { remote: getRemoteSkillEligibility() },
+      snapshotVersion: skillsSnapshotVersion,
+      skillFilter,
+    });
+    const needsSkillsSnapshot =
+      isNewSession || !areSkillSnapshotsEquivalent(previousSkillsSnapshot, skillsSnapshot);
     traceAgentCommandStage(
       `agent-command-post-skills-snapshot present=${skillsSnapshot ? "yes" : "no"}`,
     );

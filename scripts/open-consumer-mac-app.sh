@@ -29,6 +29,88 @@ terminate_matching_app_binary() {
   /bin/kill "${pids[@]}" 2>/dev/null || true
 }
 
+plist_value() {
+  local plist_path="$1"
+  local key_path="$2"
+  /usr/libexec/PlistBuddy -c "Print :${key_path}" "$plist_path" 2>/dev/null || true
+}
+
+bootout_conflicting_gateway_label() {
+  local label="$1"
+  local target_label="$2"
+  local target_state_dir="$3"
+  local target_config_path="$4"
+  local target_port="$5"
+
+  [[ "$label" == "$target_label" ]] && return
+
+  local plist_path="$HOME/Library/LaunchAgents/${label}.plist"
+  [[ -f "$plist_path" ]] || return
+
+  local existing_state_dir
+  local existing_config_path
+  local existing_port=""
+  local index=0
+  local arg=""
+
+  existing_state_dir="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_STATE_DIR')"
+  existing_config_path="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_CONFIG_PATH')"
+
+  while true; do
+    arg="$(plist_value "$plist_path" "ProgramArguments:${index}")"
+    [[ -n "$arg" ]] || break
+    if [[ "$arg" == "--port" ]]; then
+      existing_port="$(plist_value "$plist_path" "ProgramArguments:$((index + 1))")"
+      break
+    fi
+    if [[ "$arg" == --port=* ]]; then
+      existing_port="${arg#--port=}"
+      break
+    fi
+    index=$((index + 1))
+  done
+
+  if [[ "$existing_state_dir" != "$target_state_dir" && "$existing_config_path" != "$target_config_path" && "$existing_port" != "$target_port" ]]; then
+    return
+  fi
+
+  /bin/launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
+  /bin/launchctl unload "$plist_path" >/dev/null 2>&1 || true
+}
+
+refresh_gateway_service_env() {
+  local normalized="${1:-}"
+  local state_dir
+  local config_path
+  local gateway_port
+  local profile
+  local launchd_label
+
+  state_dir="$(consumer_instance_state_dir "$normalized")"
+  config_path="$state_dir/openclaw.json"
+  gateway_port="$(consumer_instance_gateway_port "$normalized")"
+  profile="$(consumer_instance_profile "$normalized")"
+  launchd_label="$(consumer_instance_gateway_launchd_label "$normalized")"
+
+  # The app process launched through `open -n` does not reliably inherit arbitrary shell env.
+  # Reinstall the dedicated gateway lane from this shell once bootstrap has written the instance
+  # config so allowlisted skill env vars land in the supervised runtime for that instance.
+  local attempt
+  for attempt in {1..20}; do
+    if [[ -f "$config_path" ]]; then
+      bootout_conflicting_gateway_label "ai.openclaw.gateway" "$launchd_label" "$state_dir" "$config_path" "$gateway_port"
+      bootout_conflicting_gateway_label "ai.openclaw.consumer.gateway" "$launchd_label" "$state_dir" "$config_path" "$gateway_port"
+      OPENCLAW_STATE_DIR="$state_dir" \
+        OPENCLAW_CONFIG_PATH="$config_path" \
+        OPENCLAW_PROFILE="$profile" \
+        OPENCLAW_LAUNCHD_LABEL="$launchd_label" \
+        pnpm --dir "$ROOT_DIR" openclaw:local gateway install --force --port "$gateway_port" --runtime node >/dev/null
+      return
+    fi
+    /bin/sleep 0.25
+  done
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --instance)
@@ -134,6 +216,8 @@ fi
 # leave the right instance running without surfacing its window. Reopen+activate
 # the exact bundle id so "open the app" actually brings the intended lane
 # forward instead of a random existing consumer variant.
+refresh_gateway_service_env "$NORMALIZED_INSTANCE_ID"
+
 /usr/bin/osascript <<EOF >/dev/null 2>&1 || true
 tell application id "$actual_bundle_id"
   reopen
