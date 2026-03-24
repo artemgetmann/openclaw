@@ -38,7 +38,7 @@ cd tg
 go build -o tg .
 ```
 
-### 2) Prepare Telethon (user-side sends)
+### 2) Prepare Telegram user tooling
 
 ```bash
 cd scripts/telegram-e2e
@@ -47,7 +47,43 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Manual setup is optional now. `userbot-send-live.sh` auto-bootstraps `.venv` only when missing/broken and stays quiet when healthy.
+Manual setup is optional now. `pnpm openclaw:local telegram-user ...` and `userbot-send-live.sh` both auto-bootstrap `.venv` only when missing/broken and stay quiet when healthy.
+
+### Preferred CLI path
+
+Use the repo-local CLI for normal operator work and automation:
+
+```bash
+pnpm openclaw:local telegram-user precheck --chat @jarvis_tester_1_bot
+
+pnpm openclaw:local telegram-user send \
+  --chat @jarvis_tester_1_bot \
+  --message "hello from the Telegram user CLI" \
+  --json
+
+pnpm openclaw:local telegram-user read \
+  --chat @jarvis_tester_1_bot \
+  --limit 5 \
+  --json
+
+pnpm openclaw:local telegram-user wait \
+  --chat @jarvis_tester_1_bot \
+  --after-id 12345 \
+  --sender-id 67890 \
+  --thread-anchor 7001 \
+  --json
+```
+
+Why this is the preferred path:
+
+1. one command surface for send/read/wait instead of scattered scripts
+2. shared thread matching for `reply_to_top_id`, `reply_to_msg_id`, and DM topic ids
+3. session locking so parallel probes fail loudly instead of corrupting Telethon state
+4. secrets stay in env and env-files, not process arguments
+
+### Legacy direct Python path
+
+Keep this only for one-off debugging or initial auth bootstrap:
 
 First login will ask for Telegram code in your app:
 
@@ -323,6 +359,31 @@ Use the MTProto probe for debugging, not as the final ship gate:
 scripts/telegram-e2e/.venv/bin/python scripts/telegram-e2e/probe_dm_thread_inheritance.py \
   --chat "${TG_DM_CHAT_ID:-@Artem_jarvis_exec_bot}" \
   --target-model "anthropic/claude-sonnet-4-6"
+```
+
+## First-reply smoke
+
+Preferred future-facing command flow:
+
+```bash
+scripts/telegram-live-runtime.sh ensure
+
+pnpm openclaw:local telegram-user send \
+  --chat @jarvis_tester_1_bot \
+  --message "codex smoke $(date +%s)" \
+  --json
+
+pnpm openclaw:local telegram-user wait \
+  --chat @jarvis_tester_1_bot \
+  --after-id <sent_message_id> \
+  --sender-id <bot_user_id> \
+  --json
+```
+
+Or use the bundled wrapper:
+
+```bash
+scripts/telegram-e2e/run-consumer-first-reply-smoke.sh --chat @jarvis_tester_1_bot
 ```
 
 Despite the name, this probe is also used for Telegram forum-topic inheritance

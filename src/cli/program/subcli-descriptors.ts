@@ -109,6 +109,11 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "telegram-user",
+    description: "Operator-grade Telegram user MTProto tooling for local E2E",
+    hasSubcommands: true,
+  },
+  {
     name: "security",
     description: "Security tools and local config audits",
     hasSubcommands: true,

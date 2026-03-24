@@ -787,6 +787,23 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `--buttons` for inline keyboards when `channels.telegram.capabilities.inlineButtons` allows it
     - `--force-document` to send outbound images and GIFs as documents instead of compressed photo or animated-media uploads
 
+    For local Telegram user-account E2E, prefer the repo-local MTProto CLI instead of ad-hoc Python helpers:
+
+```bash
+pnpm openclaw:local telegram-user send --chat @jarvis_tester_1_bot --message "hi" --json
+pnpm openclaw:local telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json
+pnpm openclaw:local telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json
+```
+
+    `telegram-user wait` matches replies using the raw metadata that matters in Telegram E2E:
+
+    - `sender_id`
+    - `message_id`
+    - `reply_to_msg_id`
+    - `reply_to_top_id`
+    - `direct_messages_topic.topic_id`
+    - `chat_id`
+
     Action gating:
 
     - `channels.telegram.actions.sendMessage=false` disables outbound Telegram messages, including polls
