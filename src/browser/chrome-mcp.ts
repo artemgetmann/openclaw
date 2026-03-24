@@ -269,6 +269,23 @@ function normalizeChromeMcpUserDataDir(userDataDir?: string): string | undefined
   return trimmed ? trimmed : undefined;
 }
 
+function resolveUserDataDirAndOptions(
+  userDataDirOrOptions?: string | ChromeMcpCallOptions,
+  options: ChromeMcpCallOptions = {},
+): { userDataDir?: string; options: ChromeMcpCallOptions } {
+  if (userDataDirOrOptions && typeof userDataDirOrOptions === "object") {
+    const resolvedOptions = userDataDirOrOptions;
+    return {
+      userDataDir: normalizeChromeMcpUserDataDir(resolvedOptions.userDataDir),
+      options: resolvedOptions,
+    };
+  }
+  return {
+    userDataDir: normalizeChromeMcpUserDataDir(userDataDirOrOptions),
+    options,
+  };
+}
+
 function buildChromeMcpSessionCacheKey(profileName: string, userDataDir?: string): string {
   return JSON.stringify([profileName, normalizeChromeMcpUserDataDir(userDataDir) ?? ""]);
 }
@@ -526,12 +543,13 @@ async function findPageById(
 
 export async function ensureChromeMcpAvailable(
   profileName: string,
-  userDataDir?: string,
+  userDataDirOrOptions?: string | ChromeMcpCallOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<void> {
+  const resolved = resolveUserDataDirAndOptions(userDataDirOrOptions, options);
   await getSession(profileName, {
-    ...options,
-    userDataDir,
+    ...resolved.options,
+    userDataDir: resolved.userDataDir,
   });
 }
 
@@ -557,36 +575,46 @@ export async function stopAllChromeMcpSessions(): Promise<void> {
 
 export async function listChromeMcpPages(
   profileName: string,
-  userDataDir?: string,
+  userDataDirOrOptions?: string | ChromeMcpCallOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<ChromeMcpStructuredPage[]> {
-  const result = await callTool(profileName, userDataDir, "list_pages", {}, options);
+  const resolved = resolveUserDataDirAndOptions(userDataDirOrOptions, options);
+  const result = await callTool(
+    profileName,
+    resolved.userDataDir,
+    "list_pages",
+    {},
+    resolved.options,
+  );
   return extractStructuredPages(result);
 }
 
 export async function listChromeMcpTabs(
   profileName: string,
-  userDataDir?: string,
+  userDataDirOrOptions?: string | ChromeMcpCallOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<BrowserTab[]> {
-  return toBrowserTabs(await listChromeMcpPages(profileName, userDataDir, options));
+  return toBrowserTabs(await listChromeMcpPages(profileName, userDataDirOrOptions, options));
 }
 
 export async function openChromeMcpTab(
   profileName: string,
   url: string,
-  userDataDir?: string,
+  userDataDirOrOptions?: string | ChromeMcpCallOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<BrowserTab> {
+  const resolved = resolveUserDataDirAndOptions(userDataDirOrOptions, options);
   const result = await callTool(
     profileName,
-    userDataDir,
+    resolved.userDataDir,
     "new_page",
     {
       url,
-      ...(typeof options.timeoutMs === "number" ? { timeout: options.timeoutMs } : {}),
+      ...(typeof resolved.options.timeoutMs === "number"
+        ? { timeout: resolved.options.timeoutMs }
+        : {}),
     },
-    options,
+    resolved.options,
   );
   const pages = extractStructuredPages(result);
   const chosen = pages.find((page) => page.selected) ?? pages.at(-1);

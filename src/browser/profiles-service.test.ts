@@ -67,9 +67,9 @@ describe("BrowserProfilesService", () => {
       browserConfig: { profiles: {} },
     });
 
-    expect(result.cdpPort).toBe(18801);
+    expect(result.cdpPort).toBe(18802);
     expect(result.isRemote).toBe(false);
-    expect(state.resolved.profiles.work?.cdpPort).toBe(18801);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(18802);
     expect(writeConfigFile).toHaveBeenCalled();
   });
 
@@ -102,9 +102,9 @@ describe("BrowserProfilesService", () => {
       browserConfig: { cdpPortRangeStart: 19000, profiles: {} },
     });
 
-    expect(result.cdpPort).toBe(19001);
+    expect(result.cdpPort).toBe(19002);
     expect(result.isRemote).toBe(false);
-    expect(state.resolved.profiles.work?.cdpPort).toBe(19001);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(19002);
     expect(writeConfigFile).toHaveBeenCalled();
   });
 
