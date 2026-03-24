@@ -7,6 +7,7 @@ enum AgentWorkspace {
     static let soulFilename = "SOUL.md"
     static let identityFilename = "IDENTITY.md"
     static let userFilename = "USER.md"
+    static let memoryFilename = "MEMORY.md"
     static let bootstrapFilename = "BOOTSTRAP.md"
     static let memoryFilename = "MEMORY.md"
     private static let templateDirname = "templates"
@@ -16,6 +17,7 @@ enum AgentWorkspace {
         AgentWorkspace.soulFilename,
         AgentWorkspace.identityFilename,
         AgentWorkspace.userFilename,
+        AgentWorkspace.memoryFilename,
         AgentWorkspace.bootstrapFilename,
         AgentWorkspace.memoryFilename,
     ]
@@ -235,6 +237,15 @@ enum AgentWorkspace {
         - Notes:
         """
         return self.loadTemplate(named: self.userFilename, fallback: fallback)
+    }
+
+    static func defaultMemoryTemplate() -> String {
+        let fallback = """
+        # MEMORY.md - Long-Term Memory
+
+        Keep durable facts, preferences, and decisions here.
+        """
+        return self.loadTemplate(named: self.memoryFilename, fallback: fallback)
     }
 
     static func defaultBootstrapTemplate() -> String {

@@ -55,6 +55,8 @@ describe("runDaemonInstall integration", () => {
       "CLAWDBOT_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
       "CLAWDBOT_GATEWAY_PASSWORD",
+      "GOOGLE_PLACES_API_KEY",
+      "HIMALAYA_CONFIG",
     ]);
     tempHome = await makeTempWorkspace("openclaw-daemon-install-int-");
     configPath = path.join(tempHome, "openclaw.json");
@@ -77,6 +79,8 @@ describe("runDaemonInstall integration", () => {
     process.env.CLAWDBOT_GATEWAY_TOKEN = "";
     process.env.OPENCLAW_GATEWAY_PASSWORD = "";
     process.env.CLAWDBOT_GATEWAY_PASSWORD = "";
+    delete process.env.GOOGLE_PLACES_API_KEY;
+    delete process.env.HIMALAYA_CONFIG;
     serviceMock.isLoaded.mockResolvedValue(false);
     await fs.writeFile(configPath, JSON.stringify({}, null, 2));
     clearConfigCache();
@@ -144,5 +148,17 @@ describe("runDaemonInstall integration", () => {
 
     const installEnv = serviceMock.install.mock.calls[0]?.[0]?.environment;
     expect(installEnv?.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+  });
+
+  it("passes allowlisted skill env vars into the service install environment", async () => {
+    process.env.GOOGLE_PLACES_API_KEY = "test-google-places-key";
+    process.env.HIMALAYA_CONFIG = "/tmp/himalaya-empty.toml";
+
+    await runDaemonInstall({ json: true });
+
+    expect(serviceMock.install).toHaveBeenCalledTimes(1);
+    const installEnv = serviceMock.install.mock.calls[0]?.[0]?.environment;
+    expect(installEnv?.GOOGLE_PLACES_API_KEY).toBe("test-google-places-key");
+    expect(installEnv?.HIMALAYA_CONFIG).toBe("/tmp/himalaya-empty.toml");
   });
 });

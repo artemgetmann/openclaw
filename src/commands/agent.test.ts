@@ -8,6 +8,8 @@ import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import * as skillsModule from "../agents/skills.js";
+import * as skillsRefreshModule from "../agents/skills/refresh.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
@@ -431,6 +433,50 @@ describe("agentCommand", () => {
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.sessionId).toBe("session-123");
+    });
+  });
+
+  it("refreshes a cached skills snapshot when runtime skill eligibility changes", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const workspace = path.join(home, "openclaw");
+      mockConfig(home, store, { workspace });
+      writeSessionStoreSeed(store, {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          skillsSnapshot: {
+            prompt: "old prompt",
+            skills: [{ name: "weather" }],
+            version: 1,
+          },
+        },
+      });
+
+      vi.mocked(skillsRefreshModule.getSkillsSnapshotVersion).mockReturnValueOnce(2);
+      vi.mocked(skillsModule.buildWorkspaceSkillSnapshot).mockReturnValueOnce({
+        prompt: "new prompt",
+        skills: [{ name: "goplaces", primaryEnv: "GOOGLE_PLACES_API_KEY" }],
+        version: 2,
+      });
+
+      await agentCommand({ message: "find coffee nearby", sessionKey: "main" }, runtime);
+
+      const embeddedCall = getLastEmbeddedCall();
+      expect(embeddedCall?.skillsSnapshot).toEqual({
+        prompt: "new prompt",
+        skills: [{ name: "goplaces", primaryEnv: "GOOGLE_PLACES_API_KEY" }],
+        version: 2,
+      });
+
+      const saved = readSessionStore<{
+        skillsSnapshot?: { prompt: string; skills: Array<{ name: string }>; version?: number };
+      }>(store);
+      expect(saved["agent:main:main"]?.skillsSnapshot).toEqual({
+        prompt: "new prompt",
+        skills: [{ name: "goplaces", primaryEnv: "GOOGLE_PLACES_API_KEY" }],
+        version: 2,
+      });
     });
   });
 

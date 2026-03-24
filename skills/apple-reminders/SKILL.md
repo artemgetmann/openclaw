@@ -53,6 +53,16 @@ Use `remindctl` to manage Apple Reminders directly from the terminal.
 - Check status: `remindctl status`
 - Request access: `remindctl authorize`
 
+## Automation Rule
+
+- On a local macOS machine, use the local host directly. Do not route reminder
+  creation through `nodes run` / `system.run` when the host already has
+  `remindctl`.
+- Use `remindctl ... --json` when you need machine-checkable verification or
+  cleanup.
+- After delete, re-check after a short delay because Reminders can take a
+  moment to converge.
+
 ## Common Commands
 
 ### View Reminders
@@ -82,6 +92,7 @@ remindctl list Work --delete        # Delete list
 remindctl add "Buy milk"
 remindctl add --title "Call mom" --list Personal --due tomorrow
 remindctl add --title "Meeting prep" --due "2026-02-15 09:00"
+remindctl add --title "Test reminder" --list Reminders --due "2026-02-15 09:00" --json
 ```
 
 ### Complete/Delete
@@ -89,6 +100,7 @@ remindctl add --title "Meeting prep" --due "2026-02-15 09:00"
 ```bash
 remindctl complete 1 2 3     # Complete by ID
 remindctl delete 4A83 --force  # Delete by ID
+remindctl delete 4A83 --force --json
 ```
 
 ### Output Formats
@@ -116,3 +128,15 @@ User: "Remind me to check on the deploy in 2 hours"
 
 - Apple Reminders → use this skill
 - OpenClaw alert → use `cron` tool with systemEvent
+
+## Verification Pattern
+
+For a clean create/verify/delete cycle:
+
+```bash
+remindctl add --title "OpenClaw test" --list Reminders --due "2026-02-15 09:00" --json
+remindctl 2026-02-15 --json
+remindctl delete <id> --force --json
+sleep 3
+remindctl 2026-02-15 --json
+```

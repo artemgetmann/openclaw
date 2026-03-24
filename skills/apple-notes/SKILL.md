@@ -23,55 +23,58 @@ metadata:
   }
 ---
 
-# Apple Notes CLI
+# Apple Notes
 
-Use `memo notes` to manage Apple Notes directly from the terminal. Create, view, edit, delete, search, move notes between folders, and export to HTML/Markdown.
+Use Apple Notes on macOS.
 
-Setup
+## Automation Rule
+
+- On a local macOS machine, use the local host directly. Do not route Notes actions through `nodes run` / `system.run`.
+- Keep `memo` for list/search/export and fuzzy note lookup.
+- For deterministic create/delete, use the local helper at `scripts/apple-notes-local.sh`.
+
+## Setup
 
 - Install (Homebrew): `brew tap antoniorodr/memo && brew install antoniorodr/memo/memo`
 - Manual (pip): `pip install .` (after cloning the repo)
+- Current upstream release is `v0.5.2` (published March 24, 2026).
+- `memo 0.5.2` still exposes interactive create/edit/delete flows, so consumer-safe automation still needs the helper.
 - macOS-only; if prompted, grant Automation access to Notes.app.
 
-View Notes
+## Deterministic Create/Delete
+
+Create a note without dropping into an editor:
+
+```bash
+scripts/apple-notes-local.sh create \
+  --folder "Notes" \
+  --title "OpenClaw skills audit note" \
+  --body "hello from consumer test"
+```
+
+Delete a note by exact note id:
+
+```bash
+scripts/apple-notes-local.sh delete --id "x-coredata://REPLACE_ME"
+```
+
+## Browse And Search
 
 - List all notes: `memo notes`
-- Filter by folder: `memo notes -f "Folder Name"`
-- Search notes (fuzzy): `memo notes -s "query"`
+- Filter by folder: `memo notes --folder "Folder Name"`
+- Search notes (fuzzy): `memo notes -s`
+- View a specific note from the current list: `memo notes --view 3`
+- Refresh cache before listing if Notes changed out of band: `memo notes --no-cache`
 
-Create Notes
+## Editing And Moving
 
-- Add a new note: `memo notes -a`
-  - Opens an interactive editor to compose the note.
-- Quick add with title: `memo notes -a "Note Title"`
+- `memo notes -e` is interactive.
+- `memo notes -m` is interactive.
+- `memo notes -ex` exports a selected note to HTML/Markdown.
+- If you need deterministic automation, prefer create + exact delete over trying to drive `memo` interactively.
 
-Edit Notes
+## Limitations
 
-- Edit existing note: `memo notes -e`
-  - Interactive selection of note to edit.
-
-Delete Notes
-
-- Delete a note: `memo notes -d`
-  - Interactive selection of note to delete.
-
-Move Notes
-
-- Move note to folder: `memo notes -m`
-  - Interactive selection of note and destination folder.
-
-Export Notes
-
-- Export to HTML/Markdown: `memo notes -ex`
-  - Exports selected note; uses Mistune for markdown processing.
-
-Limitations
-
-- Cannot edit notes containing images or attachments.
-- Interactive prompts may require terminal access.
-
-Notes
-
-- macOS-only.
-- Requires Apple Notes.app to be accessible.
-- For automation, grant permissions in System Settings > Privacy & Security > Automation.
+- `memo` still does not expose a structured non-interactive create/edit/delete API.
+- `memo` cannot edit notes containing images or attachments.
+- Apple Notes automation requires macOS Automation permission for Notes.app.

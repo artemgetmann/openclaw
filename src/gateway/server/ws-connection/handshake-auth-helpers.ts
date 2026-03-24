@@ -57,9 +57,11 @@ export function shouldAllowSilentLocalPairing(params: {
     params.isLocalClient &&
     (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
     // Local-first clients on the same machine should not need manual approval just
-    // because the app reports newer platform/device-family metadata after an update.
-    // Keep role upgrades explicit, but let metadata upgrades repair silently.
+    // because startup establishes multiple roles for the same signed device
+    // (for example node + operator in the macOS app), or because the app reports
+    // newer platform/device-family metadata after an update.
     (params.reason === "not-paired" ||
+      params.reason === "role-upgrade" ||
       params.reason === "scope-upgrade" ||
       params.reason === "metadata-upgrade")
   );

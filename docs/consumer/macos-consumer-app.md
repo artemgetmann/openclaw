@@ -172,6 +172,17 @@ These wrappers fail fast unless the bundle name, bundle identifier, and app vari
 
 For the full lane-health checklist, see `docs/consumer/consumer-runtime-preflight.md`.
 
+GUI verification rule for shared developer machines:
+
+- Ask the user before any verification step that steals focus, activates the
+  app, or captures desktop screenshots.
+- If the user is multitasking, do not keep retrying frontmost-window checks.
+  Verify runtime and logs directly, then hand off a short manual GUI checklist.
+- Treat manual user confirmation as acceptable proof for native SwiftUI
+  surfaces when the machine is actively in use.
+
+For the full lane-health checklist, see `docs/consumer/consumer-runtime-preflight.md`.
+
 ## Parallel worktree testing
 
 Use named consumer instances when multiple agents or worktrees need to run the

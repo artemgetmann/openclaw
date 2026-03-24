@@ -96,6 +96,20 @@ export function registerControlUiAndPairingSuite(): void {
     expect(admin.ok).toBe(true);
   };
 
+  const MACOS_UI_CLIENT = {
+    id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+    version: "1.0.0",
+    platform: "macOS",
+    mode: GATEWAY_CLIENT_MODES.UI,
+  };
+
+  const MACOS_NODE_CLIENT = {
+    id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+    version: "1.0.0",
+    platform: "macOS",
+    mode: GATEWAY_CLIENT_MODES.NODE,
+  };
+
   const connectControlUiWithoutDeviceAndExpectOk = async (params: {
     ws: WebSocket;
     token?: string;
@@ -599,6 +613,62 @@ export function registerControlUiAndPairingSuite(): void {
     expect(updated?.tokens?.operator?.scopes).toContain("operator.admin");
 
     ws2.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
+  test("auto-approves loopback role upgrades for native macOS app clients", async () => {
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const { identityPath, identity } = await createOperatorIdentityFixture("openclaw-device-role-");
+
+    ws.close();
+
+    const wsNode = await openWs(port);
+    const nodeNonce = await readConnectChallengeNonce(wsNode);
+    const nodeConnect = await connectReq(wsNode, {
+      token: "secret",
+      role: "node",
+      scopes: [],
+      client: { ...MACOS_NODE_CLIENT },
+      device: await buildSignedDeviceForIdentity({
+        identityPath,
+        client: MACOS_NODE_CLIENT,
+        role: "node",
+        scopes: [],
+        nonce: nodeNonce,
+      }),
+    });
+    expect(nodeConnect.ok).toBe(true);
+    wsNode.close();
+
+    const wsOperator = await openWs(port);
+    const operatorNonce = await readConnectChallengeNonce(wsOperator);
+    const operatorConnect = await connectReq(wsOperator, {
+      token: "secret",
+      role: "operator",
+      scopes: ["operator.read", "operator.write"],
+      client: { ...MACOS_UI_CLIENT },
+      device: await buildSignedDeviceForIdentity({
+        identityPath,
+        client: MACOS_UI_CLIENT,
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+        nonce: operatorNonce,
+      }),
+    });
+    expect(operatorConnect.ok).toBe(true);
+
+    const pending = await listDevicePairing();
+    expect(pending.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
+
+    const paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.roles ?? []).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(paired?.tokens?.operator?.scopes ?? []).toEqual(
+      expect.arrayContaining(["operator.read", "operator.write"]),
+    );
+
+    wsOperator.close();
     await server.close();
     restoreGatewayToken(prevToken);
   });

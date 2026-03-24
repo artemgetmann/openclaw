@@ -37,13 +37,39 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 2. A configuration file at `~/.config/himalaya/config.toml`
 3. IMAP/SMTP credentials configured (password stored securely)
 
+## Automation Rule
+
+- For local macOS/email checks, prefer read-only commands first:
+  `himalaya account list`, `himalaya folder list`, `himalaya envelope list`.
+- If configuration is missing, do not dump raw CLI noise back to the user.
+  Explain that email is not connected yet and offer to help set it up.
+- Treat send/reply/forward as higher-risk actions; prove read-only access first.
+
 ## Configuration Setup
 
-Run the interactive wizard to set up an account:
+Do not tell a consumer user to go run terminal commands on their own unless they
+explicitly asked for the CLI path. The agent should own the setup flow:
+
+1. Detect that Himalaya is not configured.
+2. Tell the user email is not connected yet.
+3. Offer to set it up with them.
+4. Ask only for the information or approvals the user must provide.
+5. If browser or GUI automation is available, prefer guiding or driving the
+   provider login flow there instead of sending the user to a terminal.
+
+The raw CLI wizard is still useful when you are the one executing the setup:
 
 ```bash
 himalaya account configure
 ```
+
+If the user asks to check email and setup is missing, respond like a product
+assistant, not like a README. Good pattern:
+
+- "Email is not connected yet."
+- "I can help set it up now."
+- "I’ll need your email provider plus permission to walk through login/config."
+- "Once connected, I can read your inbox from here."
 
 Or create `~/.config/himalaya/config.toml` manually:
 
@@ -77,6 +103,11 @@ message.send.backend.auth.cmd = "pass show email/smtp"
 ```bash
 himalaya folder list
 ```
+
+If `himalaya` says it cannot find configuration, treat that as a setup-needed
+state, not as a hard product failure. Do not echo the raw "Cannot find
+configuration" error back to the user unless they explicitly asked for the CLI
+details.
 
 ### List Emails
 

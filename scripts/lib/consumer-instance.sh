@@ -75,6 +75,30 @@ consumer_instance_app_path() {
   printf '%s/dist/%s.app' "$root_dir" "$app_name"
 }
 
+consumer_instance_runtime_root() {
+  local normalized="${1:-}"
+  local base="${HOME}/Library/Application Support/OpenClaw Consumer"
+  if [[ -z "$normalized" ]]; then
+    printf '%s' "$base"
+    return
+  fi
+  printf '%s/instances/%s' "$base" "$normalized"
+}
+
+consumer_instance_state_dir() {
+  local normalized="${1:-}"
+  printf '%s/.openclaw' "$(consumer_instance_runtime_root "$normalized")"
+}
+
+consumer_instance_profile() {
+  local normalized="${1:-}"
+  if [[ -z "$normalized" ]]; then
+    printf 'consumer'
+    return
+  fi
+  printf 'consumer-%s' "$normalized"
+}
+
 consumer_instance_launchd_label() {
   local normalized="${1:-}"
   if [[ -z "$normalized" ]]; then

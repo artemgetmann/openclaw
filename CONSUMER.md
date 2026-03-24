@@ -49,6 +49,19 @@ Consumer debugging rule:
 - one Telegram bot token = one active runtime
 - terminal preflight first, GUI second
 
+## GUI Verification Rule
+
+Before doing any GUI verification on the user's Mac that can steal focus,
+switch windows, or take screenshots of the live desktop, ask first.
+
+- Examples: activating the app, bringing windows frontmost, driving Peekaboo,
+  or capturing screenshots meant to prove a visible SwiftUI state.
+- If the user is actively multitasking on that machine, prefer log/runtime
+  verification first and then hand them explicit manual GUI steps instead of
+  fighting for focus.
+- Treat manual user confirmation as the default fallback for native macOS GUI
+  checks when the desktop is shared or busy.
+
 ---
 
 ## Branch Rules
