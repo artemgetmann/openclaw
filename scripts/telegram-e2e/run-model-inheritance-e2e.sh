@@ -7,8 +7,8 @@ set -euo pipefail
 # 3) Poll bot updates through tg (Bot API) and assert thread B reports expected model.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=scripts/telegram-e2e/userbot-common.sh
-source "${SCRIPT_DIR}/userbot-common.sh"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+USERBOT_ENV_LOCAL="${SCRIPT_DIR}/.env.local"
 
 CHAT=""
 SET_MODEL=""
@@ -41,6 +41,15 @@ Optional environment:
   TG_POLL_SLEEP        Sleep between polls seconds (default: 2)
   USERBOT_SESSION      Telethon session path
 USAGE
+}
+
+load_repo_telegram_env_if_present() {
+  if [[ -f "${USERBOT_ENV_LOCAL}" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${USERBOT_ENV_LOCAL}"
+    set +a
+  fi
 }
 
 while [[ $# -gt 0 ]]; do
@@ -86,10 +95,10 @@ if [[ -z "${CHAT}" || -z "${SET_MODEL}" || -z "${THREAD_A_REPLY_TO}" || -z "${TH
   exit 1
 fi
 
-load_userbot_env_if_present
+load_repo_telegram_env_if_present
 
-if [[ -z "${TELEGRAM_API_ID:-}" || -z "${TELEGRAM_API_HASH:-}" || -z "${TG_BIN:-}" ]]; then
-  echo "Missing required env vars (TELEGRAM_API_ID, TELEGRAM_API_HASH, TG_BIN)." >&2
+if [[ -z "${TG_BIN:-}" ]]; then
+  echo "Missing required env var: TG_BIN." >&2
   usage
   exit 1
 fi
@@ -100,12 +109,39 @@ if [[ ! -x "${TG_BIN}" ]]; then
 fi
 
 # Hard gate: ensure this worktree owns Telegram runtime before live assertions.
-"${ROOT_DIR}/scripts/telegram-live-preflight.sh"
+"${REPO_ROOT}/scripts/telegram-live-preflight.sh"
 
 EXPECT_MODEL="${EXPECT_MODEL:-${SET_MODEL}}"
-USERBOT_PYTHON="$(ensure_userbot_python)"
-USERBOT_SESSION="$(resolve_userbot_session_path)"
-run_userbot_precheck "${USERBOT_PYTHON}" "${USERBOT_SESSION}" "${CHAT}"
+
+extract_json_payload() {
+  RAW_OUTPUT="$1" python3 - <<'PY'
+import json
+import os
+import sys
+
+raw = os.environ["RAW_OUTPUT"]
+start = raw.find("{")
+if start < 0:
+  print(raw, file=sys.stderr)
+  raise SystemExit("Could not find JSON payload in command output.")
+
+payload = raw[start:].strip()
+data = json.loads(payload)
+print(json.dumps(data, ensure_ascii=True))
+PY
+}
+
+run_telegram_user_cli() {
+  (
+    cd "${REPO_ROOT}"
+    pnpm openclaw:local telegram-user "$@"
+  )
+}
+
+# Force an upfront health check so later send/wait failures read like Telegram
+# problems instead of "nothing happened" when the user session itself is broken.
+precheck_output="$(run_telegram_user_cli precheck --chat "${CHAT}" --json)"
+precheck_json="$(extract_json_payload "${precheck_output}")"
 
 TG_POLL_ATTEMPTS="${TG_POLL_ATTEMPTS:-10}"
 TG_POLL_TIMEOUT="${TG_POLL_TIMEOUT:-20}"
@@ -113,12 +149,33 @@ TG_POLL_SLEEP="${TG_POLL_SLEEP:-2}"
 TG_BOT_ID=""
 if [[ -n "${TG_BOT_TOKEN:-}" ]]; then
   TG_BOT_ID="${TG_BOT_TOKEN%%:*}"
+else
+  TG_BOT_ID="$(
+    PRECHECK_JSON="${precheck_json}" python3 - <<'PY'
+import json
+import os
+
+chat_id = (json.loads(os.environ["PRECHECK_JSON"]).get("chat") or {}).get("chat_id")
+print(int(chat_id or 0))
+PY
+  )"
 fi
 
 send_user_message() {
   local text="$1"
   local reply_to="$2"
-  run_userbot_send "${USERBOT_PYTHON}" "${USERBOT_SESSION}" "${CHAT}" "${reply_to}" "${text}"
+  local send_output
+  local send_json
+  send_output="$(
+    run_telegram_user_cli send \
+      --chat "${CHAT}" \
+      --message "${text}" \
+      --reply-to "${reply_to}" \
+      --json
+  )"
+  send_json="$(extract_json_payload "${send_output}")"
+  # Return the raw send JSON so callers can inspect the exact Telegram metadata.
+  printf '%s\n' "${send_json}"
 }
 
 wait_userbot_message() {
@@ -129,20 +186,19 @@ wait_userbot_message() {
   local sender_id="${5:-0}"
 
   local wait_cmd=(
-    "${USERBOT_PYTHON}" "${SCRIPT_DIR}/userbot_wait.py"
-    --api-id "${TELEGRAM_API_ID}" \
-    --api-hash "${TELEGRAM_API_HASH}" \
-    --session "${USERBOT_SESSION}" \
-    --chat "${CHAT}" \
-    --after-id "${after_id}" \
-    --thread-anchor "${thread_anchor}" \
-    --contains "${contains}" \
-    --timeout "${timeout}"
+    run_telegram_user_cli
+    wait
+    --chat "${CHAT}"
+    --after-id "${after_id}"
+    --thread-anchor "${thread_anchor}"
+    --contains "${contains}"
+    --timeout-ms "$(( timeout * 1000 ))"
+    --json
   )
   if [[ "${sender_id}" -gt 0 ]]; then
     wait_cmd+=(--sender-id "${sender_id}")
   fi
-  "${wait_cmd[@]}"
+  "${wait_cmd[@]}" >/dev/null
 }
 
 tg_poll_json() {
@@ -178,11 +234,11 @@ find_thread_text() {
 
 echo "Step 1: set model in thread A (${THREAD_A_REPLY_TO}) -> ${SET_MODEL}"
 set_payload="$(send_user_message "/model ${SET_MODEL}" "${THREAD_A_REPLY_TO}")"
-set_msg_id="$(jq -er '.message_id // 0' <<<"${set_payload}" 2>/dev/null || echo 0)"
+set_msg_id="$(jq -er '.message.message_id // 0' <<<"${set_payload}" 2>/dev/null || echo 0)"
 
 echo "Step 2: query model in thread B (${THREAD_B_REPLY_TO})"
 query_payload="$(send_user_message "/model" "${THREAD_B_REPLY_TO}")"
-query_msg_id="$(jq -er '.message_id // 0' <<<"${query_payload}" 2>/dev/null || echo 0)"
+query_msg_id="$(jq -er '.message.message_id // 0' <<<"${query_payload}" 2>/dev/null || echo 0)"
 
 echo "Step 3: poll bot updates and assert thread B reports ${EXPECT_MODEL}"
 attempt=1
