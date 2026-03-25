@@ -8,6 +8,9 @@ enum OpenClawConfigFile {
     private static let defaultBrowserCdpRangeStart = 18_800
     private static let defaultManagedUserBrowserCdpPort = 18_801
     private static let managedBrowserProfileName = "user"
+    // Keep this in sync with the browser runtime's default managed-user accent so
+    // config edits done from the mac app remain schema-valid and visually coherent.
+    private static let managedBrowserProfileColor = "#00AA00"
 
     static func url() -> URL {
         OpenClawPaths.configURL
@@ -149,18 +152,23 @@ enum OpenClawConfigFile {
         let trimmed = directoryName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
-        // Browser setup only needs to persist which real Chrome profile should seed the managed
-        // "user" lane. The runtime already derives browser control + CDP ports from the instance
-        // scoped gateway port, so duplicating those numbers here would be drift-prone busywork.
+        // Browser setup persists the managed "user" lane as a real browser profile, not just
+        // metadata. The runtime rejects profiles without a CDP endpoint, so we mirror the same
+        // derived port math here instead of relying on later reloads to fill it in.
+        let cdpPort = self.managedBrowserUserCdpPort()
         var root = self.loadDict()
         var browser = root["browser"] as? [String: Any] ?? [:]
         browser["defaultProfile"] = self.managedBrowserProfileName
         var profiles = browser["profiles"] as? [String: Any] ?? [:]
         var userProfile = profiles[self.managedBrowserProfileName] as? [String: Any] ?? [:]
-        userProfile["cdpPort"] = self.managedUserBrowserCdpPort(root: root)
+        userProfile["cdpPort"] = cdpPort
         userProfile["driver"] = "openclaw"
         userProfile["cloneFromUserProfile"] = true
         userProfile["sourceProfileName"] = trimmed
+        // The shared config schema requires every named browser profile to include
+        // a color. Without this the gateway rejects reloads and onboarding looks
+        // like it randomly failed right after the user picked Chrome.
+        userProfile["color"] = self.managedBrowserProfileColor
         profiles[self.managedBrowserProfileName] = userProfile
         browser["profiles"] = profiles
         root["browser"] = browser
@@ -175,7 +183,13 @@ enum OpenClawConfigFile {
         if var profiles = browser["profiles"] as? [String: Any],
            var userProfile = profiles[self.managedBrowserProfileName] as? [String: Any]
         {
+            // Clearing the selection should remove the managed-user profile stub too.
+            // Leaving clone/driver/color behind keeps stale browser config around for no gain.
+            userProfile.removeValue(forKey: "cdpPort")
+            userProfile.removeValue(forKey: "cloneFromUserProfile")
+            userProfile.removeValue(forKey: "driver")
             userProfile.removeValue(forKey: "sourceProfileName")
+            userProfile.removeValue(forKey: "color")
             if userProfile.isEmpty {
                 profiles.removeValue(forKey: self.managedBrowserProfileName)
             } else {

@@ -55,6 +55,31 @@ final class DevicePairingApprovalPrompter {
 
     private typealias PairingResolvedEvent = PairingAlertSupport.PairingResolvedEvent
 
+    nonisolated static func shouldAutoApproveConsumerLocalNodeBridge(
+        isConsumer: Bool,
+        clientId: String?,
+        clientMode: String?,
+        role: String?,
+        remoteIp: String?) -> Bool
+    {
+        guard isConsumer else { return false }
+        let normalizedClientID = clientId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedClientMode = clientMode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedRole = role?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedRemoteIP = remoteIp?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let isLocalAddress =
+            normalizedRemoteIP == nil ||
+            normalizedRemoteIP == "" ||
+            normalizedRemoteIP == "unknown-ip" ||
+            normalizedRemoteIP == "127.0.0.1" ||
+            normalizedRemoteIP == "::1"
+        return
+            normalizedClientID == "openclaw-macos" &&
+            normalizedClientMode == "node" &&
+            normalizedRole == "node" &&
+            isLocalAddress
+    }
+
     func start() {
         self.startPushTask()
     }
@@ -106,8 +131,41 @@ final class DevicePairingApprovalPrompter {
         guard !self.isStopping else { return }
         guard !self.isPresenting else { return }
         guard let next = self.queue.first else { return }
+        if Self.shouldAutoApproveConsumerLocalNodeBridge(
+            isConsumer: AppFlavor.current.isConsumer,
+            clientId: next.clientId,
+            clientMode: next.clientMode,
+            role: next.role,
+            remoteIp: next.remoteIp)
+        {
+            // The packaged consumer app talks to its own loopback gateway and
+            // immediately brings up the macOS node bridge. Requiring manual approval
+            // here blocks first-run setup on the user's own Mac, so auto-approve only
+            // this exact local node-bridge upgrade path.
+            self.isPresenting = true
+            Task { @MainActor in
+                await self.autoApproveConsumerLocalNodeBridge(next)
+            }
+            return
+        }
         self.isPresenting = true
         self.presentAlert(for: next)
+    }
+
+    private func autoApproveConsumerLocalNodeBridge(_ req: PendingRequest) async {
+        self.logger.info("auto-approving consumer local node bridge requestId=\(req.requestId, privacy: .public)")
+        let approved = await self.approve(requestId: req.requestId)
+        if approved {
+            self.queue.removeAll { $0.requestId == req.requestId }
+            self.updatePendingCounts()
+            self.isPresenting = false
+            self.presentNextIfNeeded()
+            return
+        }
+
+        self.logger.error(
+            "auto-approve failed for consumer local node bridge requestId=\(req.requestId, privacy: .public)")
+        self.presentAlert(for: req)
     }
 
     private func presentAlert(for req: PendingRequest) {

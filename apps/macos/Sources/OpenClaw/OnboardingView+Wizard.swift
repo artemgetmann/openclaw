@@ -45,7 +45,7 @@ extension OnboardingView {
             return "OpenClaw couldn’t finish setup."
         }
         if self.onboardingWizard.isComplete {
-            return "OpenClaw is ready. Click Finish to continue."
+            return "Local setup is ready. Next we’ll connect Telegram."
         }
         return "This usually takes a moment."
     }
@@ -117,7 +117,7 @@ struct OnboardingWizardCardContent: View {
             }
             .id(step.id)
         case .complete:
-            Text(self.isConsumer ? "OpenClaw is ready." : "Wizard complete. Continue to the next step.")
+            Text(self.isConsumer ? "Local setup is ready." : "Wizard complete. Continue to the next step.")
                 .font(.headline)
         case .waiting:
             Text(self.isConsumer ? "Getting OpenClaw ready…" : "Waiting for wizard…")

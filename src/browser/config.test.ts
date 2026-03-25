@@ -128,6 +128,28 @@ describe("browser config", () => {
     expect(remote?.cdpIsLoopback).toBe(false);
   });
 
+  it("accepts cloned user profiles when they include a CDP port", () => {
+    const resolved = resolveBrowserConfig({
+      defaultProfile: "user",
+      profiles: {
+        user: {
+          cdpPort: 19012,
+          cloneFromUserProfile: true,
+          sourceProfileName: "Profile 4",
+          color: "#00AA00",
+        },
+      },
+    });
+
+    const user = resolveProfile(resolved, "user");
+    expect(user?.driver).toBe("openclaw");
+    expect(user?.cdpPort).toBe(19012);
+    expect(user?.cdpUrl).toBe("http://127.0.0.1:19012");
+    expect(user?.cloneFromUserProfile).toBe(true);
+    expect(user?.sourceProfileName).toBe("Profile 4");
+    expect(user?.color).toBe("#00AA00");
+  });
+
   it("inherits attachOnly from global browser config when profile override is not set", () => {
     const resolved = resolveBrowserConfig({
       attachOnly: true,

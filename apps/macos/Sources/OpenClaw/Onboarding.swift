@@ -20,6 +20,7 @@ enum RemoteOnboardingProbeState: Equatable {
 final class OnboardingController {
     static let shared = OnboardingController()
     private var window: NSWindow?
+    private let logger = Logger(subsystem: "ai.openclaw", category: "consumer.launch")
 
     func show() {
         if ProcessInfo.processInfo.isNixMode {
@@ -30,6 +31,7 @@ final class OnboardingController {
             return
         }
         if let window {
+            self.logger.info("reusing existing onboarding window")
             DockIconManager.shared.temporarilyShowDock()
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -48,6 +50,7 @@ final class OnboardingController {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
+        self.logger.info("created onboarding window")
     }
 
     func close() {
@@ -150,7 +153,7 @@ struct OnboardingView: View {
         if AppFlavor.current.isConsumer {
             if self.pageCount == 1, self.activePageIndex == 0 {
                 return self.onboardingWizard.isComplete && self.browserSetup.isComplete && self.modelSetup.isComplete
-                    ? "Finish"
+                    ? "Connect Telegram"
                     : "Setting Up…"
             }
             if self.activePageIndex == self.wizardPageIndex, self.onboardingWizard.isComplete {
