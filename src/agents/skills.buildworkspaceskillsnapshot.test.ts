@@ -110,6 +110,27 @@ describe("buildWorkspaceSkillSnapshot", () => {
     ]);
   });
 
+  it("includes bundled consumer setup helpers in the prompt when model-visible", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    await writeSkill({
+      dir: path.join(bundledDir, "consumer-setup"),
+      name: "consumer-setup",
+      description: "Shared consumer setup help",
+    });
+    await writeSkill({
+      dir: path.join(bundledDir, "himalaya"),
+      name: "himalaya",
+      description: "Email skill",
+    });
+
+    const snapshot = buildSnapshot(workspaceDir);
+
+    expectSnapshotNamesAndPrompt(snapshot, {
+      contains: ["consumer-setup", "himalaya"],
+    });
+  });
+
   it("keeps prompt output aligned with buildWorkspaceSkillsPrompt", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeSkill({

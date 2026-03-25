@@ -33,13 +33,13 @@ Use Apple Notes on macOS.
 - Keep `memo` for list/search/export and fuzzy note lookup.
 - For deterministic create/delete, use the local helper at `scripts/apple-notes-local.sh`.
 
-## Setup
+## Setup Routing
 
-- Install (Homebrew): `brew tap antoniorodr/memo && brew install antoniorodr/memo/memo`
-- Manual (pip): `pip install .` (after cloning the repo)
-- Current upstream release is `v0.5.2` (published March 24, 2026).
-- `memo 0.5.2` still exposes interactive create/edit/delete flows, so consumer-safe automation still needs the helper.
-- macOS-only; if prompted, grant Automation access to Notes.app.
+- If `memo` is missing or Notes automation permission is blocked, use the
+  shared `consumer-setup` skill.
+- `memo` still exposes interactive create/edit/delete flows, so consumer-safe
+  automation should keep using the local helper for deterministic create/delete
+  instead of falling back to the interactive path.
 
 ## Deterministic Create/Delete
 

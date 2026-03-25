@@ -29,6 +29,7 @@ struct ConsumerBootstrapTests {
             #expect(consumerModel?["alias"] as? String == "GPT")
             #expect(install?["nodeManager"] as? String == "npm")
             #expect(skills?["allowBundled"] as? [String] == [
+                "consumer-setup",
                 "apple-notes",
                 "apple-reminders",
                 "bear-notes",

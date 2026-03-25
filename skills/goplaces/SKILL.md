@@ -27,11 +27,7 @@ metadata:
 
 Modern Google Places API (New) CLI. Human output by default, `--json` for scripts.
 
-Install
-
-- Homebrew: `brew install steipete/tap/goplaces`
-
-Config
+Requirements
 
 - `GOOGLE_PLACES_API_KEY` required.
 - Optional: `GOOGLE_PLACES_BASE_URL` for testing/proxying.
@@ -40,7 +36,8 @@ Automation notes
 
 - If `GOOGLE_PLACES_API_KEY` is missing, do not pretend the skill works.
 - For a consumer product build, this can be a product-provided secret instead
-  of user setup. Distinguish `missing product secret` from `missing user setup`.
+  of user setup. Distinguish `missing product secret` from `missing user setup`
+  via the shared `consumer-setup` skill.
 - Prefer `--json` when verifying search results in automation.
 
 Common commands

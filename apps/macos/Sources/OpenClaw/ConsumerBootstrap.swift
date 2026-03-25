@@ -4,6 +4,9 @@ enum ConsumerBootstrap {
     // Curated starter skills keep the consumer install useful without dumping the
     // full skill catalog into the default prompt footprint.
     private static let bundledSkillAllowlist = [
+        // Shared setup surface keeps first-run account/config guidance out of
+        // every individual skill prompt while staying directly discoverable.
+        "consumer-setup",
         "apple-notes",
         "apple-reminders",
         "bear-notes",
