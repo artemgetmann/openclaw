@@ -10,6 +10,11 @@ import Speech
 import UserNotifications
 
 enum PermissionManager {
+    enum ScreenRecordingRecoveryAction: Equatable {
+        case requestAuthorization
+        case openSettingsFallback
+    }
+
     static func isLocationAuthorized(status: CLAuthorizationStatus, requireAlways: Bool) -> Bool {
         if requireAlways { return status == .authorizedAlways }
         switch status {
@@ -97,15 +102,40 @@ enum PermissionManager {
         return updated
     }
 
+    static func screenRecordingRecoveryActions(
+        interactive: Bool,
+        initialGranted: Bool,
+        grantedAfterRequest: Bool?) -> [ScreenRecordingRecoveryAction]
+    {
+        guard interactive, !initialGranted else { return [] }
+        var actions: [ScreenRecordingRecoveryAction] = [.requestAuthorization]
+        if grantedAfterRequest == false {
+            actions.append(.openSettingsFallback)
+        }
+        return actions
+    }
+
     private static func ensureScreenRecording(interactive: Bool) async -> Bool {
         let granted = ScreenRecordingProbe.isAuthorized()
-        if interactive, !granted {
-            // On recent macOS releases, the system often skips the in-app prompt and
-            // expects users to toggle Screen Recording in System Settings instead.
-            await MainActor.run { ScreenRecordingPermissionHelper.openSettings() }
-            await ScreenRecordingProbe.requestAuthorization()
-        }
+        guard interactive, !granted else { return granted }
+
+        // Ask macOS for Screen Recording access first. Opening System Settings
+        // before this can skip the normal prompt path and strand users on a
+        // generic Privacy & Security page even when the system dialog would
+        // have been enough.
+        await ScreenRecordingProbe.requestAuthorization()
+
         let updated = ScreenRecordingProbe.isAuthorized()
+        if self.screenRecordingRecoveryActions(
+            interactive: interactive,
+            initialGranted: granted,
+            grantedAfterRequest: updated
+        ).contains(.openSettingsFallback) {
+            // Fallback only after the direct macOS request failed or was
+            // skipped. At that point the UI needs to guide the user through the
+            // manual Privacy & Security -> Screen & System Audio Recording path.
+            await MainActor.run { ScreenRecordingPermissionHelper.openSettings() }
+        }
         return updated
     }
 
@@ -255,19 +285,30 @@ enum MicrophonePermissionHelper {
 
 enum AccessibilityPermissionHelper {
     static func openSettings() {
-        SystemSettingsURLSupport.openFirst([
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        SystemSettingsURLSupport.open(
+            revealTarget: .init(
+                paneID: "com.apple.settings.PrivacySecurity.extension",
+                anchor: "Privacy_Accessibility"),
+            fallbackCandidates: [
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
             "x-apple.systempreferences:com.apple.preference.security",
-        ])
+            ])
     }
 }
 
 enum ScreenRecordingPermissionHelper {
     static func openSettings() {
-        SystemSettingsURLSupport.openFirst([
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+        SystemSettingsURLSupport.open(
+            revealTarget: .init(
+                paneID: "com.apple.settings.PrivacySecurity.extension",
+                anchor: "Privacy_ScreenCapture"),
+            fallbackCandidates: [
+                // If the AppleScript reveal path fails, fall back to the stable
+                // Privacy & Security root instead of the flaky blank
+                // Screen Recording deep link.
+                "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension",
             "x-apple.systempreferences:com.apple.preference.security",
-        ])
+            ])
     }
 }
 
@@ -499,10 +540,11 @@ enum ScreenRecordingProbe {
         return true
     }
 
-    @MainActor
     static func requestAuthorization() async {
         if #available(macOS 10.15, *) {
-            _ = CGRequestScreenCaptureAccess()
+            await MainActor.run {
+                _ = CGRequestScreenCaptureAccess()
+            }
         }
     }
 }

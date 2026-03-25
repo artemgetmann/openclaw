@@ -35,4 +35,22 @@ struct PermissionManagerTests {
         let ensured = await PermissionManager.ensure([.location], interactive: false)
         #expect(ensured[.location] == (status == .authorizedAlways))
     }
+
+    @Test func `screen recording recovery actions request first and then open settings`() async {
+        let actions = PermissionManager.screenRecordingRecoveryActions(
+            interactive: true,
+            initialGranted: false,
+            grantedAfterRequest: false)
+
+        #expect(actions == [.requestAuthorization, .openSettingsFallback])
+    }
+
+    @Test func `screen recording recovery actions stop after request when access is granted`() async {
+        let actions = PermissionManager.screenRecordingRecoveryActions(
+            interactive: true,
+            initialGranted: false,
+            grantedAfterRequest: true)
+
+        #expect(actions == [.requestAuthorization])
+    }
 }
