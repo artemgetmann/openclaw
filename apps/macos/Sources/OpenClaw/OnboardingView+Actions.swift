@@ -72,6 +72,9 @@ extension OnboardingView {
             self.openSettings(tab: Self.consumerPostBrowserSetupTab)
         }
         OnboardingController.shared.close()
+        if AppFlavor.current.isConsumer {
+            SettingsWindowOpener.shared.open(tab: .general)
+        }
     }
 
     func copyToPasteboard(_ text: String) {

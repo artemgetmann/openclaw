@@ -314,6 +314,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @MainActor
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard AppFlavor.current.isConsumer else { return false }
+        guard !flag else { return false }
+        self.showVisibleConsumerSurface()
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         if let observer = self.consumerReopenObserver {
             DistributedNotificationCenter.default().removeObserver(observer)
@@ -332,13 +340,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await RemoteTunnelManager.shared.stopAll() }
         Task { await GatewayConnection.shared.shutdown() }
         Task { await PeekabooBridgeHostCoordinator.shared.stop() }
-    }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        guard AppFlavor.current.isConsumer else { return false }
-        guard !flag else { return false }
-        self.showVisibleConsumerSurface()
-        return true
     }
 
     @MainActor
