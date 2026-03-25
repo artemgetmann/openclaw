@@ -144,8 +144,10 @@ Bundled skills are intentionally curated, not universal.
   - `gog`
   - `goplaces`
   - `himalaya`
-  - `bear-notes`
 - Not part of the clean first-run promise for this MVP:
+  - `bear-notes`
+  - `camsnap`
+  - `canvas`
   - WhatsApp CLI
   - extra Google CLI setup beyond the seeded Google lane
   - manually provisioned founder-only skills

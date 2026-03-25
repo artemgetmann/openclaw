@@ -55,8 +55,10 @@ Scope: install -> permissions -> browser -> Telegram -> first delegated task
     - `gog`
     - `goplaces`
     - `himalaya`
-    - `bear-notes`
   - Not part of the clean default promise for this MVP:
+    - `bear-notes`
+    - `camsnap`
+    - `canvas`
     - WhatsApp CLI
     - generic Google CLI setup beyond the seeded Google lane
     - other founder-only or manually provisioned skills

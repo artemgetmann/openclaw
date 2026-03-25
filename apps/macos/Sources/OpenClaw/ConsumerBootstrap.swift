@@ -9,9 +9,6 @@ enum ConsumerBootstrap {
         "consumer-setup",
         "apple-notes",
         "apple-reminders",
-        "bear-notes",
-        "camsnap",
-        "canvas",
         // Google Workspace covers common consumer operator tasks like Gmail,
         // Calendar, Drive, and Docs without forcing users into multiple skills.
         "gog",
