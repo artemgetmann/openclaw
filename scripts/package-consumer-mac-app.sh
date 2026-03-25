@@ -59,6 +59,7 @@ APP_PATH="${ROOT_DIR}/dist/${APP_BUNDLE_NAME}"
 INFO_PLIST="${APP_PATH}/Contents/Info.plist"
 EXPECTED_BUNDLE_ID="${BUNDLE_ID:-$(consumer_instance_bundle_id "$NORMALIZED_INSTANCE_ID")}"
 EXPECTED_VARIANT="consumer"
+VERIFY_ARGS=()
 
 APP_NAME="$APP_NAME" \
 APP_BUNDLE_NAME="$APP_BUNDLE_NAME" \
@@ -98,10 +99,12 @@ if [[ "$actual_instance_id" != "${NORMALIZED_INSTANCE_ID}" ]]; then
   exit 1
 fi
 
-echo "Consumer app ready:"
-echo "  path=$APP_PATH"
-echo "  display_name=$actual_name"
-echo "  bundle_id=$actual_bundle_id"
-echo "  variant=$actual_variant"
-echo "  instance_id=${NORMALIZED_INSTANCE_ID:-default}"
-echo "  gateway_port=$(consumer_instance_gateway_port "$NORMALIZED_INSTANCE_ID")"
+if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
+  VERIFY_ARGS+=(--instance "$NORMALIZED_INSTANCE_ID")
+fi
+
+"$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+
+echo "Consumer packaging note:"
+echo "  If the verifier passed, treat unrelated pnpm/TypeScript diagnostics separately from bundle assembly."
+echo "  Known current repo noise: skipWaitForIdle diagnostics from src/agents/pi-embedded-runner/run/attempt.ts can appear during packaging without breaking the consumer app bundle."

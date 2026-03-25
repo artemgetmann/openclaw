@@ -76,18 +76,73 @@ consumer_instance_app_path() {
 }
 
 consumer_instance_runtime_root() {
-  local normalized="${1:-}"
-  local base="${HOME}/Library/Application Support/OpenClaw Consumer"
+  local home_dir="${HOME}"
+  local normalized=""
+
+  # Accept both the legacy single-argument form and the new explicit-home
+  # form so older call sites keep working while the verifier can inspect
+  # a specific user's runtime tree.
+  if [[ $# -ge 2 ]]; then
+    home_dir="${1:-$HOME}"
+    normalized="${2:-}"
+  else
+    normalized="${1:-}"
+  fi
+
+  local runtime_root="${home_dir}/Library/Application Support/OpenClaw Consumer"
   if [[ -z "$normalized" ]]; then
-    printf '%s' "$base"
+    printf '%s' "$runtime_root"
     return
   fi
-  printf '%s/instances/%s' "$base" "$normalized"
+  printf '%s/instances/%s' "$runtime_root" "$normalized"
 }
 
 consumer_instance_state_dir() {
-  local normalized="${1:-}"
-  printf '%s/.openclaw' "$(consumer_instance_runtime_root "$normalized")"
+  local home_dir="${HOME}"
+  local normalized=""
+  if [[ $# -ge 2 ]]; then
+    home_dir="${1:-$HOME}"
+    normalized="${2:-}"
+  else
+    normalized="${1:-}"
+  fi
+  printf '%s/.openclaw' "$(consumer_instance_runtime_root "$home_dir" "$normalized")"
+}
+
+consumer_instance_config_path() {
+  local home_dir="${HOME}"
+  local normalized=""
+  if [[ $# -ge 2 ]]; then
+    home_dir="${1:-$HOME}"
+    normalized="${2:-}"
+  else
+    normalized="${1:-}"
+  fi
+  printf '%s/openclaw.json' "$(consumer_instance_state_dir "$home_dir" "$normalized")"
+}
+
+consumer_instance_workspace_path() {
+  local home_dir="${HOME}"
+  local normalized=""
+  if [[ $# -ge 2 ]]; then
+    home_dir="${1:-$HOME}"
+    normalized="${2:-}"
+  else
+    normalized="${1:-}"
+  fi
+  printf '%s/workspace' "$(consumer_instance_state_dir "$home_dir" "$normalized")"
+}
+
+consumer_instance_logs_path() {
+  local home_dir="${HOME}"
+  local normalized=""
+  if [[ $# -ge 2 ]]; then
+    home_dir="${1:-$HOME}"
+    normalized="${2:-}"
+  else
+    normalized="${1:-}"
+  fi
+  printf '%s/logs' "$(consumer_instance_state_dir "$home_dir" "$normalized")"
 }
 
 consumer_instance_profile() {
@@ -115,33 +170,4 @@ consumer_instance_gateway_launchd_label() {
     return
   fi
   printf 'ai.openclaw.consumer.%s.gateway' "$normalized"
-}
-
-consumer_instance_runtime_root() {
-  local normalized="${1:-}"
-  local base="${HOME}/Library/Application Support/OpenClaw Consumer"
-  if [[ -z "$normalized" ]]; then
-    printf '%s' "$base"
-    return
-  fi
-  printf '%s/instances/%s' "$base" "$normalized"
-}
-
-consumer_instance_state_dir() {
-  local normalized="${1:-}"
-  printf '%s/.openclaw' "$(consumer_instance_runtime_root "$normalized")"
-}
-
-consumer_instance_config_path() {
-  local normalized="${1:-}"
-  printf '%s/openclaw.json' "$(consumer_instance_state_dir "$normalized")"
-}
-
-consumer_instance_profile() {
-  local normalized="${1:-}"
-  if [[ -z "$normalized" ]]; then
-    printf 'consumer'
-    return
-  fi
-  printf 'consumer-%s' "$normalized"
 }
