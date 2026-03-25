@@ -26,11 +26,13 @@ metadata:
 
 Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
 
-Setup (once)
+Setup routing
 
-- `gog auth credentials /path/to/client_secret.json`
-- `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
-- `gog auth list`
+- If OAuth client credentials, account auth, or `gog auth list` are missing,
+  use the shared `consumer-setup` skill instead of pushing raw setup commands at
+  the user.
+- Keep the CLI setup path opt-in. If the user explicitly wants the terminal
+  flow, you can execute the normal `gog auth ...` commands yourself.
 
 Common commands
 

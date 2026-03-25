@@ -46,13 +46,6 @@ Use `remindctl` to manage Apple Reminders directly from the terminal.
 - One-time notifications → use `cron` tool for timed alerts
 - User says "remind me" but means an OpenClaw alert → clarify first
 
-## Setup
-
-- Install: `brew install steipete/tap/remindctl`
-- macOS-only; grant Reminders permission when prompted
-- Check status: `remindctl status`
-- Request access: `remindctl authorize`
-
 ## Automation Rule
 
 - On a local macOS machine, use the local host directly. Do not route reminder
@@ -62,6 +55,13 @@ Use `remindctl` to manage Apple Reminders directly from the terminal.
   cleanup.
 - After delete, re-check after a short delay because Reminders can take a
   moment to converge.
+
+## Setup Routing
+
+- If `remindctl` is missing or Reminders access is not authorized yet, use the
+  shared `consumer-setup` skill.
+- Once setup is complete, verify with `remindctl status` or a read-only list
+  call before creating reminders.
 
 ## Common Commands
 

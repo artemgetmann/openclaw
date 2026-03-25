@@ -130,6 +130,10 @@ Consumer workspace bootstrap now seeds the core files the runtime expects from t
 
 Bundled skills are intentionally curated, not universal.
 
+- Shared setup surface:
+  - `consumer-setup`
+  - consumer-facing skills that need account/config/permission work should
+    route setup here instead of embedding large inline setup flows
 - Ready now after the normal permissions flow:
   - `summarize`
   - `weather`
