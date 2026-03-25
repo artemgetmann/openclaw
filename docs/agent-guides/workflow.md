@@ -7,6 +7,7 @@
 - General fork work that is not consumer-product work targets this repo's `main`.
 - Use upstream `https://github.com/openclaw/openclaw` only when the user explicitly asks for upstream review, triage, or PR flow.
 - `consumer` is legacy. Do not target new PRs there unless the user explicitly asks.
+- Do not validate the live main bot from a feature worktree. Merge the fix to `main` first, then restart and exercise the gateway from the `main` checkout. See `docs/debug/worktree-branch-survival.md` for the runtime truth model.
 
 ## GitHub footguns
 
