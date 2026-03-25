@@ -7,6 +7,9 @@
 - General fork work that is not consumer-product work targets this repo's `main`.
 - Use upstream `https://github.com/openclaw/openclaw` only when the user explicitly asks for upstream review, triage, or PR flow.
 - `consumer` is legacy. Do not target new PRs there unless the user explicitly asks.
+- Do not recreate `consumer` for new work. The active product branch is `codex/consumer-openclaw-project`.
+- If the user says "consumer branch", interpret that as `codex/consumer-openclaw-project` unless they explicitly say they want the legacy `consumer` branch.
+- Never run `git merge upstream/main` on this fork. Port upstream changes selectively via `main`.
 
 ## GitHub footguns
 

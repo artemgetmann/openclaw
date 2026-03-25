@@ -8,6 +8,9 @@
 
 - Treat this checkout as the consumer-product fork unless the user says otherwise.
 - Do not assume upstream `openclaw/openclaw` workflow by default.
+- Do not recreate or target a `consumer` branch for new work. Use `codex/consumer-openclaw-project`.
+- If the user says "consumer branch", interpret that as `codex/consumer-openclaw-project` unless they explicitly say they mean the legacy `consumer` branch.
+- Never merge `upstream/main` into fork branches. Upstream intake is selective only.
 - PR targets:
   - Consumer-product work: `codex/consumer-openclaw-project`
   - General fork work: this repo's `main`
@@ -36,6 +39,8 @@
   - `docs/consumer/openclaw-consumer-execution-spec.md`
 - Branching, PR targets, commits, GitHub footguns:
   - `docs/agent-guides/workflow.md`
+- Fork maintenance and upstream intake:
+  - `docs/agent-guides/fork-maintenance.md`
 - Build, test, style, and validation:
   - `docs/agent-guides/dev-and-test.md`
 - Docs authoring, Mintlify rules, and i18n:
