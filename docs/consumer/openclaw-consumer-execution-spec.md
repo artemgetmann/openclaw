@@ -70,28 +70,30 @@ This means the refactor and the consumer build are the same work — not two sep
 ### Structure
 - **Source clone:** `/Users/user/Programming_Projects/openclaw`
 - **Live bot (personal):** `~/.openclaw/workspace` — DO NOT TOUCH during consumer development
-- **Consumer work:** `consumer` branch on `artemgetmann/openclaw`
+- **Fork integration:** `main` on `artemgetmann/openclaw`
+- **Consumer work:** `codex/consumer-openclaw-project` on `artemgetmann/openclaw`
 
 ### Convergence Plan
 - Current `main` = your live personal bot (complicated, works, don't break it)
-- `consumer` branch = the simplified rebuild (also becomes your personal bot when ready)
-- When `consumer` is stable → switch `~/.openclaw` to run from `consumer` → retire `main` as your daily driver
+- `codex/consumer-openclaw-project` = the simplified rebuild and product branch
+- When `codex/consumer-openclaw-project` is stable → switch `~/.openclaw` to run from that branch → retire `main` as your daily driver
 - You end up with ONE bot, ONE codebase, that is both your personal agent AND the product
 
 ### Refactor Strategy
-The refactor doesn't happen on `main`. It happens as part of building `consumer`.
+The refactor doesn't happen on `main`. It happens as part of building `codex/consumer-openclaw-project`.
 - Branch off current `main` (so you have its working code as a starting point)
-- Aggressively simplify on `consumer` — remove everything not needed for the core loop
+- Aggressively simplify on `codex/consumer-openclaw-project` — remove everything not needed for the core loop
 - Your live bot on `main` stays untouched and working throughout
-- Periodically cherry-pick genuinely useful improvements from `main` into `consumer`
+- Periodically forward genuinely useful improvements from `main` into `codex/consumer-openclaw-project`
+- For upstream intake rules, use `docs/agent-guides/fork-maintenance.md`
 
 ### Workflow
 ```sh
-# Create consumer branch (one-time)
+# Create or refresh a consumer worktree/branch from the active product branch
 cd ~/Programming_Projects/openclaw
-git checkout main
-git checkout -b consumer
-git push -u origin consumer
+git fetch origin --prune
+git checkout codex/consumer-openclaw-project
+git pull --ff-only origin codex/consumer-openclaw-project
 
 # Test consumer build without touching live bot
 pnpm install && pnpm build
@@ -99,15 +101,12 @@ OPENCLAW_HOME=/tmp/openclaw-consumer \
 OPENCLAW_PROFILE=consumer-test \
 pnpm openclaw gateway --port 19001 --bind loopback
 
-# Sync upstream changes when ready
-git checkout main
-git fetch upstream && git merge upstream/main
-git push origin main
-git checkout consumer && git merge main
+# Upstream intake is selective, never a blind merge
+# See docs/agent-guides/fork-maintenance.md
 ```
 
 ### Rule
-Your personal bot stays on `main`. Consumer branch is the product. Only switch your personal bot to `consumer` when it's proven stable.
+Your personal bot stays on `main`. `codex/consumer-openclaw-project` is the product branch. Only switch your personal bot when that branch is proven stable.
 
 ---
 
