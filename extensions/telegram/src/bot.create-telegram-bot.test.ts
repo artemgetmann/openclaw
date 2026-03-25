@@ -238,7 +238,10 @@ describe("createTelegramBot", () => {
         expect(pairingText, testCase.name).toContain("Pairing code:");
         expect(pairingText, testCase.name).toContain("PAIRME12");
         expect(pairingText, testCase.name).toContain("openclaw pairing approve telegram PAIRME12");
-        expect(pairingText, testCase.name).not.toContain("<code>");
+        expect(pairingText, testCase.name).toContain("<pre><code>");
+        expect(sendMessageSpy.mock.calls[0]?.[2], testCase.name).toEqual(
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
       }
     }
   });
@@ -279,7 +282,12 @@ describe("createTelegramBot", () => {
       expect(getFileSpy).not.toHaveBeenCalled();
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-      expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Pairing code:");
+      const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+      expect(pairingText).toContain("Pairing code:");
+      expect(pairingText).toContain("<pre><code>");
+      expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
@@ -363,7 +371,12 @@ describe("createTelegramBot", () => {
       expect(getFileSpy).not.toHaveBeenCalled();
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-      expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Pairing code:");
+      const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+      expect(pairingText).toContain("Pairing code:");
+      expect(pairingText).toContain("<pre><code>");
+      expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
