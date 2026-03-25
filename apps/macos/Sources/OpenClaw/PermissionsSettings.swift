@@ -1,7 +1,219 @@
+import AppKit
 import CoreLocation
 import OpenClawIPC
 import OpenClawKit
 import SwiftUI
+
+enum ConsumerPermissionRecoverySupport {
+    struct Context: Equatable {
+        var attemptedSettingsRecovery = false
+        var requestedExplicitSettingsFollowUp = false
+        var reactivatedAfterSettings = false
+    }
+
+    enum DisplayState: Equatable {
+        case granted
+        case notRequested
+        case needsSystemSettings
+        case checking
+        case restartRequired
+    }
+
+    struct Presentation {
+        let displayState: DisplayState
+        let actionLabel: String?
+        let statusText: String
+        let detailText: String?
+        let statusColor: Color?
+    }
+
+    struct StepInstruction: Equatable, Identifiable {
+        let capability: Capability
+        let title: String
+        let body: String
+
+        var id: Capability { self.capability }
+    }
+
+    // Accessibility and Screen Recording have real macOS recovery phases that a
+    // plain Bool cannot represent. Keep that complexity inside the consumer UI.
+    static func presentation(
+        for capability: Capability,
+        granted: Bool,
+        isChecking: Bool,
+        context: Context?)
+        -> Presentation
+    {
+        if granted {
+            return Presentation(
+                displayState: .granted,
+                actionLabel: nil,
+                statusText: "Granted",
+                detailText: nil,
+                statusColor: .green)
+        }
+
+        if isChecking {
+            return Presentation(
+                displayState: .checking,
+                actionLabel: nil,
+                statusText: "Checking…",
+                detailText: nil,
+                statusColor: nil)
+        }
+
+        guard self.requiresSettingsRecovery(capability), let context, context.attemptedSettingsRecovery else {
+            return Presentation(
+                displayState: .notRequested,
+                actionLabel: "Grant",
+                statusText: self.defaultPendingHint(for: capability),
+                detailText: nil,
+                statusColor: nil)
+        }
+
+        // Only escalate to "Restart app" after the user has explicitly retried the
+        // System Settings path from our UI. A passive app reactivation alone is
+        // too weak a signal because macOS can land Screen Recording on a blank
+        // pane, leaving the user without a real chance to complete the toggle.
+        if context.requestedExplicitSettingsFollowUp && context.reactivatedAfterSettings {
+            return Presentation(
+                displayState: .restartRequired,
+                actionLabel: "Restart app",
+                statusText: "Enabled already? Restart app",
+                detailText: self.restartRecoveryDetail(for: capability),
+                statusColor: .orange)
+        }
+
+        return Presentation(
+            displayState: .needsSystemSettings,
+            actionLabel: self.settingsActionLabel(for: capability),
+            statusText: self.settingsActionLabel(for: capability),
+            detailText: self.systemSettingsDetail(for: capability),
+            statusColor: nil)
+    }
+
+    @MainActor
+    static func recommendedSummary(
+        status: [Capability: Bool],
+        contexts: [Capability: Context],
+        hasAttemptedRecommendedFlow: Bool,
+        isChecking: Bool)
+        -> String?
+    {
+        if isChecking {
+            return "Checking the latest permission changes…"
+        }
+
+        let unresolvedRecommended = PermissionsSettings.consumerRecommendedCapabilities.filter {
+            status[$0] != true
+        }
+        if unresolvedRecommended.isEmpty {
+            return "Recommended permissions are ready."
+        }
+
+        let specialUnresolved = unresolvedRecommended.filter(self.requiresSettingsRecovery)
+        if !specialUnresolved.isEmpty {
+            let restartNeeded = specialUnresolved.contains {
+                let context = contexts[$0]
+                return context?.requestedExplicitSettingsFollowUp == true && context?.reactivatedAfterSettings == true
+            }
+            if restartNeeded {
+                return "If Accessibility or Screen Recording is already enabled in System Settings, reopen the app once so macOS refreshes the status."
+            }
+            if hasAttemptedRecommendedFlow || specialUnresolved.contains(where: { contexts[$0]?.attemptedSettingsRecovery == true }) {
+                return "Accessibility lives in Privacy & Security -> Accessibility. Screen Recording lives in Privacy & Security -> Screen & System Audio Recording."
+            }
+        }
+
+        if hasAttemptedRecommendedFlow {
+            return "\(unresolvedRecommended.count) recommended permission\(unresolvedRecommended.count == 1 ? "" : "s") still need attention."
+        }
+        return nil
+    }
+
+    static func requiresSettingsRecovery(_ capability: Capability) -> Bool {
+        capability == .accessibility || capability == .screenRecording
+    }
+
+    static func stepInstructions(
+        status: [Capability: Bool],
+        contexts: [Capability: Context],
+        hasAttemptedRecommendedFlow: Bool) -> [StepInstruction]
+    {
+        let shouldShow = hasAttemptedRecommendedFlow || Self.requiresInstructionCard(status: status, contexts: contexts)
+        guard shouldShow else { return [] }
+
+        var instructions: [StepInstruction] = []
+        if status[.accessibility] != true {
+            instructions.append(
+                StepInstruction(
+                    capability: .accessibility,
+                    title: "Accessibility",
+                    body: "In Privacy & Security, wait for the list to load, click Accessibility, then turn on \(AppFlavor.current.appName)."))
+        }
+        if status[.screenRecording] != true {
+            instructions.append(
+                StepInstruction(
+                    capability: .screenRecording,
+                    title: "Screen Recording",
+                    body: "In Privacy & Security, wait for the list to load, scroll down, click Screen & System Audio Recording, then turn on \(AppFlavor.current.appName)."))
+        }
+        return instructions
+    }
+
+    private static func requiresInstructionCard(
+        status: [Capability: Bool],
+        contexts: [Capability: Context]) -> Bool
+    {
+        [.accessibility, .screenRecording].contains { capability in
+            status[capability] != true && contexts[capability]?.attemptedSettingsRecovery == true
+        }
+    }
+
+    private static func defaultPendingHint(for capability: Capability) -> String {
+        switch capability {
+        case .accessibility:
+            return "Grant access"
+        case .screenRecording:
+            return "Grant access"
+        default:
+            return "Request access"
+        }
+    }
+
+    private static func systemSettingsDetail(for capability: Capability) -> String? {
+        switch capability {
+        case .accessibility:
+            return "Wait for Privacy & Security to load, click Accessibility, then enable this app."
+        case .screenRecording:
+            return "Privacy & Security can take a moment to load. Wait for the list, click Screen & System Audio Recording, then enable this app."
+        default:
+            return nil
+        }
+    }
+
+    private static func settingsActionLabel(for capability: Capability) -> String {
+        switch capability {
+        case .accessibility:
+            return "Open Privacy & Security"
+        case .screenRecording:
+            return "Open Privacy & Security"
+        default:
+            return "Open Settings"
+        }
+    }
+
+    private static func restartRecoveryDetail(for capability: Capability) -> String? {
+        switch capability {
+        case .accessibility:
+            return "If Privacy & Security is still loading, wait for the list, click Accessibility, and confirm this app is enabled. If it already is, reopen the app once."
+        case .screenRecording:
+            return "If Privacy & Security is still loading, wait for the list, click Screen & System Audio Recording, and confirm this app is enabled. If it already is, reopen the app once."
+        default:
+            return nil
+        }
+    }
+}
 
 struct PermissionsSettings: View {
     let status: [Capability: Bool]
@@ -10,10 +222,19 @@ struct PermissionsSettings: View {
     @AppStorage(showAdvancedSettingsKey) private var showAdvancedSettings = false
     @State private var requestingRecommended = false
     @State private var showOptionalPermissions = false
+    @State private var hasAttemptedRecommendedFlow = false
+    @State private var consumerRecoveryContexts: [Capability: ConsumerPermissionRecoverySupport.Context] = [:]
 
-    private static let consumerRecommendedCapabilities: [Capability] = [
+    static let consumerRecommendedCapabilities: [Capability] = [
         .screenRecording,
         .accessibility,
+        .notifications,
+        .appleScript,
+        .microphone,
+        .location,
+    ]
+
+    static let consumerBulkGrantCapabilities: [Capability] = [
         .notifications,
         .appleScript,
         .microphone,
@@ -68,7 +289,7 @@ struct PermissionsSettings: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Grant the permissions \(AppFlavor.current.appName) needs to help on this Mac.")
                         .font(.title3.weight(.semibold))
-                    Text("Click once to go through the recommended permissions. Accessibility and Screen Recording may open System Settings instead of showing a prompt.")
+                    Text("Go through the recommended permissions once. Accessibility and Screen Recording usually finish in System Settings, and macOS may not report them as granted until you reopen the app.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -81,7 +302,7 @@ struct PermissionsSettings: View {
                         if self.requestingRecommended {
                             Label("Requesting permissions…", systemImage: "hourglass")
                         } else {
-                            Label("Grant recommended permissions", systemImage: "checkmark.shield")
+                            Label("Grant available permissions", systemImage: "checkmark.shield")
                         }
                     }
                     .buttonStyle(.borderedProminent)
@@ -96,8 +317,39 @@ struct PermissionsSettings: View {
                     .disabled(self.requestingRecommended)
                 }
 
+                Text("Accessibility and Screen Recording still need the row buttons below because macOS finishes those in System Settings.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let summary = self.consumerRecoverySummary {
+                    Text(summary)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(self.consumerRecoveryNeedsAttention ? .orange : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if !self.consumerRecoveryInstructions.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("What to click in macOS")
+                            .font(.footnote.weight(.semibold))
+                        ForEach(self.consumerRecoveryInstructions) { instruction in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(instruction.title)
+                                    .font(.footnote.weight(.semibold))
+                                Text(instruction.body)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                }
+
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("If Accessibility or Screen Recording still look pending after you enabled them in System Settings, quit and reopen \(AppFlavor.current.appName) once. macOS can keep those states stale until restart.")
+                    Text("If Accessibility or Screen Recording still looks pending after you enabled it in System Settings, reopen \(AppFlavor.current.appName) once. macOS can leave those statuses stale until the app starts again.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -111,13 +363,24 @@ struct PermissionsSettings: View {
                     .disabled(self.requestingRecommended)
                 }
 
-                PermissionStatusList(
-                    status: self.status,
-                    capabilities: Self.consumerRecommendedCapabilities,
-                    showRefreshButton: false,
-                    refresh: self.refresh)
-                    .padding(.horizontal, 2)
-                    .padding(.vertical, 6)
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Self.consumerRecommendedCapabilities, id: \.self) { capability in
+                        let presentation = self.consumerPresentation(for: capability)
+                        PermissionRow(
+                            capability: capability,
+                            status: presentation.displayState == .granted,
+                            isPending: presentation.displayState == .checking,
+                            actionLabel: presentation.actionLabel,
+                            statusText: presentation.statusText,
+                            detailText: presentation.detailText,
+                            statusColor: presentation.statusColor)
+                        {
+                            Task { await self.handleConsumerCapability(capability, presentation: presentation) }
+                        }
+                    }
+                }
+                .padding(.horizontal, 2)
+                .padding(.vertical, 6)
 
                 DisclosureGroup(isExpanded: self.$showOptionalPermissions) {
                     PermissionStatusList(
@@ -141,16 +404,144 @@ struct PermissionsSettings: View {
             .padding(.vertical, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard self.isConsumer && !self.showAdvancedSettings else { return }
+            self.markConsumerPermissionsReactivated()
+        }
+        .onChange(of: self.status) { _, newValue in
+            self.reconcileConsumerPermissionContexts(using: newValue)
+        }
     }
 
     @MainActor
     private func grantRecommendedPermissions() async {
         guard !self.requestingRecommended else { return }
         self.requestingRecommended = true
+        self.hasAttemptedRecommendedFlow = true
         defer { self.requestingRecommended = false }
 
-        _ = await PermissionManager.ensure(Self.consumerRecommendedCapabilities, interactive: true)
+        var results: [Capability: Bool] = [:]
+        for capability in Self.consumerBulkGrantCapabilities {
+            let result = await PermissionManager.ensure([capability], interactive: true)[capability] == true
+            results[capability] = result
+        }
+
+        self.registerConsumerRecoveryAttempts(from: results, capabilities: Self.consumerRecommendedCapabilities)
         await self.refreshStatusTransitions()
+    }
+
+    private var consumerRecoverySummary: String? {
+        ConsumerPermissionRecoverySupport.recommendedSummary(
+            status: self.status,
+            contexts: self.consumerRecoveryContexts,
+            hasAttemptedRecommendedFlow: self.hasAttemptedRecommendedFlow,
+            isChecking: self.requestingRecommended)
+    }
+
+    private var consumerRecoveryNeedsAttention: Bool {
+        Self.consumerRecommendedCapabilities.contains {
+            let presentation = self.consumerPresentation(for: $0)
+            return presentation.displayState == .needsSystemSettings || presentation.displayState == .restartRequired
+        }
+    }
+
+    private var consumerRecoveryInstructions: [ConsumerPermissionRecoverySupport.StepInstruction] {
+        ConsumerPermissionRecoverySupport.stepInstructions(
+            status: self.status,
+            contexts: self.consumerRecoveryContexts,
+            hasAttemptedRecommendedFlow: self.hasAttemptedRecommendedFlow)
+    }
+
+    private func consumerPresentation(for capability: Capability) -> ConsumerPermissionRecoverySupport.Presentation {
+        ConsumerPermissionRecoverySupport.presentation(
+            for: capability,
+            granted: self.status[capability] == true,
+            isChecking: self.requestingRecommended,
+            context: self.consumerRecoveryContexts[capability])
+    }
+
+    @MainActor
+    private func handleConsumerCapability(
+        _ capability: Capability,
+        presentation: ConsumerPermissionRecoverySupport.Presentation) async
+    {
+        self.hasAttemptedRecommendedFlow = true
+        switch presentation.displayState {
+        case .granted, .checking:
+            return
+        case .restartRequired:
+            DebugActions.restartApp()
+        case .needsSystemSettings:
+            if ConsumerPermissionRecoverySupport.requiresSettingsRecovery(capability) {
+                // Treat an explicit "Open Settings" click as the point where we
+                // can reasonably escalate to restart guidance on the next return.
+                // Before this, keep pointing users back to System Settings.
+                var context = self.consumerRecoveryContexts[capability] ?? .init()
+                context.attemptedSettingsRecovery = true
+                context.requestedExplicitSettingsFollowUp = true
+                context.reactivatedAfterSettings = false
+                self.consumerRecoveryContexts[capability] = context
+            }
+            self.openSettings(for: capability)
+        case .notRequested:
+            let results = await PermissionManager.ensure([capability], interactive: true)
+            self.registerConsumerRecoveryAttempts(from: results, capabilities: [capability])
+            await self.refreshStatusTransitions()
+        }
+    }
+
+    private func openSettings(for capability: Capability) {
+        switch capability {
+        case .accessibility:
+            AccessibilityPermissionHelper.openSettings()
+        case .screenRecording:
+            ScreenRecordingPermissionHelper.openSettings()
+        case .microphone:
+            MicrophonePermissionHelper.openSettings()
+        case .camera:
+            CameraPermissionHelper.openSettings()
+        case .location:
+            LocationPermissionHelper.openSettings()
+        case .notifications:
+            NotificationPermissionHelper.openSettings()
+        case .appleScript:
+            Task { @MainActor in
+                await AppleScriptPermission.requestAuthorization()
+            }
+        case .speechRecognition:
+            break
+        }
+    }
+
+    private func registerConsumerRecoveryAttempts(
+        from results: [Capability: Bool],
+        capabilities: [Capability])
+    {
+        for capability in capabilities where ConsumerPermissionRecoverySupport.requiresSettingsRecovery(capability) {
+            if results[capability] == true {
+                self.consumerRecoveryContexts.removeValue(forKey: capability)
+                continue
+            }
+            self.consumerRecoveryContexts[capability] = .init(
+                attemptedSettingsRecovery: true,
+                reactivatedAfterSettings: false)
+        }
+    }
+
+    private func markConsumerPermissionsReactivated() {
+        for capability in Self.consumerRecommendedCapabilities where ConsumerPermissionRecoverySupport.requiresSettingsRecovery(capability) {
+            guard var context = self.consumerRecoveryContexts[capability], context.attemptedSettingsRecovery else { continue }
+            context.reactivatedAfterSettings = true
+            self.consumerRecoveryContexts[capability] = context
+        }
+    }
+
+    private func reconcileConsumerPermissionContexts(using status: [Capability: Bool]) {
+        for capability in Self.consumerRecommendedCapabilities where ConsumerPermissionRecoverySupport.requiresSettingsRecovery(capability) {
+            if status[capability] == true {
+                self.consumerRecoveryContexts.removeValue(forKey: capability)
+            }
+        }
     }
 
     @MainActor
@@ -303,6 +694,10 @@ struct PermissionRow: View {
     let status: Bool
     let isPending: Bool
     let compact: Bool
+    let actionLabel: String?
+    let statusText: String?
+    let detailText: String?
+    let statusColor: Color?
     let action: () -> Void
 
     init(
@@ -310,12 +705,20 @@ struct PermissionRow: View {
         status: Bool,
         isPending: Bool = false,
         compact: Bool = false,
+        actionLabel: String? = nil,
+        statusText: String? = nil,
+        detailText: String? = nil,
+        statusColor: Color? = nil,
         action: @escaping () -> Void)
     {
         self.capability = capability
         self.status = status
         self.isPending = isPending
         self.compact = compact
+        self.actionLabel = actionLabel
+        self.statusText = statusText
+        self.detailText = detailText
+        self.statusColor = statusColor
         self.action = action
     }
 
@@ -333,6 +736,12 @@ struct PermissionRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if let detailText, !detailText.isEmpty {
+                    Text(detailText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .layoutPriority(1)
@@ -347,11 +756,14 @@ struct PermissionRow: View {
                     ProgressView()
                         .controlSize(.small)
                         .frame(width: 78)
-                } else {
-                    Button("Grant") { self.action() }
+                } else if let actionLabel {
+                    Button(actionLabel) { self.action() }
                         .buttonStyle(.bordered)
                         .controlSize(self.compact ? .small : .regular)
                         .frame(minWidth: self.compact ? 68 : 78, alignment: .trailing)
+                } else {
+                    Spacer()
+                        .frame(width: 78)
                 }
 
                 if self.status {
@@ -363,9 +775,9 @@ struct PermissionRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text(self.pendingHint)
+                    Text(self.statusText ?? self.pendingHint)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.statusColor ?? .secondary)
                 }
             }
             .frame(minWidth: self.compact ? 86 : 104, alignment: .trailing)

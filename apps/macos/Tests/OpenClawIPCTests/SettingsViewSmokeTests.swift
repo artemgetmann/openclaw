@@ -141,6 +141,20 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `consumer permissions settings builds body`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let view = PermissionsSettings(
+                status: [
+                    .notifications: true,
+                    .screenRecording: false,
+                    .accessibility: false,
+                ],
+                refresh: {},
+                showOnboarding: {})
+            _ = view.body
+        }
+    }
+
     @Test func `settings root view builds body`() {
         let state = AppState(preview: true)
         let view = SettingsRootView(state: state, updater: nil, initialTab: .general)
