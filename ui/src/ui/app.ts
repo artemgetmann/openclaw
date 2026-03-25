@@ -393,6 +393,9 @@ export class OpenClawApp extends LitElement {
   @state() overviewShowGatewayPassword = false;
   @state() overviewLogLines: string[] = [];
   @state() overviewLogCursor = 0;
+  @state() aiReadinessLoading = false;
+  @state() aiReadinessResult: import("./types.js").ModelsReadinessResult | null = null;
+  @state() aiReadinessError: string | null = null;
 
   @state() skillsLoading = false;
   @state() skillsReport: SkillStatusReport | null = null;

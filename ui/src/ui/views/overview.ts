@@ -10,6 +10,7 @@ import type {
   AttentionItem,
   CronJob,
   CronStatus,
+  ModelsReadinessResult,
   SessionsListResult,
   SessionsUsageResult,
   SkillStatusReport,
@@ -45,6 +46,9 @@ export type OverviewProps = {
   attentionItems: AttentionItem[];
   eventLog: EventLogEntry[];
   overviewLogLines: string[];
+  aiReadinessLoading: boolean;
+  aiReadinessResult: ModelsReadinessResult | null;
+  aiReadinessError: string | null;
   showGatewayToken: boolean;
   showGatewayPassword: boolean;
   onSettingsChange: (next: UiSettings) => void;
@@ -189,6 +193,17 @@ export function renderOverview(props: OverviewProps) {
       </div>
     `;
   })();
+
+  const aiReadiness = props.aiReadinessResult;
+  const aiReadinessStatusClass =
+    aiReadiness?.status === "ready" ? "ok" : aiReadiness?.status === "blocked" ? "warn" : "";
+  const aiReadinessCheckedAt =
+    aiReadiness?.lastProbeAt != null
+      ? formatRelativeTimestamp(aiReadiness.lastProbeAt)
+      : t("common.na");
+  const aiReadinessLatency =
+    aiReadiness?.probeLatencyMs != null ? `${aiReadiness.probeLatencyMs}ms` : t("common.na");
+  const aiReadinessActions = aiReadiness?.actions ?? [];
 
   const currentLocale = i18n.getLocale();
 
@@ -372,6 +387,97 @@ export function renderOverview(props: OverviewProps) {
                 </div>
               `
         }
+      </div>
+
+      <div class="card">
+        <div class="card-title">AI Readiness</div>
+        <div class="card-sub">Truthful first-run status for the default model path.</div>
+        <div class="stat-grid" style="margin-top: 16px;">
+          <div class="stat">
+            <div class="stat-label">Status</div>
+            <div class="stat-value ${aiReadinessStatusClass}">
+              ${
+                props.aiReadinessLoading
+                  ? "Checking"
+                  : props.aiReadinessError
+                    ? "Error"
+                    : aiReadiness?.status === "ready"
+                      ? "Ready"
+                      : aiReadiness?.status === "blocked"
+                        ? "Blocked"
+                        : "Unknown"
+              }
+            </div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Mode</div>
+            <div class="stat-value">
+              ${aiReadiness ? (aiReadiness.mode === "managed" ? "Managed" : "BYOK") : t("common.na")}
+            </div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Default Model</div>
+            <div class="stat-value" style="font-size: 14px;">${aiReadiness?.defaultModel ?? t("common.na")}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Last Check</div>
+            <div class="stat-value">${aiReadinessCheckedAt}</div>
+          </div>
+        </div>
+
+        ${
+          props.aiReadinessError
+            ? html`<div class="callout danger" style="margin-top: 14px;">${props.aiReadinessError}</div>`
+            : aiReadiness
+              ? html`
+                  <div
+                    class="callout ${aiReadiness.status === "blocked" ? "danger" : ""}"
+                    style="margin-top: 14px;"
+                  >
+                    <div>${aiReadiness.summary}</div>
+                    <div class="muted" style="margin-top: 8px;">
+                      Probe latency: ${aiReadinessLatency}
+                    </div>
+                    ${
+                      aiReadiness.probe?.error
+                        ? html`<div class="muted" style="margin-top: 8px;">${aiReadiness.probe.error}</div>`
+                        : nothing
+                    }
+                  </div>
+                  <div class="muted" style="margin-top: 10px;">
+                    Runtime: <span class="mono">${aiReadiness.stateDir}</span>
+                  </div>
+                  ${
+                    aiReadiness.mode === "managed" && aiReadiness.sharedProfileId
+                      ? html`<div class="muted" style="margin-top: 6px;">
+                          Shared profile: <span class="mono">${aiReadiness.sharedProfileId}</span>
+                        </div>`
+                      : nothing
+                  }
+                  ${
+                    aiReadinessActions.length > 0
+                      ? html`
+                          <div style="margin-top: 12px;">
+                            ${aiReadinessActions.map(
+                              (entry) =>
+                                html`<div class="muted" style="margin-top: 6px;">${entry}</div>`,
+                            )}
+                          </div>
+                        `
+                      : nothing
+                  }
+                `
+              : html`
+                  <div class="callout" style="margin-top: 14px">
+                    Run an AI readiness check to verify the configured model path.
+                  </div>
+                `
+        }
+
+        <div class="row" style="margin-top: 14px;">
+          <button class="btn" @click=${() => props.onRefresh()}>Retry AI check</button>
+          <button class="btn" @click=${() => props.onNavigate("aiAgents")}>Use your own model key</button>
+        </div>
       </div>
     </section>
 

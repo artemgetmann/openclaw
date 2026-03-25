@@ -173,6 +173,65 @@ export const ModelsListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ModelsReadinessParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const ModelsReadinessProbeSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    model: Type.Optional(NonEmptyString),
+    profileId: Type.Optional(NonEmptyString),
+    label: NonEmptyString,
+    source: Type.Union([Type.Literal("profile"), Type.Literal("env"), Type.Literal("models.json")]),
+    mode: Type.Optional(Type.String()),
+    status: Type.Union([
+      Type.Literal("ok"),
+      Type.Literal("auth"),
+      Type.Literal("rate_limit"),
+      Type.Literal("billing"),
+      Type.Literal("timeout"),
+      Type.Literal("format"),
+      Type.Literal("unknown"),
+      Type.Literal("no_model"),
+    ]),
+    reasonCode: Type.Optional(Type.String()),
+    error: Type.Optional(Type.String()),
+    latencyMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsReadinessResultSchema = Type.Object(
+  {
+    status: Type.Union([Type.Literal("ready"), Type.Literal("blocked"), Type.Literal("checking")]),
+    mode: Type.Union([Type.Literal("managed"), Type.Literal("byok")]),
+    defaultModel: NonEmptyString,
+    configPath: NonEmptyString,
+    stateDir: NonEmptyString,
+    agentDir: NonEmptyString,
+    authMode: Type.Union([Type.Literal("shared"), Type.Literal("byok")]),
+    sharedProfileId: Type.Optional(NonEmptyString),
+    reasonCodes: Type.Array(
+      Type.Union([
+        Type.Literal("wrong_state_dir"),
+        Type.Literal("missing_auth"),
+        Type.Literal("probe_auth_failed"),
+        Type.Literal("probe_rate_limited"),
+        Type.Literal("probe_billing_failed"),
+        Type.Literal("probe_timeout"),
+        Type.Literal("probe_no_model"),
+        Type.Literal("probe_unknown"),
+      ]),
+    ),
+    summary: Type.String(),
+    actions: Type.Array(Type.String()),
+    byokAvailable: Type.Boolean(),
+    lastProbeAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    probeLatencyMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    probe: Type.Optional(ModelsReadinessProbeSchema),
+  },
+  { additionalProperties: false },
+);
+
 export const SkillsStatusParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
