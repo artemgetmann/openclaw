@@ -75,6 +75,8 @@ describe("handshake auth helpers", () => {
         hasBrowserOriginHeader: false,
         isControlUi: false,
         isWebchat: false,
+        clientId: GATEWAY_CLIENT_IDS.PROBE,
+        clientMode: GATEWAY_CLIENT_MODES.PROBE,
         reason: "not-paired",
       }),
     ).toBe(true);
@@ -84,6 +86,8 @@ describe("handshake auth helpers", () => {
         hasBrowserOriginHeader: false,
         isControlUi: false,
         isWebchat: false,
+        clientId: GATEWAY_CLIENT_IDS.PROBE,
+        clientMode: GATEWAY_CLIENT_MODES.PROBE,
         reason: "metadata-upgrade",
       }),
     ).toBe(true);
@@ -93,9 +97,22 @@ describe("handshake auth helpers", () => {
         hasBrowserOriginHeader: false,
         isControlUi: false,
         isWebchat: false,
+        clientId: GATEWAY_CLIENT_IDS.PROBE,
+        clientMode: GATEWAY_CLIENT_MODES.PROBE,
         reason: "role-upgrade",
       }),
     ).toBe(false);
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        clientId: GATEWAY_CLIENT_IDS.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        reason: "role-upgrade",
+      }),
+    ).toBe(true);
   });
 
   it("skips backend self-pairing for local trusted backend clients", () => {

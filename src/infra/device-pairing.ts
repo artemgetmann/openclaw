@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../gateway/protocol/client-info.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
@@ -175,6 +176,22 @@ function mergeScopes(...items: Array<string[] | undefined>): string[] | undefine
   return [...scopes];
 }
 
+function shouldPromotePendingRequestToSilent(params: {
+  existing: DevicePairingPendingRequest;
+  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">;
+  isRepair: boolean;
+}): boolean {
+  const incomingRole = normalizeRole(params.incoming.role);
+  return (
+    params.isRepair &&
+    params.incoming.silent === true &&
+    params.incoming.clientId === GATEWAY_CLIENT_IDS.MACOS_APP &&
+    params.incoming.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+    incomingRole === "node" &&
+    params.existing.clientId === GATEWAY_CLIENT_IDS.MACOS_APP
+  );
+}
+
 function mergePendingDevicePairingRequest(
   existing: DevicePairingPendingRequest,
   incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
@@ -182,6 +199,14 @@ function mergePendingDevicePairingRequest(
 ): DevicePairingPendingRequest {
   const existingRole = normalizeRole(existing.role);
   const incomingRole = normalizeRole(incoming.role);
+  // A stale interactive request for the local packaged macOS node bridge should
+  // not poison future same-machine repair attempts. Once the incoming request is
+  // known-safe and silent, promote the pending record so startup can auto-heal.
+  const promoteToSilent = shouldPromotePendingRequestToSilent({
+    existing,
+    incoming,
+    isRepair,
+  });
   return {
     ...existing,
     displayName: incoming.displayName ?? existing.displayName,
@@ -194,7 +219,8 @@ function mergePendingDevicePairingRequest(
     scopes: mergeScopes(existing.scopes, incoming.scopes),
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
     // If either request is interactive, keep the pending request visible for approval.
-    silent: Boolean(existing.silent && incoming.silent),
+    // The one exception is the trusted same-Mac macOS node repair path above.
+    silent: promoteToSilent ? true : Boolean(existing.silent && incoming.silent),
     isRepair: existing.isRepair || isRepair,
     ts: Date.now(),
   };

@@ -51,8 +51,14 @@ export function shouldAllowSilentLocalPairing(params: {
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
   isWebchat: boolean;
+  clientId: string | undefined;
+  clientMode: string | undefined;
   reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
 }): boolean {
+  const isLocalMacAppNodeUpgrade =
+    params.clientId === GATEWAY_CLIENT_IDS.MACOS_APP &&
+    params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+    params.reason === "role-upgrade";
   return (
     params.isLocalClient &&
     (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
@@ -60,10 +66,12 @@ export function shouldAllowSilentLocalPairing(params: {
     // because startup establishes multiple roles for the same signed device
     // (for example node + operator in the macOS app), or because the app reports
     // newer platform/device-family metadata after an update.
+    // Keep generic role upgrades explicit, but allow the packaged macOS app's own
+    // local node bridge to upgrade from operator -> node without a dead-end prompt.
     (params.reason === "not-paired" ||
-      params.reason === "role-upgrade" ||
       params.reason === "scope-upgrade" ||
-      params.reason === "metadata-upgrade")
+      params.reason === "metadata-upgrade" ||
+      isLocalMacAppNodeUpgrade)
   );
 }
 
