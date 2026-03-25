@@ -20,7 +20,7 @@ The consumer build is a separate app/runtime identity, not a separate repository
 - Named instance gateway port: deterministic FNV-based offset from the instance id
 - Default launch labels: `ai.openclaw.consumer` and `ai.openclaw.consumer.gateway`
 - Named instance launch labels: `ai.openclaw.consumer.<instance-id>` and `ai.openclaw.consumer.<instance-id>.gateway`
-- Logs: `/tmp/openclaw-consumer`
+- Logs: `~/Library/Application Support/OpenClaw Consumer/.openclaw/logs`
 
 This keeps consumer testing from silently reusing the founder runtime.
 
@@ -107,7 +107,7 @@ Bundled skills are intentionally curated, not universal.
   - WhatsApp CLI
   - extra Google CLI setup beyond the seeded Google lane
   - manually provisioned founder-only skills
-macOS caveat:
+    macOS caveat:
 
 - Accessibility and Screen Recording can remain visually pending until the app restarts, even after the user grants them in System Settings.
 - Screen Recording may open System Settings directly instead of showing an in-app prompt.
@@ -119,16 +119,71 @@ macOS caveat:
 Package the consumer app with the dedicated wrapper:
 
 ```bash
-scripts/package-consumer-mac-app.sh
+bash scripts/package-consumer-mac-app.sh
+```
+
+Verify the packaged app before you open it:
+
+```bash
+bash scripts/verify-consumer-mac-app.sh
 ```
 
 Open the packaged app with the matching preflight:
 
 ```bash
-scripts/open-consumer-mac-app.sh
+bash scripts/open-consumer-mac-app.sh
 ```
 
-These wrappers fail fast unless the bundle name, bundle identifier, and app variant all match the consumer app. That prevents accidentally launching the generic founder/dev shell during consumer testing.
+These wrappers fail fast unless the bundle name, bundle identifier, app variant, signing state, and runtime expectations all match the consumer app. That prevents accidentally launching the generic founder/dev shell during consumer testing.
+
+## Reproducible demo checklist
+
+Use this exact path when you want a repeatable consumer demo build instead of a
+"works on my machine" shrug:
+
+1. Package the guarded consumer app:
+
+```bash
+bash scripts/package-consumer-mac-app.sh
+```
+
+2. Re-run the verifier if you want a standalone verdict:
+
+```bash
+bash scripts/verify-consumer-mac-app.sh
+```
+
+3. Open the guarded bundle:
+
+```bash
+bash scripts/open-consumer-mac-app.sh
+```
+
+4. Confirm the first-run expectations printed by the verifier:
+   - runtime root: `~/Library/Application Support/OpenClaw Consumer`
+   - config path: `~/Library/Application Support/OpenClaw Consumer/.openclaw/openclaw.json`
+   - workspace path: `~/Library/Application Support/OpenClaw Consumer/.openclaw/workspace`
+   - logs path: `~/Library/Application Support/OpenClaw Consumer/.openclaw/logs`
+   - gateway port: `19001`
+   - launch labels: `ai.openclaw.consumer` and `ai.openclaw.consumer.gateway`
+
+5. If you need to hand the build to another Mac for a demo, zip the `.app`
+   without changing its on-disk structure:
+
+```bash
+ditto -c -k --sequesterRsrc --keepParent \
+  "dist/OpenClaw Consumer.app" \
+  "dist/OpenClaw Consumer.zip"
+```
+
+6. On the receiving Mac or clean macOS VM:
+   - unzip the archive
+   - use Finder -> right click -> **Open** on `OpenClaw Consumer.app`
+   - if Gatekeeper still blocks the app, that is expected for the current Apple Development-signed demo build
+
+The point of this checklist is clarity: if the verifier passes, the consumer
+bundle is assembled correctly. Any remaining friction is launch trust, not
+consumer bundle identity.
 
 Default consumer packaging and launch are reserved for the main consumer checkout. Feature worktrees should always use `--instance <id>` so they do not fight over the shared runtime or port.
 
@@ -140,15 +195,15 @@ consumer app on one Mac without sharing state.
 Package two isolated instances:
 
 ```bash
-scripts/package-consumer-mac-app.sh --instance ux-audit
-scripts/package-consumer-mac-app.sh --instance agent-a
+bash scripts/package-consumer-mac-app.sh --instance ux-audit
+bash scripts/package-consumer-mac-app.sh --instance agent-a
 ```
 
 Open them in parallel:
 
 ```bash
-scripts/open-consumer-mac-app.sh --instance ux-audit
-scripts/open-consumer-mac-app.sh --instance agent-a
+bash scripts/open-consumer-mac-app.sh --instance ux-audit
+bash scripts/open-consumer-mac-app.sh --instance agent-a
 ```
 
 What changes per instance:
@@ -162,7 +217,7 @@ What changes per instance:
 Use `--replace` only when you want to recycle the same named instance:
 
 ```bash
-scripts/open-consumer-mac-app.sh --instance ux-audit --replace
+bash scripts/open-consumer-mac-app.sh --instance ux-audit --replace
 ```
 
 That path targets the matching bundle binary only. It does not broad-kill other
@@ -175,6 +230,10 @@ Consumer v1 targets signed + notarized direct download distribution.
 - Web-based subscriptions and billing are allowed and assumed outside the app.
 - Mac App Store distribution is deferred.
 - Current product decisions should not be shaped by Mac App Store constraints.
+- Current packaging status:
+  - the guarded consumer `.app` path is reproducible now
+  - raw demo handoff is acceptable with a manual trust/open step
+  - broader distribution is still blocked by Developer ID signing plus notarization/stapling
 
 ## Future iPhone path
 
