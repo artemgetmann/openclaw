@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-24
+Last updated: 2026-03-25
 Owner: consumer execution team
 Status: Active
 
@@ -84,7 +84,41 @@ Notes:
 - `GatewayProcessManager` now skips redundant launch-agent ensure work while startup is already in progress, which reduced a packaged-app cold-start self-restart race.
 - The consumer gateway health path is verified; the remaining CLI quirk is that bare `gateway status` still assumes profile-derived launchd labels unless the explicit consumer gateway label is present in the env.
 - Consumer app runtime now sets `OPENCLAW_CONSUMER_MINIMAL_STARTUP=1`, which keeps first boot non-blocking by skipping founder-oriented sidecars (session lock cleanup, browser-control sidecar, Gmail watcher, internal hook loading, plugin services, memory backend bootstrap) and by backgrounding channel startup.
-- Draft PR is open for review:
+- 2026-03-25 packaged install findings from a real MacBook demo pass:
+  - Desktop zip handoff is real and launches the packaged build, but `.zip` does not feel like an installer:
+    - it unzips onto the Desktop
+    - it does not move itself into `Applications`
+  - Default consumer package is a menu bar app (`LSUIElement=true`), so Finder launch can feel like "nothing opened" unless the Settings/onboarding window appears immediately.
+  - Launching the default consumer build on a Mac with existing consumer state reuses that state exactly as designed; this contaminated the first "fresh install" check.
+  - Isolated named-instance package (`fresh-install`) produced a better fresh-path signal, but still exposed setup friction that should be treated as product issues:
+    - onboarding first showed a generic `Setup problem` + `Try Again` state before the real flow resumed
+    - a device pairing alert (`Allow device to connect?`) appeared during local onboarding; for consumer local setup this likely needs auto-approval or suppression
+    - the security warning copy is too heavy and too early for first-run consumer UX
+    - `QuickStart` vs `Manual` is too technical for the first-run consumer path; default users should not need to choose a setup mode up front
+    - once the isolated lane had partial state, onboarding surfaced `Existing config detected` and `Config handling` steps; these are valid for recovery/debug, but they are too nerdy for the primary consumer flow
+  - Current product-status read:
+    - manual-trust demo packaging is good enough to test with humans
+    - onboarding/install UX is still rough enough that we should run at least one cleanup pass before calling it ready for broader demo distribution
+  - Current update status:
+    - the packaged consumer debug build ships with `SUEnableAutomaticChecks=false`
+    - `SUFeedURL` is blank
+    - so these MVP demo builds do not auto-update yet
+  - 2026-03-25 follow-up fix pass after fresh-install repro:
+    - fixed consumer QuickStart so clean installs show the resolved instance-scoped gateway port instead of the founder/default `18789`
+    - fixed browser profile persistence to write a schema-valid managed profile (`browser.profiles.user.color`), which stopped the `config reload skipped (invalid config)` loop after Chrome selection
+    - made the Chrome profile row fully clickable instead of only parts of the row
+    - changed successful one-page consumer onboarding to hand off into Settings instead of silently closing the only visible window
+    - added one internal onboarding gateway-readiness retry so slow-but-recovering local startups do not immediately dump users into `Setup problem`
+  - 2026-03-25 consumer setup honesty + launch cleanup pass:
+    - consumer onboarding no longer hands off to `General` as if setup were done; the post-browser handoff now points users at `Channels`, which matches the actual next required step
+    - consumer onboarding copy no longer implies the app is fully ready before Telegram/channel setup happens
+    - browser selection now writes a schema-valid managed profile by including the derived CDP port, so the runtime accepts the config after onboarding instead of silently carrying a broken browser stub
+    - consumer app launch no longer starts the generic device-pairing approval prompt, which previously asked local users to approve their own Mac during first-run setup
+  - Remaining consumer setup truth after that pass:
+    - first-run is visibly better and more honest, but it is still not a true end-to-end completion flow
+    - Telegram/channel setup, model/provider credential setup, and first successful task still need to be part of the guided consumer setup before we can call onboarding complete
+    - moving the app into `Applications` is still not automated because the current handoff is a raw `.zip`, not an installer or drag-to-Applications DMG
+  - Draft PR is open for review:
   - `https://github.com/artemgetmann/openclaw/pull/72`
   - head: `codex/simplify-consumer-bootstrap-flow-telegram`
   - base: `codex/consumer-openclaw-project`
@@ -933,3 +967,64 @@ Out of scope:
   - Add the same `consumer:preflight` expectation to any future consumer smoke/runbook steps so agents stop debugging screenshots first.
   - Run a separate lane for shared-auth hardening so early users do not hit surprise OAuth refresh failures.
   - Run a separate lane for signed-in browser reliability and the public-web-search fallback experience.
+
+### 2026-03-25 consumer packaging and first-launch repro
+
+- Packaging lane:
+  - `bash scripts/package-consumer-mac-app.sh --instance fresh-install`
+  - `bash scripts/package-consumer-mac-app.sh --instance launch-smoke`
+  - both produced verified consumer `.app` bundles with isolated bundle ids, runtime roots, and gateway ports
+- Verified:
+  - `swift test --package-path apps/macos --filter BrowserSetupSupportTests`
+  - `swift test --package-path apps/macos --filter OpenClawConfigFileTests`
+  - `scripts/verify-consumer-mac-app.sh` reports the expected consumer bundle metadata and correctly classifies Gatekeeper rejection as an Apple Development signing blocker, not a bundle-assembly failure
+  - a brand-new `launch-smoke` instance opened directly into the onboarding window from a packaged app launch
+- Fixes landed during this pass:
+  - consumer quickstart now uses the resolved instance gateway port instead of falling back to founder `18789`
+  - browser profile persistence now writes a valid `color` field and clears `profiles.user` cleanly on reset
+  - Chrome profile rows are fully clickable instead of only the text/icon hotspots
+  - successful one-page consumer onboarding now reopens Settings instead of disappearing into menu-bar-only limbo
+  - onboarding wizard now gets one internal retry before surfacing `Setup problem`
+  - consumer app launch path now tries to surface a visible onboarding/settings window on first launch and when a duplicate instance is reopened
+- Repro findings from manual Desktop testing:
+  - stale unzipped Desktop copies and stale instance-scoped defaults can make the app appear "broken" even after packaging fixes, because Finder can reopen an already-running menu-bar instance that has no visible window to show
+  - for reproducible checks, use a brand-new instance id or wipe both:
+    - `~/Library/Application Support/OpenClaw Consumer/instances/<id>`
+    - defaults domain `ai.openclaw.consumer.mac.debug.<id>`
+  - zip-based MVP demos still do not auto-move themselves into `Applications`; that is expected for a raw `.zip`, not a bug
+- Still blocking broader distribution:
+  - Gatekeeper/manual trust friction remains because the bundle is Apple Development signed
+  - auto-updates are still disabled in the packaged consumer app
+
+### 2026-03-25 consumer onboarding gap list after successful visible launch
+
+- User-validated progress:
+  - double-click launch now opens a visible app window instead of silently disappearing into menu-bar-only state
+  - browser profile selection is simple enough for a real user to complete
+  - landing in Settings after setup is clearer than vanishing
+- Product gaps still exposed by the test:
+  - onboarding currently behaves like partial bootstrap, not full setup
+  - it does not carry the user through channel setup, model/provider auth, permission completion, or first successful task
+  - ending setup in Settings forces the user to infer what to do next, which is still consumer-hostile
+  - local device pairing alert (`Allow device to connect?`) is still too technical for this path and should be auto-approved or suppressed for same-Mac consumer onboarding
+  - raw zip delivery still does not move the app into `Applications`; if we want install-like behavior we need either a DMG/app-drag flow or an explicit first-run prompt/instruction
+  - packaged demo builds still have auto-updates disabled, so distribution iteration is manual right now
+- Concrete runtime truth from the `launch-smoke` instance:
+  - default model was seeded automatically to `openai-codex/gpt-5.4`
+  - bundled skill allowlist was seeded automatically
+  - gateway token/port/runtime/workspace were created automatically
+  - no consumer-owned credential files were created under the instance runtime during onboarding
+  - browser profile selection currently writes a config shape that the CLI/runtime validator still rejects (`browser.profiles.user: Profile must set cdpPort or cdpUrl`), which means the browser step is still not fully production-valid even though the UI flow looks successful
+- Implication:
+  - current consumer onboarding is not yet a true end-to-end "ready to do first task" path
+  - before calling onboarding done, it should either:
+    - complete Telegram/model/browser/permission setup in one guided flow, or
+    - stop claiming completion and explicitly drive the user through the remaining required steps
+
+### 2026-03-25 next parallel lanes
+
+- Next execution is split across three parallel lanes:
+  - onboarding-to-first-task
+  - signing-and-notarization demo distribution
+  - update/appcast strategy
+- Every lane must append its concrete findings, decisions, and verification steps to this tracker before merge.
