@@ -648,6 +648,8 @@ export type ToolCatalogGroup =
   import("../../../src/gateway/protocol/schema/types.js").ToolCatalogGroup;
 export type ToolsCatalogResult =
   import("../../../src/gateway/protocol/schema/types.js").ToolsCatalogResult;
+export type ModelsReadinessResult =
+  import("../../../src/gateway/protocol/schema/types.js").ModelsReadinessResult;
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 

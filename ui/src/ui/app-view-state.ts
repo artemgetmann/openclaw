@@ -305,6 +305,9 @@ export type AppViewState = {
     overviewShowGatewayPassword: boolean;
     overviewLogLines: string[];
     overviewLogCursor: number;
+    aiReadinessLoading: boolean;
+    aiReadinessResult: import("./types.js").ModelsReadinessResult | null;
+    aiReadinessError: string | null;
     client: GatewayBrowserClient | null;
     refreshSessionsAfterChat: Set<string>;
     connect: () => void;

@@ -18,6 +18,7 @@ import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
+import { loadModelReadiness } from "./controllers/model-readiness.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { loadSessions } from "./controllers/sessions.ts";
@@ -482,6 +483,7 @@ export async function loadOverview(host: SettingsHost) {
     loadDebug(app),
     loadSkills(app),
     loadUsage(app),
+    loadModelReadiness(app),
     loadOverviewLogs(app),
   ]);
   buildAttentionItems(app);
@@ -605,6 +607,22 @@ function buildAttentionItems(host: OpenClawApp) {
       icon: "clock",
       title: `${overdue.length} overdue job${overdue.length > 1 ? "s" : ""}`,
       description: overdue.map((j) => j.name).join(", "),
+    });
+  }
+
+  if (host.aiReadinessError) {
+    items.push({
+      severity: "error",
+      icon: "radio",
+      title: "AI readiness check failed",
+      description: host.aiReadinessError,
+    });
+  } else if (host.aiReadinessResult?.status === "blocked") {
+    items.push({
+      severity: "error",
+      icon: "zap",
+      title: "AI not ready",
+      description: host.aiReadinessResult.summary,
     });
   }
 
