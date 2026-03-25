@@ -92,7 +92,9 @@ This means the refactor and the consumer build are the same work — not two sep
 - You end up with ONE bot, ONE codebase, that is both your personal agent AND the product
 
 ### Refactor Strategy
+
 The refactor doesn't happen on `main`. It happens as part of building `codex/consumer-openclaw-project`.
+
 - Branch off current `main` (so you have its working code as a starting point)
 - Aggressively simplify on `codex/consumer-openclaw-project` — remove everything not needed for the core loop
 - Your live bot on `main` stays untouched and working throughout
@@ -119,6 +121,7 @@ pnpm openclaw gateway --port 19001 --bind loopback
 ```
 
 ### Rule
+
 Your personal bot stays on `main`. `codex/consumer-openclaw-project` is the product branch. Only switch your personal bot when that branch is proven stable.
 
 ---
