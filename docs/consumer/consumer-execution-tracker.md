@@ -46,8 +46,8 @@ Use this mini-checklist for the runtime/bootstrap work in this branch:
 - Seeded templates/default config: implemented and verified in the consumer runtime/workspace
 - Bundled starter skills: audited and pinned in consumer bootstrap
   - current seeded allowlist:
-    `apple-notes`, `apple-reminders`, `bear-notes`, `camsnap`, `canvas`,
-    `gog`, `goplaces`, `himalaya`, `peekaboo`, `summarize`, `weather`
+    `consumer-setup`, `apple-notes`, `apple-reminders`, `gog`, `goplaces`,
+    `himalaya`, `peekaboo`, `summarize`, `weather`
   - rationale:
     keep the baseline curated, but include email and Google Workspace because
     consumer operator value is weak without inbox/calendar surfaces

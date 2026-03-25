@@ -142,8 +142,8 @@ repo, so there was nothing to commit`.
     - compare the shipped allowlist against the real consumer/founder-used skill
       set
     - keep the current bundled baseline explicit:
-      `apple-notes`, `apple-reminders`, `bear-notes`, `camsnap`, `canvas`,
-      `gog`, `goplaces`, `himalaya`, `peekaboo`, `summarize`, `weather`
+      `consumer-setup`, `apple-notes`, `apple-reminders`, `gog`,
+      `goplaces`, `himalaya`, `peekaboo`, `summarize`, `weather`
     - keep `himalaya` in the starter pack because consumer email triage/drafting
       is too core to leave out of the default surface
     - keep `gog` in the starter pack because Gmail/Calendar/Drive/Docs maps
@@ -184,8 +184,8 @@ suggestions...` and system metadata can appear in the visible chat stream.
 - Expand the consumer bundled-skill set to include the useful default skills we
   actually expect early testers to need.
   - Current baseline now includes:
-    `apple-notes`, `apple-reminders`, `bear-notes`, `camsnap`, `canvas`,
-    `gog`, `goplaces`, `himalaya`, `peekaboo`, `summarize`, `weather`
+    `consumer-setup`, `apple-notes`, `apple-reminders`, `gog`, `goplaces`,
+    `himalaya`, `peekaboo`, `summarize`, `weather`
   - Expected behavior:
     - treat `himalaya` as the default provider-agnostic email lane
     - treat `gog` as the default Google Workspace lane for Gmail/Calendar/Drive
