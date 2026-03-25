@@ -2,6 +2,12 @@ import OpenClawProtocol
 import SwiftUI
 
 extension ChannelsSettings {
+    private var consumerTelegramOwnershipIssue: String? {
+        guard self.isConsumerSimpleTelegramPath else { return nil }
+        guard !self.store.isPreview else { return nil }
+        return GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage()
+    }
+
     private var isConsumerSimpleTelegramPath: Bool {
         AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
     }
@@ -39,6 +45,7 @@ extension ChannelsSettings {
 
     private var consumerTelegramLooksLive: Bool {
         guard self.isConsumerSimpleTelegramPath else { return false }
+        guard self.consumerTelegramOwnershipIssue == nil else { return false }
         if let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self) {
             if status.configured && (status.running || status.probe?.ok == true) {
                 return true
@@ -167,6 +174,9 @@ extension ChannelsSettings {
     }
 
     var telegramTint: Color {
+        if self.consumerTelegramOwnershipIssue != nil {
+            return .orange
+        }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else {
             let fallback = self.consumerTelegramConfigFallback
@@ -230,6 +240,9 @@ extension ChannelsSettings {
     }
 
     var telegramSummary: String {
+        if self.consumerTelegramOwnershipIssue != nil {
+            return "Needs attention"
+        }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else {
             if self.consumerTelegramConflictMessage(self.store.telegramSetupStatus) != nil {
@@ -309,6 +322,9 @@ extension ChannelsSettings {
     }
 
     var telegramDetails: String? {
+        if let ownershipIssue = self.consumerTelegramOwnershipIssue {
+            return ownershipIssue
+        }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else {
             if let conflict = self.consumerTelegramConflictMessage(self.store.telegramSetupStatus) {

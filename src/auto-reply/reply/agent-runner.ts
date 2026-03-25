@@ -28,6 +28,7 @@ import {
 } from "../fallback-state.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
@@ -199,7 +200,7 @@ export async function runReplyAgent(params: {
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();
-      return undefined;
+      return { text: SILENT_REPLY_TOKEN };
     }
   }
 
@@ -212,14 +213,14 @@ export async function runReplyAgent(params: {
 
   if (activeRunQueueAction === "drop") {
     typing.cleanup();
-    return undefined;
+    return { text: SILENT_REPLY_TOKEN };
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     await touchActiveSessionEntry();
     typing.cleanup();
-    return undefined;
+    return { text: SILENT_REPLY_TOKEN };
   }
 
   await typingSignals.signalRunStart();

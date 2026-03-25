@@ -513,6 +513,7 @@ export const dispatchTelegramMessage = async ({
   });
 
   let queuedFinal = false;
+  let silenceExpected = false;
 
   if (statusReactionController) {
     void statusReactionController.setThinking();
@@ -532,7 +533,7 @@ export const dispatchTelegramMessage = async ({
 
   let dispatchError: unknown;
   try {
-    ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
+    ({ queuedFinal, silenceExpected = false } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg,
       dispatcherOptions: {
@@ -653,9 +654,11 @@ export const dispatchTelegramMessage = async ({
           }
         },
         onSkip: (_payload, info) => {
-          if (info.reason !== "silent") {
-            deliveryState.markNonSilentSkip();
+          if (info.reason === "silent") {
+            deliveryState.markSilentSkip();
+            return;
           }
+          deliveryState.markNonSilentSkip();
         },
         onError: (err, info) => {
           deliveryState.markNonSilentFailure();
@@ -798,10 +801,20 @@ export const dispatchTelegramMessage = async ({
   }
   let sentFallback = false;
   const deliverySummary = deliveryState.snapshot();
+  const missingReplyWithoutDeclaredSilence =
+    !dispatchError &&
+    !silenceExpected &&
+    !queuedFinal &&
+    !deliverySummary.delivered &&
+    deliverySummary.skippedSilent === 0 &&
+    deliverySummary.skippedNonSilent === 0 &&
+    deliverySummary.failedNonSilent === 0;
   if (
     dispatchError ||
     (!deliverySummary.delivered &&
-      (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0))
+      (deliverySummary.skippedNonSilent > 0 ||
+        deliverySummary.failedNonSilent > 0 ||
+        missingReplyWithoutDeclaredSilence))
   ) {
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."

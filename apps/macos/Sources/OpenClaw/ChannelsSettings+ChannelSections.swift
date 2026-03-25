@@ -95,7 +95,8 @@ extension ChannelsSettings {
     }
 
     var telegramSetupSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let runtimeOwnershipIssue = self.store.telegramRuntimeOwnershipIssue()
+        return VStack(alignment: .leading, spacing: 16) {
             self.formSection("One-time setup") {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("1. Open @BotFather.")
@@ -155,9 +156,15 @@ extension ChannelsSettings {
                             Task { await self.store.captureTelegramFirstDirectMessage() }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(self.store.telegramBusy || self.store.telegramSetupBotUsername == nil)
+                        .disabled(
+                            self.store.telegramBusy
+                                || self.store.telegramSetupBotUsername == nil
+                                || runtimeOwnershipIssue != nil)
 
-                        if self.store.telegramSetupWaitingForDM || self.store.telegramSetupPhase == .savingSetup {
+                        if self.store.telegramSetupWaitingForDM
+                            || self.store.telegramSetupPhase == .savingSetup
+                            || self.store.telegramSetupPhase == .startingFirstReply
+                        {
                             ProgressView().controlSize(.small)
                         }
 
@@ -167,6 +174,13 @@ extension ChannelsSettings {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                }
+
+                if let runtimeOwnershipIssue {
+                    Text(runtimeOwnershipIssue)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if let status = self.store.telegramSetupStatus {

@@ -115,6 +115,7 @@ const resolveSessionStoreLookup = (
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
+  silenceExpected?: boolean;
 };
 
 export async function dispatchReplyFromConfig(params: {
@@ -180,7 +181,11 @@ export async function dispatchReplyFromConfig(params: {
 
   if (shouldSkipDuplicateInbound(ctx)) {
     recordProcessed("skipped", { reason: "duplicate" });
-    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+    return {
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+      silenceExpected: true,
+    };
   }
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
@@ -344,7 +349,11 @@ export async function dispatchReplyFromConfig(params: {
       case "handled": {
         markIdle("plugin_binding_dispatch");
         recordProcessed("completed", { reason: "plugin-bound-handled" });
-        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+        return {
+          queuedFinal: false,
+          counts: dispatcher.getQueuedCounts(),
+          silenceExpected: true,
+        };
       }
       case "missing_plugin":
       case "no_handler": {
@@ -364,25 +373,25 @@ export async function dispatchReplyFromConfig(params: {
         break;
       }
       case "declined": {
-        await sendBindingNotice(
+        const queuedFinal = await sendBindingNotice(
           { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
           "terminal",
         );
         markIdle("plugin_binding_declined");
         recordProcessed("completed", { reason: "plugin-bound-declined" });
-        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+        return { queuedFinal, counts: dispatcher.getQueuedCounts() };
       }
       case "error": {
         logVerbose(
           `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
         );
-        await sendBindingNotice(
+        const queuedFinal = await sendBindingNotice(
           { text: buildPluginBindingErrorText(pluginOwnedBinding) },
           "terminal",
         );
         markIdle("plugin_binding_error");
         recordProcessed("completed", { reason: "plugin-bound-error" });
-        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+        return { queuedFinal, counts: dispatcher.getQueuedCounts() };
       }
     }
   }
@@ -473,7 +482,7 @@ export async function dispatchReplyFromConfig(params: {
       const counts = dispatcher.getQueuedCounts();
       recordProcessed("completed", { reason: "send_policy_deny" });
       markIdle("message_completed");
-      return { queuedFinal: false, counts };
+      return { queuedFinal: false, counts, silenceExpected: true };
     }
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";

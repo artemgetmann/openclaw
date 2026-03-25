@@ -275,6 +275,9 @@
   - Preferred worktree lifecycle entrypoint: `bash scripts/new-worktree.sh <feature-name>`.
   - `scripts/new-worktree.sh` defaults to the consumer base only when the current branch or upstream is `codex/consumer-openclaw-project`; otherwise it defaults to `main`. Use `--base <branch>` when you want something else explicitly.
   - Preferred Codex/tmux recovery entrypoint after session loss: `bash scripts/codex-recover.sh` (use `--all` when the default ranked view hides stale but still interesting history).
+  - If a user needs to run isolated OAuth auth for a worktree lane, do not hand them a wrapped multiline shell command that can break on prompt line-wrap. Spawn a new tmux pane yourself from the correct worktree and run the auth command there with `pnpm --dir <worktree> ...`.
+  - For isolated Telegram runtime auth, pin all of these in the spawned command: `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_AGENT_DIR`, `PI_CODING_AGENT_DIR`, `OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE=1`, and `OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC=1`.
+  - After OAuth completes, verify success by checking the isolated `agents/main/agent/auth-profiles.json` contains `openai-codex:default`; do not trust the wizard success banner alone.
   - Preferred stale-claim cleanup entrypoint: `bash scripts/gc-worktrees.sh` first, then `bash scripts/gc-worktrees.sh --auto` only after reviewing the dry-run table.
   - Preferred isolated mac app entrypoint per worktree: `bash scripts/dev-launch-mac.sh`.
   - Consumer mac app parallel-testing entrypoint: `bash scripts/package-consumer-mac-app.sh --instance <id>` then `bash scripts/open-consumer-mac-app.sh --instance <id>`.
