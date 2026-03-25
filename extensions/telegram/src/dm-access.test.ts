@@ -1,16 +1,15 @@
-import type { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { issuePairingChallenge } from "../../../src/pairing/pairing-challenge.js";
 
-const createChannelPairingChallengeIssuerMock = vi.hoisted(() => vi.fn());
-const upsertChannelPairingRequestMock = vi.hoisted(() => vi.fn(async () => undefined));
+const issuePairingChallengeMock = vi.hoisted(() => vi.fn());
 const withTelegramApiErrorLoggingMock = vi.hoisted(() => vi.fn(async ({ fn }) => await fn()));
 
-vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
-  createChannelPairingChallengeIssuer: createChannelPairingChallengeIssuerMock,
+vi.mock("../../../src/pairing/pairing-challenge.js", () => ({
+  issuePairingChallenge: issuePairingChallengeMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  upsertChannelPairingRequest: upsertChannelPairingRequestMock,
+vi.mock("../../../src/pairing/pairing-store.js", () => ({
+  upsertChannelPairingRequest: vi.fn(async () => undefined),
 }));
 
 vi.mock("./api-logging.js", () => ({
@@ -90,17 +89,14 @@ describe("enforceTelegramDmAccess", () => {
     });
 
     expect(allowed).toBe(true);
-    expect(createChannelPairingChallengeIssuerMock).not.toHaveBeenCalled();
+    expect(issuePairingChallengeMock).not.toHaveBeenCalled();
   });
 
   it("issues a pairing challenge for unauthorized DMs under pairing policy", async () => {
     const sendMessage = vi.fn(async () => undefined);
     const logger = { info: vi.fn() };
-    createChannelPairingChallengeIssuerMock.mockReturnValueOnce(
-      ({
-        sendPairingReply,
-        onCreated,
-      }: Parameters<ReturnType<typeof createChannelPairingChallengeIssuer>>[0]) =>
+    issuePairingChallengeMock.mockImplementationOnce(
+      ({ sendPairingReply, onCreated }: Parameters<typeof issuePairingChallenge>[0]) =>
         (async () => {
           onCreated?.({ code: "123456" });
           await sendPairingReply("Pairing code: 123456");
