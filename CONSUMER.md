@@ -14,6 +14,9 @@ Read this before doing consumer-product work in this repo.
 - Legacy branch: `consumer`
 - General fork work that is not consumer-product work can still target this repo's `main`
 - Only use upstream `openclaw/openclaw` PR flow when the user explicitly asks
+- Do not recreate `consumer` for new work. It is legacy-only.
+- If the user says "consumer branch", treat that as `codex/consumer-openclaw-project` unless they explicitly ask for the legacy `consumer` branch.
+- Never merge `upstream/main` into this fork. Upstream changes come in through selective intake.
 
 ## Product contract
 
