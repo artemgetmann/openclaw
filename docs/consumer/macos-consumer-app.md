@@ -37,55 +37,11 @@ The consumer app defaults to:
 
 The goal is to reduce cognitive overload without deleting advanced capabilities yet.
 
-## First-run path
-
-The default consumer setup path should be:
-
-1. Open the app.
-2. Finish the identity/bootstrap prompt.
-3. Connect Chrome.
-4. Pass AI readiness.
-5. Verify the Telegram bot token.
-6. Send the bot one direct message.
-7. Capture that message and let OpenClaw start the first reply automatically.
-
-Important product rules for this path:
-
-- The browser step is not complete until the real runtime config is written and a browser readiness check passes.
-- The AI step is not complete until the bundled default model is actually usable.
-- Telegram setup should feel like one continuous setup flow, not "configure now, maybe chat later."
-
-## AI model path
-
-Consumer MVP defaults to a founder-managed shared model path.
-
-- Default behavior: the packaged build tries to use the app-owned shared credential path first.
-- Advanced fallback: users can still switch to their own model setup later.
-- UX rule: if the shared credential is missing, expired, or rate-limited, the app must say that plainly before setup finishes.
-
-This keeps the first-run path simple for demo users while preserving a BYOK escape hatch.
-
-## Browser readiness outcomes
-
-The browser step should end in one of these explicit states:
-
-- Chrome missing:
-  - tell the user to install Google Chrome
-- Chrome installed but no profile found:
-  - tell the user to open Chrome once, then retry
-- Profile selected and readiness passes:
-  - browser setup is complete
-- Profile selected but readiness fails:
-  - clear the stale selection and ask the user to choose again
-- Signed-in task later needs login:
-  - open the OpenClaw browser and ask the user to log in manually
-
 ## Telegram onboarding in-app
 
 The consumer path keeps Telegram setup inside the app:
 
 - Channels → Telegram includes a one-time BYOK wizard (BotFather -> token verify -> first DM capture).
-- After the first DM is captured, the consumer runtime should auto-start the first assistant reply instead of waiting for a second user message.
 - The panel includes a placeholder video walkthrough entry that can be rewired later without changing the onboarding flow.
 - Runtime writes stay isolated under the consumer runtime root.
 
@@ -151,7 +107,6 @@ Bundled skills are intentionally curated, not universal.
   - WhatsApp CLI
   - extra Google CLI setup beyond the seeded Google lane
   - manually provisioned founder-only skills
-
 macOS caveat:
 
 - Accessibility and Screen Recording can remain visually pending until the app restarts, even after the user grants them in System Settings.
@@ -170,24 +125,12 @@ scripts/package-consumer-mac-app.sh
 Open the packaged app with the matching preflight:
 
 ```bash
-pnpm consumer:preflight
 scripts/open-consumer-mac-app.sh
 ```
 
 These wrappers fail fast unless the bundle name, bundle identifier, and app variant all match the consumer app. That prevents accidentally launching the generic founder/dev shell during consumer testing.
 
-For the full lane-health checklist, see `docs/consumer/consumer-runtime-preflight.md`.
-
-GUI verification rule for shared developer machines:
-
-- Ask the user before any verification step that steals focus, activates the
-  app, or captures desktop screenshots.
-- If the user is multitasking, do not keep retrying frontmost-window checks.
-  Verify runtime and logs directly, then hand off a short manual GUI checklist.
-- Treat manual user confirmation as acceptable proof for native SwiftUI
-  surfaces when the machine is actively in use.
-
-For the full lane-health checklist, see `docs/consumer/consumer-runtime-preflight.md`.
+Default consumer packaging and launch are reserved for the main consumer checkout. Feature worktrees should always use `--instance <id>` so they do not fight over the shared runtime or port.
 
 ## Parallel worktree testing
 
@@ -208,13 +151,6 @@ scripts/open-consumer-mac-app.sh --instance ux-audit
 scripts/open-consumer-mac-app.sh --instance agent-a
 ```
 
-Before opening either app, run preflight for that exact lane:
-
-```bash
-OPENCLAW_CONSUMER_INSTANCE_ID=ux-audit pnpm consumer:preflight
-OPENCLAW_CONSUMER_INSTANCE_ID=agent-a pnpm consumer:preflight
-```
-
 What changes per instance:
 
 - runtime root under `~/Library/Application Support/OpenClaw Consumer/instances/<instance-id>`
@@ -231,11 +167,6 @@ scripts/open-consumer-mac-app.sh --instance ux-audit --replace
 
 That path targets the matching bundle binary only. It does not broad-kill other
 consumer app instances.
-
-Telegram warning:
-
-- one bot token can only be owned by one active runtime
-- preflight will print token collisions before you waste time on `409 getUpdates`
 
 ## Distribution assumption
 

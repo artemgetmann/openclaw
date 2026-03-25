@@ -12,6 +12,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
+    "OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE",
   ]);
   let tmpDir: string;
   let mainAgentDir: string;
@@ -165,6 +166,51 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     });
   });
 
+  it("does not fall back to main agent credentials when main-auth inheritance is disabled", async () => {
+    const profileId = "anthropic:claude-cli";
+    const now = Date.now();
+    const expiredTime = now - 60 * 60 * 1000;
+    const freshTime = now + 60 * 60 * 1000;
+
+    await writeAuthProfilesStore(
+      secondaryAgentDir,
+      createOauthStore({
+        profileId,
+        access: "expired-access-token",
+        refresh: "expired-refresh-token",
+        expires: expiredTime,
+        provider: "anthropic",
+      }),
+    );
+
+    await writeAuthProfilesStore(
+      mainAgentDir,
+      createOauthStore({
+        profileId,
+        access: "fresh-access-token",
+        refresh: "fresh-refresh-token",
+        expires: freshTime,
+        provider: "anthropic",
+      }),
+    );
+
+    process.env.OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE = "1";
+    stubOAuthRefreshFailure();
+
+    await expect(resolveFromSecondaryAgent(profileId)).rejects.toThrow(
+      /OAuth token refresh failed for anthropic/,
+    );
+
+    const updatedSecondaryStore = JSON.parse(
+      await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
+      access: "expired-access-token",
+      refresh: "expired-refresh-token",
+      expires: expiredTime,
+    });
+  });
+
   it("adopts newer OAuth token from main agent even when secondary token is still valid", async () => {
     const profileId = "anthropic:claude-cli";
     const now = Date.now();
@@ -201,6 +247,50 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
       access: "main-newer-access-token",
       expires: mainExpiry,
+    });
+  });
+
+  it("does not adopt a newer main-agent OAuth token when main-auth inheritance is disabled", async () => {
+    const profileId = "anthropic:claude-cli";
+    const now = Date.now();
+    const secondaryExpiry = now + 30 * 60 * 1000;
+    const mainExpiry = now + 2 * 60 * 60 * 1000;
+
+    await writeAuthProfilesStore(
+      secondaryAgentDir,
+      createOauthStore({
+        profileId,
+        access: "secondary-access-token",
+        refresh: "secondary-refresh-token",
+        expires: secondaryExpiry,
+        provider: "anthropic",
+      }),
+    );
+
+    await writeAuthProfilesStore(
+      mainAgentDir,
+      createOauthStore({
+        profileId,
+        access: "main-newer-access-token",
+        refresh: "main-newer-refresh-token",
+        expires: mainExpiry,
+        provider: "anthropic",
+      }),
+    );
+
+    process.env.OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE = "1";
+
+    const result = await resolveFromSecondaryAgent(profileId);
+
+    expect(result?.apiKey).toBe("secondary-access-token");
+
+    const updatedSecondaryStore = JSON.parse(
+      await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
+      access: "secondary-access-token",
+      refresh: "secondary-refresh-token",
+      expires: secondaryExpiry,
     });
   });
 

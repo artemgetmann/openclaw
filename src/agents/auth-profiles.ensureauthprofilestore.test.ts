@@ -1,11 +1,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 
 describe("ensureAuthProfileStore", () => {
+  const previousDisableMainInheritance = process.env.OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE;
+
+  afterEach(() => {
+    if (previousDisableMainInheritance === undefined) {
+      delete process.env.OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE;
+    } else {
+      process.env.OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE = previousDisableMainInheritance;
+    }
+  });
+
   it("migrates legacy auth.json and deletes it (PR #368)", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-profiles-"));
     try {
@@ -108,6 +118,56 @@ describe("ensureAuthProfileStore", () => {
         provider: "openai",
         key: "agent-key",
       });
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+      if (previousPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not inherit main auth profiles when main-auth inheritance is disabled", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-no-inherit-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const mainDir = path.join(root, "main-agent");
+      const agentDir = path.join(root, "agent-x");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      process.env.OPENCLAW_AGENT_DIR = mainDir;
+      process.env.PI_CODING_AGENT_DIR = mainDir;
+      process.env.OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE = "1";
+
+      const mainStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "main-access-token",
+            refresh: "main-refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      };
+      fs.writeFileSync(
+        path.join(mainDir, "auth-profiles.json"),
+        `${JSON.stringify(mainStore, null, 2)}\n`,
+        "utf8",
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(store.profiles).toEqual({});
+      expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.OPENCLAW_AGENT_DIR;

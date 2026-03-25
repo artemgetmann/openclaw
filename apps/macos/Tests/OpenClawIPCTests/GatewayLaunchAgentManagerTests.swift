@@ -102,6 +102,33 @@ struct GatewayLaunchAgentManagerTests {
                 launchAgentMatchesCurrentEntrypoint: false) == .install)
     }
 
+    @Test func `runtime ownership blocker explains stale launch agent entrypoint`() {
+        let snapshot = LaunchAgentPlistSnapshot(
+            programArguments: [
+                "/opt/homebrew/bin/node",
+                "/tmp/other-worktree/dist/index.js",
+                "gateway",
+                "--port",
+                "19001",
+            ],
+            environment: [:],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: 19001,
+            bind: "loopback",
+            token: nil,
+            password: nil)
+
+        let ownership = GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot)
+
+        #expect(ownership.actualEntrypoint == "/tmp/other-worktree/dist/index.js")
+        #expect(ownership.expectedEntrypoint?.hasSuffix("/dist/index.js") == true)
+        #expect(ownership.matchesCurrentEntrypoint == false)
+        #expect(
+            GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage(snapshot: snapshot)?
+                .contains("/tmp/other-worktree/dist/index.js") == true)
+    }
+
     @Test func `bringup treats not loaded result as not ready`() {
         #expect(
             !GatewayLaunchAgentManager._testShouldTreatBringupResultAsReady(

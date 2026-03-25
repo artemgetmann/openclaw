@@ -7,10 +7,16 @@ struct TelegramSetupBotInfo: Sendable, Equatable {
 
 struct TelegramSetupDirectMessage: Sendable, Equatable {
     let updateId: Int
+    let messageId: Int
+    let chatId: Int64
+    let chatUsername: String?
     let senderId: Int
     let senderUsername: String?
     let senderFirstName: String?
-    let messageText: String?
+    let text: String?
+    let caption: String?
+    let date: Int
+    let messageThreadId: Int?
 }
 
 enum TelegramSetupVerifierError: LocalizedError {
@@ -29,7 +35,7 @@ enum TelegramSetupVerifierError: LocalizedError {
         case let .api(message):
             return message
         case .conflict:
-            return "This bot is already active in another OpenClaw window or worktree on this Mac. Close the other runtime or use a different bot token here."
+            return "This bot is already being used by another OpenClaw Telegram poller. Stop the other runtime, or let setup pause Telegram before trying again."
         case .noDirectMessage:
             return "No Telegram DM arrived yet. Ask the user to send the bot a private message, then try again."
         }
@@ -110,10 +116,16 @@ enum TelegramSetupVerifier {
         guard let sender = message.from, sender.isBot != true else { return nil }
         return TelegramSetupDirectMessage(
             updateId: update.updateId,
+            messageId: message.messageId,
+            chatId: message.chat.id,
+            chatUsername: message.chat.username,
             senderId: sender.id,
             senderUsername: sender.username,
             senderFirstName: sender.firstName,
-            messageText: message.text)
+            text: message.text,
+            caption: message.caption,
+            date: message.date,
+            messageThreadId: message.messageThreadId)
     }
 
     private static func updatesQueryItems(offset: Int?) -> [URLQueryItem] {
@@ -217,19 +229,35 @@ private struct TelegramUpdate: Decodable {
 }
 
 private struct TelegramMessage: Decodable {
+    let messageId: Int
+    let date: Int
     let from: TelegramUser?
     let chat: TelegramChat
     let text: String?
+    let caption: String?
+    let messageThreadId: Int?
 
     private enum CodingKeys: String, CodingKey {
+        case messageId = "message_id"
+        case date
         case from
         case chat
         case text
+        case caption
+        case messageThreadId = "message_thread_id"
     }
 }
 
 private struct TelegramChat: Decodable {
+    let id: Int64
     let type: String
+    let username: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case username
+    }
 }
 
 private struct TelegramUser: Decodable {

@@ -3,6 +3,16 @@ import Foundation
 enum GatewayLaunchAgentManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
 
+    struct EntrypointOwnership: Equatable {
+        let expectedEntrypoint: String?
+        let actualEntrypoint: String?
+
+        var matchesCurrentEntrypoint: Bool {
+            guard let expectedEntrypoint else { return false }
+            return self.actualEntrypoint == expectedEntrypoint
+        }
+    }
+
     enum DesiredAction: Equatable {
         case install
         case start
@@ -120,6 +130,27 @@ enum GatewayLaunchAgentManager {
         }
         return LogLocator.launchdGatewayLogPath
     }
+
+    static func currentEntrypointOwnership(snapshot: LaunchAgentPlistSnapshot? = nil) -> EntrypointOwnership {
+        let resolvedSnapshot = snapshot ?? self.launchdConfigSnapshot()
+        let expectedEntrypoint = CommandResolver.projectRootEnvironmentHint().flatMap { expectedRoot in
+            CommandResolver.gatewayEntrypoint(in: URL(fileURLWithPath: expectedRoot, isDirectory: true))
+        }
+        let actualEntrypoint = self.resolveLaunchAgentEntrypoint(from: resolvedSnapshot)
+        return EntrypointOwnership(
+            expectedEntrypoint: expectedEntrypoint,
+            actualEntrypoint: actualEntrypoint)
+    }
+
+    static func runtimeOwnershipBlockerMessage(snapshot: LaunchAgentPlistSnapshot? = nil) -> String? {
+        let ownership = self.currentEntrypointOwnership(snapshot: snapshot)
+        guard let expectedEntrypoint = ownership.expectedEntrypoint else { return nil }
+        guard let actualEntrypoint = ownership.actualEntrypoint else { return nil }
+        guard ownership.matchesCurrentEntrypoint == false else { return nil }
+        return """
+        Telegram live testing is blocked because this app expects \(expectedEntrypoint), but the consumer gateway is pinned to \(actualEntrypoint). Restart the consumer gateway from this build before capturing the first DM.
+        """
+    }
 }
 
 extension GatewayLaunchAgentManager {
@@ -175,12 +206,14 @@ extension GatewayLaunchAgentManager {
     }
 
     private static func launchAgentMatchesCurrentEntrypoint(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
-        guard let snapshot else { return false }
-        guard let expectedRoot = CommandResolver.projectRootEnvironmentHint() else { return false }
-        let expectedEntrypoint = URL(fileURLWithPath: expectedRoot, isDirectory: true)
-            .appendingPathComponent("dist/index.js")
-            .path
-        return snapshot.programArguments.contains(expectedEntrypoint)
+        let ownership = self.currentEntrypointOwnership(snapshot: snapshot)
+        return ownership.matchesCurrentEntrypoint
+    }
+
+    private static func resolveLaunchAgentEntrypoint(from snapshot: LaunchAgentPlistSnapshot?) -> String? {
+        snapshot?.programArguments.first(where: { arg in
+            arg.hasSuffix("/dist/index.js") || arg.hasSuffix("/openclaw.mjs") || arg.hasSuffix("/bin/openclaw.js")
+        })
     }
 
     private struct CommandResult {

@@ -285,7 +285,7 @@ export async function runPreparedReply(
     hasControlCommand(commandSource, cfg)
   ) {
     typing.cleanup();
-    return undefined;
+    return { text: SILENT_REPLY_TOKEN };
   }
   const isBareNewOrReset = rawBodyTrimmed === "/new" || rawBodyTrimmed === "/reset";
   const isBareSessionReset =

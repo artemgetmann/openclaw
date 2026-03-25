@@ -26,6 +26,13 @@ function isExternalCliAuthSyncDisabled(): boolean {
   return process.env.OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC === "1";
 }
 
+function isMainAuthInheritanceDisabled(): boolean {
+  // Some isolated runtimes must not clone shared auth state from the main
+  // agent because OAuth refresh tokens are single-session state, not a
+  // reusable cache blob.
+  return process.env.OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE === "1";
+}
+
 function syncExternalCliCredentialsIfEnabled(store: AuthProfileStore): boolean {
   if (isExternalCliAuthSyncDisabled()) {
     return false;
@@ -401,8 +408,9 @@ function loadAuthProfileStoreForAgent(
     return asStore;
   }
 
-  // Fallback: inherit auth-profiles from main agent if subagent has none
-  if (agentDir && !readOnly) {
+  // Subagents usually inherit main-agent auth for convenience. Isolated
+  // runtimes can opt out so they keep their own auth lifecycle.
+  if (agentDir && !readOnly && !isMainAuthInheritanceDisabled()) {
     const mainAuthPath = resolveAuthStorePath(); // without agentDir = main
     const mainRaw = loadJsonFile(mainAuthPath);
     const mainStore = coerceAuthStore(mainRaw);
@@ -460,7 +468,7 @@ export function loadAuthProfileStoreForRuntime(
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
-  if (!agentDir || authPath === mainAuthPath) {
+  if (!agentDir || authPath === mainAuthPath || isMainAuthInheritanceDisabled()) {
     return store;
   }
 
@@ -484,7 +492,7 @@ export function ensureAuthProfileStore(
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
-  if (!agentDir || authPath === mainAuthPath) {
+  if (!agentDir || authPath === mainAuthPath || isMainAuthInheritanceDisabled()) {
     return store;
   }
 

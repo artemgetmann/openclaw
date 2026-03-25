@@ -86,6 +86,41 @@ mask_token() {
   printf '%s...%s' "${token:0:4}" "${token:len-4:4}"
 }
 
+report_claimed_worktrees() {
+  local worktree_path=""
+  local env_local_path=""
+  local token_value=""
+  local branch_name=""
+  local status_line=""
+  local process_count=""
+
+  for worktree_path in "${worktree_paths[@]}"; do
+    env_local_path="$worktree_path/.env.local"
+    [[ -f "$env_local_path" ]] || continue
+
+    token_value="$(read_last_env_value "$env_local_path" "TELEGRAM_BOT_TOKEN")"
+    [[ -n "$token_value" ]] || continue
+
+    branch_name="unknown"
+    status_line="missing"
+    process_count="0"
+
+    if [[ -d "$worktree_path" ]]; then
+      branch_name="$(git -C "$worktree_path" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown')"
+      if [[ -n "$(git -C "$worktree_path" status --short 2>/dev/null | sed -n '1p')" ]]; then
+        status_line="dirty"
+      else
+        status_line="clean"
+      fi
+      process_count="$(
+        ps -axo command= | awk -v needle="$worktree_path" 'index($0, needle) > 0 { count++ } END { print count + 0 }'
+      )"
+    fi
+
+    echo "  worktree=$worktree_path branch=$branch_name status=$status_line live_processes=$process_count token=$(mask_token "$token_value")" >&2
+  done
+}
+
 if [[ ! -r ".env.bots" ]]; then
   echo "Error: .env.bots not found or not readable in $(pwd)." >&2
   echo "Create it from .env.bots.example and add BOT_TOKEN entries." >&2
@@ -113,6 +148,7 @@ if (( ${#bot_tokens[@]} == 0 )); then
 fi
 
 worktree_paths=()
+current_worktree="$(pwd -P)"
 worktree_list_output=""
 if ! worktree_list_output="$(git worktree list --porcelain 2>/dev/null)"; then
   echo "Error: unable to list git worktrees from $(pwd)." >&2
@@ -127,6 +163,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done <<< "$worktree_list_output"
 
 claimed_tokens=()
+other_claimed_tokens=()
+current_claimed_token=""
 worktree_path=""
 env_local_path=""
 claimed=""
@@ -138,14 +176,36 @@ for worktree_path in "${worktree_paths[@]-}"; do
   claimed="$(read_last_env_value "$env_local_path" "TELEGRAM_BOT_TOKEN")"
   if [[ -n "$claimed" ]]; then
     claimed_tokens+=("$claimed")
+    if [[ "$worktree_path" == "$current_worktree" ]]; then
+      current_claimed_token="$claimed"
+    else
+      other_claimed_tokens+=("$claimed")
+    fi
   fi
 done
+
+# Reuse the current worktree's token when it already owns a unique claim from
+# the shared pool. Without this, follow-up `ensure` runs fail after a successful
+# first claim just because the pool is fully allocated again.
+if [[ -n "$current_claimed_token" ]] && contains_token "$current_claimed_token" "${bot_tokens[@]-}"; then
+  if ! contains_token "$current_claimed_token" "${other_claimed_tokens[@]-}"; then
+    printf 'TELEGRAM_BOT_TOKEN=%s\n' "$current_claimed_token" > ".env.local"
+    echo "Reusing Telegram bot token for current worktree: $current_worktree"
+    echo "Token fingerprint: $(mask_token "$current_claimed_token")"
+    exit 0
+  fi
+  echo "Error: current worktree token is also claimed by another worktree." >&2
+  echo "Resolve the duplicate .env.local claim before reusing this bot." >&2
+  echo "Claimed worktrees:" >&2
+  report_claimed_worktrees
+  exit 1
+fi
 
 selected_token=""
 selected_index=0
 idx=0
 for idx in "${!bot_tokens[@]}"; do
-  if ! contains_token "${bot_tokens[$idx]}" "${claimed_tokens[@]-}"; then
+  if ! contains_token "${bot_tokens[$idx]}" "${other_claimed_tokens[@]-}"; then
     selected_token="${bot_tokens[$idx]}"
     selected_index=$((idx + 1))
     break
@@ -156,6 +216,9 @@ if [[ -z "$selected_token" ]]; then
   echo "Error: no unclaimed bot tokens available." >&2
   echo "Claimed: ${#claimed_tokens[@]} / Total: ${#bot_tokens[@]}" >&2
   echo "Delete an unused worktree .env.local to free a token." >&2
+  echo "Claimed worktrees:" >&2
+  report_claimed_worktrees
+  echo "Safe release candidates are usually worktrees with status=clean and live_processes=0." >&2
   exit 1
 fi
 

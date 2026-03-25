@@ -4,6 +4,12 @@ import Foundation
 extension ChannelsStore {
     static let consumerTelegramBotUsernameDefaultsKey = "OpenClawConsumerTelegramBotUsername"
 
+    func telegramRuntimeOwnershipIssue() -> String? {
+        guard AppFlavor.current.isConsumer else { return nil }
+        guard !self.isPreview else { return nil }
+        return GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage()
+    }
+
     func resetTelegramSetupProgressForEditedToken() {
         self.telegramSetupStatus = nil
         self.telegramSetupBotId = nil
@@ -75,6 +81,10 @@ extension ChannelsStore {
             self.telegramSetupStatus = "Paste your BotFather token first."
             return
         }
+        if let ownershipIssue = self.telegramRuntimeOwnershipIssue() {
+            self.telegramSetupStatus = ownershipIssue
+            return
+        }
         self.telegramSetupToken = token
 
         guard !self.telegramBusy, self.telegramSetupPhase == .idle else { return }
@@ -109,11 +119,13 @@ extension ChannelsStore {
                 allowFrom: [String(dm.senderId)])
             restoredByFinalBootstrap = true
             self.telegramSetupFirstSenderId = String(dm.senderId)
-            let autoReplyError = await self.triggerConsumerTelegramFirstReplyIfNeeded(dm: dm)
+            self.telegramSetupStatus = "Starting the first reply in Telegram..."
+            self.telegramSetupPhase = .startingFirstReply
+            let replayResult = await self.startFirstTelegramReply(dm: dm)
             self.telegramSetupStatus = self.telegramCaptureStatus(
                 dm: dm,
                 persistedRoot: persisted,
-                autoReplyError: autoReplyError)
+                replayResult: replayResult)
         } catch {
             self.telegramSetupWaitingForDM = false
             if pausedPollingProvider && !restoredByFinalBootstrap {
@@ -169,48 +181,23 @@ extension ChannelsStore {
     private func telegramCaptureStatus(
         dm: TelegramSetupDirectMessage,
         persistedRoot: [String: Any],
-        autoReplyError: String?
+        replayResult: TelegramSetupReplayResult
     ) -> String {
         _ = persistedRoot
+        if let error = replayResult.error {
+            return "Telegram setup is finished, but OpenClaw could not start the first reply automatically. \(error)"
+        }
+        if !replayResult.replyStarted {
+            return "Telegram setup is finished, but OpenClaw could not confirm that the first reply started."
+        }
         if AppFlavor.current.isConsumer {
-            if let autoReplyError {
-                _ = autoReplyError
-                // Consumer setup should explain the next human step, not dump raw
-                // gateway/auth internals into the UI. The detailed failure still
-                // lives in logs and channel status surfaces for debugging.
-                return dm.senderUsername.map {
-                    "Connected to @\($0). If the first reply did not appear, open your bot and send any message."
-                } ?? "Telegram setup is finished. If the first reply did not appear, open your bot and send any message."
-            }
             return dm.senderUsername.map {
-                "Connected to @\($0). OpenClaw already started the first reply in Telegram."
-            } ?? "Telegram setup is finished. OpenClaw already started the first reply in Telegram."
+                "Connected to @\($0). Your AI operator has started the first reply in Telegram."
+            } ?? "Telegram setup is finished. Your AI operator has started the first reply in Telegram."
         }
         return dm.senderUsername.map {
             "Locked to @\($0). For multiple parallel tasks, add the bot to a Telegram group and use topics."
         } ?? "Locked to Telegram user ID \(dm.senderId). For multiple parallel tasks, add the bot to a Telegram group and use topics."
-    }
-
-    private func triggerConsumerTelegramFirstReplyIfNeeded(
-        dm: TelegramSetupDirectMessage
-    ) async -> String? {
-        guard AppFlavor.current.isConsumer else { return nil }
-
-        let rawMessage = dm.messageText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let bootstrapMessage = rawMessage.isEmpty
-            ? "Hi"
-            : rawMessage
-
-        let sessionKey = await GatewayConnection.shared.mainSessionKey()
-        let result = await GatewayConnection.shared.sendAgent(
-            GatewayAgentInvocation(
-                message: bootstrapMessage,
-                sessionKey: sessionKey,
-                thinking: "default",
-                deliver: true,
-                to: "telegram:\(dm.senderId)",
-                channel: .telegram))
-        return result.ok ? nil : (result.error ?? "Agent request failed.")
     }
 
     private func assertPersistedTelegramBootstrap(
@@ -268,6 +255,67 @@ extension ChannelsStore {
             dmPolicy: "pairing",
             allowFrom: nil)
     }
+
+    private func startFirstTelegramReply(dm: TelegramSetupDirectMessage) async -> TelegramSetupReplayResult {
+        // The first DM must go through the same Telegram inbound pipeline the real
+        // gateway uses. Otherwise setup "works" but the first reply path is still fake.
+        guard let payload = self.telegramReplayPayloadJson(dm: dm) else {
+            return TelegramSetupReplayResult(
+                ok: false,
+                replyStarted: false,
+                error: "The captured first message did not contain text. Send one text message to begin.")
+        }
+
+        let command = CommandResolver.openclawCommand(
+            subcommand: "channels",
+            extraArgs: ["telegram-replay-setup-dm", "--payload-json", payload, "--json"],
+            configRoot: ["gateway": ["mode": "local"]])
+        let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            projectRootHint: CommandResolver.projectRootEnvironmentHint())
+        let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: 90)
+        if !response.success {
+            let detail = response.stderr.nonEmpty ?? response.stdout.nonEmpty ?? response.errorMessage ?? "unknown error"
+            return TelegramSetupReplayResult(ok: false, replyStarted: false, error: detail)
+        }
+
+        let raw = response.stdout.isEmpty ? response.stderr : response.stdout
+        guard let data = raw.data(using: .utf8),
+              let parsed = try? JSONDecoder().decode(TelegramSetupReplayResult.self, from: data)
+        else {
+            return TelegramSetupReplayResult(
+                ok: false,
+                replyStarted: false,
+                error: "OpenClaw started the handoff, but returned an unreadable response.")
+        }
+        return parsed
+    }
+
+    private func telegramReplayPayloadJson(dm: TelegramSetupDirectMessage) -> String? {
+        let text = dm.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let caption = dm.caption?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (text?.isEmpty == false) || (caption?.isEmpty == false) else {
+            return nil
+        }
+        let payload = TelegramSetupReplayPayload(
+            updateId: dm.updateId,
+            messageId: dm.messageId,
+            chatId: dm.chatId,
+            chatUsername: dm.chatUsername,
+            senderId: dm.senderId,
+            senderUsername: dm.senderUsername,
+            senderFirstName: dm.senderFirstName,
+            text: text?.isEmpty == false ? text : nil,
+            caption: caption?.isEmpty == false ? caption : nil,
+            date: dm.date,
+            messageThreadId: dm.messageThreadId)
+        guard let data = try? JSONEncoder().encode(payload),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return json
+    }
 }
 
 private enum TelegramBootstrapPersistenceError: LocalizedError {
@@ -279,4 +327,24 @@ private enum TelegramBootstrapPersistenceError: LocalizedError {
             "Telegram setup found your message, but OpenClaw could not persist the final config. Please try again."
         }
     }
+}
+
+private struct TelegramSetupReplayPayload: Encodable {
+    let updateId: Int
+    let messageId: Int
+    let chatId: Int64
+    let chatUsername: String?
+    let senderId: Int
+    let senderUsername: String?
+    let senderFirstName: String?
+    let text: String?
+    let caption: String?
+    let date: Int
+    let messageThreadId: Int?
+}
+
+private struct TelegramSetupReplayResult: Decodable {
+    let ok: Bool
+    let replyStarted: Bool
+    let error: String?
 }

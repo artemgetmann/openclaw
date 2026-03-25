@@ -34,6 +34,13 @@ const isOAuthProvider = (provider: string): provider is OAuthProvider =>
 const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
   isOAuthProvider(provider) ? provider : null;
 
+function isMainOAuthInheritanceDisabled(): boolean {
+  // Isolated runtimes need a hard stop here: copying a fresh main-agent OAuth
+  // credential into another runtime recreates the same refresh-token collision
+  // we are trying to avoid.
+  return process.env.OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE === "1";
+}
+
 /** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
 const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
 
@@ -113,7 +120,7 @@ function adoptNewerMainOAuthCredential(params: {
   agentDir?: string;
   cred: OAuthCredentials & { type: "oauth"; provider: string; email?: string };
 }): (OAuthCredentials & { type: "oauth"; provider: string; email?: string }) | null {
-  if (!params.agentDir) {
+  if (!params.agentDir || isMainOAuthInheritanceDisabled()) {
     return null;
   }
   try {
@@ -425,7 +432,7 @@ export async function resolveApiKeyForProfile(
     }
 
     // Fallback: if this is a secondary agent, try using the main agent's credentials
-    if (params.agentDir) {
+    if (params.agentDir && !isMainOAuthInheritanceDisabled()) {
       try {
         const mainStore = ensureAuthProfileStore(undefined); // main agent (no agentDir)
         const mainCred = mainStore.profiles[profileId];

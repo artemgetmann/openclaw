@@ -108,6 +108,28 @@ export function registerChannelsCli(program: Command) {
     });
 
   channels
+    .command("telegram-replay-setup-dm")
+    .description(
+      "Internal consumer helper: replay a captured Telegram DM through the normal inbound path",
+    )
+    .requiredOption("--payload-json <json>", "Captured Telegram DM payload as JSON")
+    .option("--account <id>", "Telegram account id")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runChannelsCommand(async () => {
+        const { channelsTelegramReplaySetupDmCommand } = await import("../commands/channels.js");
+        await channelsTelegramReplaySetupDmCommand(
+          {
+            account: opts.account as string | undefined,
+            json: Boolean(opts.json),
+            payloadJson: String(opts.payloadJson ?? ""),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  channels
     .command("capabilities")
     .description("Show provider capabilities (intents/scopes + supported features)")
     .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`)

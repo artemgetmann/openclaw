@@ -224,6 +224,7 @@ enum TelegramSetupPhase: Equatable {
     case verifyingToken
     case capturingFirstMessage
     case savingSetup
+    case startingFirstReply
 }
 
 @MainActor

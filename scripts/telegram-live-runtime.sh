@@ -377,6 +377,26 @@ NODE
   fi
 }
 
+probe_runtime_stability() {
+  local hold_secs="${OPENCLAW_TELEGRAM_LIVE_STABILITY_HOLD_SECS:-2}"
+  if [[ ! "$hold_secs" =~ ^[0-9]+$ ]]; then
+    hold_secs=2
+  fi
+  if [[ "$hold_secs" -gt 0 ]]; then
+    sleep "$hold_secs"
+  fi
+  resolve_runtime_owner
+  if [[ "$RUNTIME_OWNERSHIP" != "ok" || -z "$RUNTIME_PID" ]]; then
+    RUNTIME_HEALTH="fail"
+    return
+  fi
+  if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
+    RUNTIME_HEALTH="fail"
+    return
+  fi
+  probe_runtime_health
+}
+
 ensure_tester_bot_claim() {
   local env_local="${REPO_ROOT}/.env.local"
   local env_bots="${REPO_ROOT}/.env.bots"
@@ -583,32 +603,10 @@ sync_runtime_auth_profiles() {
     return
   fi
 
-  purge_runtime_auth_profiles() {
-    local auth_path=""
-    while IFS= read -r auth_path || [[ -n "$auth_path" ]]; do
-      [[ -z "$auth_path" ]] && continue
-      rm -f "$auth_path"
-    done < <(
-      find "$RUNTIME_STATE_DIR/agents" \
-        \( -path "*/agent/auth-profiles.json" -o -path "*/agent/auth.json" \) \
-        -type f 2>/dev/null
-    )
-  }
-
-  # Telegram live tester lanes should be able to run with fully isolated auth.
-  # When this flag is set we intentionally do not inherit any auth-profiles
-  # from the shared ~/.openclaw agent state, which avoids OAuth refresh-token
-  # races between the tester runtime and the user's main runtime.
-  if [[ "${OPENCLAW_TELEGRAM_LIVE_SKIP_AUTH_SYNC:-0}" == "1" ]]; then
-    # Scrub any stale inherited auth that might already be sitting in the
-    # runtime state from an earlier non-isolated run.
-    purge_runtime_auth_profiles
-    return
-  fi
-
-  # Worktree runtimes keep isolated state, but they still need the operator's
-  # existing auth profiles copied in so inbound Telegram messages can actually
-  # execute the same agent models as the stable runtime.
+  # Telegram live runtimes must never reuse shared OAuth refresh state. Instead
+  # of copying auth forward, scrub any target OAuth profiles that are identical
+  # to the source shared store. That cleans up legacy inherited refresh tokens
+  # without destroying lane-local auth that was minted separately.
   if ! BASE_CONFIG_PATH="$BASE_CONFIG_PATH" \
     RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
     node --input-type=module - <<'NODE'
@@ -654,20 +652,65 @@ for (const [agentId, entry] of agentEntries) {
       ? entry.agentDir.trim()
       : path.join(os.homedir(), ".openclaw", "agents", agentId, "agent");
   const sourceAuthPath = path.join(sourceAgentDir, "auth-profiles.json");
-  if (!fs.existsSync(sourceAuthPath)) {
-    continue;
-  }
-
   const targetAuthPath = path.join(runtimeStateDir, "agents", agentId, "agent", "auth-profiles.json");
-  fs.mkdirSync(path.dirname(targetAuthPath), { recursive: true });
-
-  const sourceContent = fs.readFileSync(sourceAuthPath);
-  const targetContent = fs.existsSync(targetAuthPath) ? fs.readFileSync(targetAuthPath) : null;
-  if (targetContent && Buffer.compare(sourceContent, targetContent) === 0) {
+  if (!fs.existsSync(sourceAuthPath) || !fs.existsSync(targetAuthPath)) {
     continue;
   }
 
-  fs.writeFileSync(targetAuthPath, sourceContent);
+  let sourceStore;
+  let targetStore;
+  try {
+    sourceStore = JSON.parse(fs.readFileSync(sourceAuthPath, "utf8"));
+    targetStore = JSON.parse(fs.readFileSync(targetAuthPath, "utf8"));
+  } catch {
+    continue;
+  }
+
+  if (
+    !sourceStore ||
+    typeof sourceStore !== "object" ||
+    !targetStore ||
+    typeof targetStore !== "object" ||
+    !sourceStore.profiles ||
+    typeof sourceStore.profiles !== "object" ||
+    !targetStore.profiles ||
+    typeof targetStore.profiles !== "object"
+  ) {
+    continue;
+  }
+
+  let mutated = false;
+  for (const [profileId, targetProfile] of Object.entries(targetStore.profiles)) {
+    const sourceProfile = sourceStore.profiles[profileId];
+    if (!targetProfile || typeof targetProfile !== "object" || targetProfile.type !== "oauth") {
+      continue;
+    }
+    if (!sourceProfile || typeof sourceProfile !== "object" || sourceProfile.type !== "oauth") {
+      continue;
+    }
+    if (JSON.stringify(sourceProfile) !== JSON.stringify(targetProfile)) {
+      continue;
+    }
+
+    delete targetStore.profiles[profileId];
+    if (targetStore.lastGood && typeof targetStore.lastGood === "object") {
+      for (const [provider, lastGoodProfileId] of Object.entries(targetStore.lastGood)) {
+        if (lastGoodProfileId === profileId) {
+          delete targetStore.lastGood[provider];
+        }
+      }
+    }
+    if (targetStore.usageStats && typeof targetStore.usageStats === "object") {
+      delete targetStore.usageStats[profileId];
+    }
+    mutated = true;
+  }
+
+  if (!mutated) {
+    continue;
+  }
+
+  fs.writeFileSync(targetAuthPath, `${JSON.stringify(targetStore, null, 2)}\n`);
   fs.chmodSync(targetAuthPath, 0o600);
 }
 NODE
@@ -696,7 +739,8 @@ start_isolated_runtime() {
       OPENCLAW_SKIP_CANVAS_HOST=1 \
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1 \
       OPENCLAW_DISABLE_BONJOUR=1 \
-      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_SKIP_AUTH_SYNC:-0}" \
+      OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE=1 \
+      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC=1 \
       node scripts/run-node.mjs gateway run --bind loopback --port "$RUNTIME_PORT" --force --allow-unconfigured \
       >"$RUNTIME_LOG_PATH" 2>&1 &
   ); then
@@ -769,7 +813,10 @@ ensure_command() {
       if [[ "$RUNTIME_OWNERSHIP" == "ok" ]]; then
         probe_runtime_health
         if [[ "$RUNTIME_HEALTH" == "ok" ]]; then
-          break
+          probe_runtime_stability
+          if [[ "$RUNTIME_HEALTH" == "ok" ]]; then
+            break
+          fi
         fi
       fi
       sleep 1

@@ -182,6 +182,7 @@ function hasBoundConversationForSession(params: {
 export type AcpDispatchAttemptResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
+  silenceExpected?: boolean;
 };
 
 export async function tryDispatchAcpReply(params: {
@@ -290,7 +291,7 @@ export async function tryDispatchAcpReply(params: {
       delivery.applyRoutedCounts(counts);
       params.recordProcessed("completed", { reason: "acp_empty_prompt" });
       params.markIdle("message_completed");
-      return { queuedFinal: false, counts };
+      return { queuedFinal: false, counts, silenceExpected: true };
     }
 
     try {

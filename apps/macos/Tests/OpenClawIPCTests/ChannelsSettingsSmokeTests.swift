@@ -205,7 +205,7 @@ struct ChannelsSettingsSmokeTests {
             #expect(telegram.id == "telegram")
             #expect(view.channelEnabled(telegram))
             #expect(view.telegramSummary == "Live")
-            #expect(view.telegramDetails == nil)
+            #expect(view.telegramDetails == "Telegram access is saved on this Mac.")
         }
     }
 
