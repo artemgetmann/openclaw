@@ -2,6 +2,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../gateway/protocol/client-info.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import {
   approveDevicePairing,
@@ -154,6 +155,52 @@ describe("device pairing tokens", () => {
     const paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.roles).toEqual(["node", "operator"]);
     expect(paired?.scopes).toEqual(["operator.read", "operator.write"]);
+  });
+
+  test("promotes stale local macOS node repair requests to silent auto-approval", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const operator = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        clientId: GATEWAY_CLIENT_IDS.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.UI,
+        role: "operator",
+      },
+      baseDir,
+    );
+    await approveDevicePairing(operator.request.requestId, baseDir);
+
+    await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        clientId: GATEWAY_CLIENT_IDS.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        role: "node",
+        silent: false,
+      },
+      baseDir,
+    );
+
+    const repaired = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        clientId: GATEWAY_CLIENT_IDS.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        role: "node",
+        silent: true,
+      },
+      baseDir,
+    );
+
+    expect(repaired.created).toBe(false);
+    expect(repaired.request.silent).toBe(true);
+    expect(repaired.request.isRepair).toBe(true);
+    expect(repaired.request.clientId).toBe(GATEWAY_CLIENT_IDS.MACOS_APP);
+    expect(repaired.request.clientMode).toBe(GATEWAY_CLIENT_MODES.NODE);
+    expect(repaired.request.roles).toEqual(["node"]);
   });
 
   test("rejects bootstrap token replay before pending scope escalation can be approved", async () => {

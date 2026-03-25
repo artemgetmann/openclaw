@@ -816,6 +816,8 @@ export function attachGatewayWsMessageHandler(params: {
               hasBrowserOriginHeader,
               isControlUi,
               isWebchat,
+              clientId: connectParams.client.id,
+              clientMode: connectParams.client.mode,
               reason,
             });
             const pairing = await requestDevicePairing({
