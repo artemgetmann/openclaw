@@ -11,12 +11,7 @@ import type {
   ResetScope,
 } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  DEFAULT_GATEWAY_PORT,
-  readConfigFileSnapshot,
-  resolveGatewayPort,
-  writeConfigFile,
-} from "../config/config.js";
+import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -275,7 +270,7 @@ export async function runSetupWizard(
           "Direct to chat channels.",
         ]
       : [
-          `Gateway port: ${DEFAULT_GATEWAY_PORT}`,
+          `Gateway port: ${quickstartGateway.port}`,
           "Gateway bind: Loopback (127.0.0.1)",
           "Gateway auth: Token (default)",
           "Tailscale exposure: Off",

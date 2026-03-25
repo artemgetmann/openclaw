@@ -199,8 +199,11 @@ struct BrowserSetupCardContent: View {
             if let action {
                 Button(action: action) {
                     self.profileCardLabel(profile: profile, selected: selected)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             } else {
                 self.profileCardLabel(profile: profile, selected: selected)
             }

@@ -80,7 +80,10 @@ final class OnboardingWizardModel {
 
         do {
             GatewayProcessManager.shared.setActive(true)
-            if await GatewayProcessManager.shared.waitForGatewayReady(timeout: 12) == false {
+            // First-run consumer startup can trail the onboarding window on busy Macs.
+            // Give the gateway a longer grace window before surfacing a scary
+            // "Setup problem" card for a process that is still booting in the background.
+            if await GatewayProcessManager.shared.waitForGatewayReady(timeout: 45) == false {
                 throw NSError(
                     domain: "Gateway",
                     code: 1,

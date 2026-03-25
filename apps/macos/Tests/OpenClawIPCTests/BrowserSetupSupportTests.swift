@@ -156,6 +156,10 @@ struct BrowserSetupSupportTests {
             "OPENCLAW_STATE_DIR": stateDir.path,
             "OPENCLAW_CONFIG_PATH": configPath.path,
         ]) {
+            OpenClawConfigFile.updateGatewayDict { gateway in
+                gateway["port"] = 19001
+            }
+
             let model = BrowserSetupModel(
                 defaults: defaults,
                 detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
@@ -177,8 +181,10 @@ struct BrowserSetupSupportTests {
             let profiles = browser?["profiles"] as? [String: Any]
             let userProfile = profiles?["user"] as? [String: Any]
             #expect(browser?["defaultProfile"] as? String == "user")
+            #expect((userProfile?["cdpPort"] as? NSNumber)?.intValue == 19012)
             #expect(userProfile?["cloneFromUserProfile"] as? Bool == true)
             #expect(userProfile?["sourceProfileName"] as? String == "Profile 4")
+            #expect(userProfile?["color"] as? String == "#00AA00")
 
             let userDataDir = OpenClawConfigFile.managedBrowserUserDataDirURL()
             #expect(FileManager.default.fileExists(atPath: userDataDir.path))
@@ -243,6 +249,10 @@ struct BrowserSetupSupportTests {
             "OPENCLAW_STATE_DIR": stateDir.path,
             "OPENCLAW_CONFIG_PATH": configPath.path,
         ]) {
+            OpenClawConfigFile.updateGatewayDict { gateway in
+                gateway["port"] = 19001
+            }
+
             let model = BrowserSetupModel(
                 defaults: defaults,
                 detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
@@ -289,7 +299,9 @@ struct BrowserSetupSupportTests {
 
             let root = OpenClawConfigFile.loadDict()
             let browser = root["browser"] as? [String: Any]
+            let profiles = browser?["profiles"] as? [String: Any]
             #expect((browser?["defaultProfile"] as? String) == nil)
+            #expect(profiles?["user"] == nil)
         }
     }
 

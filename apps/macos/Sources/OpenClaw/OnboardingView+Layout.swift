@@ -50,6 +50,15 @@ extension OnboardingView {
             guard newValue, self.activePageIndex == self.wizardPageIndex else { return }
             self.handleNext()
         }
+        .onChange(of: self.browserSetup.isComplete) { _, newValue in
+            guard newValue else { return }
+            guard AppFlavor.current.isConsumer else { return }
+            guard self.pageCount == 1, self.state.connectionMode == .local else { return }
+            // Inline consumer setup is intentionally a one-page flow. Once Chrome is
+            // connected, hand off directly to Telegram setup instead of leaving the
+            // user at a generic Settings screen.
+            self.finish()
+        }
         .onDisappear {
             self.stopPermissionMonitoring()
             self.stopDiscovery()

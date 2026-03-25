@@ -262,6 +262,8 @@ private final class StatusItemMouseHandlerView: NSView {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var state: AppState?
+    private var consumerReopenObserver: NSObjectProtocol?
+    private let launchLogger = Logger(subsystem: "ai.openclaw", category: "consumer.launch")
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     let updaterController: UpdaterProviding = makeUpdaterController()
 
@@ -276,11 +278,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
         if self.isDuplicateInstance() {
+            self.signalExistingConsumerInstanceToShowVisibleSurface()
             NSApp.terminate(nil)
             return
         }
         self.state = AppStateStore.shared
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
+        self.installConsumerReopenObserverIfNeeded()
         if let state {
             Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
         }
@@ -295,7 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
         Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
-        self.scheduleFirstRunOnboardingIfNeeded()
+        self.scheduleInitialVisibleSurfaceIfNeeded()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
         }
@@ -311,6 +315,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let observer = self.consumerReopenObserver {
+            DistributedNotificationCenter.default().removeObserver(observer)
+            self.consumerReopenObserver = nil
+        }
         PresenceReporter.shared.stop()
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
@@ -326,14 +334,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await PeekabooBridgeHostCoordinator.shared.stop() }
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard AppFlavor.current.isConsumer else { return false }
+        guard !flag else { return false }
+        self.showVisibleConsumerSurface()
+        return true
+    }
+
     @MainActor
-    private func scheduleFirstRunOnboardingIfNeeded() {
-        let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
-        let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
-        guard shouldShow else { return }
+    private func scheduleInitialVisibleSurfaceIfNeeded() {
+        let shouldShowOnboarding = self.shouldShowOnboarding()
+        self.launchLogger.info(
+            """
+            initial visible surface decision onboarding=\(shouldShowOnboarding, privacy: .public) \
+            finderLaunch=\(self.didLaunchFromFinder, privacy: .public)
+            """)
+        guard shouldShowOnboarding || self.didLaunchFromFinder else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            OnboardingController.shared.show()
+            self.launchLogger.info("showing initial visible consumer surface")
+            self.showVisibleConsumerSurface()
         }
+    }
+
+    private func shouldShowOnboarding() -> Bool {
+        let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
+        return seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
+    }
+
+    private var didLaunchFromFinder: Bool {
+        CommandLine.arguments.contains(where: { $0.hasPrefix("-psn_") })
+    }
+
+    private func showVisibleConsumerSurface() {
+        guard AppFlavor.current.isConsumer else { return }
+        if self.shouldShowOnboarding() {
+            self.launchLogger.info("opening onboarding window")
+            OnboardingController.shared.show()
+            return
+        }
+        self.launchLogger.info("opening settings window")
+        SettingsWindowOpener.shared.open()
+    }
+
+    private func installConsumerReopenObserverIfNeeded() {
+        guard AppFlavor.current.isConsumer else { return }
+        guard self.consumerReopenObserver == nil else { return }
+        let bundleID = Bundle.main.bundleIdentifier
+        self.launchLogger.info("installing reopen observer bundleID=\(bundleID ?? "missing", privacy: .public)")
+        self.consumerReopenObserver = DistributedNotificationCenter.default().addObserver(
+            forName: .openclawConsumerShowVisibleSurface,
+            object: bundleID,
+            queue: .main)
+        { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.launchLogger.info("received reopen signal from duplicate instance")
+                self?.showVisibleConsumerSurface()
+            }
+        }
+    }
+
+    private func signalExistingConsumerInstanceToShowVisibleSurface() {
+        guard AppFlavor.current.isConsumer else { return }
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+        self.launchLogger.info("signaling existing instance to show visible surface")
+        DistributedNotificationCenter.default().postNotificationName(
+            .openclawConsumerShowVisibleSurface,
+            object: bundleID,
+            userInfo: nil,
+            deliverImmediately: true)
     }
 
     private func isDuplicateInstance() -> Bool {
@@ -441,6 +509,10 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
 }
 
 extension SparkleUpdaterController: SPUUpdaterDelegate {}
+
+extension Notification.Name {
+    static let openclawConsumerShowVisibleSurface = Notification.Name("ai.openclaw.consumer.showVisibleSurface")
+}
 
 private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
     var staticCode: SecStaticCode?

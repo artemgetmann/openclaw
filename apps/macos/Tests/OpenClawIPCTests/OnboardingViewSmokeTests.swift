@@ -64,6 +64,10 @@ struct OnboardingViewSmokeTests {
         }
     }
 
+    @Test func `consumer browser handoff goes to channels`() {
+        #expect(OnboardingView.consumerPostBrowserSetupTab == .channels)
+    }
+
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {
         let override = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")

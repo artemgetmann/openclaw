@@ -5,6 +5,8 @@ import OpenClawIPC
 import SwiftUI
 
 extension OnboardingView {
+    static var consumerPostBrowserSetupTab: SettingsTab { .channels }
+
     func selectLocalGateway() {
         self.state.connectionMode = .local
         self.preferredGatewayID = nil
@@ -64,6 +66,11 @@ extension OnboardingView {
     func finish() {
         UserDefaults.standard.set(true, forKey: onboardingSeenKey)
         UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
+        if AppFlavor.current.isConsumer {
+            // Consumer onboarding should hand off to the next required step, not
+            // imply the setup is already finished. Channels is where Telegram lives.
+            self.openSettings(tab: Self.consumerPostBrowserSetupTab)
+        }
         OnboardingController.shared.close()
     }
 

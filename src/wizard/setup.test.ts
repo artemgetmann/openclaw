@@ -68,6 +68,7 @@ const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
 const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
+const resolveGatewayPort = vi.hoisted(() => vi.fn(() => 18789));
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({
     path: "/tmp/.openclaw/openclaw.json",
@@ -146,7 +147,7 @@ vi.mock("../commands/onboard-hooks.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   DEFAULT_GATEWAY_PORT: 18789,
-  resolveGatewayPort: () => 18789,
+  resolveGatewayPort,
   readConfigFileSnapshot,
   writeConfigFile,
 }));
@@ -419,6 +420,94 @@ describe("runSetupWizard", () => {
     }
   });
 
+  it("shows the resolved local gateway port in quickstart when config starts empty", async () => {
+    resolveGatewayPort.mockClear();
+    resolveGatewayPort.mockReturnValueOnce(20637);
+    const note = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(note).toHaveBeenCalledWith(expect.stringContaining("Gateway port: 20637"), "QuickStart");
+  });
+
+  it("passes the configured local port into the gateway config step", async () => {
+    configureGatewayForSetup.mockClear();
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          auth: {
+            mode: "password",
+            password: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_PASSWORD",
+            },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
+      if (opts.message === "Config handling") {
+        return "keep";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localPort: 18789,
+        quickstartGateway: expect.objectContaining({
+          port: 18789,
+          authMode: "password",
+        }),
+      }),
+    );
+  });
+
   it("passes the configured local port into the local gateway probe", async () => {
     probeGatewayReachable.mockClear();
     resolveSetupSecretInputString.mockClear();
@@ -484,7 +573,6 @@ describe("runSetupWizard", () => {
 
   it("surfaces gateway probe secret resolution failures through the wizard note channel", async () => {
     const note = vi.fn(async () => {});
-    const prompter = buildWizardPrompter({ note });
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
@@ -508,6 +596,13 @@ describe("runSetupWizard", () => {
       warnings: [],
       legacyIssues: [],
     });
+    const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
+      if (opts.message === "Config handling") {
+        return "keep";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ note, select });
     const runtime = createRuntime();
     resolveSetupSecretInputString.mockImplementation(async (params: { path: string }) => {
       if (params.path === "gateway.auth.password") {
