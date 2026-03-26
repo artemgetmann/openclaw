@@ -21,6 +21,7 @@
 
 - In chat replies, use repo-root-relative file references only.
 - Read `SECURITY.md` before any security triage, advisory work, or severity decision.
+- Before touching gateway runtime ownership, worktree bot validation, or LaunchAgent behavior, read `docs/agent-guides/workflow.md` and `docs/agent-guides/runtime-ops.md`.
 - Before opening or updating a PR:
   - For fork PRs targeting `artemgetmann/openclaw` `main` or `codex/consumer-openclaw-project`, read `FORK_CONTRIBUTING.md`
   - For upstream PRs or other targets, read `CONTRIBUTING.md`
@@ -30,6 +31,8 @@
 - Never edit `node_modules`.
 - Never update the Carbon dependency.
 - Do not patch dependencies without explicit approval.
+- Treat the default shared gateway service as sacred: tester/consumer/rescue runtimes must use explicit profile/config/state/port isolation instead of plain `openclaw gateway install`.
+- Only replace the default shared gateway service intentionally, via `openclaw gateway install --force --allow-shared-service-takeover`.
 - When adding a new `AGENTS.md`, add a sibling `CLAUDE.md` symlink to it.
 
 ## Load only the docs you need

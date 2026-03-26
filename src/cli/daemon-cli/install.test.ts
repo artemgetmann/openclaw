@@ -84,6 +84,40 @@ vi.mock("../../commands/daemon-install-helpers.js", () => ({
 
 vi.mock("./shared.js", () => ({
   parsePort: parsePortMock,
+  parsePortFromArgs: (programArguments: string[] | undefined) => {
+    if (!programArguments?.length) {
+      return null;
+    }
+    for (let i = 0; i < programArguments.length; i += 1) {
+      const arg = programArguments[i];
+      if (arg === "--port") {
+        const next = programArguments[i + 1];
+        const parsed = Number.parseInt(next ?? "", 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      }
+    }
+    return null;
+  },
+  filterDaemonEnv: (env: Record<string, string> | undefined) => {
+    if (!env) {
+      return {};
+    }
+    const filtered: Record<string, string> = {};
+    for (const key of [
+      "OPENCLAW_PROFILE",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_GATEWAY_PORT",
+      "OPENCLAW_NIX_MODE",
+    ]) {
+      const value = env[key];
+      if (!value?.trim()) {
+        continue;
+      }
+      filtered[key] = value.trim();
+    }
+    return filtered;
+  },
   createDaemonInstallActionContext: (jsonFlag: unknown) => {
     const json = Boolean(jsonFlag);
     return {
@@ -164,6 +198,7 @@ describe("runDaemonInstall", () => {
     isGatewayDaemonRuntimeMock.mockReset();
     installDaemonServiceAndEmitMock.mockReset();
     service.isLoaded.mockReset();
+    service.readCommand.mockReset();
     runtimeLogs.length = 0;
     actionState.warnings.length = 0;
     actionState.emitted.length = 0;
@@ -209,7 +244,7 @@ describe("runDaemonInstall", () => {
 
     expect(actionState.failed[0]?.message).toContain("gateway.auth.token SecretRef is configured");
     expect(actionState.failed[0]?.message).toContain("unresolved");
-    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
@@ -288,5 +323,86 @@ describe("runDaemonInstall", () => {
     expect(actionState.failed[0]?.message).toContain("Gateway service check failed");
     expect(actionState.failed[0]?.message).toContain("read-only file system");
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks default shared gateway takeover when installed ownership drifts", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: [
+        "/opt/homebrew/bin/node",
+        "/tmp/other/dist/index.js",
+        "gateway",
+        "--port",
+        "31197",
+      ],
+      workingDirectory: "/tmp/other",
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/other/.openclaw",
+        OPENCLAW_CONFIG_PATH: "/tmp/other/.openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "31197",
+      },
+    });
+
+    await runDaemonInstall({ json: true, force: true });
+
+    expect(actionState.failed[0]?.message).toContain(
+      "default shared gateway service already belongs",
+    );
+    expect(actionState.failed[0]?.hints).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Current entrypoint"),
+        expect.stringContaining("--profile tester gateway install"),
+        expect.stringContaining("--allow-shared-service-takeover"),
+      ]),
+    );
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("allows replacing the shared gateway when takeover is explicit", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: [
+        "/opt/homebrew/bin/node",
+        "/tmp/other/dist/index.js",
+        "gateway",
+        "--port",
+        "31197",
+      ],
+      workingDirectory: "/tmp/other",
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/other/.openclaw",
+        OPENCLAW_CONFIG_PATH: "/tmp/other/.openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "31197",
+      },
+    });
+
+    await runDaemonInstall({ json: true, force: true, allowSharedServiceTakeover: true });
+
+    expect(actionState.failed).toEqual([]);
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the shared-service guard for profiled installs", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "tester");
+    service.readCommand.mockResolvedValue({
+      programArguments: [
+        "/opt/homebrew/bin/node",
+        "/tmp/other/dist/index.js",
+        "gateway",
+        "--port",
+        "31197",
+      ],
+      workingDirectory: "/tmp/other",
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/other/.openclaw",
+        OPENCLAW_CONFIG_PATH: "/tmp/other/.openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "31197",
+        OPENCLAW_PROFILE: "tester",
+      },
+    });
+
+    await runDaemonInstall({ json: true, force: true });
+
+    expect(actionState.failed).toEqual([]);
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -19,6 +19,7 @@ function resolveInstallOptions(
   const parentToken = inheritOptionFromParent<string>(command, "token");
   return {
     ...cmdOpts,
+    allowSharedServiceTakeover: Boolean(cmdOpts.allowSharedServiceTakeover),
     force: Boolean(cmdOpts.force || parentForce),
     port: cmdOpts.port ?? parentPort,
     token: cmdOpts.token ?? parentToken,
@@ -64,6 +65,11 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
     .option("--force", "Reinstall/overwrite if already installed", false)
+    .option(
+      "--allow-shared-service-takeover",
+      "Allow overwriting the default shared gateway service when it belongs to another runtime/config",
+      false,
+    )
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
       await runDaemonInstall(resolveInstallOptions(cmdOpts, command));
