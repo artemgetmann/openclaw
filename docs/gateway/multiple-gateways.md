@@ -41,6 +41,8 @@ openclaw --profile main gateway install
 openclaw --profile rescue gateway install
 ```
 
+Safety note: the default shared service label/name is reserved for the main runtime. If an installed default service already points at another runtime/config, plain `openclaw gateway install` now refuses to silently overwrite it. Use explicit profiles for tester/consumer/rescue gateways, or pass `--force --allow-shared-service-takeover` only when you intentionally want to replace the shared main service.
+
 ## Rescue-bot guide
 
 Run a second Gateway on the same host with its own:
