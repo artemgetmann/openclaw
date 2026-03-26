@@ -48,6 +48,8 @@
   - `docs/agent-guides/dev-and-test.md`
 - Docs authoring, Mintlify rules, and i18n:
   - `docs/agent-guides/docs-and-content.md`
+- Browser and agent end-to-end checks without Telegram:
+  - `docs/agent-guides/browser-e2e.md`
 - Telegram live checks and worktree bot setup:
   - `docs/agent-guides/telegram-live.md`
 - Runtime ops, logs, timeout triage, and mac app behavior:
