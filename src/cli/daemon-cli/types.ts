@@ -20,6 +20,7 @@ export type DaemonInstallOptions = {
   runtime?: string;
   token?: string;
   force?: boolean;
+  allowSharedServiceTakeover?: boolean;
   json?: boolean;
 };
 

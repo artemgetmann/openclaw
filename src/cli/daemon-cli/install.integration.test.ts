@@ -161,4 +161,53 @@ describe("runDaemonInstall integration", () => {
     expect(installEnv?.GOOGLE_PLACES_API_KEY).toBe("test-google-places-key");
     expect(installEnv?.HIMALAYA_CONFIG).toBe("/tmp/himalaya-empty.toml");
   });
+
+  it("fails closed when the default shared service already belongs to another runtime", async () => {
+    serviceMock.readCommand.mockResolvedValue({
+      programArguments: [
+        "/opt/homebrew/bin/node",
+        "/tmp/other/dist/index.js",
+        "gateway",
+        "--port",
+        "31197",
+      ],
+      workingDirectory: "/tmp/other",
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/other/.openclaw",
+        OPENCLAW_CONFIG_PATH: "/tmp/other/.openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "31197",
+      },
+    });
+
+    await expect(runDaemonInstall({ json: true, force: true })).rejects.toThrow("__exit__:1");
+
+    expect(serviceMock.install).not.toHaveBeenCalled();
+    const joined = runtimeLogs.join("\n");
+    expect(joined).toContain(
+      "default shared gateway service already belongs to another runtime/config",
+    );
+    expect(joined).toContain("--allow-shared-service-takeover");
+  });
+
+  it("allows explicit takeover of the default shared service", async () => {
+    serviceMock.readCommand.mockResolvedValue({
+      programArguments: [
+        "/opt/homebrew/bin/node",
+        "/tmp/other/dist/index.js",
+        "gateway",
+        "--port",
+        "31197",
+      ],
+      workingDirectory: "/tmp/other",
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/other/.openclaw",
+        OPENCLAW_CONFIG_PATH: "/tmp/other/.openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "31197",
+      },
+    });
+
+    await runDaemonInstall({ json: true, force: true, allowSharedServiceTakeover: true });
+
+    expect(serviceMock.install).toHaveBeenCalledTimes(1);
+  });
 });
