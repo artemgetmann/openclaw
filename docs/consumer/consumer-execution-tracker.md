@@ -1142,3 +1142,32 @@ Out of scope:
      - intentionally try `SPARKLE_FEED_URL=https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`
      - expected:
        - consumer packaging fails fast with a message telling you to use a consumer-owned feed or leave updates disabled
+
+### 2026-03-26 updates-and-appcast verification follow-up
+
+- Rebased this lane onto the latest `origin/codex/consumer-openclaw-project`.
+- Result:
+  - the earlier `apps/macos/Sources/OpenClaw/AgentWorkspace.swift` duplicate-declaration blocker was resolved on base
+  - this lane did not need to touch `AgentWorkspace.swift`
+- Verified current debug/demo consumer truth on the rebased branch:
+  - `bash scripts/package-consumer-mac-app.sh --instance updates-appcast-lane` passed
+  - verifier output matched the intended MVP-demo state:
+    - `bundle_id=ai.openclaw.consumer.mac.debug.updates-appcast-lane`
+    - `sparkle_mode=disabled`
+    - `sparkle_feed_url=<blank>`
+    - `sparkle_auto_checks=false`
+    - `gatekeeper=rejected` with the expected Apple Development/manual-trust note
+- Verified release-capable consumer packaging stays consumer-scoped when explicitly configured:
+  - `SKIP_TSC=1 SKIP_UI_BUILD=1 BUNDLE_ID=ai.openclaw.consumer.mac.updates-appcast-lane SPARKLE_FEED_URL=https://example.com/consumer-appcast.xml bash scripts/package-consumer-mac-app.sh --instance updates-appcast-lane` passed
+  - verifier output confirmed:
+    - `bundle_id=ai.openclaw.consumer.mac.updates-appcast-lane`
+    - `sparkle_mode=automatic`
+    - `sparkle_feed_url=https://example.com/consumer-appcast.xml`
+    - `sparkle_auto_checks=true`
+- Verified the safety guard:
+  - `SKIP_TSC=1 SKIP_UI_BUILD=1 BUNDLE_ID=ai.openclaw.consumer.mac.updates-appcast-lane SPARKLE_FEED_URL=https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml bash scripts/package-consumer-mac-app.sh --instance updates-appcast-lane`
+  - expected failure happened immediately:
+    - `ERROR: consumer bundle ids must not point at the generic OpenClaw appcast.`
+- Final lane conclusion before merge:
+  - consumer MVP demos should stay manual-update only
+  - the minimal repo-side consumer auto-update path is now defined, guarded, and locally verified
