@@ -138,4 +138,24 @@ describe("flushPendingToolResultsAfterIdle", () => {
     });
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("skips the idle wait when cleanup explicitly opts out", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    vi.useFakeTimers();
+    const waitForIdle = vi.fn(() => new Promise<void>(() => {}));
+
+    appendMessage(assistantToolCall("call_skip_wait_1"));
+
+    await flushPendingToolResultsAfterIdle({
+      agent: { waitForIdle },
+      sessionManager: sm,
+      timeoutMs: 30,
+      skipWaitForIdle: true,
+    });
+
+    expect(waitForIdle).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+  });
 });
