@@ -282,4 +282,40 @@ describe("cli credentials", () => {
       provider: "openai-codex",
     });
   });
+
+  it("does not let OPENCLAW_HOME hijack Codex auth.json lookup", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-runtime-"));
+    const realHome = path.join(tempRoot, "real-home");
+    const runtimeHome = path.join(tempRoot, "consumer-runtime");
+    const codexDir = path.join(realHome, ".codex");
+
+    fs.mkdirSync(codexDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(runtimeHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(codexDir, "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: "file-access",
+          refresh_token: "file-refresh",
+          account_id: "acct_123",
+        },
+      }),
+      "utf8",
+    );
+
+    process.env.HOME = realHome;
+    process.env.OPENCLAW_HOME = runtimeHome;
+    execSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    const creds = readCodexCliCredentials({ execSync: execSyncMock });
+
+    expect(creds).toMatchObject({
+      access: "file-access",
+      refresh: "file-refresh",
+      provider: "openai-codex",
+      accountId: "acct_123",
+    });
+  });
 });

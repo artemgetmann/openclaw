@@ -130,7 +130,14 @@ function resolveCodexCliAuthPath() {
 
 function resolveCodexHomePath() {
   const configured = process.env.CODEX_HOME;
-  const home = configured ? resolveUserPath(configured) : resolveUserPath("~/.codex");
+  const pathEnv = { ...process.env };
+  delete pathEnv.OPENCLAW_HOME;
+  // OPENCLAW_HOME points at the app/runtime root for isolated consumer lanes.
+  // Codex CLI auth should keep resolving from the user's Codex home unless the
+  // user explicitly overrides CODEX_HOME.
+  const home = configured
+    ? resolveUserPath(configured, pathEnv)
+    : resolveUserPath("~/.codex", pathEnv);
   try {
     return fs.realpathSync.native(home);
   } catch {
