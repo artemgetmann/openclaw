@@ -35,10 +35,37 @@ fi
 IFS=' ' read -r -a BUILD_ARCHS <<< "$BUILD_ARCHS_VALUE"
 PRIMARY_ARCH="${BUILD_ARCHS[0]}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
-SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml}"
+DEFAULT_STANDARD_SPARKLE_FEED_URL="https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml"
+
+default_sparkle_feed_url_for_bundle() {
+  local bundle_id="$1"
+  case "$bundle_id" in
+    ai.openclaw.mac|ai.openclaw.mac.*)
+      printf '%s' "$DEFAULT_STANDARD_SPARKLE_FEED_URL"
+      ;;
+    *)
+      # Consumer builds must opt into a consumer-owned feed explicitly.
+      # Falling back to the founder/upstream appcast would make the updater
+      # fetch the wrong artifact line for a different product identity.
+      printf ''
+      ;;
+  esac
+}
+
+if [[ -v SPARKLE_FEED_URL ]]; then
+  SPARKLE_FEED_URL="${SPARKLE_FEED_URL}"
+else
+  SPARKLE_FEED_URL="$(default_sparkle_feed_url_for_bundle "$BUNDLE_ID")"
+fi
+
+if [[ "$BUNDLE_ID" == ai.openclaw.consumer.mac* && "$SPARKLE_FEED_URL" == "$DEFAULT_STANDARD_SPARKLE_FEED_URL" ]]; then
+  echo "ERROR: consumer bundle ids must not point at the generic OpenClaw appcast." >&2
+  echo "Set SPARKLE_FEED_URL to a consumer-owned feed or leave it blank to keep updates disabled." >&2
+  exit 1
+fi
+
 AUTO_CHECKS=true
-if [[ "$BUNDLE_ID" == *.debug ]]; then
-  SPARKLE_FEED_URL=""
+if [[ "$BUNDLE_ID" == *.debug || -z "$SPARKLE_FEED_URL" ]]; then
   AUTO_CHECKS=false
 fi
 
