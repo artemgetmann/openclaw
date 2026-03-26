@@ -1046,3 +1046,128 @@ Out of scope:
   - the notarization-enabled path now fails fast with the correct blocker when only Apple Development signing is available
 - Detailed findings, decisions, and exact command output for this lane now live in:
   - `docs/consumer/signing-and-notarization-demo-distribution.md`
+
+### 2026-03-26 updates-and-appcast lane
+
+- Scope:
+  - define the minimal consumer auto-update path
+  - confirm the current Sparkle/update identity wiring
+  - decide whether consumer should auto-update in MVP demos
+- Current code truth:
+  - the macOS app already includes Sparkle and the consumer app UI already has the updater surface in `About`
+  - packaged app updater availability is still gated to Developer ID signed `.app` bundles in `apps/macos/Sources/OpenClaw/MenuBar.swift`
+  - the generic packaging script still owns the only live default appcast path:
+    - `scripts/package-mac-app.sh` defaulted `SPARKLE_FEED_URL` to `https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`
+    - root `appcast.xml` is the founder/general OpenClaw feed
+    - root `appcast.xml` contains generic `OpenClaw-<version>.zip` artifacts, not consumer artifacts
+  - consumer packaging still defaults to debug bundle ids:
+    - default consumer bundle id is `ai.openclaw.consumer.mac.debug[.<instance>]`
+    - debug consumer packages intentionally ship with `SUFeedURL` blank and `SUEnableAutomaticChecks=false`
+  - there is no Sparkle release-channel separation in repo right now:
+    - no `sparkle:channel` entries in `appcast.xml`
+    - no `SUAllowedChannels` usage in the macOS app
+- Product decision:
+  - consumer should not auto-update in current MVP demo builds
+  - reason:
+    - current demos are still Apple Development signed/manual-trust builds, so the Sparkle updater is intentionally unavailable
+    - there is no consumer-owned appcast yet
+    - reusing the founder/general appcast would be the wrong product identity and the wrong artifact line
+  - minimal safe path is:
+    1. keep debug/manual demo builds update-off
+    2. create one consumer-owned stable appcast/feed first
+    3. ship a stable consumer bundle id for release-capable builds (`ai.openclaw.consumer.mac[.<instance>]`)
+    4. only enable Sparkle auto-checks on Developer ID signed + notarized consumer builds that point at that consumer feed
+    5. defer beta/canary channel separation until the stable consumer feed is real
+- Feed/appcast strategy decision:
+  - MVP consumer auto-update should use one dedicated consumer stable feed, not the generic repo root `appcast.xml`
+  - do not introduce Sparkle beta/canary channels yet
+  - if we need staged rollouts later, add channel separation only after the consumer stable feed and artifact naming are working end-to-end
+- Repo changes landed in this lane:
+  - `scripts/package-mac-app.sh`
+    - consumer bundle ids no longer inherit the generic founder/upstream appcast by default
+    - Sparkle auto-checks now stay off whenever the feed is blank
+    - consumer bundle ids now fail fast if someone points them at the generic `openclaw/openclaw` appcast
+  - `scripts/verify-consumer-mac-app.sh`
+    - verification output now reports:
+      - `sparkle_mode`
+      - `sparkle_feed_url`
+      - `sparkle_auto_checks`
+      - `sparkle_public_ed_key`
+- Full implementation blocker analysis:
+  - external/product blocker:
+    - no consumer-owned appcast/feed is published yet
+  - distribution blocker:
+    - current demo packaging path is Apple Development signed/manual trust, not Developer ID + notarized
+  - repo blocker:
+    - fresh macOS consumer packaging is currently blocked by unrelated duplicate declarations in `apps/macos/Sources/OpenClaw/AgentWorkspace.swift`
+    - concrete breakage on 2026-03-26:
+      - duplicate `memoryFilename`
+      - duplicate `defaultMemoryTemplate()`
+    - this prevents a fresh packaged-app verification pass from completing in this checkout
+- Verification completed in this lane:
+  - `bash -n scripts/package-mac-app.sh`
+  - `bash -n scripts/verify-consumer-mac-app.sh`
+  - code inspection of:
+    - `scripts/package-mac-app.sh`
+    - `scripts/package-consumer-mac-app.sh`
+    - `scripts/verify-consumer-mac-app.sh`
+    - `apps/macos/Sources/OpenClaw/MenuBar.swift`
+    - `appcast.xml`
+  - attempted real package verification:
+    - `bash scripts/package-consumer-mac-app.sh --instance updates-appcast-lane`
+    - result:
+      - JS/control-ui build steps completed
+      - Swift packaging failed on the unrelated `AgentWorkspace.swift` duplicate declarations listed above
+- Exact verification steps to rerun after the unrelated macOS build blocker is fixed:
+  1. Verify shell packaging logic:
+     - `bash -n scripts/package-mac-app.sh`
+     - `bash -n scripts/verify-consumer-mac-app.sh`
+  2. Verify current debug consumer truth:
+     - `bash scripts/package-consumer-mac-app.sh --instance updates-appcast-lane`
+     - `bash scripts/verify-consumer-mac-app.sh --instance updates-appcast-lane`
+     - expected:
+       - `bundle_id=ai.openclaw.consumer.mac.debug.updates-appcast-lane`
+       - `sparkle_mode=disabled`
+       - `sparkle_feed_url=<blank>`
+       - `sparkle_auto_checks=false`
+  3. Verify release-capable consumer packaging stays consumer-scoped:
+     - `BUNDLE_ID=ai.openclaw.consumer.mac.updates-appcast-lane SPARKLE_FEED_URL=https://<consumer-feed>/appcast.xml bash scripts/package-consumer-mac-app.sh --instance updates-appcast-lane`
+     - `BUNDLE_ID=ai.openclaw.consumer.mac.updates-appcast-lane bash scripts/verify-consumer-mac-app.sh --instance updates-appcast-lane`
+     - expected:
+       - `bundle_id=ai.openclaw.consumer.mac.updates-appcast-lane`
+       - `sparkle_feed_url=https://<consumer-feed>/appcast.xml`
+       - `sparkle_auto_checks=true`
+       - do not use the generic root `appcast.xml`
+  4. Verify the safety guard:
+     - intentionally try `SPARKLE_FEED_URL=https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`
+     - expected:
+       - consumer packaging fails fast with a message telling you to use a consumer-owned feed or leave updates disabled
+
+### 2026-03-26 updates-and-appcast verification follow-up
+
+- Rebased this lane onto the latest `origin/codex/consumer-openclaw-project`.
+- Result:
+  - the earlier `apps/macos/Sources/OpenClaw/AgentWorkspace.swift` duplicate-declaration blocker was resolved on base
+  - this lane did not need to touch `AgentWorkspace.swift`
+- Verified current debug/demo consumer truth on the rebased branch:
+  - `bash scripts/package-consumer-mac-app.sh --instance updates-appcast-lane` passed
+  - verifier output matched the intended MVP-demo state:
+    - `bundle_id=ai.openclaw.consumer.mac.debug.updates-appcast-lane`
+    - `sparkle_mode=disabled`
+    - `sparkle_feed_url=<blank>`
+    - `sparkle_auto_checks=false`
+    - `gatekeeper=rejected` with the expected Apple Development/manual-trust note
+- Verified release-capable consumer packaging stays consumer-scoped when explicitly configured:
+  - `SKIP_TSC=1 SKIP_UI_BUILD=1 BUNDLE_ID=ai.openclaw.consumer.mac.updates-appcast-lane SPARKLE_FEED_URL=https://example.com/consumer-appcast.xml bash scripts/package-consumer-mac-app.sh --instance updates-appcast-lane` passed
+  - verifier output confirmed:
+    - `bundle_id=ai.openclaw.consumer.mac.updates-appcast-lane`
+    - `sparkle_mode=automatic`
+    - `sparkle_feed_url=https://example.com/consumer-appcast.xml`
+    - `sparkle_auto_checks=true`
+- Verified the safety guard:
+  - `SKIP_TSC=1 SKIP_UI_BUILD=1 BUNDLE_ID=ai.openclaw.consumer.mac.updates-appcast-lane SPARKLE_FEED_URL=https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml bash scripts/package-consumer-mac-app.sh --instance updates-appcast-lane`
+  - expected failure happened immediately:
+    - `ERROR: consumer bundle ids must not point at the generic OpenClaw appcast.`
+- Final lane conclusion before merge:
+  - consumer MVP demos should stay manual-update only
+  - the minimal repo-side consumer auto-update path is now defined, guarded, and locally verified
