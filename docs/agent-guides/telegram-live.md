@@ -1,5 +1,7 @@
 # Telegram live checks
 
+Use this after the isolated browser and agent smoke flow in `docs/agent-guides/browser-agent-e2e.md` unless the bug is clearly Telegram-specific.
+
 ## Required precheck before any live Telegram validation
 
 - Confirm the current git branch has a real name and is not `HEAD`.
