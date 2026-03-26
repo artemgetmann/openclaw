@@ -107,7 +107,7 @@ function buildSyntheticUpdate(payload: TelegramReplaySetupDmPayload): Update {
     first_name: payload.senderFirstName ?? "Telegram user",
     ...(payload.senderUsername ? { username: payload.senderUsername } : {}),
   };
-  const message: Message = {
+  const message: Message & Update.NonChannel = {
     message_id: payload.messageId,
     date: payload.date,
     chat: {
