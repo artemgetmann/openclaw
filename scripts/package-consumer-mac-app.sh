@@ -103,7 +103,10 @@ if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
   VERIFY_ARGS+=(--instance "$NORMALIZED_INSTANCE_ID")
 fi
 
-"$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+# Keep verifier expectations aligned when the caller overrides the bundle id for
+# release/distribution packaging instead of the default debug identity.
+BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
+  "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
 
 echo "Consumer packaging note:"
 echo "  If the verifier passed, treat unrelated pnpm/TypeScript diagnostics separately from bundle assembly."

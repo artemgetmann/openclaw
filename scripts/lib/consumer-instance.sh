@@ -67,6 +67,15 @@ consumer_instance_bundle_id() {
   printf 'ai.openclaw.consumer.mac.debug.%s' "$normalized"
 }
 
+consumer_instance_release_bundle_id() {
+  local normalized="${1:-}"
+  if [[ -z "$normalized" ]]; then
+    printf 'ai.openclaw.consumer.mac'
+    return
+  fi
+  printf 'ai.openclaw.consumer.mac.%s' "$normalized"
+}
+
 consumer_instance_app_path() {
   local root_dir="$1"
   local normalized="${2:-}"

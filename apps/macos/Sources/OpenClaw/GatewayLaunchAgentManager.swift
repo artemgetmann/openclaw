@@ -172,11 +172,11 @@ extension GatewayLaunchAgentManager {
 
     private static func desiredEnableAction() async -> DesiredAction {
         let loaded = await self.readDaemonLoaded()
-        let launchAgentMatchesCurrentEntrypoint = self.launchAgentMatchesCurrentEntrypoint(
-            snapshot: self.launchdConfigSnapshot())
-        let action = self._testDesiredEnableAction(
+        let snapshot = self.launchdConfigSnapshot()
+        let launchAgentMatchesCurrentEntrypoint = self.launchAgentMatchesCurrentEntrypoint(snapshot: snapshot)
+        let action = self.computeDesiredEnableAction(
             loaded: loaded,
-            hasPlist: self.launchdConfigSnapshot() != nil,
+            hasPlist: snapshot != nil,
             launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
         switch action {
         case .restart:
@@ -320,6 +320,19 @@ extension GatewayLaunchAgentManager {
         return args + ["--json"]
     }
 
+    // Keep the decision logic in a non-DEBUG helper so release packaging can reuse the
+    // same branch selection that tests assert against.
+    private static func computeDesiredEnableAction(
+        loaded: Bool?,
+        hasPlist: Bool,
+        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
+    {
+        if hasPlist, !launchAgentMatchesCurrentEntrypoint { return .install }
+        if loaded == true { return .restart }
+        if hasPlist { return .start }
+        return .install
+    }
+
     private static func parseDaemonJson(from raw: String) -> ParsedDaemonJson? {
         guard let parsed = JSONObjectExtractionSupport.extract(from: raw) else { return nil }
         return ParsedDaemonJson(text: parsed.text, object: parsed.object)
@@ -361,10 +374,10 @@ extension GatewayLaunchAgentManager {
         hasPlist: Bool,
         launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
     {
-        if hasPlist, !launchAgentMatchesCurrentEntrypoint { return .install }
-        if loaded == true { return .restart }
-        if hasPlist { return .start }
-        return .install
+        self.computeDesiredEnableAction(
+            loaded: loaded,
+            hasPlist: hasPlist,
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
     }
 
     static func _testShouldTreatBringupResultAsReady(_ payload: String) -> Bool {
