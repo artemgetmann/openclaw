@@ -162,10 +162,14 @@ Notes:
     - `docs/consumer/openclaw-consumer-brutal-execution-board.md`
     - `docs/consumer/openclaw-consumer-execution-spec.md`
     - `docs/consumer/openclaw-consumer-investor-brief-1page.md`
-  - `swift test --package-path apps/macos --filter OnboardingViewSmokeTests` -> blocked by unrelated existing compile errors in `apps/macos/Sources/OpenClaw/AgentWorkspace.swift`
-    - duplicate `memoryFilename`
-    - duplicate `defaultMemoryTemplate()`
-  - `swift test --package-path apps/macos --filter ChannelsSettingsSmokeTests` -> blocked by the same unrelated `AgentWorkspace.swift` duplicate declarations
+  - follow-up unblocker applied in `apps/macos/Sources/OpenClaw/AgentWorkspace.swift`:
+    - removed duplicate `memoryFilename`
+    - removed duplicate `defaultMemoryTemplate()`
+  - `swift test --package-path apps/macos --filter OnboardingViewSmokeTests` -> passed
+  - `swift test --package-path apps/macos --filter ChannelsSettingsSmokeTests` -> passed
+  - `bash scripts/package-consumer-mac-app.sh --instance consumer-onboarding-first-task-lane-20260325` -> passed
+  - `bash scripts/verify-consumer-mac-app.sh --instance consumer-onboarding-first-task-lane-20260325` -> passed via the packaging wrapper
+  - `bash scripts/open-consumer-mac-app.sh --instance consumer-onboarding-first-task-lane-20260325 --replace` -> passed
 - Exact manual verification steps required before merge:
   1. Run the packaged/local consumer app on an isolated consumer instance.
   2. Stay on the one-page local onboarding flow.
@@ -179,7 +183,7 @@ Notes:
   10. Reopen Settings -> Channels and confirm the consumer Telegram row shows `Live`, not `Verify first task`.
 - Merge gate after this code pass:
   - manual packaged-app walkthrough of the exact steps above is still required
-  - the unrelated `AgentWorkspace.swift` duplicate-symbol break should be cleaned up or routed around before relying on macOS Swift test green status again
+  - no more known local packaging blocker remains in this worktree; the remaining gate is the human Telegram first-task walkthrough
 
 ### 2026-03-24 first-run activation pass
 
