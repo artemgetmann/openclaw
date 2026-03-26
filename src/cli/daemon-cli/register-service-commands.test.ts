@@ -42,10 +42,19 @@ describe("addGatewayServiceCommands", () => {
   it.each([
     {
       name: "forwards install option collisions from parent gateway command",
-      argv: ["install", "--force", "--port", "19000", "--token", "tok_test"],
+      argv: [
+        "install",
+        "--force",
+        "--allow-shared-service-takeover",
+        "--port",
+        "19000",
+        "--token",
+        "tok_test",
+      ],
       assert: () => {
         expect(runDaemonInstall).toHaveBeenCalledWith(
           expect.objectContaining({
+            allowSharedServiceTakeover: true,
             force: true,
             port: "19000",
             token: "tok_test",

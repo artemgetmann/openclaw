@@ -9,6 +9,7 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import { detectSharedGatewayInstallOwnershipConflict } from "./install-ownership.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import {
   createDaemonInstallActionContext,
@@ -41,6 +42,19 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   const service = resolveGatewayService();
+  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
+    env: process.env,
+    port,
+    runtime: runtimeRaw,
+    warn: (message) => {
+      if (json) {
+        warnings.push(message);
+      } else {
+        defaultRuntime.log(message);
+      }
+    },
+    config: cfg,
+  });
   let loaded = false;
   try {
     loaded = await service.isLoaded({ env: process.env });
@@ -70,6 +84,19 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
 
+  const ownershipConflict = await detectSharedGatewayInstallOwnershipConflict({
+    env: process.env,
+    service,
+    allowSharedServiceTakeover: opts.allowSharedServiceTakeover,
+    programArguments,
+    workingDirectory,
+    environment,
+  });
+  if (ownershipConflict) {
+    fail(ownershipConflict.message, ownershipConflict.hints);
+    return;
+  }
+
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
     env: process.env,
@@ -88,20 +115,6 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       defaultRuntime.log(warning);
     }
   }
-
-  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
-    port,
-    runtime: runtimeRaw,
-    warn: (message) => {
-      if (json) {
-        warnings.push(message);
-      } else {
-        defaultRuntime.log(message);
-      }
-    },
-    config: cfg,
-  });
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",

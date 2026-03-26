@@ -31,6 +31,8 @@
 - Never edit `node_modules`.
 - Never update the Carbon dependency.
 - Do not patch dependencies without explicit approval.
+- Treat the default shared gateway service as sacred: tester/consumer/rescue runtimes must use explicit profile/config/state/port isolation instead of plain `openclaw gateway install`.
+- Only replace the default shared gateway service intentionally, via `openclaw gateway install --force --allow-shared-service-takeover`.
 - When adding a new `AGENTS.md`, add a sibling `CLAUDE.md` symlink to it.
 
 ## Load only the docs you need
