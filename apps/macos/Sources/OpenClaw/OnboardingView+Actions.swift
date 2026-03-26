@@ -66,9 +66,12 @@ extension OnboardingView {
     func finish() {
         UserDefaults.standard.set(true, forKey: onboardingSeenKey)
         UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
-        if AppFlavor.current.isConsumer {
-            // Consumer onboarding should hand off to the next required step, not
-            // imply the setup is already finished. Channels is where Telegram lives.
+        if AppFlavor.current.isConsumer,
+           self.state.connectionMode != .local || !self.channelsStore.consumerTelegramReadyForFirstTask()
+        {
+            // Consumer onboarding only opens Channels as a recovery handoff when
+            // Telegram still is not truly ready. A verified first task should just
+            // finish cleanly instead of pretending there is more mandatory setup.
             self.openSettings(tab: Self.consumerPostBrowserSetupTab)
         }
         OnboardingController.shared.close()

@@ -124,6 +124,63 @@ Notes:
   - base: `codex/consumer-openclaw-project`
   - merge gate remains: Telegram BYOK E2E on isolated consumer runtime
 
+### 2026-03-26 onboarding-to-first-task lane
+
+- Scope for this pass stayed consumer-only:
+  - no unrelated infra changes
+  - no reopening of founder/runtime migration work
+- Decisions locked in this pass:
+  - consumer onboarding completion is no longer allowed to mean "browser and model are ready";
+    it now has to mean "Telegram is connected and one real Telegram task already succeeded"
+  - the consumer Telegram simple path now distinguishes 3 states instead of collapsing them:
+    - bot token/config saved
+    - bot live
+    - first Telegram task verified end-to-end
+  - the "first Telegram task verified" marker is stored per consumer instance and keyed to the bot id, so switching bots invalidates the proof without storing the secret token in app defaults
+  - Telegram verification copy now asks for the user's first real task, not a fake placeholder message
+  - Telegram verification explicitly does not ask for extra macOS permissions; optional system permissions stay out of the critical path
+- Concrete product findings from this pass:
+  - the old one-page consumer onboarding still finished too early:
+    browser readiness used to trigger the finish handoff even before Telegram was proven
+  - Channels could still call Telegram "Live" from saved config/runtime state alone, which was not truthful enough for "ready to send the first task"
+  - `channels telegram-replay-setup-dm` already exercises the real Telegram bot pipeline; the honest fix here was to surface that result as completed first-task proof instead of describing it like a vague "reply started"
+- Implementation summary for this lane:
+  - embedded consumer Telegram setup directly into the local one-page onboarding after browser + AI readiness
+  - removed the browser-only finish line; local onboarding now stays blocked until Telegram first-task proof exists
+  - added a consumer Telegram verification state helper shared by onboarding + Channels so the simple consumer path agrees on setup truth
+  - changed consumer Telegram status/copy to say:
+    - "Verify first task" when the bot is connected but not yet proven
+    - "Live" only after a verified first Telegram task
+  - updated the Telegram replay command JSON to include `replyCompleted=true`
+- Validation run in this worktree:
+  - `pnpm install` -> passed
+  - `pnpm test -- src/commands/channels/telegram-replay-setup-dm.test.ts` -> passed
+  - `pnpm build` -> passed overall
+    - note: `build:plugin-sdk:dts` still printed unrelated existing TypeScript errors from `src/agents/pi-embedded-runner/run/attempt.ts` about `skipWaitForIdle`, but that step is already non-blocking in the repo build script (`tsc ... || true`)
+  - `pnpm check` -> failed on unrelated pre-existing doc formatting only:
+    - `docs/agent-guides/upstream-intake-2026-03-25.md`
+    - `docs/consumer/openclaw-consumer-brutal-execution-board.md`
+    - `docs/consumer/openclaw-consumer-execution-spec.md`
+    - `docs/consumer/openclaw-consumer-investor-brief-1page.md`
+  - `swift test --package-path apps/macos --filter OnboardingViewSmokeTests` -> blocked by unrelated existing compile errors in `apps/macos/Sources/OpenClaw/AgentWorkspace.swift`
+    - duplicate `memoryFilename`
+    - duplicate `defaultMemoryTemplate()`
+  - `swift test --package-path apps/macos --filter ChannelsSettingsSmokeTests` -> blocked by the same unrelated `AgentWorkspace.swift` duplicate declarations
+- Exact manual verification steps required before merge:
+  1. Run the packaged/local consumer app on an isolated consumer instance.
+  2. Stay on the one-page local onboarding flow.
+  3. Finish local bootstrap/wizard.
+  4. Connect Chrome and confirm the browser card reaches the ready state.
+  5. Wait for AI access to reach the ready state.
+  6. In the embedded Telegram section, paste the BotFather token and click `Verify token`.
+  7. Click `Open your bot`, send a real first task from a private Telegram DM, then click `Verify first task`.
+  8. Confirm the UI reports that the first Telegram task finished on this Mac.
+  9. Confirm the onboarding primary button changes to `Finish` only after step 8.
+  10. Reopen Settings -> Channels and confirm the consumer Telegram row shows `Live`, not `Verify first task`.
+- Merge gate after this code pass:
+  - manual packaged-app walkthrough of the exact steps above is still required
+  - the unrelated `AgentWorkspace.swift` duplicate-symbol break should be cleaned up or routed around before relying on macOS Swift test green status again
+
 ### 2026-03-24 first-run activation pass
 
 - This pass was scoped to install-to-first-task friction, not new capability.

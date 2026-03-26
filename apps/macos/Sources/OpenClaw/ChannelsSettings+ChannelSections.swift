@@ -95,110 +95,11 @@ extension ChannelsSettings {
     }
 
     var telegramSetupSection: some View {
-        let runtimeOwnershipIssue = self.store.telegramRuntimeOwnershipIssue()
         return VStack(alignment: .leading, spacing: 16) {
-            self.formSection("One-time setup") {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("1. Open @BotFather.")
-                        .font(.callout)
-
-                    Button("Open BotFather") {
-                        self.store.openTelegramBotFather()
-                    }
-                    .buttonStyle(.bordered)
-
-                    Text("2. Send /newbot and follow the prompts.")
-                        .font(.callout)
-
-                    Text("3. Copy the bot token from BotFather.")
-                        .font(.callout)
-
-                    Text("4. Paste the token here and click Verify token.")
-                        .font(.callout)
-
-                    TextField("BotFather token", text: self.$store.telegramSetupToken)
-                        .textFieldStyle(.roundedBorder)
-                        .autocorrectionDisabled()
-                        .onChange(of: self.store.telegramSetupToken) { _, _ in
-                            self.store.resetTelegramSetupProgressForEditedToken()
-                        }
-
-                    HStack(spacing: 10) {
-                        Button("Verify token") {
-                            Task { await self.store.verifyTelegramSetupToken() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(self.store.telegramBusy || self.store.telegramSetupPhase == .savingSetup)
-
-                        if self.store.telegramSetupPhase == .verifyingToken {
-                            ProgressView().controlSize(.small)
-                        }
-
-                        Button("Video walkthrough") {
-                            self.store.openTelegramSetupVideo()
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(AppFlavor.current.telegramSetupVideoURL == nil)
-                    }
-
-                    Text("5. Click Open your bot, send your bot one message, then click Capture first message.")
-                        .font(.callout)
-
-                    HStack(spacing: 10) {
-                        if let username = self.store.telegramSetupBotUsername {
-                            Button("Open your bot") {
-                                self.store.openTelegramBot(username: username)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        Button("Capture first message") {
-                            Task { await self.store.captureTelegramFirstDirectMessage() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(
-                            self.store.telegramBusy
-                                || self.store.telegramSetupBotUsername == nil
-                                || runtimeOwnershipIssue != nil)
-
-                        if self.store.telegramSetupWaitingForDM
-                            || self.store.telegramSetupPhase == .savingSetup
-                            || self.store.telegramSetupPhase == .startingFirstReply
-                        {
-                            ProgressView().controlSize(.small)
-                        }
-
-                        if let senderId = self.store.telegramSetupFirstSenderId {
-                            Text("Captured: \(senderId)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                if let runtimeOwnershipIssue {
-                    Text(runtimeOwnershipIssue)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if let status = self.store.telegramSetupStatus {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Text(
-                    "Optional but recommended: in BotFather -> your bot -> Bot Settings, enable Threaded Mode for a better experience.")
-                    .font(.callout)
-                    .foregroundStyle(.primary)
-
-                Text(
-                    "Power users: for multiple tasks at once, add the bot to a Telegram group and use topics to keep each task separate.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+            self.formSection(
+                self.store.consumerTelegramReadyForFirstTask() ? "Connected bot" : "One-time setup")
+            {
+                ConsumerTelegramSetupCardContent(store: self.store, presentation: .settings)
             }
         }
     }
@@ -206,30 +107,7 @@ extension ChannelsSettings {
     var consumerTelegramLiveSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             self.formSection("Connected bot") {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text(
-                        self.consumerTelegramBotUsername.map {
-                            "Connected as @\($0)."
-                        } ?? "Bot connected.")
-                        .font(.callout)
-
-                    if let username = self.consumerTelegramBotUsername {
-                        Button("Open your bot") {
-                            self.store.openTelegramBot(username: username)
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-
-                    Text(
-                        "Optional but recommended: in BotFather -> your bot -> Bot Settings, enable Threaded Mode for a better experience.")
-                        .font(.callout)
-                        .foregroundStyle(.primary)
-
-                    Text(
-                        "Power users: for multiple tasks at once, add the bot to a Telegram group and use topics to keep each task separate.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
+                ConsumerTelegramSetupCardContent(store: self.store, presentation: .settings)
             }
         }
     }

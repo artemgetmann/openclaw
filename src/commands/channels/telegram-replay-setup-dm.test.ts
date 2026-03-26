@@ -98,6 +98,7 @@ describe("channelsTelegramReplaySetupDmCommand", () => {
     expect(initBot).toHaveBeenCalledTimes(1);
     expect(stopBot).toHaveBeenCalledTimes(1);
     expect(logs[0]).toContain('"replyStarted":true');
+    expect(logs[0]).toContain('"replyCompleted":true');
   });
 
   it("rejects payloads without text or caption", async () => {

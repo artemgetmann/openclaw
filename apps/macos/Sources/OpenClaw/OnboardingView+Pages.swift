@@ -93,6 +93,28 @@ extension OnboardingView {
                                             .padding(.vertical, 6)
 
                                         ConsumerModelSetupCardContent(model: self.modelSetup)
+
+                                        if self.modelSetup.isComplete {
+                                            Divider()
+                                                .padding(.vertical, 6)
+
+                                            ConsumerTelegramSetupCardContent(
+                                                store: self.channelsStore,
+                                                presentation: .onboarding)
+                                        } else {
+                                            Divider()
+                                                .padding(.vertical, 6)
+
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text("Telegram comes after AI access")
+                                                    .font(.headline)
+                                                Text(
+                                                    "Once OpenClaw can actually use its model, you’ll verify Telegram by sending the first task you want it to handle.")
+                                                    .font(.subheadline)
+                                                    .foregroundStyle(.secondary)
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                            }
+                                        }
                                     } else {
                                         Divider()
                                             .padding(.vertical, 6)

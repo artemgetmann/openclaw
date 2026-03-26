@@ -180,6 +180,7 @@ export async function channelsTelegramReplaySetupDmCommand(
   const result = {
     ok: true,
     replyStarted: true,
+    replyCompleted: true,
     accountId: account.accountId,
     updateId: payload.updateId,
   };
