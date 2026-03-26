@@ -298,7 +298,7 @@ enum AgentWorkspace {
 
     static func defaultMemoryTemplate() -> String {
         let fallback = """
-        # MEMORY.md - Durable Notes
+        # MEMORY.md - Long-Term Memory
 
         Use this file for stable facts and preferences that should survive across sessions.
 
