@@ -1,11 +1,14 @@
 import { fetchBrowserJson } from "./client-fetch.js";
 
-// Heavy real-world pages (Flights, X, airline checkout flows) can take materially
-// longer than toy examples. Keep read-only status endpoints fast, but give
-// navigation/snapshot/open enough budget to avoid false negatives.
+// Existing-session Chrome MCP attach can take tens of seconds on the first
+// read, especially while Chrome shows approval prompts or the MCP bridge warms
+// up. Keep attach-sensitive discovery calls aligned with the CLI budget so the
+// agent path does not false-fail while the raw browser CLI still succeeds.
+const BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS = 45_000;
 const BROWSER_PAGE_LOAD_TIMEOUT_MS = 45_000;
-const BROWSER_STATUS_TIMEOUT_MS = 15_000;
-const BROWSER_PROFILES_TIMEOUT_MS = 10_000;
+const BROWSER_STATUS_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
+const BROWSER_PROFILES_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
+const BROWSER_TABS_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
 
 export type BrowserTransport = "cdp" | "chrome-mcp";
 
@@ -229,7 +232,7 @@ export async function browserTabs(
   const q = buildProfileQuery(opts?.profile);
   const res = await fetchBrowserJson<{ running: boolean; tabs: BrowserTab[] }>(
     withBaseUrl(baseUrl, `/tabs${q}`),
-    { timeoutMs: 3000 },
+    { timeoutMs: BROWSER_TABS_TIMEOUT_MS },
   );
   return res.tabs ?? [];
 }
