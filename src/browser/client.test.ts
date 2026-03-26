@@ -8,7 +8,13 @@ import {
   browserPdfSave,
   browserScreenshotAction,
 } from "./client-actions.js";
-import { browserOpenTab, browserSnapshot, browserStatus, browserTabs } from "./client.js";
+import {
+  browserOpenTab,
+  browserProfiles,
+  browserSnapshot,
+  browserStatus,
+  browserTabs,
+} from "./client.js";
 
 describe("browser client", () => {
   function stubSnapshotFetch(calls: string[]) {
@@ -146,13 +152,30 @@ describe("browser client", () => {
     expect(calls[3]?.init?.timeoutMs).toBe(65_000);
   });
 
-  it("uses a longer timeout budget for browser status checks", async () => {
+  it("uses the attach-ready timeout budget for browser discovery calls", async () => {
     const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
 
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
         calls.push({ url, init });
+        if (url.endsWith("/profiles")) {
+          return {
+            ok: true,
+            json: async () => ({
+              profiles: [],
+            }),
+          } as unknown as Response;
+        }
+        if (url.endsWith("/tabs")) {
+          return {
+            ok: true,
+            json: async () => ({
+              running: true,
+              tabs: [],
+            }),
+          } as unknown as Response;
+        }
         return {
           ok: true,
           json: async () => ({
@@ -171,8 +194,12 @@ describe("browser client", () => {
     );
 
     await browserStatus("http://127.0.0.1:18791");
+    await browserProfiles("http://127.0.0.1:18791");
+    await browserTabs("http://127.0.0.1:18791");
 
-    expect(calls[0]?.init?.timeoutMs).toBe(15_000);
+    expect(calls[0]?.init?.timeoutMs).toBe(45_000);
+    expect(calls[1]?.init?.timeoutMs).toBe(45_000);
+    expect(calls[2]?.init?.timeoutMs).toBe(45_000);
   });
 
   it("omits format when the caller wants server-side snapshot capability defaults", async () => {
