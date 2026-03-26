@@ -261,6 +261,7 @@ private final class StatusItemMouseHandlerView: NSView {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let showVisibleSurfaceNotification = Notification.Name("ai.openclaw.consumer.showVisibleSurface")
     private var state: AppState?
     private var consumerReopenObserver: NSObjectProtocol?
     private let launchLogger = Logger(subsystem: "ai.openclaw", category: "consumer.launch")
@@ -284,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.state = AppStateStore.shared
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
-        self.installConsumerReopenObserverIfNeeded()
+        self.installVisibleSurfaceObserverIfNeeded()
         if let state {
             Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
         }
@@ -314,6 +315,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @MainActor
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard Self.shouldHandleConsumerReopen(
+            isConsumer: AppFlavor.current.isConsumer,
+            hasVisibleWindows: flag)
+        else { return false }
+        self.showVisibleSurface()
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         if let observer = self.consumerReopenObserver {
             DistributedNotificationCenter.default().removeObserver(observer)
@@ -334,13 +345,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await PeekabooBridgeHostCoordinator.shared.stop() }
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        guard AppFlavor.current.isConsumer else { return false }
-        guard !flag else { return false }
-        self.showVisibleConsumerSurface()
-        return true
-    }
-
     @MainActor
     private func scheduleInitialVisibleSurfaceIfNeeded() {
         let shouldShowOnboarding = self.shouldShowOnboarding()
@@ -349,10 +353,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             initial visible surface decision onboarding=\(shouldShowOnboarding, privacy: .public) \
             finderLaunch=\(self.didLaunchFromFinder, privacy: .public)
             """)
-        guard shouldShowOnboarding || self.didLaunchFromFinder else { return }
+        guard Self.shouldScheduleInitialVisibleSurface(
+            isConsumer: AppFlavor.current.isConsumer,
+            onboardingPending: shouldShowOnboarding,
+            didLaunchFromFinder: self.didLaunchFromFinder)
+        else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             self.launchLogger.info("showing initial visible consumer surface")
-            self.showVisibleConsumerSurface()
+            self.showVisibleSurface()
         }
     }
 
@@ -365,7 +373,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CommandLine.arguments.contains(where: { $0.hasPrefix("-psn_") })
     }
 
-    private func showVisibleConsumerSurface() {
+    private func isDuplicateInstance() -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
+        let running = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleID }
+        return running.count > 1
+    }
+
+    private func installVisibleSurfaceObserverIfNeeded() {
+        guard AppFlavor.current.isConsumer else { return }
+        guard self.consumerReopenObserver == nil else { return }
+        let bundleID = Bundle.main.bundleIdentifier
+        self.launchLogger.info("installing reopen observer bundleID=\(bundleID ?? "missing", privacy: .public)")
+        self.consumerReopenObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Self.showVisibleSurfaceNotification,
+            object: bundleID,
+            queue: .main)
+        { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.launchLogger.info("received reopen signal from duplicate instance")
+                self?.showVisibleSurface()
+            }
+        }
+    }
+
+    private func signalExistingConsumerInstanceToShowVisibleSurface() {
+        guard AppFlavor.current.isConsumer, let bundleID = Bundle.main.bundleIdentifier else { return }
+        self.launchLogger.info("signaling existing instance to show visible surface")
+        DistributedNotificationCenter.default().postNotificationName(
+            Self.showVisibleSurfaceNotification,
+            object: bundleID,
+            userInfo: nil,
+            options: [.deliverImmediately])
+    }
+
+    private func showVisibleSurface() {
         guard AppFlavor.current.isConsumer else { return }
         if self.shouldShowOnboarding() {
             self.launchLogger.info("opening onboarding window")
@@ -373,41 +414,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         self.launchLogger.info("opening settings window")
-        SettingsWindowOpener.shared.open()
+        SettingsWindowOpener.shared.open(tab: .general)
     }
 
-    private func installConsumerReopenObserverIfNeeded() {
-        guard AppFlavor.current.isConsumer else { return }
-        guard self.consumerReopenObserver == nil else { return }
-        let bundleID = Bundle.main.bundleIdentifier
-        self.launchLogger.info("installing reopen observer bundleID=\(bundleID ?? "missing", privacy: .public)")
-        self.consumerReopenObserver = DistributedNotificationCenter.default().addObserver(
-            forName: .openclawConsumerShowVisibleSurface,
-            object: bundleID,
-            queue: .main)
-        { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.launchLogger.info("received reopen signal from duplicate instance")
-                self?.showVisibleConsumerSurface()
-            }
-        }
+    static func shouldScheduleInitialVisibleSurface(
+        isConsumer: Bool,
+        onboardingPending: Bool,
+        didLaunchFromFinder: Bool) -> Bool
+    {
+        isConsumer && (onboardingPending || didLaunchFromFinder)
     }
 
-    private func signalExistingConsumerInstanceToShowVisibleSurface() {
-        guard AppFlavor.current.isConsumer else { return }
-        guard let bundleID = Bundle.main.bundleIdentifier else { return }
-        self.launchLogger.info("signaling existing instance to show visible surface")
-        DistributedNotificationCenter.default().postNotificationName(
-            .openclawConsumerShowVisibleSurface,
-            object: bundleID,
-            userInfo: nil,
-            deliverImmediately: true)
-    }
-
-    private func isDuplicateInstance() -> Bool {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
-        let running = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleID }
-        return running.count > 1
+    static func shouldHandleConsumerReopen(isConsumer: Bool, hasVisibleWindows: Bool) -> Bool {
+        isConsumer && !hasVisibleWindows
     }
 }
 

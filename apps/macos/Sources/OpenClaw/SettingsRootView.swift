@@ -90,6 +90,7 @@ struct SettingsRootView: View {
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 22)
+        .background(SettingsWindowVisibilityBridge())
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
@@ -188,6 +189,37 @@ struct SettingsRootView: View {
 
     private func stopPermissionMonitoring() {
         PermissionMonitoringSupport.stopMonitoring(&self.monitoringPermissions)
+    }
+}
+
+// SwiftUI's Settings scene can create the underlying NSWindow on a different
+// desktop/space for accessory apps. Bridge back into AppKit so the settings
+// window is moved onto the active space and raised whenever the scene attaches.
+private struct SettingsWindowVisibilityBridge: NSViewRepresentable {
+    func makeNSView(context _: Context) -> SettingsWindowBridgeView {
+        SettingsWindowBridgeView()
+    }
+
+    func updateNSView(_: SettingsWindowBridgeView, context _: Context) {}
+}
+
+private final class SettingsWindowBridgeView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window = self.window else { return }
+        DispatchQueue.main.async {
+            Self.configure(window: window)
+        }
+    }
+
+    private static func configure(window: NSWindow) {
+        DockIconManager.shared.temporarilyShowDock()
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.collectionBehavior.insert(.fullScreenAuxiliary)
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 

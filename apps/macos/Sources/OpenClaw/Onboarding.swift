@@ -22,6 +22,10 @@ final class OnboardingController {
     private var window: NSWindow?
     private let logger = Logger(subsystem: "ai.openclaw", category: "consumer.launch")
 
+    var isVisible: Bool {
+        self.window != nil
+    }
+
     func show() {
         if ProcessInfo.processInfo.isNixMode {
             // Nix mode is fully declarative; onboarding would suggest interactive setup that doesn't apply.

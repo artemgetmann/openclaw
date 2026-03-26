@@ -1,7 +1,50 @@
 # Consumer Telegram Setup Follow-ups
 
-Last updated: 2026-03-21
+Last updated: 2026-03-25
 Scope: consumer macOS Telegram onboarding polish and adjacent consumer-shell cleanup
+
+## Consumer app visibility debugging notes (2026-03-25)
+
+- Split permissions work and app-visibility work into separate PRs.
+  - Why it matters: the permissions/recovery fix was coherent and mergeable on its own, while the app-resurfacing lane was still flaky and needed deeper debugging.
+
+- Real root cause for the "app disappeared" behavior:
+  - `DockIconManager` was hiding the Dock icon whenever there were no visible windows.
+  - In consumer first-run, that is too aggressive because the user can still be mid-setup or mid-permission recovery even when they accidentally close the window.
+  - Why it matters: the app became effectively unreachable if the menu bar was crowded and the Dock icon vanished.
+
+- Current visibility-branch fix:
+  - keep the Dock icon visible while consumer onboarding is still pending
+  - keep the Dock icon visible while Accessibility or Screen Recording are still unresolved
+  - keep a short temporary Dock hold after surfacing Settings so the app does not vanish immediately if macOS steals focus into System Settings
+  - Why it matters: this addresses the real first-run recoverability problem instead of stacking more reopen hacks on top.
+
+- Important remaining bug:
+  - a fresh isolated consumer app instance can still launch with zero visible windows until `Settings…` is triggered explicitly
+  - Why it matters: this is separate from the Dock-hide bug. Do not confuse "the Dock icon stayed visible" with "the app actually surfaced a usable window."
+
+- False leads that wasted time:
+  - `open -b <bundle-id>` returning success does not mean a visible window exists
+  - AppleScript `activate` calls can succeed while the app still has zero windows
+  - manually forcing `Settings…` from the app menu can make the app look "fixed" even when the initial launch path is still broken
+  - Why it matters: always verify actual windows, not just process state or activation success
+
+- Short verification path for future agents:
+  1. Run `swift test --package-path apps/macos --filter ConsumerAppActivationTests`
+  2. Run `swift test --package-path apps/macos --filter SettingsViewSmokeTests`
+  3. Package a unique isolated instance:
+     `bash scripts/package-consumer-mac-app.sh --instance <unique-id>`
+  4. Open that exact instance:
+     `bash scripts/open-consumer-mac-app.sh --instance <unique-id> --replace`
+  5. Prove whether a window exists:
+     `osascript -e 'tell application "System Events" to tell (first process whose bundle identifier is "<bundle-id>") to count windows'`
+  6. If needed, force the app menu path explicitly:
+     click `Settings…` on the app menu, then re-check window count/titles
+  7. Only after that should you judge close/reopen behavior
+
+- Temporary local verification unblock:
+  - if `apps/macos/Sources/OpenClaw/AgentWorkspace.swift` is failing the build because of duplicate `memoryFilename` / `defaultMemoryTemplate()` definitions, remove those duplicates locally to unblock verification, then revert that file before preparing the app-visibility PR
+  - Why it matters: that compile break is unrelated to the visibility lane and should not get mixed into the PR
 
 ## Immediate follow-ups
 

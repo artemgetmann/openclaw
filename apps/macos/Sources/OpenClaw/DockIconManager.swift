@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 /// Central manager for Dock icon visibility.
 /// Shows the Dock icon while any windows are visible, regardless of user preference.
@@ -6,6 +7,8 @@ final class DockIconManager: NSObject, @unchecked Sendable {
     static let shared = DockIconManager()
 
     private var windowsObservation: NSKeyValueObservation?
+    private var visibilityHoldUntil: Date?
+    private var visibilityHoldResetTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "ai.openclaw", category: "DockIconManager")
 
     override private init() {
@@ -18,6 +21,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
 
     deinit {
         self.windowsObservation?.invalidate()
+        self.visibilityHoldResetTask?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -28,7 +32,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 return
             }
 
-            let userWantsDockHidden = !UserDefaults.standard.bool(forKey: showDockIconKey)
+            let userWantsDockIcon = UserDefaults.standard.bool(forKey: showDockIconKey)
             let visibleWindows = NSApp?.windows.filter { window in
                 window.isVisible &&
                     window.frame.width > 1 &&
@@ -39,7 +43,14 @@ final class DockIconManager: NSObject, @unchecked Sendable {
             } ?? []
 
             let hasVisibleWindows = !visibleWindows.isEmpty
-            if !userWantsDockHidden || hasVisibleWindows {
+            let shouldKeepConsumerDockVisible = self.shouldKeepConsumerDockVisible()
+            let hasVisibilityHold = self.hasActiveVisibilityHold()
+            if Self.shouldUseRegularActivationPolicy(
+                userWantsDockIcon: userWantsDockIcon,
+                hasVisibleWindows: hasVisibleWindows,
+                shouldKeepConsumerDockVisible: shouldKeepConsumerDockVisible,
+                hasVisibilityHold: hasVisibilityHold)
+            {
                 NSApp?.setActivationPolicy(.regular)
             } else {
                 NSApp?.setActivationPolicy(.accessory)
@@ -47,14 +58,49 @@ final class DockIconManager: NSObject, @unchecked Sendable {
         }
     }
 
-    func temporarilyShowDock() {
+    func temporarilyShowDock(holdFor seconds: TimeInterval = 10) {
         Task { @MainActor in
             guard NSApp != nil else {
                 self.logger.warning("NSApp not ready, cannot show Dock icon")
                 return
             }
+            // Keep the Dock icon alive briefly after surfacing Settings so a
+            // first-run user can still relaunch the app if they accidentally
+            // close the window or macOS steals focus into System Settings.
+            self.visibilityHoldUntil = Date().addingTimeInterval(seconds)
+            self.visibilityHoldResetTask?.cancel()
+            self.visibilityHoldResetTask = Task { [weak self] in
+                let delay = UInt64(max(seconds, 0) * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: delay)
+                await MainActor.run {
+                    self?.updateDockVisibility()
+                }
+            }
             NSApp.setActivationPolicy(.regular)
         }
+    }
+
+    static func shouldUseRegularActivationPolicy(
+        userWantsDockIcon: Bool,
+        hasVisibleWindows: Bool,
+        shouldKeepConsumerDockVisible: Bool,
+        hasVisibilityHold: Bool) -> Bool
+    {
+        userWantsDockIcon || hasVisibleWindows || shouldKeepConsumerDockVisible || hasVisibilityHold
+    }
+
+    static func shouldKeepConsumerDockVisible(
+        isConsumer: Bool,
+        onboardingPending: Bool,
+        accessibilityGranted: Bool,
+        screenRecordingGranted: Bool) -> Bool
+    {
+        guard isConsumer else { return false }
+
+        // Consumer first-run is not actually done until the app is reachable
+        // again and the two most failure-prone permissions have a clear
+        // recovery path. Hiding the Dock icon sooner strands users.
+        return onboardingPending || !accessibilityGranted || !screenRecordingGranted
     }
 
     private func setupObservers() {
@@ -112,5 +158,29 @@ final class DockIconManager: NSObject, @unchecked Sendable {
         Task { @MainActor in
             self.updateDockVisibility()
         }
+    }
+
+    @MainActor
+    private func shouldKeepConsumerDockVisible() -> Bool {
+        Self.shouldKeepConsumerDockVisible(
+            isConsumer: AppFlavor.current.isConsumer,
+            onboardingPending: self.isConsumerOnboardingPending(),
+            accessibilityGranted: AXIsProcessTrusted(),
+            screenRecordingGranted: ScreenRecordingProbe.isAuthorized())
+    }
+
+    private func isConsumerOnboardingPending() -> Bool {
+        let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
+        let onboardingSeen = UserDefaults.standard.bool(forKey: onboardingSeenKey)
+        return seenVersion < currentOnboardingVersion || !onboardingSeen
+    }
+
+    private func hasActiveVisibilityHold(now: Date = Date()) -> Bool {
+        guard let visibilityHoldUntil = self.visibilityHoldUntil else { return false }
+        if visibilityHoldUntil <= now {
+            self.visibilityHoldUntil = nil
+            return false
+        }
+        return true
     }
 }
