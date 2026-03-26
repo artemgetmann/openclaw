@@ -47,7 +47,7 @@ struct AgentWorkspaceTests {
         #expect(FileManager().fileExists(atPath: bootstrapURL.path))
 
         let memoryContents = try String(contentsOf: memoryURL, encoding: .utf8)
-        #expect(memoryContents.contains("Durable Notes"))
+        #expect(memoryContents.contains("Long-Term Memory"))
         #expect(memoryContents.contains("Do not store secrets here."))
 
         let second = try AgentWorkspace.bootstrap(workspaceURL: tmp)

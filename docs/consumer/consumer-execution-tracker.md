@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 Owner: consumer execution team
 Status: Active
 
@@ -1028,3 +1028,21 @@ Out of scope:
   - signing-and-notarization demo distribution
   - update/appcast strategy
 - Every lane must append its concrete findings, decisions, and verification steps to this tracker before merge.
+
+### 2026-03-26 signing-and-notarization demo distribution pass
+
+- Status:
+  - repo-side consumer release packaging path is implemented
+  - local smoke distribution works for release `.app`, `.zip`, and `.dmg`
+  - seamless direct-download trust is still blocked by missing `Developer ID Application` signing plus missing notary auth on the current Mac
+- Decision:
+  - treat Apple credentials as the remaining blocker, not app assembly
+  - keep local/manual-trust demo packaging available via `SKIP_NOTARIZE=1`
+- Verification summary:
+  - `swift test --package-path apps/macos --filter AgentWorkspaceTests` passed
+  - `swift test --package-path apps/macos --filter GatewayLaunchAgentManagerTests` passed
+  - `BUNDLE_ID=ai.openclaw.consumer.mac.signing-notary bash scripts/verify-consumer-mac-app.sh --instance signing-notary "dist/OpenClaw Consumer (signing-notary).app"` passed
+  - `SKIP_NOTARIZE=1 SKIP_TSC=1 SKIP_UI_BUILD=1 APP_VERSION=0.0.0-demo bash scripts/package-consumer-mac-dist.sh --instance signing-notary` passed
+  - the notarization-enabled path now fails fast with the correct blocker when only Apple Development signing is available
+- Detailed findings, decisions, and exact command output for this lane now live in:
+  - `docs/consumer/signing-and-notarization-demo-distribution.md`

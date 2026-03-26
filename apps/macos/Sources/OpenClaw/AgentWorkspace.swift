@@ -9,7 +9,6 @@ enum AgentWorkspace {
     static let userFilename = "USER.md"
     static let memoryFilename = "MEMORY.md"
     static let bootstrapFilename = "BOOTSTRAP.md"
-    static let memoryFilename = "MEMORY.md"
     private static let templateDirname = "templates"
     private static let ignoredEntries: Set<String> = [".DS_Store", ".git", ".gitignore"]
     private static let templateEntries: Set<String> = [
@@ -19,7 +18,6 @@ enum AgentWorkspace {
         AgentWorkspace.userFilename,
         AgentWorkspace.memoryFilename,
         AgentWorkspace.bootstrapFilename,
-        AgentWorkspace.memoryFilename,
     ]
     struct BootstrapSafety: Equatable {
         let unsafeReason: String?
@@ -239,15 +237,6 @@ enum AgentWorkspace {
         return self.loadTemplate(named: self.userFilename, fallback: fallback)
     }
 
-    static func defaultMemoryTemplate() -> String {
-        let fallback = """
-        # MEMORY.md - Long-Term Memory
-
-        Keep durable facts, preferences, and decisions here.
-        """
-        return self.loadTemplate(named: self.memoryFilename, fallback: fallback)
-    }
-
     static func defaultBootstrapTemplate() -> String {
         let fallback = """
         # BOOTSTRAP.md - First Run Ritual (delete after)
@@ -309,7 +298,7 @@ enum AgentWorkspace {
 
     static func defaultMemoryTemplate() -> String {
         let fallback = """
-        # MEMORY.md - Durable Notes
+        # MEMORY.md - Long-Term Memory
 
         Use this file for stable facts and preferences that should survive across sessions.
 

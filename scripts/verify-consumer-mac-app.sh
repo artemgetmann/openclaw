@@ -41,7 +41,9 @@ done
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
 EXPECTED_NAME="$(consumer_instance_app_name "$NORMALIZED_INSTANCE_ID")"
-EXPECTED_BUNDLE_ID="$(consumer_instance_bundle_id "$NORMALIZED_INSTANCE_ID")"
+# Allow release/distribution callers to override the debug bundle id while still
+# reusing the same consumer-identity verifier.
+EXPECTED_BUNDLE_ID="${BUNDLE_ID:-$(consumer_instance_bundle_id "$NORMALIZED_INSTANCE_ID")}"
 EXPECTED_VARIANT="consumer"
 EXPECTED_URL_SCHEME="openclaw-consumer"
 EXPECTED_GATEWAY_PORT="$(consumer_instance_gateway_port "$NORMALIZED_INSTANCE_ID")"

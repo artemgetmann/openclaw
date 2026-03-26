@@ -117,7 +117,8 @@ if [[ "${SKIP_DMG_STYLE:-0}" != "1" ]]; then
     fi
   fi
 
-  osascript <<EOF
+  if ! osascript <<EOF
+with timeout of 30 seconds
 tell application "Finder"
   tell disk "$DMG_VOLUME_NAME"
     open
@@ -144,10 +145,14 @@ tell application "Finder"
     delay 1
   end tell
 end tell
+end timeout
 EOF
+  then
+    echo "WARN: Finder DMG styling timed out; continuing with the mounted layout as-is." >&2
+  fi
 
   sleep 2
-  osascript -e 'tell application "Finder" to close every window' || true
+  osascript -e 'with timeout of 5 seconds' -e 'tell application "Finder" to close every window' -e 'end timeout' || true
 fi
 
 for i in {1..5}; do
