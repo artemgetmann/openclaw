@@ -7,7 +7,7 @@ const writeTelegramUpdateOffset = vi.fn();
 const handleUpdate = vi.fn();
 const initBot = vi.fn(async () => undefined);
 const stopBot = vi.fn(async () => undefined);
-const createTelegramBot = vi.fn(() => ({
+const createTelegramBot = vi.fn((_params: unknown) => ({
   init: initBot,
   handleUpdate,
   stop: stopBot,
