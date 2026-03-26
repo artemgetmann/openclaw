@@ -436,4 +436,24 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(lifecycleError).toBeDefined();
     expect(lifecycleError?.data?.error).toContain("API rate limit reached");
   });
+
+  it("keeps usage-window detail in lifecycle:error events", async () => {
+    const { emit, onAgentEvent } = createAgentEventHarness({
+      runId: "run-usage-window",
+      sessionKey: "test-session",
+    });
+
+    emitAssistantLifecycleErrorAndEnd({
+      emit,
+      errorMessage:
+        "LLM error 1310: Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-03-06 22:19:54.",
+    });
+
+    const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
+
+    expect(lifecycleError).toBeDefined();
+    expect(lifecycleError?.data?.error).toBe(
+      "⚠️ Weekly/Monthly usage limit reached. Resets at 2026-03-06 22:19:54.",
+    );
+  });
 });

@@ -80,6 +80,25 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("keeps provider usage-window detail when the raw error exposes it", () => {
+    expect(
+      sanitizeUserFacingText(
+        "Error: Weekly usage limit exhausted. Your limit will reset at 2026-03-06 22:19:54.",
+        { errorContext: true },
+      ),
+    ).toBe("⚠️ Weekly usage limit reached. Resets at 2026-03-06 22:19:54.");
+  });
+
+  it("uses an honest fallback for generic usage-cap errors", () => {
+    expect(
+      sanitizeUserFacingText("Error: Current session 100% used. Weekly limits 55% used.", {
+        errorContext: true,
+      }),
+    ).toBe(
+      "⚠️ Current session usage limit reached. Please wait for the limit window to reset or try another model/provider.",
+    );
+  });
+
   it.each([
     {
       input: "Hello there!\n\nHello there!",

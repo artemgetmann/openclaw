@@ -43,8 +43,78 @@ const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
+const USAGE_LIMIT_5H_RE = /\b(?:5h|5-hour|5 hour|five-hour|five hour)\b/i;
+const USAGE_LIMIT_RESET_AT_RE = /\b(?:will\s+)?reset(?:s)?\s+at\s+([^.\n(]+)/i;
+const USAGE_LIMIT_TRY_AGAIN_IN_RE = /\btry again in\s+([^.\n)]+)/i;
+
+function formatUsageLimitErrorCopy(raw: string): string | undefined {
+  const normalized = normalize402Message(raw);
+  const lower = normalized.toLowerCase();
+
+  // Hard billing failures should keep the billing copy even if they mention
+  // "limit" so we do not turn "upgrade your plan" into a transient cooldown.
+  if (hasExplicit402BillingSignal(lower)) {
+    return undefined;
+  }
+
+  const hasUsageSignal =
+    lower.includes("usage limit") ||
+    lower.includes("organization usage") ||
+    lower.includes("chatgpt usage limit") ||
+    lower.includes("current session") ||
+    lower.includes("weekly limits") ||
+    isPeriodicUsageLimitErrorMessage(lower) ||
+    USAGE_LIMIT_5H_RE.test(lower);
+  if (!hasUsageSignal) {
+    return undefined;
+  }
+
+  // Keep the label extraction explicit and ordered from most specific to most
+  // generic so raw provider text survives as plain language when we have it.
+  let label = "Provider usage limit";
+  if (lower.includes("current session")) {
+    label = "Current session usage limit";
+  } else if (lower.includes("chatgpt usage limit")) {
+    label = "ChatGPT usage limit";
+  } else if (USAGE_LIMIT_5H_RE.test(lower)) {
+    label = "5h usage limit";
+  } else if (lower.includes("weekly/monthly")) {
+    label = "Weekly/Monthly usage limit";
+  } else if (lower.includes("weekly")) {
+    label = "Weekly usage limit";
+  } else if (lower.includes("monthly")) {
+    label = "Monthly usage limit";
+  } else if (lower.includes("daily")) {
+    label = "Daily usage limit";
+  } else if (lower.includes("organization usage")) {
+    label = "Organization usage limit";
+  } else if (lower.includes("workspace") && lower.includes("limit")) {
+    label = "Workspace usage limit";
+  }
+
+  const tryAgainIn = raw.match(USAGE_LIMIT_TRY_AGAIN_IN_RE)?.[1]?.trim();
+  if (tryAgainIn) {
+    return `⚠️ ${label} reached. Try again in ${tryAgainIn}.`;
+  }
+
+  const resetAt = raw.match(USAGE_LIMIT_RESET_AT_RE)?.[1]?.trim();
+  if (resetAt) {
+    return `⚠️ ${label} reached. Resets at ${resetAt}.`;
+  }
+
+  if (/resets tomorrow/i.test(raw)) {
+    return `⚠️ ${label} reached. Resets tomorrow.`;
+  }
+
+  return `⚠️ ${label} reached. Please wait for the limit window to reset or try another model/provider.`;
+}
+
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
-  if (isRateLimitErrorMessage(raw)) {
+  const usageLimitCopy = formatUsageLimitErrorCopy(raw);
+  if (usageLimitCopy) {
+    return usageLimitCopy;
+  }
+  if (isRateLimitErrorMessage(raw) && !isBillingErrorMessage(raw)) {
     return RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   if (isOverloadedErrorMessage(raw)) {

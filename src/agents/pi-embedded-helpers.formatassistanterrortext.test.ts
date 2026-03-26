@@ -89,6 +89,12 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
+  it("does not downgrade plan-upgrade limits into transient usage windows", () => {
+    const msg = makeAssistantError(
+      "HTTP 402 Payment Required: Your usage limit has been reached. Please upgrade your plan.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(BILLING_ERROR_USER_MESSAGE);
+  });
   it("includes provider and assistant model in billing message when provider is given", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg, { provider: "Anthropic" });
@@ -111,6 +117,33 @@ describe("formatAssistantErrorText", () => {
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
+  });
+
+  it("keeps usage-window detail for transient usage caps", () => {
+    const msg = makeAssistantError(
+      "LLM error 1310: Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-03-06 22:19:54 (request_id: req_123)",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ Weekly/Monthly usage limit reached. Resets at 2026-03-06 22:19:54.",
+    );
+  });
+
+  it("surfaces current-session usage caps honestly instead of as API throttling", () => {
+    const msg = makeAssistantError(
+      "Current session 100% used. Weekly limits: All models 55% used.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ Current session usage limit reached. Please wait for the limit window to reset or try another model/provider.",
+    );
+  });
+
+  it("preserves try-again timing for chatgpt usage windows", () => {
+    const msg = makeAssistantError(
+      "You have hit your ChatGPT usage limit (plus plan). Try again in 2h 14m.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ ChatGPT usage limit reached. Try again in 2h 14m.",
+    );
   });
 
   it("returns a friendly message for empty stream chunk errors", () => {
