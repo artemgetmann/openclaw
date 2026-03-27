@@ -9,6 +9,15 @@ enum ConsumerPermissionCatalog {
         .accessibility,
         .screenRecording,
         .appleScript,
+    ]
+
+    // Keep Location visible during first run, but do not let flaky refresh state
+    // block the rest of onboarding while we validate the higher-leverage remote
+    // control path. The user can still grant it here or recover it later.
+    static let recommendedOnboardingCapabilities: [Capability] = [
+        .accessibility,
+        .screenRecording,
+        .appleScript,
         .location,
     ]
 
@@ -113,7 +122,7 @@ struct ConsumerCorePermissionsSection: View {
             contexts: self.recoveryContexts,
             hasAttemptedRecommendedFlow: self.hasAttemptedCoreFlow,
             isChecking: self.requestingCorePermissions,
-            recommendedCapabilities: ConsumerPermissionCatalog.coreCapabilities)
+            recommendedCapabilities: ConsumerPermissionCatalog.recommendedOnboardingCapabilities)
     }
 
     private var recoveryInstructions: [ConsumerPermissionRecoverySupport.StepInstruction] {
@@ -193,7 +202,7 @@ struct ConsumerCorePermissionsSection: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(ConsumerPermissionCatalog.coreCapabilities, id: \.self) { capability in
+                ForEach(ConsumerPermissionCatalog.recommendedOnboardingCapabilities, id: \.self) { capability in
                     let rowPresentation = self.presentation(for: capability)
                     PermissionRow(
                         capability: capability,
@@ -287,7 +296,7 @@ struct ConsumerCorePermissionsSection: View {
             }
         }
 
-        self.registerRecoveryAttempts(from: results, capabilities: ConsumerPermissionCatalog.coreCapabilities)
+        self.registerRecoveryAttempts(from: results, capabilities: ConsumerPermissionCatalog.recommendedOnboardingCapabilities)
         await self.refreshStatusTransitions()
     }
 
@@ -343,7 +352,7 @@ struct ConsumerCorePermissionsSection: View {
     }
 
     private func markReactivated() {
-        for capability in ConsumerPermissionCatalog.coreCapabilities
+        for capability in ConsumerPermissionCatalog.recommendedOnboardingCapabilities
         where ConsumerPermissionRecoverySupport.requiresSettingsRecovery(capability)
         {
             guard var context = self.recoveryContexts[capability], context.attemptedSettingsRecovery else { continue }
@@ -353,7 +362,7 @@ struct ConsumerCorePermissionsSection: View {
     }
 
     private func reconcileContexts(using status: [Capability: Bool]) {
-        for capability in ConsumerPermissionCatalog.coreCapabilities
+        for capability in ConsumerPermissionCatalog.recommendedOnboardingCapabilities
         where ConsumerPermissionRecoverySupport.requiresSettingsRecovery(capability)
         {
             if status[capability] == true {

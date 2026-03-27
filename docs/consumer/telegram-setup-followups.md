@@ -25,6 +25,11 @@ Scope: consumer macOS Telegram onboarding polish and adjacent consumer-shell cle
   - Current behavior: the consumer MVP shows a provider list such as Alibaba Cloud, Anthropic, BytePlus, and others during first run.
   - Why it matters: this is internal plumbing, not a consumer decision. MVP should use our default provider and only surface a simple failure state if our auth is broken.
 
+- Follow-up from fresh consumer E2E: Location permission refresh can stay stale after the user enables it in System Settings.
+  - Current behavior: onboarding can keep showing Location as not granted even after the matching app row is enabled and the user clicks `Refresh`.
+  - Temporary product decision: keep Location visible as recommended, but do not let it block Telegram/setup validation.
+  - Why it matters: Location still matters for `near me` tasks, but it should not derail validation of the main remote-control onboarding path.
+
 - Copy follow-up: the inline Telegram onboarding card is still too terse for first-time bot setup.
   - Current behavior: the card tells the user to verify the token and first task, but it no longer walks through the BotFather setup steps as explicitly as the older Channels version did.
   - Why it matters: the runtime flow is better now, but first-time consumer users still need more hand-holding in this one spot.
