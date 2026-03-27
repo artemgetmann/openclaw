@@ -54,17 +54,18 @@ extension OnboardingView {
             guard newValue else { return }
             guard AppFlavor.current.isConsumer else { return }
             guard self.pageCount == 1, self.state.connectionMode == .local else { return }
-            // Inline consumer setup is intentionally a one-page flow. Once Chrome is
-            // connected, hand off directly to Telegram setup instead of leaving the
-            // user at a generic Settings screen.
-            self.finish()
+            // Consumer onboarding is only actually done after Telegram proves the
+            // first task path end-to-end. Chrome readiness is a prerequisite, not
+            // the finish line.
         }
         .onDisappear {
+            self.channelsStore.stop()
             self.stopPermissionMonitoring()
             self.stopDiscovery()
             Task { await self.onboardingWizard.cancelIfRunning() }
         }
         .task {
+            self.channelsStore.start()
             await self.refreshPerms()
             self.refreshCLIStatus()
             await self.loadWorkspaceDefaults()
