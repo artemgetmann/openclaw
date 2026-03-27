@@ -32,23 +32,40 @@ extension ChannelsStore {
         UserDefaults.standard.removeObject(forKey: Self.consumerTelegramFirstTaskVerificationDefaultsKey())
     }
 
-    func consumerTelegramLatestInboundAt() -> Double? {
+    private func consumerTelegramPrimaryAccount() -> ChannelsStatusSnapshot.ChannelAccountSnapshot? {
         self.snapshot?.channelAccounts["telegram"]?
-            .first(where: { ($0.accountId == "default") || ($0.accountId == self.snapshot?.channelDefaultAccountId["telegram"]) })?
-            .lastInboundAt
+            .first(where: { ($0.accountId == "default") || ($0.accountId == self.snapshot?.channelDefaultAccountId["telegram"]) })
+    }
+
+    func consumerTelegramLatestInboundAt() -> Double? {
+        self.consumerTelegramPrimaryAccount()?.lastInboundAt
+    }
+
+    func consumerTelegramLatestOutboundAt() -> Double? {
+        self.consumerTelegramPrimaryAccount()?.lastOutboundAt
+    }
+
+    func consumerTelegramLatestActivityAt() -> Double? {
+        max(
+            self.consumerTelegramLatestInboundAt() ?? 0,
+            self.consumerTelegramLatestOutboundAt() ?? 0)
     }
 
     func primeConsumerTelegramFirstTaskBaselineIfNeeded() {
         guard self.telegramSetupBaselineInboundAt == nil else { return }
-        self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestInboundAt()
+        // Track the last seen Telegram activity, not only inbound traffic.
+        // The onboarding success condition is "the first task finished end-to-end",
+        // which may surface as the bot's outbound reply even when inbound timing is
+        // unchanged or was observed too late.
+        self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestActivityAt()
     }
 
     func consumerTelegramCanVerifyFirstTaskFromActivity() -> Bool {
-        guard let latestInboundAt = self.consumerTelegramLatestInboundAt() else { return false }
+        guard let latestActivityAt = self.consumerTelegramLatestActivityAt() else { return false }
         guard let baselineInboundAt = self.telegramSetupBaselineInboundAt else {
             return false
         }
-        return latestInboundAt > baselineInboundAt
+        return latestActivityAt > baselineInboundAt
     }
 
     func consumerTelegramConflictMessage(_ raw: String?) -> String? {

@@ -67,6 +67,10 @@ extension ChannelsStore {
                     forKey: Self.consumerTelegramBotUsernameDefaultsKey)
             }
             await self.refresh(probe: true)
+            // Seed the verification baseline immediately after token verification,
+            // before the user sends the first real task. Waiting until a later
+            // lifecycle refresh can capture post-reply activity too late and make
+            // the UI think it still needs another message.
             self.primeConsumerTelegramFirstTaskBaselineIfNeeded()
             self.telegramSetupStatus = self.telegramVerificationStatus(botUsername: bot.username)
         } catch {
@@ -117,6 +121,12 @@ extension ChannelsStore {
             self.telegramSetupWaitingForDM = false
             self.telegramSetupStatus = "Saving Telegram setup..."
             self.telegramSetupPhase = .savingSetup
+            // The first captured DM is the last known Telegram activity before the
+            // bootstrap reply starts. Record that edge explicitly so a later bot
+            // reply can satisfy the completion check even if the replay helper
+            // process stalls while the gateway restarts.
+            self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestActivityAt()
+                ?? Double(dm.date * 1_000)
             let persisted = try await self.applyTelegramSetupBootstrap(
                 token: token,
                 dmPolicy: "allowlist",
@@ -205,6 +215,7 @@ extension ChannelsStore {
             dmPolicy: dmPolicy,
             allowFrom: allowFrom,
             enabled: enabled)
+        await self.reconnectConsumerGatewayAfterConfigBootstrap()
         Task { await self.refresh(probe: true) }
         return persisted
     }
@@ -349,7 +360,17 @@ extension ChannelsStore {
         let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
             base: ProcessInfo.processInfo.environment,
             projectRootHint: CommandResolver.projectRootEnvironmentHint())
-        let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: 90)
+        let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: 20)
+        if response.timedOut {
+            await self.refresh(probe: true)
+            if self.consumerTelegramCanVerifyFirstTaskFromActivity() {
+                return TelegramSetupReplayResult(
+                    ok: true,
+                    replyStarted: true,
+                    replyCompleted: true,
+                    error: nil)
+            }
+        }
         if !response.success {
             let detail = response.stderr.nonEmpty ?? response.stdout.nonEmpty ?? response.errorMessage ?? "unknown error"
             return TelegramSetupReplayResult(
@@ -370,6 +391,20 @@ extension ChannelsStore {
                 error: "OpenClaw started the handoff, but returned an unreadable response.")
         }
         return parsed
+    }
+
+    private func reconnectConsumerGatewayAfterConfigBootstrap() async {
+        guard AppFlavor.current.isConsumer else { return }
+        guard !self.isPreview else { return }
+        guard AppStateStore.shared.connectionMode == .local else { return }
+
+        // Telegram bootstrap mutates gateway.auth.token and channels, which forces
+        // a local gateway restart. The shared macOS control socket must drop its
+        // stale auth and reconnect to the restarted gateway before the onboarding
+        // flow can observe the new Telegram state truthfully.
+        await GatewayConnection.shared.shutdown()
+        await GatewayEndpointStore.shared.refresh()
+        try? await GatewayConnection.shared.refresh()
     }
 
     private func telegramReplayPayloadJson(dm: TelegramSetupDirectMessage) -> String? {

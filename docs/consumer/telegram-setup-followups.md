@@ -21,6 +21,10 @@ Scope: consumer macOS Telegram onboarding polish and adjacent consumer-shell cle
   - Current behavior: while the user is mid-Telegram setup, the onboarding surface can vanish and leave only the General settings window behind.
   - Why it matters: this breaks the one-flow-at-a-time model and strands the user halfway through setup.
 
+- Blocker from fresh consumer E2E: onboarding still asks the user to choose a model/auth provider.
+  - Current behavior: the consumer MVP shows a provider list such as Alibaba Cloud, Anthropic, BytePlus, and others during first run.
+  - Why it matters: this is internal plumbing, not a consumer decision. MVP should use our default provider and only surface a simple failure state if our auth is broken.
+
 - Copy follow-up: the inline Telegram onboarding card is still too terse for first-time bot setup.
   - Current behavior: the card tells the user to verify the token and first task, but it no longer walks through the BotFather setup steps as explicitly as the older Channels version did.
   - Why it matters: the runtime flow is better now, but first-time consumer users still need more hand-holding in this one spot.
