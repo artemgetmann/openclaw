@@ -136,9 +136,12 @@ export const buildTelegramMessageContext = async ({
   // Group sender checks are explicit and must not inherit DM pairing-store entries.
   const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? groupAllowFrom);
   const ownerAllowFrom = resolveOwnerAllowFrom();
+  const directConversationAllowFrom = senderId
+    ? [senderId]
+    : [String(msg.from?.username ?? chatId).trim()].filter(Boolean);
   const contextAllowFrom = isGroup
     ? normalizeTrustEntries(groupAllowOverride ?? groupAllowFrom)
-    : normalizeTrustEntries(dmAllowFrom);
+    : normalizeTrustEntries(directConversationAllowFrom);
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   const senderUsername = msg.from?.username ?? "";
   const baseAccess = evaluateTelegramGroupBaseAccess({
