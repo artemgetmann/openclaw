@@ -11,6 +11,25 @@
 - If the user says "consumer branch", interpret that as `codex/consumer-openclaw-project` unless they explicitly say they want the legacy `consumer` branch.
 - Never run `git merge upstream/main` on this fork. Port upstream changes selectively via `main`.
 
+## Worktree durability
+
+- Default location rule:
+  - create repo worktrees under the repo-owned `.worktrees/` directory by default
+  - use one predictable location so active lanes do not get split across `.worktrees/` and `.codex/worktrees/`
+- Why:
+  - `.codex/worktrees/` lanes have repeatedly disappeared after restart, interruption, cleanup, or session churn
+  - the branch and Codex history often survive, but the on-disk checkout may not
+- Practical rule:
+  - important multi-hour, multi-turn, or PR-bound work belongs under `.worktrees/`
+  - do not create new durable lanes under `.codex/worktrees/` unless the user explicitly asks for that path
+  - if you inherit a non-trivial lane under `.codex/worktrees/`, checkpoint aggressively and print proof lines before surgery
+- When state matters, print:
+  - `branch=<branch>`
+  - `worktree=<absolute-path>`
+  - `head=<sha>`
+  - `status_dirty=yes|no`
+- For recovery and vanished-worktree triage, use `docs/debug/worktree-branch-survival.md`.
+
 ## GitHub footguns
 
 - For issue comments, PR comments, and review bodies, use literal multiline strings or a single-quoted heredoc. Do not embed `\n`.
@@ -37,6 +56,14 @@
   - Fix touching that code path
   - Regression proof or explicit manual validation notes
 - Before `/landpr`, run `/reviewpr`.
+
+## tmux and Codex panes
+
+- When driving interactive Codex panes through tmux skills or manual pane control, do not paste a prompt and send Enter in one blind action.
+- Paste the prompt first.
+- Capture or inspect the pane so you know the full prompt landed correctly.
+- Send Enter as a separate action.
+- This avoids half-pasted prompts, accidental sends, and fake state recovery.
 
 ## Multi-agent safety
 
