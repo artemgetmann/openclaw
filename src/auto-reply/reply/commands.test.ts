@@ -977,6 +977,30 @@ describe("handleCommands bash alias", () => {
       expect(result.reply?.text).toContain("No active bash job");
     }
   });
+
+  it("blocks gateway self-restart commands from live Telegram bash chat", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    const cfg = {
+      commands: { bash: true, text: true },
+      tools: { exec: { ask: "off", security: "full" } },
+      whatsapp: { allowFrom: ["*"] },
+      telegram: { allowFrom: ["*"] },
+    } as OpenClawConfig;
+    const params = buildParams("/bash bash scripts/restart-local-gateway.sh", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain(
+      "exec blocked a gateway supervisor command from the live telegram chat surface",
+    );
+  });
 });
 
 function buildPolicyParams(

@@ -14,24 +14,46 @@ function resolveHomeDir(): string {
   return process.env.HOME ?? os.homedir();
 }
 
-export async function noteMacLaunchAgentOverrides() {
-  if (process.platform !== "darwin") {
-    return;
+export function resolveMacLaunchAgentDisableMarkerPath(deps?: {
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+  existsSync?: (path: string) => boolean;
+}): string | null {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return null;
   }
-  const home = resolveHomeDir();
-  const markerCandidates = [path.join(home, ".openclaw", "disable-launchagent")];
-  const markerPath = markerCandidates.find((candidate) => fs.existsSync(candidate));
+  const home = deps?.homeDir ?? resolveHomeDir();
+  const markerPath = path.join(home, ".openclaw", "disable-launchagent");
+  const existsSync = deps?.existsSync ?? fs.existsSync;
+  return existsSync(markerPath) ? markerPath : null;
+}
+
+function formatMacLaunchAgentDisableMarkerNote(markerPath: string): string {
+  const displayMarkerPath = shortenHomePath(markerPath);
+  return [
+    `- LaunchAgent writes are disabled via ${displayMarkerPath}.`,
+    "- To restore default behavior:",
+    `  rm ${displayMarkerPath}`,
+  ].join("\n");
+}
+
+export async function noteMacLaunchAgentOverrides(deps?: {
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+  existsSync?: (path: string) => boolean;
+  noteFn?: typeof note;
+}) {
+  const markerPath = resolveMacLaunchAgentDisableMarkerPath({
+    platform: deps?.platform,
+    homeDir: deps?.homeDir,
+    existsSync: deps?.existsSync,
+  });
   if (!markerPath) {
     return;
   }
 
-  const displayMarkerPath = shortenHomePath(markerPath);
-  const lines = [
-    `- LaunchAgent writes are disabled via ${displayMarkerPath}.`,
-    "- To restore default behavior:",
-    `  rm ${displayMarkerPath}`,
-  ].filter((line): line is string => Boolean(line));
-  note(lines.join("\n"), "Gateway (macOS)");
+  (deps?.noteFn ?? note)(formatMacLaunchAgentDisableMarkerNote(markerPath), "Gateway (macOS)");
 }
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {

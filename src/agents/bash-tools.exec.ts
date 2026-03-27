@@ -77,6 +77,82 @@ function extractScriptTargetFromCommand(
   return null;
 }
 
+function normalizeShellSegment(segment: string): string {
+  return segment.trim().replace(/\s+/g, " ");
+}
+
+function splitShellCommandSegments(command: string): string[] {
+  return command
+    .split(/[\n;]+/u)
+    .map((segment) => normalizeShellSegment(segment))
+    .filter(Boolean);
+}
+
+function isGatewaySupervisorMutationSegment(segment: string): boolean {
+  // These patterns intentionally target mutation commands only.
+  // Read-only inspection like `cat scripts/restart-local-gateway.sh` must remain allowed.
+  if (
+    /(?:^|\s)(?:\/bin\/bash|\/bin\/sh|bash|sh|zsh)\s+(?:\S+\/)?scripts\/restart-local-gateway\.sh(?:\s|$)/u.test(
+      segment,
+    )
+  ) {
+    return true;
+  }
+  if (/^(?:\.\/)?scripts\/restart-local-gateway\.sh(?:\s|$)/u.test(segment)) {
+    return true;
+  }
+  if (
+    /\bnode\b .*?\bopenclaw\.mjs\b .*?\bdaemon\b .*?\b(?:install|restart|start)\b/u.test(segment)
+  ) {
+    return true;
+  }
+  if (
+    /\bopenclaw\b .*?\b(?:gateway|daemon)\b .*?\b(?:restart|start|run|install)\b/u.test(segment)
+  ) {
+    return true;
+  }
+  if (
+    /\blaunchctl\b .*?\b(?:bootout|bootstrap|kickstart)\b .*?\bai\.openclaw\.gateway\b/u.test(
+      segment,
+    )
+  ) {
+    return true;
+  }
+  if (/\bpkill\b .*?\bopenclaw-gateway\b/u.test(segment)) {
+    return true;
+  }
+  return false;
+}
+
+function isChatDrivenGatewaySelfRestartCommand(command: string): boolean {
+  return splitShellCommandSegments(command).some((segment) =>
+    isGatewaySupervisorMutationSegment(segment),
+  );
+}
+
+function assertNoChatDrivenGatewaySelfRestart(params: {
+  command: string;
+  messageProvider?: string;
+}): void {
+  const provider = params.messageProvider?.trim().toLowerCase();
+  if (process.platform !== "darwin") {
+    return;
+  }
+  if (!isChatDrivenGatewaySelfRestartCommand(params.command)) {
+    return;
+  }
+  const contextLabel = provider
+    ? `the live ${provider} chat surface`
+    : "this agent execution context";
+  throw new Error(
+    [
+      `exec blocked a gateway supervisor command from ${contextLabel}.`,
+      "Direct macOS gateway restarts from chat can terminate the session issuing the command before it can recover.",
+      "Use /restart for an agent-safe detached restart, or run the restart from Terminal/OpenClaw.app outside the chat session.",
+    ].join("\n"),
+  );
+}
+
 async function validateScriptFileForShellBleed(params: {
   command: string;
   workdir: string;
@@ -467,6 +543,10 @@ export function createExecTool(
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
+      assertNoChatDrivenGatewaySelfRestart({
+        command: params.command,
+        messageProvider: defaults?.messageProvider,
+      });
       await validateScriptFileForShellBleed({ command: params.command, workdir });
 
       const run = await runExecProcess({
