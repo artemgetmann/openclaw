@@ -36,6 +36,7 @@ final class OnboardingController {
         }
         if let window {
             self.logger.info("reusing existing onboarding window")
+            SettingsWindowOpener.shared.hideContentWindows()
             DockIconManager.shared.temporarilyShowDock()
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -50,6 +51,7 @@ final class OnboardingController {
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
         window.center()
+        SettingsWindowOpener.shared.hideContentWindows()
         DockIconManager.shared.temporarilyShowDock()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -93,6 +95,7 @@ struct OnboardingView: View {
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var browserSetup = BrowserSetupModel()
     @State var modelSetup = ConsumerModelSetupModel()
+    @State var channelsStore: ChannelsStore
     @State var onboardingSkillsModel = SkillsSettingsModel()
     @State var onboardingWizard = OnboardingWizardModel()
     @State var didLoadOnboardingSkills = false
@@ -156,9 +159,13 @@ struct OnboardingView: View {
     var buttonTitle: String {
         if AppFlavor.current.isConsumer {
             if self.pageCount == 1, self.activePageIndex == 0 {
-                return self.onboardingWizard.isComplete && self.browserSetup.isComplete && self.modelSetup.isComplete
-                    ? "Connect Telegram"
-                    : "Setting Up…"
+                if self.isCorePermissionsBlocking {
+                    return "Grant core permissions"
+                }
+                if self.canFinishConsumerInlineSetup {
+                    return "Finish"
+                }
+                return "Setting Up…"
             }
             if self.activePageIndex == self.wizardPageIndex, self.onboardingWizard.isComplete {
                 return "Finish"
@@ -199,11 +206,51 @@ struct OnboardingView: View {
             !self.modelSetup.isComplete
     }
 
+    var areCorePermissionsGranted: Bool {
+        ConsumerPermissionCatalog.coreCapabilities.allSatisfy { capability in
+            self.permissionMonitor.status[capability] == true
+        }
+    }
+
+    var isCorePermissionsBlocking: Bool {
+        AppFlavor.current.isConsumer &&
+            self.pageCount == 1 &&
+            self.state.connectionMode != .remote &&
+            self.onboardingWizard.isComplete &&
+            self.browserSetup.isComplete &&
+            self.modelSetup.isComplete &&
+            !self.areCorePermissionsGranted
+    }
+
+    var canFinishConsumerInlineSetup: Bool {
+        AppFlavor.current.isConsumer &&
+            self.pageCount == 1 &&
+            self.state.connectionMode != .remote &&
+            self.onboardingWizard.isComplete &&
+            self.browserSetup.isComplete &&
+            self.modelSetup.isComplete &&
+            self.areCorePermissionsGranted &&
+            self.channelsStore.consumerTelegramReadyForFirstTask()
+    }
+
+    var isTelegramSetupBlocking: Bool {
+        AppFlavor.current.isConsumer &&
+            self.pageCount == 1 &&
+            self.state.connectionMode != .remote &&
+            self.onboardingWizard.isComplete &&
+            self.browserSetup.isComplete &&
+            self.modelSetup.isComplete &&
+            self.areCorePermissionsGranted &&
+            !self.channelsStore.consumerTelegramReadyForFirstTask()
+    }
+
     var canAdvance: Bool {
         !self.isWizardBlocking &&
             !self.isConsumerInlineSetupBlocking &&
             !self.isBrowserSetupBlocking &&
-            !self.isModelSetupBlocking
+            !self.isModelSetupBlocking &&
+            !self.isCorePermissionsBlocking &&
+            !self.isTelegramSetupBlocking
     }
 
     var devLinkCommand: String {
@@ -223,11 +270,14 @@ struct OnboardingView: View {
         permissionMonitor: PermissionMonitor = .shared,
         discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel(
             localDisplayName: InstanceIdentity.displayName,
-            filterLocalGateways: false))
+            filterLocalGateways: false),
+        channelsStore: ChannelsStore = ChannelsStore(
+            isPreview: ProcessInfo.processInfo.isPreview))
     {
         self.state = state
         self.permissionMonitor = permissionMonitor
         self._gatewayDiscovery = State(initialValue: discoveryModel)
+        self._channelsStore = State(initialValue: channelsStore)
         self._onboardingChatModel = State(
             initialValue: OpenClawChatViewModel(
                 sessionKey: "onboarding",

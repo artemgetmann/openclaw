@@ -39,6 +39,12 @@ final class SettingsWindowOpener {
         self.ensureVisibleContentWindow()
     }
 
+    func hideContentWindows() {
+        for window in Self.contentWindows() {
+            window.orderOut(nil)
+        }
+    }
+
     // Non-trivial: opening Settings is asynchronous when SwiftUI has to create
     // the scene. Post the tab selection on the next run loop so the new window
     // can subscribe before we ask it to switch tabs.

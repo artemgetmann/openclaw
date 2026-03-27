@@ -182,14 +182,12 @@ function shouldPromotePendingRequestToSilent(params: {
   isRepair: boolean;
 }): boolean {
   const incomingRole = normalizeRole(params.incoming.role);
-  return (
-    params.isRepair &&
-    params.incoming.silent === true &&
+  const isLocalMacAppRepairRole =
     params.incoming.clientId === GATEWAY_CLIENT_IDS.MACOS_APP &&
-    params.incoming.clientMode === GATEWAY_CLIENT_MODES.NODE &&
-    incomingRole === "node" &&
-    params.existing.clientId === GATEWAY_CLIENT_IDS.MACOS_APP
-  );
+    params.existing.clientId === GATEWAY_CLIENT_IDS.MACOS_APP &&
+    ((params.incoming.clientMode === GATEWAY_CLIENT_MODES.NODE && incomingRole === "node") ||
+      (params.incoming.clientMode === GATEWAY_CLIENT_MODES.UI && incomingRole === "operator"));
+  return params.isRepair && params.incoming.silent === true && isLocalMacAppRepairRole;
 }
 
 function mergePendingDevicePairingRequest(

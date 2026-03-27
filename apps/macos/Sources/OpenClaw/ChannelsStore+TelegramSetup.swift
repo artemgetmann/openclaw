@@ -2,8 +2,6 @@ import AppKit
 import Foundation
 
 extension ChannelsStore {
-    static let consumerTelegramBotUsernameDefaultsKey = "OpenClawConsumerTelegramBotUsername"
-
     func telegramRuntimeOwnershipIssue() -> String? {
         guard AppFlavor.current.isConsumer else { return nil }
         guard !self.isPreview else { return nil }
@@ -11,6 +9,7 @@ extension ChannelsStore {
     }
 
     func resetTelegramSetupProgressForEditedToken() {
+        self.clearConsumerTelegramFirstTaskVerified()
         self.telegramSetupStatus = nil
         self.telegramSetupBotId = nil
         self.telegramSetupBotUsername = nil
@@ -96,7 +95,7 @@ extension ChannelsStore {
             self.telegramSetupPhase = .idle
         }
 
-        self.telegramSetupStatus = "Waiting for the first message to the bot..."
+        self.telegramSetupStatus = "Waiting for your first Telegram task..."
         var pausedPollingProvider = false
         var restoredByFinalBootstrap = false
         do {
@@ -106,7 +105,9 @@ extension ChannelsStore {
                 if pausedPollingProvider {
                     try? await self.restoreTelegramPairingAfterSetupPause(token: token)
                 }
-                self.telegramSetupStatus = TelegramSetupVerifierError.noDirectMessage.localizedDescription
+                await self.refresh(probe: true)
+                self.telegramSetupStatus = self.telegramCaptureFailureStatusAfterTimeout()
+                    ?? TelegramSetupVerifierError.noDirectMessage.localizedDescription
                 return
             }
 
@@ -116,18 +117,36 @@ extension ChannelsStore {
             let persisted = try await self.applyTelegramSetupBootstrap(
                 token: token,
                 dmPolicy: "allowlist",
-                allowFrom: [String(dm.senderId)])
-            restoredByFinalBootstrap = true
+                allowFrom: [String(dm.senderId)],
+                enabled: false)
             self.telegramSetupFirstSenderId = String(dm.senderId)
-            self.telegramSetupStatus = "Starting the first reply in Telegram..."
+            self.telegramSetupStatus = "Running your first Telegram task..."
             self.telegramSetupPhase = .startingFirstReply
             let replayResult = await self.startFirstTelegramReply(dm: dm)
+            let replayCompleted = replayResult.replyCompleted ?? replayResult.replyStarted
+            if replayResult.error == nil {
+                _ = try await self.applyTelegramSetupBootstrap(
+                    token: token,
+                    dmPolicy: "allowlist",
+                    allowFrom: [String(dm.senderId)],
+                    enabled: true)
+                restoredByFinalBootstrap = true
+            } else if pausedPollingProvider {
+                try? await self.restoreTelegramPairingAfterSetupPause(token: token)
+                restoredByFinalBootstrap = true
+            }
+            if replayCompleted, replayResult.error == nil {
+                self.markConsumerTelegramFirstTaskVerified()
+            } else {
+                self.clearConsumerTelegramFirstTaskVerified()
+            }
             self.telegramSetupStatus = self.telegramCaptureStatus(
                 dm: dm,
                 persistedRoot: persisted,
                 replayResult: replayResult)
         } catch {
             self.telegramSetupWaitingForDM = false
+            self.clearConsumerTelegramFirstTaskVerified()
             if pausedPollingProvider && !restoredByFinalBootstrap {
                 try? await self.restoreTelegramPairingAfterSetupPause(token: token)
             }
@@ -138,12 +157,16 @@ extension ChannelsStore {
     func applyTelegramSetupBootstrap(
         token: String,
         dmPolicy: String,
-        allowFrom: [String]?
+        allowFrom: [String]?,
+        enabled: Bool = true
     ) async throws -> [String: Any] {
         // Reload from the authoritative consumer config before editing so setup
         // cannot accidentally overwrite gateway/runtime keys with a stale empty draft.
         await self.restoreConfigDraftFromCurrentSource()
-        self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("enabled")], value: true)
+        // Keep Telegram disabled until the onboarding replay has consumed the
+        // captured first DM. Otherwise the live poller can wake up mid-setup and
+        // race the replay path into duplicate replies or fake ownership conflicts.
+        self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("enabled")], value: enabled)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("botToken")], value: token)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("dmPolicy")], value: dmPolicy)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("groupPolicy")], value: "open")
@@ -160,7 +183,8 @@ extension ChannelsStore {
         try self.assertPersistedTelegramBootstrap(
             persistedRoot: persisted,
             dmPolicy: dmPolicy,
-            allowFrom: allowFrom)
+            allowFrom: allowFrom,
+            enabled: enabled)
         Task { await self.refresh(probe: true) }
         return persisted
     }
@@ -174,8 +198,8 @@ extension ChannelsStore {
         botUsername: String?
     ) -> String {
         return botUsername.map {
-            "Token verified for @\($0). Now send the bot one message, then click Capture first message."
-        } ?? "Token verified. Now send the bot one message, then click Capture first message."
+            "Token verified for @\($0). Now send your first task in Telegram, then click Verify first task."
+        } ?? "Token verified. Now send your first task in Telegram, then click Verify first task."
     }
 
     private func telegramCaptureStatus(
@@ -184,28 +208,52 @@ extension ChannelsStore {
         replayResult: TelegramSetupReplayResult
     ) -> String {
         _ = persistedRoot
+        let replayCompleted = replayResult.replyCompleted ?? replayResult.replyStarted
         if let error = replayResult.error {
-            return "Telegram setup is finished, but OpenClaw could not start the first reply automatically. \(error)"
+            return "Telegram setup is saved, but OpenClaw could not finish the first Telegram task. \(error)"
         }
-        if !replayResult.replyStarted {
-            return "Telegram setup is finished, but OpenClaw could not confirm that the first reply started."
+        if !replayCompleted {
+            return "Telegram setup is saved, but OpenClaw could not confirm that the first Telegram task finished."
         }
         if AppFlavor.current.isConsumer {
             return dm.senderUsername.map {
-                "Connected to @\($0). Your AI operator has started the first reply in Telegram."
-            } ?? "Telegram setup is finished. Your AI operator has started the first reply in Telegram."
+                "Connected to @\($0). OpenClaw finished the first Telegram task on this Mac."
+            } ?? "Telegram setup is finished. OpenClaw finished the first Telegram task on this Mac."
         }
         return dm.senderUsername.map {
             "Locked to @\($0). For multiple parallel tasks, add the bot to a Telegram group and use topics."
         } ?? "Locked to Telegram user ID \(dm.senderId). For multiple parallel tasks, add the bot to a Telegram group and use topics."
     }
 
+    private func telegramCaptureFailureStatusAfterTimeout() -> String? {
+        if let ownershipIssue = self.telegramRuntimeOwnershipIssue() {
+            return ownershipIssue
+        }
+        if let status = self.snapshot?.decodeChannel(
+            "telegram",
+            as: ChannelsStatusSnapshot.TelegramStatus.self
+        ) {
+            if let conflict = self.consumerTelegramConflictMessage(status.lastError) {
+                return conflict
+            }
+            if let conflict = self.consumerTelegramConflictMessage(status.probe?.error) {
+                return conflict
+            }
+        }
+        return nil
+    }
+
     private func assertPersistedTelegramBootstrap(
         persistedRoot: [String: Any],
         dmPolicy: String,
-        allowFrom: [String]?
+        allowFrom: [String]?,
+        enabled: Bool
     ) throws {
         let telegram = ((persistedRoot["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
+        let persistedEnabled = telegram["enabled"] as? Bool ?? false
+        guard persistedEnabled == enabled else {
+            throw TelegramBootstrapPersistenceError.persistedConfigMismatch
+        }
         let persistedPolicy = (telegram["dmPolicy"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard persistedPolicy == dmPolicy else {
@@ -243,7 +291,14 @@ extension ChannelsStore {
         // conflict. Pause the consumer Telegram channel briefly, capture the DM, then
         // let the final bootstrap write re-enable it.
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("enabled")], value: false)
-        _ = try await self.saveConfigDraftOrThrow()
+        if AppFlavor.current.isConsumer,
+           !self.isPreview,
+           AppStateStore.shared.connectionMode != .remote
+        {
+            _ = await self.saveConfigDraftLocallyAndRefresh()
+        } else {
+            _ = try await self.saveConfigDraftOrThrow()
+        }
         Task { await self.refresh(probe: true) }
         try await Task.sleep(nanoseconds: 1_500_000_000)
         return true
@@ -263,6 +318,7 @@ extension ChannelsStore {
             return TelegramSetupReplayResult(
                 ok: false,
                 replyStarted: false,
+                replyCompleted: false,
                 error: "The captured first message did not contain text. Send one text message to begin.")
         }
 
@@ -276,7 +332,11 @@ extension ChannelsStore {
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: 90)
         if !response.success {
             let detail = response.stderr.nonEmpty ?? response.stdout.nonEmpty ?? response.errorMessage ?? "unknown error"
-            return TelegramSetupReplayResult(ok: false, replyStarted: false, error: detail)
+            return TelegramSetupReplayResult(
+                ok: false,
+                replyStarted: false,
+                replyCompleted: false,
+                error: detail)
         }
 
         let raw = response.stdout.isEmpty ? response.stderr : response.stdout
@@ -286,6 +346,7 @@ extension ChannelsStore {
             return TelegramSetupReplayResult(
                 ok: false,
                 replyStarted: false,
+                replyCompleted: false,
                 error: "OpenClaw started the handoff, but returned an unreadable response.")
         }
         return parsed
@@ -346,5 +407,6 @@ private struct TelegramSetupReplayPayload: Encodable {
 private struct TelegramSetupReplayResult: Decodable {
     let ok: Bool
     let replyStarted: Bool
+    let replyCompleted: Bool?
     let error: String?
 }

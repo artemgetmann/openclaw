@@ -181,7 +181,7 @@ struct BrowserSetupSupportTests {
             let profiles = browser?["profiles"] as? [String: Any]
             let userProfile = profiles?["user"] as? [String: Any]
             #expect(browser?["defaultProfile"] as? String == "user")
-            #expect((userProfile?["cdpPort"] as? NSNumber)?.intValue == 19012)
+            #expect((userProfile?["cdpPort"] as? NSNumber)?.intValue == OpenClawConfigFile.managedBrowserUserCdpPort())
             #expect(userProfile?["cloneFromUserProfile"] as? Bool == true)
             #expect(userProfile?["sourceProfileName"] as? String == "Profile 4")
             #expect(userProfile?["color"] as? String == "#00AA00")
@@ -226,6 +226,52 @@ struct BrowserSetupSupportTests {
             #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
             #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
             #expect(verifiedProfileName == "Profile 4")
+            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
+        }
+    }
+
+    @Test func `consumer browser readiness succeeds without gateway pairing when browser status is ready`() async {
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        var browserStatusCalled = false
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+            let payload = """
+            {
+              "enabled": true,
+              "running": false,
+              "chosenBrowser": null,
+              "detectedBrowser": "chrome",
+              "detectedExecutablePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+              "detectError": null
+            }
+            """
+
+            let result = await BrowserSetupModel.verifyConsumerBrowserSelection(
+                expectedProfile: selected,
+                runBrowserStatus: { _, _, _ in
+                    browserStatusCalled = true
+                    return ConsumerShellCommandResult(
+                        stdout: payload,
+                        stderr: "",
+                        exitCode: 0,
+                        success: true)
+                })
+
+            #expect(browserStatusCalled)
+            #expect(result == nil)
             #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
         }
     }

@@ -138,6 +138,7 @@ extension ChannelsStore {
                     ? "Telegram token cleared."
                     : "No Telegram token configured."
             }
+            self.clearConsumerTelegramFirstTaskVerified()
             await self.loadConfig()
         } catch {
             self.configStatus = error.localizedDescription
@@ -172,14 +173,20 @@ extension ChannelsStore {
         }
 
         if self.telegramSetupStatus == nil
-            || self.telegramSetupStatus == "Waiting for the first message to the bot..."
+            || self.telegramSetupStatus == "Waiting for your first Telegram task..."
             || self.telegramSetupStatus == "Saving Telegram setup..."
             || self.telegramSetupStatus?.hasPrefix("Token verified") == true
         {
             let username = status.probe?.bot?.username ?? self.telegramSetupBotUsername
-            self.telegramSetupStatus = username.map {
-                "Telegram bot is live as @\($0)."
-            } ?? "Telegram bot is live."
+            if self.consumerTelegramFirstTaskVerified {
+                self.telegramSetupStatus = username.map {
+                    "Telegram bot is live as @\($0). First task verified."
+                } ?? "Telegram bot is live. First task verified."
+            } else {
+                self.telegramSetupStatus = username.map {
+                    "Telegram bot is live as @\($0). Send your first task, then click Verify first task."
+                } ?? "Telegram bot is live. Send your first task, then click Verify first task."
+            }
         }
     }
 }

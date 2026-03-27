@@ -1,7 +1,44 @@
 # Consumer Telegram Setup Follow-ups
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 Scope: consumer macOS Telegram onboarding polish and adjacent consumer-shell cleanup
+
+## Current Tracker
+
+- Imported Telegram-first-task onboarding work: pending human verification in the packaged app.
+  - Why it matters: the flow now blocks on a real Telegram task instead of claiming setup is done too early.
+
+- Remaining manual packaged-app verification:
+  1. Rebuild and open the isolated consumer app.
+  2. Confirm browser, model, and core permission checkpoints behave in order.
+  3. Send one real Telegram DM.
+  4. Click `Verify first task`.
+  5. Confirm onboarding only finishes after the first real task succeeds.
+  6. Confirm `Settings -> Channels` shows Telegram as `Live`.
+  - Why it matters: this is the end-to-end proof that the setup flow matches reality.
+
+- Blocker from live test: onboarding can still disappear into the regular settings window before Telegram verification is done.
+  - Current behavior: while the user is mid-Telegram setup, the onboarding surface can vanish and leave only the General settings window behind.
+  - Why it matters: this breaks the one-flow-at-a-time model and strands the user halfway through setup.
+
+- Copy follow-up: the inline Telegram onboarding card is still too terse for first-time bot setup.
+  - Current behavior: the card tells the user to verify the token and first task, but it no longer walks through the BotFather setup steps as explicitly as the older Channels version did.
+  - Why it matters: the runtime flow is better now, but first-time consumer users still need more hand-holding in this one spot.
+
+- Deeper local-gateway pairing repair fix: keep as a separate follow-up PR.
+  - Current finding: one separate lane identified a same-Mac pairing repair bug where a `node` -> `ui/operator` upgrade could poison browser readiness with `pairing required` noise.
+  - Why it matters: the onboarding-side fix is the safe unblocker now, but the gateway-side auto-heal is still worth preserving and reviewing separately.
+
+- Add a thin CLI packaged-app smoke wrapper for consumer onboarding and Telegram runtime ownership.
+  - Proposed path:
+    1. package the isolated app
+    2. verify the bundle identity and runtime root
+    3. ensure the live Telegram runtime belongs to this worktree
+    4. open the packaged app
+    5. assert the exact bundle has a visible window
+    6. run the existing Telegram first-reply smoke
+    7. re-check window visibility after the Telegram roundtrip
+  - Why it matters: the repo already has most of these pieces. A small wrapper would catch the class of "simple but embarrassing" runtime/window bugs before a human finds them in the GUI.
 
 ## Consumer app visibility debugging notes (2026-03-25)
 

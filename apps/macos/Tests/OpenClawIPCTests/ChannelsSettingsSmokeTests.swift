@@ -188,6 +188,10 @@ struct ChannelsSettingsSmokeTests {
         try await TestIsolation.withEnvValues([
             "OPENCLAW_APP_VARIANT": "consumer",
         ]) {
+            let verificationKey = ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(instanceId: nil)
+            UserDefaults.standard.set(123456, forKey: verificationKey)
+            defer { UserDefaults.standard.removeObject(forKey: verificationKey) }
+
             let store = ChannelsStore(isPreview: true)
             store.configDraft = [
                 "channels": [
@@ -205,7 +209,31 @@ struct ChannelsSettingsSmokeTests {
             #expect(telegram.id == "telegram")
             #expect(view.channelEnabled(telegram))
             #expect(view.telegramSummary == "Live")
-            #expect(view.telegramDetails == "Telegram access is saved on this Mac.")
+            #expect(view.telegramDetails == nil)
+        }
+    }
+
+    @Test func `consumer telegram live without verified task stays in verify-first-task state`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let verificationKey = ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(instanceId: nil)
+            UserDefaults.standard.removeObject(forKey: verificationKey)
+
+            let store = ChannelsStore(isPreview: true)
+            store.configDraft = [
+                "channels": [
+                    "telegram": [
+                        "enabled": true,
+                        "botToken": "123456:test-token",
+                        "dmPolicy": "allowlist",
+                        "allowFrom": ["42"],
+                    ],
+                ],
+            ]
+
+            let view = ChannelsSettings(store: store)
+            #expect(view.telegramSummary == "Verify first task")
         }
     }
 
@@ -213,6 +241,10 @@ struct ChannelsSettingsSmokeTests {
         try await TestIsolation.withEnvValues([
             "OPENCLAW_APP_VARIANT": "consumer",
         ]) {
+            let verificationKey = ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(instanceId: nil)
+            UserDefaults.standard.set(123, forKey: verificationKey)
+            defer { UserDefaults.standard.removeObject(forKey: verificationKey) }
+
             let store = ChannelsStore(isPreview: true)
             store.snapshot = ChannelsStatusSnapshot(
                 ts: 1_700_000_000_000,
@@ -250,6 +282,10 @@ struct ChannelsSettingsSmokeTests {
         try await TestIsolation.withEnvValues([
             "OPENCLAW_APP_VARIANT": "consumer",
         ]) {
+            let verificationKey = ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(instanceId: nil)
+            UserDefaults.standard.set(123, forKey: verificationKey)
+            defer { UserDefaults.standard.removeObject(forKey: verificationKey) }
+
             let store = ChannelsStore(isPreview: true)
             store.snapshot = ChannelsStatusSnapshot(
                 ts: 1_700_000_000_000,
