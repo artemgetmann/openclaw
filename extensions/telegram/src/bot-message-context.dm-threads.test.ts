@@ -164,4 +164,47 @@ describe("buildTelegramMessageContext direct peer routing", () => {
     expect(first?.ctxPayload?.SessionKey).toBe("agent:main:telegram:direct:123456789");
     expect(second?.ctxPayload?.SessionKey).toBe("agent:main:telegram:direct:987654321");
   });
+
+  it("uses the active DM sender as the conversation trust scope", async () => {
+    const runtimeCfg = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+      channels: {
+        telegram: {
+          allowFrom: ["123456789", "987654321"],
+        },
+      },
+      commands: {
+        ownerAllowFrom: ["123456789"],
+      },
+      messages: { groupChat: { mentionPatterns: [] } },
+      session: { dmScope: "per-channel-peer" as const },
+    };
+    setRuntimeConfigSnapshot(runtimeCfg);
+
+    const ownerDm = await buildTelegramMessageContextForTest({
+      cfg: runtimeCfg,
+      message: {
+        message_id: 1,
+        chat: { id: 777777777, type: "private" as const },
+        date: 1700000000,
+        text: "owner hello",
+        from: { id: 123456789, first_name: "Owner" },
+      },
+    });
+    const otherDm = await buildTelegramMessageContextForTest({
+      cfg: runtimeCfg,
+      message: {
+        message_id: 2,
+        chat: { id: 777777777, type: "private" as const },
+        date: 1700000001,
+        text: "other hello",
+        from: { id: 987654321, first_name: "Guest" },
+      },
+    });
+
+    expect(ownerDm?.ctxPayload?.OwnerAllowFrom).toEqual(["123456789"]);
+    expect(ownerDm?.ctxPayload?.ContextAllowFrom).toEqual(["123456789"]);
+    expect(otherDm?.ctxPayload?.OwnerAllowFrom).toEqual(["123456789"]);
+    expect(otherDm?.ctxPayload?.ContextAllowFrom).toEqual(["987654321"]);
+  });
 });
