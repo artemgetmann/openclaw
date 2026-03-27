@@ -1,21 +1,18 @@
 # Consumer Telegram Setup Follow-ups
 
-Last updated: 2026-03-26
+Last updated: 2026-03-27
 Scope: consumer macOS Telegram onboarding polish and adjacent consumer-shell cleanup
 
 ## Current Tracker
 
-- Imported Telegram-first-task onboarding work: pending human verification in the packaged app.
-  - Why it matters: the flow now blocks on a real Telegram task instead of claiming setup is done too early.
-
-- Remaining manual packaged-app verification:
-  1. Rebuild and open the isolated consumer app.
-  2. Confirm browser, model, and core permission checkpoints behave in order.
-  3. Send one real Telegram DM.
-  4. Click `Verify first task`.
-  5. Confirm onboarding only finishes after the first real task succeeds.
-  6. Confirm `Settings -> Channels` shows Telegram as `Live`.
-  - Why it matters: this is the end-to-end proof that the setup flow matches reality.
+- Imported Telegram-first-task onboarding work: live-validated in the packaged app; PR #174 is open against `codex/consumer-openclaw-project`.
+  - Validation completed on March 27, 2026 in the isolated lane `consumer-first-run-permissions-20260326`.
+  - Proof:
+    1. packaged and opened the isolated consumer app
+    2. confirmed onboarding reached the Telegram step on the real lane runtime
+    3. sent a real Telegram DM to `@jarvis_consumer_bot`
+    4. confirmed onboarding reached `Telegram verified` and enabled `Finish`
+  - Why it matters: this is the end-to-end proof that the setup flow now blocks on a real Telegram task instead of claiming setup is done too early.
 
 - Blocker from live test: onboarding can still disappear into the regular settings window before Telegram verification is done.
   - Current behavior: while the user is mid-Telegram setup, the onboarding surface can vanish and leave only the General settings window behind.
