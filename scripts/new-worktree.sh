@@ -203,9 +203,10 @@ if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
 fi
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd -P)"
 
-# Keep helper-generated worktrees aligned with the Codex workspace layout so
-# follow-up sessions and local tooling land in the same predictable tree.
-WORKTREE_PATH="${REPO_ROOT}/.codex/worktrees/${FEATURE_NAME}"
+# Keep helper-generated worktrees under the repo-owned durable lane area so
+# follow-up sessions and local tooling land in one predictable tree.
+mkdir -p "${REPO_ROOT}/.worktrees"
+WORKTREE_PATH="${REPO_ROOT}/.worktrees/${FEATURE_NAME}"
 BRANCH_NAME="codex/${FEATURE_NAME}"
 
 if [[ -e "$WORKTREE_PATH" ]]; then
