@@ -141,16 +141,15 @@ function assertNoChatDrivenGatewaySelfRestart(params: {
   if (!isChatDrivenGatewaySelfRestartCommand(params.command)) {
     return;
   }
-  const contextLabel = provider
-    ? `the live ${provider} chat surface`
-    : "this agent execution context";
+  const contextLabel = provider ? `the live ${provider} chat` : "this agent run";
   throw new Error(
     [
-      `exec blocked a gateway supervisor command from ${contextLabel}.`,
-      "Restarting the macOS gateway from chat can cut off this conversation before it comes back.",
+      `Restart command blocked in ${contextLabel}.`,
+      "This command was blocked to keep this chat connected.",
+      "Restarting OpenClaw from inside this chat can cut off the reply before it comes back.",
       provider === "telegram"
-        ? "Use /restart here in Telegram instead. If you are on your computer, you can also restart it from Terminal or the OpenClaw app."
-        : "Use /restart here instead. If you are on your computer, you can also restart it from Terminal or the OpenClaw app.",
+        ? "Use /restart here in Telegram. If you are on your computer, you can also restart it from Terminal or the OpenClaw app."
+        : "Use /restart here. If you are on your computer, you can also restart it from Terminal or the OpenClaw app.",
     ].join("\n"),
   );
 }
