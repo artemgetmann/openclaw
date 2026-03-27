@@ -6,6 +6,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.js";
 import type { TtsAutoMode } from "../types.tts.js";
 
 export type SessionScope = "per-sender" | "global";
+export type SessionMemoryScope = "personal" | "shared";
 
 export type SessionChannelId = ChannelId | "webchat";
 
@@ -192,6 +193,12 @@ export type SessionEntry = {
   groupChannel?: string;
   space?: string;
   origin?: SessionOrigin;
+  /**
+   * Trust-derived memory lane for this session.
+   * personal = may see personal long-term + daily memory
+   * shared = must not auto-load personal memory files
+   */
+  memoryScope?: SessionMemoryScope;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionChannelId;
   lastTo?: string;

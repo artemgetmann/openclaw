@@ -15,6 +15,7 @@ import {
   evaluateSessionFreshness,
   type GroupKeyResolution,
   loadSessionStore,
+  resolveSessionMemoryScope,
   resolveAndPersistSessionFile,
   resolveChannelResetConfig,
   resolveThreadFlag,
@@ -41,6 +42,7 @@ import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js"
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
+import { maybeRunDailyMemoryRollover } from "./daily-memory-rollover.js";
 import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -172,8 +174,9 @@ export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
+  workspaceDir?: string;
 }): Promise<SessionInitResult> {
-  const { ctx, cfg, commandAuthorized } = params;
+  const { ctx, cfg, commandAuthorized, workspaceDir } = params;
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const targetSessionKey =
@@ -224,6 +227,7 @@ export async function initSessionState(params: {
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
     normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
+  const memoryScope = resolveSessionMemoryScope(ctx);
   // Prefer CommandBody/RawBody (clean message) for command detection; fall back
   // to Body which may contain structural context (history, sender labels).
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
@@ -333,8 +337,23 @@ export async function initSessionState(params: {
     resetType,
     resetOverride: channelReset,
   });
+  let shouldRotateForDailyMemory = false;
+  if (workspaceDir && memoryScope === "personal") {
+    const dailyRollover = await maybeRunDailyMemoryRollover({
+      workspaceDir,
+      agentId,
+      storePath,
+      sessionKey,
+      sessionEntry: entry,
+      sessionStore,
+      atHour: resetPolicy.atHour,
+      nowMs: now,
+    });
+    shouldRotateForDailyMemory = dailyRollover.shouldRotateSession;
+  }
   const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
+    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh &&
+      !shouldRotateForDailyMemory
     : false;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward. We need to do this for both explicit resets (/new, /reset)
@@ -437,6 +456,7 @@ export async function initSessionState(params: {
     subject: baseEntry?.subject,
     groupChannel: baseEntry?.groupChannel,
     space: baseEntry?.space,
+    memoryScope,
     deliveryContext: deliveryFields.deliveryContext,
     // Track originating channel for subagent announce routing.
     lastChannel,

@@ -24,6 +24,14 @@
 - Use `scripts/committer "<message>" <file...>` for commits so staging stays scoped.
 - Use Conventional Commits and include a bullet body for what, why, and risk.
 - Group related changes. Do not bundle unrelated refactors.
+- Do not leave non-trivial implementation work only in the working tree. Create a checkpoint commit once the first meaningful slice of the change exists, even if end-to-end validation is still pending.
+- Validation gates PR readiness and merge, not whether you are allowed to commit. If a task would be painful to re-create, it should already be committed.
+- For long or risky tasks, prefer this sequence:
+  - checkpoint commit after the first coherent implementation slice
+  - more commits as the work evolves
+  - end-to-end validation
+  - PR or draft PR update with validation notes
+- If validation is still pending, say so explicitly in the commit body or follow-up notes. Do not pretend a checkpoint commit means the change is fully verified.
 - If the task is a bug-fix PR, require proof:
   - Symptom evidence
   - Root cause in code with file and line

@@ -153,6 +153,7 @@ export async function getReplyFromConfig(
     ctx: finalized,
     cfg,
     commandAuthorized,
+    workspaceDir,
   });
   let {
     sessionCtx,
