@@ -135,15 +135,18 @@ function assertNoChatDrivenGatewaySelfRestart(params: {
   messageProvider?: string;
 }): void {
   const provider = params.messageProvider?.trim().toLowerCase();
-  if (process.platform !== "darwin" || !provider) {
+  if (process.platform !== "darwin") {
     return;
   }
   if (!isChatDrivenGatewaySelfRestartCommand(params.command)) {
     return;
   }
+  const contextLabel = provider
+    ? `the live ${provider} chat surface`
+    : "this agent execution context";
   throw new Error(
     [
-      `exec blocked a gateway supervisor command from the live ${provider} chat surface.`,
+      `exec blocked a gateway supervisor command from ${contextLabel}.`,
       "Direct macOS gateway restarts from chat can terminate the session issuing the command before it can recover.",
       "Use /restart for an agent-safe detached restart, or run the restart from Terminal/OpenClaw.app outside the chat session.",
     ].join("\n"),
