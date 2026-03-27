@@ -16,6 +16,7 @@ Use this after the isolated browser and agent smoke flow in `docs/agent-guides/b
 ## Worktree bot setup
 
 - Preferred worktree entrypoint: `bash scripts/new-worktree.sh <feature-name>`
+- The helper creates repo-owned worktrees under `.worktrees/<feature-name>`.
 - For each new worktree:
   - Copy `.env.bots` from the main checkout if needed
   - Run `bash scripts/assign-bot.sh`

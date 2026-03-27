@@ -71,6 +71,18 @@ Do not assume another worktree sees your uncommitted edits.
 
 Do not assume a checkout you call "main" is actually on `main`.
 
+For lane placement, use this default:
+
+- create repo worktrees under the repo-owned `.worktrees/` directory by default
+- keep one predictable location so active lanes do not get split across `.worktrees/` and `.codex/worktrees/`
+- important multi-hour, multi-turn, or PR-bound work belongs under `.worktrees/`
+- do not create new durable lanes under `.codex/worktrees/` unless the user explicitly asks for that path
+
+Reason:
+
+- active `.codex/worktrees/` lanes have repeatedly disappeared after interruption, restart, cleanup, or other session churn
+- the branch and Codex history often survive, but the directory on disk may not
+
 Treat uncommitted work as volatile. If the change is non-trivial, create a checkpoint commit before you step away, restart, switch focus, or do branch/worktree surgery.
 
 ## Safe Sequence Before Risky Git Operations
@@ -100,6 +112,7 @@ These are the common footguns:
 - merged remotely, but local `main` is stale
 - local `main` updated, but the live runtime still launches from another checkout
 - uncommitted edits exist only in one worktree and get forgotten
+- active work lived only in `.codex/worktrees/...`, the directory disappeared, and everyone assumed the branch was gone too
 
 ## Proof Lines
 
@@ -118,6 +131,112 @@ When runtime state matters, also print:
 - `runtime_pid=<pid>`
 
 That turns guesswork into evidence.
+
+If you are coordinating through tmux skills or another remote pane controller, also respect this rule:
+
+- paste the prompt first
+- verify the pane content
+- send Enter separately
+
+Blind "paste plus Enter" is unreliable for interactive Codex panes and creates fake recovery problems.
+
+## Vanished Worktree Recovery
+
+If a worktree directory vanished, do not start with cleanup. Start with evidence.
+
+### Step 1: Find surviving branch and session evidence
+
+From any checkout in the repo, run:
+
+```bash
+bash scripts/codex-recover.sh
+```
+
+That helper correlates:
+
+- current git worktrees
+- recent Codex session metadata under `~/.codex/sessions`
+- the latest tmux-resurrect snapshot
+
+Use `--all` if the lane is older or the default view is too narrow:
+
+```bash
+bash scripts/codex-recover.sh --all
+```
+
+Look for:
+
+- the row with the expected `branch`, if it still exists somewhere else
+- `session_id` or the `resume` signal tied to the vanished path
+- the old `path` so you know which checkout disappeared
+
+### Step 2: Prove the branch still exists
+
+If the directory is gone but you know the branch name, verify the branch before recreating anything:
+
+```bash
+git branch --list 'codex/<lane>'
+git log --oneline --decorate -n 10 codex/<lane>
+git rev-parse codex/<lane>
+```
+
+If those commands work, the lane is not gone. Only the checkout vanished.
+
+If the branch is missing locally, check remotes before assuming loss:
+
+```bash
+git fetch origin
+git branch -r | rg 'codex/<lane>|origin/.+<lane>'
+```
+
+### Step 3: Recreate the missing checkout on the surviving branch
+
+Prefer recreating important lanes under repo-owned `.worktrees/`:
+
+```bash
+git worktree add .worktrees/<lane> codex/<lane>
+```
+
+Then print proof immediately:
+
+```bash
+printf 'branch=%s\n' "$(git -C .worktrees/<lane> branch --show-current)"
+printf 'worktree=%s\n' "$(cd .worktrees/<lane> && pwd -P)"
+printf 'head=%s\n' "$(git -C .worktrees/<lane> rev-parse HEAD)"
+printf 'status_dirty=%s\n' "$(test -n "$(git -C .worktrees/<lane> status --short)" && echo yes || echo no)"
+```
+
+### Step 4: Reattach the Codex conversation
+
+Use the surviving evidence from Step 1:
+
+- if you have a `resume_id`, resume that exact Codex session
+- if you have only a `session_id` or archived transcript, use the transcript plus branch diff to reconstruct context
+- if tmux still has a pane or resurrect trail, inspect it before sending anything new
+
+The point is simple:
+
+- restore the checkout first
+- restore the conversation second
+- only then continue editing
+
+Do not create a fresh branch with the same intent until you have checked whether the original branch and session already survived.
+
+### Step 5: Recover stranded uncommitted work from logs if needed
+
+If the branch exists but the latest edits were never committed, search the surviving trails:
+
+- `~/.codex/sessions/**`
+- `~/.codex/archived_sessions/**`
+- tmux capture or tmux-resurrect history
+
+Use those sources to recover:
+
+- the last prompt
+- the last applied patch or discussed diff
+- the intended next step
+
+Then rebuild the missing edits in the recreated worktree and commit a checkpoint quickly so the lane is durable again.
 
 ## Branch Delete Rule
 
