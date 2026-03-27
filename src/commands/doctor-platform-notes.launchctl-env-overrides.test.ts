@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { noteMacLaunchctlGatewayEnvOverrides } from "./doctor-platform-notes.js";
+import {
+  noteMacLaunchAgentOverrides,
+  noteMacLaunchctlGatewayEnvOverrides,
+} from "./doctor-platform-notes.js";
 
 describe("noteMacLaunchctlGatewayEnvOverrides", () => {
   it("prints clear unsetenv instructions for token override", async () => {
@@ -80,5 +83,25 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
 
     expect(getenv).not.toHaveBeenCalled();
     expect(noteFn).not.toHaveBeenCalled();
+  });
+
+  it("warns when launchagent writes are disabled", async () => {
+    const noteFn = vi.fn();
+    const existsSync = vi.fn(
+      (candidate: string) => candidate === "/Users/user/.openclaw/disable-launchagent",
+    );
+
+    await noteMacLaunchAgentOverrides({
+      platform: "darwin",
+      homeDir: "/Users/user",
+      existsSync,
+      noteFn,
+    });
+
+    expect(noteFn).toHaveBeenCalledTimes(1);
+    const [message, title] = noteFn.mock.calls[0] ?? [];
+    expect(title).toBe("Gateway (macOS)");
+    expect(message).toContain("LaunchAgent writes are disabled");
+    expect(message).toContain("rm /Users/user/.openclaw/disable-launchagent");
   });
 });

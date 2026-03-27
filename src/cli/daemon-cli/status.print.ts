@@ -1,3 +1,4 @@
+import { resolveMacLaunchAgentDisableMarkerPath } from "../../commands/doctor-platform-notes.js";
 import { resolveControlUiLinks } from "../../commands/onboard-helpers.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
@@ -97,6 +98,22 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   const daemonEnvLines = safeDaemonEnv(service.command?.environment);
   if (daemonEnvLines.length > 0) {
     defaultRuntime.log(`${label("Service env:")} ${daemonEnvLines.join(" ")}`);
+  }
+  const isLocalGateway = status.config?.cli.gateway?.mode !== "remote";
+  const launchAgentDisableMarkerPath = isLocalGateway
+    ? resolveMacLaunchAgentDisableMarkerPath()
+    : null;
+  if (launchAgentDisableMarkerPath) {
+    defaultRuntime.error(
+      warnText(
+        `LaunchAgent writes are disabled via ${shortenHomePath(launchAgentDisableMarkerPath)}.`,
+      ),
+    );
+    defaultRuntime.error(
+      warnText(
+        `Fix: run rm ${shortenHomePath(launchAgentDisableMarkerPath)} and restart the main gateway.`,
+      ),
+    );
   }
   spacer();
 

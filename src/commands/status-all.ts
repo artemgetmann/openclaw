@@ -28,6 +28,7 @@ import { checkUpdateStatus, formatGitInstallLabel } from "../infra/update-check.
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
+import { resolveMacLaunchAgentDisableMarkerPath } from "./doctor-platform-notes.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { getAgentLocalStatuses } from "./status-all/agents.js";
 import { buildChannelsTable } from "./status-all/channels.js";
@@ -121,6 +122,8 @@ export async function statusAllCommand(
       typeof cfg.gateway?.remote?.url === "string" ? cfg.gateway.remote.url.trim() : "";
     const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
     const gatewayMode = isRemoteMode ? "remote" : "local";
+    const launchAgentDisableMarkerPath =
+      gatewayMode === "local" ? resolveMacLaunchAgentDisableMarkerPath() : null;
 
     const localProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "local" });
     const remoteProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "remote" });
@@ -344,6 +347,7 @@ export async function statusAllCommand(
         snap,
         remoteUrlMissing,
         sentinel,
+        macLaunchAgentDisableMarkerPath: launchAgentDisableMarkerPath,
         lastErr,
         port,
         portUsage,
