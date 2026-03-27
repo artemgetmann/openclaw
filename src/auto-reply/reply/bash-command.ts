@@ -12,6 +12,7 @@ import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 
 const CHAT_BASH_SCOPE_KEY = "chat:bash";
 const DEFAULT_FOREGROUND_MS = 2000;
@@ -227,6 +228,10 @@ export async function handleBashChatCommand(params: {
   if (!request) {
     return { text: "⚠️ Unrecognized bash request." };
   }
+  const messageProvider = resolveOriginMessageProvider({
+    originatingChannel: params.ctx.OriginatingChannel,
+    provider: params.ctx.Provider ?? params.ctx.Surface,
+  });
 
   const liveJob = ensureActiveJobState();
 
@@ -337,10 +342,13 @@ export async function handleBashChatCommand(params: {
     const notifyOnExit = params.cfg.tools?.exec?.notifyOnExit;
     const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
     const execTool = createExecTool({
+      security: params.cfg.tools?.exec?.security,
+      ask: params.cfg.tools?.exec?.ask,
       scopeKey: CHAT_BASH_SCOPE_KEY,
       allowBackground: true,
       timeoutSec,
       sessionKey: params.sessionKey,
+      messageProvider,
       notifyOnExit,
       notifyOnExitEmptySuccess,
       elevated: {
