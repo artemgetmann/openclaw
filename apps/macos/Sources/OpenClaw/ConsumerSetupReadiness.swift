@@ -4,7 +4,7 @@ import SwiftUI
 
 private let consumerBrowserProfileName = "user"
 
-private struct ConsumerShellCommandResult {
+struct ConsumerShellCommandResult {
     let stdout: String
     let stderr: String
     let exitCode: Int?
@@ -247,7 +247,10 @@ extension BrowserSetupModel {
         OpenClawConfigFile.saveDict(root)
     }
 
-    static func verifyConsumerBrowserSelection(expectedProfile: ChromeProfileCandidate? = nil) async -> String? {
+    static func verifyConsumerBrowserSelection(
+        expectedProfile: ChromeProfileCandidate? = nil,
+        runBrowserStatus: ((String, [String], TimeInterval) async -> ConsumerShellCommandResult)? = nil) async -> String?
+    {
         if let expectedProfile {
             let persistedProfile = self.persistedConsumerBrowserSourceProfileName() ?? ""
             if persistedProfile != expectedProfile.directoryName {
@@ -255,21 +258,21 @@ extension BrowserSetupModel {
             }
         }
 
-        // Browser readiness depends on the local consumer gateway. During first-run
-        // onboarding we have seen the UI ask for browser verification while the app
-        // was still transitioning from `.unconfigured`, which can leave 19001 dead.
-        // Start the local gateway explicitly here so the readiness check validates
-        // the real dependency chain instead of failing on a missing runtime.
-        GatewayProcessManager.shared.setActive(true)
-        guard await GatewayProcessManager.shared.waitForGatewayReady(timeout: 12) else {
-            return GatewayProcessManager.shared.lastReadinessFailureReason
-                ?? "OpenClaw could not start its local runtime. Try again in a moment. If it keeps failing, reopen the app."
+        // Browser readiness should follow the direct browser-status command path.
+        // First-run onboarding can hit gateway pairing races that are unrelated to
+        // whether Chrome itself is ready, so we avoid treating control-channel
+        // readiness as a prerequisite here.
+        let result = if let runBrowserStatus {
+            await runBrowserStatus(
+                "browser",
+                ["--json", "--browser-profile", consumerBrowserProfileName, "status"],
+                20)
+        } else {
+            await ConsumerSetupCommandRunner.runOpenClaw(
+                subcommand: "browser",
+                extraArgs: ["--json", "--browser-profile", consumerBrowserProfileName, "status"],
+                timeout: 20)
         }
-
-        let result = await ConsumerSetupCommandRunner.runOpenClaw(
-            subcommand: "browser",
-            extraArgs: ["--json", "--browser-profile", consumerBrowserProfileName, "status"],
-            timeout: 20)
         guard result.success else {
             return "OpenClaw saved the Chrome profile, but browser readiness failed. \(ConsumerSetupCommandRunner.bestEffortMessage(for: result))"
         }

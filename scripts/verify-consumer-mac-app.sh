@@ -10,6 +10,8 @@ APP_PATH=""
 usage() {
   cat <<'EOF'
 Usage: scripts/verify-consumer-mac-app.sh [--instance <id>] [app_path]
+Set OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 when verifying an isolated runtime
+lane that was packaged with the stable consumer debug app identity.
 EOF
 }
 
@@ -40,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
-EXPECTED_NAME="$(consumer_instance_app_name "$NORMALIZED_INSTANCE_ID")"
+EXPECTED_NAME="$(consumer_instance_display_name "$NORMALIZED_INSTANCE_ID")"
 # Allow release/distribution callers to override the debug bundle id while still
 # reusing the same consumer-identity verifier.
 EXPECTED_BUNDLE_ID="${BUNDLE_ID:-$(consumer_instance_bundle_id "$NORMALIZED_INSTANCE_ID")}"

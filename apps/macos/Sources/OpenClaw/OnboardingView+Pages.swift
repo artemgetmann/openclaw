@@ -93,6 +93,48 @@ extension OnboardingView {
                                             .padding(.vertical, 6)
 
                                         ConsumerModelSetupCardContent(model: self.modelSetup)
+
+                                        if self.modelSetup.isComplete {
+                                            Divider()
+                                                .padding(.vertical, 6)
+
+                                            ConsumerCorePermissionsSection(
+                                                status: self.permissionMonitor.status,
+                                                refresh: self.refreshPerms,
+                                                presentation: .onboarding)
+
+                                            Divider()
+                                                .padding(.vertical, 6)
+
+                                            if self.areCorePermissionsGranted {
+                                                ConsumerTelegramSetupCardContent(
+                                                    store: self.channelsStore,
+                                                    presentation: .onboarding)
+                                            } else {
+                                                VStack(alignment: .leading, spacing: 4) {
+                                                    Text("Telegram comes after core Mac permissions")
+                                                        .font(.headline)
+                                                    Text(
+                                                        "Once those Mac permissions are granted, you’ll verify Telegram by sending the first real task you want OpenClaw to handle.")
+                                                        .font(.subheadline)
+                                                        .foregroundStyle(.secondary)
+                                                        .fixedSize(horizontal: false, vertical: true)
+                                                }
+                                            }
+                                        } else {
+                                            Divider()
+                                                .padding(.vertical, 6)
+
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text("Mac permissions come next")
+                                                    .font(.headline)
+                                                Text(
+                                                    "After OpenClaw confirms AI access, it will ask for the Mac permissions that would otherwise break remote use later.")
+                                                    .font(.subheadline)
+                                                    .foregroundStyle(.secondary)
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                            }
+                                        }
                                     } else {
                                         Divider()
                                             .padding(.vertical, 6)

@@ -101,6 +101,51 @@ struct MacNodeRuntimeTests {
         #expect(!payload.base64.isEmpty)
     }
 
+    @Test func `handle invoke location accepts while using authorization`() async {
+        @MainActor
+        final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            func recordScreen(
+                screenIndex: Int?,
+                durationMs: Int?,
+                fps: Double?,
+                includeAudio: Bool?,
+                outPath: String?) async throws -> (path: String, hasAudio: Bool)
+            {
+                Issue.record("screen recording should not run during location test")
+                return ("", false)
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus {
+                .authorized
+            }
+
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
+                .reducedAccuracy
+            }
+
+            func currentLocation(
+                desiredAccuracy: OpenClawLocationAccuracy,
+                maxAgeMs: Int?,
+                timeoutMs: Int?) async throws -> CLLocation
+            {
+                CLLocation(latitude: 1, longitude: 2)
+            }
+        }
+
+        let services = await MainActor.run { FakeMainActorServices() }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+
+        await TestIsolation.withUserDefaultsValues([
+            locationModeKey: OpenClawLocationMode.whileUsing.rawValue,
+            locationPreciseKey: false,
+        ]) {
+            let response = await runtime.handleInvoke(
+                BridgeInvokeRequest(id: "req-location", command: OpenClawLocationCommand.get.rawValue))
+            #expect(response.ok == true)
+            #expect(response.payloadJSON?.contains("\"lat\":1") == true)
+        }
+    }
+
     @Test func `handle invoke browser proxy uses injected request`() async {
         let runtime = MacNodeRuntime(browserProxyRequest: { paramsJSON in
             #expect(paramsJSON?.contains("/tabs") == true)

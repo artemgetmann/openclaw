@@ -62,6 +62,30 @@ extension ChannelsStore {
         self.configDirty = false
         self.configLoaded = true
         self.applyUIConfig(root: root)
+        self.syncConsumerTelegramSetupFields(from: root)
+    }
+
+    private func syncConsumerTelegramSetupFields(from root: [String: Any]) {
+        guard AppFlavor.current.isConsumer else { return }
+
+        let telegram = ((root["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
+        let configuredToken = TelegramSetupVerifier.normalizeToken((telegram["botToken"] as? String) ?? "")
+
+        // The onboarding field must reflect the lane-local config on disk. If it
+        // drifts stale in memory, users can unknowingly verify an old bot token
+        // and reintroduce the exact "already active elsewhere" conflict we were
+        // trying to escape with a fresh consumer instance.
+        if !configuredToken.isEmpty {
+            self.telegramSetupToken = configuredToken
+            return
+        }
+
+        // If the loaded config no longer has a Telegram token and the user is not
+        // mid-setup, drop any stale in-memory token instead of keeping a ghost
+        // value visible in the field.
+        if !self.telegramBusy, self.telegramSetupPhase == .idle {
+            self.telegramSetupToken = ""
+        }
     }
 
     func restoreConfigDraftFromCurrentSource() async {

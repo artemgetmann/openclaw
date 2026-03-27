@@ -11,6 +11,8 @@ REPLACE=0
 usage() {
   cat <<'EOF'
 Usage: scripts/open-consumer-mac-app.sh [--instance <id>] [--replace] [app_path]
+Set OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 when opening an isolated runtime
+lane that was packaged with the stable consumer debug app identity.
 EOF
 }
 
@@ -159,7 +161,7 @@ if [[ -z "$NORMALIZED_INSTANCE_ID" && -z "$APP_PATH" ]]; then
     exit 1
   fi
 fi
-EXPECTED_NAME="$(consumer_instance_app_name "$NORMALIZED_INSTANCE_ID")"
+EXPECTED_NAME="$(consumer_instance_display_name "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_BUNDLE_ID="$(consumer_instance_bundle_id "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_VARIANT="consumer"
 

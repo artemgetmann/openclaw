@@ -12,63 +12,8 @@ extension ChannelsSettings {
         AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
     }
 
-    private func consumerTelegramConflictMessage(_ raw: String?) -> String? {
-        guard self.isConsumerSimpleTelegramPath else { return nil }
-        let normalized = raw?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() ?? ""
-        guard !normalized.isEmpty else { return nil }
-        if normalized.contains("terminated by other getupdates request")
-            || normalized.contains("already being used by another openclaw telegram poller")
-        {
-            // Telegram returns a raw 409 string here, but consumer users need the
-            // actual meaning: some other local OpenClaw lane already owns this bot.
-            return "This bot is already active in another OpenClaw window or worktree on this Mac. Close the other runtime or use a different bot token here."
-        }
-        return nil
-    }
-
-    private var consumerTelegramConfigFallback: (configured: Bool, lockedSenderId: String?) {
-        guard self.isConsumerSimpleTelegramPath else { return (false, nil) }
-
-        // The consumer Telegram lane should stay legible even while the gateway is
-        // still reconnecting. Fall back to the locally persisted config instead of
-        // pretending Telegram has vanished just because the latest status probe has
-        // not landed yet.
-        let root = self.store.configDraft.isEmpty ? OpenClawConfigFile.loadDict() : self.store.configDraft
-        let telegram = ((root["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
-        let enabled = telegram["enabled"] as? Bool ?? false
-        let token = TelegramSetupVerifier.normalizeToken((telegram["botToken"] as? String) ?? "")
-        let allowFrom = (telegram["allowFrom"] as? [String]) ?? []
-        return (enabled && !token.isEmpty, allowFrom.first)
-    }
-
-    private var consumerTelegramLooksLive: Bool {
-        guard self.isConsumerSimpleTelegramPath else { return false }
-        guard self.consumerTelegramOwnershipIssue == nil else { return false }
-        if let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self) {
-            if status.configured && (status.running || status.probe?.ok == true) {
-                return true
-            }
-        }
-        let fallback = self.consumerTelegramConfigFallback
-        return fallback.configured && fallback.lockedSenderId != nil
-    }
-
     var consumerTelegramBotUsername: String? {
-        if let username = self.channelStatus(
-            "telegram",
-            as: ChannelsStatusSnapshot.TelegramStatus.self)?.probe?.bot?.username,
-           !username.isEmpty
-        {
-            return username
-        }
-        if let username = self.store.telegramSetupBotUsername, !username.isEmpty {
-            return username
-        }
-        let persisted = UserDefaults.standard.string(
-            forKey: ChannelsStore.consumerTelegramBotUsernameDefaultsKey)
-        return (persisted?.isEmpty == false) ? persisted : nil
+        self.store.consumerTelegramBotUsername()
     }
 
     private func channelStatus<T: Decodable>(
@@ -179,9 +124,8 @@ extension ChannelsSettings {
         }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else {
-            let fallback = self.consumerTelegramConfigFallback
-            guard fallback.configured else { return .secondary }
-            return fallback.lockedSenderId == nil ? .orange : .green
+            guard self.store.consumerTelegramLooksLive() else { return .secondary }
+            return self.store.consumerTelegramReadyForFirstTask() ? .green : .orange
         }
         return self.configuredChannelTint(
             configured: status.configured,
@@ -245,21 +189,20 @@ extension ChannelsSettings {
         }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else {
-            if self.consumerTelegramConflictMessage(self.store.telegramSetupStatus) != nil {
+            if self.store.consumerTelegramConflictMessage(self.store.telegramSetupStatus) != nil {
                 return "Busy elsewhere"
             }
-            let fallback = self.consumerTelegramConfigFallback
             if self.isConsumerSimpleTelegramPath {
-                if fallback.lockedSenderId != nil { return "Live" }
-                if fallback.configured { return "Setup complete" }
+                if self.store.consumerTelegramReadyForFirstTask() { return "Live" }
+                if self.store.consumerTelegramLooksLive() { return "Verify first task" }
                 return "Setup needed"
             }
-            if fallback.configured { return "Configured" }
             return "Checking…"
         }
         if self.isConsumerSimpleTelegramPath {
-            if self.consumerTelegramConflictMessage(status.lastError) != nil { return "Busy elsewhere" }
-            if status.configured && (status.running || status.probe?.ok == true) { return "Live" }
+            if self.store.consumerTelegramConflictMessage(status.lastError) != nil { return "Busy elsewhere" }
+            if self.store.consumerTelegramReadyForFirstTask() { return "Live" }
+            if self.store.consumerTelegramLooksLive() { return "Verify first task" }
             if status.configured { return "Setup complete" }
             return "Setup needed"
         }
@@ -327,7 +270,7 @@ extension ChannelsSettings {
         }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else {
-            if let conflict = self.consumerTelegramConflictMessage(self.store.telegramSetupStatus) {
+            if let conflict = self.store.consumerTelegramConflictMessage(self.store.telegramSetupStatus) {
                 return conflict
             }
             if self.isConsumerSimpleTelegramPath {
@@ -339,21 +282,10 @@ extension ChannelsSettings {
             if let status = self.store.telegramSetupStatus, !status.isEmpty {
                 return status
             }
-            let fallback = self.consumerTelegramConfigFallback
-            if fallback.lockedSenderId != nil {
-                return self.isConsumerSimpleTelegramPath
-                    ? "Telegram access is saved on this Mac."
-                    : "Telegram DM allowlist saved locally."
-            }
-            if fallback.configured {
-                return self.isConsumerSimpleTelegramPath
-                    ? "Telegram setup is saved on this Mac."
-                    : "Telegram token saved locally."
-            }
             return nil
         }
         var lines: [String] = []
-        if let conflict = self.consumerTelegramConflictMessage(status.lastError) {
+        if let conflict = self.store.consumerTelegramConflictMessage(status.lastError) {
             return conflict
         }
         if self.isConsumerSimpleTelegramPath {
@@ -520,7 +452,7 @@ extension ChannelsSettings {
         let accountActive = self.store.snapshot?.channelAccounts[channel.id]?.contains(
             where: { $0.configured == true || $0.running == true || $0.connected == true }) ?? false
         if channel.id == "telegram", !configured, !running, !connected, !accountActive,
-           self.consumerTelegramConfigFallback.configured
+           self.store.consumerTelegramLooksLive()
         {
             return true
         }
@@ -533,12 +465,9 @@ extension ChannelsSettings {
             self.whatsAppSection
         } else if channel.id == "telegram" {
             if AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey) {
-                // Once the consumer Telegram lane is already configured and healthy,
-                // always prefer the steady-state "bot is live" card over the setup
-                // wizard. The setup phase can lag behind reality when background
-                // refreshes or launchd restarts finish out of order, and showing the
-                // wizard again just makes a working bot look broken.
-                if self.consumerTelegramLooksLive {
+                // A configured consumer bot is not enough. Keep the setup card
+                // visible until one real Telegram task has succeeded on this Mac.
+                if self.store.consumerTelegramReadyForFirstTask() {
                     self.consumerTelegramLiveSection
                 } else {
                     self.telegramSetupSection

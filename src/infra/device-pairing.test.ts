@@ -203,6 +203,52 @@ describe("device pairing tokens", () => {
     expect(repaired.request.roles).toEqual(["node"]);
   });
 
+  test("promotes stale local macOS ui repair requests to silent auto-approval", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const node = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        clientId: GATEWAY_CLIENT_IDS.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        role: "node",
+      },
+      baseDir,
+    );
+    await approveDevicePairing(node.request.requestId, baseDir);
+
+    await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        clientId: GATEWAY_CLIENT_IDS.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.UI,
+        role: "operator",
+        silent: false,
+      },
+      baseDir,
+    );
+
+    const repaired = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        clientId: GATEWAY_CLIENT_IDS.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.UI,
+        role: "operator",
+        silent: true,
+      },
+      baseDir,
+    );
+
+    expect(repaired.created).toBe(false);
+    expect(repaired.request.silent).toBe(true);
+    expect(repaired.request.isRepair).toBe(true);
+    expect(repaired.request.clientId).toBe(GATEWAY_CLIENT_IDS.MACOS_APP);
+    expect(repaired.request.clientMode).toBe(GATEWAY_CLIENT_MODES.UI);
+    expect(repaired.request.roles).toEqual(["operator"]);
+  });
+
   test("rejects bootstrap token replay before pending scope escalation can be approved", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     const issued = await issueDeviceBootstrapToken({ baseDir });

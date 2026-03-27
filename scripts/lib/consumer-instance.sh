@@ -58,8 +58,37 @@ consumer_instance_app_name() {
   printf 'OpenClaw Consumer (%s)' "$normalized"
 }
 
+consumer_instance_stable_tcc_identity_enabled() {
+  local raw="${OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY:-}"
+  case "${raw,,}" in
+    1|true|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+consumer_instance_display_name() {
+  local normalized="${1:-}"
+  # Screen Recording can pin dev builds to a stale TCC row when every worktree
+  # gets its own bundle identity. Keep the runtime lane isolated, but allow the
+  # packaged app identity to collapse back to the stable debug app when local QA
+  # explicitly opts in to that mode.
+  if consumer_instance_stable_tcc_identity_enabled; then
+    printf 'OpenClaw Consumer'
+    return
+  fi
+  consumer_instance_app_name "$normalized"
+}
+
 consumer_instance_bundle_id() {
   local normalized="${1:-}"
+  if consumer_instance_stable_tcc_identity_enabled; then
+    printf 'ai.openclaw.consumer.mac.debug'
+    return
+  fi
   if [[ -z "$normalized" ]]; then
     printf 'ai.openclaw.consumer.mac.debug'
     return

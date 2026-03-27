@@ -5,8 +5,6 @@ import OpenClawIPC
 import SwiftUI
 
 extension OnboardingView {
-    static var consumerPostBrowserSetupTab: SettingsTab { .channels }
-
     func selectLocalGateway() {
         self.state.connectionMode = .local
         self.preferredGatewayID = nil
@@ -66,15 +64,18 @@ extension OnboardingView {
     func finish() {
         UserDefaults.standard.set(true, forKey: onboardingSeenKey)
         UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
-        if AppFlavor.current.isConsumer {
-            // Consumer onboarding should hand off to the next required step, not
-            // imply the setup is already finished. Channels is where Telegram lives.
-            self.openSettings(tab: Self.consumerPostBrowserSetupTab)
+        AppStateStore.shared.onboardingSeen = true
+
+        if AppFlavor.current.isConsumer,
+           self.state.connectionMode != .local || !self.channelsStore.consumerTelegramReadyForFirstTask()
+        {
+            // Keep Channels as the recovery destination when consumer onboarding
+            // is closed before Telegram is truly ready. A fully verified local
+            // setup should just finish instead of opening extra windows.
+            self.openSettings(tab: .channels)
         }
+
         OnboardingController.shared.close()
-        if AppFlavor.current.isConsumer {
-            SettingsWindowOpener.shared.open(tab: .general)
-        }
     }
 
     func copyToPasteboard(_ text: String) {
