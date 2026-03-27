@@ -7,6 +7,7 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  isAuthErrorMessage,
   isCompactionFailureError,
   isContextOverflowError,
   isBillingErrorMessage,
@@ -48,6 +49,9 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+const AUTH_ERROR_USER_MESSAGE =
+  "⚠️ OpenClaw's AI access is unavailable right now. Reconnect the credential and try again.";
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -528,6 +532,7 @@ export async function runAgentTurnWithFallback(params: {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const isBilling = isBillingErrorMessage(message);
+      const isAuthError = isAuthErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
@@ -620,17 +625,22 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-      const safeMessage = isTransientHttp
-        ? sanitizeUserFacingText(message, { errorContext: true })
-        : message;
+      const safeMessage =
+        isTransientHttp || isAuthError
+          ? sanitizeUserFacingText(message, { errorContext: true })
+          : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isBilling
         ? BILLING_ERROR_USER_MESSAGE
         : isContextOverflow
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-          : isRoleOrderingError
-            ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+          : isAuthError
+            ? // Raw OAuth/provider diagnostics belong in logs. Chat channels should
+              // get a stable product message instead of credential internals.
+              AUTH_ERROR_USER_MESSAGE
+            : isRoleOrderingError
+              ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+              : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",

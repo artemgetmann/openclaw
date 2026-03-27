@@ -580,4 +580,89 @@ struct ChannelsSettingsSmokeTests {
             #expect(store.telegramSetupBaselineInboundAt == 150)
         }
     }
+
+    @Test func `consumer telegram activity verification marks ready without another DM`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let verificationKey = ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(instanceId: nil)
+            UserDefaults.standard.removeObject(forKey: verificationKey)
+
+            let store = ChannelsStore(isPreview: true)
+            store.configDraft = [
+                "channels": [
+                    "telegram": [
+                        "enabled": true,
+                        "botToken": "123:test-token",
+                        "dmPolicy": "allowlist",
+                        "allowFrom": ["42"],
+                    ],
+                ],
+            ]
+            store.snapshot = ChannelsStatusSnapshot(
+                ts: 1_700_000_000_000,
+                channelOrder: ["telegram"],
+                channelLabels: ["telegram": "Telegram"],
+                channelDetailLabels: nil,
+                channelSystemImages: nil,
+                channelMeta: nil,
+                channels: [
+                    "telegram": SnapshotAnyCodable([
+                        "configured": true,
+                        "running": true,
+                        "mode": "polling",
+                        "probe": [
+                            "ok": true,
+                            "status": 200,
+                            "bot": ["id": 123, "username": "jarvis_consumer_bot"],
+                        ],
+                    ]),
+                ],
+                channelAccounts: [
+                    "telegram": [
+                        .init(
+                            accountId: "default",
+                            name: nil,
+                            enabled: true,
+                            configured: true,
+                            linked: nil,
+                            running: true,
+                            connected: nil,
+                            reconnectAttempts: nil,
+                            lastConnectedAt: nil,
+                            lastError: nil,
+                            lastStartAt: nil,
+                            lastStopAt: nil,
+                            lastInboundAt: 200,
+                            lastOutboundAt: 300,
+                            lastProbeAt: nil,
+                            mode: "polling",
+                            dmPolicy: "allowlist",
+                            allowFrom: ["42"],
+                            tokenSource: "config",
+                            botTokenSource: nil,
+                            appTokenSource: nil,
+                            baseUrl: nil,
+                            allowUnmentionedGroups: nil,
+                            cliPath: nil,
+                            dbPath: nil,
+                            port: nil,
+                            probe: nil,
+                            audit: nil,
+                            application: nil),
+                    ],
+                ],
+                channelDefaultAccountId: ["telegram": "default"])
+            store.telegramSetupBaselineInboundAt = 250
+            store.telegramSetupWaitingForDM = true
+            store.telegramSetupPhase = .capturingFirstMessage
+
+            #expect(store.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible())
+            #expect(store.consumerTelegramFirstTaskVerified)
+            #expect(store.telegramSetupFirstSenderId == "42")
+            #expect(store.telegramSetupWaitingForDM == false)
+            #expect(store.telegramSetupPhase == .idle)
+            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_bot. First task verified.")
+        }
+    }
 }

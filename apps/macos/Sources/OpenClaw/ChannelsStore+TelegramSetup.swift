@@ -113,6 +113,9 @@ extension ChannelsStore {
                     try? await self.restoreTelegramPairingAfterSetupPause(token: token)
                 }
                 await self.refresh(probe: true)
+                if self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible() {
+                    return
+                }
                 self.telegramSetupStatus = self.telegramCaptureFailureStatusAfterTimeout()
                     ?? TelegramSetupVerifierError.noDirectMessage.localizedDescription
                 return
@@ -169,14 +172,7 @@ extension ChannelsStore {
 
     func verifyConsumerTelegramFirstTask() async {
         if self.consumerTelegramLooksLive() {
-            await self.refresh(probe: true)
-            if self.consumerTelegramCanVerifyFirstTaskFromActivity() {
-                self.markConsumerTelegramFirstTaskVerified()
-                self.telegramSetupWaitingForDM = false
-                self.telegramSetupPhase = .idle
-                self.telegramSetupStatus = self.consumerTelegramBotUsername().map {
-                    "Telegram bot is live as @\($0). First task verified."
-                } ?? "Telegram bot is live. First task verified."
+            if await self.waitForConsumerTelegramFirstTaskActivityRefreshes() {
                 return
             }
         }
@@ -223,6 +219,27 @@ extension ChannelsStore {
     private func openTelegramURL(_ raw: String) {
         guard let url = URL(string: raw) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private func waitForConsumerTelegramFirstTaskActivityRefreshes(
+        attempts: Int = 4,
+        delayNanoseconds: UInt64 = 1_000_000_000
+    ) async -> Bool {
+        guard self.consumerTelegramLooksLive() else { return false }
+
+        // The snapshot can lag a real Telegram reply right after config reloads.
+        // Spend a short grace period on the live activity signal before forcing
+        // the user to send another DM that may not actually be necessary.
+        for attempt in 0..<attempts {
+            await self.refresh(probe: true)
+            if self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible() {
+                return true
+            }
+            guard attempt + 1 < attempts else { break }
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+
+        return false
     }
 
     private func telegramVerificationStatus(

@@ -68,6 +68,24 @@ extension ChannelsStore {
         return latestActivityAt > baselineInboundAt
     }
 
+    @discardableResult
+    func completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible() -> Bool {
+        guard self.consumerTelegramCanVerifyFirstTaskFromActivity() else { return false }
+
+        // When the live poller has already consumed the first DM/reply, trust the
+        // observed Telegram activity instead of waiting for a second message.
+        self.markConsumerTelegramFirstTaskVerified()
+        self.telegramSetupWaitingForDM = false
+        self.telegramSetupPhase = .idle
+        if self.telegramSetupFirstSenderId == nil {
+            self.telegramSetupFirstSenderId = self.consumerTelegramConfigFallback().lockedSenderId
+        }
+        self.telegramSetupStatus = self.consumerTelegramBotUsername().map {
+            "Telegram bot is live as @\($0). First task verified."
+        } ?? "Telegram bot is live. First task verified."
+        return true
+    }
+
     func consumerTelegramConflictMessage(_ raw: String?) -> String? {
         guard AppFlavor.current.isConsumer else { return nil }
         let normalized = raw?
