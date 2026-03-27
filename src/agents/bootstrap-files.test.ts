@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -55,6 +55,7 @@ function registerMalformedBootstrapFileHook() {
 describe("resolveBootstrapFilesForRun", () => {
   beforeEach(() => clearInternalHooks());
   afterEach(() => clearInternalHooks());
+  afterEach(() => vi.useRealTimers());
 
   it("applies bootstrap hook overrides", async () => {
     registerExtraBootstrapFileHook();
@@ -80,6 +81,55 @@ describe("resolveBootstrapFilesForRun", () => {
     ).toBe(true);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
+  });
+
+  it("keeps personal memory files in trusted sessions and strips them from shared sessions", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-27T09:00:00"));
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-memory-scope-");
+    const sessionsDir = path.join(workspaceDir, "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-03-27.md"), "today", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-03-26.md"), "yesterday", "utf8");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        personal: {
+          sessionId: "personal-session",
+          updatedAt: Date.now(),
+          chatType: "direct",
+          memoryScope: "personal",
+        },
+        shared: {
+          sessionId: "shared-session",
+          updatedAt: Date.now(),
+          chatType: "group",
+          memoryScope: "shared",
+        },
+      }),
+      "utf8",
+    );
+
+    const personalFiles = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: { session: { store: storePath } },
+      sessionKey: "personal",
+    });
+    const sharedFiles = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: { session: { store: storePath } },
+      sessionKey: "shared",
+    });
+
+    expect(personalFiles.some((file) => file.name === "MEMORY.md")).toBe(true);
+    expect(personalFiles.some((file) => file.name === "memory/2026-03-27.md")).toBe(true);
+    expect(personalFiles.some((file) => file.name === "memory/2026-03-26.md")).toBe(true);
+    expect(sharedFiles.some((file) => file.name === "MEMORY.md")).toBe(false);
+    expect(sharedFiles.some((file) => file.name.startsWith("memory/"))).toBe(false);
   });
 });
 

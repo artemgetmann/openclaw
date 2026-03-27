@@ -1,4 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  loadSessionStore,
+  resolveSessionMemoryScope,
+  resolveStoredSessionMemoryScope,
+  resolveStorePath,
+  type SessionMemoryScope,
+} from "../config/sessions.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -61,6 +68,51 @@ function applyContextModeFilter(params: {
   return [];
 }
 
+function applyMemoryScopeFilter(params: {
+  files: WorkspaceBootstrapFile[];
+  memoryScope: SessionMemoryScope;
+}): WorkspaceBootstrapFile[] {
+  if (params.memoryScope === "personal") {
+    return params.files;
+  }
+  return params.files.filter(
+    (file) =>
+      file.name !== "MEMORY.md" && file.name !== "memory.md" && !file.name.startsWith("memory/"),
+  );
+}
+
+function resolveBootstrapMemoryScope(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  agentId?: string;
+}): SessionMemoryScope {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return "personal";
+  }
+
+  // Session-scoped trust beats naming heuristics. The session store is the one
+  // place where reply flows, CLI, and reruns can agree on the current memory lane.
+  try {
+    const storePath = resolveStorePath(params.config?.session?.store, {
+      agentId: params.agentId,
+    });
+    const entry = loadSessionStore(storePath)[sessionKey];
+    if (entry) {
+      return resolveStoredSessionMemoryScope(entry);
+    }
+  } catch {
+    // Fall through to key-based defaults below.
+  }
+
+  // Standalone local sessions (CLI/TUI) do not always persist through initSessionState.
+  // Keep those personal unless they are explicit subagent/cron sessions.
+  return resolveSessionMemoryScope({
+    SessionKey: sessionKey,
+    ChatType: "direct",
+  });
+}
+
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -72,14 +124,34 @@ export async function resolveBootstrapFilesForRun(params: {
   runKind?: BootstrapContextRunKind;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
-  const rawFiles = params.sessionKey
+  const memoryScope = resolveBootstrapMemoryScope({
+    config: params.config,
+    sessionKey,
+    agentId: params.agentId,
+  });
+  const baseFiles = params.sessionKey
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
       })
-    : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+    : await loadWorkspaceBootstrapFiles(params.workspaceDir, {
+        includeRecentDailyMemory: memoryScope === "personal",
+      });
+  const dailyFiles =
+    params.sessionKey && memoryScope === "personal"
+      ? (
+          await loadWorkspaceBootstrapFiles(params.workspaceDir, {
+            includeRecentDailyMemory: true,
+          })
+        ).filter((file) => file.name.startsWith("memory/"))
+      : [];
+  const rawFiles = [...baseFiles, ...dailyFiles];
+  const sessionFiltered = filterBootstrapFilesForSession(rawFiles, sessionKey);
   const bootstrapFiles = applyContextModeFilter({
-    files: filterBootstrapFilesForSession(rawFiles, sessionKey),
+    files: applyMemoryScopeFilter({
+      files: sessionFiltered,
+      memoryScope,
+    }),
     contextMode: params.contextMode,
     runKind: params.runKind,
   });

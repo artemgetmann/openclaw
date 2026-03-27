@@ -66,6 +66,8 @@ export async function buildTelegramInboundContextPayload(params: {
   locationData?: import("../../../src/channels/location.js").NormalizedLocation;
   options?: TelegramMessageContextOptions;
   dmAllowFrom?: Array<string | number>;
+  ownerAllowFrom?: Array<string | number>;
+  contextAllowFrom?: Array<string | number>;
 }): Promise<{
   ctxPayload: ReturnType<typeof finalizeInboundContext>;
   skillFilter: string[] | undefined;
@@ -98,6 +100,8 @@ export async function buildTelegramInboundContextPayload(params: {
     locationData,
     options,
     dmAllowFrom,
+    ownerAllowFrom,
+    contextAllowFrom,
   } = params;
   const replyTarget = describeReplyTarget(msg);
   const forwardOrigin = normalizeForwardedContext(msg);
@@ -243,6 +247,8 @@ export async function buildTelegramInboundContextPayload(params: {
     StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
+    OwnerAllowFrom: ownerAllowFrom,
+    ContextAllowFrom: contextAllowFrom,
     MessageThreadId: threadSpec.id,
     IsForum: isForum,
     OriginatingChannel: "telegram" as const,
