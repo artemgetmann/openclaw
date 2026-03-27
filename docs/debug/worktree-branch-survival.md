@@ -73,8 +73,10 @@ Do not assume a checkout you call "main" is actually on `main`.
 
 For lane placement, use this default:
 
-- important multi-hour, multi-turn, or PR-bound work belongs under the repo-owned `.worktrees/`
-- treat `.codex/worktrees/` as lower-durability and disposable
+- create repo worktrees under the repo-owned `.worktrees/` directory by default
+- keep one predictable location so active lanes do not get split across `.worktrees/` and `.codex/worktrees/`
+- important multi-hour, multi-turn, or PR-bound work belongs under `.worktrees/`
+- do not create new durable lanes under `.codex/worktrees/` unless the user explicitly asks for that path
 
 Reason:
 
@@ -130,7 +132,7 @@ When runtime state matters, also print:
 
 That turns guesswork into evidence.
 
-If you are coordinating through tmux or another remote pane controller, also respect this rule:
+If you are coordinating through tmux skills or another remote pane controller, also respect this rule:
 
 - paste the prompt first
 - verify the pane content
