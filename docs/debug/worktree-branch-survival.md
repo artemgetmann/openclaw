@@ -71,6 +71,8 @@ Do not assume another worktree sees your uncommitted edits.
 
 Do not assume a checkout you call "main" is actually on `main`.
 
+Treat uncommitted work as volatile. If the change is non-trivial, create a checkpoint commit before you step away, restart, switch focus, or do branch/worktree surgery.
+
 ## Safe Sequence Before Risky Git Operations
 
 Run these before branch surgery:
@@ -144,3 +146,20 @@ For live systems, done means:
 - proof printed
 
 That is the full chain.
+
+## Checkpoint Commit Rule
+
+Use commits for durability, not just for "finished" code.
+
+- Make a checkpoint commit after the first meaningful implementation slice for any non-trivial task.
+- Do not wait for perfect validation before creating the first commit.
+- Validation still must happen before PR approval, merge, or runtime rollout.
+- If the commit is a checkpoint and not fully validated yet, say that plainly in the commit body or notes.
+
+The failure mode to avoid is simple:
+
+- valuable work exists only in one worktree
+- that worktree gets confused, deleted, or orphaned
+- the branch has no commit containing the work
+
+At that point Git cannot save you because Git never had the work.

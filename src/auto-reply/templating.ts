@@ -122,6 +122,8 @@ export type MsgContext = {
   InputProvenance?: InputProvenance;
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
+  /** Effective conversation allowlist for the current chat/topic when known. */
+  ContextAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
   SenderUsername?: string;

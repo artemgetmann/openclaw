@@ -31,6 +31,7 @@ export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
 export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
+const DAILY_MEMORY_DIRNAME = "memory";
 const WORKSPACE_STATE_DIRNAME = ".openclaw";
 const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_STATE_VERSION = 1;
@@ -138,7 +139,8 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_HEARTBEAT_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME
   | typeof DEFAULT_MEMORY_FILENAME
-  | typeof DEFAULT_MEMORY_ALT_FILENAME;
+  | typeof DEFAULT_MEMORY_ALT_FILENAME
+  | `memory/${string}.md`;
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -484,7 +486,31 @@ async function resolveMemoryBootstrapEntry(
   return null;
 }
 
-export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
+function formatLocalDateKey(nowMs: number): string {
+  const date = new Date(nowMs);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function resolveRecentDailyMemoryEntryNames(nowMs: number): WorkspaceBootstrapFileName[] {
+  const today = new Date(nowMs);
+  const yesterday = new Date(nowMs);
+  yesterday.setDate(yesterday.getDate() - 1);
+  return [
+    `${DAILY_MEMORY_DIRNAME}/${formatLocalDateKey(today.getTime())}.md`,
+    `${DAILY_MEMORY_DIRNAME}/${formatLocalDateKey(yesterday.getTime())}.md`,
+  ];
+}
+
+export async function loadWorkspaceBootstrapFiles(
+  dir: string,
+  opts?: {
+    includeRecentDailyMemory?: boolean;
+    nowMs?: number;
+  },
+): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
   const entries: Array<{
@@ -524,6 +550,17 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   const memoryEntry = await resolveMemoryBootstrapEntry(resolvedDir);
   if (memoryEntry) {
     entries.push(memoryEntry);
+  }
+  if (opts?.includeRecentDailyMemory) {
+    // Daily notes are dynamic and intentionally loaded only for trusted personal
+    // sessions. We append today+yesterday here so the agent sees the same recent
+    // memory window that AGENTS.md asks it to consult on startup.
+    for (const relativeName of resolveRecentDailyMemoryEntryNames(opts.nowMs ?? Date.now())) {
+      entries.push({
+        name: relativeName,
+        filePath: path.join(resolvedDir, relativeName),
+      });
+    }
   }
 
   const result: WorkspaceBootstrapFile[] = [];
