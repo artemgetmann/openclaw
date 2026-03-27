@@ -147,8 +147,10 @@ function assertNoChatDrivenGatewaySelfRestart(params: {
   throw new Error(
     [
       `exec blocked a gateway supervisor command from ${contextLabel}.`,
-      "Direct macOS gateway restarts from chat can terminate the session issuing the command before it can recover.",
-      "Use /restart for an agent-safe detached restart, or run the restart from Terminal/OpenClaw.app outside the chat session.",
+      "Restarting the macOS gateway from chat can cut off this conversation before it comes back.",
+      provider === "telegram"
+        ? "Use /restart here in Telegram instead. If you are on your computer, you can also restart it from Terminal or the OpenClaw app."
+        : "Use /restart here instead. If you are on your computer, you can also restart it from Terminal or the OpenClaw app.",
     ].join("\n"),
   );
 }
