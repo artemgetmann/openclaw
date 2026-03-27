@@ -6,6 +6,7 @@ import {
   type RestartSentinelPayload,
   summarizeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
+import { shortenHomePath } from "../../utils.js";
 import { formatTimeAgo, redactSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
 
@@ -50,6 +51,7 @@ export async function appendStatusAllDiagnosis(params: {
   connectionDetailsForReport: string;
   snap: ConfigSnapshotLike | null;
   remoteUrlMissing: boolean;
+  macLaunchAgentDisableMarkerPath?: string | null;
   sentinel: { payload?: RestartSentinelPayload | null } | null;
   lastErr: string | null;
   port: number;
@@ -102,6 +104,17 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push("");
     emitCheck("Gateway remote mode misconfigured (gateway.remote.url missing)", "warn");
     lines.push(`  ${muted("Fix: set gateway.remote.url, or set gateway.mode=local.")}`);
+  }
+
+  if (params.macLaunchAgentDisableMarkerPath) {
+    lines.push("");
+    emitCheck(
+      `LaunchAgent writes disabled via ${shortenHomePath(params.macLaunchAgentDisableMarkerPath)}`,
+      "warn",
+    );
+    lines.push(
+      `  ${muted(`Fix: remove ${shortenHomePath(params.macLaunchAgentDisableMarkerPath)} and restart the main gateway.`)}`,
+    );
   }
 
   if (params.sentinel?.payload) {

@@ -18,6 +18,12 @@ vi.mock("../../commands/onboard-helpers.js", () => ({
   resolveControlUiLinks: () => ({ httpUrl: "http://127.0.0.1:18789" }),
 }));
 
+const resolveMacLaunchAgentDisableMarkerPath = vi.hoisted(() => vi.fn(() => null));
+
+vi.mock("../../commands/doctor-platform-notes.js", () => ({
+  resolveMacLaunchAgentDisableMarkerPath,
+}));
+
 vi.mock("../../daemon/inspect.js", () => ({
   renderGatewayServiceCleanupHints: () => [],
 }));
@@ -70,6 +76,8 @@ describe("printDaemonStatus", () => {
   beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
+    resolveMacLaunchAgentDisableMarkerPath.mockReset();
+    resolveMacLaunchAgentDisableMarkerPath.mockReturnValue(null);
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -137,6 +145,39 @@ describe("printDaemonStatus", () => {
 
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Runtime ID:"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("branch=main"));
+  });
+
+  it("warns when launchagent writes are disabled on local macOS runtime", () => {
+    resolveMacLaunchAgentDisableMarkerPath.mockReturnValue(
+      "/Users/user/.openclaw/disable-launchagent",
+    );
+
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        config: {
+          cli: {
+            path: "/Users/user/.openclaw/openclaw.json",
+            exists: true,
+            valid: true,
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("LaunchAgent writes are disabled"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("rm /Users/user/.openclaw/disable-launchagent"),
+    );
   });
 
   it("keeps the runtime fingerprint in json mode", () => {
