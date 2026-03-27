@@ -349,4 +349,175 @@ struct ChannelsSettingsSmokeTests {
                     == "This bot is already active in another OpenClaw window or worktree on this Mac. Close the other runtime or use a different bot token here.")
         }
     }
+
+    @Test func `consumer telegram verification can use recent inbound activity`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.snapshot = ChannelsStatusSnapshot(
+                ts: 1_700_000_000_000,
+                channelOrder: ["telegram"],
+                channelLabels: ["telegram": "Telegram"],
+                channelDetailLabels: nil,
+                channelSystemImages: nil,
+                channelMeta: nil,
+                channels: [
+                    "telegram": SnapshotAnyCodable([
+                        "configured": true,
+                        "running": true,
+                        "mode": "polling",
+                    ]),
+                ],
+                channelAccounts: [
+                    "telegram": [
+                        .init(
+                            accountId: "default",
+                            name: nil,
+                            enabled: true,
+                            configured: true,
+                            linked: nil,
+                            running: true,
+                            connected: nil,
+                            reconnectAttempts: nil,
+                            lastConnectedAt: nil,
+                            lastError: nil,
+                            lastStartAt: nil,
+                            lastStopAt: nil,
+                            lastInboundAt: 200,
+                            lastOutboundAt: nil,
+                            lastProbeAt: nil,
+                            mode: "polling",
+                            dmPolicy: "allowlist",
+                            allowFrom: ["42"],
+                            tokenSource: "config",
+                            botTokenSource: nil,
+                            appTokenSource: nil,
+                            baseUrl: nil,
+                            allowUnmentionedGroups: nil,
+                            cliPath: nil,
+                            dbPath: nil,
+                            port: nil,
+                            probe: nil,
+                            audit: nil,
+                            application: nil),
+                    ],
+                ],
+                channelDefaultAccountId: ["telegram": "default"])
+
+            store.telegramSetupBaselineInboundAt = 150
+            #expect(store.consumerTelegramCanVerifyFirstTaskFromActivity())
+        }
+    }
+
+    @Test func `consumer telegram baseline primes from current activity once`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.snapshot = ChannelsStatusSnapshot(
+                ts: 1_700_000_000_000,
+                channelOrder: ["telegram"],
+                channelLabels: ["telegram": "Telegram"],
+                channelDetailLabels: nil,
+                channelSystemImages: nil,
+                channelMeta: nil,
+                channels: [
+                    "telegram": SnapshotAnyCodable([
+                        "configured": true,
+                        "running": true,
+                        "mode": "polling",
+                    ]),
+                ],
+                channelAccounts: [
+                    "telegram": [
+                        .init(
+                            accountId: "default",
+                            name: nil,
+                            enabled: true,
+                            configured: true,
+                            linked: nil,
+                            running: true,
+                            connected: nil,
+                            reconnectAttempts: nil,
+                            lastConnectedAt: nil,
+                            lastError: nil,
+                            lastStartAt: nil,
+                            lastStopAt: nil,
+                            lastInboundAt: 123,
+                            lastOutboundAt: nil,
+                            lastProbeAt: nil,
+                            mode: "polling",
+                            dmPolicy: "allowlist",
+                            allowFrom: ["42"],
+                            tokenSource: "config",
+                            botTokenSource: nil,
+                            appTokenSource: nil,
+                            baseUrl: nil,
+                            allowUnmentionedGroups: nil,
+                            cliPath: nil,
+                            dbPath: nil,
+                            port: nil,
+                            probe: nil,
+                            audit: nil,
+                            application: nil),
+                    ],
+                ],
+                channelDefaultAccountId: ["telegram": "default"])
+
+            store.primeConsumerTelegramFirstTaskBaselineIfNeeded()
+            #expect(store.telegramSetupBaselineInboundAt == 123)
+            store.snapshot = ChannelsStatusSnapshot(
+                ts: 1_700_000_100_000,
+                channelOrder: ["telegram"],
+                channelLabels: ["telegram": "Telegram"],
+                channelDetailLabels: nil,
+                channelSystemImages: nil,
+                channelMeta: nil,
+                channels: [
+                    "telegram": SnapshotAnyCodable([
+                        "configured": true,
+                        "running": true,
+                        "mode": "polling",
+                    ]),
+                ],
+                channelAccounts: [
+                    "telegram": [
+                        .init(
+                            accountId: "default",
+                            name: nil,
+                            enabled: true,
+                            configured: true,
+                            linked: nil,
+                            running: true,
+                            connected: nil,
+                            reconnectAttempts: nil,
+                            lastConnectedAt: nil,
+                            lastError: nil,
+                            lastStartAt: nil,
+                            lastStopAt: nil,
+                            lastInboundAt: 456,
+                            lastOutboundAt: nil,
+                            lastProbeAt: nil,
+                            mode: "polling",
+                            dmPolicy: "allowlist",
+                            allowFrom: ["42"],
+                            tokenSource: "config",
+                            botTokenSource: nil,
+                            appTokenSource: nil,
+                            baseUrl: nil,
+                            allowUnmentionedGroups: nil,
+                            cliPath: nil,
+                            dbPath: nil,
+                            port: nil,
+                            probe: nil,
+                            audit: nil,
+                            application: nil),
+                    ],
+                ],
+                channelDefaultAccountId: ["telegram": "default"])
+            store.primeConsumerTelegramFirstTaskBaselineIfNeeded()
+            #expect(store.telegramSetupBaselineInboundAt == 123)
+        }
+    }
 }

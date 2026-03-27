@@ -32,6 +32,25 @@ extension ChannelsStore {
         UserDefaults.standard.removeObject(forKey: Self.consumerTelegramFirstTaskVerificationDefaultsKey())
     }
 
+    func consumerTelegramLatestInboundAt() -> Double? {
+        self.snapshot?.channelAccounts["telegram"]?
+            .first(where: { ($0.accountId == "default") || ($0.accountId == self.snapshot?.channelDefaultAccountId["telegram"]) })?
+            .lastInboundAt
+    }
+
+    func primeConsumerTelegramFirstTaskBaselineIfNeeded() {
+        guard self.telegramSetupBaselineInboundAt == nil else { return }
+        self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestInboundAt()
+    }
+
+    func consumerTelegramCanVerifyFirstTaskFromActivity() -> Bool {
+        guard let latestInboundAt = self.consumerTelegramLatestInboundAt() else { return false }
+        guard let baselineInboundAt = self.telegramSetupBaselineInboundAt else {
+            return false
+        }
+        return latestInboundAt > baselineInboundAt
+    }
+
     func consumerTelegramConflictMessage(_ raw: String?) -> String? {
         guard AppFlavor.current.isConsumer else { return nil }
         let normalized = raw?

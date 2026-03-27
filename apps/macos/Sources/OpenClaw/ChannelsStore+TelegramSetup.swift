@@ -14,6 +14,7 @@ extension ChannelsStore {
         self.telegramSetupBotId = nil
         self.telegramSetupBotUsername = nil
         self.telegramSetupFirstSenderId = nil
+        self.telegramSetupBaselineInboundAt = nil
         self.telegramSetupWaitingForDM = false
         self.telegramSetupPhase = .idle
     }
@@ -65,6 +66,8 @@ extension ChannelsStore {
                     username,
                     forKey: Self.consumerTelegramBotUsernameDefaultsKey)
             }
+            await self.refresh(probe: true)
+            self.primeConsumerTelegramFirstTaskBaselineIfNeeded()
             self.telegramSetupStatus = self.telegramVerificationStatus(botUsername: bot.username)
         } catch {
             self.telegramSetupBotId = nil
@@ -152,6 +155,23 @@ extension ChannelsStore {
             }
             self.telegramSetupStatus = error.localizedDescription
         }
+    }
+
+    func verifyConsumerTelegramFirstTask() async {
+        if self.consumerTelegramLooksLive() {
+            await self.refresh(probe: true)
+            if self.consumerTelegramCanVerifyFirstTaskFromActivity() {
+                self.markConsumerTelegramFirstTaskVerified()
+                self.telegramSetupWaitingForDM = false
+                self.telegramSetupPhase = .idle
+                self.telegramSetupStatus = self.consumerTelegramBotUsername().map {
+                    "Telegram bot is live as @\($0). First task verified."
+                } ?? "Telegram bot is live. First task verified."
+                return
+            }
+        }
+
+        await self.captureTelegramFirstDirectMessage()
     }
 
     func applyTelegramSetupBootstrap(

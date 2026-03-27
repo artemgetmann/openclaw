@@ -138,7 +138,7 @@ struct ConsumerTelegramSetupCardContent: View {
 
                 Button("Verify first task") {
                     self.tokenFieldFocused = false
-                    Task { await self.store.captureTelegramFirstDirectMessage() }
+                    Task { await self.store.verifyConsumerTelegramFirstTask() }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(

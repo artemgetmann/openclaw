@@ -172,6 +172,10 @@ extension ChannelsStore {
                 forKey: ChannelsStore.consumerTelegramBotUsernameDefaultsKey)
         }
 
+        if !self.consumerTelegramFirstTaskVerified {
+            self.primeConsumerTelegramFirstTaskBaselineIfNeeded()
+        }
+
         if self.telegramSetupStatus == nil
             || self.telegramSetupStatus == "Waiting for your first Telegram task..."
             || self.telegramSetupStatus == "Saving Telegram setup..."

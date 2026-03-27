@@ -247,6 +247,7 @@ final class ChannelsStore {
     var telegramSetupBotId: Int?
     var telegramSetupBotUsername: String?
     var telegramSetupFirstSenderId: String?
+    var telegramSetupBaselineInboundAt: Double?
     var telegramSetupWaitingForDM = false
     var telegramSetupPhase: TelegramSetupPhase = .idle
 
