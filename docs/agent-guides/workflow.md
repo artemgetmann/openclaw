@@ -14,14 +14,15 @@
 ## Worktree durability
 
 - Default location rule:
-  - important multi-hour, multi-turn, or PR-bound work belongs under the repo-owned `.worktrees/`
-  - treat `.codex/worktrees/` as lower-durability and disposable unless the user explicitly wants that tradeoff
+  - create repo worktrees under the repo-owned `.worktrees/` directory by default
+  - use one predictable location so active lanes do not get split across `.worktrees/` and `.codex/worktrees/`
 - Why:
   - `.codex/worktrees/` lanes have repeatedly disappeared after restart, interruption, cleanup, or session churn
   - the branch and Codex history often survive, but the on-disk checkout may not
 - Practical rule:
-  - if recreating the lane would hurt, create it under `.worktrees/` from the start
-  - if you inherit a non-trivial lane under `.codex/worktrees/`, make checkpoint commits aggressively and print proof lines before surgery
+  - important multi-hour, multi-turn, or PR-bound work belongs under `.worktrees/`
+  - do not create new durable lanes under `.codex/worktrees/` unless the user explicitly asks for that path
+  - if you inherit a non-trivial lane under `.codex/worktrees/`, checkpoint aggressively and print proof lines before surgery
 - When state matters, print:
   - `branch=<branch>`
   - `worktree=<absolute-path>`
@@ -58,7 +59,7 @@
 
 ## tmux and Codex panes
 
-- For interactive Codex panes, do not paste a prompt and send Enter in one blind action.
+- When driving interactive Codex panes through tmux skills or manual pane control, do not paste a prompt and send Enter in one blind action.
 - Paste the prompt first.
 - Capture or inspect the pane so you know the full prompt landed correctly.
 - Send Enter as a separate action.
