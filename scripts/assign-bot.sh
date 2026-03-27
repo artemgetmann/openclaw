@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HELPER_MODULE="${SCRIPT_DIR}/lib/telegram-live-runtime-helpers.mjs"
+BASE_CONFIG_PATH="${OPENCLAW_TELEGRAM_BASE_CONFIG_PATH:-${OPENCLAW_CONFIG_PATH:-${HOME}/.openclaw/openclaw.json}}"
+
 # Trim leading/trailing whitespace for robust .env parsing.
 trim() {
   local value="$1"
@@ -58,19 +62,6 @@ read_last_env_value() {
   printf '%s' "$last_value"
 }
 
-# Bash 3-compatible membership test for small token lists.
-contains_token() {
-  local needle="$1"
-  shift
-  local candidate=""
-  for candidate in "$@"; do
-    if [[ "$candidate" == "$needle" ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
 # Mask token output so logs never leak full credentials.
 mask_token() {
   local token="$1"
@@ -84,41 +75,6 @@ mask_token() {
     return
   fi
   printf '%s...%s' "${token:0:4}" "${token:len-4:4}"
-}
-
-report_claimed_worktrees() {
-  local worktree_path=""
-  local env_local_path=""
-  local token_value=""
-  local branch_name=""
-  local status_line=""
-  local process_count=""
-
-  for worktree_path in "${worktree_paths[@]}"; do
-    env_local_path="$worktree_path/.env.local"
-    [[ -f "$env_local_path" ]] || continue
-
-    token_value="$(read_last_env_value "$env_local_path" "TELEGRAM_BOT_TOKEN")"
-    [[ -n "$token_value" ]] || continue
-
-    branch_name="unknown"
-    status_line="missing"
-    process_count="0"
-
-    if [[ -d "$worktree_path" ]]; then
-      branch_name="$(git -C "$worktree_path" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown')"
-      if [[ -n "$(git -C "$worktree_path" status --short 2>/dev/null | sed -n '1p')" ]]; then
-        status_line="dirty"
-      else
-        status_line="clean"
-      fi
-      process_count="$(
-        ps -axo command= | awk -v needle="$worktree_path" 'index($0, needle) > 0 { count++ } END { print count + 0 }'
-      )"
-    fi
-
-    echo "  worktree=$worktree_path branch=$branch_name status=$status_line live_processes=$process_count token=$(mask_token "$token_value")" >&2
-  done
 }
 
 if [[ ! -r ".env.bots" ]]; then
@@ -147,82 +103,172 @@ if (( ${#bot_tokens[@]} == 0 )); then
   exit 1
 fi
 
-worktree_paths=()
-current_worktree="$(pwd -P)"
-worktree_list_output=""
-if ! worktree_list_output="$(git worktree list --porcelain 2>/dev/null)"; then
-  echo "Error: unable to list git worktrees from $(pwd)." >&2
-  echo "Run this script from within a git worktree." >&2
-  exit 1
-fi
+selection="$(
+  HELPER_MODULE="$HELPER_MODULE" \
+  BASE_CONFIG_PATH="$BASE_CONFIG_PATH" \
+  CURRENT_WORKTREE="$(pwd -P)" \
+  node --input-type=module - <<'NODE'
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
-while IFS= read -r line || [[ -n "$line" ]]; do
-  if [[ "$line" == worktree\ * ]]; then
-    worktree_paths+=("${line#worktree }")
-  fi
-done <<< "$worktree_list_output"
+const helperPath = process.env.HELPER_MODULE;
+const baseConfigPath = process.env.BASE_CONFIG_PATH ?? "";
+const currentWorktree = process.env.CURRENT_WORKTREE ?? "";
 
-claimed_tokens=()
-other_claimed_tokens=()
-current_claimed_token=""
-worktree_path=""
-env_local_path=""
-claimed=""
-for worktree_path in "${worktree_paths[@]-}"; do
-  env_local_path="$worktree_path/.env.local"
-  if [[ ! -f "$env_local_path" ]]; then
-    continue
-  fi
-  claimed="$(read_last_env_value "$env_local_path" "TELEGRAM_BOT_TOKEN")"
-  if [[ -n "$claimed" ]]; then
-    claimed_tokens+=("$claimed")
-    if [[ "$worktree_path" == "$current_worktree" ]]; then
-      current_claimed_token="$claimed"
-    else
-      other_claimed_tokens+=("$claimed")
-    fi
-  fi
-done
+if (!helperPath) {
+  throw new Error("Missing helper module path.");
+}
 
-# Reuse the current worktree's token when it already owns a unique claim from
-# the shared pool. Without this, follow-up `ensure` runs fail after a successful
-# first claim just because the pool is fully allocated again.
-if [[ -n "$current_claimed_token" ]] && contains_token "$current_claimed_token" "${bot_tokens[@]-}"; then
-  if ! contains_token "$current_claimed_token" "${other_claimed_tokens[@]-}"; then
-    printf 'TELEGRAM_BOT_TOKEN=%s\n' "$current_claimed_token" > ".env.local"
-    echo "Reusing Telegram bot token for current worktree: $current_worktree"
-    echo "Token fingerprint: $(mask_token "$current_claimed_token")"
-    exit 0
-  fi
-  echo "Error: current worktree token is also claimed by another worktree." >&2
-  echo "Resolve the duplicate .env.local claim before reusing this bot." >&2
-  echo "Claimed worktrees:" >&2
-  report_claimed_worktrees
-  exit 1
-fi
+const {
+  extractTelegramBotTokensFromConfig,
+  selectTelegramTesterToken,
+} = await import(pathToFileURL(helperPath).href);
+
+const envBotsPath = path.join(currentWorktree, ".env.bots");
+const envLocalPath = path.join(currentWorktree, ".env.local");
+const envBotsText = fs.readFileSync(envBotsPath, "utf8");
+const poolTokens = [];
+for (const line of envBotsText.split(/\r?\n/g)) {
+  const match = line.match(/^[\t ]*(?:export[\t ]+)?BOT_TOKEN[\t ]*=[\t ]*(.*)$/);
+  if (!match) {
+    continue;
+  }
+  let value = match[1].trim();
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+  ) {
+    value = value.slice(1, -1);
+  }
+  if (value) {
+    poolTokens.push(value);
+  }
+}
+
+const readLastEnvValue = (filePath, key) => {
+  const text = fs.readFileSync(filePath, "utf8");
+  let token = "";
+  for (const line of text.split(/\r?\n/g)) {
+    const match = line.match(
+      new RegExp(`^[\\t ]*(?:export[\\t ]+)?${key}[\\t ]*=[\\t ]*(.*)$`),
+    );
+    if (!match) {
+      continue;
+    }
+    let value = match[1].trim();
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    token = value;
+  }
+  return token;
+};
+
+const currentToken = fs.existsSync(envLocalPath) ? readLastEnvValue(envLocalPath, "TELEGRAM_BOT_TOKEN") : "";
+
+const claimedTokens = [];
+const worktreeList = execFileSync("git", ["worktree", "list", "--porcelain"], {
+  cwd: currentWorktree,
+  encoding: "utf8",
+});
+for (const line of worktreeList.split(/\r?\n/g)) {
+  if (!line.startsWith("worktree ")) {
+    continue;
+  }
+  const worktreePath = line.slice("worktree ".length).trim();
+  if (!worktreePath || path.resolve(worktreePath) === path.resolve(currentWorktree)) {
+    continue;
+  }
+  const candidateEnvLocalPath = path.join(worktreePath, ".env.local");
+  if (!fs.existsSync(candidateEnvLocalPath)) {
+    continue;
+  }
+  const claimed = readLastEnvValue(candidateEnvLocalPath, "TELEGRAM_BOT_TOKEN");
+  if (claimed) {
+    claimedTokens.push(claimed);
+  }
+}
+
+let reservedTokens = [];
+if (baseConfigPath && fs.existsSync(baseConfigPath)) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(baseConfigPath, "utf8"));
+    reservedTokens = extractTelegramBotTokensFromConfig(parsed);
+  } catch {
+    reservedTokens = [];
+  }
+}
+
+const selection = selectTelegramTesterToken({
+  poolTokens,
+  claimedTokens,
+  reservedTokens,
+  currentToken,
+});
+
+if (!selection.ok || !selection.selectedToken) {
+  console.log("ok=no");
+  console.log(`reason=${selection.reason}`);
+  console.log(`claimedCount=${claimedTokens.length}`);
+  console.log(`poolCount=${poolTokens.length}`);
+  console.log(`reservedCount=${reservedTokens.length}`);
+  process.exit(0);
+}
+
+const selectedIndex = poolTokens.findIndex((token) => token === selection.selectedToken);
+console.log("ok=yes");
+console.log(`action=${selection.action}`);
+console.log(`reason=${selection.reason}`);
+console.log(`selectedToken=${selection.selectedToken}`);
+console.log(`selectedIndex=${selectedIndex >= 0 ? selectedIndex + 1 : 0}`);
+console.log(`claimedCount=${claimedTokens.length}`);
+console.log(`poolCount=${poolTokens.length}`);
+console.log(`reservedCount=${reservedTokens.length}`);
+NODE
+)"
 
 selected_token=""
 selected_index=0
-idx=0
-for idx in "${!bot_tokens[@]}"; do
-  if ! contains_token "${bot_tokens[$idx]}" "${other_claimed_tokens[@]-}"; then
-    selected_token="${bot_tokens[$idx]}"
-    selected_index=$((idx + 1))
-    break
-  fi
-done
+selection_ok="no"
+selection_action=""
+selection_reason=""
+claimed_count=0
+pool_count=${#bot_tokens[@]}
+reserved_count=0
+while IFS= read -r line || [[ -n "$line" ]]; do
+  key="${line%%=*}"
+  value="${line#*=}"
+  case "$key" in
+    ok) selection_ok="$value" ;;
+    action) selection_action="$value" ;;
+    reason) selection_reason="$value" ;;
+    selectedToken) selected_token="$value" ;;
+    selectedIndex) selected_index="$value" ;;
+    claimedCount) claimed_count="$value" ;;
+    poolCount) pool_count="$value" ;;
+    reservedCount) reserved_count="$value" ;;
+  esac
+done <<< "$selection"
 
-if [[ -z "$selected_token" ]]; then
-  echo "Error: no unclaimed bot tokens available." >&2
-  echo "Claimed: ${#claimed_tokens[@]} / Total: ${#bot_tokens[@]}" >&2
-  echo "Delete an unused worktree .env.local to free a token." >&2
-  echo "Claimed worktrees:" >&2
-  report_claimed_worktrees
-  echo "Safe release candidates are usually worktrees with status=clean and live_processes=0." >&2
+if [[ "$selection_ok" != "yes" || -z "$selected_token" ]]; then
+  echo "Error: no eligible tester bot tokens available." >&2
+  echo "Reason: ${selection_reason:-unknown}" >&2
+  echo "Claimed: ${claimed_count} / Pool: ${pool_count} / Reserved by main runtime: ${reserved_count}" >&2
+  echo "Delete an unused worktree .env.local or add more tester-only bot tokens." >&2
   exit 1
 fi
 
 printf 'TELEGRAM_BOT_TOKEN=%s\n' "$selected_token" > ".env.local"
 
-echo "Assigned Telegram bot token #$selected_index to worktree: $(pwd -P)"
+if [[ "$selection_action" == "retain" ]]; then
+  echo "Retained Telegram bot token #$selected_index for worktree: $(pwd -P)"
+else
+  echo "Assigned Telegram bot token #$selected_index to worktree: $(pwd -P)"
+fi
+echo "Selection reason: ${selection_reason}"
 echo "Token fingerprint: $(mask_token "$selected_token")"

@@ -1000,6 +1000,7 @@ describe("handleCommands bash alias", () => {
     expect(result.reply?.text).toContain(
       "exec blocked a gateway supervisor command from the live telegram chat surface",
     );
+    expect(result.reply?.text).toContain("Use /restart here in Telegram instead.");
   });
 });
 
