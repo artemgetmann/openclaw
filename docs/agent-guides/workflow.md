@@ -12,6 +12,24 @@
 - Never run `git merge upstream/main` on this fork. Port upstream changes selectively via `main`.
 - Validate new bot behavior in a feature worktree first when possible, ideally with a tester bot or other isolated runtime. Do not repoint the long-lived main bot or LaunchAgent at a feature worktree. For the production bot, merge to `main` first, then restart and exercise the gateway from the `main` checkout. See `docs/debug/worktree-branch-survival.md` for the runtime truth model.
 
+## Worktree durability
+
+- Default location rule:
+  - important multi-hour, multi-turn, or PR-bound work belongs under the repo-owned `.worktrees/`
+  - treat `.codex/worktrees/` as lower-durability and disposable unless the user explicitly wants that tradeoff
+- Why:
+  - `.codex/worktrees/` lanes have repeatedly disappeared after restart, interruption, cleanup, or session churn
+  - the branch and Codex history often survive, but the on-disk checkout may not
+- Practical rule:
+  - if recreating the lane would hurt, create it under `.worktrees/` from the start
+  - if you inherit a non-trivial lane under `.codex/worktrees/`, make checkpoint commits aggressively and print proof lines before surgery
+- When state matters, print:
+  - `branch=<branch>`
+  - `worktree=<absolute-path>`
+  - `head=<sha>`
+  - `status_dirty=yes|no`
+- For recovery and vanished-worktree triage, use `docs/debug/worktree-branch-survival.md`.
+
 ## GitHub footguns
 
 - For issue comments, PR comments, and review bodies, use literal multiline strings or a single-quoted heredoc. Do not embed `\n`.
@@ -38,6 +56,14 @@
   - Fix touching that code path
   - Regression proof or explicit manual validation notes
 - Before `/landpr`, run `/reviewpr`.
+
+## tmux and Codex panes
+
+- For interactive Codex panes, do not paste a prompt and send Enter in one blind action.
+- Paste the prompt first.
+- Capture or inspect the pane so you know the full prompt landed correctly.
+- Send Enter as a separate action.
+- This avoids half-pasted prompts, accidental sends, and fake state recovery.
 
 ## Multi-agent safety
 
