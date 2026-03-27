@@ -52,42 +52,53 @@ afterEach(() => {
 });
 
 describe("handleRestartCommand", () => {
-  it("prefers local restart script for Telegram on macOS when available", async () => {
+  it.each(["telegram", "whatsapp", "discord"])(
+    "prefers local restart script for %s on macOS when available",
+    async (surface) => {
+      setPlatform("darwin");
+      isLocalRestartScriptAvailableMock.mockReturnValue(true);
+
+      vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
+        signal === "SIGUSR1" ? 1 : 0,
+      );
+
+      triggerOpenClawRestartMock.mockReturnValue({
+        ok: true,
+        method: "launchctl",
+        detail: "scheduled local restart script: /tmp/openclaw-restart-local-gateway.sh",
+      });
+
+      const result = await handleRestartCommand(
+        buildParams("/restart", {
+          Provider: surface,
+          Surface: surface,
+          OriginatingChannel: surface,
+        }),
+        true,
+      );
+
+      expect(triggerOpenClawRestartMock).toHaveBeenCalledWith({ preferLocalScript: true });
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+      expect(result?.reply?.text).toContain("local restart script");
+    },
+  );
+
+  it("uses in-process SIGUSR1 scheduling for empty/unknown surfaces", async () => {
     setPlatform("darwin");
     isLocalRestartScriptAvailableMock.mockReturnValue(true);
 
     vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
       signal === "SIGUSR1" ? 1 : 0,
     );
-
-    triggerOpenClawRestartMock.mockReturnValue({
-      ok: true,
-      method: "launchctl",
-      detail: "scheduled local restart script: /tmp/openclaw-restart-local-gateway.sh",
-    });
 
     const result = await handleRestartCommand(
       buildParams("/restart", {
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
+        Provider: "",
+        Surface: "",
+        OriginatingChannel: "",
       }),
       true,
     );
-
-    expect(triggerOpenClawRestartMock).toHaveBeenCalledWith({ preferLocalScript: true });
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-    expect(result?.reply?.text).toContain("local restart script");
-  });
-
-  it("uses in-process SIGUSR1 scheduling for non-Telegram surfaces", async () => {
-    setPlatform("darwin");
-    isLocalRestartScriptAvailableMock.mockReturnValue(true);
-    vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
-      signal === "SIGUSR1" ? 1 : 0,
-    );
-
-    const result = await handleRestartCommand(buildParams("/restart"), true);
 
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({ reason: "/restart" });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();

@@ -16,7 +16,12 @@ import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
-import { isDiscordSurface, isTelegramSurface, resolveChannelAccountId } from "./channel-context.js";
+import {
+  isDiscordSurface,
+  isTelegramSurface,
+  resolveChannelAccountId,
+  resolveCommandSurfaceChannel,
+} from "./channel-context.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -616,11 +621,12 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  const commandSurface = resolveCommandSurfaceChannel(params);
   const preferLocalScriptRestart =
-    process.platform === "darwin" && isTelegramSurface(params) && isLocalRestartScriptAvailable();
-  // Telegram /restart is often invoked from the same process tree as the
-  // gateway itself on macOS dev setups. Prefer the detached local restart
-  // script so we can acknowledge the command before launchctl tears us down.
+    process.platform === "darwin" && commandSurface.length > 0 && isLocalRestartScriptAvailable();
+  // Any live chat surface on macOS can be hosted by the same gateway process
+  // tree it is trying to restart. Prefer the detached local restart script so
+  // the command can return before launchctl tears the session down.
   if (preferLocalScriptRestart) {
     const restartMethod = triggerOpenClawRestart({ preferLocalScript: true });
     if (!restartMethod.ok) {

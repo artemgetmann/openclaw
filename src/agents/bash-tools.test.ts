@@ -497,6 +497,29 @@ describe("exec tool backgrounding", () => {
   });
 });
 
+describe("exec gateway restart guard", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it("blocks direct gateway restart scripts from live chat surfaces on macOS", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    const tool = createTestExecTool({ messageProvider: "telegram" });
+    await expect(executeExecCommand(tool, "bash scripts/restart-local-gateway.sh")).rejects.toThrow(
+      "exec blocked a gateway supervisor command from the live telegram chat surface",
+    );
+  });
+
+  it("allows read-only inspection of restart scripts from live chat surfaces", async () => {
+    const tool = createTestExecTool({ messageProvider: "telegram" });
+    const result = await executeExecCommand(
+      tool,
+      "cat scripts/restart-local-gateway.sh | head -n 1",
+    );
+    expect(readTextContent(result.content) ?? "").toContain("#!/usr/bin/env bash");
+  });
+});
+
 describe("exec exit codes", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 
