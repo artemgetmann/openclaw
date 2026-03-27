@@ -512,18 +512,23 @@ prepare_isolated_runtime_config() {
     RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
     ASSIGNED_BOT_TOKEN="$ASSIGNED_BOT_TOKEN" \
     RUNTIME_PORT="$RUNTIME_PORT" \
+    HELPER_MODULE="$HELPER_MODULE" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const basePath = process.env.BASE_CONFIG_PATH;
 const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
 const assignedToken = process.env.ASSIGNED_BOT_TOKEN;
 const runtimePort = Number.parseInt(process.env.RUNTIME_PORT ?? "", 10);
+const helperPath = process.env.HELPER_MODULE;
 
-if (!runtimeConfigPath || !assignedToken || !Number.isFinite(runtimePort) || runtimePort <= 0) {
+if (!runtimeConfigPath || !assignedToken || !Number.isFinite(runtimePort) || runtimePort <= 0 || !helperPath) {
   throw new Error("Missing runtime config path, assigned token, or runtime port.");
 }
+
+const { buildTelegramLiveRuntimeConfig } = await import(pathToFileURL(helperPath).href);
 
 let config = {};
 if (basePath && fs.existsSync(basePath)) {
@@ -536,58 +541,11 @@ if (basePath && fs.existsSync(basePath)) {
     // Fall back to a minimal config if base config is absent/invalid.
   }
 }
-
-const gateway = config.gateway && typeof config.gateway === "object" ? config.gateway : {};
-const controlUi =
-  gateway.controlUi && typeof gateway.controlUi === "object" ? gateway.controlUi : {};
-config.gateway = {
-  ...gateway,
-  port: runtimePort,
-  bind: "loopback",
-  mode: "local",
-  controlUi: {
-    ...controlUi,
-    enabled: false,
-    allowedOrigins: [
-      `http://localhost:${runtimePort}`,
-      `http://127.0.0.1:${runtimePort}`,
-    ],
-  },
-};
-
-const baseChannels = config.channels && typeof config.channels === "object" ? config.channels : {};
-const telegram =
-  baseChannels.telegram && typeof baseChannels.telegram === "object" ? baseChannels.telegram : {};
-const basePlugins = config.plugins && typeof config.plugins === "object" ? config.plugins : {};
-const pluginSlots =
-  basePlugins.slots && typeof basePlugins.slots === "object" ? basePlugins.slots : {};
-
-// Force a Telegram-only runtime profile for worktree live tests. Telegram is a
-// bundled channel plugin in this repo, so isolation must allow the telegram
-// plugin while still blocking unrelated plugins and memory slot side effects.
-delete telegram.accounts;
-config.channels = {
-  telegram: {
-    ...telegram,
-    enabled: true,
-    botToken: assignedToken,
-  },
-};
-config.plugins = {
-  ...basePlugins,
-  enabled: true,
-  allow: ["telegram"],
-  entries: {
-    ...(basePlugins.entries && typeof basePlugins.entries === "object" ? basePlugins.entries : {}),
-    telegram: {
-      enabled: true,
-    },
-  },
-  slots: {
-    ...pluginSlots,
-    memory: "none",
-  },
-};
+config = buildTelegramLiveRuntimeConfig({
+  baseConfig: config,
+  assignedToken,
+  runtimePort,
+});
 
 fs.mkdirSync(path.dirname(runtimeConfigPath), { recursive: true });
 fs.writeFileSync(runtimeConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -740,7 +698,7 @@ start_isolated_runtime() {
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1 \
       OPENCLAW_DISABLE_BONJOUR=1 \
       OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE=1 \
-      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC=1 \
+      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-1}" \
       node scripts/run-node.mjs gateway run --bind loopback --port "$RUNTIME_PORT" --force --allow-unconfigured \
       >"$RUNTIME_LOG_PATH" 2>&1 &
   ); then

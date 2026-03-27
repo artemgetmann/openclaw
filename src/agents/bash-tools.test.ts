@@ -506,7 +506,7 @@ describe("exec gateway restart guard", () => {
     }
     const tool = createTestExecTool({ messageProvider: "telegram" });
     await expect(executeExecCommand(tool, "bash scripts/restart-local-gateway.sh")).rejects.toThrow(
-      "exec blocked a gateway supervisor command from the live telegram chat surface",
+      "Restart command blocked in the live telegram chat.",
     );
   });
 
