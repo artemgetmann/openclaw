@@ -48,7 +48,11 @@ import Testing
         let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
         try makeExecutableForTests(at: openclawPath)
 
-        let cmd = CommandResolver.openclawCommand(subcommand: "gateway", defaults: defaults, configRoot: [:])
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "gateway",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
     }
 
@@ -156,6 +160,104 @@ import Testing
         if cmd.count >= 3 {
             #expect(cmd[0] == nodePath.path)
             #expect(cmd[1] == distEntry.path)
+            #expect(cmd[2] == "gateway")
+        }
+    }
+
+    @Test func `prefers repo entrypoint over project node modules wrapper when runtime exists`() throws {
+        let defaults = self.makeLocalDefaults()
+
+        let tmp = try makeTempDirForTests()
+        CommandResolver.setProjectRoot(tmp.path)
+
+        let projectBinDir = tmp.appendingPathComponent("node_modules/.bin")
+        let projectOpenclaw = projectBinDir.appendingPathComponent("openclaw")
+        try makeExecutableForTests(at: projectOpenclaw)
+
+        let nodePath = projectBinDir.appendingPathComponent("node")
+        try """
+        #!/bin/sh
+        echo v22.16.0
+        """.write(to: nodePath, atomically: true, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "gateway",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [projectBinDir.path])
+
+        #expect(cmd.count >= 3)
+        if cmd.count >= 3 {
+            #expect(cmd[0] == nodePath.path)
+            #expect(cmd[1] == tmp.appendingPathComponent("openclaw.mjs").path)
+            #expect(cmd[2] == "gateway")
+        }
+    }
+
+    @Test func `project root override keeps gateway commands pinned to canonical repo entrypoint`() throws {
+        let defaults = self.makeLocalDefaults()
+
+        let repoRoot = try makeTempDirForTests()
+        let worktreeRoot = repoRoot.appendingPathComponent(".worktrees/bugfix")
+        try FileManager().createDirectory(at: worktreeRoot, withIntermediateDirectories: true)
+
+        let packageJson = "{\n  \"name\": \"openclaw\"\n}\n"
+        try packageJson.write(
+            to: repoRoot.appendingPathComponent("package.json"),
+            atomically: true,
+            encoding: .utf8)
+        try "export {}\n".write(
+            to: repoRoot.appendingPathComponent("openclaw.mjs"),
+            atomically: true,
+            encoding: .utf8)
+        let canonicalEntry = repoRoot.appendingPathComponent("dist/index.js")
+        try FileManager().createDirectory(
+            at: canonicalEntry.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try "export {}\n".write(to: canonicalEntry, atomically: true, encoding: .utf8)
+
+        try packageJson.write(
+            to: worktreeRoot.appendingPathComponent("package.json"),
+            atomically: true,
+            encoding: .utf8)
+        try "export {}\n".write(
+            to: worktreeRoot.appendingPathComponent("openclaw.mjs"),
+            atomically: true,
+            encoding: .utf8)
+        let worktreeEntry = worktreeRoot.appendingPathComponent("dist/index.js")
+        try FileManager().createDirectory(
+            at: worktreeEntry.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try "export {}\n".write(to: worktreeEntry, atomically: true, encoding: .utf8)
+
+        let resolvedRoot = CommandResolver.canonicalGatewayProjectRoot(projectRoot: worktreeRoot)
+        #expect(resolvedRoot.path == repoRoot.path)
+
+        let globalBinDir = repoRoot.appendingPathComponent("global-bin")
+        let globalOpenclaw = globalBinDir.appendingPathComponent("openclaw")
+        try makeExecutableForTests(at: globalOpenclaw)
+
+        let nodeDir = repoRoot.appendingPathComponent("node-bin")
+        try FileManager().createDirectory(at: nodeDir, withIntermediateDirectories: true)
+        let nodePath = nodeDir.appendingPathComponent("node")
+        try """
+        #!/bin/sh
+        echo v22.16.0
+        """.write(to: nodePath, atomically: true, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "gateway",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [nodeDir.path, globalBinDir.path],
+            projectRoot: resolvedRoot)
+
+        #expect(cmd.count >= 3)
+        if cmd.count >= 3 {
+            #expect(cmd[0] == nodePath.path)
+            #expect(cmd[1] == canonicalEntry.path)
             #expect(cmd[2] == "gateway")
         }
     }
@@ -271,10 +373,11 @@ import Testing
             defaults: defaults,
             configRoot: ["gateway": ["mode": "local"]])
 
-        #expect(cmd.first == openclawPath.path)
-        #expect(cmd.count >= 2)
-        if cmd.count >= 2 {
-            #expect(cmd[1] == "daemon")
+        #expect(cmd.count >= 3)
+        if cmd.count >= 3 {
+            #expect(cmd[0].hasSuffix("/node"))
+            #expect(cmd[1] == tmp.appendingPathComponent("openclaw.mjs").path)
+            #expect(cmd[2] == "daemon")
         }
     }
 }
