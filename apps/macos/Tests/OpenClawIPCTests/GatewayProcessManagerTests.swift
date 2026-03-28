@@ -6,6 +6,10 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
+    @Test func `gateway readiness timeout allows real launchd restart budget`() {
+        #expect(GatewayProcessManager.gatewayReadinessTimeout >= 20)
+    }
+
     @Test func `clears last failure when health succeeds`() async throws {
         let session = GatewayTestWebSocketSession(
             taskFactory: {
