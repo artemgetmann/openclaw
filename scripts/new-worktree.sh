@@ -100,6 +100,56 @@ resolve_default_base_branch() {
   printf 'main'
 }
 
+assert_base_branch_synced_with_remote() {
+  local base_branch="$1"
+  local override="${OPENCLAW_NEW_WORKTREE_ALLOW_UNSYNCED_BASE:-0}"
+  local local_ref="refs/heads/${base_branch}"
+  local remote_ref="refs/remotes/origin/${base_branch}"
+  local local_only=0
+  local remote_only=0
+
+  if [[ "$override" == "1" ]]; then
+    return 0
+  fi
+
+  if ! git show-ref --verify --quiet "$local_ref"; then
+    cat >&2 <<EOF
+Error: local base branch '${base_branch}' does not exist.
+
+Create or fast-forward it first so local branch truth matches origin:
+  git checkout ${base_branch}
+  git pull --ff-only
+
+If you intentionally want to bypass this check, set:
+  OPENCLAW_NEW_WORKTREE_ALLOW_UNSYNCED_BASE=1
+EOF
+    exit 1
+  fi
+
+  read -r local_only remote_only < <(git rev-list --left-right --count "${base_branch}...origin/${base_branch}")
+  if [[ "$local_only" == "0" && "$remote_only" == "0" ]]; then
+    return 0
+  fi
+
+  cat >&2 <<EOF
+Error: base branch '${base_branch}' is not synced with origin/${base_branch}.
+
+Ahead commits:  ${local_only}
+Behind commits: ${remote_only}
+
+Sync the base branch before creating a new worktree:
+  git checkout ${base_branch}
+  git pull --ff-only
+
+If the branch is ahead locally, push/merge that work first so origin/${base_branch}
+matches what you expect to branch from.
+
+If you intentionally want to bypass this check, set:
+  OPENCLAW_NEW_WORKTREE_ALLOW_UNSYNCED_BASE=1
+EOF
+  exit 1
+}
+
 run_ensure_with_timeout() {
   local worktree_path="$1"
   local timeout_secs="${OPENCLAW_NEW_WORKTREE_ENSURE_TIMEOUT_SECS:-45}"
@@ -233,6 +283,11 @@ if ! git show-ref --verify --quiet "refs/remotes/origin/${BASE_BRANCH}"; then
   echo "Error: origin/${BASE_BRANCH} does not exist locally. Fetch it or choose a different --base." >&2
   exit 1
 fi
+
+# Creating a fresh lane from stale local branch truth is how we keep reimporting
+# old scripts, old docs, and old runtime rules. Require the named base branch to
+# be exactly aligned with its origin tracking branch before creating the worktree.
+assert_base_branch_synced_with_remote "$BASE_BRANCH"
 
 # Mirror the Telegram live runtime port derivation pattern: normalize the
 # absolute worktree path, hash it, then take a stable modulo into a reserved
