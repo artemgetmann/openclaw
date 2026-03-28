@@ -75,7 +75,7 @@ mask_token() {
 
 usage() {
   cat <<'EOF'
-Usage: scripts/new-worktree.sh <feature-name> [--base <branch>]
+Usage: scripts/new-worktree.sh <feature-name> [--base <branch>] [--no-bootstrap]
 EOF
 }
 
@@ -199,6 +199,56 @@ PY
   fi
 }
 
+link_bootstrap_directory() {
+  local source_dir="$1"
+  local dest_dir="$2"
+  local label="$3"
+
+  if [[ ! -d "$source_dir" || -e "$dest_dir" ]]; then
+    return 0
+  fi
+
+  ln -s "$source_dir" "$dest_dir"
+  echo "bootstrap_${label}=linked" >&2
+}
+
+copy_bootstrap_directory() {
+  local source_dir="$1"
+  local dest_dir="$2"
+  local label="$3"
+
+  if [[ ! -d "$source_dir" || -e "$dest_dir" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$dest_dir")"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a "$source_dir/" "$dest_dir/"
+  else
+    cp -R "$source_dir" "$dest_dir"
+  fi
+  echo "bootstrap_${label}=copied" >&2
+}
+
+bootstrap_worktree_artifacts() {
+  local source_root="$1"
+  local worktree_root="$2"
+  local source_head="$3"
+  local worktree_head="$4"
+
+  # Dependency installs are branch-agnostic enough to reuse safely across
+  # fresh worktrees; symlink them so a new lane can start immediately.
+  link_bootstrap_directory "$source_root/node_modules" "$worktree_root/node_modules" "node_modules"
+  link_bootstrap_directory "$source_root/ui/node_modules" "$worktree_root/ui/node_modules" "ui_node_modules"
+
+  # Built output is branch-sensitive. Only copy it when the source checkout and
+  # new worktree point at the same commit, otherwise we would seed the lane with
+  # artifacts from the wrong code and create a more subtle footgun.
+  if [[ -n "$source_head" && "$source_head" == "$worktree_head" ]]; then
+    copy_bootstrap_directory "$source_root/dist" "$worktree_root/dist" "dist"
+  fi
+}
+
 if [[ $# -lt 1 ]]; then
   usage >&2
   exit 1
@@ -207,6 +257,7 @@ fi
 FEATURE_NAME=""
 BASE_BRANCH=""
 BASE_SOURCE="auto"
+NO_BOOTSTRAP=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -218,6 +269,10 @@ while [[ $# -gt 0 ]]; do
       BASE_BRANCH="$2"
       BASE_SOURCE="flag"
       shift 2
+      ;;
+    --no-bootstrap)
+      NO_BOOTSTRAP=1
+      shift
       ;;
     --help|-h)
       usage
@@ -260,6 +315,7 @@ worktree_guard_reject_shared_root_main_edits \
   --context "scripts/new-worktree.sh"
 
 BOOTSTRAP_SCRIPT="${REPO_ROOT}/scripts/bootstrap-worktree-telegram.sh"
+RUNTIME_BOOTSTRAP_SCRIPT="${REPO_ROOT}/scripts/bootstrap-worktree-runtime.sh"
 DOCTOR_SCRIPT="${REPO_ROOT}/scripts/worktree-doctor.sh"
 
 # Keep helper-generated worktrees under the repo-owned durable lane area so
@@ -302,6 +358,10 @@ assert_base_branch_synced_with_remote "$BASE_BRANCH"
 TARGET_REF="origin/${BASE_BRANCH}"
 git worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" "$TARGET_REF"
 
+SOURCE_HEAD="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+WORKTREE_HEAD="$(git -C "$WORKTREE_PATH" rev-parse HEAD 2>/dev/null || true)"
+bootstrap_worktree_artifacts "$REPO_ROOT" "$WORKTREE_PATH" "$SOURCE_HEAD" "$WORKTREE_HEAD"
+
 (cd "$WORKTREE_PATH" && bash "$BOOTSTRAP_SCRIPT" --optional)
 
 DEV_PORT="$(WORKTREE_PATH="$WORKTREE_PATH" node --input-type=module - <<'NODE'
@@ -329,6 +389,19 @@ if [[ -x "$DOCTOR_SCRIPT" ]]; then
     --require-dev-launch-env
 fi
 
+BOOTSTRAP_RUNTIME_STATUS="disabled"
+if [[ "$NO_BOOTSTRAP" != "1" ]] && [[ -f "$RUNTIME_BOOTSTRAP_SCRIPT" ]]; then
+  # Fresh git worktrees inherit source only. Bootstrap deps/build artifacts
+  # here so the lane is immediately usable instead of failing on missing
+  # node_modules/dist the first time someone tries to validate anything.
+  if bash "$RUNTIME_BOOTSTRAP_SCRIPT" --root "$WORKTREE_PATH" --quiet; then
+    BOOTSTRAP_RUNTIME_STATUS="ok"
+  else
+    BOOTSTRAP_RUNTIME_STATUS="failed"
+    echo "warning: worktree runtime bootstrap failed; the lane may still need pnpm install/build" >&2
+  fi
+fi
+
 if [[ -f "$WORKTREE_PATH/.env.local" ]]; then
   run_ensure_with_timeout "$WORKTREE_PATH"
 else
@@ -349,3 +422,4 @@ echo "base_branch=${BASE_BRANCH}"
 echo "base_source=${BASE_SOURCE}"
 echo "bot_fingerprint=${BOT_FINGERPRINT}"
 echo "dev_port=${DEV_PORT}"
+echo "bootstrap_runtime=${BOOTSTRAP_RUNTIME_STATUS}"
