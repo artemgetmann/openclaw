@@ -269,6 +269,9 @@ enum CommandResolver {
         }
 
         let root = self.projectRoot()
+        if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
+            return [openclawPath, subcommand] + extraArgs
+        }
         let runtimeResult = self.runtimeResolution(searchPaths: searchPaths)
         switch runtimeResult {
         case let .success(runtime):
@@ -286,9 +289,11 @@ enum CommandResolver {
             break
         }
 
-        if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
-            return [openclawPath, subcommand] + extraArgs
-        }
+        // The shared founder runtime must stay pinned to the canonical repo
+        // checkout when one exists. Falling back to a globally installed
+        // `openclaw` helper before we even try the repo entrypoint silently
+        // repoints ai.openclaw.gateway at ~/.openclaw or another PATH-owned
+        // install, which is exactly how the main bot keeps drifting off `main`.
         if let openclawPath = self.openclawExecutable(searchPaths: searchPaths) {
             return [openclawPath, subcommand] + extraArgs
         }

@@ -214,7 +214,10 @@ main() {
 
   log_block "Rebuild and reinstall from main runtime"
   run_strict bash -lc "cd '${MAIN_REPO}' && pnpm build"
-  run_strict bash -lc "cd '${MAIN_REPO}' && ./bin/openclaw gateway install --force --runtime node --port '${PORT}'"
+  # Recovery is specifically about reclaiming the default shared service for
+  # the canonical main runtime, so install from the built repo entrypoint with
+  # explicit takeover instead of going through a wrapper that can drift.
+  run_strict bash -lc "cd '${MAIN_REPO}' && node dist/index.js gateway install --force --allow-shared-service-takeover --runtime node --port '${PORT}'"
 
   log_block "Bootstrap gateway launch agent"
   launchctl bootstrap "gui/$(id -u)" "${HOME}/Library/LaunchAgents/${GATEWAY_LABEL}.plist" 2>/dev/null || true

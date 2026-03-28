@@ -49,6 +49,10 @@ fi
 # The shared gateway LaunchAgent points at the canonical checkout. Do not let a
 # branch switch in that checkout silently restart Jarvis onto feature code.
 worktree_guard_require_shared_root_main_branch "$ROOT"
+worktree_guard_reject_shared_root_main_edits \
+  "$ROOT" \
+  worktree \
+  --context "scripts/restart-local-gateway.sh"
 
 is_self_restart_context() {
   # OPENCLAW_RESTART_DETACHED is set when the gateway asks us to restart from
@@ -93,8 +97,12 @@ EOF
   echo "Helper log: ${HELPER_LOG_PATH}"
 }
 
-# Reinstall service definition from the local fork.
-"$NODE" "$CLI" daemon install --force --runtime node >/dev/null
+# Reinstall the shared service from the canonical repo entrypoint itself. Using
+# the wrapper/legacy daemon alias here leaves room for whichever launch context
+# invoked the script to influence the resolved service target, which is how the
+# shared LaunchAgent keeps drifting back to ~/.openclaw. We want one legal
+# owner for ai.openclaw.gateway: the canonical repo dist/index.js.
+"$NODE" "$EXPECTED_ENTRY" gateway install --force --allow-shared-service-takeover --runtime node >/dev/null
 
 if is_self_restart_context; then
   schedule_detached_restart
