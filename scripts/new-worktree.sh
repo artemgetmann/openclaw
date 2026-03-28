@@ -202,6 +202,8 @@ if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
   exit 1
 fi
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd -P)"
+BOOTSTRAP_SCRIPT="${REPO_ROOT}/scripts/bootstrap-worktree-telegram.sh"
+DOCTOR_SCRIPT="${REPO_ROOT}/scripts/worktree-doctor.sh"
 
 # Keep helper-generated worktrees under the repo-owned durable lane area so
 # follow-up sessions and local tooling land in one predictable tree.
@@ -238,7 +240,7 @@ fi
 TARGET_REF="origin/${BASE_BRANCH}"
 git worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" "$TARGET_REF"
 
-(cd "$WORKTREE_PATH" && bash scripts/bootstrap-worktree-telegram.sh)
+(cd "$WORKTREE_PATH" && bash "$BOOTSTRAP_SCRIPT" --optional)
 
 DEV_PORT="$(WORKTREE_PATH="$WORKTREE_PATH" node --input-type=module - <<'NODE'
 import crypto from "node:crypto";
@@ -257,7 +259,19 @@ OPENCLAW_STATE_DIR=/tmp/openclaw-dev-${FEATURE_NAME}
 OPENCLAW_GATEWAY_PORT=${DEV_PORT}
 EOF
 
-run_ensure_with_timeout "$WORKTREE_PATH"
+if [[ -x "$DOCTOR_SCRIPT" ]]; then
+  bash "$DOCTOR_SCRIPT" \
+    --root "$WORKTREE_PATH" \
+    --mode new-worktree \
+    --telegram-mode warn \
+    --require-dev-launch-env
+fi
+
+if [[ -f "$WORKTREE_PATH/.env.local" ]]; then
+  run_ensure_with_timeout "$WORKTREE_PATH"
+else
+  echo "warning: no Telegram token claim was assigned; skipping telegram-live-runtime ensure" >&2
+fi
 
 BOT_FINGERPRINT="none"
 if [[ -f "${WORKTREE_PATH}/.env.local" ]]; then

@@ -3,6 +3,30 @@ set -euo pipefail
 
 MAIN_REPO_DEFAULT="/Users/user/Programming_Projects/openclaw"
 MAIN_REPO="${OPENCLAW_MAIN_REPO:-$MAIN_REPO_DEFAULT}"
+OPTIONAL=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --optional)
+      OPTIONAL=1
+      shift
+      ;;
+    --strict)
+      OPTIONAL=0
+      shift
+      ;;
+    --help|-h)
+      cat <<'EOF'
+Usage: scripts/bootstrap-worktree-telegram.sh [--optional|--strict]
+EOF
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
 
 if [[ ! -d "$MAIN_REPO" ]]; then
   echo "Main repo not found: $MAIN_REPO" >&2
@@ -25,7 +49,14 @@ copy_if_exists() {
 copy_if_exists "$MAIN_REPO/.env.bots" "./.env.bots"
 
 if [[ -f "./.env.bots" ]]; then
-  bash scripts/assign-bot.sh
+  assign_output="$({ bash scripts/assign-bot.sh; } 2>&1)" || {
+    if [[ "$OPTIONAL" -eq 1 ]] && [[ "$assign_output" == *"no eligible tester bot tokens available"* ]]; then
+      echo "warning: telegram bot pool exhausted; skipping optional claim"
+    else
+      printf '%s\n' "$assign_output" >&2
+      exit 1
+    fi
+  }
 else
   echo "skip: .env.bots missing in main repo"
 fi
