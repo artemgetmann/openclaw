@@ -26,9 +26,14 @@ describe("git-hooks/pre-commit (integration)", () => {
     // Use the real hook script and lightweight helper stubs.
     mkdirSync(path.join(dir, "git-hooks"), { recursive: true });
     mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
+    mkdirSync(path.join(dir, "scripts", "lib"), { recursive: true });
     symlinkSync(
       path.join(process.cwd(), "git-hooks", "pre-commit"),
       path.join(dir, "git-hooks", "pre-commit"),
+    );
+    symlinkSync(
+      path.join(process.cwd(), "scripts", "lib", "worktree-guards.sh"),
+      path.join(dir, "scripts", "lib", "worktree-guards.sh"),
     );
     writeFileSync(
       path.join(dir, "scripts", "pre-commit", "run-node-tool.sh"),
@@ -64,5 +69,50 @@ describe("git-hooks/pre-commit (integration)", () => {
 
     const staged = run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean);
     expect(staged).toEqual(["--all"]);
+  });
+
+  it("blocks the canonical shared main checkout when it owns ai.openclaw.gateway", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-main-guard-"));
+    const home = path.join(dir, "home");
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    mkdirSync(path.join(dir, "scripts", "lib"), { recursive: true });
+    mkdirSync(path.join(dir, "dist"), { recursive: true });
+    mkdirSync(path.join(home, "Library", "LaunchAgents"), { recursive: true });
+    symlinkSync(
+      path.join(process.cwd(), "scripts", "lib", "worktree-guards.sh"),
+      path.join(dir, "scripts", "lib", "worktree-guards.sh"),
+    );
+    writeFileSync(path.join(dir, "dist", "index.js"), "console.log('gateway');\n", "utf8");
+    writeFileSync(
+      path.join(home, "Library", "LaunchAgents", "ai.openclaw.gateway.plist"),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/node</string>
+    <string>${path.join(dir, "dist", "index.js")}</string>
+    <string>gateway</string>
+  </array>
+</dict>
+</plist>
+`,
+      "utf8",
+    );
+    expect(() =>
+      run(
+        dir,
+        "/bin/bash",
+        [
+          "-c",
+          'source "$PWD/scripts/lib/worktree-guards.sh"; worktree_guard_forbid_shared_root_main_commits "$PWD"',
+        ],
+        {
+          HOME: home,
+        },
+      ),
+    ).toThrow(/canonical shared main checkout/);
   });
 });
