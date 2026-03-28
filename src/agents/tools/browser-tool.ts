@@ -384,6 +384,7 @@ export function createBrowserTool(opts?: {
       'The old built-in profile="user" cloned lane is deprecated and is no longer created by default. If you need that behavior, use an explicit custom profile instead of guessing.',
       'Do not silently fall back to profile="openclaw" when the task depends on existing logins/cookies; surface the blocker instead.',
       'profile="user-live" attaches to the user\'s real Chrome session through the existing-session lane and is host-only.',
+      'If profile="user-live" fails to attach, first try the official Chrome live-session recovery path: keep normal Google Chrome running, open chrome://inspect/#remote-debugging in that same browser, enable remote debugging, accept the attach prompt if Chrome shows one, then retry before escalating.',
       "If multiple Chrome profiles may exist, prefer a named custom existing-session profile pinned by userDataDir, profileDirectory, or cdpUrl instead of guessing.",
       "Custom profiles can still target Brave, Edge, Chromium, non-default Chrome profiles, or explicit cloned-session flows when the default two-lane setup is insufficient.",
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',

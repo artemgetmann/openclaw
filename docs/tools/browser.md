@@ -377,6 +377,7 @@ What to check if attach does not work:
 - the target Chromium-based browser is version `144+`
 - remote debugging is enabled in that browser's inspect page
 - the browser showed and you accepted the attach consent prompt
+- for the built-in `user-live` lane, prefer normal Chrome + `chrome://inspect/#remote-debugging`; do not rely on manually relaunching the default Chrome profile with `--remote-debugging-port`
 - `openclaw doctor` migrates old extension-based browser config and checks that
   Chrome is installed locally for default auto-connect profiles, but it cannot
   enable browser-side remote debugging for you

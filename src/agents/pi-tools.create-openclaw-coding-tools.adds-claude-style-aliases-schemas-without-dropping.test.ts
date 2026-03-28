@@ -163,6 +163,7 @@ describe("createOpenClawCodingTools", () => {
     expect(browser.description).toMatch(/profile="openclaw"/i);
     expect(browser.description).toMatch(/deprecated/i);
     expect(browser.description).toMatch(/do not silently fall back/i);
+    expect(browser.description).toMatch(/chrome:\/\/inspect\/#remote-debugging/i);
   });
   it("keeps browser tool schema properties after normalization", () => {
     const browser = defaultTools.find((tool) => tool.name === "browser");
