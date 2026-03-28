@@ -516,6 +516,27 @@ describe("channels command", () => {
     expect(joined).toMatch(/Group -1001/i);
   });
 
+  it("suppresses Telegram privacy-mode hints when probe confirms full group visibility", () => {
+    const joined = formatChannelStatusJoined({
+      telegram: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          allowUnmentionedGroups: true,
+          probe: {
+            ok: true,
+            bot: {
+              canReadAllGroupMessages: true,
+            },
+          },
+        },
+      ],
+    });
+
+    expect(joined).not.toMatch(/Telegram Bot API privacy mode/i);
+  });
+
   it("surfaces WhatsApp auth/runtime hints when unlinked or disconnected", () => {
     const unlinked = formatGatewayChannelsStatusLines({
       channelAccounts: {

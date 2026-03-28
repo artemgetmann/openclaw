@@ -997,9 +997,8 @@ describe("handleCommands bash alias", () => {
     const result = await handleCommands(params);
 
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain(
-      "exec blocked a gateway supervisor command from the live telegram chat surface",
-    );
+    expect(result.reply?.text).toContain("This command was blocked to keep this chat connected.");
+    expect(result.reply?.text).toContain("Use /restart here in Telegram.");
   });
 });
 
