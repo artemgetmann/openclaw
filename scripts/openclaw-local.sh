@@ -23,6 +23,10 @@ fi
 # Refuse to run it from a feature/consumer branch so checkout drift cannot
 # silently repoint the shared bot at the wrong code.
 worktree_guard_require_shared_root_main_branch "$ROOT"
+worktree_guard_reject_shared_root_main_edits \
+  "$ROOT" \
+  worktree \
+  --context "scripts/openclaw-local.sh"
 
 if [[ -n "${OPENCLAW_CONSUMER_INSTANCE_ID:-}" ]]; then
   normalized_instance_id="$(consumer_instance_normalize_id "$OPENCLAW_CONSUMER_INSTANCE_ID")"
