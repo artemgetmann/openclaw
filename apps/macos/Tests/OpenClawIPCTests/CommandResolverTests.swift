@@ -42,17 +42,14 @@ import Testing
     @Test func `prefers open claw binary`() throws {
         let defaults = self.makeLocalDefaults()
 
-        let tmp = try self.makeRepoRoot()
+        let tmp = try makeTempDirForTests()
         CommandResolver.setProjectRoot(tmp.path)
 
-        try makeExecutableForTests(at: tmp.appendingPathComponent("node_modules/.bin/openclaw"))
+        let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
+        try makeExecutableForTests(at: openclawPath)
 
         let cmd = CommandResolver.openclawCommand(subcommand: "gateway", defaults: defaults, configRoot: [:])
-        #expect(cmd.count >= 3)
-        if cmd.count >= 3 {
-            #expect(cmd[1] == tmp.appendingPathComponent("dist/index.js").path)
-            #expect(cmd[2] == "gateway")
-        }
+        #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
     }
 
     @Test func `falls back to node and project entrypoint`() throws {
@@ -263,21 +260,21 @@ import Testing
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("openclaw@example.com:2222", forKey: remoteTargetKey)
 
-        let tmp = try self.makeRepoRoot()
+        let tmp = try makeTempDirForTests()
         CommandResolver.setProjectRoot(tmp.path)
 
-        try makeExecutableForTests(at: tmp.appendingPathComponent("node_modules/.bin/openclaw"))
+        let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
+        try makeExecutableForTests(at: openclawPath)
 
         let cmd = CommandResolver.openclawCommand(
             subcommand: "daemon",
             defaults: defaults,
             configRoot: ["gateway": ["mode": "local"]])
 
-        #expect(cmd.count >= 3)
+        #expect(cmd.first == openclawPath.path)
         #expect(cmd.count >= 2)
-        if cmd.count >= 3 {
-            #expect(cmd[1] == tmp.appendingPathComponent("dist/index.js").path)
-            #expect(cmd[2] == "daemon")
+        if cmd.count >= 2 {
+            #expect(cmd[1] == "daemon")
         }
     }
 }
