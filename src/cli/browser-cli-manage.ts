@@ -117,12 +117,21 @@ function formatBrowserConnectionSummary(params: {
   cdpPort?: number | null;
   cdpUrl?: string | null;
   userDataDir?: string | null;
+  profileDirectory?: string | null;
 }): string {
   if (usesChromeMcpTransport(params)) {
     const userDataDir = params.userDataDir ? shortenHomePath(params.userDataDir) : null;
-    return userDataDir
-      ? `transport: chrome-mcp, userDataDir: ${userDataDir}`
-      : "transport: chrome-mcp";
+    const profileDirectory = params.profileDirectory?.trim() || null;
+    if (userDataDir && profileDirectory) {
+      return `transport: chrome-mcp, userDataDir: ${userDataDir}, profileDirectory: ${profileDirectory}`;
+    }
+    if (userDataDir) {
+      return `transport: chrome-mcp, userDataDir: ${userDataDir}`;
+    }
+    if (profileDirectory) {
+      return `transport: chrome-mcp, profileDirectory: ${profileDirectory}`;
+    }
+    return "transport: chrome-mcp";
   }
   if (params.isRemote) {
     return `cdpUrl: ${params.cdpUrl ?? "(unset)"}`;
@@ -160,9 +169,14 @@ export function registerBrowserManageCommands(
                   `cdpPort: ${status.cdpPort ?? "(unset)"}`,
                   `cdpUrl: ${redactCdpUrl(status.cdpUrl ?? `http://127.0.0.1:${status.cdpPort}`)}`,
                 ]
-              : status.userDataDir
-                ? [`userDataDir: ${shortenHomePath(status.userDataDir)}`]
-                : []),
+              : [
+                  ...(status.userDataDir
+                    ? [`userDataDir: ${shortenHomePath(status.userDataDir)}`]
+                    : []),
+                  ...(status.profileDirectory
+                    ? [`profileDirectory: ${status.profileDirectory}`]
+                    : []),
+                ]),
             `browser: ${status.chosenBrowser ?? "unknown"}`,
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
             `detectedPath: ${detectedDisplay}`,
@@ -464,6 +478,10 @@ export function registerBrowserManageCommands(
     .option("--color <hex>", "Profile color (hex format, e.g. #0066CC)")
     .option("--cdp-url <url>", "CDP URL for remote Chrome (http/https)")
     .option("--user-data-dir <path>", "User data dir for existing-session Chromium attach")
+    .option(
+      "--profile-directory <name>",
+      'Chromium profile directory for existing-session attach (for example "Profile 4")',
+    )
     .option("--driver <driver>", "Profile driver (openclaw|existing-session). Default: openclaw")
     .action(
       async (
@@ -472,6 +490,7 @@ export function registerBrowserManageCommands(
           color?: string;
           cdpUrl?: string;
           userDataDir?: string;
+          profileDirectory?: string;
           driver?: string;
         },
         cmd,
@@ -488,6 +507,7 @@ export function registerBrowserManageCommands(
                 color: opts.color,
                 cdpUrl: opts.cdpUrl,
                 userDataDir: opts.userDataDir,
+                profileDirectory: opts.profileDirectory,
                 driver: opts.driver === "existing-session" ? "existing-session" : undefined,
               },
             },
@@ -501,6 +521,8 @@ export function registerBrowserManageCommands(
             info(
               `🦞 Created profile "${result.profile}"\n${loc}\n  color: ${result.color}${
                 result.userDataDir ? `\n  userDataDir: ${shortenHomePath(result.userDataDir)}` : ""
+              }${
+                result.profileDirectory ? `\n  profileDirectory: ${result.profileDirectory}` : ""
               }${opts.driver === "existing-session" ? "\n  driver: existing-session" : ""}`,
             ),
           );

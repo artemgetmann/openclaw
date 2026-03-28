@@ -317,8 +317,8 @@ Common parameters:
 - Requires `browser.enabled=true` (default is `true`; set `false` to disable).
 - All actions accept optional `profile` parameter for multi-instance support.
 - Omit `profile` for the safe default: isolated OpenClaw-managed browser (`openclaw`).
-- Use `profile="user"` for the host-local cloned Chrome lane when existing logins/cookies matter.
-- `profile="user"` is host-only; do not combine it with sandbox/node targets.
+- Use `profile="user-live"` only when the task explicitly needs the user’s real live browser session, existing tabs, or installed extensions.
+- `profile="user-live"` is host-only; do not combine it with sandbox/node targets.
 - When `profile` is omitted, uses `browser.defaultProfile` (defaults to `openclaw`).
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
 - Port range: 18800-18899 (~100 profiles max).

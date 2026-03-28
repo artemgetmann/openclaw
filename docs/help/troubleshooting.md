@@ -278,13 +278,13 @@ flowchart TD
     Good output looks like:
 
     - Browser status shows `running: true` and a chosen browser/profile.
-    - `openclaw` starts, or `user` can see local Chrome tabs.
+    - `openclaw` starts, or `user-live` can see local Chrome tabs.
 
     Common log signatures:
 
     - `Failed to start Chrome CDP on port` → local browser launch failed.
     - `browser.executablePath not found` → configured binary path is wrong.
-    - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
+    - `No Chrome tabs found for profile="user-live"` → the Chrome MCP attach profile has no open local Chrome tabs.
     - `Browser attachOnly is enabled ... not reachable` → attach-only profile has no live CDP target.
 
     Deep pages:

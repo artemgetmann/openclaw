@@ -2430,7 +2430,7 @@ See [Plugins](/tools/plugin).
   browser: {
     enabled: true,
     evaluateEnabled: true,
-    defaultProfile: "user",
+    defaultProfile: "openclaw",
     ssrfPolicy: {
       dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
       // allowPrivateNetwork: true, // legacy alias
@@ -2440,7 +2440,7 @@ See [Plugins](/tools/plugin).
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
-      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      "user-live": { driver: "existing-session", attachOnly: true, color: "#2D7FF9" },
       brave: {
         driver: "existing-session",
         attachOnly: true,
@@ -2469,6 +2469,12 @@ See [Plugins](/tools/plugin).
 - `existing-session` profiles are host-only and use Chrome MCP instead of CDP.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
+- `existing-session` profiles can set `profileDirectory` to pin one exact
+  signed-in Chromium profile such as `Default` or `Profile 4` inside that
+  shared user-data root.
+- `existing-session` profiles can also set `cdpUrl` when you want Chrome MCP to
+  attach to one exact live Chrome process that you launched with a known
+  `--remote-debugging-port` instead of relying on auto-discovery.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
 - `extraArgs` appends extra launch flags to local Chromium startup (for example

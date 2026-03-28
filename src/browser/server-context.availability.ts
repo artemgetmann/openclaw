@@ -83,7 +83,6 @@ export function createProfileAvailability({
       remoteHttpTimeoutMs: state().resolved.remoteCdpTimeoutMs,
       remoteHandshakeTimeoutMs: state().resolved.remoteCdpHandshakeTimeoutMs,
     });
-
   const isReachable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
       const readyTimeoutMs = resolveChromeMcpReadyTimeoutMs(timeoutMs);

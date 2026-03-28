@@ -5,6 +5,13 @@ export type BrowserProfileConfig = {
   cdpUrl?: string;
   /** Explicit user data directory for existing-session Chrome MCP attachment. */
   userDataDir?: string;
+  /**
+   * Explicit Chromium profile directory for existing-session attachment.
+   * Use values like "Default" or "Profile 4" when multiple signed-in profiles
+   * share the same userDataDir and OpenClaw must fail closed instead of
+   * attaching to whichever live Chrome window answered first.
+   */
+  profileDirectory?: string;
   /** Profile driver (default: openclaw). */
   driver?: "openclaw" | "clawd" | "existing-session";
   /** If true, seed this profile by cloning a local Chrome profile before launch. */
