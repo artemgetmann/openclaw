@@ -10,6 +10,7 @@ PREFLIGHT="$ROOT/scripts/local-runtime-preflight.sh"
 DEFERRED_RESTART_DELAY_SECONDS="${OPENCLAW_DEFERRED_RESTART_DELAY_SECONDS:-1}"
 HELPER_LOG_PATH="${OPENCLAW_RESTART_HELPER_LOG:-/tmp/openclaw-restart-helper.log}"
 source "$ROOT/scripts/lib/consumer-instance.sh"
+source "$ROOT/scripts/lib/worktree-guards.sh"
 
 RAW_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 if [[ -z "$RAW_INSTANCE_ID" ]]; then
@@ -44,6 +45,10 @@ fi
 if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
+
+# The shared gateway LaunchAgent points at the canonical checkout. Do not let a
+# branch switch in that checkout silently restart Jarvis onto feature code.
+worktree_guard_require_shared_root_main_branch "$ROOT"
 
 is_self_restart_context() {
   # OPENCLAW_RESTART_DETACHED is set when the gateway asks us to restart from
