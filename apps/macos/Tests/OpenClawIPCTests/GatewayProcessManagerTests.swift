@@ -6,6 +6,10 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
+    @Test func `gateway readiness timeout allows real launchd restart budget`() {
+        #expect(GatewayProcessManager.gatewayReadinessTimeout >= 20)
+    }
+
     @Test func `skips launch agent ensure while gateway start is already in progress`() {
         #expect(GatewayProcessManager._testShouldSkipLaunchAgentEnsure(for: .starting))
         #expect(!GatewayProcessManager._testShouldSkipLaunchAgentEnsure(for: .stopped))

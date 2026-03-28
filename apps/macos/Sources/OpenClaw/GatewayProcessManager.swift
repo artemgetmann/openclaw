@@ -5,7 +5,12 @@ import Observation
 @Observable
 final class GatewayProcessManager {
     static let shared = GatewayProcessManager()
-    private static let gatewayStartupTimeout: TimeInterval = 15
+    // Real launchd restarts on this machine routinely take 13-14s because the gateway
+    // may regenerate auth config and then bootstrap channels before the health RPC
+    // answers again. A 6s deadline turns successful restarts into fake "not connecting"
+    // errors in the app, so keep one explicit, shared readiness budget here.
+    static let gatewayReadinessTimeout: TimeInterval = 20
+    private static let readinessPollIntervalNanos: UInt64 = 400_000_000
 
     enum Status: Equatable {
         case stopped
@@ -181,7 +186,7 @@ final class GatewayProcessManager {
 
         // A restart keeps launchd ownership intact, so only wait for the daemon to
         // come back and reattach to the existing service instead of reinstalling it.
-        let deadline = Date().addingTimeInterval(6)
+        let deadline = Date().addingTimeInterval(Self.gatewayReadinessTimeout)
         while Date() < deadline {
             if !self.desiredActive { return }
             do {
@@ -199,7 +204,7 @@ final class GatewayProcessManager {
                 self.refreshLog()
                 return
             } catch {
-                try? await Task.sleep(nanoseconds: 400_000_000)
+                try? await Task.sleep(nanoseconds: Self.readinessPollIntervalNanos)
             }
         }
 
@@ -469,7 +474,7 @@ final class GatewayProcessManager {
         // The consumer gateway can take a while to become responsive after launchd has accepted
         // the job, especially on this machine when multiple OpenClaw lanes are chewing CPU.
         // Give recovery the full timeout window before we declare failure and poison the UI.
-        let deadline = Date().addingTimeInterval(Self.gatewayStartupTimeout)
+        let deadline = Date().addingTimeInterval(Self.gatewayReadinessTimeout)
         while Date() < deadline {
             if !self.desiredActive { return false }
             do {
@@ -483,7 +488,7 @@ final class GatewayProcessManager {
                 self.refreshLog()
                 return true
             } catch {
-                try? await Task.sleep(nanoseconds: 400_000_000)
+                try? await Task.sleep(nanoseconds: Self.readinessPollIntervalNanos)
             }
         }
 
@@ -516,7 +521,7 @@ final class GatewayProcessManager {
         Task { await ControlChannel.shared.configure() }
     }
 
-    func waitForGatewayReady(timeout: TimeInterval = 6) async -> Bool {
+    func waitForGatewayReady(timeout: TimeInterval = GatewayProcessManager.gatewayReadinessTimeout) async -> Bool {
         self.lastReadinessFailureReason = nil
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -537,7 +542,7 @@ final class GatewayProcessManager {
                     self.logger.warning("gateway readiness blocked by auth/pairing")
                     return false
                 }
-                try? await Task.sleep(nanoseconds: 300_000_000)
+                try? await Task.sleep(nanoseconds: Self.readinessPollIntervalNanos)
             }
         }
         self.appendLog("[gateway] readiness wait timed out\n")
