@@ -154,6 +154,26 @@ describe("fetchBrowserJson loopback auth", () => {
     });
   });
 
+  it("preserves retryable chrome attach guidance without restart or no-retry hints", async () => {
+    mocks.dispatch.mockRejectedValueOnce(
+      new Error(
+        'Chrome MCP existing-session attach for profile "user-live" timed out waiting for tabs to become available. Approve the browser attach prompt, keep the browser open, and retry.',
+      ),
+    );
+
+    await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
+      contains: [
+        'Chrome MCP existing-session attach for profile "user-live"',
+        "Approve the browser attach prompt",
+      ],
+      omits: [
+        "Restart the OpenClaw gateway",
+        "Do NOT retry the browser tool",
+        "Can't reach the OpenClaw browser control service",
+      ],
+    });
+  });
+
   it("surfaces 429 from HTTP URL as rate-limit error with no-retry hint", async () => {
     const response = new Response("max concurrent sessions exceeded", { status: 429 });
     const text = vi.spyOn(response, "text");

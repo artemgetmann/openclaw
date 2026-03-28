@@ -385,6 +385,64 @@ describe("browser tool snapshot maxChars", () => {
     expect(Object.hasOwn(opts ?? {}, "maxChars")).toBe(false);
   });
 
+  it("warms chrome-mcp live lanes and retries snapshot once after attach timeout", async () => {
+    setResolvedBrowserProfiles({
+      "user-live": { driver: "existing-session", attachOnly: true, color: "#2D7FF9" },
+    });
+    browserClientMocks.browserSnapshot
+      .mockRejectedValueOnce(
+        new Error(
+          'Chrome MCP existing-session attach for profile "user-live" timed out waiting for tabs to become available. Approve the browser attach prompt, keep the browser open, and retry. Last error: MCP error -32001: Request timed out',
+        ),
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        format: "ai",
+        targetId: "t1",
+        url: "https://example.com",
+        snapshot: "ok",
+      });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      profile: "user-live",
+      snapshotFormat: "ai",
+    });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(undefined, {
+      profile: "user-live",
+    });
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not warm or retry snapshots for non-chrome lanes", async () => {
+    setResolvedBrowserProfiles({
+      openclaw: {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#FF4500",
+        cdpPort: 18792,
+        cdpUrl: "http://127.0.0.1:18792",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+      },
+    });
+    browserClientMocks.browserSnapshot.mockRejectedValueOnce(new Error("snapshot blew up"));
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "snapshot",
+        profile: "openclaw",
+        snapshotFormat: "ai",
+      }),
+    ).rejects.toThrow(/snapshot blew up/i);
+
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("routes to node proxy when target=node", async () => {
     mockSingleBrowserProxyNode();
     const tool = createBrowserTool();

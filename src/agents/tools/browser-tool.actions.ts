@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { browserAct, browserConsoleMessages } from "../../browser/client-actions.js";
-import { browserSnapshot, browserTabs } from "../../browser/client.js";
+import { browserSnapshot, browserStatus, browserTabs } from "../../browser/client.js";
 import { resolveBrowserConfig, resolveProfile } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { getBrowserProfileCapabilities } from "../../browser/profile-capabilities.js";
@@ -125,6 +125,28 @@ function canRetryChromeActWithoutTargetId(request: Parameters<typeof browserAct>
   return kind === "hover" || kind === "scrollIntoView" || kind === "wait";
 }
 
+function isRetryableChromeMcpSnapshotAttachError(
+  profile: string | undefined,
+  err: unknown,
+): boolean {
+  if (!profile) {
+    return false;
+  }
+  const cfg = loadConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const browserProfile = resolveProfile(resolved, profile);
+  if (!browserProfile || !getBrowserProfileCapabilities(browserProfile).usesChromeMcp) {
+    return false;
+  }
+  const message = String(err);
+  return (
+    (message.includes("Chrome MCP existing-session attach for profile") &&
+      message.includes("timed out waiting for tabs to become available")) ||
+    (message.includes("Could not connect to Chrome. Check if Chrome is running.") &&
+      message.includes("DevToolsActivePort"))
+  );
+}
+
 export async function executeTabsAction(params: {
   baseUrl?: string;
   profile?: string;
@@ -207,19 +229,38 @@ export async function executeSnapshotAction(params: {
     labels,
     mode,
   };
-  const snapshot = proxyRequest
-    ? ((await proxyRequest({
-        method: "GET",
-        path: "/snapshot",
-        profile,
-        query: snapshotQuery,
-        timeoutMs,
-      })) as Awaited<ReturnType<typeof browserSnapshot>>)
-    : await browserSnapshot(baseUrl, {
+  let snapshot: Awaited<ReturnType<typeof browserSnapshot>>;
+  if (proxyRequest) {
+    snapshot = (await proxyRequest({
+      method: "GET",
+      path: "/snapshot",
+      profile,
+      query: snapshotQuery,
+      timeoutMs,
+    })) as Awaited<ReturnType<typeof browserSnapshot>>;
+  } else {
+    try {
+      snapshot = await browserSnapshot(baseUrl, {
         ...snapshotQuery,
         profile,
         timeoutMs,
       });
+    } catch (err) {
+      // Chrome MCP existing-session lanes can false-fail on the very first
+      // heavy read while the attach bridge is still warming. A cheap status
+      // probe primes the attach path; retry the snapshot once before surfacing
+      // a user-visible "browser unavailable" failure.
+      if (!isRetryableChromeMcpSnapshotAttachError(profile, err)) {
+        throw err;
+      }
+      await browserStatus(baseUrl, { profile });
+      snapshot = await browserSnapshot(baseUrl, {
+        ...snapshotQuery,
+        profile,
+        timeoutMs,
+      });
+    }
+  }
   if (snapshot.format === "ai") {
     const extractedText = snapshot.snapshot ?? "";
     const wrappedSnapshot = wrapExternalContent(extractedText, {
