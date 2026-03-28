@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw browser` (profiles, tabs, actions, Chrome 
 read_when:
   - You use `openclaw browser` and want examples for common tasks
   - You want to control a browser running on another machine via a node host
-  - You want to use a separate browser window seeded from your signed-in Chrome state
+  - You want to use either the isolated browser or your real live Chrome session
 title: "browser"
 ---
 
@@ -37,7 +37,7 @@ openclaw browser --browser-profile openclaw snapshot
 Profiles are named browser routing configs. In practice:
 
 - `openclaw`: launches or attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
-- `user`: launches a separate OpenClaw-managed Chrome window seeded from your signed-in Chrome state.
+- `user-live`: attaches to your real live Chrome session.
 - custom CDP profiles: point at a local or remote CDP endpoint.
 
 ```bash
@@ -53,9 +53,9 @@ Use a specific profile:
 openclaw browser --browser-profile work tabs
 ```
 
-Built-in signed-in lanes:
+Built-in live/session lanes:
 
-- `user`: cloned browser seeded from the user's Chrome state
+- `openclaw`: isolated managed browser
 - `user-live`: the user's actual live Chrome session
 
 ## Tabs
@@ -89,12 +89,12 @@ openclaw browser click <ref>
 openclaw browser type <ref> "hello"
 ```
 
-## Signed-in Chrome lane vs live Chrome attach
+## OpenClaw vs live Chrome attach
 
-Use the built-in `user` profile for the default signed-in cloned-session lane, or create your own `existing-session` profile when you explicitly want live Chrome attach:
+Use the built-in `user-live` profile for the default live-session lane, or create your own `existing-session` profile when you need an exact browser target:
 
 ```bash
-openclaw browser --browser-profile user tabs
+openclaw browser --browser-profile user-live tabs
 openclaw browser create-profile --name chrome-live --driver existing-session
 openclaw browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
 openclaw browser --browser-profile chrome-live tabs
@@ -121,7 +121,7 @@ openclaw browser create-profile \
 Use this exact-target pattern when multiple Chrome sessions are open and the
 built-in `user-live` lane might attach to the wrong one.
 
-The default `user` lane is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
+The built-in `user-live` lane is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
 
 ## Remote browser control (node host proxy)
 

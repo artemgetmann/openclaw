@@ -284,9 +284,9 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts?.mode).toBeUndefined();
   });
 
-  it("defaults to host when using profile=user (even in sandboxed sessions)", async () => {
+  it("defaults to host when using an explicit cloned-session profile", async () => {
     setResolvedBrowserProfiles({
-      user: {
+      "signed-in": {
         driver: "openclaw",
         attachOnly: false,
         color: "#00AA00",
@@ -300,14 +300,14 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
     await tool.execute?.("call-1", {
       action: "snapshot",
-      profile: "user",
+      profile: "signed-in",
       snapshotFormat: "ai",
     });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       undefined,
       expect.objectContaining({
-        profile: "user",
+        profile: "signed-in",
       }),
     );
   });
@@ -331,9 +331,9 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
-  it('rejects profile="user" with target="sandbox"', async () => {
+  it('rejects cloned-session profiles with target="sandbox"', async () => {
     setResolvedBrowserProfiles({
-      user: {
+      "signed-in": {
         driver: "openclaw",
         attachOnly: false,
         color: "#00AA00",
@@ -349,21 +349,33 @@ describe("browser tool snapshot maxChars", () => {
     await expect(
       tool.execute?.("call-1", {
         action: "snapshot",
-        profile: "user",
+        profile: "signed-in",
         target: "sandbox",
         snapshotFormat: "ai",
       }),
-    ).rejects.toThrow(/profile="user" cannot use the sandbox browser/i);
+    ).rejects.toThrow(/profile="signed-in" cannot use the sandbox browser/i);
   });
 
   it("lets the server choose snapshot format when the user does not request one", async () => {
+    setResolvedBrowserProfiles({
+      "signed-in": {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
+    });
     const tool = createBrowserTool();
-    await tool.execute?.("call-1", { action: "snapshot", profile: "user" });
+    await tool.execute?.("call-1", { action: "snapshot", profile: "signed-in" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       undefined,
       expect.objectContaining({
-        profile: "user",
+        profile: "signed-in",
       }),
     );
     const opts = browserClientMocks.browserSnapshot.mock.calls.at(-1)?.[1] as
@@ -430,10 +442,10 @@ describe("browser tool snapshot maxChars", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("keeps user profile on host when node proxy is available", async () => {
+  it("keeps cloned-session profiles on host when node proxy is available", async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
-      user: {
+      "signed-in": {
         driver: "openclaw",
         attachOnly: false,
         color: "#00AA00",
@@ -445,11 +457,11 @@ describe("browser tool snapshot maxChars", () => {
       },
     });
     const tool = createBrowserTool();
-    await tool.execute?.("call-1", { action: "status", profile: "user" });
+    await tool.execute?.("call-1", { action: "status", profile: "signed-in" });
 
     expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
       undefined,
-      expect.objectContaining({ profile: "user" }),
+      expect.objectContaining({ profile: "signed-in" }),
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
@@ -811,7 +823,19 @@ describe("browser tool external content wrapping", () => {
 describe("browser tool act stale target recovery", () => {
   registerBrowserToolAfterEachReset();
 
-  it("retries safe user-browser act once without targetId when exactly one tab remains", async () => {
+  it("retries safe cloned-session act once without targetId when exactly one tab remains", async () => {
+    setResolvedBrowserProfiles({
+      "signed-in": {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
+    });
     browserActionsMocks.browserAct
       .mockRejectedValueOnce(new Error("404: tab not found"))
       .mockResolvedValueOnce({ ok: true });
@@ -820,7 +844,7 @@ describe("browser tool act stale target recovery", () => {
     const tool = createBrowserTool();
     const result = await tool.execute?.("call-1", {
       action: "act",
-      profile: "user",
+      profile: "signed-in",
       request: {
         kind: "hover",
         targetId: "stale-tab",
@@ -833,18 +857,30 @@ describe("browser tool act stale target recovery", () => {
       1,
       undefined,
       expect.objectContaining({ targetId: "stale-tab", kind: "hover", ref: "btn-1" }),
-      expect.objectContaining({ profile: "user" }),
+      expect.objectContaining({ profile: "signed-in" }),
     );
     expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
       2,
       undefined,
       expect.not.objectContaining({ targetId: expect.anything() }),
-      expect.objectContaining({ profile: "user" }),
+      expect.objectContaining({ profile: "signed-in" }),
     );
     expect(result?.details).toMatchObject({ ok: true });
   });
 
-  it("does not retry mutating user-browser act requests without targetId", async () => {
+  it("does not retry mutating cloned-session act requests without targetId", async () => {
+    setResolvedBrowserProfiles({
+      "signed-in": {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
+    });
     browserActionsMocks.browserAct.mockRejectedValueOnce(new Error("404: tab not found"));
     browserClientMocks.browserTabs.mockResolvedValueOnce([{ targetId: "only-tab" }]);
 
@@ -852,14 +888,14 @@ describe("browser tool act stale target recovery", () => {
     await expect(
       tool.execute?.("call-1", {
         action: "act",
-        profile: "user",
+        profile: "signed-in",
         request: {
           kind: "click",
           targetId: "stale-tab",
           ref: "btn-1",
         },
       }),
-    ).rejects.toThrow(/Run action=tabs profile="user"/i);
+    ).rejects.toThrow(/Run action=tabs profile="signed-in"/i);
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(1);
   });
@@ -869,11 +905,23 @@ describe("browser tool session lane stickiness", () => {
   registerBrowserToolAfterEachReset();
 
   it("reuses the last explicit profile within the same agent session", async () => {
+    setResolvedBrowserProfiles({
+      "signed-in": {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
+    });
     const tool = createBrowserTool({ agentSessionKey: "agent:main:browser-lane" });
 
     await tool.execute?.("call-1", {
       action: "open",
-      profile: "user",
+      profile: "signed-in",
       url: "https://mail.google.com",
     });
     await tool.execute?.("call-2", {
@@ -884,20 +932,32 @@ describe("browser tool session lane stickiness", () => {
     expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
       undefined,
       "https://mail.google.com",
-      expect.objectContaining({ profile: "user" }),
+      expect.objectContaining({ profile: "signed-in" }),
     );
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       undefined,
-      expect.objectContaining({ profile: "user" }),
+      expect.objectContaining({ profile: "signed-in" }),
     );
   });
 
   it("lets a later explicit profile override the remembered lane", async () => {
+    setResolvedBrowserProfiles({
+      "signed-in": {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
+    });
     const tool = createBrowserTool({ agentSessionKey: "agent:main:browser-lane-override" });
 
     await tool.execute?.("call-1", {
       action: "open",
-      profile: "user",
+      profile: "signed-in",
       url: "https://mail.google.com",
     });
     await tool.execute?.("call-2", {
@@ -923,11 +983,23 @@ describe("browser tool session lane stickiness", () => {
   });
 
   it("keeps profiles listing lane-agnostic", async () => {
+    setResolvedBrowserProfiles({
+      "signed-in": {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#00AA00",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
+    });
     const tool = createBrowserTool({ agentSessionKey: "agent:main:browser-lane-profiles" });
 
     await tool.execute?.("call-1", {
       action: "open",
-      profile: "user",
+      profile: "signed-in",
       url: "https://mail.google.com",
     });
     await tool.execute?.("call-2", {

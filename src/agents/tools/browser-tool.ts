@@ -108,9 +108,6 @@ function resolveBrowserProfileAlias(profileName?: string): string | undefined {
     if (resolveProfile(resolved, "user-live")) {
       return "user-live";
     }
-    if (resolveProfile(resolved, "user")) {
-      return "user";
-    }
   }
 
   return normalized;
@@ -382,14 +379,13 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Browser choice: prefer profile="user" for signed-in sites, hostile sites, or any flow where existing cookies/logins matter.',
-      'Use profile="user-live" when the user explicitly means their actual live Chrome session, already-open tabs, or the browser they are actively using right now.',
-      'Use profile="openclaw" for public browsing, clean isolated runs, or as an explicit fallback when session reuse is not required.',
+      'Browser choice: prefer profile="openclaw" by default for public browsing, clean isolated runs, and most automation.',
+      'Use profile="user-live" only when the task explicitly depends on the user\'s real live browser session, existing tabs, logged-in state, or installed extensions.',
+      'The old built-in profile="user" cloned lane is deprecated and is no longer created by default. If you need that behavior, use an explicit custom profile instead of guessing.',
       'Do not silently fall back to profile="openclaw" when the task depends on existing logins/cookies; surface the blocker instead.',
-      "profile=\"user\" launches a separate host-local Chromium window seeded from the user's signed-in browser state; it should not take over the user's current live tabs by default.",
-      'profile="user-live" attaches to the user\'s real Chrome session through the existing-session lane and should be used only when the user explicitly wants the live browser.',
-      'Do not mention the removed Browser Relay extension path. If profile="user" fails, describe the actual blocker (for example clone setup, Chrome availability, or signed-in state) instead of suggesting relay fixes.',
-      "Custom existing-session profiles can target Brave, Edge, Chromium, or non-default Chrome profiles via userDataDir when auto-connect would attach to the wrong browser state.",
+      'profile="user-live" attaches to the user\'s real Chrome session through the existing-session lane and is host-only.',
+      "If multiple Chrome profiles may exist, prefer a named custom existing-session profile pinned by userDataDir, profileDirectory, or cdpUrl instead of guessing.",
+      "Custom profiles can still target Brave, Edge, Chromium, non-default Chrome profiles, or explicit cloned-session flows when the default two-lane setup is insufficient.",
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
@@ -412,9 +408,9 @@ export function createBrowserTool(opts?: {
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
-      // The signed-in user lane is host-only whether it is a live attach profile
-      // or a cloned-session launch. Sandbox/node routing would lose access to the
-      // user's local Chrome state, so keep this lane anchored to the host.
+      // Live-session and cloned-session host profiles rely on the operator's
+      // local browser state. Sandbox/node routing would detach from that state,
+      // so keep those lanes anchored to the host.
       const isUserBrowserProfile = shouldPreferHostForProfile(profile);
       if (isUserBrowserProfile) {
         if (requestedNode || target === "node") {

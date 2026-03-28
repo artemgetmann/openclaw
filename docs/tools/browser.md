@@ -18,7 +18,7 @@ Beginner view:
 - Think of it as a **separate, agent-only browser**.
 - The `openclaw` profile does **not** touch your personal browser profile.
 - The agent can **open tabs, read pages, click, and type** in a safe lane.
-- The built-in `user` profile launches a separate host-local Chrome window seeded from your signed-in Chrome state.
+- The built-in `user-live` profile attaches to your actual host-local Chrome session when a task truly depends on your real browser state.
 
 ## What you get
 
@@ -42,22 +42,17 @@ openclaw browser --browser-profile openclaw snapshot
 If you get “Browser disabled”, enable it in config (see below) and restart the
 Gateway.
 
-## Profiles: `openclaw` vs `user`
+## Profiles: `openclaw` vs `user-live`
 
 - `openclaw`: managed, isolated browser (no extension required).
-- `user`: host-local cloned-session lane for your signed-in Chrome state without taking over the live browser process.
+- `user-live`: host-local live-session lane for your real Chrome tabs, extensions, and login state.
 
 For agent browser tool calls:
 
-- Prefer `profile="user"` for signed-in sites, hostile sites, or flows where
-  existing cookies/session matter.
-- Use `profile="openclaw"` for public browsing, clean isolated runs, or as an
-  explicit fallback when session reuse is not required.
-- If the task clearly depends on existing login state and `profile="user"` is
-  unavailable, stop and surface the blocker instead of silently switching to a
-  clean isolated browser.
-- Do not suggest the removed Browser Relay extension path for `profile="user"`
-  failures. Report the actual blocker instead.
+- Prefer `profile="openclaw"` by default for public browsing, clean isolated runs, and most automation.
+- Use `profile="user-live"` only when the task explicitly depends on your real signed-in browser session, existing tabs, or installed extensions.
+- If the task clearly depends on existing login state and `profile="user-live"` is unavailable, stop and surface the blocker instead of silently switching to a clean isolated browser.
+- If multiple Chrome profiles may exist, use a named `existing-session` profile pinned by `userDataDir`, `profileDirectory`, or `cdpUrl` instead of guessing.
 - `profile` is the explicit override when you want a specific browser mode.
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
@@ -88,10 +83,10 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
-      user: {
-        cdpPort: 18801,
-        cloneFromUserProfile: true,
-        color: "#00AA00",
+      "user-live": {
+        driver: "existing-session",
+        attachOnly: true,
+        color: "#2D7FF9",
       },
       brave: {
         driver: "existing-session",
@@ -120,16 +115,15 @@ Notes:
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
-- Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "user"` to opt into the signed-in cloned user browser.
+- Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "user-live"` only when you intentionally want the real live browser as the default lane.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
 - `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do
   not set `cdpUrl` for that driver.
 - Set `browser.profiles.<name>.userDataDir` when an existing-session profile
   should attach to a non-default Chromium user profile such as Brave or Edge.
-- `driver: "existing-session"` is the explicit live-browser attach mode for
-  advanced use cases. The built-in `user` lane should stay on cloned-session
-  mode for normal consumer flows.
+- `driver: "existing-session"` is the explicit live-browser attach mode.
+- `cloneFromUserProfile` still exists for advanced custom profiles, but the built-in cloned `user` lane is no longer created by default.
 
 ## Use Brave (or another Chromium-based browser)
 
@@ -298,9 +292,9 @@ OpenClaw supports multiple named profiles (routing configs). Profiles can be:
 Defaults:
 
 - The `openclaw` profile is auto-created if missing.
-- The `user` profile is built-in for the safe cloned browser lane.
 - The `user-live` profile is built-in for the user's actual live Chrome session.
 - Existing-session profiles are opt-in beyond `user-live`; create them with `--driver existing-session`.
+- Cloned signed-in browsers remain available only as explicit custom profiles via `cloneFromUserProfile`.
 - Local CDP ports allocate from **18800–18899** by default.
 - Deleting a profile moves its local data directory to Trash.
 
@@ -326,11 +320,12 @@ different name, color, or browser data directory.
 
 Default behavior:
 
-- The built-in `user` profile uses the cloned signed-in lane, which seeds a
-  separate managed browser from the user's Chrome state.
 - The built-in `user-live` profile uses Chrome MCP auto-connect as the explicit
-  live browser lane. Use this when the user means the real open Chrome window
-  or tabs rather than the safe cloned browser.
+  live browser lane. Use this when the user means the real open Chrome window,
+  tabs, extensions, or signed-in session.
+- If that is too ambiguous, create a named custom existing-session profile
+  pinned to one browser family, one user data dir, one profile directory, or
+  one explicit debugging port.
 
 Use `userDataDir` for Brave, Edge, Chromium, or a non-default Chrome profile:
 
@@ -364,10 +359,9 @@ Common inspect pages:
 Live attach smoke test:
 
 ```bash
-openclaw browser --browser-profile user start
-openclaw browser --browser-profile user status
-openclaw browser --browser-profile user tabs
-openclaw browser --browser-profile user snapshot --format ai
+openclaw browser --browser-profile user-live status
+openclaw browser --browser-profile user-live tabs
+openclaw browser --browser-profile user-live snapshot --format ai
 ```
 
 What success looks like:
@@ -389,7 +383,8 @@ What to check if attach does not work:
 
 Agent use:
 
-- Use `profile="user"` when you need the user’s logged-in browser state.
+- Use `profile="openclaw"` by default.
+- Use `profile="user-live"` when you need the user’s real logged-in browser state or existing tabs/extensions.
 - If you use a custom existing-session profile, pass that explicit profile name.
 - Only choose this mode when the user is at the computer to approve the attach
   prompt.

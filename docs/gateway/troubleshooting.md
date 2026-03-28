@@ -289,13 +289,13 @@ Look for:
 
 - Valid browser executable path.
 - CDP profile reachability.
-- Local Chrome availability for `existing-session` / `user` profiles.
+- Local Chrome availability for `existing-session` / `user-live` profiles.
 
 Common signatures:
 
 - `Failed to start Chrome CDP on port` → browser process failed to launch.
 - `browser.executablePath not found` → configured path is invalid.
-- `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
+- `No Chrome tabs found for profile="user-live"` → the Chrome MCP attach profile has no open local Chrome tabs.
 - `Browser attachOnly is enabled ... not reachable` → attach-only profile has no reachable target.
 
 Related:

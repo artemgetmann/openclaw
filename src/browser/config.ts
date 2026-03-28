@@ -15,7 +15,7 @@ import {
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { allocateCdpPort, CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
+import { CDP_PORT_RANGE_START } from "./profiles.js";
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
@@ -185,25 +185,19 @@ function ensureDefaultProfile(
 }
 
 /**
- * Ensure the built-in signed-in browser lanes exist.
+ * Ensure the built-in live browser lane exists.
  *
- * `user` is the safe cloned window seeded from the user's Chrome state.
- * `user-live` is the explicit live-attach lane for the user's existing Chrome session.
- * Keeping both avoids forcing one semantic onto the other.
+ * The MVP keeps exactly two built-ins:
+ * - `openclaw` for the isolated managed browser
+ * - `user-live` for attaching to the user's real live Chromium session
+ *
+ * Cloned signed-in browsers still exist as an advanced explicit config via
+ * `cloneFromUserProfile`, but we no longer auto-create a built-in `user` lane.
  */
 function ensureDefaultSignedInBrowserProfiles(
   profiles: Record<string, BrowserProfileConfig>,
-  range?: { start: number; end: number },
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
-  if (!result.user) {
-    const cdpPort = allocateCdpPort(getUsedPorts(result), range) ?? CDP_PORT_RANGE_START + 1;
-    result.user = {
-      cdpPort,
-      cloneFromUserProfile: true,
-      color: "#00AA00",
-    };
-  }
   if (!result["user-live"]) {
     // Keep the live lane visually distinct so operators can tell the cloned
     // browser and the user's actual browser apart at a glance.
@@ -282,7 +276,6 @@ export function resolveBrowserConfig(
       cdpPortRangeStart,
       legacyCdpUrl,
     ),
-    { start: cdpPortRangeStart, end: cdpPortRangeEnd },
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
 
@@ -292,7 +285,7 @@ export function resolveBrowserConfig(
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
       : profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
         ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
-        : "user");
+        : "user-live");
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)

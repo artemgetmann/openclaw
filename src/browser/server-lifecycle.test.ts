@@ -39,10 +39,10 @@ describe("stopKnownBrowserProfiles", () => {
   });
 
   it("stops all known profiles and ignores per-profile failures", async () => {
-    listKnownProfileNamesMock.mockReturnValue(["openclaw", "user"]);
+    listKnownProfileNamesMock.mockReturnValue(["openclaw", "user-live"]);
     const stopMap: Record<string, ReturnType<typeof vi.fn>> = {
       openclaw: vi.fn(async () => {}),
-      user: vi.fn(async () => {
+      "user-live": vi.fn(async () => {
         throw new Error("profile stop failed");
       }),
     };
@@ -60,7 +60,7 @@ describe("stopKnownBrowserProfiles", () => {
     });
 
     expect(stopMap.openclaw).toHaveBeenCalledTimes(1);
-    expect(stopMap.user).toHaveBeenCalledTimes(1);
+    expect(stopMap["user-live"]).toHaveBeenCalledTimes(1);
     expect(onWarn).not.toHaveBeenCalled();
   });
 

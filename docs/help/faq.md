@@ -1216,14 +1216,14 @@ ClawHub installs into `./skills` under your current directory (or falls back to 
 
 ### How do I use my existing signed-in Chrome with OpenClaw
 
-Use the built-in `user` browser profile, which opens a separate OpenClaw-managed Chrome window seeded from your signed-in Chrome state:
+Use the built-in `user-live` browser profile, which attaches to your actual live Chrome session:
 
 ```bash
-openclaw browser --browser-profile user tabs
-openclaw browser --browser-profile user snapshot
+openclaw browser --browser-profile user-live tabs
+openclaw browser --browser-profile user-live snapshot
 ```
 
-If you want explicit live-Chrome attach instead, create an `existing-session` profile:
+If you want an exact live-Chrome target instead of the default live lane, create an explicit `existing-session` profile:
 
 ```bash
 openclaw browser create-profile --name chrome-live --driver existing-session
