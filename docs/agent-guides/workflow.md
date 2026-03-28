@@ -6,6 +6,9 @@
 - Consumer-product work targets `codex/consumer-openclaw-project`.
 - General fork work that is not consumer-product work targets this repo's `main`.
 - Keep the canonical shared checkout at `/Users/user/Programming_Projects/openclaw` on `main`. That checkout owns the long-lived shared `ai.openclaw.gateway` runtime. Consumer work should happen in worktrees created from that checkout with `bash scripts/new-worktree.sh <feature-name> --base codex/consumer-openclaw-project`.
+- The canonical shared `main` checkout is runtime/orchestration-only, not a coding lane.
+- Allowed there: `git status`, `git pull --ff-only`, `bash scripts/new-worktree.sh ...`, PR/review/orchestration commands, and shared-runtime operations.
+- Not allowed there: tracked implementation edits, feature development, or commits. Move into a worktree before changing repo files.
 - Before creating a new worktree, fast-forward the chosen base branch locally so it exactly matches `origin/<base>`. `scripts/new-worktree.sh` now fails if the named base branch is ahead of or behind its remote tracking branch. Use `git checkout <base> && git pull --ff-only` first, then create the worktree.
 - Use upstream `https://github.com/openclaw/openclaw` only when the user explicitly asks for upstream review, triage, or PR flow.
 - `consumer` is legacy. Do not target new PRs there unless the user explicitly asks.
