@@ -14,6 +14,7 @@ type TelegramAccountStatus = {
   enabled?: unknown;
   configured?: unknown;
   allowUnmentionedGroups?: unknown;
+  probe?: unknown;
   audit?: unknown;
 };
 
@@ -39,8 +40,20 @@ function readTelegramAccountStatus(value: ChannelAccountSnapshot): TelegramAccou
     enabled: value.enabled,
     configured: value.configured,
     allowUnmentionedGroups: value.allowUnmentionedGroups,
+    probe: value.probe,
     audit: value.audit,
   };
+}
+
+function canReadAllTelegramGroupMessages(value: unknown): boolean | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const bot = value.bot;
+  if (!isRecord(bot)) {
+    return undefined;
+  }
+  return typeof bot.canReadAllGroupMessages === "boolean" ? bot.canReadAllGroupMessages : undefined;
 }
 
 function readTelegramGroupMembershipAuditSummary(
@@ -94,7 +107,8 @@ export function collectTelegramStatusIssues(
       continue;
     }
 
-    if (account.allowUnmentionedGroups === true) {
+    const canReadAllGroupMessages = canReadAllTelegramGroupMessages(account.probe);
+    if (account.allowUnmentionedGroups === true && canReadAllGroupMessages !== true) {
       issues.push({
         channel: "telegram",
         accountId,

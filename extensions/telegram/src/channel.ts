@@ -733,9 +733,10 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       return lines;
     },
     auditAccount: async ({ account, timeoutMs, probe, cfg }) => {
-      const groups =
-        cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
-        cfg.channels?.telegram?.groups;
+      // Audit the effective account config, not the raw channel fallback. In
+      // multi-account setups channel-level groups are intentionally not
+      // inherited by accounts without their own groups config.
+      const groups = account.config.groups;
       const { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups } =
         getTelegramRuntime().channel.telegram.collectUnmentionedGroupIds(groups);
       if (!groupIds.length && unresolvedGroups === 0 && !hasWildcardUnmentionedGroups) {
@@ -776,9 +777,9 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         : null;
       const configured =
         (configuredFromStatus ?? Boolean(account.token?.trim())) && !ownerAccountId;
-      const groups =
-        cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
-        cfg.channels?.telegram?.groups;
+      // Surface mention/privacy hints from the same effective per-account
+      // groups config that the runtime actually uses.
+      const groups = account.config.groups;
       const allowUnmentionedGroups =
         groups?.["*"]?.requireMention === false ||
         Object.entries(groups ?? {}).some(
