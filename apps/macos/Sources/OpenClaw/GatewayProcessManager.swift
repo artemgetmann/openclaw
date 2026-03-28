@@ -123,6 +123,59 @@ final class GatewayProcessManager {
         }
     }
 
+    func restartManagedGateway() async {
+        guard !CommandResolver.connectionModeIsRemote() else {
+            self.status = .stopped
+            return
+        }
+        self.logger.info("gateway managed restart requested")
+        self.desiredActive = true
+        self.existingGatewayDetails = nil
+        self.clearLastFailure()
+        self.status = .starting
+        self.refreshEnvironmentStatus(force: true)
+
+        let bundlePath = Bundle.main.bundleURL.path
+        let port = GatewayEnvironment.gatewayPort()
+        let err = await GatewayLaunchAgentManager.restartOrStart(bundlePath: bundlePath, port: port)
+        if let err {
+            self.status = .failed(err)
+            self.lastFailureReason = err
+            self.appendLog("[gateway] managed restart failed: \(err)\n")
+            self.logger.error("gateway managed restart failed: \(err)")
+            return
+        }
+
+        // A restart keeps launchd ownership intact, so only wait for the daemon to
+        // come back and reattach to the existing service instead of reinstalling it.
+        let deadline = Date().addingTimeInterval(6)
+        while Date() < deadline {
+            if !self.desiredActive { return }
+            do {
+                let data = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
+                let instance = await PortGuardian.shared.describe(port: port)
+                let details = self.describe(
+                    details: instance.map { self.describe(instance: $0) },
+                    port: port,
+                    snap: decodeHealthSnapshot(from: data))
+                self.existingGatewayDetails = details
+                self.status = .running(details: details)
+                self.appendLog("[gateway] managed restart succeeded: \(details)\n")
+                self.logger.info("gateway managed restart succeeded details=\(details)")
+                self.refreshControlChannelIfNeeded(reason: "gateway restarted")
+                self.refreshLog()
+                return
+            } catch {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+        }
+
+        self.status = .failed("Gateway did not restart in time")
+        self.lastFailureReason = "launchd restart timeout"
+        self.appendLog("[gateway] managed restart timed out\n")
+        self.logger.warning("gateway managed restart timed out")
+    }
+
     func stop() {
         self.desiredActive = false
         self.existingGatewayDetails = nil

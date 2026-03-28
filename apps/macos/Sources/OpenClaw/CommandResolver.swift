@@ -76,6 +76,24 @@ enum CommandResolver {
         self.projectRoot().path
     }
 
+    static func canonicalGatewayProjectRoot(projectRoot: URL? = nil) -> URL {
+        let resolvedRoot = projectRoot ?? self.projectRoot()
+        let pathComponents = resolvedRoot.pathComponents
+        guard let worktreesIndex = pathComponents.firstIndex(of: ".worktrees"), worktreesIndex > 0 else {
+            return resolvedRoot
+        }
+
+        // Gateway ownership must stay pinned to the canonical shared checkout.
+        // If the app is running from a worktree bundle, strip the worktree
+        // suffix and use the repo root that owns the shared LaunchAgent.
+        let canonicalPath = NSString.path(withComponents: Array(pathComponents.prefix(worktreesIndex)))
+        let canonicalRoot = URL(fileURLWithPath: canonicalPath)
+        if self.isRepoRoot(canonicalRoot), self.gatewayEntrypoint(in: canonicalRoot) != nil {
+            return canonicalRoot
+        }
+        return resolvedRoot
+    }
+
     static func projectRootEnvironmentHint() -> String? {
         let root = self.projectRoot()
         return self.isRepoRoot(root) ? root.path : nil
@@ -247,7 +265,8 @@ enum CommandResolver {
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil,
-        searchPaths: [String]? = nil) -> [String]
+        searchPaths: [String]? = nil,
+        projectRoot: URL? = nil) -> [String]
     {
         let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
         if settings.mode == .remote, let ssh = self.sshNodeCommand(
@@ -258,11 +277,7 @@ enum CommandResolver {
             return ssh
         }
 
-        let root = self.projectRoot()
-        if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
-            return [openclawPath, subcommand] + extraArgs
-        }
-
+        let root = projectRoot ?? self.projectRoot()
         let runtimeResult = self.runtimeResolution(searchPaths: searchPaths)
         switch runtimeResult {
         case let .success(runtime):
@@ -275,6 +290,13 @@ enum CommandResolver {
             }
         case .failure:
             break
+        }
+
+        // In repo checkouts, node_modules/.bin/openclaw can point at a stale packed
+        // dependency while the repo entrypoint is current. Only fall back to that
+        // wrapper after we fail to resolve a runtime for the real repo entrypoint.
+        if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
+            return [openclawPath, subcommand] + extraArgs
         }
 
         // The shared founder runtime must stay pinned to the canonical repo
@@ -307,14 +329,16 @@ enum CommandResolver {
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil,
-        searchPaths: [String]? = nil) -> [String]
+        searchPaths: [String]? = nil,
+        projectRoot: URL? = nil) -> [String]
     {
         self.openclawNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
             defaults: defaults,
             configRoot: configRoot,
-            searchPaths: searchPaths)
+            searchPaths: searchPaths,
+            projectRoot: projectRoot)
     }
 
     // MARK: - SSH helpers
