@@ -9,6 +9,8 @@ import {
   browserScreenshotAction,
 } from "./client-actions.js";
 import {
+  browserCloseTab,
+  browserFocusTab,
   browserOpenTab,
   browserProfiles,
   browserSnapshot,
@@ -200,6 +202,29 @@ describe("browser client", () => {
     expect(calls[0]?.init?.timeoutMs).toBe(45_000);
     expect(calls[1]?.init?.timeoutMs).toBe(45_000);
     expect(calls[2]?.init?.timeoutMs).toBe(45_000);
+  });
+
+  it("uses the attach-ready timeout budget for attach-sensitive tab control calls", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+          }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserFocusTab("http://127.0.0.1:18791", "tab-1");
+    await browserCloseTab("http://127.0.0.1:18791", "tab-1");
+
+    expect(calls[0]?.init?.timeoutMs).toBe(45_000);
+    expect(calls[1]?.init?.timeoutMs).toBe(45_000);
   });
 
   it("omits format when the caller wants server-side snapshot capability defaults", async () => {

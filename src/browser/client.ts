@@ -9,6 +9,10 @@ const BROWSER_PAGE_LOAD_TIMEOUT_MS = 45_000;
 const BROWSER_STATUS_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
 const BROWSER_PROFILES_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
 const BROWSER_TABS_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
+// Tab focus/close can be the first attach-sensitive call after the model picks
+// a target tab. If these stay on a generic 5s budget, existing-session Chrome
+// lanes false-timeout even though the same lane succeeds via status/tabs/snapshot.
+const BROWSER_TAB_CONTROL_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
 
 export type BrowserTransport = "cdp" | "chrome-mcp";
 
@@ -274,7 +278,7 @@ export async function browserFocusTab(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId }),
-    timeoutMs: 5000,
+    timeoutMs: BROWSER_TAB_CONTROL_TIMEOUT_MS,
   });
 }
 
@@ -286,7 +290,7 @@ export async function browserCloseTab(
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/${encodeURIComponent(targetId)}${q}`), {
     method: "DELETE",
-    timeoutMs: 5000,
+    timeoutMs: BROWSER_TAB_CONTROL_TIMEOUT_MS,
   });
 }
 
