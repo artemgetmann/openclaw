@@ -71,6 +71,7 @@ final class BrowserSetupModel {
     private(set) var phase: BrowserSetupPhase = .idle
     private(set) var isApplyingSelection = false
     private(set) var statusLine: String?
+    private var lastAutoRecoveryFailureMessage: String?
 
     private let defaults: UserDefaults
     private let detectChromeExecutable: () -> URL?
@@ -125,6 +126,18 @@ final class BrowserSetupModel {
         await self.refresh()
     }
 
+    func retryTransientFailureIfNeeded() async {
+        guard case let .failed(message) = self.phase else { return }
+        guard Self.isTransientReadinessFailure(message) else { return }
+        // The post-onboarding shell can briefly probe browser readiness before
+        // the consumer lane has fully restabilized. Retry that exact transient
+        // failure once on the next app activation so General does not stay stuck
+        // showing a fake-broken browser card after setup already succeeded.
+        guard self.lastAutoRecoveryFailureMessage != message else { return }
+        self.lastAutoRecoveryFailureMessage = message
+        await self.refresh()
+    }
+
     func refresh() async {
         self.phase = .checking
         self.statusLine = "Checking Chrome on this Mac…"
@@ -135,6 +148,7 @@ final class BrowserSetupModel {
             self.clearSelectionFromConfig()
             self.phase = .chromeMissing
             self.statusLine = "Google Chrome is required for browser setup."
+            self.lastAutoRecoveryFailureMessage = nil
             return
         }
 
@@ -146,6 +160,7 @@ final class BrowserSetupModel {
             self.clearSelectionFromConfig()
             self.phase = .noProfiles
             self.statusLine = "Open Chrome once on this Mac so OpenClaw can find your profile."
+            self.lastAutoRecoveryFailureMessage = nil
             return
         }
 
@@ -158,17 +173,20 @@ final class BrowserSetupModel {
             }
             self.phase = .ready(selected)
             self.statusLine = "Connected to \(selected.displayName). OpenClaw can use its own Chrome copy when needed."
+            self.lastAutoRecoveryFailureMessage = nil
             return
         }
 
         if profiles.count == 1, let first = profiles.first {
             self.phase = .confirm(first)
             self.statusLine = "We found one Chrome profile."
+            self.lastAutoRecoveryFailureMessage = nil
             return
         }
 
         self.phase = .choose(profiles)
         self.statusLine = "Choose the Chrome profile OpenClaw should use."
+        self.lastAutoRecoveryFailureMessage = nil
     }
 
     func chooseProfile(_ profile: ChromeProfileCandidate) async {
@@ -191,11 +209,13 @@ final class BrowserSetupModel {
         }
         self.phase = .ready(profile)
         self.statusLine = "Connected to \(profile.displayName). OpenClaw can use its own Chrome copy when needed."
+        self.lastAutoRecoveryFailureMessage = nil
     }
 
     func clearProfileSelection() {
         self.clearSelection()
         self.clearSelectionFromConfig()
+        self.lastAutoRecoveryFailureMessage = nil
         if self.detectedProfiles.count == 1, let first = self.detectedProfiles.first {
             self.phase = .confirm(first)
             self.statusLine = "We found one Chrome profile."
@@ -206,6 +226,12 @@ final class BrowserSetupModel {
             self.phase = .idle
             self.statusLine = nil
         }
+    }
+
+    private static func isTransientReadinessFailure(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("browser readiness failed") ||
+            normalized.contains("returned unreadable output")
     }
 
     func openChromeDownloadPage() {

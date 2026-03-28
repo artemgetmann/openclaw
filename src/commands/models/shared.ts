@@ -75,10 +75,15 @@ export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
 
 export async function updateConfig(
   mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+  options: {
+    expectedConfigPath?: string;
+  } = {},
 ): Promise<OpenClawConfig> {
   const config = await loadValidConfigOrThrow();
   const next = mutator(config);
-  await writeConfigFile(next);
+  await writeConfigFile(next, {
+    expectedConfigPath: options.expectedConfigPath,
+  });
   return next;
 }
 

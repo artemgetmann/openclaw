@@ -133,6 +133,92 @@ struct BrowserSetupSupportTests {
         }
     }
 
+    @Test func `transient browser readiness failure auto-recovers on app activation`() async {
+        let defaults = self.makeDefaults()
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        var verificationAttempts = 0
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)
+            defaults.set("Artem", forKey: browserSelectedChromeProfileNameKey)
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in
+                    verificationAttempts += 1
+                    if verificationAttempts == 1 {
+                        return "OpenClaw saved the Chrome profile, but browser readiness failed. command failed"
+                    }
+                    return nil
+                })
+
+            await model.refresh()
+            #expect(model.phase == .failed("OpenClaw saved the Chrome profile, but browser readiness failed. command failed"))
+
+            await model.retryTransientFailureIfNeeded()
+
+            #expect(verificationAttempts == 2)
+            #expect(model.phase == .ready(selected))
+            #expect(model.isComplete)
+        }
+    }
+
+    @Test func `stable browser readiness failure does not auto-recover on app activation`() async {
+        let defaults = self.makeDefaults()
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        var verificationAttempts = 0
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)
+            defaults.set("Artem", forKey: browserSelectedChromeProfileNameKey)
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in
+                    verificationAttempts += 1
+                    return "OpenClaw saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."
+                })
+
+            await model.refresh()
+            #expect(model.phase == .failed("OpenClaw saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."))
+
+            await model.retryTransientFailureIfNeeded()
+
+            #expect(verificationAttempts == 1)
+            #expect(model.phase == .failed("OpenClaw saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."))
+        }
+    }
+
     @Test func `choose profile persists selection and marks ready`() async {
         let defaults = self.makeDefaults()
         let personal = ChromeProfileCandidate(

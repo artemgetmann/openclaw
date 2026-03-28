@@ -26,6 +26,10 @@ final class OnboardingController {
         self.window != nil
     }
 
+    var hasVisibleWindow: Bool {
+        self.window?.isVisible == true
+    }
+
     func show() {
         if ProcessInfo.processInfo.isNixMode {
             // Nix mode is fully declarative; onboarding would suggest interactive setup that doesn't apply.

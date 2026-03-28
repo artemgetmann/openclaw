@@ -51,6 +51,29 @@ struct ConsumerAppActivationTests {
                 hasVisibleWindows: false))
     }
 
+    @Test func `consumer activation recovers a visible surface only when none exists`() {
+        #expect(
+            AppDelegate.shouldRecoverVisibleSurfaceOnActivation(
+                isConsumer: true,
+                hasVisibleContentWindow: false,
+                hasVisibleOnboardingWindow: false))
+        #expect(
+            !AppDelegate.shouldRecoverVisibleSurfaceOnActivation(
+                isConsumer: true,
+                hasVisibleContentWindow: true,
+                hasVisibleOnboardingWindow: false))
+        #expect(
+            !AppDelegate.shouldRecoverVisibleSurfaceOnActivation(
+                isConsumer: true,
+                hasVisibleContentWindow: false,
+                hasVisibleOnboardingWindow: true))
+        #expect(
+            !AppDelegate.shouldRecoverVisibleSurfaceOnActivation(
+                isConsumer: false,
+                hasVisibleContentWindow: false,
+                hasVisibleOnboardingWindow: false))
+    }
+
     @Test func `consumer first run keeps dock visible while onboarding is still pending`() {
         #expect(
             DockIconManager.shouldKeepConsumerDockVisible(
@@ -97,5 +120,72 @@ struct ConsumerAppActivationTests {
                 hasVisibleWindows: false,
                 shouldKeepConsumerDockVisible: false,
                 hasVisibilityHold: true))
+    }
+
+    @Test func `visible surface recovery stops once onboarding or settings is visible`() {
+        #expect(
+            AppDelegate.hasVisibleConsumerSurface(
+                hasVisibleContentWindow: true,
+                hasVisibleOnboardingWindow: false))
+        #expect(
+            AppDelegate.hasVisibleConsumerSurface(
+                hasVisibleContentWindow: false,
+                hasVisibleOnboardingWindow: true))
+        #expect(
+            !AppDelegate.hasVisibleConsumerSurface(
+                hasVisibleContentWindow: false,
+                hasVisibleOnboardingWindow: false))
+    }
+
+    @Test func `visible surface recovery retries only while consumer launch is still invisible`() {
+        #expect(
+            AppDelegate.shouldRetryVisibleSurfaceRecovery(
+                hasVisibleContentWindow: false,
+                hasVisibleOnboardingWindow: false,
+                attemptsRemaining: 4))
+        #expect(
+            !AppDelegate.shouldRetryVisibleSurfaceRecovery(
+                hasVisibleContentWindow: true,
+                hasVisibleOnboardingWindow: false,
+                attemptsRemaining: 4))
+        #expect(
+            !AppDelegate.shouldRetryVisibleSurfaceRecovery(
+                hasVisibleContentWindow: false,
+                hasVisibleOnboardingWindow: true,
+                attemptsRemaining: 4))
+        #expect(
+            !AppDelegate.shouldRetryVisibleSurfaceRecovery(
+                hasVisibleContentWindow: false,
+                hasVisibleOnboardingWindow: false,
+                attemptsRemaining: 0))
+    }
+
+    @Test func `consumer finish routes incomplete setup back to channels`() {
+        #expect(
+            OnboardingView.postFinishSettingsTab(
+                isConsumer: true,
+                connectionMode: .local,
+                telegramReady: false) == .channels)
+        #expect(
+            OnboardingView.postFinishSettingsTab(
+                isConsumer: true,
+                connectionMode: .remote,
+                telegramReady: true) == .channels)
+    }
+
+    @Test func `consumer finish keeps successful local setup on a visible general surface`() {
+        #expect(
+            OnboardingView.postFinishSettingsTab(
+                isConsumer: true,
+                connectionMode: .local,
+                telegramReady: true) == .general)
+    }
+
+    @Test func `non consumer finish does not force a settings follow up`() {
+        #expect(
+            OnboardingView.postFinishSettingsTab(
+                isConsumer: false,
+                connectionMode: .local,
+                telegramReady: true) == nil)
     }
 }

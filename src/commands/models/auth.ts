@@ -21,7 +21,7 @@ import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { readConfigFileSnapshot, type OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
 import type {
@@ -83,6 +83,7 @@ function resolveDefaultTokenProfileId(provider: string): string {
 
 type ResolvedModelsAuthContext = {
   config: OpenClawConfig;
+  configPath: string;
   agentDir: string;
   workspaceDir: string;
   providers: ProviderPlugin[];
@@ -101,7 +102,8 @@ function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlu
 }
 
 async function resolveModelsAuthContext(): Promise<ResolvedModelsAuthContext> {
-  const config = await loadValidConfigOrThrow();
+  const snapshot = await readConfigFileSnapshot();
+  const config = snapshot.valid ? snapshot.config : await loadValidConfigOrThrow();
   const defaultAgentId = resolveDefaultAgentId(config);
   const agentDir = resolveAgentDir(config, defaultAgentId);
   const workspaceDir =
@@ -112,7 +114,13 @@ async function resolveModelsAuthContext(): Promise<ResolvedModelsAuthContext> {
     bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
   });
-  return { config, agentDir, workspaceDir, providers };
+  return {
+    config,
+    configPath: snapshot.path,
+    agentDir,
+    workspaceDir,
+    providers,
+  };
 }
 
 function resolveRequestedProviderOrThrow(
@@ -213,6 +221,7 @@ async function pickProviderTokenMethod(params: {
 
 async function persistProviderAuthResult(params: {
   result: ProviderAuthResult;
+  configPath: string;
   agentDir: string;
   runtime: RuntimeEnv;
   prompter: ReturnType<typeof createClackPrompter>;
@@ -226,25 +235,28 @@ async function persistProviderAuthResult(params: {
     });
   }
 
-  await updateConfig((cfg) => {
-    let next = cfg;
-    if (params.result.configPatch) {
-      next = mergeConfigPatch(next, params.result.configPatch);
-    }
-    for (const profile of params.result.profiles) {
-      next = applyAuthProfileConfig(next, {
-        profileId: profile.profileId,
-        provider: profile.credential.provider,
-        mode: credentialMode(profile.credential),
-      });
-    }
-    if (params.setDefault && params.result.defaultModel) {
-      next = applyDefaultModel(next, params.result.defaultModel);
-    }
-    return next;
-  });
+  await updateConfig(
+    (cfg) => {
+      let next = cfg;
+      if (params.result.configPatch) {
+        next = mergeConfigPatch(next, params.result.configPatch);
+      }
+      for (const profile of params.result.profiles) {
+        next = applyAuthProfileConfig(next, {
+          profileId: profile.profileId,
+          provider: profile.credential.provider,
+          mode: credentialMode(profile.credential),
+        });
+      }
+      if (params.setDefault && params.result.defaultModel) {
+        next = applyDefaultModel(next, params.result.defaultModel);
+      }
+      return next;
+    },
+    { expectedConfigPath: params.configPath },
+  );
 
-  logConfigUpdated(params.runtime);
+  logConfigUpdated(params.runtime, { path: params.configPath });
   for (const profile of params.result.profiles) {
     params.runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
@@ -264,6 +276,7 @@ async function persistProviderAuthResult(params: {
 
 async function runProviderAuthMethod(params: {
   config: OpenClawConfig;
+  configPath: string;
   agentDir: string;
   workspaceDir: string;
   provider: ProviderPlugin;
@@ -292,6 +305,7 @@ async function runProviderAuthMethod(params: {
 
   await persistProviderAuthResult({
     result,
+    configPath: params.configPath,
     agentDir: params.agentDir,
     runtime: params.runtime,
     prompter: params.prompter,
@@ -307,7 +321,8 @@ export async function modelsAuthSetupTokenCommand(
     throw new Error("setup-token requires an interactive TTY.");
   }
 
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext();
+  const { config, configPath, agentDir, workspaceDir, providers } =
+    await resolveModelsAuthContext();
   const tokenProviders = listProvidersWithTokenMethods(providers);
   if (tokenProviders.length === 0) {
     throw new Error(
@@ -342,6 +357,7 @@ export async function modelsAuthSetupTokenCommand(
 
   await runProviderAuthMethod({
     config,
+    configPath,
     agentDir,
     workspaceDir,
     provider,
@@ -365,6 +381,7 @@ export async function modelsAuthPasteTokenCommand(
   }
   const provider = normalizeProviderId(rawProvider);
   const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
+  const { agentDir, configPath } = await resolveModelsAuthContext();
 
   const tokenInput = await text({
     message: `Paste token for ${provider}`,
@@ -385,16 +402,20 @@ export async function modelsAuthPasteTokenCommand(
       token,
       ...(expires ? { expires } : {}),
     },
+    agentDir,
   });
 
-  await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
+  await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }), {
+    expectedConfigPath: configPath,
+  });
 
-  logConfigUpdated(runtime);
+  logConfigUpdated(runtime, { path: configPath });
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
 }
 
 export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext();
+  const { config, configPath, agentDir, workspaceDir, providers } =
+    await resolveModelsAuthContext();
   const tokenProviders = listProvidersWithTokenMethods(providers);
 
   const provider = await select({
@@ -447,6 +468,7 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
       }
       await runProviderAuthMethod({
         config,
+        configPath,
         agentDir,
         workspaceDir,
         provider: providerPlugin,
@@ -538,7 +560,8 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     throw new Error("models auth login requires an interactive TTY.");
   }
 
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext();
+  const { config, configPath, agentDir, workspaceDir, providers } =
+    await resolveModelsAuthContext();
   const prompter = createClackPrompter();
   const authProviders = listProvidersWithAuthMethods(providers);
   if (authProviders.length === 0) {
@@ -576,6 +599,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
 
   await runProviderAuthMethod({
     config,
+    configPath,
     agentDir,
     workspaceDir,
     provider: selectedProvider,

@@ -58,6 +58,9 @@ describe("models/shared", () => {
       expect.objectContaining({
         update: { channel: "beta" },
       }),
+      {
+        expectedConfigPath: undefined,
+      },
     );
   });
 });
