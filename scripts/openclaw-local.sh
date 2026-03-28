@@ -8,6 +8,7 @@ CLI="$ROOT/openclaw.mjs"
 PREFLIGHT="$ROOT/scripts/local-runtime-preflight.sh"
 LOCAL_RESTART="$ROOT/scripts/restart-local-gateway.sh"
 source "$ROOT/scripts/lib/consumer-instance.sh"
+source "$ROOT/scripts/lib/worktree-guards.sh"
 
 if [[ ! -x "$NODE" ]]; then
   echo "ERROR: node runtime not found. Install Node 22+ or set OPENCLAW_NODE_BIN." >&2
@@ -34,6 +35,16 @@ if [[ -n "${OPENCLAW_CONSUMER_INSTANCE_ID:-}" ]]; then
     export OPENCLAW_LAUNCHD_LABEL="${OPENCLAW_LAUNCHD_LABEL:-$(consumer_instance_gateway_launchd_label "$normalized_instance_id")}"
   fi
 fi
+
+# Short local CLI commands are an easy place to accidentally mutate the shared
+# runtime from a manually-created worktree. Require the generated dev launch env
+# before we let linked worktrees talk to the local runtime wrapper at all.
+worktree_guard_run_for_linked_checkout \
+  "$ROOT" \
+  --mode generic \
+  --require-dev-launch-env \
+  --require-node-modules \
+  --quiet
 
 if [[ -x "$LOCAL_RESTART" ]]; then
   export OPENCLAW_LOCAL_RESTART_SCRIPT="${OPENCLAW_LOCAL_RESTART_SCRIPT:-$LOCAL_RESTART}"

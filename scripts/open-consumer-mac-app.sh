@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+source "$ROOT_DIR/scripts/lib/worktree-guards.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
@@ -11,6 +12,8 @@ REPLACE=0
 usage() {
   cat <<'EOF'
 Usage: scripts/open-consumer-mac-app.sh [--instance <id>] [--replace] [app_path]
+Set OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 when opening an isolated runtime
+lane that was packaged with the stable consumer debug app identity.
 EOF
 }
 
@@ -159,7 +162,26 @@ if [[ -z "$NORMALIZED_INSTANCE_ID" && -z "$APP_PATH" ]]; then
     exit 1
   fi
 fi
-EXPECTED_NAME="$(consumer_instance_app_name "$NORMALIZED_INSTANCE_ID")"
+
+# Treat GUI launches from linked worktrees the same way as shell launches:
+# require the generated isolation env first so a manually-added checkout cannot
+# quietly wake the shared consumer runtime.
+worktree_guard_run_for_linked_checkout \
+  "$ROOT_DIR" \
+  --mode generic \
+  --require-dev-launch-env \
+  --quiet
+
+# Opening the packaged app from a worktree should use the same isolation checks
+# as the shell launch path; otherwise GUI QA can silently wake the wrong lane.
+worktree_guard_run_doctor \
+  "$ROOT_DIR" \
+  --mode open-consumer \
+  --instance "$NORMALIZED_INSTANCE_ID" \
+  --telegram-mode skip \
+  --quiet
+
+EXPECTED_NAME="$(consumer_instance_display_name "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_BUNDLE_ID="$(consumer_instance_bundle_id "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_VARIANT="consumer"
 

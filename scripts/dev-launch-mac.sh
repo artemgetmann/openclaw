@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
 NO_BUILD=0
+source "${ROOT_DIR}/scripts/lib/worktree-guards.sh"
 
 # Trim leading/trailing whitespace for robust .env parsing.
 trim() {
@@ -119,6 +120,14 @@ if [[ -z "$OPENCLAW_GATEWAY_PORT" ]]; then
   echo "Error: OPENCLAW_GATEWAY_PORT missing in ${ENV_FILE}." >&2
   exit 1
 fi
+
+# A linked worktree without its generated launch env is exactly how runtimes
+# fall back to the shared defaults and start stealing each other's ports/state.
+worktree_guard_run_for_linked_checkout \
+  "$ROOT_DIR" \
+  --mode dev-launch \
+  --telegram-mode skip \
+  --quiet
 
 if [[ "$NO_BUILD" != "1" ]]; then
   bash "${ROOT_DIR}/scripts/package-mac-app.sh"

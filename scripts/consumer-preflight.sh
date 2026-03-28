@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 PREFLIGHT="$ROOT/scripts/local-runtime-preflight.sh"
 source "$ROOT/scripts/lib/consumer-instance.sh"
+source "$ROOT/scripts/lib/worktree-guards.sh"
 
 INSTANCE_ARG="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 
@@ -49,6 +50,24 @@ INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ARG")"
 if [[ -z "$INSTANCE_ID" ]]; then
   INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT")"
 fi
+
+# Consumer GUI work from a linked worktree must come from a bootstrap-created
+# lane. If `.dev-launch.env` is missing, this checkout was almost certainly
+# created by raw Git plumbing and is unsafe to trust.
+worktree_guard_run_for_linked_checkout \
+  "$ROOT" \
+  --mode generic \
+  --require-dev-launch-env \
+  --quiet
+
+# Consumer preflight exists to prove lane ownership before GUI testing. Run the
+# shared doctor first so the script fails on malformed worktrees before it emits
+# a bunch of health output from the wrong runtime.
+worktree_guard_run_doctor \
+  "$ROOT" \
+  --mode consumer-preflight \
+  --instance "$INSTANCE_ID" \
+  --quiet
 
 RUNTIME_ROOT="$(consumer_instance_runtime_root "$INSTANCE_ID")"
 STATE_DIR="$(consumer_instance_state_dir "$INSTANCE_ID")"
