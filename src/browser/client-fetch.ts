@@ -153,6 +153,17 @@ function appendBrowserToolModelHint(message: string): string {
   return `${message} ${BROWSER_TOOL_MODEL_HINT}`;
 }
 
+function isRetryableChromeAttachMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    (lower.includes("chrome mcp existing-session attach") &&
+      lower.includes("timed out waiting for tabs to become available")) ||
+    lower.includes("approve the browser attach prompt") ||
+    lower.includes("devtoolsactiveport") ||
+    (lower.includes("attach timed out") && lower.includes("chrome mcp"))
+  );
+}
+
 async function discardResponseBody(res: Response): Promise<void> {
   try {
     await res.body?.cancel();
@@ -163,6 +174,12 @@ async function discardResponseBody(res: Response): Promise<void> {
 
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const msg = normalizeErrorMessage(err);
+  if (isRetryableChromeAttachMessage(msg)) {
+    // Existing-session attach errors are browser-session availability issues,
+    // not control-service reachability failures. Preserve the direct guidance
+    // so callers can retry immediately after approving Chrome's attach prompt.
+    return new Error(msg, err instanceof Error ? { cause: err } : undefined);
+  }
   const suffix = `${resolveBrowserFetchOperatorHint(url)} ${BROWSER_TOOL_MODEL_HINT}`;
   const normalized = msg.endsWith(".") ? msg : `${msg}.`;
   return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);

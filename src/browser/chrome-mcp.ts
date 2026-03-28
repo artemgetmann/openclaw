@@ -29,12 +29,6 @@ type ChromeMcpSession = {
   ready: Promise<void>;
 };
 
-type ChromeMcpAttachFailure = {
-  error: BrowserProfileUnavailableError;
-  failedAt: number;
-  retryAfter: number;
-};
-
 type ChromeMcpSessionFactory = (
   profileName: string,
   userDataDir?: string,
@@ -57,10 +51,11 @@ const DEFAULT_CHROME_MCP_ARGS = [
 
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
-const attachFailures = new Map<string, ChromeMcpAttachFailure>();
+// Do not cache attach failures across calls. Existing-session Chrome lanes can
+// fail once while Chrome shows an approval prompt; once the user approves it,
+// the very next retry should reconnect instead of failing closed for a minute.
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 const DEFAULT_CHROME_MCP_REQUEST_TIMEOUT_MS = 30_000;
-const CHROME_MCP_ATTACH_FAILURE_COOLDOWN_MS = 60_000;
 const DEFAULT_CHROME_USER_DATA_DIR = path.join(
   os.homedir(),
   "Library/Application Support/Google/Chrome",
@@ -561,12 +556,6 @@ async function closeChromeMcpSessionsForProfile(
     }
   }
 
-  for (const key of Array.from(attachFailures.keys())) {
-    if (key !== keepKey && cacheKeyMatchesProfileName(key, profileName)) {
-      attachFailures.delete(key);
-    }
-  }
-
   return closed;
 }
 
@@ -679,28 +668,6 @@ function normalizeAttachFailure(profileName: string, err: unknown): BrowserProfi
   );
 }
 
-function getActiveAttachFailure(cacheKey: string): BrowserProfileUnavailableError | null {
-  const failure = attachFailures.get(cacheKey);
-  if (!failure) {
-    return null;
-  }
-  if (Date.now() >= failure.retryAfter) {
-    attachFailures.delete(cacheKey);
-    return null;
-  }
-  return failure.error;
-}
-
-function recordAttachFailure(cacheKey: string, profileName: string, err: unknown): void {
-  const error = normalizeAttachFailure(profileName, err);
-  const failedAt = Date.now();
-  attachFailures.set(cacheKey, {
-    error,
-    failedAt,
-    retryAfter: failedAt + CHROME_MCP_ATTACH_FAILURE_COOLDOWN_MS,
-  });
-}
-
 async function getSession(
   profileName: string,
   options: ChromeMcpCallOptions = {},
@@ -716,10 +683,6 @@ async function getSession(
     options.userDataDir,
     sessionProfileDirectory,
   );
-  const activeFailure = getActiveAttachFailure(cacheKey);
-  if (activeFailure) {
-    throw activeFailure;
-  }
   await closeChromeMcpSessionsForProfile(profileName, cacheKey);
 
   let session = sessions.get(cacheKey);
@@ -750,8 +713,7 @@ async function getSession(
     try {
       session = await pending;
     } catch (err) {
-      recordAttachFailure(cacheKey, profileName, err);
-      throw err;
+      throw normalizeAttachFailure(profileName, err);
     } finally {
       if (pendingSessions.get(cacheKey) === pending) {
         pendingSessions.delete(cacheKey);
@@ -772,8 +734,7 @@ async function getSession(
       sessions.delete(cacheKey);
     }
     await session.client.close().catch(() => {});
-    recordAttachFailure(cacheKey, profileName, err);
-    throw err;
+    throw normalizeAttachFailure(profileName, err);
   }
 }
 
@@ -812,8 +773,7 @@ async function callTool(
     // Transport/connection error — tear down session so it reconnects on next call
     sessions.delete(cacheKey);
     await session.client.close().catch(() => {});
-    recordAttachFailure(cacheKey, profileName, err);
-    throw err;
+    throw normalizeAttachFailure(profileName, err);
   }
   // Tool-level errors (element not found, script error, etc.) don't indicate a
   // broken connection — don't tear down the session for these.
@@ -1295,6 +1255,5 @@ export async function resetChromeMcpSessionsForTest(): Promise<void> {
   processCommandLinesReader = null;
   profileDirectoryOverrides.clear();
   pendingSessions.clear();
-  attachFailures.clear();
   await stopAllChromeMcpSessions();
 }
