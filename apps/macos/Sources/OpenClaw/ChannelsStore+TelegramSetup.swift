@@ -391,7 +391,10 @@ extension ChannelsStore {
         let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
             base: ProcessInfo.processInfo.environment,
             projectRootHint: CommandResolver.projectRootEnvironmentHint())
-        let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: 20)
+        // The setup replay only needs to prove the first task started end-to-end.
+        // If the helper gets stuck in a lingering interactive follow-up, prefer a
+        // bounded timeout plus activity confirmation over leaving onboarding to spin.
+        let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: 8)
         if response.timedOut {
             await self.refresh(probe: true)
             return TelegramSetupReplayResult(

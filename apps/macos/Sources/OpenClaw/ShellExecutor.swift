@@ -1,7 +1,24 @@
 import Foundation
 import OpenClawIPC
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 enum ShellExecutor {
+    actor TimeoutState {
+        private var triggered = false
+
+        func mark() {
+            self.triggered = true
+        }
+
+        func isTriggered() -> Bool {
+            self.triggered
+        }
+    }
+
     struct ShellResult {
         var stdout: String
         var stderr: String
@@ -52,19 +69,21 @@ enum ShellExecutor {
 
         let outTask = Task { stdoutPipe.fileHandleForReading.readToEndSafely() }
         let errTask = Task { stderrPipe.fileHandleForReading.readToEndSafely() }
+        let timeoutState = TimeoutState()
 
         let waitTask = Task { () -> ShellResult in
             process.waitUntilExit()
             let out = await outTask.value
             let err = await errTask.value
             let status = Int(process.terminationStatus)
+            let timedOut = await timeoutState.isTriggered()
             return ShellResult(
                 stdout: String(bytes: out, encoding: .utf8) ?? "",
                 stderr: String(bytes: err, encoding: .utf8) ?? "",
                 exitCode: status,
-                timedOut: false,
-                success: status == 0,
-                errorMessage: status == 0 ? nil : "exit \(status)")
+                timedOut: timedOut,
+                success: status == 0 && !timedOut,
+                errorMessage: timedOut ? "timeout" : (status == 0 ? nil : "exit \(status)"))
         }
 
         if let timeout, timeout > 0 {
@@ -73,8 +92,26 @@ enum ShellExecutor {
                 group.addTask { await waitTask.value }
                 group.addTask {
                     try? await Task.sleep(nanoseconds: nanos)
-                    if process.isRunning { process.terminate() }
-                    _ = await waitTask.value // drain pipes after termination
+                    await timeoutState.mark()
+                    // Some child commands ignore SIGTERM or keep descendants alive
+                    // long enough that a naive terminate()+wait can strand callers in
+                    // a fake "timeout" that never actually returns.
+                    if process.isRunning {
+                        process.terminate()
+                        try? await Task.sleep(nanoseconds: 750_000_000)
+                    }
+                    if process.isRunning {
+                        kill(process.processIdentifier, SIGKILL)
+                    }
+                    // Return the timeout immediately. The caller needs the UI to
+                    // move on once the command overstays; background cleanup can
+                    // finish after we have already reported the timeout.
+                    stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                    stderrPipe.fileHandleForReading.readabilityHandler = nil
+                    try? stdoutPipe.fileHandleForReading.close()
+                    try? stderrPipe.fileHandleForReading.close()
+                    outTask.cancel()
+                    errTask.cancel()
                     return ShellResult(
                         stdout: "",
                         stderr: "",
