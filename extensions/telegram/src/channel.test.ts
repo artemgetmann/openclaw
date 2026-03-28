@@ -295,6 +295,40 @@ describe("telegramPlugin duplicate token guard", () => {
     });
   });
 
+  it("does not inherit channel-level groups into unrelated multi-account audits", async () => {
+    const { collectUnmentionedGroupIds, auditGroupMembership } = installGatewayRuntime({
+      probeOk: true,
+      botUsername: "opsbot",
+    });
+
+    const cfg = createCfg();
+    cfg.channels!.telegram!.groups = {
+      "*": { requireMention: false },
+      "-100123": { requireMention: false },
+    };
+    const account = telegramPlugin.config.resolveAccount(cfg, "ops");
+
+    const snapshot = await telegramPlugin.status!.buildAccountSnapshot!({
+      account,
+      cfg,
+      runtime: undefined,
+      probe: undefined,
+      audit: undefined,
+    });
+
+    const audit = await telegramPlugin.status!.auditAccount!({
+      account,
+      timeoutMs: 5000,
+      probe: { ok: true, bot: { id: 123 }, elapsedMs: 1 },
+      cfg,
+    });
+
+    expect(snapshot.allowUnmentionedGroups).toBe(false);
+    expect(collectUnmentionedGroupIds).toHaveBeenCalledWith(undefined);
+    expect(auditGroupMembership).not.toHaveBeenCalled();
+    expect(audit).toBeUndefined();
+  });
+
   it("forwards mediaLocalRoots to sendMessageTelegram for outbound media sends", async () => {
     const sendMessageTelegram = installSendMessageRuntime(
       vi.fn(async () => ({ messageId: "tg-1" })),
