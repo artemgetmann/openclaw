@@ -10,7 +10,11 @@ extension OnboardingView {
     func pageView(for pageIndex: Int) -> some View {
         switch pageIndex {
         case 0:
-            self.welcomePage()
+            if AppFlavor.current.isConsumer, self.state.connectionMode != .remote {
+                self.consumerSetupPage()
+            } else {
+                self.welcomePage()
+            }
         case 1:
             self.connectionPage()
         case 3:
@@ -29,7 +33,7 @@ extension OnboardingView {
     }
 
     func welcomePage() -> some View {
-        let consumerSecurityCopy = "\(AppFlavor.current.appName) can run apps, edit files, and take actions on your Mac when you allow it."
+        let consumerSecurityCopy = "\(AppFlavor.current.appName) can take actions on your Mac when you allow it."
         let standardSecurityCopy =
             "The connected AI agent can trigger powerful actions on your Mac, " +
             "including running commands, reading/writing files, and capturing screenshots — " +
@@ -43,7 +47,7 @@ extension OnboardingView {
                     .font(.largeTitle.weight(.semibold))
                 Text(
                     AppFlavor.current.isConsumer
-                        ? "OpenClaw is a personal AI operator for this Mac. Next we will connect your Telegram bot."
+                        ? "OpenClaw is a personal AI operator for this Mac. Setup takes about two minutes. First we’ll connect Chrome."
                         : "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
@@ -60,7 +64,7 @@ extension OnboardingView {
                             .padding(.top, 1)
 
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Security notice")
+                            Text(AppFlavor.current.isConsumer ? "Before you start" : "Security notice")
                                 .font(.headline)
                             Text(
                                 AppFlavor.current.isConsumer
@@ -73,92 +77,25 @@ extension OnboardingView {
                             if AppFlavor.current.isConsumer {
                                 Divider()
                                     .padding(.vertical, 6)
-
-                                OnboardingWizardCardContent(
-                                    wizard: self.onboardingWizard,
-                                    isConsumer: true,
-                                    mode: self.state.connectionMode,
-                                    workspacePath: self.workspacePath)
-
-                                Divider()
-                                    .padding(.vertical, 6)
-
-                                if self.onboardingWizard.isComplete {
-                                    BrowserSetupCardContent(
-                                        model: self.browserSetup,
-                                        presentation: .onboarding)
-
-                                    if self.browserSetup.isComplete {
-                                        Divider()
-                                            .padding(.vertical, 6)
-
-                                        ConsumerModelSetupCardContent(model: self.modelSetup)
-
-                                        if self.modelSetup.isComplete {
-                                            Divider()
-                                                .padding(.vertical, 6)
-
-                                            ConsumerCorePermissionsSection(
-                                                status: self.permissionMonitor.status,
-                                                refresh: self.refreshPerms,
-                                                presentation: .onboarding)
-
-                                            Divider()
-                                                .padding(.vertical, 6)
-
-                                            if self.areCorePermissionsGranted {
-                                                ConsumerTelegramSetupCardContent(
-                                                    store: self.channelsStore,
-                                                    presentation: .onboarding)
-                                            } else {
-                                                VStack(alignment: .leading, spacing: 4) {
-                                                    Text("Telegram comes after core Mac permissions")
-                                                        .font(.headline)
-                                                    Text(
-                                                        "Once those Mac permissions are granted, you’ll verify Telegram by sending the first real task you want OpenClaw to handle.")
-                                                        .font(.subheadline)
-                                                        .foregroundStyle(.secondary)
-                                                        .fixedSize(horizontal: false, vertical: true)
-                                                }
-                                            }
-                                        } else {
-                                            Divider()
-                                                .padding(.vertical, 6)
-
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text("Mac permissions come next")
-                                                    .font(.headline)
-                                                Text(
-                                                    "After OpenClaw confirms AI access, it will ask for the Mac permissions that would otherwise break remote use later.")
-                                                    .font(.subheadline)
-                                                    .foregroundStyle(.secondary)
-                                                    .fixedSize(horizontal: false, vertical: true)
-                                            }
-                                        }
-                                    } else {
-                                        Divider()
-                                            .padding(.vertical, 6)
-
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text("AI comes last")
-                                                .font(.headline)
-                                            Text(
-                                                "After Chrome is connected, OpenClaw checks that this build can actually use its AI model before finishing setup.")
-                                                .font(.subheadline)
-                                                .foregroundStyle(.secondary)
-                                                .fixedSize(horizontal: false, vertical: true)
-                                        }
-                                    }
-                                } else {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Chrome comes next")
-                                            .font(.headline)
-                                        Text(
-                                            "After OpenClaw finishes local setup, you’ll connect the Chrome profile it should use for browser work.")
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
+                                VStack(alignment: .leading, spacing: 12) {
+                                    // Keep the first screen product-level and calm.
+                                    // The actual setup work starts after the user presses Continue.
+                                    self.featureRow(
+                                        title: "Connect Chrome",
+                                        subtitle: "Pick the Chrome profile OpenClaw should use for browser work.",
+                                        systemImage: "globe")
+                                    self.featureRow(
+                                        title: "Confirm AI access",
+                                        subtitle: "We check that the default AI connection is ready before remote work starts.",
+                                        systemImage: "sparkles")
+                                    self.featureRow(
+                                        title: "Grant Mac permissions",
+                                        subtitle: "OpenClaw asks only for the permissions that would otherwise break real tasks later.",
+                                        systemImage: "lock.shield")
+                                    self.featureRow(
+                                        title: "Verify Telegram",
+                                        subtitle: "Send your first real task so the bot knows it is talking to you.",
+                                        systemImage: "paperplane")
                                 }
                             }
                         }
@@ -168,17 +105,84 @@ extension OnboardingView {
             }
             .padding(.top, 16)
         }
-        .task {
-            guard AppFlavor.current.isConsumer else { return }
-            if self.state.connectionMode == .unconfigured {
-                // Consumer onboarding now exposes local setup directly on the welcome page.
-                // Flip into local mode before any wizard/browser work starts so the page
-                // does not try to talk to a gateway that `.unconfigured` immediately stops.
-                self.selectLocalGateway()
+    }
+
+    func consumerSetupPage() -> some View {
+        self.onboardingPage {
+            VStack(spacing: 22) {
+                Text("Set up OpenClaw")
+                    .font(.largeTitle.weight(.semibold))
+                Text("Connect Chrome first. Then OpenClaw will guide you through the Mac permissions it needs and verify Telegram.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 560)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                self.onboardingCard(spacing: 10, padding: 14) {
+                    BrowserSetupCardContent(
+                        model: self.browserSetup,
+                        presentation: .onboarding)
+
+                    if self.browserSetup.isComplete {
+                        Divider()
+                            .padding(.vertical, 6)
+                        ConsumerCorePermissionsSection(
+                            status: self.permissionMonitor.status,
+                            refresh: self.refreshPerms,
+                            presentation: .onboarding)
+
+                        Divider()
+                            .padding(.vertical, 6)
+
+                        ConsumerModelSetupCardContent(model: self.modelSetup)
+
+                        Divider()
+                            .padding(.vertical, 6)
+
+                        if self.areCorePermissionsGranted && self.modelSetup.isComplete {
+                            ConsumerTelegramSetupCardContent(
+                                store: self.channelsStore,
+                                presentation: .onboarding)
+                        } else if !self.areCorePermissionsGranted {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Telegram comes after core Mac permissions")
+                                    .font(.headline)
+                                Text(
+                                    "Once those Mac permissions are granted, you’ll verify Telegram by sending the first real task you want OpenClaw to handle.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Telegram comes after AI access is ready")
+                                    .font(.headline)
+                                Text(
+                                    "OpenClaw must pass a live AI readiness check before the first Telegram task can complete end to end.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    } else {
+                        Divider()
+                            .padding(.vertical, 6)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Mac permissions and Telegram come next")
+                                .font(.headline)
+                            Text(
+                                "Finish Chrome first, then OpenClaw will guide you through the remaining setup in order.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .frame(maxWidth: 520)
             }
-            await self.onboardingWizard.startIfNeeded(
-                mode: self.state.connectionMode,
-                workspace: self.workspacePath.isEmpty ? nil : self.workspacePath)
+            .padding(.top, 16)
         }
     }
 

@@ -129,6 +129,7 @@ struct OnboardingView: View {
             case .remote:
                 return [0, 1, 3]
             case .local, .unconfigured:
+                // Consumer local onboarding drops directly into the setup work.
                 return [0]
             }
         }
@@ -189,24 +190,25 @@ struct OnboardingView: View {
     var isConsumerInlineSetupBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            !self.onboardingWizard.isComplete
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .unconfigured
     }
 
     var isBrowserSetupBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            self.onboardingWizard.isComplete &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
             !self.browserSetup.isComplete
     }
 
     var isModelSetupBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            self.onboardingWizard.isComplete &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
             self.browserSetup.isComplete &&
+            self.areCorePermissionsGranted &&
             !self.modelSetup.isComplete
     }
 
@@ -219,32 +221,31 @@ struct OnboardingView: View {
     var isCorePermissionsBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            self.onboardingWizard.isComplete &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
             self.browserSetup.isComplete &&
-            self.modelSetup.isComplete &&
             !self.areCorePermissionsGranted
     }
 
     var canFinishConsumerInlineSetup: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            self.onboardingWizard.isComplete &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
             self.browserSetup.isComplete &&
-            self.modelSetup.isComplete &&
             self.areCorePermissionsGranted &&
+            self.modelSetup.isComplete &&
             self.channelsStore.consumerTelegramReadyForFirstTask()
     }
 
     var isTelegramSetupBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            self.onboardingWizard.isComplete &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
             self.browserSetup.isComplete &&
-            self.modelSetup.isComplete &&
             self.areCorePermissionsGranted &&
+            self.modelSetup.isComplete &&
             !self.channelsStore.consumerTelegramReadyForFirstTask()
     }
 
@@ -282,6 +283,16 @@ struct OnboardingView: View {
         self.permissionMonitor = permissionMonitor
         self._gatewayDiscovery = State(initialValue: discoveryModel)
         self._channelsStore = State(initialValue: channelsStore)
+        self._browserSetup = State(
+            initialValue: BrowserSetupModel(
+                // Consumer onboarding should not silently accept a browser
+                // profile that was seeded by bootstrap/runtime plumbing before
+                // the user ever saw the Chrome step.
+                allowConfigOnlyRestore: !AppFlavor.current.isConsumer,
+                // Even when the user already picked a browser on this Mac,
+                // first-run onboarding should still present Chrome as an explicit
+                // step instead of teleporting straight into "already done."
+                restoredSelectionRequiresConfirmation: AppFlavor.current.isConsumer))
         self._onboardingChatModel = State(
             initialValue: OpenClawChatViewModel(
                 sessionKey: "onboarding",

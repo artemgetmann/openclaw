@@ -6,9 +6,10 @@ enum LaunchAgentManager {
     }
 
     static func status() async -> Bool {
-        guard FileManager().fileExists(atPath: self.plistURL.path) else { return false }
-        let result = await self.runLaunchctl(["print", "gui/\(getuid())/\(launchdLabel)"])
-        return result == 0
+        // This toggle represents the user's "launch at login" preference, not whether the
+        // current GUI session already has the launchd job loaded. The plist is the durable
+        // source of truth for next-login behavior, which is what consumer onboarding needs.
+        FileManager().fileExists(atPath: self.plistURL.path)
     }
 
     static func set(enabled: Bool, bundlePath: String) async {
@@ -22,6 +23,12 @@ enum LaunchAgentManager {
             // bootout would terminate the launchd job immediately (and crash the app if launched via agent).
             try? FileManager().removeItem(at: self.plistURL)
         }
+    }
+
+    static func registerForNextLogin(bundlePath: String) async {
+        // First-run consumer default should not kickstart a second copy of the app mid-onboarding.
+        // Writing the plist is enough for next-login autostart while keeping this session stable.
+        self.writePlist(bundlePath: bundlePath)
     }
 
     private static func writePlist(bundlePath: String) {

@@ -188,4 +188,11 @@ struct ConsumerAppActivationTests {
                 connectionMode: .local,
                 telegramReady: true) == nil)
     }
+
+    @Test func `consumer defaults keep dock and launch available on first run`() {
+        #expect(AppState.defaultLaunchAtLogin(isConsumer: true))
+        #expect(AppState.defaultShowDockIcon(storedValue: nil, isConsumer: true))
+        #expect(!AppState.defaultLaunchAtLogin(isConsumer: false))
+        #expect(!AppState.defaultShowDockIcon(storedValue: nil, isConsumer: false))
+    }
 }

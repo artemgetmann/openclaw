@@ -79,10 +79,14 @@ final class BrowserSetupModel {
     private let persistSelectionToConfig: (ChromeProfileCandidate) -> Void
     private let clearSelectionFromConfig: () -> Void
     private let verifySelectionReadiness: (ChromeProfileCandidate) async -> String?
+    private let allowConfigOnlyRestore: Bool
+    private let restoredSelectionRequiresConfirmation: Bool
     private var detectedProfiles: [ChromeProfileCandidate] = []
 
     init(
         defaults: UserDefaults = .standard,
+        allowConfigOnlyRestore: Bool = true,
+        restoredSelectionRequiresConfirmation: Bool = false,
         detectChromeExecutable: (() -> URL?)? = nil,
         loadProfiles: (() -> [ChromeProfileCandidate])? = nil,
         persistSelectionToConfig: ((ChromeProfileCandidate) -> Void)? = nil,
@@ -90,6 +94,8 @@ final class BrowserSetupModel {
         verifySelectionReadiness: ((ChromeProfileCandidate) async -> String?)? = nil)
     {
         self.defaults = defaults
+        self.allowConfigOnlyRestore = allowConfigOnlyRestore
+        self.restoredSelectionRequiresConfirmation = restoredSelectionRequiresConfirmation
         self.detectChromeExecutable = detectChromeExecutable ?? { BrowserSetupModel.detectChromeExecutable() }
         self.loadProfiles = loadProfiles ?? { BrowserSetupModel.loadChromeProfiles() }
         self.persistSelectionToConfig = persistSelectionToConfig ?? { profile in
@@ -165,6 +171,15 @@ final class BrowserSetupModel {
         }
 
         if let selected = self.restoreSelection(from: profiles) {
+            // Onboarding should acknowledge prior Chrome choices explicitly so the
+            // user sees a real browser step even when this Mac already has enough
+            // state to prefill it. Settings keeps the faster auto-ready behavior.
+            if self.restoredSelectionRequiresConfirmation {
+                self.phase = .confirm(selected)
+                self.statusLine = "We found your Chrome profile."
+                self.lastAutoRecoveryFailureMessage = nil
+                return
+            }
             self.statusLine = "Checking browser readiness…"
             if let failure = await self.verifySelectionReadiness(selected) {
                 self.phase = .failed(failure)
@@ -344,11 +359,21 @@ final class BrowserSetupModel {
     }
 
     private func restoreSelection(from profiles: [ChromeProfileCandidate]) -> ChromeProfileCandidate? {
+        let hasDefaultsSelection = self.hasPersistedDefaultsSelection()
+
         // Config is the runtime source of truth. If we only trust UserDefaults here,
         // the setup sheet can claim success while the actual browser runtime stays global.
         if let selectedID = OpenClawConfigFile.selectedChromeProfileDirectoryName(),
            let selected = profiles.first(where: { $0.directoryName == selectedID })
         {
+            // Some bootstrap paths can preseed browser.user.sourceProfileName before the
+            // consumer has explicitly confirmed Chrome in onboarding. Honor config-only
+            // restore in Settings, but keep first-run onboarding honest and require an
+            // explicit confirmation when no app-local browser choice was persisted yet.
+            guard self.allowConfigOnlyRestore || hasDefaultsSelection else {
+                self.clearSelectionFromConfig()
+                return nil
+            }
             self.persistDefaultsSelection(selected)
             return selected
         }
@@ -364,6 +389,15 @@ final class BrowserSetupModel {
         // existing users do not have to re-pick their Chrome profile after upgrading.
         _ = self.persistRuntimeSelection(selected)
         return selected
+    }
+
+    private func hasPersistedDefaultsSelection() -> Bool {
+        guard let selectedID = self.defaults.string(forKey: browserSelectedChromeProfileIDKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        else {
+            return false
+        }
+        return !selectedID.isEmpty
     }
 
     private func persistSelection(_ profile: ChromeProfileCandidate) -> Bool {

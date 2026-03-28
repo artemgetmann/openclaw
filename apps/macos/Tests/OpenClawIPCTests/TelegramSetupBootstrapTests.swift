@@ -118,4 +118,26 @@ struct TelegramSetupBootstrapTests {
                     }
                 }
     }
+
+    @Test func `telegram replay timeout recovery reenables telegram after reply started`() {
+        let decision = ChannelsStore.consumerTelegramReplayDecision(
+            replyStarted: true,
+            replyCompleted: false,
+            error: "timeout")
+
+        #expect(decision.shouldReenableTelegram)
+        #expect(decision.shouldWaitForActivityConfirmation)
+        #expect(!decision.shouldTrustReplayCompletion)
+    }
+
+    @Test func `telegram replay hard failure keeps telegram disabled until retry`() {
+        let decision = ChannelsStore.consumerTelegramReplayDecision(
+            replyStarted: false,
+            replyCompleted: nil,
+            error: "boot failed")
+
+        #expect(!decision.shouldReenableTelegram)
+        #expect(!decision.shouldWaitForActivityConfirmation)
+        #expect(!decision.shouldTrustReplayCompletion)
+    }
 }

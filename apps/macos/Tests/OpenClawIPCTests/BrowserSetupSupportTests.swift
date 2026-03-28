@@ -97,6 +97,80 @@ struct BrowserSetupSupportTests {
         }
     }
 
+    @Test func `onboarding restore requires explicit confirmation for defaults backed selection`() async {
+        let defaults = self.makeDefaults()
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: "artem@example.com",
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)
+            defaults.set("Artem", forKey: browserSelectedChromeProfileNameKey)
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                allowConfigOnlyRestore: false,
+                restoredSelectionRequiresConfirmation: true,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in nil })
+
+            await model.refresh()
+
+            #expect(model.phase == .confirm(selected))
+            #expect(model.isComplete == false)
+            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
+            #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
+        }
+    }
+
+    @Test func `consumer onboarding ignores config only browser selection until confirmed`() async {
+        let defaults = self.makeDefaults()
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: "artem@example.com",
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                allowConfigOnlyRestore: false,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in nil })
+
+            await model.refresh()
+
+            #expect(model.phase == .confirm(selected))
+            #expect(model.isComplete == false)
+            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == nil)
+            #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == nil)
+            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == nil)
+        }
+    }
+
     @Test func `refresh preserves persisted profile when runtime readiness fails`() async {
         let defaults = self.makeDefaults()
         let selected = ChromeProfileCandidate(

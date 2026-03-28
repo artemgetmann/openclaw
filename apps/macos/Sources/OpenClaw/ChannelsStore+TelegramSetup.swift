@@ -139,8 +139,11 @@ extension ChannelsStore {
             self.telegramSetupStatus = "Running your first Telegram task..."
             self.telegramSetupPhase = .startingFirstReply
             let replayResult = await self.startFirstTelegramReply(dm: dm)
-            let replayCompleted = replayResult.replyCompleted ?? replayResult.replyStarted
-            if replayResult.error == nil {
+            let replayDecision = Self.consumerTelegramReplayDecision(
+                replyStarted: replayResult.replyStarted,
+                replyCompleted: replayResult.replyCompleted,
+                error: replayResult.error)
+            if replayDecision.shouldReenableTelegram {
                 _ = try await self.applyTelegramSetupBootstrap(
                     token: token,
                     dmPolicy: "allowlist",
@@ -151,7 +154,12 @@ extension ChannelsStore {
                 try? await self.restoreTelegramPairingAfterSetupPause(token: token)
                 restoredByFinalBootstrap = true
             }
-            if replayCompleted, replayResult.error == nil {
+
+            let activityConfirmed = replayDecision.shouldWaitForActivityConfirmation
+                ? await self.waitForConsumerTelegramFirstTaskActivityRefreshes()
+                : false
+
+            if replayDecision.shouldTrustReplayCompletion || activityConfirmed {
                 self.markConsumerTelegramFirstTaskVerified()
             } else {
                 self.clearConsumerTelegramFirstTaskVerified()
@@ -159,7 +167,8 @@ extension ChannelsStore {
             self.telegramSetupStatus = self.telegramCaptureStatus(
                 dm: dm,
                 persistedRoot: persisted,
-                replayResult: replayResult)
+                replayResult: replayResult,
+                activityConfirmed: activityConfirmed)
         } catch {
             self.telegramSetupWaitingForDM = false
             self.clearConsumerTelegramFirstTaskVerified()
@@ -253,24 +262,29 @@ extension ChannelsStore {
     private func telegramCaptureStatus(
         dm: TelegramSetupDirectMessage,
         persistedRoot: [String: Any],
-        replayResult: TelegramSetupReplayResult
+        replayResult: TelegramSetupReplayResult,
+        activityConfirmed: Bool
     ) -> String {
         _ = persistedRoot
-        let replayCompleted = replayResult.replyCompleted ?? replayResult.replyStarted
+        let replayCompleted = activityConfirmed
+            || ((replayResult.replyCompleted ?? replayResult.replyStarted) && replayResult.error == nil)
+        if replayCompleted {
+            if AppFlavor.current.isConsumer {
+                return dm.senderUsername.map {
+                    "Connected to @\($0). OpenClaw finished the first Telegram task on this Mac."
+                } ?? "Telegram setup is finished. OpenClaw finished the first Telegram task on this Mac."
+            }
+            return dm.senderUsername.map {
+                "Locked to @\($0). For multiple parallel tasks, add the bot to a Telegram group and use topics."
+            } ?? "Locked to Telegram user ID \(dm.senderId). For multiple parallel tasks, add the bot to a Telegram group and use topics."
+        }
         if let error = replayResult.error {
             return "Telegram setup is saved, but OpenClaw could not finish the first Telegram task. \(error)"
         }
         if !replayCompleted {
             return "Telegram setup is saved, but OpenClaw could not confirm that the first Telegram task finished."
         }
-        if AppFlavor.current.isConsumer {
-            return dm.senderUsername.map {
-                "Connected to @\($0). OpenClaw finished the first Telegram task on this Mac."
-            } ?? "Telegram setup is finished. OpenClaw finished the first Telegram task on this Mac."
-        }
-        return dm.senderUsername.map {
-            "Locked to @\($0). For multiple parallel tasks, add the bot to a Telegram group and use topics."
-        } ?? "Locked to Telegram user ID \(dm.senderId). For multiple parallel tasks, add the bot to a Telegram group and use topics."
+        return "Telegram setup is saved, but OpenClaw could not confirm that the first Telegram task finished."
     }
 
     private func telegramCaptureFailureStatusAfterTimeout() -> String? {
@@ -380,13 +394,11 @@ extension ChannelsStore {
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: 20)
         if response.timedOut {
             await self.refresh(probe: true)
-            if self.consumerTelegramCanVerifyFirstTaskFromActivity() {
-                return TelegramSetupReplayResult(
-                    ok: true,
-                    replyStarted: true,
-                    replyCompleted: true,
-                    error: nil)
-            }
+            return TelegramSetupReplayResult(
+                ok: false,
+                replyStarted: true,
+                replyCompleted: self.consumerTelegramCanVerifyFirstTaskFromActivity(),
+                error: "OpenClaw started the first Telegram task, but the setup handoff timed out before completion was confirmed.")
         }
         if !response.success {
             let detail = response.stderr.nonEmpty ?? response.stdout.nonEmpty ?? response.errorMessage ?? "unknown error"
@@ -448,6 +460,44 @@ extension ChannelsStore {
             return nil
         }
         return json
+    }
+}
+
+struct ConsumerTelegramReplayDecision: Equatable {
+    let shouldReenableTelegram: Bool
+    let shouldWaitForActivityConfirmation: Bool
+    let shouldTrustReplayCompletion: Bool
+}
+
+extension ChannelsStore {
+    static func consumerTelegramReplayDecision(
+        replyStarted: Bool,
+        replyCompleted: Bool?,
+        error: String?
+    ) -> ConsumerTelegramReplayDecision {
+        let completed = replyCompleted ?? replyStarted
+        if error == nil {
+            return ConsumerTelegramReplayDecision(
+                shouldReenableTelegram: true,
+                shouldWaitForActivityConfirmation: !completed,
+                shouldTrustReplayCompletion: completed)
+        }
+
+        // Sender capture already proved the user/channel pairing. If the replay
+        // helper at least started, always restore the live Telegram config first
+        // and then verify completion from fresh activity instead of leaving the
+        // lane stuck in enabled:false after a timeout or restart race.
+        if replyStarted {
+            return ConsumerTelegramReplayDecision(
+                shouldReenableTelegram: true,
+                shouldWaitForActivityConfirmation: true,
+                shouldTrustReplayCompletion: false)
+        }
+
+        return ConsumerTelegramReplayDecision(
+            shouldReenableTelegram: false,
+            shouldWaitForActivityConfirmation: false,
+            shouldTrustReplayCompletion: false)
     }
 }
 

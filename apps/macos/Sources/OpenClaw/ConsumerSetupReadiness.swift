@@ -83,6 +83,8 @@ private struct ConsumerBrowserStatusPayload: Decodable {
 @MainActor
 @Observable
 final class ConsumerModelSetupModel {
+    typealias ReadinessProbe = @Sendable () async throws -> ConsumerModelsReadinessPayload
+
     enum Phase: Equatable {
         case idle
         case checking
@@ -92,6 +94,11 @@ final class ConsumerModelSetupModel {
 
     private(set) var phase: Phase = .idle
     private(set) var statusLine: String?
+    private let probeReadiness: ReadinessProbe
+
+    init(probeReadiness: ReadinessProbe? = nil) {
+        self.probeReadiness = probeReadiness ?? Self.gatewayReadinessProbe
+    }
 
     var isComplete: Bool {
         if case .ready = self.phase {
@@ -109,84 +116,52 @@ final class ConsumerModelSetupModel {
         self.phase = .checking
         self.statusLine = "Checking OpenClaw's AI access…"
 
-        let result = await ConsumerSetupCommandRunner.runOpenClaw(
-            subcommand: "models",
-            extraArgs: ["status", "--json", "--check"],
-            timeout: 20)
+        do {
+            let payload = try await self.probeReadiness()
+            if payload.status == "ready" {
+                let trimmedModel = payload.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let display = (trimmedModel?.isEmpty == false ? trimmedModel : nil) ?? "the default model"
+                self.phase = .ready(display)
+                self.statusLine = "AI ready on \(display)."
+                return
+            }
 
-        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        let payload = stdout.data(using: .utf8).flatMap {
-            try? JSONDecoder().decode(ConsumerModelsStatusPayload.self, from: $0)
+            let detail = payload.consumerFailureMessage
+            self.phase = .failed(detail)
+            self.statusLine = detail
+        } catch {
+            let detail = error.localizedDescription
+            self.phase = .failed(detail)
+            self.statusLine = detail
         }
+    }
 
-        if result.success, let payload {
-            let model = payload.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let display = (model?.isEmpty == false ? model : payload.resolvedDefault) ?? "the default model"
-            self.phase = .ready(display)
-            self.statusLine = "AI ready on \(display)."
-            return
-        }
-
-        let detail = payload?.consumerFailureMessage ?? ConsumerSetupCommandRunner.bestEffortMessage(for: result)
-        self.phase = .failed(detail)
-        self.statusLine = detail
+    private static func gatewayReadinessProbe() async throws -> ConsumerModelsReadinessPayload {
+        return try await GatewayConnection.shared.requestDecoded(
+            method: .modelsReadiness,
+            timeoutMs: 20_000)
     }
 }
 
-private struct ConsumerModelsStatusPayload: Decodable {
-    struct Auth: Decodable {
-        struct OAuth: Decodable {
-            struct Profile: Decodable {
-                let provider: String
-                let status: String
-                let remainingMs: Double?
-            }
-
-            let profiles: [Profile]?
-        }
-
-        let missingProvidersInUse: [String]?
-        let oauth: OAuth?
-    }
-
+struct ConsumerModelsReadinessPayload: Decodable {
+    let status: String
     let defaultModel: String?
-    let resolvedDefault: String?
-    let auth: Auth
+    let summary: String
+    let reasonCodes: [String]
 
     var consumerFailureMessage: String {
-        if let missingProvider = self.auth.missingProvidersInUse?.first {
-            return "OpenClaw is not ready for a first task yet. Missing AI access for \(missingProvider). Reopen the app or switch to your own model in Advanced."
+        if self.status == "ready" {
+            return "OpenClaw's AI access is ready."
         }
-        if let expired = self.auth.oauth?.profiles?.first(where: { $0.status == "expired" || $0.status == "missing" }) {
-            return "OpenClaw's AI credential for \(expired.provider) is unavailable. Reopen the app or switch to your own model in Advanced."
-        }
-        if let expiring = self.auth.oauth?.profiles?.first(where: { $0.status == "expiring" }) {
-            let remaining = expiring.remainingMs.map {
-                formatRemainingShort(Int($0), underMinuteLabel: "under a minute")
-            } ?? "soon"
-            return "OpenClaw's AI credential for \(expiring.provider) expires \(remaining). Refresh it before relying on this build."
+        // Consumer onboarding needs a plain-English blocker. The gateway already
+        // computed the truthful live-probe summary, so surface that instead of
+        // re-deriving auth state from stale local snapshots.
+        let trimmedSummary = self.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSummary.isEmpty {
+            return trimmedSummary
         }
         return "OpenClaw is not ready for a first task yet. Reopen the app or switch to your own model in Advanced."
     }
-}
-
-private func formatRemainingShort(_ remainingMs: Int, underMinuteLabel: String) -> String {
-    if remainingMs <= 0 {
-        return "now"
-    }
-    let roundedMinutes = Int((Double(remainingMs) / 60_000).rounded())
-    if roundedMinutes < 1 {
-        return underMinuteLabel
-    }
-    if roundedMinutes < 60 {
-        return "in \(roundedMinutes)m"
-    }
-    let roundedHours = Int((Double(roundedMinutes) / 60).rounded())
-    if roundedHours < 48 {
-        return "in \(roundedHours)h"
-    }
-    let roundedDays = Int((Double(roundedHours) / 24).rounded())
-    return "in \(roundedDays)d"
 }
 
 extension BrowserSetupModel {
