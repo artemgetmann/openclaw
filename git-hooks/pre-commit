@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 RUN_NODE_TOOL="$ROOT_DIR/scripts/pre-commit/run-node-tool.sh"
 FILTER_FILES="$ROOT_DIR/scripts/pre-commit/filter-staged-files.mjs"
+WORKTREE_GUARDS="$ROOT_DIR/scripts/lib/worktree-guards.sh"
 
 if [[ ! -x "$RUN_NODE_TOOL" ]]; then
   echo "Missing helper: $RUN_NODE_TOOL" >&2
@@ -14,6 +15,14 @@ fi
 if [[ ! -f "$FILTER_FILES" ]]; then
   echo "Missing helper: $FILTER_FILES" >&2
   exit 1
+fi
+
+if [[ -f "$WORKTREE_GUARDS" ]]; then
+  # Block commits from the canonical shared main checkout that owns the live
+  # ai.openclaw.gateway runtime. Worktree branches remain allowed.
+  # shellcheck source=scripts/lib/worktree-guards.sh
+  source "$WORKTREE_GUARDS"
+  worktree_guard_forbid_shared_root_main_commits "$ROOT_DIR"
 fi
 
 # Security: avoid option-injection from malicious file names (e.g. "--all", "--force").

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { GATEWAY_LAUNCH_AGENT_LABEL, normalizeGatewayProfile } from "../../daemon/constants.js";
 import type {
   GatewayService,
@@ -31,6 +33,38 @@ function resolveGatewayEntrypoint(programArguments: string[] | undefined): strin
 function normalizeWorkingDirectory(workingDirectory: string | undefined): string | null {
   const trimmed = workingDirectory?.trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizePathForComparison(filePath: string | null | undefined): string | null {
+  const trimmed = filePath?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const resolved = path.resolve(trimmed);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function resolveCanonicalSharedGatewayEntrypoint(env: GatewayServiceEnv): string | null {
+  const home = env.HOME?.trim() || process.env.HOME?.trim() || "";
+  const explicitRoot = env.OPENCLAW_MAIN_REPO?.trim();
+  const candidates = [
+    explicitRoot,
+    home ? path.join(home, "Programming_Projects", "openclaw") : "",
+    home ? path.join(home, "Projects", "openclaw") : "",
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const entrypoint = normalizePathForComparison(path.join(candidate, "dist", "index.js"));
+    if (entrypoint && fs.existsSync(entrypoint)) {
+      return entrypoint;
+    }
+  }
+
+  return null;
 }
 
 function buildOwnershipSnapshot(args: {
@@ -109,7 +143,36 @@ export async function detectSharedGatewayInstallOwnershipConflict(args: {
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
 }): Promise<GatewayInstallOwnershipConflict | null> {
-  if (args.allowSharedServiceTakeover || !isDefaultSharedGatewayInstallTarget(args.env)) {
+  if (!isDefaultSharedGatewayInstallTarget(args.env)) {
+    return null;
+  }
+
+  const proposed = buildOwnershipSnapshot({
+    programArguments: args.programArguments,
+    workingDirectory: args.workingDirectory,
+    environment: args.environment,
+  });
+  const canonicalEntrypoint = resolveCanonicalSharedGatewayEntrypoint(args.env);
+  if (canonicalEntrypoint) {
+    const requestedEntrypoint = normalizePathForComparison(proposed.entrypoint);
+    if (requestedEntrypoint !== canonicalEntrypoint) {
+      return {
+        message:
+          "Gateway install blocked: the default shared gateway service must target the canonical main runtime.",
+        hints: [
+          `Requested entrypoint: ${formatValue(proposed.entrypoint)}`,
+          `Expected shared entrypoint: ${canonicalEntrypoint}`,
+          `Run the shared-service install from ${path.dirname(path.dirname(canonicalEntrypoint))}.`,
+          `For isolated runtimes, use ${formatCliCommand(
+            "openclaw --profile tester gateway install",
+            args.env,
+          )}.`,
+        ],
+      };
+    }
+  }
+
+  if (args.allowSharedServiceTakeover) {
     return null;
   }
 
@@ -127,11 +190,6 @@ export async function detectSharedGatewayInstallOwnershipConflict(args: {
     programArguments: currentCommand.programArguments,
     workingDirectory: currentCommand.workingDirectory,
     environment: currentCommand.environment,
-  });
-  const proposed = buildOwnershipSnapshot({
-    programArguments: args.programArguments,
-    workingDirectory: args.workingDirectory,
-    environment: args.environment,
   });
   const diffs = collectOwnershipDiffs(current, proposed);
   if (diffs.length === 0) {

@@ -4,7 +4,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${ROOT_DIR}/scripts/lib/worktree-guards.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
+GATEWAY_ENTRY="${ROOT_DIR}/dist/index.js"
 APP_PROCESS_PATTERN="OpenClaw.app/Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
 LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/OpenClaw"
@@ -20,7 +22,10 @@ SIGN=0
 AUTO_DETECT_SIGNING=1
 GATEWAY_WAIT_SECONDS="${OPENCLAW_GATEWAY_WAIT_SECONDS:-0}"
 LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
-ATTACH_ONLY=1
+# Default to the normal launchd-owning path. Attach-only is a niche debugging
+# mode that explicitly disables ai.openclaw.gateway ownership, so making it the
+# default turns "restart the app" into "quietly stop updating the main bot".
+ATTACH_ONLY=0
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -96,8 +101,8 @@ for arg in "$@"; do
       log "  OPENCLAW_GATEWAY_WAIT_SECONDS=0  Wait time before gateway port check (unsigned only)"
       log ""
       log "Unsigned recovery:"
-      log "  node openclaw.mjs daemon install --force --runtime node"
-      log "  node openclaw.mjs daemon restart"
+      log "  node dist/index.js gateway install --force --allow-shared-service-takeover --runtime node"
+      log "  node dist/index.js gateway restart"
       log ""
       log "Reset unsigned overrides:"
       log "  rm ~/.openclaw/disable-launchagent"
@@ -125,6 +130,11 @@ if [[ "$ATTACH_ONLY" -eq 1 ]]; then
 fi
 
 acquire_lock
+
+worktree_guard_reject_shared_root_main_edits \
+  "${ROOT_DIR}" \
+  worktree \
+  --context "scripts/restart-mac.sh"
 
 kill_all_openclaw() {
   for _ in {1..10}; do
@@ -217,8 +227,11 @@ fi
 # When unsigned, ensure the gateway LaunchAgent targets the repo CLI (before the app launches).
 # This reduces noisy "could not connect" errors during app startup.
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "install gateway launch agent (unsigned)" bash -lc "cd '${ROOT_DIR}' && node openclaw.mjs daemon install --force --runtime node"
-  run_step "restart gateway daemon (unsigned)" bash -lc "cd '${ROOT_DIR}' && node openclaw.mjs daemon restart"
+  # The unsigned recovery path still owns the shared main LaunchAgent, so it
+  # must use the canonical repo entrypoint plus explicit takeover instead of a
+  # wrapper/alias install that can drift back to ~/.openclaw.
+  run_step "install gateway launch agent (unsigned)" bash -lc "cd '${ROOT_DIR}' && node '${GATEWAY_ENTRY}' gateway install --force --allow-shared-service-takeover --runtime node"
+  run_step "restart gateway daemon (unsigned)" bash -lc "cd '${ROOT_DIR}' && node '${GATEWAY_ENTRY}' gateway restart"
   if [[ "${GATEWAY_WAIT_SECONDS}" -gt 0 ]]; then
     run_step "wait for gateway (unsigned)" sleep "${GATEWAY_WAIT_SECONDS}"
   fi
@@ -237,6 +250,7 @@ if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
     '
   )"
   run_step "verify gateway port ${GATEWAY_PORT} (unsigned)" bash -lc "lsof -iTCP:${GATEWAY_PORT} -sTCP:LISTEN | head -n 5 || true"
+  run_step "verify gateway launch agent target (unsigned)" bash -lc "launchctl print gui/\$(id -u)/ai.openclaw.gateway | grep -F '${GATEWAY_ENTRY}'"
 fi
 
 ATTACH_ONLY_ARGS=()

@@ -252,6 +252,13 @@ if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
   exit 1
 fi
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd -P)"
+source "${REPO_ROOT}/scripts/lib/worktree-guards.sh"
+
+worktree_guard_reject_shared_root_main_edits \
+  "$REPO_ROOT" \
+  worktree \
+  --context "scripts/new-worktree.sh"
+
 BOOTSTRAP_SCRIPT="${REPO_ROOT}/scripts/bootstrap-worktree-telegram.sh"
 DOCTOR_SCRIPT="${REPO_ROOT}/scripts/worktree-doctor.sh"
 
