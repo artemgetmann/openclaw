@@ -64,7 +64,12 @@ final class OnboardingController {
     }
 
     func close() {
-        self.window?.close()
+        guard let window = self.window else { return }
+        // AppKit can leave a just-closed SwiftUI window onscreen until the next
+        // run-loop turn. Order it out first so the onboarding surface disappears
+        // immediately, then close it to finish teardown.
+        window.orderOut(nil)
+        window.close()
         self.window = nil
     }
 

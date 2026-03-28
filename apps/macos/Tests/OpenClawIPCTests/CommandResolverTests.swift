@@ -39,17 +39,39 @@ import Testing
         return tmp
     }
 
-    @Test func `prefers open claw binary`() throws {
-        let defaults = self.makeLocalDefaults()
+    private func makeNodeExecutable(at path: URL) throws {
+        try FileManager().createDirectory(
+            at: path.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try """
+        #!/bin/sh
+        echo v22.16.0
+        """.write(to: path, atomically: true, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+    }
 
-        let tmp = try makeTempDirForTests()
+    @Test func `prefers project entrypoint over repo shim`() throws {
+        let defaults = self.makeLocalDefaults()
+        let tmp = try self.makeRepoRoot()
         CommandResolver.setProjectRoot(tmp.path)
 
         let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
         try makeExecutableForTests(at: openclawPath)
+        let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
+        try self.makeNodeExecutable(at: nodePath)
 
-        let cmd = CommandResolver.openclawCommand(subcommand: "gateway", defaults: defaults, configRoot: [:])
-        #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "gateway",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
+
+        #expect(cmd.count >= 3)
+        if cmd.count >= 3 {
+            #expect(cmd[0] == nodePath.path)
+            #expect(cmd[1] == tmp.appendingPathComponent("dist/index.js").path)
+            #expect(cmd[2] == "gateway")
+        }
     }
 
     @Test func `falls back to node and project entrypoint`() throws {
@@ -59,13 +81,7 @@ import Testing
         CommandResolver.setProjectRoot(tmp.path)
 
         let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
-        try makeExecutableForTests(at: nodePath)
-        try """
-        #!/bin/sh
-        echo v22.16.0
-        """.write(to: nodePath, atomically: true, encoding: .utf8)
-        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
-        let scriptPath = tmp.appendingPathComponent("openclaw.mjs")
+        try self.makeNodeExecutable(at: nodePath)
 
         let cmd = CommandResolver.openclawCommand(
             subcommand: "rpc",
@@ -138,13 +154,8 @@ import Testing
         try makeExecutableForTests(at: globalOpenclaw)
 
         let nodeDir = tmp.appendingPathComponent("node-bin")
-        try FileManager().createDirectory(at: nodeDir, withIntermediateDirectories: true)
         let nodePath = nodeDir.appendingPathComponent("node")
-        try """
-        #!/bin/sh
-        echo v22.16.0
-        """.write(to: nodePath, atomically: true, encoding: .utf8)
-        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
+        try self.makeNodeExecutable(at: nodePath)
 
         let cmd = CommandResolver.openclawCommand(
             subcommand: "gateway",
@@ -260,21 +271,56 @@ import Testing
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("openclaw@example.com:2222", forKey: remoteTargetKey)
 
-        let tmp = try makeTempDirForTests()
+        let tmp = try self.makeRepoRoot()
         CommandResolver.setProjectRoot(tmp.path)
 
         let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
         try makeExecutableForTests(at: openclawPath)
+        let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
+        try self.makeNodeExecutable(at: nodePath)
 
         let cmd = CommandResolver.openclawCommand(
             subcommand: "daemon",
             defaults: defaults,
-            configRoot: ["gateway": ["mode": "local"]])
+            configRoot: ["gateway": ["mode": "local"]],
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
 
-        #expect(cmd.first == openclawPath.path)
-        #expect(cmd.count >= 2)
-        if cmd.count >= 2 {
-            #expect(cmd[1] == "daemon")
+        #expect(cmd.count >= 3)
+        if cmd.count >= 3 {
+            #expect(cmd[0] == nodePath.path)
+            #expect(cmd[1] == tmp.appendingPathComponent("dist/index.js").path)
+            #expect(cmd[2] == "daemon")
+        }
+    }
+
+    @Test func `ignores repo shim that realpaths outside the current worktree`() throws {
+        let defaults = self.makeLocalDefaults()
+        let worktreeRoot = try self.makeRepoRoot()
+        CommandResolver.setProjectRoot(worktreeRoot.path)
+
+        let sharedRoot = try self.makeRepoRoot()
+        let sharedShimTarget = sharedRoot.appendingPathComponent("openclaw.mjs")
+        let shimPath = worktreeRoot.appendingPathComponent("node_modules/.bin/openclaw")
+        try FileManager().createDirectory(
+            at: shimPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try FileManager().createSymbolicLink(at: shimPath, withDestinationURL: sharedShimTarget)
+
+        let nodePath = worktreeRoot.appendingPathComponent("node_modules/.bin/node")
+        try self.makeNodeExecutable(at: nodePath)
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "browser",
+            extraArgs: ["status"],
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [worktreeRoot.appendingPathComponent("node_modules/.bin").path])
+
+        #expect(cmd.count >= 3)
+        if cmd.count >= 3 {
+            #expect(cmd[0] == nodePath.path)
+            #expect(cmd[1] == worktreeRoot.appendingPathComponent("dist/index.js").path)
+            #expect(cmd[2] == "browser")
         }
     }
 }

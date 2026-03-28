@@ -219,16 +219,6 @@ enum CommandResolver {
         self.findExecutable(named: self.helperName, searchPaths: searchPaths)
     }
 
-    static func projectOpenClawExecutable(projectRoot: URL? = nil) -> String? {
-        #if DEBUG
-        let root = projectRoot ?? self.projectRoot()
-        let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
-        return FileManager().isExecutableFile(atPath: candidate) ? candidate : nil
-        #else
-        return nil
-        #endif
-    }
-
     static func nodeCliPath() -> String? {
         let root = self.projectRoot()
         let candidates = [
@@ -269,16 +259,13 @@ enum CommandResolver {
         }
 
         let root = self.projectRoot()
-        if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
-            return [openclawPath, subcommand] + extraArgs
-        }
         let runtimeResult = self.runtimeResolution(searchPaths: searchPaths)
         switch runtimeResult {
         case let .success(runtime):
             if let entry = self.gatewayEntrypoint(in: root) {
-                // When we know the current repo root, prefer its built entrypoint over any
-                // PATH-level wrapper. This keeps the mac app pinned to the active worktree
-                // instead of a stale hoisted/global `openclaw` package.
+                // Always self-invoke via the current checkout's explicit entrypoint.
+                // Repo-local .bin shims can resolve outside a linked worktree and silently
+                // run a different checkout, which breaks isolation for onboarding checks.
                 return self.makeRuntimeCommand(
                     runtime: runtime,
                     entrypoint: entry,

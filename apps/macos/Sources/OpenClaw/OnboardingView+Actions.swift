@@ -93,10 +93,14 @@ extension OnboardingView {
 
         guard let followUpTab else { return }
         if let delegate = AppDelegate.shared {
-            delegate.requestVisibleSurface(reason: "finish", preferredSettingsTab: followUpTab)
+            DispatchQueue.main.async {
+                delegate.requestVisibleSurface(reason: "finish", preferredSettingsTab: followUpTab)
+            }
             return
         }
-        SettingsWindowOpener.shared.open(tab: followUpTab)
+        DispatchQueue.main.async {
+            SettingsWindowOpener.shared.open(tab: followUpTab)
+        }
     }
 
     func copyToPasteboard(_ text: String) {

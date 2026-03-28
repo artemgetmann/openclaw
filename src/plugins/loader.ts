@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { listChatChannels, normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isChannelConfigured } from "../config/plugin-auto-enable.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -330,10 +331,51 @@ function setCachedPluginRegistry(cacheKey: string, registry: PluginRegistry): vo
   }
 }
 
+function buildChannelCacheState(
+  rootConfig: OpenClawConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): Record<string, { configured: boolean; enabled?: boolean }> {
+  if (!rootConfig) {
+    return {};
+  }
+  const rawChannels =
+    rootConfig.channels &&
+    typeof rootConfig.channels === "object" &&
+    !Array.isArray(rootConfig.channels)
+      ? (rootConfig.channels as Record<string, unknown>)
+      : undefined;
+  const normalizedEntries = new Map<string, Record<string, unknown>>();
+  const channelIds = new Set<string>(listChatChannels().map((entry) => entry.id));
+
+  // Keep the cache fingerprint small and secret-safe: we only persist booleans that
+  // affect loader behavior, not raw channel credentials or other config payloads.
+  for (const [rawId, value] of Object.entries(rawChannels ?? {})) {
+    const normalizedId = normalizeChatChannelId(rawId) ?? rawId.trim().toLowerCase();
+    if (!normalizedId) {
+      continue;
+    }
+    channelIds.add(normalizedId);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      normalizedEntries.set(normalizedId, value as Record<string, unknown>);
+    }
+  }
+
+  const cacheState: Record<string, { configured: boolean; enabled?: boolean }> = {};
+  for (const channelId of Array.from(channelIds).toSorted()) {
+    const explicitEntry = normalizedEntries.get(channelId);
+    cacheState[channelId] = {
+      configured: isChannelConfigured(rootConfig, channelId, env),
+      ...(typeof explicitEntry?.enabled === "boolean" ? { enabled: explicitEntry.enabled } : {}),
+    };
+  }
+  return cacheState;
+}
+
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
   installs?: Record<string, PluginInstallRecord>;
+  rootConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
@@ -361,10 +403,12 @@ function buildCacheKey(params: {
   );
   const scopeKey = JSON.stringify(params.onlyPluginIds ?? []);
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
+  const channelCacheState = buildChannelCacheState(params.rootConfig, params.env);
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     ...params.plugins,
     installs,
     loadPaths,
+    channels: channelCacheState,
   })}::${scopeKey}::${setupOnlyKey}`;
 }
 
@@ -810,6 +854,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     workspaceDir: options.workspaceDir,
     plugins: normalized,
     installs: cfg.plugins?.installs,
+    rootConfig: cfg,
     env,
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
