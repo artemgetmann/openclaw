@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   upsertAuthProfile: vi.fn(),
   resolvePluginProviders: vi.fn(),
   createClackPrompter: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
   loadValidConfigOrThrow: vi.fn(),
   updateConfig: vi.fn(),
   logConfigUpdated: vi.fn(),
@@ -64,6 +65,14 @@ vi.mock("./shared.js", async (importActual) => {
     ...actual,
     loadValidConfigOrThrow: mocks.loadValidConfigOrThrow,
     updateConfig: mocks.updateConfig,
+  };
+});
+
+vi.mock("../../config/config.js", async (importActual) => {
+  const actual = await importActual<typeof import("../../config/config.js")>();
+  return {
+    ...actual,
+    readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   };
 });
 
@@ -147,6 +156,11 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.resolveDefaultAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      path: "/tmp/consumer/openclaw.json",
+      config: currentConfig,
+    });
     mocks.loadValidConfigOrThrow.mockImplementation(async () => currentConfig);
     mocks.updateConfig.mockImplementation(
       async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) => {
@@ -209,6 +223,12 @@ describe("modelsAuthLoginCommand", () => {
     expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
       provider: "openai-codex",
       mode: "oauth",
+    });
+    expect(mocks.updateConfig).toHaveBeenCalledWith(expect.any(Function), {
+      expectedConfigPath: "/tmp/consumer/openclaw.json",
+    });
+    expect(mocks.logConfigUpdated).toHaveBeenCalledWith(runtime, {
+      path: "/tmp/consumer/openclaw.json",
     });
     expect(runtime.log).toHaveBeenCalledWith(
       "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
@@ -313,6 +333,29 @@ describe("modelsAuthLoginCommand", () => {
     } finally {
       exitSpy.mockRestore();
     }
+  });
+
+  it("pins manual token writes to the resolved config path and agent dir", async () => {
+    const runtime = createRuntime();
+    mocks.clackText.mockResolvedValue("manual-token");
+
+    await modelsAuthPasteTokenCommand({ provider: "openai" }, runtime);
+
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "token",
+        provider: "openai",
+        token: "manual-token",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(mocks.updateConfig).toHaveBeenCalledWith(expect.any(Function), {
+      expectedConfigPath: "/tmp/consumer/openclaw.json",
+    });
+    expect(mocks.logConfigUpdated).toHaveBeenCalledWith(runtime, {
+      path: "/tmp/consumer/openclaw.json",
+    });
   });
 
   it("runs token auth for any token-capable provider plugin", async () => {

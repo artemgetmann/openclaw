@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct BrowserSetupCardContent: View {
@@ -32,6 +33,9 @@ struct BrowserSetupCardContent: View {
         }
         .task {
             await self.model.refreshIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await self.model.retryTransientFailureIfNeeded() }
         }
     }
 

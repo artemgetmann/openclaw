@@ -9,6 +9,8 @@ INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 usage() {
   cat <<'EOF'
 Usage: scripts/package-consumer-mac-app.sh [--instance <id>]
+Set OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 to package an isolated runtime lane
+with the stable consumer debug app identity for Screen Recording/TCC testing.
 EOF
 }
 
@@ -53,8 +55,9 @@ if [[ -z "$NORMALIZED_INSTANCE_ID" ]]; then
     exit 1
   fi
 fi
-APP_NAME="${APP_NAME:-$(consumer_instance_app_name "$NORMALIZED_INSTANCE_ID")}"
-APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"
+EXPECTED_DISPLAY_NAME="${APP_NAME:-$(consumer_instance_display_name "$NORMALIZED_INSTANCE_ID")}"
+APP_NAME="$EXPECTED_DISPLAY_NAME"
+APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-$(consumer_instance_app_name "$NORMALIZED_INSTANCE_ID").app}"
 APP_PATH="${ROOT_DIR}/dist/${APP_BUNDLE_NAME}"
 INFO_PLIST="${APP_PATH}/Contents/Info.plist"
 EXPECTED_BUNDLE_ID="${BUNDLE_ID:-$(consumer_instance_bundle_id "$NORMALIZED_INSTANCE_ID")}"
@@ -79,8 +82,8 @@ actual_bundle_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$INFO
 actual_variant=$(/usr/libexec/PlistBuddy -c "Print :OpenClawAppVariant" "$INFO_PLIST")
 actual_instance_id=$(/usr/libexec/PlistBuddy -c "Print :OpenClawConsumerInstanceID" "$INFO_PLIST" 2>/dev/null || true)
 
-if [[ "$actual_name" != "$APP_NAME" ]]; then
-  echo "ERROR: expected consumer display name '$APP_NAME', got '$actual_name'" >&2
+if [[ "$actual_name" != "$EXPECTED_DISPLAY_NAME" ]]; then
+  echo "ERROR: expected consumer display name '$EXPECTED_DISPLAY_NAME', got '$actual_name'" >&2
   exit 1
 fi
 

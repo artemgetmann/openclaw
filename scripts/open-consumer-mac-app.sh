@@ -162,7 +162,6 @@ if [[ -z "$NORMALIZED_INSTANCE_ID" && -z "$APP_PATH" ]]; then
     exit 1
   fi
 fi
-
 # Treat GUI launches from linked worktrees the same way as shell launches:
 # require the generated isolation env first so a manually-added checkout cannot
 # quietly wake the shared consumer runtime.
@@ -180,7 +179,6 @@ worktree_guard_run_doctor \
   --instance "$NORMALIZED_INSTANCE_ID" \
   --telegram-mode skip \
   --quiet
-
 EXPECTED_NAME="$(consumer_instance_display_name "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_BUNDLE_ID="$(consumer_instance_bundle_id "$NORMALIZED_INSTANCE_ID")"
 EXPECTED_VARIANT="consumer"

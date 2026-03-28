@@ -1,7 +1,50 @@
 # Consumer Telegram Setup Follow-ups
 
-Last updated: 2026-03-25
+Last updated: 2026-03-27
 Scope: consumer macOS Telegram onboarding polish and adjacent consumer-shell cleanup
+
+## Current Tracker
+
+- Imported Telegram-first-task onboarding work: live-validated in the packaged app; PR #174 is merged into `codex/consumer-openclaw-project`.
+  - Validation completed on March 27, 2026 in the isolated lane `consumer-first-run-permissions-20260326`.
+  - Proof:
+    1. packaged and opened the isolated consumer app
+    2. confirmed onboarding reached the Telegram step on the real lane runtime
+    3. sent a real Telegram DM to `@jarvis_consumer_bot`
+    4. confirmed onboarding reached `Telegram verified` and enabled `Finish`
+  - Why it matters: this is the end-to-end proof that the setup flow now blocks on a real Telegram task instead of claiming setup is done too early.
+
+- Blocker from live test: onboarding can still disappear into the regular settings window before Telegram verification is done.
+  - Current behavior: while the user is mid-Telegram setup, the onboarding surface can vanish and leave only the General settings window behind.
+  - Why it matters: this breaks the one-flow-at-a-time model and strands the user halfway through setup.
+
+- Blocker from fresh consumer E2E: onboarding still asks the user to choose a model/auth provider.
+  - Current behavior: the consumer MVP shows a provider list such as Alibaba Cloud, Anthropic, BytePlus, and others during first run.
+  - Why it matters: this is internal plumbing, not a consumer decision. MVP should use our default provider and only surface a simple failure state if our auth is broken.
+
+- Follow-up from fresh consumer E2E: Location permission refresh can stay stale after the user enables it in System Settings.
+  - Current behavior: onboarding can keep showing Location as not granted even after the matching app row is enabled and the user clicks `Refresh`.
+  - Temporary product decision: keep Location visible as recommended, but do not let it block Telegram/setup validation.
+  - Why it matters: Location still matters for `near me` tasks, but it should not derail validation of the main remote-control onboarding path.
+
+- Copy follow-up: the inline Telegram onboarding card is still too terse for first-time bot setup.
+  - Current behavior: the card tells the user to verify the token and first task, but it no longer walks through the BotFather setup steps as explicitly as the older Channels version did.
+  - Why it matters: the runtime flow is better now, but first-time consumer users still need more hand-holding in this one spot.
+
+- Deeper local-gateway pairing repair fix: keep as a separate follow-up PR.
+  - Current finding: one separate lane identified a same-Mac pairing repair bug where a `node` -> `ui/operator` upgrade could poison browser readiness with `pairing required` noise.
+  - Why it matters: the onboarding-side fix is the safe unblocker now, but the gateway-side auto-heal is still worth preserving and reviewing separately.
+
+- Add a thin CLI packaged-app smoke wrapper for consumer onboarding and Telegram runtime ownership.
+  - Proposed path:
+    1. package the isolated app
+    2. verify the bundle identity and runtime root
+    3. ensure the live Telegram runtime belongs to this worktree
+    4. open the packaged app
+    5. assert the exact bundle has a visible window
+    6. run the existing Telegram first-reply smoke
+    7. re-check window visibility after the Telegram roundtrip
+  - Why it matters: the repo already has most of these pieces. A small wrapper would catch the class of "simple but embarrassing" runtime/window bugs before a human finds them in the GUI.
 
 ## Consumer app visibility debugging notes (2026-03-25)
 
@@ -47,6 +90,12 @@ Scope: consumer macOS Telegram onboarding polish and adjacent consumer-shell cle
   - Why it matters: that compile break is unrelated to the visibility lane and should not get mixed into the PR
 
 ## Immediate follow-ups
+
+- Fix the stale Browser card in `General` after setup handoff.
+  - Root cause: `GeneralSettings` creates a fresh `BrowserSetupModel`, and that model only auto-checks once from `.idle`.
+  - Failure mode: if the first post-setup `openclaw browser status` shell-out races and returns `browser readiness failed` / `command failed` or unreadable output, the card stays stuck in `.failed` until the user manually retries.
+  - Branch fix: auto-retry that transient readiness failure once when the app becomes active again so opening General after setup can self-heal.
+  - Why it matters: without this, a successful onboarding can immediately hand the user a fake-broken Browser section.
 
 - Fix the stale `General` health pane after the consumer gateway recovers.
   - Current bug: the General tab can still show `Cannot reach gateway at localhost:19001` even while the consumer gateway is healthy and listening.

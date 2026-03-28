@@ -11,8 +11,16 @@ DEFERRED_RESTART_DELAY_SECONDS="${OPENCLAW_DEFERRED_RESTART_DELAY_SECONDS:-1}"
 HELPER_LOG_PATH="${OPENCLAW_RESTART_HELPER_LOG:-/tmp/openclaw-restart-helper.log}"
 source "$ROOT/scripts/lib/consumer-instance.sh"
 
-NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "${OPENCLAW_CONSUMER_INSTANCE_ID:-}")"
+RAW_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
+if [[ -z "$RAW_INSTANCE_ID" ]]; then
+  # Keep direct restarts aligned with `scripts/openclaw-local.sh`: a consumer
+  # worktree should restart its own lane without requiring extra env exports.
+  RAW_INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT")"
+fi
+
+NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$RAW_INSTANCE_ID")"
 if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
+  export OPENCLAW_CONSUMER_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-$NORMALIZED_INSTANCE_ID}"
   export OPENCLAW_PROFILE="${OPENCLAW_PROFILE:-$(consumer_instance_profile "$NORMALIZED_INSTANCE_ID")}"
   export OPENCLAW_HOME="${OPENCLAW_HOME:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")}"
   export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")}"

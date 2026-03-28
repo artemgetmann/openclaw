@@ -267,9 +267,9 @@ actor MacNodeRuntime {
         let status = await services.locationAuthorizationStatus()
         let hasPermission = switch mode {
         case .always:
-            status == .authorizedAlways
+            PermissionManager.isLocationAuthorized(status: status, requireAlways: true)
         case .whileUsing:
-            status == .authorizedAlways
+            PermissionManager.isLocationAuthorized(status: status, requireAlways: false)
         case .off:
             false
         }

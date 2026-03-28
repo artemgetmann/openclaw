@@ -21,6 +21,7 @@
 
 - In chat replies, use repo-root-relative file references only.
 - Read `SECURITY.md` before any security triage, advisory work, or severity decision.
+- Before creating, moving, or cleaning up worktrees, read `docs/agent-guides/workflow.md` and keep durable lanes under the repo-owned `.worktrees/` directory by default.
 - Before touching gateway runtime ownership, worktree bot validation, or LaunchAgent behavior, read `docs/agent-guides/workflow.md` and `docs/agent-guides/runtime-ops.md`.
 - Before opening or updating a PR:
   - For fork PRs targeting `artemgetmann/openclaw` `main` or `codex/consumer-openclaw-project`, read `FORK_CONTRIBUTING.md`

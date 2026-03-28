@@ -55,9 +55,10 @@ export function shouldAllowSilentLocalPairing(params: {
   clientMode: string | undefined;
   reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
 }): boolean {
-  const isLocalMacAppNodeUpgrade =
+  const isLocalMacAppRoleUpgrade =
     params.clientId === GATEWAY_CLIENT_IDS.MACOS_APP &&
-    params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+    (params.clientMode === GATEWAY_CLIENT_MODES.NODE ||
+      params.clientMode === GATEWAY_CLIENT_MODES.UI) &&
     params.reason === "role-upgrade";
   return (
     params.isLocalClient &&
@@ -67,11 +68,14 @@ export function shouldAllowSilentLocalPairing(params: {
     // (for example node + operator in the macOS app), or because the app reports
     // newer platform/device-family metadata after an update.
     // Keep generic role upgrades explicit, but allow the packaged macOS app's own
-    // local node bridge to upgrade from operator -> node without a dead-end prompt.
+    // local startup roles to heal without a dead-end prompt. First-run onboarding
+    // can reach the gateway through the UI lane before the same instance has an
+    // operator-scoped device token cached, even though the signed device identity
+    // already belongs to this Mac and the request never leaves loopback.
     (params.reason === "not-paired" ||
       params.reason === "scope-upgrade" ||
       params.reason === "metadata-upgrade" ||
-      isLocalMacAppNodeUpgrade)
+      isLocalMacAppRoleUpgrade)
   );
 }
 

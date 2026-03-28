@@ -5,7 +5,20 @@ import OpenClawIPC
 import SwiftUI
 
 extension OnboardingView {
-    static var consumerPostBrowserSetupTab: SettingsTab { .channels }
+    static func postFinishSettingsTab(
+        isConsumer: Bool,
+        connectionMode: AppState.ConnectionMode,
+        telegramReady: Bool) -> SettingsTab?
+    {
+        guard isConsumer else { return nil }
+        // Consumer setup should never close into menu-bar-only limbo. Incomplete
+        // setup returns the user to Channels for recovery; a successful local
+        // finish lands on General so the app still has a visible home.
+        if connectionMode != .local || !telegramReady {
+            return .channels
+        }
+        return .general
+    }
 
     func selectLocalGateway() {
         self.state.connectionMode = .local
@@ -66,15 +79,24 @@ extension OnboardingView {
     func finish() {
         UserDefaults.standard.set(true, forKey: onboardingSeenKey)
         UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
-        if AppFlavor.current.isConsumer {
-            // Consumer onboarding should hand off to the next required step, not
-            // imply the setup is already finished. Channels is where Telegram lives.
-            self.openSettings(tab: Self.consumerPostBrowserSetupTab)
-        }
+        AppStateStore.shared.onboardingSeen = true
+
+        let followUpTab = Self.postFinishSettingsTab(
+            isConsumer: AppFlavor.current.isConsumer,
+            connectionMode: self.state.connectionMode,
+            telegramReady: self.channelsStore.consumerTelegramReadyForFirstTask())
+
+        // Close onboarding before asking the app shell to recover a visible
+        // surface. If onboarding is still visible, the recovery loop thinks a
+        // usable consumer surface already exists and never retries Settings.
         OnboardingController.shared.close()
-        if AppFlavor.current.isConsumer {
-            SettingsWindowOpener.shared.open(tab: .general)
+
+        guard let followUpTab else { return }
+        if let delegate = AppDelegate.shared {
+            delegate.requestVisibleSurface(reason: "finish", preferredSettingsTab: followUpTab)
+            return
         }
+        SettingsWindowOpener.shared.open(tab: followUpTab)
     }
 
     func copyToPasteboard(_ text: String) {
