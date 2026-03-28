@@ -13,6 +13,7 @@ LAUNCHD_LABEL="ai.openclaw.gateway"
 LAUNCHD_TARGET="${LAUNCHD_DOMAIN}/${LAUNCHD_LABEL}"
 DEFERRED_RESTART_DELAY_SECONDS="${OPENCLAW_DEFERRED_RESTART_DELAY_SECONDS:-1}"
 HELPER_LOG_PATH="${OPENCLAW_RESTART_HELPER_LOG:-/tmp/openclaw-restart-helper.log}"
+source "$ROOT/scripts/lib/worktree-guards.sh"
 
 if [[ ! -x "$NODE" ]]; then
   echo "ERROR: node runtime not found. Install Node 22+ or set OPENCLAW_NODE_BIN." >&2
@@ -22,6 +23,10 @@ fi
 if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
+
+# The shared gateway LaunchAgent points at the canonical checkout. Do not let a
+# branch switch in that checkout silently restart Jarvis onto feature code.
+worktree_guard_require_shared_root_main_branch "$ROOT"
 
 is_self_restart_context() {
   # OPENCLAW_RESTART_DETACHED is set when the gateway asks us to restart from

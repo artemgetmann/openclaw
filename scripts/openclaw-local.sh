@@ -19,6 +19,11 @@ if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
 
+# The canonical shared checkout powers the long-lived local Jarvis gateway.
+# Refuse to run it from a feature/consumer branch so checkout drift cannot
+# silently repoint the shared bot at the wrong code.
+worktree_guard_require_shared_root_main_branch "$ROOT"
+
 if [[ -n "${OPENCLAW_CONSUMER_INSTANCE_ID:-}" ]]; then
   normalized_instance_id="$(consumer_instance_normalize_id "$OPENCLAW_CONSUMER_INSTANCE_ID")"
   if [[ -n "$normalized_instance_id" ]]; then
