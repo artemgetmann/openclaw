@@ -12,6 +12,8 @@ import {
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   resolveChromeMcpArgsForTest,
+  setChromeMcpProcessCommandsForTest,
+  setChromeMcpProfileDirectoryForTest,
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp.js";
 
@@ -166,6 +168,64 @@ describe("chrome MCP page parsing", () => {
       ]);
       expect(fetchMock).toHaveBeenCalledWith(
         "http://127.0.0.1:9222/json/version",
+        expect.anything(),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed unless the configured profileDirectory is the one actually running", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-profile-"));
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        webSocketDebuggerUrl: "ws://127.0.0.1:9333/devtools/browser/live",
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    setChromeMcpProfileDirectoryForTest("artem-live", "Profile 4");
+    setChromeMcpProcessCommandsForTest(() => [
+      `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir="${tempDir}" --profile-directory=Default --remote-debugging-port=9333`,
+    ]);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("artem-live", tempDir)).rejects.toThrow(
+        /Profile 4.*not currently running/i,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the matched profileDirectory port when the exact signed-in profile is running", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-profile-"));
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        webSocketDebuggerUrl: "ws://127.0.0.1:9224/devtools/browser/live",
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    setChromeMcpProfileDirectoryForTest("artem-live", "Profile 4");
+    setChromeMcpProcessCommandsForTest(() => [
+      `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir="${tempDir}" --profile-directory="Profile 4" --remote-debugging-port=9224`,
+    ]);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("artem-live", tempDir)).resolves.toEqual([
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--experimentalStructuredContent",
+        "--experimental-page-id-routing",
+        "--browserUrl",
+        "http://127.0.0.1:9224",
+      ]);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:9224/json/version",
         expect.anything(),
       );
     } finally {
@@ -437,6 +497,29 @@ describe("chrome MCP page parsing", () => {
     expect(createdSessions).toHaveLength(2);
     expect(closeMocks[0]).toHaveBeenCalledTimes(1);
     expect(closeMocks[1]).not.toHaveBeenCalled();
+  });
+
+  it("creates a fresh session when profileDirectory changes for the same profile", async () => {
+    const factoryCalls: Array<{
+      profileName: string;
+      userDataDir?: string;
+      profileDirectory?: string;
+    }> = [];
+    const factory: ChromeMcpSessionFactory = async (profileName, userDataDir, profileDirectory) => {
+      factoryCalls.push({ profileName, userDataDir, profileDirectory });
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+    setChromeMcpProfileDirectoryForTest("chrome-live", "Default");
+
+    await listChromeMcpTabs("chrome-live", "/tmp/google");
+    setChromeMcpProfileDirectoryForTest("chrome-live", "Profile 4");
+    await listChromeMcpTabs("chrome-live", "/tmp/google");
+
+    expect(factoryCalls).toEqual([
+      { profileName: "chrome-live", userDataDir: "/tmp/google", profileDirectory: "Default" },
+      { profileName: "chrome-live", userDataDir: "/tmp/google", profileDirectory: "Profile 4" },
+    ]);
   });
 
   it("clears failed pending sessions when the profile is explicitly reset", async () => {

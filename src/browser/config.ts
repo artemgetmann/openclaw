@@ -46,6 +46,7 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   userDataDir?: string;
+  profileDirectory?: string;
   color: string;
   driver: "openclaw" | "existing-session";
   cloneFromUserProfile?: boolean;
@@ -340,7 +341,9 @@ export function resolveProfile(
   const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
 
   if (driver === "existing-session") {
-    // existing-session uses Chrome MCP auto-connect; no CDP port/URL needed
+    // existing-session uses Chrome MCP instead of raw CDP. Keep the configured
+    // profile directory alongside the user-data root so the attach layer can
+    // fail closed when multiple Chrome profiles are live under one root.
     return {
       name: profileName,
       cdpPort: 0,
@@ -348,6 +351,7 @@ export function resolveProfile(
       cdpHost: "",
       cdpIsLoopback: true,
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
+      profileDirectory: profile.profileDirectory?.trim() || undefined,
       color: profile.color,
       driver,
       cloneFromUserProfile: false,

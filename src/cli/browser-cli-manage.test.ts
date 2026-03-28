@@ -132,6 +132,41 @@ describe("browser manage output", () => {
     );
   });
 
+  it("shows configured profileDirectory for existing-session status", async () => {
+    mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
+      req.path === "/"
+        ? {
+            enabled: true,
+            profile: "artem-live",
+            driver: "existing-session",
+            transport: "chrome-mcp",
+            running: true,
+            cdpReady: true,
+            cdpHttp: true,
+            pid: 4321,
+            cdpPort: null,
+            cdpUrl: null,
+            chosenBrowser: null,
+            userDataDir: "/Users/test/Library/Application Support/Google/Chrome",
+            profileDirectory: "Profile 4",
+            color: "#2D7FF9",
+            headless: false,
+            noSandbox: false,
+            executablePath: null,
+            attachOnly: true,
+          }
+        : {},
+    );
+
+    const program = createProgram();
+    await program.parseAsync(["browser", "--browser-profile", "artem-live", "status"], {
+      from: "user",
+    });
+
+    const output = mocks.runtimeLog.mock.calls.at(-1)?.[0] as string;
+    expect(output).toContain("profileDirectory: Profile 4");
+  });
+
   it("shows chrome-mcp transport in browser profiles output", async () => {
     mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
       req.path === "/profiles"
@@ -147,6 +182,8 @@ describe("browser manage output", () => {
                 isRemote: false,
                 cdpPort: null,
                 cdpUrl: null,
+                userDataDir: "/Users/test/Library/Application Support/Google/Chrome",
+                profileDirectory: "Profile 4",
                 color: "#00AA00",
               },
             ],
@@ -159,7 +196,8 @@ describe("browser manage output", () => {
 
     const output = mocks.runtimeLog.mock.calls.at(-1)?.[0] as string;
     expect(output).toContain("chrome-live: running (2 tabs) [existing-session]");
-    expect(output).toContain("transport: chrome-mcp");
+    expect(output).toContain("transport: chrome-mcp, userDataDir:");
+    expect(output).toContain("profileDirectory: Profile 4");
     expect(output).not.toContain("port: 0");
   });
 
@@ -172,7 +210,8 @@ describe("browser manage output", () => {
             transport: "chrome-mcp",
             cdpPort: null,
             cdpUrl: null,
-            userDataDir: null,
+            userDataDir: "/Users/test/Library/Application Support/Google/Chrome",
+            profileDirectory: "Profile 4",
             color: "#00AA00",
             isRemote: false,
           }
@@ -181,13 +220,23 @@ describe("browser manage output", () => {
 
     const program = createProgram();
     await program.parseAsync(
-      ["browser", "create-profile", "--name", "chrome-live", "--driver", "existing-session"],
+      [
+        "browser",
+        "create-profile",
+        "--name",
+        "chrome-live",
+        "--driver",
+        "existing-session",
+        "--profile-directory",
+        "Profile 4",
+      ],
       { from: "user" },
     );
 
     const output = mocks.runtimeLog.mock.calls.at(-1)?.[0] as string;
     expect(output).toContain('Created profile "chrome-live"');
     expect(output).toContain("transport: chrome-mcp");
+    expect(output).toContain("profileDirectory: Profile 4");
     expect(output).not.toContain("port: 0");
   });
 

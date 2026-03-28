@@ -28,6 +28,7 @@ export type CreateProfileParams = {
   color?: string;
   cdpUrl?: string;
   userDataDir?: string;
+  profileDirectory?: string;
   driver?: "openclaw" | "existing-session";
 };
 
@@ -38,6 +39,7 @@ export type CreateProfileResult = {
   cdpPort: number | null;
   cdpUrl: string | null;
   userDataDir: string | null;
+  profileDirectory: string | null;
   color: string;
   isRemote: boolean;
 };
@@ -83,6 +85,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     const name = params.name.trim();
     const rawCdpUrl = params.cdpUrl?.trim() || undefined;
     const rawUserDataDir = params.userDataDir?.trim() || undefined;
+    const rawProfileDirectory = params.profileDirectory?.trim() || undefined;
     const normalizedUserDataDir = rawUserDataDir ? resolveUserPath(rawUserDataDir) : undefined;
     const driver = params.driver === "existing-session" ? "existing-session" : undefined;
 
@@ -114,6 +117,11 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         "driver=existing-session is required when userDataDir is provided",
       );
     }
+    if (rawProfileDirectory && driver !== "existing-session") {
+      throw new BrowserValidationError(
+        "driver=existing-session is required when profileDirectory is provided",
+      );
+    }
     if (normalizedUserDataDir && !fs.existsSync(normalizedUserDataDir)) {
       throw new BrowserValidationError(
         `browser user data directory not found: ${normalizedUserDataDir}`,
@@ -128,15 +136,24 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         throw new BrowserValidationError(String(err));
       }
       if (driver === "existing-session") {
-        throw new BrowserValidationError(
-          "driver=existing-session does not accept cdpUrl; it attaches via the Chrome MCP auto-connect flow",
-        );
+        // Existing-session normally auto-discovers a host-local Chrome target,
+        // but multi-Chrome setups are ambiguous. An explicit browser URL lets
+        // operators pin a specific live Chrome process/profile to this lane.
+        profileConfig = {
+          cdpUrl: parsed.normalized,
+          driver,
+          attachOnly: true,
+          ...(normalizedUserDataDir ? { userDataDir: normalizedUserDataDir } : {}),
+          ...(rawProfileDirectory ? { profileDirectory: rawProfileDirectory } : {}),
+          color: profileColor,
+        };
+      } else {
+        profileConfig = {
+          cdpUrl: parsed.normalized,
+          ...(driver ? { driver } : {}),
+          color: profileColor,
+        };
       }
-      profileConfig = {
-        cdpUrl: parsed.normalized,
-        ...(driver ? { driver } : {}),
-        color: profileColor,
-      };
     } else {
       if (driver === "existing-session") {
         // existing-session uses Chrome MCP auto-connect; no CDP port needed
@@ -144,6 +161,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
           driver,
           attachOnly: true,
           ...(normalizedUserDataDir ? { userDataDir: normalizedUserDataDir } : {}),
+          ...(rawProfileDirectory ? { profileDirectory: rawProfileDirectory } : {}),
           color: profileColor,
         };
       } else {
@@ -188,6 +206,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       cdpPort: capabilities.usesChromeMcp ? null : resolved.cdpPort,
       cdpUrl: capabilities.usesChromeMcp ? null : resolved.cdpUrl,
       userDataDir: resolved.userDataDir ?? null,
+      profileDirectory: resolved.profileDirectory ?? null,
       color: resolved.color,
       isRemote: !resolved.cdpIsLoopback,
     };

@@ -262,6 +262,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
   "browser.profiles.*.userDataDir":
     "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for host-local Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory.",
+  "browser.profiles.*.profileDirectory":
+    'Optional Chromium profile directory name for existing-session lanes (for example "Default" or "Profile 4"). Use this as operator intent metadata when a lane is meant to target one exact signed-in browser profile.',
   "browser.profiles.*.driver":
     'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for host-local Chrome DevTools MCP attachment.',
   "browser.profiles.*.cloneFromUserProfile":

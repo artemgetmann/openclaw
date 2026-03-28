@@ -306,6 +306,27 @@ describe("browser config", () => {
     );
   });
 
+  it("preserves profileDirectory for existing-session profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "artem-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          userDataDir: "~/Library/Application Support/Google/Chrome",
+          profileDirectory: "Profile 4",
+          color: "#2D7FF9",
+        },
+      },
+    });
+
+    const profile = resolveProfile(resolved, "artem-live");
+    expect(profile?.driver).toBe("existing-session");
+    expect(profile?.userDataDir).toBe(
+      resolveUserPath("~/Library/Application Support/Google/Chrome"),
+    );
+    expect(profile?.profileDirectory).toBe("Profile 4");
+  });
+
   it("sets usesChromeMcp only for existing-session profiles", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
