@@ -375,54 +375,29 @@ extension ChannelsStore {
 
     private func startFirstTelegramReply(dm: TelegramSetupDirectMessage) async -> TelegramSetupReplayResult {
         // The first DM must go through the same Telegram inbound pipeline the real
-        // gateway uses. Otherwise setup "works" but the first reply path is still fake.
-        guard let payload = self.telegramReplayPayloadJson(dm: dm) else {
+        // gateway uses. Route this through the gateway directly so onboarding does
+        // not depend on a subprocess printing perfectly clean JSON to stdout.
+        guard let params = self.telegramReplayGatewayParams(dm: dm) else {
             return TelegramSetupReplayResult(
                 ok: false,
                 replyStarted: false,
                 replyCompleted: false,
                 error: "The captured first message did not contain text. Send one text message to begin.")
         }
-
-        let command = CommandResolver.openclawCommand(
-            subcommand: "channels",
-            extraArgs: ["telegram-replay-setup-dm", "--payload-json", payload, "--json"],
-            configRoot: ["gateway": ["mode": "local"]])
-        let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
-            base: ProcessInfo.processInfo.environment,
-            projectRootHint: CommandResolver.projectRootEnvironmentHint())
-        // The setup replay only needs to prove the first task started end-to-end.
-        // If the helper gets stuck in a lingering interactive follow-up, prefer a
-        // bounded timeout plus activity confirmation over leaving onboarding to spin.
-        let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: 8)
-        if response.timedOut {
-            await self.refresh(probe: true)
-            return TelegramSetupReplayResult(
-                ok: false,
-                replyStarted: true,
-                replyCompleted: self.consumerTelegramCanVerifyFirstTaskFromActivity(),
-                error: "OpenClaw started the first Telegram task, but the setup handoff timed out before completion was confirmed.")
-        }
-        if !response.success {
-            let detail = response.stderr.nonEmpty ?? response.stdout.nonEmpty ?? response.errorMessage ?? "unknown error"
+        do {
+            // Keep the timeout slightly above the backend default so local
+            // connection retries do not lose to the RPC budget immediately.
+            return try await GatewayConnection.shared.requestDecoded(
+                method: .channelsTelegramSetupReplay,
+                params: params,
+                timeoutMs: 8_500)
+        } catch {
             return TelegramSetupReplayResult(
                 ok: false,
                 replyStarted: false,
                 replyCompleted: false,
-                error: detail)
+                error: error.localizedDescription)
         }
-
-        let raw = response.stdout.isEmpty ? response.stderr : response.stdout
-        guard let data = raw.data(using: .utf8),
-              let parsed = try? JSONDecoder().decode(TelegramSetupReplayResult.self, from: data)
-        else {
-            return TelegramSetupReplayResult(
-                ok: false,
-                replyStarted: false,
-                replyCompleted: false,
-                error: "OpenClaw started the handoff, but returned an unreadable response.")
-        }
-        return parsed
     }
 
     private func reconnectConsumerGatewayAfterConfigBootstrap() async {
@@ -439,7 +414,7 @@ extension ChannelsStore {
         try? await GatewayConnection.shared.refresh()
     }
 
-    private func telegramReplayPayloadJson(dm: TelegramSetupDirectMessage) -> String? {
+    private func telegramReplayGatewayParams(dm: TelegramSetupDirectMessage) -> [String: AnyCodable]? {
         let text = dm.text?.trimmingCharacters(in: .whitespacesAndNewlines)
         let caption = dm.caption?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (text?.isEmpty == false) || (caption?.isEmpty == false) else {
@@ -458,11 +433,16 @@ extension ChannelsStore {
             date: dm.date,
             messageThreadId: dm.messageThreadId)
         guard let data = try? JSONEncoder().encode(payload),
-              let json = String(data: data, encoding: .utf8)
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             return nil
         }
-        return json
+        return [
+            "payload": AnyCodable(object),
+            // Mirror the backend timeout so the gateway call stays bounded even
+            // when local reconnect/retry logic adds a little transport overhead.
+            "timeoutMs": AnyCodable(8_000),
+        ]
     }
 }
 

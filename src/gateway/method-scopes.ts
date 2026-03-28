@@ -103,6 +103,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "chat.send",
     "chat.abort",
     "browser.request",
+    "channels.telegram.setup-replay",
     "push.test",
     "node.pending.enqueue",
   ],

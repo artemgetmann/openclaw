@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
@@ -9,6 +9,12 @@ import {
   rpcReq,
   startServerWithClient,
 } from "./test-helpers.js";
+
+const replayTelegramSetupDirectMessage = vi.fn();
+
+vi.mock("../commands/channels/telegram-replay-setup-dm.js", () => ({
+  replayTelegramSetupDirectMessage: (params: unknown) => replayTelegramSetupDirectMessage(params),
+}));
 
 let readConfigFileSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
 let writeConfigFile: typeof import("../config/config.js").writeConfigFile;
@@ -95,6 +101,10 @@ beforeAll(async () => {
   server = started.server;
   ws = started.ws;
   await connectOk(ws);
+});
+
+beforeEach(() => {
+  replayTelegramSetupDirectMessage.mockReset();
 });
 
 afterAll(async () => {
@@ -231,6 +241,49 @@ describe("gateway server channels", () => {
     expect(telegramAccounts.find((account) => account.accountId === "ops")?.probe).toMatchObject({
       ok: false,
       error: "telegram:ops probe timed out after 1000ms",
+    });
+  });
+
+  test("channels.telegram.setup-replay returns a structured result instead of shell stdout", async () => {
+    replayTelegramSetupDirectMessage.mockResolvedValue({
+      ok: true,
+      replyStarted: true,
+      replyCompleted: true,
+      accountId: "default",
+      updateId: 41,
+    });
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      replyStarted?: boolean;
+      replyCompleted?: boolean;
+      accountId?: string;
+      updateId?: number;
+    }>(ws, "channels.telegram.setup-replay", {
+      payload: {
+        updateId: 41,
+        messageId: 99,
+        chatId: 123456789,
+        senderId: 123456789,
+        text: "hello there",
+        date: 1_711_234_567,
+      },
+      timeoutMs: 2_000,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(replayTelegramSetupDirectMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: expect.any(Object),
+        payloadJson: expect.any(String),
+      }),
+    );
+    expect(res.payload).toMatchObject({
+      ok: true,
+      replyStarted: true,
+      replyCompleted: true,
+      accountId: "default",
+      updateId: 41,
     });
   });
 });

@@ -14,7 +14,7 @@ export type ChannelsTelegramReplaySetupDmOptions = {
   payloadJson: string;
 };
 
-type TelegramReplaySetupDmPayload = {
+export type ChannelsTelegramReplaySetupDmPayload = {
   updateId: number;
   messageId: number;
   chatId: number;
@@ -26,6 +26,14 @@ type TelegramReplaySetupDmPayload = {
   caption?: string;
   date: number;
   messageThreadId?: number | null;
+};
+
+export type ChannelsTelegramReplaySetupDmResult = {
+  ok: boolean;
+  replyStarted: boolean;
+  replyCompleted: boolean;
+  accountId: string;
+  updateId: number;
 };
 
 function isSafeInteger(value: unknown): value is number {
@@ -40,7 +48,7 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function parsePayload(raw: string): TelegramReplaySetupDmPayload {
+function parsePayload(raw: string): ChannelsTelegramReplaySetupDmPayload {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -97,7 +105,7 @@ function parsePayload(raw: string): TelegramReplaySetupDmPayload {
   };
 }
 
-function buildSyntheticUpdate(payload: TelegramReplaySetupDmPayload): Update {
+function buildSyntheticUpdate(payload: ChannelsTelegramReplaySetupDmPayload): Update {
   // Reconstruct the exact private-message shape grammY expects so the setup
   // handoff exercises the normal Telegram middleware stack instead of a
   // separate "first reply" shortcut path.
@@ -129,15 +137,18 @@ function buildSyntheticUpdate(payload: TelegramReplaySetupDmPayload): Update {
   };
 }
 
-export async function channelsTelegramReplaySetupDmCommand(
-  opts: ChannelsTelegramReplaySetupDmOptions,
-  runtime: RuntimeEnv,
-) {
-  const payload = parsePayload(opts.payloadJson);
+export async function replayTelegramSetupDirectMessage(params: {
+  account?: string;
+  payloadJson: string;
+  runtime: RuntimeEnv;
+}): Promise<ChannelsTelegramReplaySetupDmResult> {
+  // Parse and validate the captured DM once inside the backend process so the
+  // gateway and CLI wrapper share the exact same replay behavior.
+  const payload = parsePayload(params.payloadJson);
   const cfg = loadConfig();
   const account = resolveTelegramAccount({
     cfg,
-    accountId: opts.account,
+    accountId: params.account,
   });
   const token = account.token?.trim();
   if (!token) {
@@ -155,7 +166,7 @@ export async function channelsTelegramReplaySetupDmCommand(
     token,
     accountId: account.accountId,
     config: cfg,
-    runtime,
+    runtime: params.runtime,
     updateOffset: {
       lastUpdateId,
       onUpdateId: async (updateId) => {
@@ -177,12 +188,28 @@ export async function channelsTelegramReplaySetupDmCommand(
     await bot.stop().catch(() => {});
   }
 
-  const result = {
+  return {
     ok: true,
     replyStarted: true,
+    // `handleUpdate` only resolves after the Telegram middleware stack has
+    // finished this synthetic inbound message, so the backend can truthfully
+    // report replay completion instead of forcing the macOS app to infer it
+    // from shell stdout or delayed activity snapshots.
+    replyCompleted: true,
     accountId: account.accountId,
     updateId: payload.updateId,
   };
+}
+
+export async function channelsTelegramReplaySetupDmCommand(
+  opts: ChannelsTelegramReplaySetupDmOptions,
+  runtime: RuntimeEnv,
+) {
+  const result = await replayTelegramSetupDirectMessage({
+    account: opts.account,
+    payloadJson: opts.payloadJson,
+    runtime,
+  });
   if (opts.json) {
     runtime.log(JSON.stringify(result));
     return;

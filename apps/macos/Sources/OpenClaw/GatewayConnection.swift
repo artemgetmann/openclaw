@@ -60,6 +60,7 @@ actor GatewayConnection {
         case systemEvent = "system-event"
         case health
         case channelsStatus = "channels.status"
+        case channelsTelegramSetupReplay = "channels.telegram.setup-replay"
         case configGet = "config.get"
         case configSet = "config.set"
         case configPatch = "config.patch"
