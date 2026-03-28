@@ -315,11 +315,17 @@ export async function resolveRuntimeWebTools(params: {
   const tools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
   const web = isRecord(tools?.web) ? tools.web : undefined;
   const search = isRecord(web?.search) ? web.search : undefined;
-  const providers = resolvePluginWebSearchProviders({
-    config: params.sourceConfig,
-    env: params.context.env,
-    bundledAllowlistCompat: true,
-  });
+  // Startup should not pull plugin search providers into the secrets precheck
+  // unless web search is actually configured. Minimal runtimes (like isolated
+  // browser-only gateway smoke) otherwise pay plugin-discovery cost for a tool
+  // surface they never expose.
+  const providers = search
+    ? resolvePluginWebSearchProviders({
+        config: params.sourceConfig,
+        env: params.context.env,
+        bundledAllowlistCompat: true,
+      })
+    : [];
 
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",

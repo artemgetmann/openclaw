@@ -1,12 +1,17 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpElement,
   buildChromeMcpArgs,
+  closeChromeMcpSession,
   evaluateChromeMcpScript,
   fillChromeMcpElement,
   listChromeMcpTabs,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
+  resolveChromeMcpArgsForTest,
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp.js";
 
@@ -137,6 +142,36 @@ describe("chrome MCP page parsing", () => {
       "--userDataDir",
       "/tmp/brave-profile",
     ]);
+  });
+
+  it("prefers a discovered browserUrl over autoConnect when Chrome exposes /json/version", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-profile-"));
+    await fs.writeFile(path.join(tempDir, "DevToolsActivePort"), "9222\n/devtools/browser/stale\n");
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/live",
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("chrome-live", tempDir)).resolves.toEqual([
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--experimentalStructuredContent",
+        "--experimental-page-id-routing",
+        "--browserUrl",
+        "http://127.0.0.1:9222",
+      ]);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:9222/json/version",
+        expect.anything(),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("parses new_page text responses and returns the created tab", async () => {
@@ -345,29 +380,36 @@ describe("chrome MCP page parsing", () => {
     expect(tabs).toHaveLength(1);
   });
 
-  it("destroys session on transport errors so next call reconnects", async () => {
-    let factoryCalls = 0;
-    const factory: ChromeMcpSessionFactory = async () => {
-      factoryCalls += 1;
-      const session = createFakeSession();
-      if (factoryCalls === 1) {
-        // First session: transport error (callTool throws)
-        const callTool = vi.fn(async () => {
-          throw new Error("connection reset");
-        });
-        session.client.callTool = callTool as typeof session.client.callTool;
-      }
-      return session;
-    };
-    setChromeMcpSessionFactoryForTest(factory);
+  it("fails closed after transport errors until the cooldown expires", async () => {
+    vi.useFakeTimers();
+    try {
+      let factoryCalls = 0;
+      const factory: ChromeMcpSessionFactory = async () => {
+        factoryCalls += 1;
+        const session = createFakeSession();
+        if (factoryCalls === 1) {
+          // First session: transport error (callTool throws)
+          const callTool = vi.fn(async () => {
+            throw new Error("connection reset");
+          });
+          session.client.callTool = callTool as typeof session.client.callTool;
+        }
+        return session;
+      };
+      setChromeMcpSessionFactoryForTest(factory);
 
-    // First call: transport error — should destroy session
-    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/connection reset/);
+      await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/connection reset/);
+      await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/connection reset/);
+      expect(factoryCalls).toBe(1);
 
-    // Second call: should create a new session (factory called twice)
-    const tabs = await listChromeMcpTabs("chrome-live");
-    expect(factoryCalls).toBe(2);
-    expect(tabs).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(60_001);
+
+      const tabs = await listChromeMcpTabs("chrome-live");
+      expect(factoryCalls).toBe(2);
+      expect(tabs).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("creates a fresh session when userDataDir changes for the same profile", async () => {
@@ -397,7 +439,7 @@ describe("chrome MCP page parsing", () => {
     expect(closeMocks[1]).not.toHaveBeenCalled();
   });
 
-  it("clears failed pending sessions so the next call can retry", async () => {
+  it("clears failed pending sessions when the profile is explicitly reset", async () => {
     let factoryCalls = 0;
     const factory: ChromeMcpSessionFactory = async () => {
       factoryCalls += 1;
@@ -409,10 +451,38 @@ describe("chrome MCP page parsing", () => {
     setChromeMcpSessionFactoryForTest(factory);
 
     await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/attach failed/);
+    await closeChromeMcpSession("chrome-live");
 
     const tabs = await listChromeMcpTabs("chrome-live");
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(2);
+  });
+
+  it("fails closed during attach cooldown instead of respawning Chrome MCP", async () => {
+    vi.useFakeTimers();
+    try {
+      let factoryCalls = 0;
+      const factory: ChromeMcpSessionFactory = async () => {
+        factoryCalls += 1;
+        if (factoryCalls === 1) {
+          throw new Error("attach failed");
+        }
+        return createFakeSession();
+      };
+      setChromeMcpSessionFactoryForTest(factory);
+
+      await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/attach failed/);
+      await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/attach failed/);
+      expect(factoryCalls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(60_001);
+
+      const tabs = await listChromeMcpTabs("chrome-live");
+      expect(factoryCalls).toBe(2);
+      expect(tabs).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("forwards per-call timeout to Chrome MCP tool requests", async () => {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +28,12 @@ type ChromeMcpSession = {
   ready: Promise<void>;
 };
 
+type ChromeMcpAttachFailure = {
+  error: BrowserProfileUnavailableError;
+  failedAt: number;
+  retryAfter: number;
+};
+
 type ChromeMcpSessionFactory = (
   profileName: string,
   userDataDir?: string,
@@ -48,8 +54,14 @@ const DEFAULT_CHROME_MCP_ARGS = [
 
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
+const attachFailures = new Map<string, ChromeMcpAttachFailure>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 const DEFAULT_CHROME_MCP_REQUEST_TIMEOUT_MS = 30_000;
+const CHROME_MCP_ATTACH_FAILURE_COOLDOWN_MS = 60_000;
+const DEFAULT_CHROME_USER_DATA_DIR = path.join(
+  os.homedir(),
+  "Library/Application Support/Google/Chrome",
+);
 
 function traceChromeMcpStage(stage: string): void {
   const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
@@ -86,6 +98,72 @@ function parseAttachUrl(value: string | undefined): string | null {
       return null;
     }
     return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function resolveExistingSessionUserDataDir(
+  profileName: string,
+  userDataDir?: string,
+): string | null {
+  const normalized = normalizeChromeMcpUserDataDir(userDataDir);
+  if (normalized) {
+    return normalized;
+  }
+  // The built-in live lane targets the user's active Chrome profile by default.
+  return profileName === "user-live" ? DEFAULT_CHROME_USER_DATA_DIR : null;
+}
+
+function readDevToolsActivePortPort(userDataDir: string): number | null {
+  const devToolsActivePortPath = path.join(userDataDir, "DevToolsActivePort");
+  if (!existsSync(devToolsActivePortPath)) {
+    return null;
+  }
+  try {
+    const raw = readFileSync(devToolsActivePortPath, "utf8");
+    const port = Number.parseInt(raw.split(/\r?\n/)[0]?.trim() ?? "", 10);
+    return Number.isFinite(port) && port >= 1 && port <= 65535 ? port : null;
+  } catch {
+    return null;
+  }
+}
+
+async function probeBrowserUrlFromUserDataDir(
+  profileName: string,
+  userDataDir?: string,
+): Promise<ChromeMcpAttachTarget | null> {
+  const resolvedUserDataDir = resolveExistingSessionUserDataDir(profileName, userDataDir);
+  if (!resolvedUserDataDir) {
+    return null;
+  }
+  const port = readDevToolsActivePortPort(resolvedUserDataDir);
+  if (!port) {
+    return null;
+  }
+  const browserUrl = `http://127.0.0.1:${port}`;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1_500);
+    const response = await fetch(`${browserUrl}/json/version`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!response.ok) {
+      return null;
+    }
+    const payload = (await response.json()) as { webSocketDebuggerUrl?: unknown };
+    if (typeof payload.webSocketDebuggerUrl !== "string" || !payload.webSocketDebuggerUrl.trim()) {
+      return null;
+    }
+    traceChromeMcpStage(
+      `chrome-mcp-attach-mode profile=${profileName} mode=browserUrl-discovered url=${browserUrl}`,
+    );
+    return {
+      mode: "browserUrl",
+      flag: "--browserUrl",
+      url: browserUrl,
+    };
   } catch {
     return null;
   }
@@ -320,6 +398,12 @@ async function closeChromeMcpSessionsForProfile(
     }
   }
 
+  for (const key of Array.from(attachFailures.keys())) {
+    if (key !== keepKey && cacheKeyMatchesProfileName(key, profileName)) {
+      attachFailures.delete(key);
+    }
+  }
+
   return closed;
 }
 
@@ -334,13 +418,17 @@ export function buildChromeMcpArgs(userDataDir?: string): string[] {
   return normalizedUserDataDir ? [...args, "--userDataDir", normalizedUserDataDir] : args;
 }
 
-function resolveChromeMcpArgs(profileName: string, userDataDir?: string): string[] {
+async function resolveChromeMcpArgs(profileName: string, userDataDir?: string): Promise<string[]> {
   const attachTarget = resolveConfiguredAttachTarget(profileName);
   if (attachTarget) {
     traceChromeMcpStage(
       `chrome-mcp-attach-mode profile=${profileName} mode=${attachTarget.mode} url=${attachTarget.url}`,
     );
     return [...DEFAULT_CHROME_MCP_ARGS, attachTarget.flag, attachTarget.url];
+  }
+  const discoveredTarget = await probeBrowserUrlFromUserDataDir(profileName, userDataDir);
+  if (discoveredTarget) {
+    return [...DEFAULT_CHROME_MCP_ARGS, discoveredTarget.flag, discoveredTarget.url];
   }
   const normalizedUserDataDir = normalizeChromeMcpUserDataDir(userDataDir);
   if (normalizedUserDataDir) {
@@ -357,7 +445,7 @@ async function createRealSession(
   profileName: string,
   userDataDir?: string,
 ): Promise<ChromeMcpSession> {
-  const args = resolveChromeMcpArgs(profileName, userDataDir);
+  const args = await resolveChromeMcpArgs(profileName, userDataDir);
   const transport = new StdioClientTransport({
     command: DEFAULT_CHROME_MCP_COMMAND,
     args,
@@ -416,6 +504,38 @@ async function withTimeout<T>(
   }
 }
 
+function normalizeAttachFailure(profileName: string, err: unknown): BrowserProfileUnavailableError {
+  if (err instanceof BrowserProfileUnavailableError) {
+    return err;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return new BrowserProfileUnavailableError(
+    `Chrome MCP existing-session attach failed for profile "${profileName}". Details: ${message}`,
+  );
+}
+
+function getActiveAttachFailure(cacheKey: string): BrowserProfileUnavailableError | null {
+  const failure = attachFailures.get(cacheKey);
+  if (!failure) {
+    return null;
+  }
+  if (Date.now() >= failure.retryAfter) {
+    attachFailures.delete(cacheKey);
+    return null;
+  }
+  return failure.error;
+}
+
+function recordAttachFailure(cacheKey: string, profileName: string, err: unknown): void {
+  const error = normalizeAttachFailure(profileName, err);
+  const failedAt = Date.now();
+  attachFailures.set(cacheKey, {
+    error,
+    failedAt,
+    retryAfter: failedAt + CHROME_MCP_ATTACH_FAILURE_COOLDOWN_MS,
+  });
+}
+
 async function getSession(
   profileName: string,
   options: ChromeMcpCallOptions = {},
@@ -423,6 +543,10 @@ async function getSession(
   const timeoutMs = resolveTimeoutMs(options.timeoutMs);
   traceChromeMcpStage(`chrome-mcp-session-get-start profile=${profileName} timeoutMs=${timeoutMs}`);
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, options.userDataDir);
+  const activeFailure = getActiveAttachFailure(cacheKey);
+  if (activeFailure) {
+    throw activeFailure;
+  }
   await closeChromeMcpSessionsForProfile(profileName, cacheKey);
 
   let session = sessions.get(cacheKey);
@@ -451,6 +575,9 @@ async function getSession(
     }
     try {
       session = await pending;
+    } catch (err) {
+      recordAttachFailure(cacheKey, profileName, err);
+      throw err;
     } finally {
       if (pendingSessions.get(cacheKey) === pending) {
         pendingSessions.delete(cacheKey);
@@ -471,6 +598,7 @@ async function getSession(
       sessions.delete(cacheKey);
     }
     await session.client.close().catch(() => {});
+    recordAttachFailure(cacheKey, profileName, err);
     throw err;
   }
 }
@@ -507,6 +635,7 @@ async function callTool(
     // Transport/connection error — tear down session so it reconnects on next call
     sessions.delete(cacheKey);
     await session.client.close().catch(() => {});
+    recordAttachFailure(cacheKey, profileName, err);
     throw err;
   }
   // Tool-level errors (element not found, script error, etc.) don't indicate a
@@ -560,6 +689,13 @@ export function getChromeMcpPid(profileName: string): number | null {
     }
   }
   return null;
+}
+
+export async function resolveChromeMcpArgsForTest(
+  profileName: string,
+  userDataDir?: string,
+): Promise<string[]> {
+  return await resolveChromeMcpArgs(profileName, userDataDir);
 }
 
 export async function closeChromeMcpSession(profileName: string): Promise<boolean> {
@@ -924,5 +1060,6 @@ export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFacto
 export async function resetChromeMcpSessionsForTest(): Promise<void> {
   sessionFactory = null;
   pendingSessions.clear();
+  attachFailures.clear();
   await stopAllChromeMcpSessions();
 }

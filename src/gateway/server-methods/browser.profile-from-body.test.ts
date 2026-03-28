@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadConfigMock, isNodeCommandAllowedMock, resolveNodeCommandAllowlistMock } = vi.hoisted(
   () => ({
@@ -7,14 +7,37 @@ const { loadConfigMock, isNodeCommandAllowedMock, resolveNodeCommandAllowlistMoc
     resolveNodeCommandAllowlistMock: vi.fn(),
   }),
 );
+const {
+  resolveBrowserConfigMock,
+  resolveBrowserControlAuthMock,
+  startBrowserControlServerIfEnabledMock,
+  fetchMock,
+} = vi.hoisted(() => ({
+  resolveBrowserConfigMock: vi.fn(),
+  resolveBrowserControlAuthMock: vi.fn(),
+  startBrowserControlServerIfEnabledMock: vi.fn(),
+  fetchMock: vi.fn(),
+}));
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: loadConfigMock,
 }));
 
+vi.mock("../../browser/config.js", () => ({
+  resolveBrowserConfig: resolveBrowserConfigMock,
+}));
+
+vi.mock("../../browser/control-auth.js", () => ({
+  resolveBrowserControlAuth: resolveBrowserControlAuthMock,
+}));
+
 vi.mock("../node-command-policy.js", () => ({
   isNodeCommandAllowed: isNodeCommandAllowedMock,
   resolveNodeCommandAllowlist: resolveNodeCommandAllowlistMock,
+}));
+
+vi.mock("../server-browser.js", () => ({
+  startBrowserControlServerIfEnabled: startBrowserControlServerIfEnabledMock,
 }));
 
 import { browserHandlers } from "./browser.js";
@@ -58,11 +81,25 @@ async function runBrowserRequest(params: Record<string, unknown>) {
 
 describe("browser.request profile selection", () => {
   beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
     loadConfigMock.mockReturnValue({
       gateway: { nodes: { browser: { mode: "auto" } } },
     });
     resolveNodeCommandAllowlistMock.mockReturnValue([]);
     isNodeCommandAllowedMock.mockReturnValue({ ok: true });
+    resolveBrowserConfigMock.mockReturnValue({ controlPort: 18791 });
+    resolveBrowserControlAuthMock.mockReturnValue({ token: "test-token" });
+    startBrowserControlServerIfEnabledMock.mockResolvedValue({ stop: async () => {} });
+    fetchMock.mockReset().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("uses profile from request body when query profile is missing", async () => {
@@ -137,5 +174,44 @@ describe("browser.request profile selection", () => {
         message: "browser.request cannot create or delete persistent browser profiles",
       }),
     );
+  });
+
+  it("proxies local browser requests through the loopback browser server", async () => {
+    loadConfigMock.mockReturnValue({
+      browser: { enabled: true },
+      gateway: { nodes: { browser: { mode: "off" } } },
+    });
+
+    const respond = vi.fn();
+    await browserHandlers["browser.request"]({
+      params: {
+        method: "GET",
+        path: "/",
+        query: { profile: "user-live" },
+        timeoutMs: 4321,
+      },
+      respond: respond as never,
+      context: {
+        nodeRegistry: {
+          listConnected: vi.fn(() => []),
+          invoke: vi.fn(),
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-2", method: "browser.request" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(startBrowserControlServerIfEnabledMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:18791/?profile=user-live");
+    expect(init).toMatchObject({
+      method: "GET",
+      headers: expect.any(Headers),
+      signal: expect.any(AbortSignal),
+    });
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer test-token");
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
   });
 });
