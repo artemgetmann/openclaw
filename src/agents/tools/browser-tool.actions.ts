@@ -88,14 +88,14 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
   if (!profile) {
     return false;
   }
-  if (profile === "user") {
-    const msg = String(err);
-    return msg.includes("404:") && msg.includes("tab not found");
-  }
   const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const browserProfile = resolveProfile(resolved, profile);
-  if (!browserProfile || !getBrowserProfileCapabilities(browserProfile).usesChromeMcp) {
+  const isRetryableChromeLane =
+    !!browserProfile &&
+    (getBrowserProfileCapabilities(browserProfile).usesChromeMcp ||
+      browserProfile.cloneFromUserProfile);
+  if (!isRetryableChromeLane) {
     return false;
   }
   const msg = String(err);
@@ -343,7 +343,8 @@ export async function executeActAction(params: {
             })) as { tabs?: unknown[] }
           ).tabs ?? [])
         : await browserTabs(baseUrl, { profile }).catch(() => []);
-      // Some user-browser targetIds can go stale between snapshots and actions.
+      // Host Chrome lanes can recycle target ids between snapshot and action,
+      // so retry the safe non-mutating request once without the stale target id.
       // Only retry safe read-only actions, and only when exactly one tab remains attached.
       if (retryRequest && canRetryChromeActWithoutTargetId(request) && tabs.length === 1) {
         try {

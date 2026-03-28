@@ -113,6 +113,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         detectedExecutablePath,
         detectError,
         userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
+        profileDirectory: profileCtx.profile.profileDirectory ?? null,
         color: profileCtx.profile.color,
         headless: current.resolved.headless,
         noSandbox: current.resolved.noSandbox,
@@ -177,6 +178,9 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     const color = toStringOrEmpty((req.body as { color?: unknown })?.color);
     const cdpUrl = toStringOrEmpty((req.body as { cdpUrl?: unknown })?.cdpUrl);
     const userDataDir = toStringOrEmpty((req.body as { userDataDir?: unknown })?.userDataDir);
+    const profileDirectory = toStringOrEmpty(
+      (req.body as { profileDirectory?: unknown })?.profileDirectory,
+    );
     const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver);
 
     if (!name) {
@@ -199,6 +203,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
           color: color || undefined,
           cdpUrl: cdpUrl || undefined,
           userDataDir: userDataDir || undefined,
+          profileDirectory: profileDirectory || undefined,
           driver:
             driver === "existing-session"
               ? "existing-session"

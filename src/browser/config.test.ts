@@ -23,11 +23,13 @@ describe("browser config", () => {
     expect(openclaw?.driver).toBe("openclaw");
     expect(openclaw?.cdpPort).toBe(18800);
     expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:18800");
-    const user = resolveProfile(resolved, "user");
-    expect(user?.driver).toBe("openclaw");
-    expect(user?.cdpPort).toBe(18801);
-    expect(user?.cdpUrl).toBe("http://127.0.0.1:18801");
-    expect(user?.cloneFromUserProfile).toBe(true);
+    expect(resolveProfile(resolved, "user")).toBe(null);
+    const userLive = resolveProfile(resolved, "user-live");
+    expect(userLive?.driver).toBe("existing-session");
+    expect(userLive?.cdpPort).toBe(0);
+    expect(userLive?.cdpUrl).toBe("");
+    expect(userLive?.attachOnly).toBe(true);
+    expect(userLive?.color).toBe("#2D7FF9");
     // chrome-relay is no longer auto-created
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
@@ -126,28 +128,6 @@ describe("browser config", () => {
     expect(remote?.cdpUrl).toBe("http://10.0.0.42:9222");
     expect(remote?.cdpHost).toBe("10.0.0.42");
     expect(remote?.cdpIsLoopback).toBe(false);
-  });
-
-  it("accepts cloned user profiles when they include a CDP port", () => {
-    const resolved = resolveBrowserConfig({
-      defaultProfile: "user",
-      profiles: {
-        user: {
-          cdpPort: 19012,
-          cloneFromUserProfile: true,
-          sourceProfileName: "Profile 4",
-          color: "#00AA00",
-        },
-      },
-    });
-
-    const user = resolveProfile(resolved, "user");
-    expect(user?.driver).toBe("openclaw");
-    expect(user?.cdpPort).toBe(19012);
-    expect(user?.cdpUrl).toBe("http://127.0.0.1:19012");
-    expect(user?.cloneFromUserProfile).toBe(true);
-    expect(user?.sourceProfileName).toBe("Profile 4");
-    expect(user?.color).toBe("#00AA00");
   });
 
   it("inherits attachOnly from global browser config when profile override is not set", () => {
@@ -322,6 +302,27 @@ describe("browser config", () => {
     );
   });
 
+  it("preserves profileDirectory for existing-session profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "artem-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          userDataDir: "~/Library/Application Support/Google/Chrome",
+          profileDirectory: "Profile 4",
+          color: "#2D7FF9",
+        },
+      },
+    });
+
+    const profile = resolveProfile(resolved, "artem-live");
+    expect(profile?.driver).toBe("existing-session");
+    expect(profile?.userDataDir).toBe(
+      resolveUserPath("~/Library/Application Support/Google/Chrome"),
+    );
+    expect(profile?.profileDirectory).toBe("Profile 4");
+  });
+
   it("sets usesChromeMcp only for existing-session profiles", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
@@ -371,20 +372,34 @@ describe("browser config", () => {
       expect(resolved.defaultProfile).toBe("openclaw");
     });
 
-    it("explicit defaultProfile config overrides defaults in headless mode", () => {
+    it("explicit custom clone profile overrides defaults in headless mode", () => {
       const resolved = resolveBrowserConfig({
         headless: true,
-        defaultProfile: "user",
+        defaultProfile: "signed-in",
+        profiles: {
+          "signed-in": {
+            cdpPort: 18833,
+            cloneFromUserProfile: true,
+            color: "#00AA00",
+          },
+        },
       });
-      expect(resolved.defaultProfile).toBe("user");
+      expect(resolved.defaultProfile).toBe("signed-in");
     });
 
-    it("explicit defaultProfile config overrides defaults in noSandbox mode", () => {
+    it("explicit custom clone profile overrides defaults in noSandbox mode", () => {
       const resolved = resolveBrowserConfig({
         noSandbox: true,
-        defaultProfile: "user",
+        defaultProfile: "signed-in",
+        profiles: {
+          "signed-in": {
+            cdpPort: 18833,
+            cloneFromUserProfile: true,
+            color: "#00AA00",
+          },
+        },
       });
-      expect(resolved.defaultProfile).toBe("user");
+      expect(resolved.defaultProfile).toBe("signed-in");
     });
 
     it("allows custom profile as default even in headless mode", () => {
@@ -396,6 +411,24 @@ describe("browser config", () => {
         },
       });
       expect(resolved.defaultProfile).toBe("custom");
+    });
+
+    it("keeps custom clone profiles available without auto-creating built-in user", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          "signed-in": {
+            cdpPort: 18833,
+            cloneFromUserProfile: true,
+            sourceProfileName: "Profile 4",
+            color: "#00AA00",
+          },
+        },
+      });
+
+      expect(resolveProfile(resolved, "user")).toBe(null);
+      const signedIn = resolveProfile(resolved, "signed-in");
+      expect(signedIn?.cloneFromUserProfile).toBe(true);
+      expect(signedIn?.cdpPort).toBe(18833);
     });
   });
 });

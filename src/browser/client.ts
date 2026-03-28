@@ -28,6 +28,7 @@ export type BrowserStatus = {
   detectedExecutablePath?: string | null;
   detectError?: string | null;
   userDataDir: string | null;
+  profileDirectory?: string | null;
   color: string;
   headless: boolean;
   noSandbox?: boolean;
@@ -40,6 +41,8 @@ export type ProfileStatus = {
   transport?: BrowserTransport;
   cdpPort: number | null;
   cdpUrl: string | null;
+  userDataDir?: string | null;
+  profileDirectory?: string | null;
   color: string;
   driver: "openclaw" | "existing-session";
   running: boolean;
@@ -175,6 +178,7 @@ export type BrowserCreateProfileResult = {
   cdpPort: number | null;
   cdpUrl: string | null;
   userDataDir: string | null;
+  profileDirectory: string | null;
   color: string;
   isRemote: boolean;
 };
@@ -186,6 +190,7 @@ export async function browserCreateProfile(
     color?: string;
     cdpUrl?: string;
     userDataDir?: string;
+    profileDirectory?: string;
     driver?: "openclaw" | "existing-session";
   },
 ): Promise<BrowserCreateProfileResult> {
@@ -199,6 +204,7 @@ export async function browserCreateProfile(
         color: opts.color,
         cdpUrl: opts.cdpUrl,
         userDataDir: opts.userDataDir,
+        profileDirectory: opts.profileDirectory,
         driver: opts.driver,
       }),
       timeoutMs: 10000,

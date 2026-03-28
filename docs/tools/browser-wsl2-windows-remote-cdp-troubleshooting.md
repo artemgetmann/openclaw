@@ -33,7 +33,7 @@ Choose this when:
 
 ### Option 2: Host-local Chrome MCP
 
-Use `existing-session` / `user` only when the Gateway itself runs on the same host as Chrome.
+Use `existing-session` / `user-live` only when the Gateway itself runs on the same host as Chrome.
 
 Choose this when:
 
@@ -189,7 +189,7 @@ Treat each message as a layer-specific clue:
   - WSL2 cannot reach the configured `cdpUrl`
 - `gateway timeout after 1500ms`
   - often still CDP reachability or a slow/unreachable remote endpoint
-- `No Chrome tabs found for profile="user"`
+- `No Chrome tabs found for profile="user-live"`
   - local Chrome MCP profile selected where no host-local tabs are available
 
 ## Fast triage checklist

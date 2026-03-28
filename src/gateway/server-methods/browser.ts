@@ -1,14 +1,12 @@
 import crypto from "node:crypto";
-import {
-  createBrowserControlContext,
-  startBrowserControlServiceFromConfig,
-} from "../../browser/control-service.js";
+import { resolveBrowserConfig } from "../../browser/config.js";
+import { resolveBrowserControlAuth } from "../../browser/control-auth.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
-import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js";
 import { loadConfig } from "../../config/config.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { NodeSession } from "../node-registry.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
+import { startBrowserControlServerIfEnabled } from "../server-browser.js";
 import { respondUnavailableOnNodeInvokeError, safeParseJson } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -159,6 +157,85 @@ function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
   applyBrowserProxyPaths(result, mapping);
 }
 
+function buildLocalBrowserUrl(params: {
+  controlPort: number;
+  path: string;
+  query?: Record<string, unknown>;
+}): string {
+  const normalizedPath = normalizeBrowserRequestPath(params.path) || "/";
+  const url = new URL(`http://127.0.0.1:${params.controlPort}${normalizedPath}`);
+  const query = params.query ?? {};
+  for (const [key, rawValue] of Object.entries(query)) {
+    const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+    for (const value of values) {
+      if (value === undefined || value === null) {
+        continue;
+      }
+      if (
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean" ||
+        typeof value === "bigint"
+      ) {
+        url.searchParams.append(key, String(value));
+      }
+    }
+  }
+  return url.toString();
+}
+
+async function dispatchViaLocalBrowserHttp(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  method: "GET" | "POST" | "DELETE";
+  path: string;
+  query?: Record<string, unknown>;
+  body?: unknown;
+  timeoutMs?: number;
+}) {
+  const resolved = resolveBrowserConfig(params.cfg.browser, params.cfg);
+  const url = buildLocalBrowserUrl({
+    controlPort: resolved.controlPort,
+    path: params.path,
+    query: params.query,
+  });
+  const auth = resolveBrowserControlAuth(params.cfg);
+  const headers = new Headers();
+  if (auth.token) {
+    headers.set("Authorization", `Bearer ${auth.token}`);
+  } else if (auth.password) {
+    headers.set("x-openclaw-password", auth.password);
+  }
+
+  let body: string | undefined;
+  if (params.body !== undefined) {
+    headers.set("content-type", "application/json");
+    body = JSON.stringify(params.body);
+  }
+
+  const ctrl = new AbortController();
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timer = setTimeout(
+    () => ctrl.abort(new Error(`timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  try {
+    const res = await fetch(url, {
+      method: params.method,
+      headers,
+      body,
+      signal: ctrl.signal,
+    });
+    const raw = await res.text();
+    const parsed = safeParseJson(raw) ?? raw;
+    return {
+      status: res.status,
+      body: parsed,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export const browserHandlers: GatewayRequestHandlers = {
   "browser.request": async ({ params, respond, context }) => {
     const typed = params as BrowserRequestParams;
@@ -261,37 +338,35 @@ export const browserHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const ready = await startBrowserControlServiceFromConfig();
+    const ready = await startBrowserControlServerIfEnabled();
     if (!ready) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser control is disabled"));
       return;
     }
 
-    let dispatcher;
     try {
-      dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
+      const result = await dispatchViaLocalBrowserHttp({
+        cfg: loadConfig(),
+        method: methodRaw,
+        path,
+        query,
+        body,
+        timeoutMs,
+      });
+
+      if (result.status >= 400) {
+        const message =
+          result.body && typeof result.body === "object" && "error" in result.body
+            ? String((result.body as { error?: unknown }).error)
+            : `browser request failed (${result.status})`;
+        const code = result.status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
+        respond(false, undefined, errorShape(code, message, { details: result.body }));
+        return;
+      }
+
+      respond(true, result.body);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
-      return;
     }
-
-    const result = await dispatcher.dispatch({
-      method: methodRaw,
-      path,
-      query,
-      body,
-    });
-
-    if (result.status >= 400) {
-      const message =
-        result.body && typeof result.body === "object" && "error" in result.body
-          ? String((result.body as { error?: unknown }).error)
-          : `browser request failed (${result.status})`;
-      const code = result.status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
-      respond(false, undefined, errorShape(code, message, { details: result.body }));
-      return;
-    }
-
-    respond(true, result.body);
   },
 };

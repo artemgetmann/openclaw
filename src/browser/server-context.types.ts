@@ -57,6 +57,8 @@ export type ProfileStatus = {
   transport: BrowserTransport;
   cdpPort: number | null;
   cdpUrl: string | null;
+  userDataDir?: string | null;
+  profileDirectory?: string | null;
   color: string;
   driver: ResolvedBrowserProfile["driver"];
   running: boolean;

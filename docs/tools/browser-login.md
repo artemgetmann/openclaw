@@ -10,10 +10,10 @@ title: "Browser Login"
 
 ## Manual login (recommended)
 
-When a site requires login, use the **signed-in user browser lane** first if it is available.
+When a site requires login, use the **real live browser lane** first if it is available.
 
 If the task depends on existing cookies or logged-in sessions, prefer the
-**user** browser profile over the isolated `openclaw` browser. If that lane is
+**user-live** browser profile over the isolated `openclaw` browser. If that lane is
 not available, surface the blocker instead of silently switching to a clean
 browser that will just ask for login again.
 
@@ -25,15 +25,15 @@ Back to the main browser docs: [Browser](/tools/browser).
 
 OpenClaw can use two browser lanes:
 
-- `user`: your signed-in cloned Chrome lane when existing cookies/session matter
 - `openclaw`: a dedicated Chrome profile (orange-tinted UI) isolated from your daily browser
+- `user-live`: your actual live Chrome session with your real tabs/extensions/login state
 
 For agent browser tool calls:
 
-- Prefer `profile="user"` for signed-in sites, hostile sites, and flows where existing cookies/session matter.
-- Use `profile="openclaw"` for public browsing, clean isolated runs, or as an explicit fallback.
-- If `profile="user"` is required for the task and is unavailable, stop and report the blocker instead of silently switching to `openclaw`.
-- If you have multiple user-browser profiles, specify the profile explicitly instead of guessing.
+- Prefer `profile="openclaw"` by default for public browsing, clean isolated runs, or anything that does not require your real browser state.
+- Use `profile="user-live"` only when the task truly depends on your actual signed-in browser session, existing tabs, or installed extensions.
+- If `profile="user-live"` is required for the task and is unavailable, stop and report the blocker instead of silently switching to `openclaw`.
+- If you have multiple Chrome profiles, create or use an explicit `existing-session` profile instead of guessing.
 
 Two easy ways to access it:
 
@@ -50,8 +50,8 @@ of having the agent guess. The default managed profile remains `openclaw`.
 
 ## X/Twitter: recommended flow
 
-- **Read/search/threads:** prefer the signed-in **user** browser lane.
-- **Post updates:** prefer the signed-in **user** browser lane.
+- **Read/search/threads:** prefer the live **user-live** browser lane.
+- **Post updates:** prefer the live **user-live** browser lane.
 
 ## Sandboxing + host browser access
 

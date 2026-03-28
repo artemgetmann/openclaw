@@ -360,6 +360,7 @@ export const OpenClawSchema = z
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
                 userDataDir: z.string().optional(),
+                profileDirectory: z.string().optional(),
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
                   .optional(),
@@ -378,6 +379,10 @@ export const OpenClawSchema = z
               )
               .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
                 message: 'Profile userDataDir is only supported with driver="existing-session"',
+              })
+              .refine((value) => value.driver === "existing-session" || !value.profileDirectory, {
+                message:
+                  'Profile profileDirectory is only supported with driver="existing-session"',
               }),
           )
           .optional(),

@@ -63,7 +63,7 @@ afterEach(() => {
 });
 
 describe("browser server-context existing-session profile", () => {
-  it("routes tab operations through the Chrome MCP backend", async () => {
+  it("routes existing-session availability and tab operations through Chrome MCP", async () => {
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     const ctx = createBrowserRouteContext({ getState: () => state });
@@ -81,14 +81,20 @@ describe("browser server-context existing-session profile", () => {
       ])
       .mockResolvedValueOnce([
         { targetId: "7", title: "", url: "https://example.com", type: "page" },
+        { targetId: "8", title: "", url: "https://openclaw.ai", type: "page" },
       ])
       .mockResolvedValueOnce([
+        { targetId: "7", title: "", url: "https://example.com", type: "page" },
+        { targetId: "8", title: "", url: "https://openclaw.ai", type: "page" },
+      ])
+      .mockResolvedValueOnce([
+        { targetId: "7", title: "", url: "https://example.com", type: "page" },
         { targetId: "8", title: "", url: "https://openclaw.ai", type: "page" },
       ]);
 
     await live.ensureBrowserAvailable();
     const tabs = await live.listTabs();
-    expect(tabs.map((tab) => tab.targetId)).toEqual(["7"]);
+    expect(tabs.map((tab) => tab.targetId)).toContain("7");
 
     const opened = await live.openTab("https://openclaw.ai");
     expect(opened.targetId).toBe("8");

@@ -24,7 +24,7 @@ describe("doctor browser readiness", () => {
     await noteChromeMcpBrowserReadiness(
       {
         browser: {
-          defaultProfile: "user",
+          defaultProfile: "user-live",
         },
       },
       {

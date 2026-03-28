@@ -171,20 +171,72 @@ describe("BrowserProfilesService", () => {
     );
   });
 
-  it("rejects driver=existing-session when cdpUrl is provided", async () => {
+  it("creates existing-session profiles with an explicit attach target URL", async () => {
     const resolved = resolveBrowserConfig({});
-    const { ctx } = createCtx(resolved);
+    const { ctx, state } = createCtx(resolved);
     vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
 
     const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({
+      name: "chrome-live",
+      driver: "existing-session",
+      cdpUrl: "http://127.0.0.1:9222",
+    });
 
-    await expect(
-      service.createProfile({
-        name: "chrome-live",
-        driver: "existing-session",
-        cdpUrl: "http://127.0.0.1:9222",
+    expect(result.transport).toBe("chrome-mcp");
+    expect(result.cdpPort).toBeNull();
+    expect(result.cdpUrl).toBeNull();
+    expect(result.userDataDir).toBeNull();
+    expect(state.resolved.profiles["chrome-live"]).toEqual({
+      driver: "existing-session",
+      attachOnly: true,
+      cdpUrl: "http://127.0.0.1:9222",
+      color: expect.any(String),
+    });
+    expect(writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browser: expect.objectContaining({
+          profiles: expect.objectContaining({
+            "chrome-live": expect.objectContaining({
+              driver: "existing-session",
+              attachOnly: true,
+              cdpUrl: "http://127.0.0.1:9222",
+            }),
+          }),
+        }),
       }),
-    ).rejects.toThrow(/does not accept cdpUrl/i);
+    );
+  });
+
+  it("creates existing-session profiles with explicit userDataDir and profileDirectory metadata", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx, state } = createCtx(resolved);
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
+    const userDataDir = path.join(tempDir, "Google", "Chrome");
+    fs.mkdirSync(userDataDir, { recursive: true });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({
+      name: "artem-live",
+      driver: "existing-session",
+      cdpUrl: "http://127.0.0.1:9224",
+      userDataDir,
+      profileDirectory: "Profile 4",
+    });
+
+    expect(result.transport).toBe("chrome-mcp");
+    expect(result.userDataDir).toBe(userDataDir);
+    expect(result.profileDirectory).toBe("Profile 4");
+    expect(state.resolved.profiles["artem-live"]).toEqual({
+      driver: "existing-session",
+      attachOnly: true,
+      cdpUrl: "http://127.0.0.1:9224",
+      userDataDir,
+      profileDirectory: "Profile 4",
+      color: expect.any(String),
+    });
   });
 
   it("creates existing-session profiles with an explicit userDataDir", async () => {
@@ -228,6 +280,21 @@ describe("BrowserProfilesService", () => {
       service.createProfile({
         name: "brave-live",
         userDataDir,
+      }),
+    ).rejects.toThrow(/driver=existing-session is required/i);
+  });
+
+  it("rejects profileDirectory for non-existing-session profiles", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx } = createCtx(resolved);
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+
+    await expect(
+      service.createProfile({
+        name: "artem-live",
+        profileDirectory: "Profile 4",
       }),
     ).rejects.toThrow(/driver=existing-session is required/i);
   });

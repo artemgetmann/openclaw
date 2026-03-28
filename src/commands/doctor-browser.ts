@@ -33,8 +33,8 @@ function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[]
   const profiles = new Map<string, ExistingSessionProfile>();
   const defaultProfile =
     typeof browser.defaultProfile === "string" ? browser.defaultProfile.trim() : "";
-  if (defaultProfile === "user") {
-    profiles.set("user", { name: "user" });
+  if (defaultProfile === "user-live") {
+    profiles.set("user-live", { name: "user-live" });
   }
 
   const configuredProfiles = asRecord(browser.profiles);

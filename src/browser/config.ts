@@ -15,7 +15,7 @@ import {
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { allocateCdpPort, CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
+import { CDP_PORT_RANGE_START } from "./profiles.js";
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
@@ -46,6 +46,7 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   userDataDir?: string;
+  profileDirectory?: string;
   color: string;
   driver: "openclaw" | "existing-session";
   cloneFromUserProfile?: boolean;
@@ -184,26 +185,27 @@ function ensureDefaultProfile(
 }
 
 /**
- * Ensure a built-in "user" profile exists for the signed-in cloned Chrome lane.
+ * Ensure the built-in live browser lane exists.
  *
- * This is intentionally different from the explicit existing-session / live-attach
- * flow. The default consumer-safe behavior is a separate managed browser window
- * seeded from the user's Chrome state rather than taking over the live browser.
+ * The MVP keeps exactly two built-ins:
+ * - `openclaw` for the isolated managed browser
+ * - `user-live` for attaching to the user's real live Chromium session
+ *
+ * Cloned signed-in browsers still exist as an advanced explicit config via
+ * `cloneFromUserProfile`, but we no longer auto-create a built-in `user` lane.
  */
-function ensureDefaultUserBrowserProfile(
+function ensureDefaultSignedInBrowserProfiles(
   profiles: Record<string, BrowserProfileConfig>,
-  range?: { start: number; end: number },
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
-  if (result.user) {
-    return result;
+  if (!result["user-live"]) {
+    // Keep the live lane visually distinct so operators can tell the cloned
+    // browser and the user's actual browser apart at a glance.
+    result["user-live"] = {
+      driver: "existing-session",
+      color: "#2D7FF9",
+    };
   }
-  const cdpPort = allocateCdpPort(getUsedPorts(result), range) ?? CDP_PORT_RANGE_START + 1;
-  result.user = {
-    cdpPort,
-    cloneFromUserProfile: true,
-    color: "#00AA00",
-  };
   return result;
 }
 
@@ -266,7 +268,7 @@ export function resolveBrowserConfig(
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
-  const profiles = ensureDefaultUserBrowserProfile(
+  const profiles = ensureDefaultSignedInBrowserProfiles(
     ensureDefaultProfile(
       cfg?.profiles,
       defaultColor,
@@ -274,7 +276,6 @@ export function resolveBrowserConfig(
       cdpPortRangeStart,
       legacyCdpUrl,
     ),
-    { start: cdpPortRangeStart, end: cdpPortRangeEnd },
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
 
@@ -284,7 +285,7 @@ export function resolveBrowserConfig(
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
       : profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
         ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
-        : "user");
+        : "user-live");
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
@@ -333,7 +334,9 @@ export function resolveProfile(
   const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
 
   if (driver === "existing-session") {
-    // existing-session uses Chrome MCP auto-connect; no CDP port/URL needed
+    // existing-session uses Chrome MCP instead of raw CDP. Keep the configured
+    // profile directory alongside the user-data root so the attach layer can
+    // fail closed when multiple Chrome profiles are live under one root.
     return {
       name: profileName,
       cdpPort: 0,
@@ -341,6 +344,7 @@ export function resolveProfile(
       cdpHost: "",
       cdpIsLoopback: true,
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
+      profileDirectory: profile.profileDirectory?.trim() || undefined,
       color: profile.color,
       driver,
       cloneFromUserProfile: false,
