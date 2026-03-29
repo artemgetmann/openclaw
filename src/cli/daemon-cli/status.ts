@@ -17,6 +17,10 @@ export async function runDaemonStatus(opts: DaemonStatusOptions) {
       deep: Boolean(opts.deep),
     });
     printDaemonStatus(status, { json: Boolean(opts.json) });
+    if (status.portMismatch) {
+      defaultRuntime.exit(1);
+      return;
+    }
     if (opts.requireRpc && !status.rpc?.ok) {
       defaultRuntime.exit(1);
     }
