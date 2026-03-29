@@ -9,7 +9,7 @@ read_when:
 
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
 
-# Heartbeat is for broad, low-frequency awareness. Do not use it as the default
+# Heartbeat is for broad periodic sweeps and ambient awareness. Do not use it as the default
 
 # home for reminders or explicit inbox/thread/person monitors.
 
