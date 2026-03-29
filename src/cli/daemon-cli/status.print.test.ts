@@ -137,6 +137,59 @@ describe("printDaemonStatus", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw gateway restart"));
   });
 
+  it("prints a loud lane-local port mismatch diagnosis", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 35324,
+          portSource: "service args",
+          probeUrl: "ws://127.0.0.1:35324",
+        },
+        port: {
+          port: 35324,
+          status: "busy",
+          listeners: [],
+          hints: [],
+        },
+        portCli: {
+          port: 35624,
+          status: "free",
+          listeners: [],
+          hints: [],
+        },
+        portMismatch: {
+          servicePort: 35324,
+          servicePortSource: "service args",
+          expectedPort: 35624,
+          expectedPortStatus: "free",
+          serviceStateDir: "/tmp/service-state",
+          expectedStateDir: "/tmp/cli-state",
+          serviceConfigPath: "/tmp/service-state/openclaw.json",
+          expectedConfigPath: "/tmp/cli-state/openclaw.json",
+          issues: ["service port=35324, cli port=35624"],
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("does not match this lane's expected runtime ownership"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("restart the gateway from this same lane"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw gateway restart"));
+  });
+
   it("prints the runtime fingerprint in text mode", () => {
     const status: DaemonStatus = {
       runtimeFingerprint: {

@@ -62,10 +62,24 @@ type PortStatusSummary = {
   hints: string[];
 };
 
+type GatewayPortMismatchSummary = {
+  servicePort: number;
+  servicePortSource: GatewayStatusSummary["portSource"];
+  expectedPort: number;
+  expectedPortStatus: PortUsageStatus;
+  serviceStateDir: string;
+  expectedStateDir: string;
+  serviceConfigPath: string;
+  expectedConfigPath: string;
+  issues: string[];
+};
+
 type DaemonConfigContext = {
   mergedDaemonEnv: Record<string, string | undefined>;
   cliCfg: OpenClawConfig;
   daemonCfg: OpenClawConfig;
+  cliStateDir: string;
+  daemonStateDir: string;
   cliConfigSummary: ConfigSummary;
   daemonConfigSummary: ConfigSummary;
   configMismatch: boolean;
@@ -112,6 +126,7 @@ export type DaemonStatus = {
     listeners: PortListener[];
     hints: string[];
   };
+  portMismatch?: GatewayPortMismatchSummary;
   lastError?: string;
   rpc?: {
     ok: boolean;
@@ -148,11 +163,10 @@ async function loadDaemonConfigContext(
     ...(serviceEnv ?? undefined),
   } satisfies Record<string, string | undefined>;
 
-  const cliConfigPath = resolveConfigPath(process.env, resolveStateDir(process.env));
-  const daemonConfigPath = resolveConfigPath(
-    mergedDaemonEnv as NodeJS.ProcessEnv,
-    resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv),
-  );
+  const cliStateDir = resolveStateDir(process.env);
+  const daemonStateDir = resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv);
+  const cliConfigPath = resolveConfigPath(process.env, cliStateDir);
+  const daemonConfigPath = resolveConfigPath(mergedDaemonEnv as NodeJS.ProcessEnv, daemonStateDir);
 
   const cliIO = createConfigIO({ env: process.env, configPath: cliConfigPath });
   const daemonIO = createConfigIO({
@@ -186,6 +200,8 @@ async function loadDaemonConfigContext(
     mergedDaemonEnv,
     cliCfg,
     daemonCfg,
+    cliStateDir,
+    daemonStateDir,
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch: cliConfigSummary.path !== daemonConfigSummary.path,
@@ -292,6 +308,8 @@ export async function gatherDaemonStatus(
     mergedDaemonEnv,
     cliCfg,
     daemonCfg,
+    cliStateDir,
+    daemonStateDir,
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch,
@@ -307,6 +325,32 @@ export async function gatherDaemonStatus(
     daemonPort,
     cliPort,
   });
+  const portMismatchIssues: string[] = [];
+  if (cliPort !== daemonPort) {
+    portMismatchIssues.push(`service port=${daemonPort}, cli port=${cliPort}`);
+  }
+  if (daemonStateDir !== cliStateDir) {
+    portMismatchIssues.push(`service state dir=${daemonStateDir}, cli state dir=${cliStateDir}`);
+  }
+  if (daemonConfigSummary.path !== cliConfigSummary.path) {
+    portMismatchIssues.push(
+      `service config=${daemonConfigSummary.path}, cli config=${cliConfigSummary.path}`,
+    );
+  }
+  const portMismatch =
+    portMismatchIssues.length > 0
+      ? {
+          servicePort: daemonPort,
+          servicePortSource: gateway.portSource,
+          expectedPort: cliPort,
+          expectedPortStatus: portCliStatus?.status ?? portStatus?.status ?? "unknown",
+          serviceStateDir: daemonStateDir,
+          expectedStateDir: cliStateDir,
+          serviceConfigPath: daemonConfigSummary.path,
+          expectedConfigPath: cliConfigSummary.path,
+          issues: portMismatchIssues,
+        }
+      : undefined;
 
   const extraServices = await findExtraGatewayServices(
     process.env as Record<string, string | undefined>,
@@ -396,6 +440,7 @@ export async function gatherDaemonStatus(
     gateway,
     port: portStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
+    ...(portMismatch ? { portMismatch } : {}),
     lastError,
     ...(rpc
       ? {

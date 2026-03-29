@@ -89,4 +89,45 @@ describe("runDaemonStatus", () => {
     expect(gatherDaemonStatus).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("--require-rpc cannot be used with --no-probe");
   });
+
+  it("exits when status detects a lane-local port mismatch", async () => {
+    gatherDaemonStatus.mockResolvedValueOnce({
+      service: {
+        label: "LaunchAgent",
+        loaded: true,
+        loadedText: "loaded",
+        notLoadedText: "not loaded",
+      },
+      gateway: {
+        bindMode: "loopback",
+        bindHost: "127.0.0.1",
+        port: 35324,
+        portSource: "service args",
+        probeUrl: "ws://127.0.0.1:35324",
+      },
+      portMismatch: {
+        servicePort: 35324,
+        servicePortSource: "service args",
+        expectedPort: 35624,
+        expectedPortStatus: "free",
+        serviceStateDir: "/tmp/service-state",
+        expectedStateDir: "/tmp/cli-state",
+        serviceConfigPath: "/tmp/service-state/openclaw.json",
+        expectedConfigPath: "/tmp/cli-state/openclaw.json",
+        issues: ["service port=35324, cli port=35624"],
+      },
+      extraServices: [],
+    });
+
+    await expect(
+      runDaemonStatus({
+        rpc: {},
+        probe: true,
+        requireRpc: false,
+        json: false,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(printDaemonStatus).toHaveBeenCalledTimes(1);
+  });
 });
