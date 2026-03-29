@@ -8,11 +8,7 @@ import {
   createScopedDmSecurityResolver,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
-import {
-  buildAgentSessionKey,
-  resolveThreadSessionKeys,
-  type RoutePeer,
-} from "openclaw/plugin-sdk/core";
+import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
 import {
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
@@ -49,6 +45,7 @@ import {
 } from "./accounts.js";
 import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
+import { resolveTelegramDmThreadSessionRouting } from "./dm-thread-session.js";
 import {
   isTelegramExecApprovalClientEnabled,
   resolveTelegramExecApprovalTarget,
@@ -288,12 +285,16 @@ function resolveTelegramOutboundSessionRoute(params: {
     accountId: params.accountId,
     peer,
   });
-  const threadKeys =
+  const dmThreadSession =
     resolvedThreadId && !isGroup
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(resolvedThreadId) })
+      ? resolveTelegramDmThreadSessionRouting({
+          baseSessionKey,
+          chatId,
+          threadId: resolvedThreadId,
+        })
       : null;
   return {
-    sessionKey: threadKeys?.sessionKey ?? baseSessionKey,
+    sessionKey: dmThreadSession?.sessionKey ?? baseSessionKey,
     baseSessionKey,
     peer,
     chatType: isGroup ? ("group" as const) : ("direct" as const),

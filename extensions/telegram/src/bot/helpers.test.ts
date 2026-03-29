@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTelegramConversationId,
+  buildTelegramDmThreadToken,
   buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
@@ -138,6 +139,27 @@ describe("buildTelegramConversationId", () => {
         messageThreadId: 99,
       }),
     ).toBe("-1001234567890:topic:99");
+  });
+});
+
+describe("buildTelegramDmThreadToken", () => {
+  it("anchors DM topic session tokens on the sender-derived peer id", () => {
+    expect(
+      buildTelegramDmThreadToken({
+        chatId: 777777777,
+        senderId: 123456789,
+        threadId: 55,
+      }),
+    ).toBe("123456789:55");
+  });
+
+  it("falls back to chat id when sender id is unavailable", () => {
+    expect(
+      buildTelegramDmThreadToken({
+        chatId: 777777777,
+        threadId: 55,
+      }),
+    ).toBe("777777777:55");
   });
 });
 
