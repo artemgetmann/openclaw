@@ -61,6 +61,12 @@ The default prompt is intentionally conservative:
 
 - **Broad periodic sweeps**: heartbeat can cover inbox, calendar, notifications,
   and project-status style checks when the user wants one shared sweep.
+- **Background tasks**: heartbeat can review follow-ups like inbox, calendar,
+  reminders, queued work, and background-task completion, then surface only the
+  items that seem worth attention.
+- **Human check-in**: heartbeat can send an occasional lightweight “anything you
+  need?” check-in when that is part of the desired behavior. Active hours and
+  timezone handling help prevent this from turning into dumb night spam.
 - **Not the default engine for explicit monitors**: scoped watches like “monitor
   this inbox/thread/person until something happens” should normally become cron jobs.
 - **No ad hoc monitor pileup**: reminders and scoped watches like “monitor this
@@ -72,6 +78,10 @@ If you want a heartbeat to do something specific, keep it broad and stable. A
 daily sweep is the safest starter pattern, but 30-minute heartbeat sweeps are
 still valid if that is the cadence the user explicitly wants. For exact
 schedules or explicit ongoing monitors, use cron instead.
+If you want heartbeat to do something very specific for ops/debugging (for
+example “check Gmail PubSub stats” or “verify gateway health”), set
+`agents.defaults.heartbeat.prompt` or `agents.list[].heartbeat.prompt` to a
+custom body.
 
 ## Response contract
 
@@ -361,6 +371,7 @@ agent (in a normal chat) something like:
 
 - “Update `HEARTBEAT.md` to keep it as one daily broad sweep.”
 - “Rewrite `HEARTBEAT.md` so it stops acting like a monitor list.”
+- “Add email/calendar/project-health checks to `HEARTBEAT.md`, but keep them as broad sweeps instead of dedicated watch jobs.”
 
 If you want this to happen proactively, you can also include an explicit line in
 your heartbeat prompt like: “If the checklist becomes stale, update HEARTBEAT.md
