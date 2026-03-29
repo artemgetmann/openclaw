@@ -62,6 +62,7 @@ import {
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
 import {
+  buildTelegramConversationId,
   buildTelegramThreadParams,
   getTelegramTextParts,
   buildTelegramGroupPeerId,
@@ -364,7 +365,7 @@ export const registerTelegramHandlers = ({
     const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
     const topicThreadId = resolvedThreadId ?? dmThreadId;
     const { topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
-    const { route } = resolveTelegramConversationRoute({
+    const { route, hasExplicitDmTopicBinding } = resolveTelegramConversationRoute({
       cfg,
       accountId,
       chatId: params.chatId,
@@ -382,7 +383,7 @@ export const registerTelegramHandlers = ({
       senderId: params.senderId,
     });
     const threadKeys =
-      dmThreadId != null
+      dmThreadId != null && !hasExplicitDmTopicBinding
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
         : null;
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
@@ -1301,8 +1302,12 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      const callbackConversationId =
-        messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
+      const callbackConversationId = buildTelegramConversationId({
+        isGroup,
+        chatId,
+        senderId,
+        messageThreadId: messageThreadId ?? undefined,
+      });
       const pluginBindingApproval = parsePluginBindingApprovalCustomId(data);
       if (pluginBindingApproval) {
         const resolved = await resolvePluginConversationBindingApproval({

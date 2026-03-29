@@ -15,6 +15,7 @@ import {
   sanitizeAgentId,
 } from "../../../src/routing/session-key.js";
 import {
+  buildTelegramConversationId,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramDirectPeerId,
@@ -33,6 +34,7 @@ export function resolveTelegramConversationRoute(params: {
   route: ReturnType<typeof resolveAgentRoute>;
   configuredBinding: ReturnType<typeof resolveConfiguredAcpRoute>["configuredBinding"];
   configuredBindingSessionKey: string;
+  hasExplicitDmTopicBinding: boolean;
 } {
   const peerId = params.isGroup
     ? buildTelegramGroupPeerId(params.chatId, params.resolvedThreadId)
@@ -105,13 +107,22 @@ export function resolveTelegramConversationRoute(params: {
   let configuredBinding = configuredRoute.configuredBinding;
   let configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
   route = configuredRoute.route;
+  let hasExplicitDmTopicBinding = false;
 
-  const threadBindingConversationId =
-    params.replyThreadId != null
-      ? `${params.chatId}:topic:${params.replyThreadId}`
-      : !params.isGroup
-        ? String(params.chatId)
-        : undefined;
+  const threadBindingConversationId = !params.isGroup
+    ? buildTelegramConversationId({
+        isGroup: false,
+        chatId: params.chatId,
+        senderId: params.senderId,
+        messageThreadId: params.replyThreadId,
+      })
+    : params.replyThreadId != null
+      ? buildTelegramConversationId({
+          isGroup: true,
+          chatId: params.chatId,
+          messageThreadId: params.replyThreadId,
+        })
+      : undefined;
   if (threadBindingConversationId) {
     const threadBinding = getSessionBindingService().resolveByConversation({
       channel: "telegram",
@@ -132,6 +143,7 @@ export function resolveTelegramConversationRoute(params: {
           matchedBy: "binding.channel",
         };
       }
+      hasExplicitDmTopicBinding = !params.isGroup && params.replyThreadId != null;
       configuredBinding = null;
       configuredBindingSessionKey = "";
       getSessionBindingService().touch(threadBinding.bindingId);
@@ -147,6 +159,7 @@ export function resolveTelegramConversationRoute(params: {
     route,
     configuredBinding,
     configuredBindingSessionKey,
+    hasExplicitDmTopicBinding,
   };
 }
 

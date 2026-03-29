@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildTelegramConversationId,
   buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
@@ -103,6 +104,40 @@ describe("resolveTelegramDirectPeerId", () => {
     expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: undefined })).toBe(
       "777777777",
     );
+  });
+});
+
+describe("buildTelegramConversationId", () => {
+  it("uses the sender-derived peer id for direct conversations when chat id differs", () => {
+    expect(
+      buildTelegramConversationId({
+        isGroup: false,
+        chatId: 777777777,
+        senderId: 123456789,
+      }),
+    ).toBe("123456789");
+  });
+
+  it("keeps DM topic conversation ids on the sender-derived peer id", () => {
+    expect(
+      buildTelegramConversationId({
+        isGroup: false,
+        chatId: 777777777,
+        senderId: 123456789,
+        messageThreadId: 55,
+      }),
+    ).toBe("123456789:topic:55");
+  });
+
+  it("keeps group topics on the chat-derived topic id", () => {
+    expect(
+      buildTelegramConversationId({
+        isGroup: true,
+        chatId: -1001234567890,
+        senderId: 42,
+        messageThreadId: 99,
+      }),
+    ).toBe("-1001234567890:topic:99");
   });
 });
 
