@@ -588,6 +588,41 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
   });
 
+  it("keeps explicit DM topic bindings exact when chat id differs from sender id", async () => {
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "default:200:topic:42",
+      targetSessionKey: "agent:codex-acp:session-dm-topic",
+    });
+
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: ["200"],
+    });
+    await handler({
+      match: "",
+      message: {
+        message_id: 3,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: 100, type: "private" as const },
+        direct_messages_topic: { topic_id: 42 },
+        from: { id: 200, username: "bob" },
+      },
+    });
+
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "200:topic:42",
+    });
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string } }]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:codex-acp:session-dm-topic");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("default:200:topic:42", undefined);
+  });
+
   it("aborts native command dispatch when configured ACP topic binding cannot initialize", async () => {
     const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue(

@@ -276,6 +276,32 @@ export function resolveTelegramDirectPeerId(params: {
   return String(params.chatId);
 }
 
+/**
+ * Build a canonical Telegram conversation id for binding lookups.
+ *
+ * Telegram can report a private-chat wrapper `chat.id` that differs from the
+ * actual human sender id. Session routing already normalizes those DMs onto
+ * the sender-derived peer id, so thread/topic binding lookups must use the
+ * same identity or callbacks and bound conversations drift onto different keys.
+ */
+export function buildTelegramConversationId(params: {
+  isGroup: boolean;
+  chatId: number | string;
+  senderId?: number | string | null;
+  messageThreadId?: number;
+}) {
+  if (params.isGroup) {
+    return buildTelegramGroupPeerId(params.chatId, params.messageThreadId);
+  }
+  const directPeerId = resolveTelegramDirectPeerId({
+    chatId: params.chatId,
+    senderId: params.senderId,
+  });
+  return params.messageThreadId != null
+    ? `${directPeerId}:topic:${params.messageThreadId}`
+    : directPeerId;
+}
+
 export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {
   return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
 }
