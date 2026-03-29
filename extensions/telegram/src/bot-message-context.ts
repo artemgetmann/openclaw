@@ -7,11 +7,12 @@ import {
   type StatusReactionController,
 } from "../../../src/channels/status-reactions.js";
 import { loadConfig } from "../../../src/config/config.js";
+import { resolveStorePath, updateSessionStore } from "../../../src/config/sessions.js";
 import type { TelegramDirectConfig, TelegramGroupConfig } from "../../../src/config/types.js";
 import { logVerbose } from "../../../src/globals.js";
 import { recordChannelActivity } from "../../../src/infra/channel-activity.js";
 import { deriveLastRoutePolicy } from "../../../src/routing/resolve-route.js";
-import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
@@ -27,6 +28,10 @@ import {
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
+import {
+  migrateTelegramDmThreadStoreEntry,
+  resolveTelegramDmThreadSessionRouting,
+} from "./dm-thread-session.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import {
   buildTelegramStatusReactionVariants,
@@ -257,12 +262,31 @@ export const buildTelegramMessageContext = async ({
     isGroup,
     senderId,
   });
-  // DMs: use thread suffix for session isolation (works regardless of dmScope)
-  const threadKeys =
+  const dmThreadSession =
     dmThreadId != null && !hasExplicitDmTopicBinding
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
+      ? resolveTelegramDmThreadSessionRouting({
+          baseSessionKey,
+          chatId,
+          senderId,
+          threadId: dmThreadId,
+        })
       : null;
-  const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
+  const sessionKey = dmThreadSession?.sessionKey ?? baseSessionKey;
+  if (dmThreadSession?.legacySessionKeys.length) {
+    const storePath = resolveStorePath(freshCfg.session?.store, {
+      agentId: route.agentId,
+    });
+    // Older DM topic sessions used chat.id-derived suffixes. Migrate them onto
+    // the sender-derived canonical key before generic session init runs so
+    // /model, /status, and normal turns all read the same entry.
+    await updateSessionStore(storePath, (store) => {
+      migrateTelegramDmThreadStoreEntry({
+        store,
+        sessionKey: dmThreadSession.sessionKey,
+        legacySessionKeys: dmThreadSession.legacySessionKeys,
+      });
+    });
+  }
   route = {
     ...route,
     sessionKey,

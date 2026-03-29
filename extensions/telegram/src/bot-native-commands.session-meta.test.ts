@@ -38,6 +38,9 @@ const persistentBindingMocks = vi.hoisted(() => ({
 const sessionMocks = vi.hoisted(() => ({
   recordSessionMetaFromInbound: vi.fn(),
   resolveStorePath: vi.fn(),
+  updateSessionStore: vi.fn(
+    async (_storePath: string, update: (store: Record<string, unknown>) => unknown) => update({}),
+  ),
 }));
 const replyMocks = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
@@ -62,10 +65,15 @@ vi.mock("../../../src/acp/persistent-bindings.js", async (importOriginal) => {
     ensureConfiguredAcpBindingSession: persistentBindingMocks.ensureConfiguredAcpBindingSession,
   };
 });
-vi.mock("../../../src/config/sessions.js", () => ({
-  recordSessionMetaFromInbound: sessionMocks.recordSessionMetaFromInbound,
-  resolveStorePath: sessionMocks.resolveStorePath,
-}));
+vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
+  return {
+    ...actual,
+    recordSessionMetaFromInbound: sessionMocks.recordSessionMetaFromInbound,
+    resolveStorePath: sessionMocks.resolveStorePath,
+    updateSessionStore: sessionMocks.updateSessionStore,
+  };
+});
 vi.mock("../../../src/pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn(async () => []),
 }));
@@ -338,6 +346,12 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
+    sessionMocks.updateSessionStore
+      .mockClear()
+      .mockImplementation(
+        async (_storePath: string, update: (store: Record<string, unknown>) => unknown) =>
+          update({}),
+      );
     replyMocks.dispatchReplyWithBufferedBlockDispatcher
       .mockClear()
       .mockResolvedValue(dispatchReplyResult);
@@ -373,7 +387,30 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       >
     )[0]?.[0];
     expect(dispatchCall?.ctx?.MessageThreadId).toBe(42);
-    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:main:main:thread:100:42");
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:main:main:thread:200:42");
+  });
+
+  it("routes DM topic slash commands on the sender-derived peer when chat id is a wrapper", async () => {
+    const cfg: OpenClawConfig = {};
+    const { handler } = registerAndResolveStatusHandler({ cfg, allowFrom: ["200"] });
+    await handler({
+      match: "",
+      message: {
+        message_id: 4,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: 777777777, type: "private" as const },
+        direct_messages_topic: { topic_id: 42 },
+        from: { id: 200, username: "bob" },
+      },
+    });
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string; MessageThreadId?: number } }]
+      >
+    ).at(-1)?.[0];
+    expect(dispatchCall?.ctx?.MessageThreadId).toBe(42);
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:main:main:thread:200:42");
   });
 
   it("delivers native DM topic model replies with the target thread session key", async () => {
@@ -405,7 +442,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     const deliveredCall = deliveryMocks.deliverReplies.mock.calls[0]?.[0] as
       | DeliverRepliesParams
       | undefined;
-    expect(deliveredCall?.sessionKeyForInternalHooks).toBe("agent:main:main:thread:100:42");
+    expect(deliveredCall?.sessionKeyForInternalHooks).toBe("agent:main:main:thread:200:42");
     expect(deliveredCall?.thread?.id).toBe(42);
   });
 
