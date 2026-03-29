@@ -24,6 +24,7 @@ type TelegramDirectMessagesTopicPayload = {
 
 type TelegramReplyHeaderPayload = {
   forum_topic?: boolean;
+  reply_to_msg_id?: number | string | null;
   reply_to_top_id?: number | string | null;
 } | null;
 
@@ -94,11 +95,21 @@ export function resolveTelegramInboundThreadId(
     return replyDmTopicThreadId;
   }
   // Some MTProto-originated payloads surface only reply header metadata.
-  const fallbackReplyTopId =
-    message.reply_to?.forum_topic === true
-      ? normalizeTelegramInboundThreadId(message.reply_to?.reply_to_top_id)
-      : undefined;
-  return fallbackReplyTopId;
+  // Forum topics set forum_topic=true. DM topics can omit that flag but still
+  // preserve reply_to_top_id pointing at the topic anchor while reply_to_msg_id
+  // targets the immediate parent message. Treat that split as a DM-topic hint.
+  const replyTopId = normalizeTelegramInboundThreadId(message.reply_to?.reply_to_top_id);
+  if (replyTopId == null) {
+    return undefined;
+  }
+  if (message.reply_to?.forum_topic === true) {
+    return replyTopId;
+  }
+  const replyMsgId = normalizeTelegramInboundThreadId(message.reply_to?.reply_to_msg_id);
+  if (replyMsgId != null && replyMsgId !== replyTopId) {
+    return replyTopId;
+  }
+  return undefined;
 }
 
 export async function resolveTelegramGroupAllowFromContext(params: {
