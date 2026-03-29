@@ -216,53 +216,82 @@ function extractQrLines(rawLog: string): string[] | null {
       break;
     }
   }
-  return qrLines.length >= 10 ? qrLines : null;
+  if (qrLines.length < 10) {
+    return null;
+  }
+  const widthCounts = new Map<number, number>();
+  for (const line of qrLines) {
+    widthCounts.set(line.length, (widthCounts.get(line.length) ?? 0) + 1);
+  }
+  const dominantWidth =
+    [...widthCounts.entries()].sort(
+      (left, right) => right[1] - left[1] || right[0] - left[0],
+    )[0]?.[0] ?? 0;
+  const normalized = qrLines.filter((line) => Math.abs(line.length - dominantWidth) <= 1);
+  return normalized.length >= 10 ? normalized : qrLines;
 }
 
-function moduleBitsForChar(char: string): [boolean, boolean] {
+function isSolidBorder(line: string, allowed: ReadonlySet<string>) {
+  return [...line].every((char) => allowed.has(char));
+}
+
+function looksLikeCompleteQr(qrLines: string[]) {
+  if (qrLines.length < 20) {
+    return false;
+  }
+  const firstLine = qrLines[0] ?? "";
+  const secondLine = qrLines[1] ?? "";
+  const lastLine = qrLines.at(-1) ?? "";
+  return (
+    isSolidBorder(firstLine, new Set(["█"])) &&
+    isSolidBorder(secondLine, new Set(["█"])) &&
+    (isSolidBorder(lastLine, new Set(["█"])) || isSolidBorder(lastLine, new Set(["▀"])))
+  );
+}
+
+type BlockCell = {
+  top: boolean;
+  bottom: boolean;
+};
+
+function blockCellForChar(char: string): BlockCell {
   switch (char) {
     case "█":
-      return [true, true];
+      return { top: true, bottom: true };
     case "▀":
-      return [true, false];
+      return { top: true, bottom: false };
     case "▄":
-      return [false, true];
+      return { top: false, bottom: true };
     default:
-      return [false, false];
+      return { top: false, bottom: false };
   }
 }
 
 async function renderQrBlockPng(qrLines: string[], outputPath: string) {
   const width = Math.max(...qrLines.map((line) => line.length));
-  const moduleRows: boolean[][] = [];
-  for (const rawLine of qrLines) {
-    const padded = rawLine.padEnd(width, " ");
-    const topRow: boolean[] = [];
-    const bottomRow: boolean[] = [];
-    for (const char of padded) {
-      const [top, bottom] = moduleBitsForChar(char);
-      topRow.push(top);
-      bottomRow.push(bottom);
-    }
-    moduleRows.push(topRow, bottomRow);
-  }
-
-  const scale = 8;
-  const margin = 4;
-  const outputWidth = (width + margin * 2) * scale;
-  const outputHeight = (moduleRows.length + margin * 2) * scale;
+  const cellWidth = 8;
+  const cellHeight = 16;
+  const marginCells = 4;
+  const outputWidth = (width + marginCells * 2) * cellWidth;
+  const outputHeight = (qrLines.length + marginCells * 2) * cellHeight;
   const rgba = Buffer.alloc(outputWidth * outputHeight * 4, 255);
 
-  for (let row = 0; row < moduleRows.length; row += 1) {
+  for (let row = 0; row < qrLines.length; row += 1) {
+    const padded = (qrLines[row] ?? "").padEnd(width, " ");
     for (let col = 0; col < width; col += 1) {
-      if (!moduleRows[row]?.[col]) {
+      const cell = blockCellForChar(padded[col] ?? " ");
+      if (!cell.top && !cell.bottom) {
         continue;
       }
-      const startX = (col + margin) * scale;
-      const startY = (row + margin) * scale;
-      for (let y = 0; y < scale; y += 1) {
+      const startX = (col + marginCells) * cellWidth;
+      const startY = (row + marginCells) * cellHeight;
+      for (let y = 0; y < cellHeight; y += 1) {
+        const inTopHalf = y < cellHeight / 2;
+        if ((inTopHalf && !cell.top) || (!inTopHalf && !cell.bottom)) {
+          continue;
+        }
         const pixelY = startY + y;
-        for (let x = 0; x < scale; x += 1) {
+        for (let x = 0; x < cellWidth; x += 1) {
           const pixelX = startX + x;
           fillPixel(rgba, pixelX, pixelY, outputWidth, 0, 0, 0, 255);
         }
@@ -501,6 +530,9 @@ async function workerCommand(flags: Map<string, string | boolean>) {
     }
     const qrLines = extractQrLines(fullLog);
     if (!qrLines) {
+      return;
+    }
+    if (!looksLikeCompleteQr(qrLines)) {
       return;
     }
     qrWritten = true;
