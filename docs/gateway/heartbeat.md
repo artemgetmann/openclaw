@@ -49,7 +49,7 @@ Example config:
 
 - Interval: `30m` (or `1h` when Anthropic OAuth/setup-token is the detected auth mode). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`):
-  `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+  `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Heartbeat is for conservative, low-frequency ambient awareness only; do not invent or store ad hoc monitors here. For reminders, exact scheduled checks, or explicit watches on an inbox, thread, or person until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.`
 - The heartbeat prompt is sent **verbatim** as the user message. The system
   prompt includes a “Heartbeat” section and the run is flagged internally.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone.
@@ -57,17 +57,18 @@ Example config:
 
 ## What the heartbeat prompt is for
 
-The default prompt is intentionally broad:
+The default prompt is intentionally conservative:
 
-- **Background tasks**: “Consider outstanding tasks” nudges the agent to review
-  follow-ups (inbox, calendar, reminders, queued work) and surface anything urgent.
-- **Human check-in**: “Checkup sometimes on your human during day time” nudges an
-  occasional lightweight “anything you need?” message, but avoids night-time spam
-  by using your configured local timezone (see [/concepts/timezone](/concepts/timezone)).
+- **Ambient awareness only**: heartbeat is for broad, low-frequency sweeps that
+  surface something important, not the default engine for explicit monitors.
+- **No ad hoc monitor pileup**: reminders and scoped watches like “monitor this
+  inbox/thread/person until something happens” should normally become cron jobs instead.
+- **Approval-oriented follow-up**: if heartbeat suggests deeper work or a new
+  recurring monitor, the model should ask before expanding scope.
 
-If you want a heartbeat to do something very specific (e.g. “check Gmail PubSub
-stats” or “verify gateway health”), set `agents.defaults.heartbeat.prompt` (or
-`agents.list[].heartbeat.prompt`) to a custom body (sent verbatim).
+If you want a heartbeat to do something specific, keep it broad and stable (for
+example “do one daily sweep and only alert me if something materially changed”).
+For exact schedules or explicit ongoing monitors, use cron instead.
 
 ## Response contract
 
@@ -97,7 +98,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
         target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "bluebubbles")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id
-        prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+        prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Heartbeat is for conservative, low-frequency ambient awareness only; do not invent or store ad hoc monitors here. For reminders, exact scheduled checks, or explicit watches on an inbox, thread, or person until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.",
         ackMaxChars: 300, // max chars allowed after HEARTBEAT_OK
       },
     },
@@ -138,7 +139,7 @@ Example: two agents, only the second agent runs heartbeats.
           every: "1h",
           target: "whatsapp",
           to: "+15551234567",
-          prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+          prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Heartbeat is for conservative, low-frequency ambient awareness only; do not invent or store ad hoc monitors here. For reminders, exact scheduled checks, or explicit watches on an inbox, thread, or person until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.",
         },
       },
     ],
@@ -319,23 +320,23 @@ channels:
 ## HEARTBEAT.md (optional)
 
 If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the
-agent to read it. Think of it as your “heartbeat checklist”: small, stable, and
-safe to include every 30 minutes.
+agent to read it. Think of it as a tiny ambient-awareness checklist: small,
+stable, and safe to include on a low-frequency cadence.
 
 If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown
 headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
 If the file is missing, the heartbeat still runs and the model decides what to do.
 
-Keep it tiny (short checklist or reminders) to avoid prompt bloat.
+Keep it tiny and stable. Do not turn it into a dumping ground for reminders or
+explicit inbox/thread/person monitors; those belong in cron.
 
 Example `HEARTBEAT.md`:
 
 ```md
 # Heartbeat checklist
 
-- Quick scan: anything urgent in inboxes?
-- If it’s daytime, do a lightweight check-in if nothing else is pending.
-- If a task is blocked, write down _what is missing_ and ask Peter next time.
+- Once each morning, do one broad sweep of my world and only alert me if something materially important stands out.
+- If a deeper recurring monitor would help, suggest one cron job with a cadence, stop condition, and expiry first. Otherwise reply HEARTBEAT_OK.
 ```
 
 ### Can the agent update HEARTBEAT.md?
@@ -345,8 +346,8 @@ Yes — if you ask it to.
 `HEARTBEAT.md` is just a normal file in the agent workspace, so you can tell the
 agent (in a normal chat) something like:
 
-- “Update `HEARTBEAT.md` to add a daily calendar check.”
-- “Rewrite `HEARTBEAT.md` so it’s shorter and focused on inbox follow-ups.”
+- “Update `HEARTBEAT.md` to keep it as one daily broad sweep.”
+- “Rewrite `HEARTBEAT.md` so it stops acting like a monitor list.”
 
 If you want this to happen proactively, you can also include an explicit line in
 your heartbeat prompt like: “If the checklist becomes stale, update HEARTBEAT.md

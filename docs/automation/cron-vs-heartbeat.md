@@ -13,46 +13,50 @@ Both heartbeats and cron jobs let you run tasks on a schedule. This guide helps 
 
 ## Quick Decision Guide
 
-| Use Case                             | Recommended         | Why                                      |
-| ------------------------------------ | ------------------- | ---------------------------------------- |
-| Check inbox every 30 min             | Heartbeat           | Batches with other checks, context-aware |
-| Send daily report at 9am sharp       | Cron (isolated)     | Exact timing needed                      |
-| Monitor calendar for upcoming events | Heartbeat           | Natural fit for periodic awareness       |
-| Run weekly deep analysis             | Cron (isolated)     | Standalone task, can use different model |
-| Remind me in 20 minutes              | Cron (main, `--at`) | One-shot with precise timing             |
-| Background project health check      | Heartbeat           | Piggybacks on existing cycle             |
+| Use Case                                               | Recommended         | Why                                              |
+| ------------------------------------------------------ | ------------------- | ------------------------------------------------ |
+| Watch this inbox/thread/person until something happens | Cron                | Explicit scoped monitor; needs a stop rule       |
+| Send daily report at 9am sharp                         | Cron (isolated)     | Exact timing needed                              |
+| Remind me in 20 minutes                                | Cron (main, `--at`) | One-shot with precise timing                     |
+| Run weekly deep analysis                               | Cron (isolated)     | Standalone task, can use different model         |
+| Keep a general eye on my world and surface big changes | Heartbeat           | Broad ambient awareness, low-frequency is enough |
+| Do one daily broad sweep and only alert if it matters  | Heartbeat           | Conservative periodic awareness                  |
 
-## Heartbeat: Periodic Awareness
+## Heartbeat: Ambient Awareness
 
-Heartbeats run in the **main session** at a regular interval (default: 30 min). They're designed for the agent to check on things and surface anything important.
+Heartbeats run in the **main session** at a regular interval (default: 30 min). They are for optional, broad, low-frequency awareness that surfaces only what looks important.
 
 ### When to use heartbeat
 
-- **Multiple periodic checks**: Instead of 5 separate cron jobs checking inbox, calendar, weather, notifications, and project status, a single heartbeat can batch all of these.
-- **Context-aware decisions**: The agent has full main-session context, so it can make smart decisions about what's urgent vs. what can wait.
-- **Conversational continuity**: Heartbeat runs share the same session, so the agent remembers recent conversations and can follow up naturally.
-- **Low-overhead monitoring**: One heartbeat replaces many small polling tasks.
+- **Broad awareness**: “Keep a general eye on my world and only surface something important.”
+- **Low-frequency sweeps**: A daily or similarly conservative cadence is usually the right starting point.
+- **Small stable checklist**: `HEARTBEAT.md` should stay tiny, durable, and approval-oriented.
+- **Context-aware judgment**: The agent can use main-session context to decide whether something is worth surfacing.
+
+### When not to use heartbeat
+
+- **Explicit monitors**: “Watch this inbox/thread/person until something happens” should default to cron.
+- **Exact schedules**: “Run at 9:00 AM sharp” is cron.
+- **Forever-jobs by accident**: if the work needs a cadence, stop condition, or expiry/TTL, model it as cron instead of stuffing it into `HEARTBEAT.md`.
 
 ### Heartbeat advantages
 
-- **Batches multiple checks**: One agent turn can review inbox, calendar, and notifications together.
-- **Reduces API calls**: A single heartbeat is cheaper than 5 isolated cron jobs.
+- **Broad context**: The agent sees the main session and can judge importance.
+- **Low overhead**: A conservative heartbeat is cheaper than a pile of isolated jobs.
 - **Context-aware**: The agent knows what you've been working on and can prioritize accordingly.
 - **Smart suppression**: If nothing needs attention, the agent replies `HEARTBEAT_OK` and no message is delivered.
-- **Natural timing**: Drifts slightly based on queue load, which is fine for most monitoring.
+- **Approval-oriented**: Good heartbeat behavior escalates first instead of quietly creating deeper recurring work.
 
-### Heartbeat example: HEARTBEAT.md checklist
+### Heartbeat example: safe `HEARTBEAT.md`
 
 ```md
 # Heartbeat checklist
 
-- Check email for urgent messages
-- Review calendar for events in next 2 hours
-- If a background task finished, summarize results
-- If idle for 8+ hours, send a brief check-in
+- Once each morning, do one broad sweep of my world and only alert me if something materially important stands out.
+- If a deeper recurring monitor would help, suggest one cron job with a cadence, stop condition, and expiry first. Otherwise reply HEARTBEAT_OK.
 ```
 
-The agent reads this on each heartbeat and handles all items in one turn.
+The agent reads this on each heartbeat. Keep it broad and low-burn.
 
 ### Configuring heartbeat
 
@@ -72,7 +76,7 @@ The agent reads this on each heartbeat and handles all items in one turn.
 
 See [Heartbeat](/gateway/heartbeat) for full configuration.
 
-## Cron: Precise Scheduling
+## Cron: Reminders, Precise Schedules, and Explicit Monitors
 
 Cron jobs run at precise times and can run in isolated sessions without affecting main context.
 Recurring top-of-hour schedules are automatically spread by a deterministic
@@ -80,12 +84,14 @@ per-job offset in a 0-5 minute window.
 
 ### When to use cron
 
+- **Explicit scoped monitors**: “Watch this inbox/thread/person until something happens.”
 - **Exact timing required**: "Send this at 9:00 AM every Monday" (not "sometime around 9").
 - **Standalone tasks**: Tasks that don't need conversational context.
 - **Different model/thinking**: Heavy analysis that warrants a more powerful model.
 - **One-shot reminders**: "Remind me in 20 minutes" with `--at`.
 - **Noisy/frequent tasks**: Tasks that would clutter main session history.
 - **External triggers**: Tasks that should run independently of whether the agent is otherwise active.
+- **Bounded recurring checks**: When you can define cadence + stop condition + expiry/TTL instead of a forever-job.
 
 ### Cron advantages
 
@@ -98,6 +104,7 @@ per-job offset in a 0-5 minute window.
 - **Immediate delivery**: Announce mode posts directly without waiting for heartbeat.
 - **No agent context needed**: Runs even if main session is idle or compacted.
 - **One-shot support**: `--at` for precise future timestamps.
+- **Scoped monitor contract**: Better fit for “check every N until X happens, then stop.”
 
 ### Cron example: Daily morning briefing
 
@@ -115,6 +122,19 @@ openclaw cron add \
 ```
 
 This runs at exactly 7:00 AM New York time, uses Opus for quality, and announces a summary directly to WhatsApp.
+
+### Cron example: Explicit monitor
+
+```bash
+openclaw cron add \
+  --name "Recruiter reply watch" \
+  --every "2h" \
+  --session isolated \
+  --message "Check the recruiter thread. Only alert me if there is a new reply from Dana. Treat this as a temporary monitor, ask to keep it running if nothing happens after 3 days, and stop once a reply arrives." \
+  --announce
+```
+
+This is a cron case because it is an explicit scoped monitor with a cadence and stop rule.
 
 ### Cron example: One-shot reminder
 
@@ -137,41 +157,39 @@ Does the task need to run at an EXACT time?
   YES -> Use cron
   NO  -> Continue...
 
-Does the task need isolation from main session?
-  YES -> Use cron (isolated)
+Is this a reminder, exact scheduled task, or explicit monitor on a specific inbox/thread/person/condition?
+  YES -> Use cron
   NO  -> Continue...
 
-Can this task be batched with other periodic checks?
-  YES -> Use heartbeat (add to HEARTBEAT.md)
+Is the goal broad ambient awareness rather than a scoped monitor?
+  YES -> Continue...
+  NO  -> Use cron
+
+Would a conservative low-frequency sweep be enough?
+  YES -> Use heartbeat (add a tiny stable item to HEARTBEAT.md)
   NO  -> Use cron
 
 Is this a one-shot reminder?
   YES -> Use cron with --at
-  NO  -> Continue...
-
-Does it need a different model or thinking level?
-  YES -> Use cron (isolated) with --model/--thinking
-  NO  -> Use heartbeat
+  NO  -> Keep the heartbeat broad and approval-oriented
 ```
 
 ## Combining Both
 
 The most efficient setup uses **both**:
 
-1. **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
-2. **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders.
+1. **Heartbeat** handles broad ambient awareness on a conservative cadence.
+2. **Cron** handles reminders, precise schedules, and explicit monitors with clear boundaries.
 
 ### Example: Efficient automation setup
 
-**HEARTBEAT.md** (checked every 30 min):
+**HEARTBEAT.md** (checked on a conservative cadence):
 
 ```md
 # Heartbeat checklist
 
-- Scan inbox for urgent emails
-- Check calendar for events in next 2h
-- Review any pending tasks
-- Light check-in if quiet for 8+ hours
+- Once each morning, do one broad sweep of my world and only alert me if something materially important stands out.
+- If a deeper recurring monitor would help, suggest one cron job with a cadence, stop condition, and expiry first. Otherwise reply HEARTBEAT_OK.
 ```
 
 **Cron jobs** (precise timing):
@@ -275,7 +293,8 @@ openclaw cron add \
 **Tips**:
 
 - Keep `HEARTBEAT.md` small to minimize token overhead.
-- Batch similar checks into heartbeat instead of multiple cron jobs.
+- Use heartbeat for broad ambient awareness, not as a bucket for every recurring monitor idea.
+- Use cron when the job needs a cadence, stop condition, or expiry/TTL.
 - Use `target: "none"` on heartbeat if you only want internal processing.
 - Use isolated cron with a cheaper model for routine tasks.
 

@@ -9,4 +9,16 @@ read_when:
 
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
 
-# Add tasks below when you want the agent to check something periodically.
+# Heartbeat is for broad, low-frequency awareness. Do not use it as the default
+
+# home for reminders or explicit inbox/thread/person monitors.
+
+# Prefer cron for reminders, exact scheduled checks, or "watch this until X happens".
+
+#
+
+# Safe example to try:
+
+# - Once each morning, do one broad sweep of my world and only alert me if something looks important.
+
+# - If a deeper recurring monitor would help, suggest one cron job with a cadence, stop condition, and expiry first. Otherwise reply HEARTBEAT_OK.
