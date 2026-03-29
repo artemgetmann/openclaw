@@ -1655,7 +1655,7 @@ export const registerTelegramHandlers = ({
                   });
                 }
               },
-              { activeSessionKey: sessionKey },
+              { activeSessionKey: sessionState.sessionKey },
             );
 
             // Update message to show success with visual feedback
