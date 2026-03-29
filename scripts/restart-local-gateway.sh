@@ -21,15 +21,7 @@ fi
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$RAW_INSTANCE_ID")"
 if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
-  export OPENCLAW_CONSUMER_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-$NORMALIZED_INSTANCE_ID}"
-  export OPENCLAW_PROFILE="${OPENCLAW_PROFILE:-$(consumer_instance_profile "$NORMALIZED_INSTANCE_ID")}"
-  export OPENCLAW_HOME="${OPENCLAW_HOME:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")}"
-  export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")}"
-  export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$(consumer_instance_config_path "$NORMALIZED_INSTANCE_ID")}"
-  export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-$(consumer_instance_gateway_port "$NORMALIZED_INSTANCE_ID")}"
-  export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
-  export OPENCLAW_LOG_DIR="${OPENCLAW_LOG_DIR:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")/logs}"
-  export OPENCLAW_LAUNCHD_LABEL="${OPENCLAW_LAUNCHD_LABEL:-$(consumer_instance_gateway_launchd_label "$NORMALIZED_INSTANCE_ID")}"
+  consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
 fi
 
 LAUNCHD_DOMAIN="gui/${UID}"
@@ -97,12 +89,18 @@ EOF
   echo "Helper log: ${HELPER_LOG_PATH}"
 }
 
-# Reinstall the shared service from the canonical repo entrypoint itself. Using
+# Reinstall the lane-local service from this worktree entrypoint itself. Using
 # the wrapper/legacy daemon alias here leaves room for whichever launch context
-# invoked the script to influence the resolved service target, which is how the
-# shared LaunchAgent keeps drifting back to ~/.openclaw. We want one legal
-# owner for ai.openclaw.gateway: the canonical repo dist/index.js.
-"$NODE" "$EXPECTED_ENTRY" gateway install --force --allow-shared-service-takeover --runtime node >/dev/null
+# invoked the script to influence the resolved service target, which is how a
+# consumer lane keeps the right label but drifts onto the wrong port/state.
+# Installing from dist/index.js with the instance-derived env above gives
+# launchd one unambiguous source of truth for this lane.
+launchctl bootout "$LAUNCHD_TARGET" >/dev/null 2>&1 || true
+INSTALL_PORT_ARGS=()
+if [[ -n "${OPENCLAW_GATEWAY_PORT:-}" ]]; then
+  INSTALL_PORT_ARGS=(--port "$OPENCLAW_GATEWAY_PORT")
+fi
+"$NODE" "$EXPECTED_ENTRY" gateway install --force --allow-shared-service-takeover --runtime node "${INSTALL_PORT_ARGS[@]}" >/dev/null
 
 if is_self_restart_context; then
   schedule_detached_restart
@@ -117,7 +115,10 @@ launchctl kickstart -k "$LAUNCHD_TARGET" >/dev/null
 
 STATUS=""
 for _ in {1..20}; do
-  STATUS="$("$NODE" "$CLI" daemon status)"
+  # `gateway status` now exits non-zero on lane drift, which is exactly what we
+  # want after the final restart. During the warm-up loop we still want the text
+  # output so we can wait for the listener to settle instead of bailing early.
+  STATUS="$("$NODE" "$CLI" gateway status --deep 2>&1 || true)"
   if printf '%s\n' "$STATUS" | grep -Fq "RPC probe: ok"; then
     break
   fi
@@ -140,5 +141,65 @@ if ! printf '%s\n' "$STATUS" | grep -Fq "RPC probe: ok"; then
   echo "ERROR: gateway did not become healthy (RPC probe not ok)." >&2
   exit 1
 fi
+
+STATUS_JSON="$("$NODE" "$CLI" gateway status --deep --json)"
+STATUS_JSON="$STATUS_JSON" \
+EXPECTED_ENTRY="$EXPECTED_ENTRY" \
+EXPECTED_PORT="${OPENCLAW_GATEWAY_PORT:-}" \
+EXPECTED_STATE_DIR="${OPENCLAW_STATE_DIR:-}" \
+EXPECTED_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-}" \
+node <<'EOF'
+const status = JSON.parse(process.env.STATUS_JSON ?? "{}");
+const expectedEntry = process.env.EXPECTED_ENTRY ?? "";
+const expectedPortRaw = process.env.EXPECTED_PORT ?? "";
+const expectedStateDir = process.env.EXPECTED_STATE_DIR ?? "";
+const expectedConfigPath = process.env.EXPECTED_CONFIG_PATH ?? "";
+const expectedPort = expectedPortRaw ? Number(expectedPortRaw) : null;
+const args = status?.service?.command?.programArguments;
+const env = status?.service?.command?.environment ?? {};
+
+if (!Array.isArray(args) || !args.includes(expectedEntry)) {
+  console.error(`ERROR: gateway is not pinned to local fork entry: ${expectedEntry}`);
+  process.exit(1);
+}
+
+if (expectedPort !== null && status?.gateway?.port !== expectedPort) {
+  console.error(
+    `ERROR: gateway service port mismatch after restart (expected ${expectedPort}, got ${status?.gateway?.port ?? "unknown"}).`,
+  );
+  process.exit(1);
+}
+
+if (
+  expectedPort !== null &&
+  Number(env.OPENCLAW_GATEWAY_PORT ?? "0") !== expectedPort
+) {
+  console.error(
+    `ERROR: launchd environment drifted after restart (expected OPENCLAW_GATEWAY_PORT=${expectedPort}, got ${env.OPENCLAW_GATEWAY_PORT ?? "unset"}).`,
+  );
+  process.exit(1);
+}
+
+if (status?.portMismatch) {
+  console.error(
+    `ERROR: status still reports a lane-local port mismatch (service ${status.portMismatch.servicePort}, expected ${status.portMismatch.expectedPort}).`,
+  );
+  process.exit(1);
+}
+
+if (expectedStateDir && env.OPENCLAW_STATE_DIR !== expectedStateDir) {
+  console.error(
+    `ERROR: launchd state dir drifted after restart (expected ${expectedStateDir}, got ${env.OPENCLAW_STATE_DIR ?? "unset"}).`,
+  );
+  process.exit(1);
+}
+
+if (expectedConfigPath && env.OPENCLAW_CONFIG_PATH !== expectedConfigPath) {
+  console.error(
+    `ERROR: launchd config path drifted after restart (expected ${expectedConfigPath}, got ${env.OPENCLAW_CONFIG_PATH ?? "unset"}).`,
+  );
+  process.exit(1);
+}
+EOF
 
 echo "OK: gateway pinned to local fork entry."

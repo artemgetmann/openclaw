@@ -209,3 +209,32 @@ consumer_instance_gateway_launchd_label() {
   fi
   printf 'ai.openclaw.consumer.%s.gateway' "$normalized"
 }
+
+consumer_instance_apply_runtime_env() {
+  local normalized="${1:-}"
+  if [[ -z "$normalized" ]]; then
+    return 0
+  fi
+
+  local state_dir
+  state_dir="$(consumer_instance_state_dir "$normalized")"
+
+  # Consumer lanes must derive runtime ownership from the instance id alone.
+  # If a caller leaves stale OPENCLAW_* overrides in the shell, commands like
+  # `browser profiles` can drift onto the wrong gateway while status still
+  # reports the LaunchAgent for this lane. Pin every runtime selector here so
+  # the wrapper, service install, and status flow all share one source of truth.
+  export OPENCLAW_CONSUMER_INSTANCE_ID="$normalized"
+  export OPENCLAW_PROFILE="$(consumer_instance_profile "$normalized")"
+  export OPENCLAW_HOME="$state_dir"
+  export OPENCLAW_STATE_DIR="$state_dir"
+  export OPENCLAW_CONFIG_PATH="$(consumer_instance_config_path "$normalized")"
+  export OPENCLAW_GATEWAY_PORT="$(consumer_instance_gateway_port "$normalized")"
+  export OPENCLAW_GATEWAY_BIND="loopback"
+  export OPENCLAW_LOG_DIR="${state_dir}/logs"
+  export OPENCLAW_LAUNCHD_LABEL="$(consumer_instance_gateway_launchd_label "$normalized")"
+}
+
+consumer_instance_export_runtime_env() {
+  consumer_instance_apply_runtime_env "$@"
+}

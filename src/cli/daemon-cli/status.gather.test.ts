@@ -156,6 +156,23 @@ describe("gatherDaemonStatus", () => {
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.DAEMON_GATEWAY_TOKEN;
     delete process.env.DAEMON_GATEWAY_PASSWORD;
+    resolveGatewayPort.mockReset();
+    resolveGatewayPort.mockImplementation((_cfg?: unknown, _env?: unknown) => 18789);
+    inspectPortUsage.mockReset();
+    inspectPortUsage.mockImplementation(async (port: number) => ({
+      port,
+      status: "free" as const,
+      listeners: [],
+      hints: [],
+    }));
+    serviceReadCommand.mockReset();
+    serviceReadCommand.mockImplementation(async (_env?: NodeJS.ProcessEnv) => ({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+      },
+    }));
     callGatewayStatusProbe.mockClear();
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
@@ -482,6 +499,89 @@ describe("gatherDaemonStatus", () => {
     expect(status.health).toEqual({
       healthy: false,
       staleGatewayPids: [9000],
+    });
+  });
+
+  it("reports a lane-local port mismatch when the service and CLI resolve different ports", async () => {
+    resolveGatewayPort.mockImplementation((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
+      return env?.OPENCLAW_GATEWAY_PORT === "19001" ? 19001 : 35624;
+    });
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "19001",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+      },
+    });
+    inspectPortUsage.mockImplementation(async (port: number) => ({
+      port,
+      status: port === 19001 ? ("busy" as const) : ("free" as const),
+      listeners: [],
+      hints: [],
+    }));
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.gateway).toMatchObject({
+      port: 19001,
+      portSource: "service args",
+    });
+    expect(status.portCli).toMatchObject({
+      port: 35624,
+      status: "free",
+    });
+    expect(status.portMismatch).toEqual({
+      servicePort: 19001,
+      servicePortSource: "service args",
+      expectedPort: 35624,
+      expectedPortStatus: "free",
+      serviceStateDir: "/tmp/openclaw-daemon",
+      expectedStateDir: "/tmp/openclaw-cli",
+      serviceConfigPath: "/tmp/openclaw-daemon/openclaw.json",
+      expectedConfigPath: "/tmp/openclaw-cli/openclaw.json",
+      issues: [
+        "service port=19001, cli port=35624",
+        "service state dir=/tmp/openclaw-daemon, cli state dir=/tmp/openclaw-cli",
+        "service config=/tmp/openclaw-daemon/openclaw.json, cli config=/tmp/openclaw-cli/openclaw.json",
+      ],
+    });
+  });
+
+  it("reports runtime drift when the service keeps the same port but a different state dir", async () => {
+    resolveGatewayPort.mockImplementation((_cfg?: unknown, _env?: NodeJS.ProcessEnv) => 19001);
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "19001",
+        OPENCLAW_CONFIG_PATH: "/tmp/another-daemon/openclaw.json",
+        OPENCLAW_STATE_DIR: "/tmp/another-daemon",
+      },
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.portMismatch).toEqual({
+      servicePort: 19001,
+      servicePortSource: "service args",
+      expectedPort: 19001,
+      expectedPortStatus: "free",
+      serviceStateDir: "/tmp/another-daemon",
+      expectedStateDir: "/tmp/openclaw-cli",
+      serviceConfigPath: "/tmp/another-daemon/openclaw.json",
+      expectedConfigPath: "/tmp/openclaw-cli/openclaw.json",
+      issues: [
+        "service state dir=/tmp/another-daemon, cli state dir=/tmp/openclaw-cli",
+        "service config=/tmp/another-daemon/openclaw.json, cli config=/tmp/openclaw-cli/openclaw.json",
+      ],
     });
   });
 });
