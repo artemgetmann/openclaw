@@ -5,6 +5,12 @@ import Observation
 @Observable
 final class GatewayProcessManager {
     static let shared = GatewayProcessManager()
+    // Real launchd restarts on this machine routinely take 13-14s because the gateway
+    // may regenerate auth config and then bootstrap channels before the health RPC
+    // answers again. A 6s deadline turns successful restarts into fake "not connecting"
+    // errors in the app, so keep one explicit, shared readiness budget here.
+    static let gatewayReadinessTimeout: TimeInterval = 20
+    private static let readinessPollIntervalNanos: UInt64 = 400_000_000
 
     enum Status: Equatable {
         case stopped
@@ -148,7 +154,7 @@ final class GatewayProcessManager {
 
         // A restart keeps launchd ownership intact, so only wait for the daemon to
         // come back and reattach to the existing service instead of reinstalling it.
-        let deadline = Date().addingTimeInterval(6)
+        let deadline = Date().addingTimeInterval(Self.gatewayReadinessTimeout)
         while Date() < deadline {
             if !self.desiredActive { return }
             do {
@@ -166,7 +172,7 @@ final class GatewayProcessManager {
                 self.refreshLog()
                 return
             } catch {
-                try? await Task.sleep(nanoseconds: 400_000_000)
+                try? await Task.sleep(nanoseconds: Self.readinessPollIntervalNanos)
             }
         }
 
@@ -386,7 +392,7 @@ final class GatewayProcessManager {
         }
 
         // Best-effort: wait for the gateway to accept connections.
-        let deadline = Date().addingTimeInterval(6)
+        let deadline = Date().addingTimeInterval(Self.gatewayReadinessTimeout)
         while Date() < deadline {
             if !self.desiredActive { return }
             do {
@@ -400,7 +406,7 @@ final class GatewayProcessManager {
                 self.refreshLog()
                 return
             } catch {
-                try? await Task.sleep(nanoseconds: 400_000_000)
+                try? await Task.sleep(nanoseconds: Self.readinessPollIntervalNanos)
             }
         }
 
@@ -428,7 +434,7 @@ final class GatewayProcessManager {
         Task { await ControlChannel.shared.configure() }
     }
 
-    func waitForGatewayReady(timeout: TimeInterval = 6) async -> Bool {
+    func waitForGatewayReady(timeout: TimeInterval = GatewayProcessManager.gatewayReadinessTimeout) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if !self.desiredActive { return false }
@@ -437,7 +443,7 @@ final class GatewayProcessManager {
                 self.clearLastFailure()
                 return true
             } catch {
-                try? await Task.sleep(nanoseconds: 300_000_000)
+                try? await Task.sleep(nanoseconds: Self.readinessPollIntervalNanos)
             }
         }
         self.appendLog("[gateway] readiness wait timed out\n")

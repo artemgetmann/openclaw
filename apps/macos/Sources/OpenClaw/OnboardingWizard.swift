@@ -80,7 +80,9 @@ final class OnboardingWizardModel {
 
         do {
             GatewayProcessManager.shared.setActive(true)
-            if await GatewayProcessManager.shared.waitForGatewayReady(timeout: 12) == false {
+            if await GatewayProcessManager.shared.waitForGatewayReady(
+                timeout: GatewayProcessManager.gatewayReadinessTimeout) == false
+            {
                 throw NSError(
                     domain: "Gateway",
                     code: 1,
