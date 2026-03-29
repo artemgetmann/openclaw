@@ -84,6 +84,7 @@ title: "Thinking Levels"
 ## Heartbeats
 
 - Heartbeat probe body is the configured heartbeat prompt (default: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, and project status), not for inventing or storing ad hoc scoped monitors. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
+- That default still allows broad heartbeat sweeps like inbox/calendar/project-status checks when the user wants them; it only pushes exact schedules and explicit watch-until-X monitors toward cron.
 - Heartbeat delivery defaults to the final payload only. To also send the separate `Reasoning:` message (when available), set `agents.defaults.heartbeat.includeReasoning: true` or per-agent `agents.list[].heartbeat.includeReasoning: true`.
 
 ## Web chat UI
