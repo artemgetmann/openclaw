@@ -168,6 +168,7 @@ describe("stripHeartbeatToken", () => {
 
 describe("isHeartbeatContentEffectivelyEmpty", () => {
   it("keeps the default heartbeat prompt conservative about monitor scope", () => {
+    expect(HEARTBEAT_PROMPT).toContain("Do not infer or repeat old tasks from prior chats");
     expect(HEARTBEAT_PROMPT).toContain("broad ambient awareness and periodic sweeps");
     expect(HEARTBEAT_PROMPT).toContain("not for inventing or storing ad hoc scoped monitors");
     expect(HEARTBEAT_PROMPT).toContain("prefer cron with a cadence, stop condition, and expiry");
