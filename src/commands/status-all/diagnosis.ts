@@ -113,7 +113,7 @@ export async function appendStatusAllDiagnosis(params: {
       "warn",
     );
     lines.push(
-      `  ${muted(`Fix: remove ${shortenHomePath(params.macLaunchAgentDisableMarkerPath)} and restart the main gateway.`)}`,
+      `  ${muted(`Fix: remove ${shortenHomePath(params.macLaunchAgentDisableMarkerPath)} and restart the affected app/gateway.`)}`,
     );
   }
 

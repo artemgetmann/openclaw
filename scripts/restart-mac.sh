@@ -17,7 +17,11 @@ NO_SIGN=0
 SIGN=0
 AUTO_DETECT_SIGNING=1
 GATEWAY_WAIT_SECONDS="${OPENCLAW_GATEWAY_WAIT_SECONDS:-0}"
-LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
+LAUNCHAGENT_DISABLE_STATE_DIR="${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:+${OPENCLAW_HOME}/.openclaw}}"
+if [[ -z "${LAUNCHAGENT_DISABLE_STATE_DIR}" ]]; then
+  LAUNCHAGENT_DISABLE_STATE_DIR="${HOME}/.openclaw"
+fi
+LAUNCHAGENT_DISABLE_MARKER="${LAUNCHAGENT_DISABLE_STATE_DIR}/disable-launchagent"
 APP_SCOPE="self"
 RESTART_PROCESS_PATTERNS=()
 # Default to the normal launchd-owning path. Attach-only is a niche debugging
@@ -78,6 +82,22 @@ check_signing_keys() {
     | grep -Eq '(Developer ID Application|Apple Distribution|Apple Development)'
 }
 
+write_launchagent_disable_marker() {
+  local reason="$1"
+  mkdir -p "${LAUNCHAGENT_DISABLE_STATE_DIR}"
+  cat > "${LAUNCHAGENT_DISABLE_MARKER}" <<EOF
+{
+  "version": 1,
+  "disabledAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "source": "scripts/restart-mac.sh",
+  "reason": "${reason}",
+  "stateDir": "${LAUNCHAGENT_DISABLE_STATE_DIR}",
+  "worktree": "${ROOT_DIR}",
+  "pid": $$
+}
+EOF
+}
+
 trap cleanup EXIT INT TERM
 
 while [[ $# -gt 0 ]]; do
@@ -127,13 +147,19 @@ while [[ $# -gt 0 ]]; do
       log ""
       log "Env:"
       log "  OPENCLAW_GATEWAY_WAIT_SECONDS=0  Wait time before gateway port check (unsigned only)"
+      log "  OPENCLAW_STATE_DIR             Scope launchagent-disable marker to this runtime state dir"
       log ""
-      log "Unsigned recovery:"
+      log "Scoped alternatives:"
+      log "  bash scripts/dev-launch-mac.sh"
+      log "  bash scripts/open-consumer-mac-app.sh --instance <id>"
+      log "  pnpm openclaw:local gateway restart"
+      log ""
+      log "Unsigned recovery (shared service path):"
       log "  node dist/index.js gateway install --force --allow-shared-service-takeover --runtime node"
-      log "  node dist/index.js gateway restart"
+      log "  pnpm openclaw:local gateway restart"
       log ""
       log "Reset unsigned overrides:"
-      log "  rm ~/.openclaw/disable-launchagent"
+      log "  rm ${LAUNCHAGENT_DISABLE_MARKER}"
       log ""
       log "Default behavior: Auto-detect signing keys, fallback to --no-sign if none found"
       log "Default app scope: self (only the current app bundle and its gateway)"
@@ -201,6 +227,22 @@ resolve_restart_patterns() {
   RESTART_PROCESS_PATTERNS+=("${ROOT_DIR}/apps/macos/.build/release/OpenClaw")
 }
 
+restart_processes_remaining() {
+  local pattern=""
+
+  for pattern in "${RESTART_PROCESS_PATTERNS[@]}"; do
+    if [[ -n "${pattern}" ]] && pgrep -f "${pattern}" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+
+  if [[ "$APP_SCOPE" == "all" ]] && pgrep -x "OpenClaw" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
 kill_current_openclaw() {
   resolve_restart_patterns
 
@@ -222,27 +264,11 @@ kill_all_openclaw() {
   kill_current_openclaw
 }
 
-restart_processes_remaining() {
-  local pattern=""
-
-  for pattern in "${RESTART_PROCESS_PATTERNS[@]}"; do
-    if [[ -n "${pattern}" ]] && pgrep -f "${pattern}" >/dev/null 2>&1; then
-      return 0
-    fi
-  done
-
-  if [[ "$APP_SCOPE" == "all" ]] && pgrep -x "OpenClaw" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  return 1
-}
-
 stop_launch_agent() {
   launchctl bootout gui/"$UID"/ai.openclaw.mac 2>/dev/null || true
 }
 
-# 1) Kill all running instances first.
+# 1) Kill the selected running instances first.
 log "==> Killing existing OpenClaw instances (scope=${APP_SCOPE})"
 kill_all_openclaw
 stop_launch_agent
@@ -267,8 +293,7 @@ fi
 if [ "$NO_SIGN" -eq 1 ]; then
   export ALLOW_ADHOC_SIGNING=1
   export SIGN_IDENTITY="-"
-  mkdir -p "${HOME}/.openclaw"
-  run_step "disable launchagent writes" /usr/bin/touch "${LAUNCHAGENT_DISABLE_MARKER}"
+  run_step "disable launchagent writes" write_launchagent_disable_marker "unsigned-restart"
 elif [ "$SIGN" -eq 1 ]; then
   if ! check_signing_keys; then
     fail "No signing identity found. Use --no-sign or install a signing key."

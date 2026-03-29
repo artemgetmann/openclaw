@@ -228,4 +228,44 @@ extension GatewayLaunchAgentManagerTests {
         }
         return nil
     }
+
+    @Test func `disable marker is written inside active state dir with provenance`() async throws {
+        let stateDir = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
+        defer { try? FileManager().removeItem(at: stateDir.deletingLastPathComponent()) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+            let error = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(
+                true,
+                source: "GatewayLaunchAgentManagerTests",
+                reason: "unit-test")
+            #expect(error == nil)
+
+            let marker = stateDir.appendingPathComponent("disable-launchagent")
+            #expect(FileManager().fileExists(atPath: marker.path))
+
+            let data = try Data(contentsOf: marker)
+            let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(json["source"] as? String == "GatewayLaunchAgentManagerTests")
+            #expect(json["reason"] as? String == "unit-test")
+            #expect(json["stateDir"] as? String == stateDir.path)
+        }
+    }
+
+    @Test func `disable marker removal only clears active state dir`() async throws {
+        let stateDir = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
+        defer { try? FileManager().removeItem(at: stateDir.deletingLastPathComponent()) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+            _ = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(
+                true,
+                source: "GatewayLaunchAgentManagerTests",
+                reason: "unit-test")
+            let marker = stateDir.appendingPathComponent("disable-launchagent")
+            #expect(FileManager().fileExists(atPath: marker.path))
+
+            let error = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(false)
+            #expect(error == nil)
+            #expect(!FileManager().fileExists(atPath: marker.path))
+        }
+    }
 }

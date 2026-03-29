@@ -87,7 +87,10 @@ struct DebugSettings: View {
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Attach only (skip launchd install)", isOn: self.$launchAgentWriteDisabled)
                     .onChange(of: self.launchAgentWriteDisabled) { _, newValue in
-                        self.launchAgentWriteError = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(newValue)
+                        self.launchAgentWriteError = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(
+                            newValue,
+                            source: "apps/macos/Sources/OpenClaw/DebugSettings.swift",
+                            reason: newValue ? "Debug Settings toggle" : nil)
                         if self.launchAgentWriteError != nil {
                             self.launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
                             return
