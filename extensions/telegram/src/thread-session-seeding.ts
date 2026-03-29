@@ -7,11 +7,12 @@ import {
   updateSessionStore,
 } from "../../../src/config/sessions.js";
 import { buildAgentSessionKey } from "../../../src/routing/resolve-route.js";
-import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import { seedSessionEntryFromFutureThreadDefaults } from "../../../src/sessions/future-thread-defaults.js";
 import { resolveFutureThreadParentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { resolveTelegramDirectPeerId, resolveTelegramInboundThreadId } from "./bot/helpers.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import { resolveTelegramDmThreadSessionRouting } from "./dm-thread-session.js";
 
 type TelegramTopicCreateCarrier = {
   message_id?: number;
@@ -172,13 +173,16 @@ export async function seedTelegramThreadSessionOnTopicCreate(params: {
           identityLinks: params.cfg.session?.identityLinks,
         }).toLowerCase()
       : route.sessionKey;
-  const sessionKey =
+  const dmThreadSession =
     params.dmThreadId != null
-      ? resolveThreadSessionKeys({
+      ? resolveTelegramDmThreadSessionRouting({
           baseSessionKey,
-          threadId: `${params.chatId}:${params.dmThreadId}`,
-        }).sessionKey
-      : baseSessionKey;
+          chatId: params.chatId,
+          senderId: params.senderId,
+          threadId: params.dmThreadId,
+        })
+      : null;
+  const sessionKey = dmThreadSession?.sessionKey ?? baseSessionKey;
   const parentSessionKey = resolveFutureThreadParentSessionKey({
     sessionKey,
     channelHint: "telegram",
@@ -197,6 +201,11 @@ export async function seedTelegramThreadSessionOnTopicCreate(params: {
         parentSessionKey,
         childThreadId: replyThreadId,
       });
+      if (dmThreadSession?.legacySessionKeys.length) {
+        for (const legacyKey of dmThreadSession.legacySessionKeys) {
+          delete store[legacyKey];
+        }
+      }
       return result;
     },
     { activeSessionKey: sessionKey },

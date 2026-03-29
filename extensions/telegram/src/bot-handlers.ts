@@ -40,10 +40,7 @@ import {
 } from "../../../src/plugins/conversation-binding.js";
 import { dispatchPluginInteractiveHandler } from "../../../src/plugins/interactive.js";
 import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveThreadSessionKeys,
-} from "../../../src/routing/session-key.js";
+import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
 import { applyFutureThreadModelDefault } from "../../../src/sessions/future-thread-defaults.js";
 import { applyModelOverrideToSessionEntry } from "../../../src/sessions/model-overrides.js";
 import { resolveFutureThreadParentSessionKey } from "../../../src/sessions/session-key-utils.js";
@@ -78,6 +75,11 @@ import {
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
+import {
+  migrateTelegramDmThreadStoreEntry,
+  resolveTelegramDmThreadSessionRouting,
+  resolveTelegramDmThreadStoreEntry,
+} from "./dm-thread-session.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
@@ -321,6 +323,7 @@ export const registerTelegramHandlers = ({
     sessionKey?: string;
   }): {
     agentId: string;
+    legacySessionKeys?: string[];
     sessionEntry: ReturnType<typeof loadSessionStore>[string] | undefined;
     sessionKey: string;
     model?: string;
@@ -340,6 +343,7 @@ export const registerTelegramHandlers = ({
       if (storedOverride) {
         return {
           agentId,
+          legacySessionKeys: [],
           sessionEntry: entry,
           sessionKey: explicitSessionKey,
           model: storedOverride.provider
@@ -350,6 +354,7 @@ export const registerTelegramHandlers = ({
       const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId });
       return {
         agentId,
+        legacySessionKeys: [],
         sessionEntry: entry,
         sessionKey: explicitSessionKey,
         model: `${resolvedDefault.provider}/${resolvedDefault.model}`,
@@ -382,14 +387,25 @@ export const registerTelegramHandlers = ({
       isGroup: params.isGroup,
       senderId: params.senderId,
     });
-    const threadKeys =
+    const dmThreadSession =
       dmThreadId != null && !hasExplicitDmTopicBinding
-        ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
+        ? resolveTelegramDmThreadSessionRouting({
+            baseSessionKey,
+            chatId: params.chatId,
+            senderId: params.senderId,
+            threadId: dmThreadId,
+          })
         : null;
-    const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
+    const sessionKey = dmThreadSession?.sessionKey ?? baseSessionKey;
     const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
     const store = loadSessionStore(storePath);
-    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+    const entry = dmThreadSession
+      ? resolveTelegramDmThreadStoreEntry({
+          store,
+          sessionKey,
+          legacySessionKeys: dmThreadSession.legacySessionKeys,
+        }).existing
+      : resolveSessionStoreEntry({ store, sessionKey }).existing;
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,
       sessionStore: store,
@@ -398,6 +414,7 @@ export const registerTelegramHandlers = ({
     if (storedOverride) {
       return {
         agentId: route.agentId,
+        legacySessionKeys: dmThreadSession?.legacySessionKeys ?? [],
         sessionEntry: entry,
         sessionKey,
         model: storedOverride.provider
@@ -410,6 +427,7 @@ export const registerTelegramHandlers = ({
     if (provider && model) {
       return {
         agentId: route.agentId,
+        legacySessionKeys: dmThreadSession?.legacySessionKeys ?? [],
         sessionEntry: entry,
         sessionKey,
         model: `${provider}/${model}`,
@@ -418,6 +436,7 @@ export const registerTelegramHandlers = ({
     const modelCfg = cfg.agents?.defaults?.model;
     return {
       agentId: route.agentId,
+      legacySessionKeys: dmThreadSession?.legacySessionKeys ?? [],
       sessionEntry: entry,
       sessionKey,
       model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
@@ -1591,40 +1610,53 @@ export const registerTelegramHandlers = ({
               selection.provider === resolvedDefault.provider &&
               selection.model === resolvedDefault.model;
 
-            await updateSessionStore(storePath, (store) => {
-              const sessionKey = sessionState.sessionKey;
-              const entry = store[sessionKey] ?? {};
-              store[sessionKey] = entry;
-              applyModelOverrideToSessionEntry({
-                entry,
-                selection: {
-                  provider: selection.provider,
-                  model: selection.model,
-                  isDefault: isDefaultSelection,
-                },
-              });
-
-              // Model-picker callbacks bypass directive handling, so we must
-              // mirror the same "future thread default" write here. Without
-              // this, selecting a model inside a Telegram topic only updates
-              // the current topic and new sibling topics keep the old default.
-              const parentSessionKey = resolveFutureThreadParentSessionKey({
-                sessionKey,
-                channelHint: "telegram",
-              });
-              if (parentSessionKey) {
-                applyFutureThreadModelDefault({
-                  store,
-                  parentSessionKey,
+            await updateSessionStore(
+              storePath,
+              (store) => {
+                const sessionKey = sessionState.sessionKey;
+                const migratedSession =
+                  sessionState.legacySessionKeys && sessionState.legacySessionKeys.length > 0
+                    ? migrateTelegramDmThreadStoreEntry({
+                        store,
+                        sessionKey,
+                        legacySessionKeys: sessionState.legacySessionKeys,
+                      })
+                    : { normalizedKey: sessionKey, existing: store[sessionKey], migrated: false };
+                const effectiveSessionKey = migratedSession.normalizedKey;
+                const entry = migratedSession.existing ?? store[effectiveSessionKey] ?? {};
+                store[effectiveSessionKey] = entry;
+                applyModelOverrideToSessionEntry({
+                  entry,
                   selection: {
                     provider: selection.provider,
                     model: selection.model,
                     isDefault: isDefaultSelection,
                   },
-                  afterThreadId: messageThreadId ?? resolvedThreadId,
                 });
-              }
-            });
+
+                // Model-picker callbacks bypass directive handling, so we must
+                // mirror the same "future thread default" write here. Without
+                // this, selecting a model inside a Telegram topic only updates
+                // the current topic and new sibling topics keep the old default.
+                const parentSessionKey = resolveFutureThreadParentSessionKey({
+                  sessionKey: effectiveSessionKey,
+                  channelHint: "telegram",
+                });
+                if (parentSessionKey) {
+                  applyFutureThreadModelDefault({
+                    store,
+                    parentSessionKey,
+                    selection: {
+                      provider: selection.provider,
+                      model: selection.model,
+                      isDefault: isDefaultSelection,
+                    },
+                    afterThreadId: messageThreadId ?? resolvedThreadId,
+                  });
+                }
+              },
+              { activeSessionKey: sessionKey },
+            );
 
             // Update message to show success with visual feedback
             const actionText = isDefaultSelection
