@@ -17,6 +17,12 @@ scripts/restart-mac.sh --app-scope all   # explicitly kill every OpenClaw app pr
 
 Default scope is `self`, which only restarts the current app bundle and its gateway. Use `--app-scope all` only when you explicitly want to terminate other OpenClaw app instances on the machine.
 
+For linked worktrees, prefer the scoped launchers instead of relying on the shared app restart path:
+
+- `bash scripts/dev-launch-mac.sh`
+- `bash scripts/open-consumer-mac-app.sh --instance <id>`
+- `pnpm openclaw:local gateway restart`
+
 ## Packaging flow
 
 ```bash
@@ -27,23 +33,25 @@ Creates `dist/OpenClaw.app` and signs it via `scripts/codesign-mac-app.sh`.
 
 ## Consumer build
 
-To package an isolated consumer app that can coexist with the founder app on the same Mac:
+Use the guarded consumer wrappers instead of hand-setting env vars:
 
 ```bash
-APP_NAME="OpenClaw Consumer" \
-APP_BUNDLE_NAME="OpenClaw Consumer.app" \
-BUNDLE_ID="ai.openclaw.consumer.mac.debug" \
-APP_VARIANT=consumer \
-URL_SCHEME=openclaw-consumer \
-scripts/package-mac-app.sh
+bash scripts/package-consumer-mac-app.sh
+bash scripts/verify-consumer-mac-app.sh
+bash scripts/open-consumer-mac-app.sh
 ```
 
 This consumer flavor defaults to its own runtime identity:
 
 - bundle identifier: `ai.openclaw.consumer.mac.*`
-- state dir: `~/.openclaw-consumer`
+- state dir: `~/Library/Application Support/OpenClaw Consumer/.openclaw`
 - local gateway port: `19001`
 - launch labels: `ai.openclaw.consumer.*`
+
+If `verify-consumer-mac-app.sh` passes but `spctl` still rejects the app, that
+means the bundle assembly is fine and the remaining friction is distribution
+trust. Apple Development signing is enough for local/manual-trust demos, but
+broader distribution still needs Developer ID + notarization.
 
 ## Signing behavior
 

@@ -10,13 +10,41 @@ enum GatewayLaunchAgentManager {
     private nonisolated(unsafe) static var testRunDaemonCommandHook: ((_ args: [String], _ timeout: Double, _ quiet: Bool) async -> String?)?
     #endif
 
+    struct EntrypointOwnership: Equatable {
+        let expectedEntrypoint: String?
+        let actualEntrypoint: String?
+
+        var matchesCurrentEntrypoint: Bool {
+            guard let expectedEntrypoint else { return false }
+            return self.actualEntrypoint == expectedEntrypoint
+        }
+    }
+
+    private struct DisableMarkerMetadata: Encodable {
+        let version: Int
+        let disabledAt: String
+        let source: String
+        let reason: String?
+        let stateDir: String
+        let bundlePath: String?
+        let instanceID: String?
+        let pid: Int32
+    }
+
+    enum DesiredAction: Equatable {
+        case install
+        case start
+        case restart
+        case stop
+        case uninstall
+    }
+
     private static var disableLaunchAgentMarkerURL: URL {
         OpenClawPaths.stateDirURL.appendingPathComponent("disable-launchagent")
     }
 
     private static var plistURL: URL {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
+        ConsumerRuntime.gatewayLaunchAgentPlistURL
     }
 
     static func isLaunchAgentWriteDisabled() -> Bool {
@@ -29,16 +57,33 @@ enum GatewayLaunchAgentManager {
         return false
     }
 
-    static func setLaunchAgentWriteDisabled(_ disabled: Bool) -> String? {
+    private static func disableMarkerMetadata(source: String, reason: String?) -> DisableMarkerMetadata {
+        DisableMarkerMetadata(
+            version: 1,
+            disabledAt: ISO8601DateFormatter().string(from: Date()),
+            source: source,
+            reason: reason,
+            stateDir: OpenClawPaths.stateDirURL.path,
+            bundlePath: Bundle.main.bundleURL.path,
+            instanceID: ConsumerInstance.current.id,
+            pid: ProcessInfo.processInfo.processIdentifier)
+    }
+
+    static func setLaunchAgentWriteDisabled(
+        _ disabled: Bool,
+        source: String = "apps/macos/Sources/OpenClaw/GatewayLaunchAgentManager.swift",
+        reason: String? = nil) -> String?
+    {
         let marker = self.disableLaunchAgentMarkerURL
         if disabled {
             do {
                 try FileManager().createDirectory(
                     at: marker.deletingLastPathComponent(),
                     withIntermediateDirectories: true)
-                if !FileManager().fileExists(atPath: marker.path) {
-                    FileManager().createFile(atPath: marker.path, contents: nil)
-                }
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let payload = try encoder.encode(self.disableMarkerMetadata(source: source, reason: reason))
+                try payload.write(to: marker, options: [.atomic])
             } catch {
                 return error.localizedDescription
             }
@@ -72,44 +117,43 @@ enum GatewayLaunchAgentManager {
         }
 
         if enabled {
-            self.logger.info("launchd enable requested via CLI port=\(port)")
-            return await self.runDaemonCommand([
-                "install",
-                "--force",
-                "--allow-shared-service-takeover",
-                "--port",
-                "\(port)",
-                "--runtime",
-                "node",
-            ])
+            let action = await self.desiredEnableAction()
+            self.logger.info("launchd enable requested action=\(String(describing: action), privacy: .public) port=\(port)")
+            switch action {
+            case .restart:
+                if let error = await self.runServiceBringupCommand(["restart"], timeout: 20) {
+                    self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
+                } else {
+                    return nil
+                }
+            case .start:
+                if let error = await self.runServiceBringupCommand(["start"], timeout: 20) {
+                    self.logger.warning("launchd start failed; falling back to install: \(error, privacy: .public)")
+                } else {
+                    return nil
+                }
+            case .install, .stop, .uninstall:
+                break
+            }
+
+            return await self.install(port: port)
         }
 
-        self.logger.info("launchd disable requested via CLI")
-        return await self.runDaemonCommand(["uninstall"])
+        self.logger.info("launchd stop requested via CLI")
+        return await self.runDaemonCommand(["stop"], timeout: 20)
     }
 
     static func kickstart() async {
         _ = await self.runDaemonCommand(["restart"], timeout: 20)
     }
 
+    static func uninstall() async -> String? {
+        self.logger.info("launchd uninstall requested via CLI")
+        return await self.runDaemonCommand(["uninstall"], timeout: 20)
+    }
+
     static func restartOrStart(bundlePath: String, port: Int) async -> String? {
-        // Preserve the current shared LaunchAgent target whenever possible. A full
-        // uninstall/install can silently repoint the main gateway at whichever CLI
-        // binary the app resolved today, which is how an in-place restart drifts to
-        // an older ~/.openclaw install and breaks plugin/runtime compatibility.
-        let loaded = await self.readDaemonLoaded()
-        if loaded != false {
-            self.logger.info("launchd restart requested via CLI")
-            let restartError = await self.runDaemonCommand(["restart"], timeout: 20, quiet: loaded == nil)
-            if loaded == nil,
-               let restartError,
-               restartError.lowercased().contains("not loaded")
-            {
-                self.logger.info("launchd restart reported not loaded; falling back to install")
-            } else {
-                return restartError
-            }
-        }
+        _ = bundlePath
         return await self.set(enabled: true, bundlePath: bundlePath, port: port)
     }
 
@@ -130,6 +174,27 @@ enum GatewayLaunchAgentManager {
             return stderr
         }
         return LogLocator.launchdGatewayLogPath
+    }
+
+    static func currentEntrypointOwnership(snapshot: LaunchAgentPlistSnapshot? = nil) -> EntrypointOwnership {
+        let resolvedSnapshot = snapshot ?? self.launchdConfigSnapshot()
+        let expectedEntrypoint = CommandResolver.projectRootEnvironmentHint().flatMap { expectedRoot in
+            CommandResolver.gatewayEntrypoint(in: URL(fileURLWithPath: expectedRoot, isDirectory: true))
+        }
+        let actualEntrypoint = self.resolveLaunchAgentEntrypoint(from: resolvedSnapshot)
+        return EntrypointOwnership(
+            expectedEntrypoint: expectedEntrypoint,
+            actualEntrypoint: actualEntrypoint)
+    }
+
+    static func runtimeOwnershipBlockerMessage(snapshot: LaunchAgentPlistSnapshot? = nil) -> String? {
+        let ownership = self.currentEntrypointOwnership(snapshot: snapshot)
+        guard let expectedEntrypoint = ownership.expectedEntrypoint else { return nil }
+        guard let actualEntrypoint = ownership.actualEntrypoint else { return nil }
+        guard ownership.matchesCurrentEntrypoint == false else { return nil }
+        return """
+        Telegram live testing is blocked because this app expects \(expectedEntrypoint), but the consumer gateway is pinned to \(actualEntrypoint). Restart the consumer gateway from this build before capturing the first DM.
+        """
     }
 }
 
@@ -173,6 +238,53 @@ extension GatewayLaunchAgentManager {
         return loaded
     }
 
+    private static func desiredEnableAction() async -> DesiredAction {
+        let loaded = await self.readDaemonLoaded()
+        let snapshot = self.launchdConfigSnapshot()
+        let launchAgentMatchesCurrentEntrypoint = self.launchAgentMatchesCurrentEntrypoint(snapshot: snapshot)
+        let action = self.computeDesiredEnableAction(
+            loaded: loaded,
+            hasPlist: snapshot != nil,
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
+        switch action {
+        case .restart:
+            // If the service is already registered and loaded, reinstalling it is needlessly
+            // destructive: launchd will terminate the running gateway and we briefly lose the
+            // listener on 19001. Prefer an in-place restart.
+            return .restart
+        case .start:
+            // A plist already exists under the consumer label. Try a normal start first so we
+            // re-use the registered service instead of churning install/uninstall state.
+            return .start
+        case .install, .stop, .uninstall:
+            return .install
+        }
+    }
+
+    private static func install(port: Int) async -> String? {
+        self.logger.info("launchd install requested via CLI port=\(port)")
+        return await self.runDaemonCommand([
+            "install",
+            "--force",
+            "--allow-shared-service-takeover",
+            "--port",
+            "\(port)",
+            "--runtime",
+            "node",
+        ])
+    }
+
+    private static func launchAgentMatchesCurrentEntrypoint(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
+        let ownership = self.currentEntrypointOwnership(snapshot: snapshot)
+        return ownership.matchesCurrentEntrypoint
+    }
+
+    private static func resolveLaunchAgentEntrypoint(from snapshot: LaunchAgentPlistSnapshot?) -> String? {
+        snapshot?.programArguments.first(where: { arg in
+            arg.hasSuffix("/dist/index.js") || arg.hasSuffix("/openclaw.mjs") || arg.hasSuffix("/bin/openclaw.js")
+        })
+    }
+
     private struct CommandResult {
         let success: Bool
         let payload: Data?
@@ -211,8 +323,9 @@ extension GatewayLaunchAgentManager {
             // Launchd management must always run locally, even if remote mode is configured.
             configRoot: ["gateway": ["mode": "local"]],
             projectRoot: gatewayRoot)
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        let env = self.daemonCommandEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            projectRootHint: CommandResolver.projectRootEnvironmentHint())
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
         let parsed = self.parseDaemonJson(from: response.stdout) ?? self.parseDaemonJson(from: response.stderr)
         let ok = parsed?.object["ok"] as? Bool
@@ -236,9 +349,64 @@ extension GatewayLaunchAgentManager {
         return CommandResult(success: false, payload: payload, message: detail)
     }
 
+    private static func runServiceBringupCommand(
+        _ args: [String],
+        timeout: Double) async -> String?
+    {
+        let result = await self.runDaemonCommandResult(args, timeout: timeout, quiet: true)
+        guard result.success else { return result.message ?? "Gateway daemon command failed" }
+        guard self.shouldTreatBringupResultAsReady(result.payload) else {
+            return self.bringupNotReadyMessage(from: result.payload) ?? "Gateway service is still not loaded"
+        }
+        return nil
+    }
+
+    static func daemonCommandEnvironment(
+        base: [String: String],
+        projectRootHint: String?) -> [String: String]
+    {
+        let instance = ConsumerInstance.current
+        var env = base
+        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        env["OPENCLAW_PROFILE"] = instance.profile
+        env["OPENCLAW_HOME"] = instance.runtimeRootURL.path
+        env["OPENCLAW_STATE_DIR"] = instance.stateDirURL.path
+        env["OPENCLAW_CONFIG_PATH"] = instance.configURL.path
+        env["OPENCLAW_GATEWAY_PORT"] = "\(instance.gatewayPort)"
+        env["OPENCLAW_GATEWAY_BIND"] = instance.gatewayBind
+        env["OPENCLAW_LOG_DIR"] = instance.logsDirURL.path
+        env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] = "1"
+        if let id = instance.id {
+            env[ConsumerInstance.envKey] = id
+        } else {
+            env.removeValue(forKey: ConsumerInstance.envKey)
+        }
+        // Keep every child CLI command pinned to the dedicated consumer gateway lane.
+        // The app and gateway intentionally use different launchd labels, and the explicit
+        // env keeps status/install/restart commands from drifting across authorities.
+        env["OPENCLAW_LAUNCHD_LABEL"] = instance.gatewayLaunchdLabel
+        if let projectRootHint, !projectRootHint.isEmpty {
+            env["OPENCLAW_FORK_ROOT"] = projectRootHint
+        }
+        return env
+    }
+
     private static func withJsonFlag(_ args: [String]) -> [String] {
         if args.contains("--json") { return args }
         return args + ["--json"]
+    }
+
+    // Keep the decision logic in a non-DEBUG helper so release packaging can reuse the
+    // same branch selection that tests assert against.
+    private static func computeDesiredEnableAction(
+        loaded: Bool?,
+        hasPlist: Bool,
+        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
+    {
+        if hasPlist, !launchAgentMatchesCurrentEntrypoint { return .install }
+        if loaded == true { return .restart }
+        if hasPlist { return .start }
+        return .install
     }
 
     private static func parseDaemonJson(from raw: String) -> ParsedDaemonJson? {
@@ -246,7 +414,50 @@ extension GatewayLaunchAgentManager {
         return ParsedDaemonJson(text: parsed.text, object: parsed.object)
     }
 
+    private static func shouldTreatBringupResultAsReady(_ payload: Data?) -> Bool {
+        guard let object = self.parseDaemonObject(payload) else { return true }
+        if let result = object["result"] as? String, result == "not-loaded" {
+            return false
+        }
+        if let service = object["service"] as? [String: Any],
+           let loaded = service["loaded"] as? Bool,
+           loaded == false
+        {
+            return false
+        }
+        return true
+    }
+
+    private static func bringupNotReadyMessage(from payload: Data?) -> String? {
+        guard let object = self.parseDaemonObject(payload) else { return nil }
+        return (object["message"] as? String) ?? (object["error"] as? String)
+    }
+
+    private static func parseDaemonObject(_ payload: Data?) -> [String: Any]? {
+        guard let payload else { return nil }
+        return (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
+    }
+
     private static func summarize(_ text: String) -> String? {
         TextSummarySupport.summarizeLastLine(text)
     }
 }
+
+#if DEBUG
+extension GatewayLaunchAgentManager {
+    static func _testDesiredEnableAction(
+        loaded: Bool?,
+        hasPlist: Bool,
+        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
+    {
+        self.computeDesiredEnableAction(
+            loaded: loaded,
+            hasPlist: hasPlist,
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
+    }
+
+    static func _testShouldTreatBringupResultAsReady(_ payload: String) -> Bool {
+        self.shouldTreatBringupResultAsReady(payload.data(using: .utf8))
+    }
+}
+#endif

@@ -32,6 +32,11 @@
 ## macOS gateway behavior
 
 - The gateway is managed by the mac app.
-- Restart via the OpenClaw Mac app or `scripts/restart-mac.sh`, not a random tmux process.
+- Use the narrowest restart that matches the job:
+  - Gateway service only: `openclaw gateway restart`
+  - Worktree mac app lane: `bash scripts/dev-launch-mac.sh`
+  - Consumer mac app lane: `bash scripts/open-consumer-mac-app.sh --instance <id>`
+  - Shared/main full app rebuild + restart: `bash scripts/restart-mac.sh`
+- `scripts/restart-mac.sh` still has an explicit broad kill path via `--app-scope all`; do not use it as the default from linked worktrees.
 - Use `scripts/clawlog.sh` for macOS unified logs.
 - Worktrees are valid for development and pre-merge validation. The primary bot must run from `main`, not from a worktree build. Shared `main` is for runtime ownership and orchestration only; tracked code edits still belong in a worktree. Test in the worktree first, then merge to `main`, rebuild, and restart the gateway from `main`.
