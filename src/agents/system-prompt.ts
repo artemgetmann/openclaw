@@ -629,10 +629,26 @@ export function buildAgentSystemPrompt(params: {
         const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
         return baseName.toLowerCase() === "soul.md";
       });
+      const hasBootstrapFile = validContextFiles.some((file) => {
+        const normalizedPath = file.path.trim().replace(/\\/g, "/");
+        const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
+        return baseName.toLowerCase() === "bootstrap.md";
+      });
       lines.push("The following project context files have been loaded:");
       if (hasSoulFile) {
         lines.push(
           "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+        );
+      }
+      if (hasBootstrapFile) {
+        lines.push(
+          "If BOOTSTRAP.md is present, first-run setup is still active. Stay in bootstrap mode until the required identity details are settled, the files are updated, and BOOTSTRAP.md is removed.",
+        );
+        lines.push(
+          "Do not repeat bootstrap questions the user already answered. If they rename you or tell you what to call them, acknowledge it briefly and continue with the remaining unanswered setup questions.",
+        );
+        lines.push(
+          "Keep the visible conversation simple and non-technical. Do not mention prompts, file writes, repos, or internal scaffolding unless the user explicitly asks.",
         );
       }
       lines.push("");

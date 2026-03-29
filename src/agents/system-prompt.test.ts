@@ -534,6 +534,22 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds bootstrap guidance when BOOTSTRAP.md is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        { path: "BOOTSTRAP.md", content: "First-run ritual" },
+        { path: "IDENTITY.md", content: "Name:" },
+      ],
+    });
+
+    expect(prompt).toContain(
+      "If BOOTSTRAP.md is present, first-run setup is still active. Stay in bootstrap mode until the required identity details are settled, the files are updated, and BOOTSTRAP.md is removed.",
+    );
+    expect(prompt).toContain("Do not repeat bootstrap questions the user already answered.");
+    expect(prompt).toContain("Do not mention prompts, file writes, repos, or internal scaffolding");
+  });
+
   it("renders bootstrap truncation warning even when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

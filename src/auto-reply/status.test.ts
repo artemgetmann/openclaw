@@ -25,6 +25,7 @@ vi.mock("../plugins/commands.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  delete process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP;
 });
 
 describe("buildStatusMessage", () => {
@@ -729,6 +730,20 @@ describe("buildHelpMessage", () => {
   it("includes /fast in help output", () => {
     expect(buildHelpMessage()).toContain("/fast on|off");
   });
+
+  it("uses a consumer-focused help summary in consumer mode", () => {
+    process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP = "1";
+    const text = buildHelpMessage();
+    expect(text).toContain("Essentials");
+    expect(text).toContain("/new  |  /stop  |  /status");
+    expect(text).toContain("/think <level>  |  /model <id>");
+    expect(text).toContain("/think adaptive = auto; falls back safely");
+    expect(text).toContain("/restart - Restart OpenClaw");
+    expect(text).toContain("/tts - Voice replies");
+    expect(text).toContain("/commands - Full command list");
+    expect(text).not.toContain("/compact");
+    expect(text).not.toContain("/skill");
+  });
 });
 
 describe("buildCommandsMessagePaginated", () => {
@@ -758,5 +773,19 @@ describe("buildCommandsMessagePaginated", () => {
     );
     expect(result.text).toContain("Plugins");
     expect(result.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
+  });
+
+  it("labels Telegram command pages as advanced in consumer mode", () => {
+    process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP = "1";
+    const result = buildCommandsMessagePaginated(
+      {
+        commands: { config: false, debug: false },
+      } as unknown as OpenClawConfig,
+      undefined,
+      { surface: "telegram", page: 1 },
+    );
+    expect(result.text).toContain(
+      "Advanced list. The default consumer Telegram menu only shows essentials.",
+    );
   });
 });
