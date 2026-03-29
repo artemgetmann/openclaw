@@ -166,6 +166,44 @@ export const ChannelsLogoutParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const TelegramSetupReplayPayloadSchema = Type.Object(
+  {
+    updateId: Type.Integer({ minimum: 0 }),
+    messageId: Type.Integer({ minimum: 1 }),
+    chatId: Type.Integer(),
+    chatUsername: Type.Optional(Type.String()),
+    senderId: Type.Integer({ minimum: 1 }),
+    senderUsername: Type.Optional(Type.String()),
+    senderFirstName: Type.Optional(Type.String()),
+    text: Type.Optional(Type.String()),
+    caption: Type.Optional(Type.String()),
+    date: Type.Integer({ minimum: 1 }),
+    messageThreadId: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+  },
+  { additionalProperties: false },
+);
+
+export const ChannelsTelegramSetupReplayParamsSchema = Type.Object(
+  {
+    accountId: Type.Optional(Type.String()),
+    payload: TelegramSetupReplayPayloadSchema,
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const ChannelsTelegramSetupReplayResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+    replyStarted: Type.Boolean(),
+    replyCompleted: Type.Boolean(),
+    accountId: NonEmptyString,
+    updateId: Type.Integer({ minimum: 0 }),
+    error: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const WebLoginStartParamsSchema = Type.Object(
   {
     force: Type.Optional(Type.Boolean()),

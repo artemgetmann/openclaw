@@ -43,14 +43,14 @@ struct OnboardingViewSmokeTests {
         }
     }
 
-    @Test func `consumer local onboarding collapses to welcome and setup`() async {
+    @Test func `consumer local onboarding drops directly into setup`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
             #expect(order == [0])
         }
     }
 
-    @Test func `consumer first run defaults unconfigured state to same two-screen flow`() async {
+    @Test func `consumer first run defaults unconfigured state to same setup page`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             let order = OnboardingView.pageOrder(for: .unconfigured, showOnboardingChat: false)
             #expect(order == [0])

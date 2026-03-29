@@ -7,6 +7,11 @@ import SwiftUI
 @MainActor
 @Observable
 final class AppState {
+    private struct LaunchAtLoginPreference {
+        let enabled: Bool
+        let needsBootstrapInstall: Bool
+    }
+
     private let isPreview: Bool
     private var isInitializing = true
     private var isApplyingRemoteTokenConfig = false
@@ -37,7 +42,10 @@ final class AppState {
     var launchAtLogin: Bool {
         didSet {
             guard !self.isInitializing else { return }
-            self.ifNotPreview { Task { AppStateStore.updateLaunchAtLogin(enabled: self.launchAtLogin) } }
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.launchAtLogin, forKey: launchAtLoginPreferenceKey)
+                Task { AppStateStore.updateLaunchAtLogin(enabled: self.launchAtLogin) }
+            }
         }
     }
 
@@ -255,8 +263,11 @@ final class AppState {
             migrateLegacyDefaults()
         }
         let onboardingSeen = UserDefaults.standard.bool(forKey: onboardingSeenKey)
+        let launchAtLoginPreference = Self.resolveLaunchAtLoginPreference(
+            storedValue: UserDefaults.standard.object(forKey: launchAtLoginPreferenceKey) as? Bool,
+            isConsumer: AppFlavor.current.isConsumer)
         self.isPaused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
-        self.launchAtLogin = false
+        self.launchAtLogin = launchAtLoginPreference.enabled
         self.onboardingSeen = onboardingSeen
         self.debugPaneEnabled = UserDefaults.standard.bool(forKey: debugPaneEnabledKey)
         self.showAdvancedSettings = UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
@@ -276,7 +287,9 @@ final class AppState {
             self.iconAnimationsEnabled = true
             UserDefaults.standard.set(true, forKey: iconAnimationsEnabledKey)
         }
-        self.showDockIcon = UserDefaults.standard.bool(forKey: showDockIconKey)
+        self.showDockIcon = Self.defaultShowDockIcon(
+            storedValue: UserDefaults.standard.object(forKey: showDockIconKey) as? Bool,
+            isConsumer: AppFlavor.current.isConsumer)
         self.voiceWakeMicID = UserDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
         self.voiceWakeMicName = UserDefaults.standard.string(forKey: voiceWakeMicNameKey) ?? ""
         self.voiceWakeLocaleID = UserDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
@@ -331,13 +344,6 @@ final class AppState {
         self.execApprovalMode = ExecApprovalQuickMode.from(security: execDefaults.security, ask: execDefaults.ask)
         self.peekabooBridgeEnabled = UserDefaults.standard
             .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
-        if !self.isPreview {
-            Task.detached(priority: .utility) { [weak self] in
-                let current = await LaunchAgentManager.status()
-                await MainActor.run { [weak self] in self?.launchAtLogin = current }
-            }
-        }
-
         if self.swabbleEnabled, !PermissionManager.voiceWakePermissionsGranted() {
             self.swabbleEnabled = false
         }
@@ -353,7 +359,39 @@ final class AppState {
         self.isInitializing = false
         if !self.isPreview {
             self.startConfigWatcher()
+            Task.detached(priority: .utility) {
+                let launchAgentEnabled = await LaunchAgentManager.status()
+                if launchAgentEnabled != launchAtLoginPreference.enabled {
+                    if launchAtLoginPreference.needsBootstrapInstall && launchAtLoginPreference.enabled {
+                        await LaunchAgentManager.registerForNextLogin(bundlePath: Bundle.main.bundlePath)
+                    } else {
+                        await LaunchAgentManager.set(
+                            enabled: launchAtLoginPreference.enabled,
+                            bundlePath: Bundle.main.bundlePath)
+                    }
+                }
+            }
         }
+    }
+
+    static func defaultLaunchAtLogin(isConsumer: Bool) -> Bool {
+        isConsumer
+    }
+
+    static func defaultShowDockIcon(storedValue: Bool?, isConsumer: Bool) -> Bool {
+        storedValue ?? isConsumer
+    }
+
+    private static func resolveLaunchAtLoginPreference(
+        storedValue: Bool?,
+        isConsumer: Bool
+    ) -> LaunchAtLoginPreference {
+        if let storedValue {
+            return LaunchAtLoginPreference(enabled: storedValue, needsBootstrapInstall: false)
+        }
+
+        let enabled = self.defaultLaunchAtLogin(isConsumer: isConsumer)
+        return LaunchAtLoginPreference(enabled: enabled, needsBootstrapInstall: enabled)
     }
 
     @MainActor

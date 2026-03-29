@@ -754,6 +754,38 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     resetGlobalHookRunner();
   });
 
+  it("does not reuse cached bundled channel registries when channels.<id>.enabled changes", () => {
+    setupBundledTelegramPlugin();
+    const options = {
+      workspaceDir: cachedBundledTelegramDir,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins(options);
+    expect(first.channels.some((entry) => entry.plugin.id === "telegram")).toBe(false);
+
+    const second = loadOpenClawPlugins({
+      ...options,
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(second).not.toBe(first);
+    expectTelegramLoaded(second);
+  });
+
   it("does not reuse cached bundled plugin registries across env changes", () => {
     const bundledA = makeTempDir();
     const bundledB = makeTempDir();

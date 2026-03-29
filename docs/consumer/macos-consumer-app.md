@@ -29,6 +29,8 @@ This keeps consumer testing from silently reusing the founder runtime.
 The consumer app defaults to:
 
 - Local setup on this Mac
+- Launch at login enabled by default
+- Dock icon visible by default
 - Minimal menu bar controls
 - Core settings tabs: General, Channels, Permissions, About
 - Channels view defaults to Telegram-only in consumer mode
@@ -41,6 +43,7 @@ The goal is to reduce cognitive overload without deleting advanced capabilities 
 
 The consumer path keeps Telegram setup inside the app:
 
+- First run stays product-owned: local runtime bootstrap is silent, then the app guides Chrome, AI readiness, core permissions, and Telegram verification on one screen.
 - Channels → Telegram includes a one-time BYOK wizard (BotFather -> token verify -> first DM capture).
 - The panel includes a placeholder video walkthrough entry that can be rewired later without changing the onboarding flow.
 - Runtime writes stay isolated under the consumer runtime root.

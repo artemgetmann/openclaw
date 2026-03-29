@@ -140,17 +140,14 @@ extension ChannelsStore {
         // more reliable than round-tripping the full config through gateway RPC at
         // that exact moment, and the gateway file watcher will pick the change up.
         //
-        // Do not block the caller on endpoint/socket refresh here. The config write
-        // is the source of truth; waiting inline on gateway reconnect work is what
-        // caused the setup UI to get stuck on "Saving Telegram setup..." even after
-        // the allowlist had already been persisted locally.
+        // Do not kick the shared gateway socket from here. Telegram bootstrap owns
+        // the reconnect timing because these writes can rotate gateway auth and
+        // force a restart. Refreshing the socket immediately from this helper
+        // races the old gateway against the new token and recreates the exact
+        // "could not connect" failure we are trying to avoid.
         OpenClawConfigFile.saveDict(self.configDraft)
         let refreshed = OpenClawConfigFile.loadDict()
         self.applyLoadedConfigRoot(refreshed)
-        Task {
-            await GatewayEndpointStore.shared.refresh()
-            try? await GatewayConnection.shared.refresh()
-        }
         return refreshed
     }
 

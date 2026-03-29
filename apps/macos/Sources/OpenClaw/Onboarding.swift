@@ -19,7 +19,9 @@ enum RemoteOnboardingProbeState: Equatable {
 @MainActor
 final class OnboardingController {
     static let shared = OnboardingController()
+    static let windowIdentifier = NSUserInterfaceItemIdentifier("ai.openclaw.consumer.onboarding")
     private var window: NSWindow?
+    private var waitingForVisibleSurfaceHandoff = false
     private let logger = Logger(subsystem: "ai.openclaw", category: "consumer.launch")
 
     var isVisible: Bool {
@@ -28,6 +30,10 @@ final class OnboardingController {
 
     var hasVisibleWindow: Bool {
         self.window?.isVisible == true
+    }
+
+    var trackedWindow: NSWindow? {
+        self.window
     }
 
     func show() {
@@ -48,6 +54,7 @@ final class OnboardingController {
         }
         let hosting = NSHostingController(rootView: OnboardingView())
         let window = NSWindow(contentViewController: hosting)
+        window.identifier = Self.windowIdentifier
         window.title = UIStrings.welcomeTitle
         window.setContentSize(NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))
         window.styleMask = [.titled, .closable, .fullSizeContentView]
@@ -64,8 +71,47 @@ final class OnboardingController {
     }
 
     func close() {
-        self.window?.close()
+        guard let window = self.window else { return }
+        // AppKit can leave a just-closed SwiftUI window onscreen until the next
+        // run-loop turn. Order it out first so the onboarding surface disappears
+        // immediately, then close it to finish teardown.
+        self.waitingForVisibleSurfaceHandoff = false
+        window.orderOut(nil)
+        window.close()
         self.window = nil
+    }
+
+    func beginVisibleSurfaceHandoff() {
+        guard let window = self.window else { return }
+        // Hide onboarding immediately so users do not see two windows at once,
+        // but keep the controller alive until a replacement surface is proven
+        // visible. If Settings creation flakes, we can still recover instead of
+        // dropping the entire consumer app into invisible accessory mode.
+        self.waitingForVisibleSurfaceHandoff = true
+        window.orderOut(nil)
+    }
+
+    func completeVisibleSurfaceHandoffIfPossible() -> Bool {
+        guard self.waitingForVisibleSurfaceHandoff else { return false }
+        // Treat "a replacement window exists" as success, not only "it is
+        // already visibly frontmost". SwiftUI Settings scenes can exist for a
+        // short beat before AppKit reports them visible, and restoring
+        // onboarding during that gap is how we end up with the setup sheet
+        // sitting on top of the real post-finish surface.
+        guard SettingsWindowOpener.hasReplacementContentWindow() else { return false }
+        self.close()
+        return true
+    }
+
+    func restoreAfterFailedVisibleSurfaceHandoff() {
+        if self.completeVisibleSurfaceHandoffIfPossible() {
+            return
+        }
+        guard self.waitingForVisibleSurfaceHandoff, let window = self.window else { return }
+        self.waitingForVisibleSurfaceHandoff = false
+        DockIconManager.shared.temporarilyShowDock()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func restart() {
@@ -129,6 +175,7 @@ struct OnboardingView: View {
             case .remote:
                 return [0, 1, 3]
             case .local, .unconfigured:
+                // Consumer local onboarding drops directly into the setup work.
                 return [0]
             }
         }
@@ -189,24 +236,25 @@ struct OnboardingView: View {
     var isConsumerInlineSetupBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            !self.onboardingWizard.isComplete
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .unconfigured
     }
 
     var isBrowserSetupBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            self.onboardingWizard.isComplete &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
             !self.browserSetup.isComplete
     }
 
     var isModelSetupBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            self.onboardingWizard.isComplete &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
             self.browserSetup.isComplete &&
+            self.areCorePermissionsGranted &&
             !self.modelSetup.isComplete
     }
 
@@ -219,32 +267,31 @@ struct OnboardingView: View {
     var isCorePermissionsBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            self.onboardingWizard.isComplete &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
             self.browserSetup.isComplete &&
-            self.modelSetup.isComplete &&
             !self.areCorePermissionsGranted
     }
 
     var canFinishConsumerInlineSetup: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            self.onboardingWizard.isComplete &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
             self.browserSetup.isComplete &&
-            self.modelSetup.isComplete &&
             self.areCorePermissionsGranted &&
+            self.modelSetup.isComplete &&
             self.channelsStore.consumerTelegramReadyForFirstTask()
     }
 
     var isTelegramSetupBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            self.onboardingWizard.isComplete &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
             self.browserSetup.isComplete &&
-            self.modelSetup.isComplete &&
             self.areCorePermissionsGranted &&
+            self.modelSetup.isComplete &&
             !self.channelsStore.consumerTelegramReadyForFirstTask()
     }
 
@@ -282,6 +329,16 @@ struct OnboardingView: View {
         self.permissionMonitor = permissionMonitor
         self._gatewayDiscovery = State(initialValue: discoveryModel)
         self._channelsStore = State(initialValue: channelsStore)
+        self._browserSetup = State(
+            initialValue: BrowserSetupModel(
+                // Consumer onboarding should not silently accept a browser
+                // profile that was seeded by bootstrap/runtime plumbing before
+                // the user ever saw the Chrome step.
+                allowConfigOnlyRestore: !AppFlavor.current.isConsumer,
+                // Even when the user already picked a browser on this Mac,
+                // first-run onboarding should still present Chrome as an explicit
+                // step instead of teleporting straight into "already done."
+                restoredSelectionRequiresConfirmation: AppFlavor.current.isConsumer))
         self._onboardingChatModel = State(
             initialValue: OpenClawChatViewModel(
                 sessionKey: "onboarding",

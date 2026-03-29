@@ -1,3 +1,4 @@
+import AppKit
 import Testing
 @testable import OpenClaw
 
@@ -181,11 +182,77 @@ struct ConsumerAppActivationTests {
                 telegramReady: true) == .general)
     }
 
+    @Test func `finish handoff closes onboarding once settings is visible`() {
+        #expect(
+            OnboardingView.finishSurfaceHandoffAction(
+                hasReplacementContentWindow: true,
+                attemptsRemaining: 4) == .completeClose)
+    }
+
+    @Test func `finish handoff retries while replacement surface is still missing`() {
+        #expect(
+            OnboardingView.finishSurfaceHandoffAction(
+                hasReplacementContentWindow: false,
+                attemptsRemaining: 4) == .retryVisibleSurface)
+    }
+
+    @Test func `finish handoff restores onboarding after retries are exhausted`() {
+        #expect(
+            OnboardingView.finishSurfaceHandoffAction(
+                hasReplacementContentWindow: false,
+                attemptsRemaining: 0) == .restoreOnboarding)
+    }
+
+    @Test func `replacement window detection excludes onboarding`() {
+        let onboarding = NSWindow()
+        onboarding.identifier = OnboardingController.windowIdentifier
+        onboarding.contentViewController = NSViewController()
+        onboarding.setContentSize(NSSize(width: 630, height: 752))
+
+        let settings = NSWindow()
+        settings.contentViewController = NSViewController()
+        settings.setContentSize(NSSize(width: 800, height: 600))
+
+        #expect(SettingsWindowOpener.isContentWindowCandidate(onboarding))
+        #expect(SettingsWindowOpener.isOnboardingWindow(onboarding))
+        #expect(SettingsWindowOpener.isContentWindowCandidate(settings))
+        #expect(!SettingsWindowOpener.isOnboardingWindow(settings))
+    }
+
+    @Test func `settings window counts as replacement content even without a content view controller`() {
+        #expect(
+            SettingsWindowOpener.isContentWindowCandidate(
+                frameWidth: 824,
+                frameHeight: 878,
+                isPanel: false,
+                className: "NSWindow",
+                hasContentView: true,
+                hasContentViewController: false))
+    }
+
+    @Test func `popup menu windows never count as replacement content`() {
+        #expect(
+            !SettingsWindowOpener.isContentWindowCandidate(
+                frameWidth: 300,
+                frameHeight: 200,
+                isPanel: false,
+                className: "NSPopupMenuWindow",
+                hasContentView: true,
+                hasContentViewController: true))
+    }
+
     @Test func `non consumer finish does not force a settings follow up`() {
         #expect(
             OnboardingView.postFinishSettingsTab(
                 isConsumer: false,
                 connectionMode: .local,
                 telegramReady: true) == nil)
+    }
+
+    @Test func `consumer defaults keep dock and launch available on first run`() {
+        #expect(AppState.defaultLaunchAtLogin(isConsumer: true))
+        #expect(AppState.defaultShowDockIcon(storedValue: nil, isConsumer: true))
+        #expect(!AppState.defaultLaunchAtLogin(isConsumer: false))
+        #expect(!AppState.defaultShowDockIcon(storedValue: nil, isConsumer: false))
     }
 }

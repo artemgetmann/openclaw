@@ -44,6 +44,10 @@ import {
   AgentWaitParamsSchema,
   type ChannelsLogoutParams,
   ChannelsLogoutParamsSchema,
+  type ChannelsTelegramSetupReplayParams,
+  ChannelsTelegramSetupReplayParamsSchema,
+  type ChannelsTelegramSetupReplayResult,
+  ChannelsTelegramSetupReplayResultSchema,
   type TalkConfigParams,
   TalkConfigParamsSchema,
   type TalkConfigResult,
@@ -362,6 +366,10 @@ export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
 export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
   ChannelsLogoutParamsSchema,
 );
+export const validateChannelsTelegramSetupReplayParams =
+  ajv.compile<ChannelsTelegramSetupReplayParams>(ChannelsTelegramSetupReplayParamsSchema);
+export const validateChannelsTelegramSetupReplayResult =
+  ajv.compile<ChannelsTelegramSetupReplayResult>(ChannelsTelegramSetupReplayResultSchema);
 export const validateModelsListParams = ajv.compile<ModelsListParams>(ModelsListParamsSchema);
 export const validateModelsReadinessParams = ajv.compile<ModelsReadinessParams>(
   ModelsReadinessParamsSchema,
@@ -523,6 +531,8 @@ export {
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   ChannelsLogoutParamsSchema,
+  ChannelsTelegramSetupReplayParamsSchema,
+  ChannelsTelegramSetupReplayResultSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
   AgentSummarySchema,

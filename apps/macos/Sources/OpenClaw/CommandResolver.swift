@@ -292,9 +292,9 @@ enum CommandResolver {
         switch runtimeResult {
         case let .success(runtime):
             if let entry = self.gatewayEntrypoint(in: root) {
-                // When we know the current repo root, prefer its built entrypoint over any
-                // PATH-level wrapper. This keeps the mac app pinned to the active worktree
-                // instead of a stale hoisted/global `openclaw` package.
+                // Always self-invoke via the current checkout's explicit entrypoint.
+                // Repo-local .bin shims can resolve outside a linked worktree and silently
+                // run a different checkout, which breaks isolation for onboarding checks.
                 return self.makeRuntimeCommand(
                     runtime: runtime,
                     entrypoint: entry,

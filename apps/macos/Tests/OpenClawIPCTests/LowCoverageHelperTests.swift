@@ -58,6 +58,19 @@ struct LowCoverageHelperTests {
         #expect(result.timedOut == true)
     }
 
+    @Test func `shell executor force kills commands that ignore terminate`() async {
+        let start = Date()
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/sh", "-c", "trap '' TERM; sleep 10"],
+            cwd: nil,
+            env: nil,
+            timeout: 0.05)
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(result.timedOut == true)
+        #expect(elapsed < 2.0)
+    }
+
     @Test func `shell executor drains stdout and stderr`() async {
         let script = """
         i=0

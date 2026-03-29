@@ -8,6 +8,7 @@ import {
 } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.js";
+import { replayTelegramSetupDirectMessage } from "../../commands/channels/telegram-replay-setup-dm.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
@@ -20,6 +21,8 @@ import {
   formatValidationErrors,
   validateChannelsLogoutParams,
   validateChannelsStatusParams,
+  validateChannelsTelegramSetupReplayParams,
+  validateChannelsTelegramSetupReplayResult,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -393,6 +396,78 @@ export const channelsHandlers: GatewayRequestHandlers = {
       });
       respond(true, payload, undefined);
     } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "channels.telegram.setup-replay": async ({ params, respond }) => {
+    if (!validateChannelsTelegramSetupReplayParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid channels.telegram.setup-replay params: ${formatValidationErrors(validateChannelsTelegramSetupReplayParams.errors)}`,
+        ),
+      );
+      return;
+    }
+
+    const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
+    const timeoutMs = typeof timeoutMsRaw === "number" ? Math.max(1000, timeoutMsRaw) : 8_000;
+    const payload = (params as { payload: Record<string, unknown> }).payload;
+    const accountIdRaw = (params as { accountId?: unknown }).accountId;
+    const accountId = typeof accountIdRaw === "string" ? accountIdRaw.trim() : undefined;
+
+    try {
+      // The macOS onboarding flow needs a structured backend answer here, not a
+      // subprocess stdout guess. Reuse the same replay helper the CLI command
+      // uses, but keep the RPC boundary typed and timeout-bounded.
+      const result = await withTimeout(
+        replayTelegramSetupDirectMessage({
+          account: accountId,
+          payloadJson: JSON.stringify(payload),
+          runtime: defaultRuntime,
+        }),
+        timeoutMs,
+        "channels.telegram.setup-replay",
+      );
+      if (!validateChannelsTelegramSetupReplayResult(result)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INTERNAL_ERROR,
+            `invalid channels.telegram.setup-replay result: ${formatValidationErrors(validateChannelsTelegramSetupReplayResult.errors)}`,
+          ),
+        );
+        return;
+      }
+      respond(true, result, undefined);
+    } catch (err) {
+      if (err instanceof Error && err.message === "timeout") {
+        respond(
+          true,
+          {
+            ok: false,
+            // A timeout here means the replay was dispatched but the server did
+            // not confirm completion in time. Keep `replyStarted` true so the
+            // macOS app can re-enable Telegram and fall back to activity-based
+            // confirmation instead of trapping the channel in disabled limbo.
+            replyStarted: true,
+            replyCompleted: false,
+            accountId: accountId || DEFAULT_ACCOUNT_ID,
+            updateId:
+              typeof payload.updateId === "number" && Number.isSafeInteger(payload.updateId)
+                ? payload.updateId
+                : 0,
+            error:
+              "OpenClaw started the first Telegram task, but the setup handoff timed out before completion was confirmed.",
+          },
+          undefined,
+        );
+        return;
+      }
+
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },

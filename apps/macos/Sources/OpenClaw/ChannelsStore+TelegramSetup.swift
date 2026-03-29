@@ -136,11 +136,45 @@ extension ChannelsStore {
                 allowFrom: [String(dm.senderId)],
                 enabled: false)
             self.telegramSetupFirstSenderId = String(dm.senderId)
+
+            // If the live Telegram poller already handled this first task before
+            // the user clicked "Verify first task", do not replay the same DM
+            // through the bootstrap helper. That replay is what produces the
+            // duplicate first-run replies the user sees in Telegram.
+            await self.refresh(probe: true)
+            let activityAlreadyConfirmed = self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible()
+            switch Self.consumerTelegramFirstTaskReplayAction(
+                activityAlreadyConfirmed: activityAlreadyConfirmed)
+            {
+            case .trustObservedLiveCompletion:
+                _ = try await self.applyTelegramSetupBootstrap(
+                    token: token,
+                    dmPolicy: "allowlist",
+                    allowFrom: [String(dm.senderId)],
+                    enabled: true)
+                restoredByFinalBootstrap = true
+                self.telegramSetupStatus = self.telegramCaptureStatus(
+                    dm: dm,
+                    persistedRoot: persisted,
+                    replayResult: TelegramSetupReplayResult(
+                        ok: true,
+                        replyStarted: true,
+                        replyCompleted: true,
+                        error: nil),
+                    activityConfirmed: true)
+                return
+            case .replayCapturedMessage:
+                break
+            }
+
             self.telegramSetupStatus = "Running your first Telegram task..."
             self.telegramSetupPhase = .startingFirstReply
             let replayResult = await self.startFirstTelegramReply(dm: dm)
-            let replayCompleted = replayResult.replyCompleted ?? replayResult.replyStarted
-            if replayResult.error == nil {
+            let replayDecision = Self.consumerTelegramReplayDecision(
+                replyStarted: replayResult.replyStarted,
+                replyCompleted: replayResult.replyCompleted,
+                error: replayResult.error)
+            if replayDecision.shouldReenableTelegram {
                 _ = try await self.applyTelegramSetupBootstrap(
                     token: token,
                     dmPolicy: "allowlist",
@@ -151,7 +185,12 @@ extension ChannelsStore {
                 try? await self.restoreTelegramPairingAfterSetupPause(token: token)
                 restoredByFinalBootstrap = true
             }
-            if replayCompleted, replayResult.error == nil {
+
+            let activityConfirmed = replayDecision.shouldWaitForActivityConfirmation
+                ? await self.waitForConsumerTelegramFirstTaskActivityRefreshes()
+                : false
+
+            if replayDecision.shouldTrustReplayCompletion || activityConfirmed {
                 self.markConsumerTelegramFirstTaskVerified()
             } else {
                 self.clearConsumerTelegramFirstTaskVerified()
@@ -159,7 +198,8 @@ extension ChannelsStore {
             self.telegramSetupStatus = self.telegramCaptureStatus(
                 dm: dm,
                 persistedRoot: persisted,
-                replayResult: replayResult)
+                replayResult: replayResult,
+                activityConfirmed: activityConfirmed)
         } catch {
             self.telegramSetupWaitingForDM = false
             self.clearConsumerTelegramFirstTaskVerified()
@@ -253,24 +293,29 @@ extension ChannelsStore {
     private func telegramCaptureStatus(
         dm: TelegramSetupDirectMessage,
         persistedRoot: [String: Any],
-        replayResult: TelegramSetupReplayResult
+        replayResult: TelegramSetupReplayResult,
+        activityConfirmed: Bool
     ) -> String {
         _ = persistedRoot
-        let replayCompleted = replayResult.replyCompleted ?? replayResult.replyStarted
+        let replayCompleted = activityConfirmed
+            || ((replayResult.replyCompleted ?? replayResult.replyStarted) && replayResult.error == nil)
+        if replayCompleted {
+            if AppFlavor.current.isConsumer {
+                return dm.senderUsername.map {
+                    "Connected to @\($0). OpenClaw finished the first Telegram task on this Mac."
+                } ?? "Telegram setup is finished. OpenClaw finished the first Telegram task on this Mac."
+            }
+            return dm.senderUsername.map {
+                "Locked to @\($0). For multiple parallel tasks, add the bot to a Telegram group and use topics."
+            } ?? "Locked to Telegram user ID \(dm.senderId). For multiple parallel tasks, add the bot to a Telegram group and use topics."
+        }
         if let error = replayResult.error {
             return "Telegram setup is saved, but OpenClaw could not finish the first Telegram task. \(error)"
         }
         if !replayCompleted {
             return "Telegram setup is saved, but OpenClaw could not confirm that the first Telegram task finished."
         }
-        if AppFlavor.current.isConsumer {
-            return dm.senderUsername.map {
-                "Connected to @\($0). OpenClaw finished the first Telegram task on this Mac."
-            } ?? "Telegram setup is finished. OpenClaw finished the first Telegram task on this Mac."
-        }
-        return dm.senderUsername.map {
-            "Locked to @\($0). For multiple parallel tasks, add the bot to a Telegram group and use topics."
-        } ?? "Locked to Telegram user ID \(dm.senderId). For multiple parallel tasks, add the bot to a Telegram group and use topics."
+        return "Telegram setup is saved, but OpenClaw could not confirm that the first Telegram task finished."
     }
 
     private func telegramCaptureFailureStatusAfterTimeout() -> String? {
@@ -361,53 +406,29 @@ extension ChannelsStore {
 
     private func startFirstTelegramReply(dm: TelegramSetupDirectMessage) async -> TelegramSetupReplayResult {
         // The first DM must go through the same Telegram inbound pipeline the real
-        // gateway uses. Otherwise setup "works" but the first reply path is still fake.
-        guard let payload = self.telegramReplayPayloadJson(dm: dm) else {
+        // gateway uses. Route this through the gateway directly so onboarding does
+        // not depend on a subprocess printing perfectly clean JSON to stdout.
+        guard let params = self.telegramReplayGatewayParams(dm: dm) else {
             return TelegramSetupReplayResult(
                 ok: false,
                 replyStarted: false,
                 replyCompleted: false,
                 error: "The captured first message did not contain text. Send one text message to begin.")
         }
-
-        let command = CommandResolver.openclawCommand(
-            subcommand: "channels",
-            extraArgs: ["telegram-replay-setup-dm", "--payload-json", payload, "--json"],
-            configRoot: ["gateway": ["mode": "local"]])
-        let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
-            base: ProcessInfo.processInfo.environment,
-            projectRootHint: CommandResolver.projectRootEnvironmentHint())
-        let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: 20)
-        if response.timedOut {
-            await self.refresh(probe: true)
-            if self.consumerTelegramCanVerifyFirstTaskFromActivity() {
-                return TelegramSetupReplayResult(
-                    ok: true,
-                    replyStarted: true,
-                    replyCompleted: true,
-                    error: nil)
-            }
-        }
-        if !response.success {
-            let detail = response.stderr.nonEmpty ?? response.stdout.nonEmpty ?? response.errorMessage ?? "unknown error"
+        do {
+            // Keep the timeout slightly above the backend default so local
+            // connection retries do not lose to the RPC budget immediately.
+            return try await GatewayConnection.shared.requestDecoded(
+                method: .channelsTelegramSetupReplay,
+                params: params,
+                timeoutMs: 8_500)
+        } catch {
             return TelegramSetupReplayResult(
                 ok: false,
                 replyStarted: false,
                 replyCompleted: false,
-                error: detail)
+                error: error.localizedDescription)
         }
-
-        let raw = response.stdout.isEmpty ? response.stderr : response.stdout
-        guard let data = raw.data(using: .utf8),
-              let parsed = try? JSONDecoder().decode(TelegramSetupReplayResult.self, from: data)
-        else {
-            return TelegramSetupReplayResult(
-                ok: false,
-                replyStarted: false,
-                replyCompleted: false,
-                error: "OpenClaw started the handoff, but returned an unreadable response.")
-        }
-        return parsed
     }
 
     private func reconnectConsumerGatewayAfterConfigBootstrap() async {
@@ -415,16 +436,59 @@ extension ChannelsStore {
         guard !self.isPreview else { return }
         guard AppStateStore.shared.connectionMode == .local else { return }
 
-        // Telegram bootstrap mutates gateway.auth.token and channels, which forces
-        // a local gateway restart. The shared macOS control socket must drop its
-        // stale auth and reconnect to the restarted gateway before the onboarding
-        // flow can observe the new Telegram state truthfully.
-        await GatewayConnection.shared.shutdown()
-        await GatewayEndpointStore.shared.refresh()
-        try? await GatewayConnection.shared.refresh()
+        _ = await Self.recoverConsumerGatewayAfterConfigBootstrap(
+            shutdown: {
+                // Drop the app's stale websocket state before every probe. The
+                // gateway may still be on the old token for a short window while
+                // launchd restarts it, and reusing a half-open client keeps the
+                // reconnect loop pinned to that dead auth state.
+                await GatewayConnection.shared.shutdown()
+            },
+            refreshEndpoint: {
+                // Pull the latest lane-local token/port snapshot after the config
+                // write so every retry reflects the new gateway truth on disk.
+                await GatewayEndpointStore.shared.refresh()
+            },
+            refreshConnection: {
+                try await GatewayConnection.shared.refresh()
+            },
+            probe: {
+                // Authenticated status is the cheapest proof that the restarted
+                // gateway is back and the app is no longer speaking with stale auth.
+                _ = try await GatewayConnection.shared.requestRaw(
+                    method: .status,
+                    timeoutMs: 1_500)
+            })
     }
 
-    private func telegramReplayPayloadJson(dm: TelegramSetupDirectMessage) -> String? {
+    private static func recoverConsumerGatewayAfterConfigBootstrap(
+        retryDelayNanoseconds: UInt64 = 350_000_000,
+        maxAttempts: Int = 5,
+        shutdown: @escaping @Sendable () async -> Void,
+        refreshEndpoint: @escaping @Sendable () async -> Void,
+        refreshConnection: @escaping @Sendable () async throws -> Void,
+        probe: @escaping @Sendable () async throws -> Void,
+        sleep: @escaping @Sendable (UInt64) async -> Void = { delay in
+            try? await Task.sleep(nanoseconds: delay)
+        }
+    ) async -> Bool {
+        for attempt in 0..<maxAttempts {
+            await shutdown()
+            await refreshEndpoint()
+            do {
+                try await refreshConnection()
+                try await probe()
+                return true
+            } catch {
+                guard attempt + 1 < maxAttempts else { break }
+                await sleep(retryDelayNanoseconds)
+            }
+        }
+
+        return false
+    }
+
+    private func telegramReplayGatewayParams(dm: TelegramSetupDirectMessage) -> [String: AnyCodable]? {
         let text = dm.text?.trimmingCharacters(in: .whitespacesAndNewlines)
         let caption = dm.caption?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (text?.isEmpty == false) || (caption?.isEmpty == false) else {
@@ -443,13 +507,90 @@ extension ChannelsStore {
             date: dm.date,
             messageThreadId: dm.messageThreadId)
         guard let data = try? JSONEncoder().encode(payload),
-              let json = String(data: data, encoding: .utf8)
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             return nil
         }
-        return json
+        return [
+            "payload": AnyCodable(object),
+            // Mirror the backend timeout so the gateway call stays bounded even
+            // when local reconnect/retry logic adds a little transport overhead.
+            "timeoutMs": AnyCodable(8_000),
+        ]
     }
 }
+
+struct ConsumerTelegramReplayDecision: Equatable {
+    let shouldReenableTelegram: Bool
+    let shouldWaitForActivityConfirmation: Bool
+    let shouldTrustReplayCompletion: Bool
+}
+
+enum ConsumerTelegramFirstTaskReplayAction: Equatable {
+    case replayCapturedMessage
+    case trustObservedLiveCompletion
+}
+
+extension ChannelsStore {
+    static func consumerTelegramReplayDecision(
+        replyStarted: Bool,
+        replyCompleted: Bool?,
+        error: String?
+    ) -> ConsumerTelegramReplayDecision {
+        let completed = replyCompleted ?? replyStarted
+        if error == nil {
+            return ConsumerTelegramReplayDecision(
+                shouldReenableTelegram: true,
+                shouldWaitForActivityConfirmation: !completed,
+                shouldTrustReplayCompletion: completed)
+        }
+
+        // Sender capture already proved the user/channel pairing. If the replay
+        // helper at least started, always restore the live Telegram config first
+        // and then verify completion from fresh activity instead of leaving the
+        // lane stuck in enabled:false after a timeout or restart race.
+        if replyStarted {
+            return ConsumerTelegramReplayDecision(
+                shouldReenableTelegram: true,
+                shouldWaitForActivityConfirmation: true,
+                shouldTrustReplayCompletion: false)
+        }
+
+        return ConsumerTelegramReplayDecision(
+            shouldReenableTelegram: false,
+            shouldWaitForActivityConfirmation: false,
+            shouldTrustReplayCompletion: false)
+    }
+
+    static func consumerTelegramFirstTaskReplayAction(
+        activityAlreadyConfirmed: Bool
+    ) -> ConsumerTelegramFirstTaskReplayAction {
+        activityAlreadyConfirmed ? .trustObservedLiveCompletion : .replayCapturedMessage
+    }
+}
+
+#if DEBUG
+extension ChannelsStore {
+    static func _testRecoverConsumerGatewayAfterConfigBootstrap(
+        retryDelayNanoseconds: UInt64 = 350_000_000,
+        maxAttempts: Int = 5,
+        shutdown: @escaping @Sendable () async -> Void,
+        refreshEndpoint: @escaping @Sendable () async -> Void,
+        refreshConnection: @escaping @Sendable () async throws -> Void,
+        probe: @escaping @Sendable () async throws -> Void,
+        sleep: @escaping @Sendable (UInt64) async -> Void = { _ in }
+    ) async -> Bool {
+        await Self.recoverConsumerGatewayAfterConfigBootstrap(
+            retryDelayNanoseconds: retryDelayNanoseconds,
+            maxAttempts: maxAttempts,
+            shutdown: shutdown,
+            refreshEndpoint: refreshEndpoint,
+            refreshConnection: refreshConnection,
+            probe: probe,
+            sleep: sleep)
+    }
+}
+#endif
 
 private enum TelegramBootstrapPersistenceError: LocalizedError {
     case persistedConfigMismatch
