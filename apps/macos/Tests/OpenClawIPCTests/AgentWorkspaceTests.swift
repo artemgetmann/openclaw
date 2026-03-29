@@ -63,6 +63,7 @@ struct AgentWorkspaceTests {
         #expect(template.contains("lead with"))
         #expect(template.contains("default suggestion"))
         #expect(template.contains("Jarvis"))
+        #expect(template.contains("Do not repeat a bootstrap question"))
         #expect(template.contains("Do not end with"))
         #expect(!template.contains("openclaw.json"))
         #expect(!template.contains("private git repo"))

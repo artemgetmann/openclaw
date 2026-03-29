@@ -57,6 +57,10 @@ type AgentConfig = Partial<AgentDefaults> & {
 
 export const formatTokenCount = formatTokenCountShared;
 
+function isConsumerMinimalCommandSurface(): boolean {
+  return process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP === "1";
+}
+
 type QueueStatus = {
   mode?: string;
   depth?: number;
@@ -725,6 +729,24 @@ function groupCommandsByCategory(
 }
 
 export function buildHelpMessage(cfg?: OpenClawConfig): string {
+  if (isConsumerMinimalCommandSurface()) {
+    return [
+      "ℹ️ Help",
+      "",
+      "Essentials",
+      "  /new  |  /stop  |  /status",
+      "  /think <level>  |  /model <id>",
+      "  /think adaptive = auto; falls back safely on models without native adaptive support.",
+      "",
+      "Useful extras",
+      "  /restart - Restart OpenClaw",
+      "  /tts - Voice replies",
+      "",
+      "Advanced",
+      "  /commands - Full command list",
+    ].join("\n");
+  }
+
   const lines = ["ℹ️ Help", ""];
 
   lines.push("Session");
@@ -888,6 +910,10 @@ export function buildCommandsMessagePaginated(
   const pageItems = items.slice(startIndex, endIndex);
 
   const lines = [`ℹ️ Commands (${currentPage}/${totalPages})`, ""];
+  if (isConsumerMinimalCommandSurface()) {
+    lines.push("Advanced list. The default consumer Telegram menu only shows essentials.");
+    lines.push("");
+  }
   lines.push(formatCommandList(pageItems));
 
   return {

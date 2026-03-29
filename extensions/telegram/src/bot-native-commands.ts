@@ -82,6 +82,23 @@ import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const execFileAsync = promisify(execFile);
+const CONSUMER_MINIMAL_MENU_COMMAND_ORDER = ["help", "status", "think", "model", "new", "stop"];
+const CONSUMER_MINIMAL_MENU_COMMANDS = new Set(CONSUMER_MINIMAL_MENU_COMMAND_ORDER);
+
+function isConsumerMinimalTelegramMenuEnabled(): boolean {
+  return process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP === "1";
+}
+
+function filterConsumerMinimalMenuCommands(
+  commands: Array<{ command: string; description: string }>,
+): Array<{ command: string; description: string }> {
+  const order = new Map(
+    CONSUMER_MINIMAL_MENU_COMMAND_ORDER.map((command, index) => [command, index] as const),
+  );
+  return commands
+    .filter((entry) => CONSUMER_MINIMAL_MENU_COMMANDS.has(entry.command))
+    .sort((left, right) => (order.get(left.command) ?? 999) - (order.get(right.command) ?? 999));
+}
 
 async function resolveCurrentBranchName(): Promise<string> {
   const candidateCwds = [
@@ -487,9 +504,17 @@ export const registerTelegramNativeCommands = ({
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
   ];
+  const menuCommands = isConsumerMinimalTelegramMenuEnabled()
+    ? filterConsumerMinimalMenuCommands(allCommandsFull)
+    : allCommandsFull;
+  if (isConsumerMinimalTelegramMenuEnabled()) {
+    runtime.log?.(
+      `telegram: consumer menu preset active; exposing ${menuCommands.length} essential commands. Use /help or /commands for the advanced list.`,
+    );
+  }
   const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
     buildCappedTelegramMenuCommands({
-      allCommands: allCommandsFull,
+      allCommands: menuCommands,
     });
   if (overflowCount > 0) {
     runtime.log?.(

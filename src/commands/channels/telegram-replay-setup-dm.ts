@@ -224,5 +224,5 @@ export async function channelsTelegramReplaySetupDmCommand(
     runtime.log(JSON.stringify(result));
     return;
   }
-  runtime.log(`Telegram first-reply handoff complete for account ${account.accountId}.`);
+  runtime.log(`Telegram first-reply handoff complete for account ${result.accountId}.`);
 }
