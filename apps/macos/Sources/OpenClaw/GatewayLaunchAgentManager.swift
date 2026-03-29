@@ -20,6 +20,17 @@ enum GatewayLaunchAgentManager {
         }
     }
 
+    private struct DisableMarkerMetadata: Encodable {
+        let version: Int
+        let disabledAt: String
+        let source: String
+        let reason: String?
+        let stateDir: String
+        let bundlePath: String?
+        let instanceID: String?
+        let pid: Int32
+    }
+
     enum DesiredAction: Equatable {
         case install
         case start
@@ -46,16 +57,33 @@ enum GatewayLaunchAgentManager {
         return false
     }
 
-    static func setLaunchAgentWriteDisabled(_ disabled: Bool) -> String? {
+    private static func disableMarkerMetadata(source: String, reason: String?) -> DisableMarkerMetadata {
+        DisableMarkerMetadata(
+            version: 1,
+            disabledAt: ISO8601DateFormatter().string(from: Date()),
+            source: source,
+            reason: reason,
+            stateDir: OpenClawPaths.stateDirURL.path,
+            bundlePath: Bundle.main.bundleURL.path,
+            instanceID: ConsumerInstance.current.id,
+            pid: ProcessInfo.processInfo.processIdentifier)
+    }
+
+    static func setLaunchAgentWriteDisabled(
+        _ disabled: Bool,
+        source: String = "apps/macos/Sources/OpenClaw/GatewayLaunchAgentManager.swift",
+        reason: String? = nil) -> String?
+    {
         let marker = self.disableLaunchAgentMarkerURL
         if disabled {
             do {
                 try FileManager().createDirectory(
                     at: marker.deletingLastPathComponent(),
                     withIntermediateDirectories: true)
-                if !FileManager().fileExists(atPath: marker.path) {
-                    FileManager().createFile(atPath: marker.path, contents: nil)
-                }
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let payload = try encoder.encode(self.disableMarkerMetadata(source: source, reason: reason))
+                try payload.write(to: marker, options: [.atomic])
             } catch {
                 return error.localizedDescription
             }

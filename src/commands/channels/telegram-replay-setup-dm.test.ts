@@ -126,4 +126,58 @@ describe("channelsTelegramReplaySetupDmCommand", () => {
 
     expect(createTelegramBot).not.toHaveBeenCalled();
   });
+
+  it("waits for update watermark persistence before returning", async () => {
+    let releaseWrite: (() => void) | null = null;
+    writeTelegramUpdateOffset.mockReset().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWrite = resolve;
+        }),
+    );
+    handleUpdate.mockReset().mockImplementation(async () => {
+      const params = createTelegramBot.mock.calls[0]?.[0] as {
+        updateOffset?: { onUpdateId?: (updateId: number) => Promise<void> };
+      };
+      await params.updateOffset?.onUpdateId?.(41);
+    });
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    let finished = false;
+    const pending = channelsTelegramReplaySetupDmCommand(
+      {
+        json: true,
+        payloadJson: JSON.stringify({
+          updateId: 41,
+          messageId: 99,
+          chatId: 123456789,
+          senderId: 123456789,
+          text: "hello there",
+          date: 1_711_234_567,
+        }),
+      },
+      runtime as never,
+    ).then(() => {
+      finished = true;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(finished).toBe(false);
+
+    releaseWrite?.();
+    await pending;
+
+    expect(finished).toBe(true);
+    expect(writeTelegramUpdateOffset).toHaveBeenCalledWith({
+      accountId: "default",
+      botToken: "123456:telegram-token",
+      updateId: 41,
+    });
+  });
 });

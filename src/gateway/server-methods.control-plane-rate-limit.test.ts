@@ -131,6 +131,72 @@ describe("gateway control-plane write rate limit", () => {
     expect(handlerCalls).toHaveBeenCalledTimes(4);
   });
 
+  it("treats models.auth.apply as a control-plane write", async () => {
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext();
+    const client = buildClient();
+
+    await runRequest({ method: "models.auth.apply", context, client, handler });
+    await runRequest({ method: "models.auth.apply", context, client, handler });
+    await runRequest({ method: "models.auth.apply", context, client, handler });
+    const blocked = await runRequest({ method: "models.auth.apply", context, client, handler });
+
+    expect(handlerCalls).toHaveBeenCalledTimes(3);
+    expect(blocked).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+  });
+
+  it("treats models.set as a control-plane write", async () => {
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext();
+    const client = buildClient();
+
+    await runRequest({ method: "models.set", context, client, handler });
+    await runRequest({ method: "models.set", context, client, handler });
+    await runRequest({ method: "models.set", context, client, handler });
+    const blocked = await runRequest({ method: "models.set", context, client, handler });
+
+    expect(handlerCalls).toHaveBeenCalledTimes(3);
+    expect(blocked).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+  });
+
+  it("treats models.set as a control-plane write", async () => {
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext();
+    const client = buildClient();
+
+    await runRequest({ method: "models.set", context, client, handler });
+    await runRequest({ method: "models.set", context, client, handler });
+    await runRequest({ method: "models.set", context, client, handler });
+    const blocked = await runRequest({ method: "models.set", context, client, handler });
+
+    expect(handlerCalls).toHaveBeenCalledTimes(3);
+    expect(blocked).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+  });
+
   it("uses connId fallback when both device and client IP are unknown", () => {
     const key = resolveControlPlaneRateLimitKey({
       connect: buildConnect(),

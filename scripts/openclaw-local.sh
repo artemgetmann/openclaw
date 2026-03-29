@@ -38,19 +38,7 @@ fi
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$RAW_INSTANCE_ID")"
 if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
-  export OPENCLAW_CONSUMER_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-$NORMALIZED_INSTANCE_ID}"
-  export OPENCLAW_PROFILE="${OPENCLAW_PROFILE:-$(consumer_instance_profile "$NORMALIZED_INSTANCE_ID")}"
-  # OPENCLAW_HOME is the consumer runtime root. OPENCLAW_STATE_DIR and
-  # OPENCLAW_CONFIG_PATH point at the nested .openclaw state payload inside it.
-  # Using the state dir as HOME makes CLI bootstrap derive paths like
-  # ".openclaw/.openclaw/workspace-*", which poisons skills/workspace checks.
-  export OPENCLAW_HOME="${OPENCLAW_HOME:-$(consumer_instance_runtime_root "$NORMALIZED_INSTANCE_ID")}"
-  export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")}"
-  export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$(consumer_instance_config_path "$NORMALIZED_INSTANCE_ID")}"
-  export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-$(consumer_instance_gateway_port "$NORMALIZED_INSTANCE_ID")}"
-  export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
-  export OPENCLAW_LOG_DIR="${OPENCLAW_LOG_DIR:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")/logs}"
-  export OPENCLAW_LAUNCHD_LABEL="${OPENCLAW_LAUNCHD_LABEL:-$(consumer_instance_gateway_launchd_label "$NORMALIZED_INSTANCE_ID")}"
+  consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
 fi
 
 # Short local CLI commands are an easy place to accidentally mutate the shared

@@ -136,6 +136,37 @@ extension ChannelsStore {
                 allowFrom: [String(dm.senderId)],
                 enabled: false)
             self.telegramSetupFirstSenderId = String(dm.senderId)
+
+            // If the live Telegram poller already handled this first task before
+            // the user clicked "Verify first task", do not replay the same DM
+            // through the bootstrap helper. That replay is what produces the
+            // duplicate first-run replies the user sees in Telegram.
+            await self.refresh(probe: true)
+            let activityAlreadyConfirmed = self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible()
+            switch Self.consumerTelegramFirstTaskReplayAction(
+                activityAlreadyConfirmed: activityAlreadyConfirmed)
+            {
+            case .trustObservedLiveCompletion:
+                _ = try await self.applyTelegramSetupBootstrap(
+                    token: token,
+                    dmPolicy: "allowlist",
+                    allowFrom: [String(dm.senderId)],
+                    enabled: true)
+                restoredByFinalBootstrap = true
+                self.telegramSetupStatus = self.telegramCaptureStatus(
+                    dm: dm,
+                    persistedRoot: persisted,
+                    replayResult: TelegramSetupReplayResult(
+                        ok: true,
+                        replyStarted: true,
+                        replyCompleted: true,
+                        error: nil),
+                    activityConfirmed: true)
+                return
+            case .replayCapturedMessage:
+                break
+            }
+
             self.telegramSetupStatus = "Running your first Telegram task..."
             self.telegramSetupPhase = .startingFirstReply
             let replayResult = await self.startFirstTelegramReply(dm: dm)
@@ -495,6 +526,11 @@ struct ConsumerTelegramReplayDecision: Equatable {
     let shouldTrustReplayCompletion: Bool
 }
 
+enum ConsumerTelegramFirstTaskReplayAction: Equatable {
+    case replayCapturedMessage
+    case trustObservedLiveCompletion
+}
+
 extension ChannelsStore {
     static func consumerTelegramReplayDecision(
         replyStarted: Bool,
@@ -524,6 +560,12 @@ extension ChannelsStore {
             shouldReenableTelegram: false,
             shouldWaitForActivityConfirmation: false,
             shouldTrustReplayCompletion: false)
+    }
+
+    static func consumerTelegramFirstTaskReplayAction(
+        activityAlreadyConfirmed: Bool
+    ) -> ConsumerTelegramFirstTaskReplayAction {
+        activityAlreadyConfirmed ? .trustObservedLiveCompletion : .replayCapturedMessage
     }
 }
 

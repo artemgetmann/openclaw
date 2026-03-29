@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reset OpenClaw like Trimmy: kill running instances, rebuild, repackage, relaunch, verify.
+# Reset OpenClaw like Trimmy: restart the current app instance, rebuild, repackage, relaunch, verify.
 
 set -euo pipefail
 
@@ -7,10 +7,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/worktree-guards.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
 GATEWAY_ENTRY="${ROOT_DIR}/dist/index.js"
-APP_PROCESS_PATTERN="OpenClaw.app/Contents/MacOS/OpenClaw"
-DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
-LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/OpenClaw"
-RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/OpenClaw"
 LAUNCH_AGENT="${HOME}/Library/LaunchAgents/ai.openclaw.mac.plist"
 LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
 LOCK_DIR="${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}"
@@ -21,7 +17,13 @@ NO_SIGN=0
 SIGN=0
 AUTO_DETECT_SIGNING=1
 GATEWAY_WAIT_SECONDS="${OPENCLAW_GATEWAY_WAIT_SECONDS:-0}"
-LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
+LAUNCHAGENT_DISABLE_STATE_DIR="${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:+${OPENCLAW_HOME}/.openclaw}}"
+if [[ -z "${LAUNCHAGENT_DISABLE_STATE_DIR}" ]]; then
+  LAUNCHAGENT_DISABLE_STATE_DIR="${HOME}/.openclaw"
+fi
+LAUNCHAGENT_DISABLE_MARKER="${LAUNCHAGENT_DISABLE_STATE_DIR}/disable-launchagent"
+APP_SCOPE="self"
+RESTART_PROCESS_PATTERNS=()
 # Default to the normal launchd-owning path. Attach-only is a niche debugging
 # mode that explicitly disables ai.openclaw.gateway ownership, so making it the
 # default turns "restart the app" into "quietly stop updating the main bot".
@@ -80,42 +82,100 @@ check_signing_keys() {
     | grep -Eq '(Developer ID Application|Apple Distribution|Apple Development)'
 }
 
+write_launchagent_disable_marker() {
+  local reason="$1"
+  mkdir -p "${LAUNCHAGENT_DISABLE_STATE_DIR}"
+  cat > "${LAUNCHAGENT_DISABLE_MARKER}" <<EOF
+{
+  "version": 1,
+  "disabledAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "source": "scripts/restart-mac.sh",
+  "reason": "${reason}",
+  "stateDir": "${LAUNCHAGENT_DISABLE_STATE_DIR}",
+  "worktree": "${ROOT_DIR}",
+  "pid": $$
+}
+EOF
+}
+
 trap cleanup EXIT INT TERM
 
-for arg in "$@"; do
-  case "${arg}" in
-    --wait|-w) WAIT_FOR_LOCK=1 ;;
-    --no-sign) NO_SIGN=1; AUTO_DETECT_SIGNING=0 ;;
-    --sign) SIGN=1; AUTO_DETECT_SIGNING=0 ;;
-    --attach-only) ATTACH_ONLY=1 ;;
-    --no-attach-only) ATTACH_ONLY=0 ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --wait|-w)
+      WAIT_FOR_LOCK=1
+      shift
+      ;;
+    --no-sign)
+      NO_SIGN=1
+      AUTO_DETECT_SIGNING=0
+      shift
+      ;;
+    --sign)
+      SIGN=1
+      AUTO_DETECT_SIGNING=0
+      shift
+      ;;
+    --attach-only)
+      ATTACH_ONLY=1
+      shift
+      ;;
+    --no-attach-only)
+      ATTACH_ONLY=0
+      shift
+      ;;
+    --app-scope)
+      if [[ $# -lt 2 ]]; then
+        fail "--app-scope requires a value of self or all"
+      fi
+      APP_SCOPE="$2"
+      shift 2
+      ;;
+    --app-scope=*)
+      APP_SCOPE="${1#--app-scope=}"
+      shift
+      ;;
     --help|-h)
-      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only]"
+      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--app-scope self|all] [--attach-only|--no-attach-only]"
       log "  --wait    Wait for other restart to complete instead of exiting"
       log "  --no-sign Force no code signing (fastest for development)"
       log "  --sign    Force code signing (will fail if no signing key available)"
+      log "  --app-scope self  Only restart the current app bundle and its gateway"
+      log "  --app-scope all   Also kill any other OpenClaw app process"
       log "  --attach-only    Launch app with --attach-only (skip launchd install)"
       log "  --no-attach-only Launch app without attach-only override"
       log ""
       log "Env:"
       log "  OPENCLAW_GATEWAY_WAIT_SECONDS=0  Wait time before gateway port check (unsigned only)"
+      log "  OPENCLAW_STATE_DIR             Scope launchagent-disable marker to this runtime state dir"
       log ""
-      log "Unsigned recovery:"
+      log "Scoped alternatives:"
+      log "  bash scripts/dev-launch-mac.sh"
+      log "  bash scripts/open-consumer-mac-app.sh --instance <id>"
+      log "  pnpm openclaw:local gateway restart"
+      log ""
+      log "Unsigned recovery (shared service path):"
       log "  node dist/index.js gateway install --force --allow-shared-service-takeover --runtime node"
-      log "  node dist/index.js gateway restart"
+      log "  pnpm openclaw:local gateway restart"
       log ""
       log "Reset unsigned overrides:"
-      log "  rm ~/.openclaw/disable-launchagent"
+      log "  rm ${LAUNCHAGENT_DISABLE_MARKER}"
       log ""
       log "Default behavior: Auto-detect signing keys, fallback to --no-sign if none found"
+      log "Default app scope: self (only the current app bundle and its gateway)"
       exit 0
       ;;
-    *) ;;
+    *)
+      shift
+      ;;
   esac
 done
 
 if [[ "$NO_SIGN" -eq 1 && "$SIGN" -eq 1 ]]; then
   fail "Cannot use --sign and --no-sign together"
+fi
+if [[ "$APP_SCOPE" != "self" && "$APP_SCOPE" != "all" ]]; then
+  fail "Unknown --app-scope value '${APP_SCOPE}'. Use self or all."
 fi
 
 mkdir -p "$(dirname "$LOG_PATH")"
@@ -128,6 +188,7 @@ fi
 if [[ "$ATTACH_ONLY" -eq 1 ]]; then
   log "==> Using --attach-only (skip launchd install)"
 fi
+log "==> App scope: ${APP_SCOPE}"
 
 acquire_lock
 
@@ -136,30 +197,79 @@ worktree_guard_reject_shared_root_main_edits \
   worktree \
   --context "scripts/restart-mac.sh"
 
-kill_all_openclaw() {
+resolve_restart_app_bundle() {
+  if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then
+    printf '%s' "${APP_BUNDLE}"
+    return 0
+  fi
+
+  if [[ -d "/Applications/OpenClaw.app" ]]; then
+    printf '%s' "/Applications/OpenClaw.app"
+    return 0
+  fi
+
+  if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
+    printf '%s' "${ROOT_DIR}/dist/OpenClaw.app"
+    return 0
+  fi
+}
+
+resolve_restart_patterns() {
+  RESTART_PROCESS_PATTERNS=()
+
+  local restart_app_bundle=""
+  restart_app_bundle="$(resolve_restart_app_bundle)"
+  if [[ -n "${restart_app_bundle}" ]]; then
+    RESTART_PROCESS_PATTERNS+=("${restart_app_bundle}/Contents/MacOS/OpenClaw")
+  fi
+  RESTART_PROCESS_PATTERNS+=("${ROOT_DIR}/apps/macos/.build/debug/OpenClaw")
+  RESTART_PROCESS_PATTERNS+=("${ROOT_DIR}/apps/macos/.build-local/debug/OpenClaw")
+  RESTART_PROCESS_PATTERNS+=("${ROOT_DIR}/apps/macos/.build/release/OpenClaw")
+}
+
+restart_processes_remaining() {
+  local pattern=""
+
+  for pattern in "${RESTART_PROCESS_PATTERNS[@]}"; do
+    if [[ -n "${pattern}" ]] && pgrep -f "${pattern}" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+
+  if [[ "$APP_SCOPE" == "all" ]] && pgrep -x "OpenClaw" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
+kill_current_openclaw() {
+  resolve_restart_patterns
+
   for _ in {1..10}; do
-    pkill -f "${APP_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -f "${DEBUG_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -f "${LOCAL_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -f "${RELEASE_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -x "OpenClaw" 2>/dev/null || true
-    if ! pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -f "${DEBUG_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -f "${LOCAL_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -f "${RELEASE_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -x "OpenClaw" >/dev/null 2>&1; then
+    for pattern in "${RESTART_PROCESS_PATTERNS[@]}"; do
+      pkill -f "${pattern}" 2>/dev/null || true
+    done
+    if [[ "$APP_SCOPE" == "all" ]]; then
+      pkill -x "OpenClaw" 2>/dev/null || true
+    fi
+    if ! restart_processes_remaining; then
       return 0
     fi
     sleep 0.3
   done
 }
 
+kill_all_openclaw() {
+  kill_current_openclaw
+}
+
 stop_launch_agent() {
   launchctl bootout gui/"$UID"/ai.openclaw.mac 2>/dev/null || true
 }
 
-# 1) Kill all running instances first.
-log "==> Killing existing OpenClaw instances"
+# 1) Kill the selected running instances first.
+log "==> Killing existing OpenClaw instances (scope=${APP_SCOPE})"
 kill_all_openclaw
 stop_launch_agent
 
@@ -183,8 +293,7 @@ fi
 if [ "$NO_SIGN" -eq 1 ]; then
   export ALLOW_ADHOC_SIGNING=1
   export SIGN_IDENTITY="-"
-  mkdir -p "${HOME}/.openclaw"
-  run_step "disable launchagent writes" /usr/bin/touch "${LAUNCHAGENT_DISABLE_MARKER}"
+  run_step "disable launchagent writes" write_launchagent_disable_marker "unsigned-restart"
 elif [ "$SIGN" -eq 1 ]; then
   if ! check_signing_keys; then
     fail "No signing identity found. Use --no-sign or install a signing key."
@@ -272,7 +381,8 @@ run_step "launch app" env -i \
 
 # 5) Verify the app is alive.
 sleep 1.5
-if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
+resolve_restart_patterns
+if restart_processes_remaining; then
   log "OK: OpenClaw is running."
 else
   fail "App exited immediately. Check ${LOG_PATH} or Console.app (User Reports)."

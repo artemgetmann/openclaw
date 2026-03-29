@@ -164,11 +164,31 @@ export const AgentsFilesSetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ModelsListParamsSchema = Type.Object({}, { additionalProperties: false });
+export const ModelsListParamsSchema = Type.Object(
+  {
+    all: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
 
 export const ModelsListResultSchema = Type.Object(
   {
     models: Type.Array(ModelChoiceSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsSetParamsSchema = Type.Object(
+  {
+    model: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsSetResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    model: NonEmptyString,
   },
   { additionalProperties: false },
 );
@@ -228,6 +248,59 @@ export const ModelsReadinessResultSchema = Type.Object(
     lastProbeAt: Type.Optional(Type.Integer({ minimum: 0 })),
     probeLatencyMs: Type.Optional(Type.Integer({ minimum: 0 })),
     probe: Type.Optional(ModelsReadinessProbeSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ConsumerAuthInputKindSchema = Type.Union([
+  Type.Literal("none"),
+  Type.Literal("api_key"),
+  Type.Literal("token"),
+]);
+
+export const ModelsAuthListParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const ModelsAuthOptionSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    providerId: NonEmptyString,
+    providerLabel: NonEmptyString,
+    title: NonEmptyString,
+    detail: NonEmptyString,
+    inputKind: ConsumerAuthInputKindSchema,
+    submitLabel: NonEmptyString,
+    inputLabel: Type.Optional(NonEmptyString),
+    inputHelp: Type.Optional(Type.String()),
+    inputPlaceholder: Type.Optional(Type.String()),
+    methodKind: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsAuthListResultSchema = Type.Object(
+  {
+    options: Type.Array(ModelsAuthOptionSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsAuthApplyParamsSchema = Type.Object(
+  {
+    optionId: NonEmptyString,
+    secret: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsAuthApplyResultSchema = Type.Object(
+  {
+    optionId: NonEmptyString,
+    providerId: NonEmptyString,
+    methodId: NonEmptyString,
+    defaultModel: Type.Optional(NonEmptyString),
+    notes: Type.Array(Type.String()),
+    profileIds: Type.Array(NonEmptyString),
+    readiness: ModelsReadinessResultSchema,
   },
   { additionalProperties: false },
 );

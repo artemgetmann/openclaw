@@ -66,8 +66,15 @@ check_required_dir() {
 check_launchd_match() {
   local label="$1"
   local expected_path="$2"
-  local category="$3"
+  local expected_state_dir="$3"
+  local expected_config_path="$4"
+  local expected_port="$5"
+  local category="$6"
   local output=""
+  local plist_path=""
+  local actual_state_dir=""
+  local actual_config_path=""
+  local actual_port=""
 
   if [[ "$(uname -s)" != "Darwin" ]]; then
     return 0
@@ -80,6 +87,49 @@ check_launchd_match() {
   if [[ "$output" != *"$expected_path"* ]]; then
     fail "${category} launch agent does not point at this worktree: ${label}"
     emit "launchd_expected_path=${expected_path}"
+  fi
+
+  plist_path="$HOME/Library/LaunchAgents/${label}.plist"
+  if [[ ! -f "$plist_path" ]]; then
+    return 0
+  fi
+
+  actual_state_dir="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:OPENCLAW_STATE_DIR' "$plist_path" 2>/dev/null || true)"
+  actual_config_path="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:OPENCLAW_CONFIG_PATH' "$plist_path" 2>/dev/null || true)"
+
+  if [[ -n "$expected_state_dir" && "$actual_state_dir" != "$expected_state_dir" ]]; then
+    fail "${category} launch agent state dir drifted away from this lane: ${label}"
+    emit "launchd_expected_state_dir=${expected_state_dir}"
+    emit "launchd_actual_state_dir=${actual_state_dir:-missing}"
+  fi
+
+  if [[ -n "$expected_config_path" && "$actual_config_path" != "$expected_config_path" ]]; then
+    fail "${category} launch agent config path drifted away from this lane: ${label}"
+    emit "launchd_expected_config_path=${expected_config_path}"
+    emit "launchd_actual_config_path=${actual_config_path:-missing}"
+  fi
+
+  local arg_index=0
+  local arg_value=""
+  while true; do
+    arg_value="$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:${arg_index}" "$plist_path" 2>/dev/null || true)"
+    if [[ -z "$arg_value" ]]; then
+      break
+    fi
+    if [[ "$arg_value" == "--port" ]]; then
+      actual_port="$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:$((arg_index + 1))" "$plist_path" 2>/dev/null || true)"
+      break
+    fi
+    if [[ "$arg_value" == --port=* ]]; then
+      actual_port="${arg_value#--port=}"
+      break
+    fi
+    arg_index=$((arg_index + 1))
+  done
+  if [[ -n "$expected_port" && -n "$actual_port" && "$actual_port" != "$expected_port" ]]; then
+    fail "${category} launch agent port drifted away from this lane: ${label}"
+    emit "launchd_expected_port=${expected_port}"
+    emit "launchd_actual_port=${actual_port}"
   fi
 }
 
@@ -375,8 +425,20 @@ if [[ -n "$NORMALIZED_INSTANCE_ID" || "$REQUIRE_INSTANCE" -eq 1 ]]; then
     emit "gateway_launchd_label=${GATEWAY_LABEL}"
 
     if [[ "$REQUIRE_LAUNCHD_MATCH" -eq 1 ]]; then
-      check_launchd_match "$GATEWAY_LABEL" "$WORKTREE_PATH" "gateway"
-      check_launchd_match "$APP_LABEL" "$WORKTREE_PATH" "app"
+      check_launchd_match \
+        "$GATEWAY_LABEL" \
+        "$WORKTREE_PATH" \
+        "$STATE_DIR" \
+        "$CONFIG_PATH" \
+        "$GATEWAY_PORT" \
+        "gateway"
+      check_launchd_match \
+        "$APP_LABEL" \
+        "$WORKTREE_PATH" \
+        "$STATE_DIR" \
+        "$CONFIG_PATH" \
+        "$GATEWAY_PORT" \
+        "app"
     fi
 
     if [[ "$TELEGRAM_MODE" != "skip" ]]; then

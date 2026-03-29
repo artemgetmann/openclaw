@@ -19,6 +19,7 @@ enum RemoteOnboardingProbeState: Equatable {
 @MainActor
 final class OnboardingController {
     static let shared = OnboardingController()
+    static let windowIdentifier = NSUserInterfaceItemIdentifier("ai.openclaw.consumer.onboarding")
     private var window: NSWindow?
     private var waitingForVisibleSurfaceHandoff = false
     private let logger = Logger(subsystem: "ai.openclaw", category: "consumer.launch")
@@ -29,6 +30,10 @@ final class OnboardingController {
 
     var hasVisibleWindow: Bool {
         self.window?.isVisible == true
+    }
+
+    var trackedWindow: NSWindow? {
+        self.window
     }
 
     func show() {
@@ -49,6 +54,7 @@ final class OnboardingController {
         }
         let hosting = NSHostingController(rootView: OnboardingView())
         let window = NSWindow(contentViewController: hosting)
+        window.identifier = Self.windowIdentifier
         window.title = UIStrings.welcomeTitle
         window.setContentSize(NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))
         window.styleMask = [.titled, .closable, .fullSizeContentView]
@@ -87,12 +93,20 @@ final class OnboardingController {
 
     func completeVisibleSurfaceHandoffIfPossible() -> Bool {
         guard self.waitingForVisibleSurfaceHandoff else { return false }
-        guard SettingsWindowOpener.hasVisibleContentWindow() else { return false }
+        // Treat "a replacement window exists" as success, not only "it is
+        // already visibly frontmost". SwiftUI Settings scenes can exist for a
+        // short beat before AppKit reports them visible, and restoring
+        // onboarding during that gap is how we end up with the setup sheet
+        // sitting on top of the real post-finish surface.
+        guard SettingsWindowOpener.hasReplacementContentWindow() else { return false }
         self.close()
         return true
     }
 
     func restoreAfterFailedVisibleSurfaceHandoff() {
+        if self.completeVisibleSurfaceHandoffIfPossible() {
+            return
+        }
         guard self.waitingForVisibleSurfaceHandoff, let window = self.window else { return }
         self.waitingForVisibleSurfaceHandoff = false
         DockIconManager.shared.temporarilyShowDock()

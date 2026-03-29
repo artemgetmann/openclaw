@@ -62,6 +62,7 @@ describe("registerTelegramNativeCommands", () => {
     pluginCommandMocks.executePluginCommand.mockResolvedValue({ text: "ok" });
     deliveryMocks.deliverReplies.mockClear();
     deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
+    delete process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP;
   });
 
   const buildParams = (cfg: OpenClawConfig, accountId = "default") =>
@@ -232,6 +233,41 @@ describe("registerTelegramNativeCommands", () => {
     expect(registeredCommands.some((entry) => entry.command === "plugin_status")).toBe(true);
     expect(registeredCommands.some((entry) => entry.command === "plugin-status")).toBe(false);
     expect(registeredCommands.some((entry) => entry.command === "custom-bad")).toBe(false);
+  });
+
+  it("registers a minimal consumer Telegram menu when consumer mode is enabled", async () => {
+    process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP = "1";
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const runtimeLog = vi.fn();
+
+    registerTelegramNativeCommands({
+      ...buildParams({}),
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn(),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      runtime: { log: runtimeLog } as unknown as RuntimeEnv,
+      telegramCfg: {
+        customCommands: [{ command: "backup", description: "Git backup" }],
+      } as TelegramAccountConfig,
+    });
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expect(registeredCommands.map((entry) => entry.command)).toEqual([
+      "help",
+      "status",
+      "think",
+      "model",
+      "new",
+      "stop",
+    ]);
+    expect(registeredCommands.some((entry) => entry.command === "backup")).toBe(false);
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "telegram: consumer menu preset active; exposing 6 essential commands. Use /help or /commands for the advanced list.",
+    );
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {

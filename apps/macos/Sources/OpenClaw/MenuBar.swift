@@ -114,7 +114,11 @@ struct OpenClawApp: App {
     private static func applyAttachOnlyOverrideIfNeeded() {
         let args = CommandLine.arguments
         guard args.contains("--attach-only") || args.contains("--no-launchd") else { return }
-        if let error = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(true) {
+        if let error = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(
+            true,
+            source: "apps/macos/Sources/OpenClaw/MenuBar.swift",
+            reason: "attach-only launch flag")
+        {
             Self.logger.error("attach-only flag failed: \(error, privacy: .public)")
             return
         }

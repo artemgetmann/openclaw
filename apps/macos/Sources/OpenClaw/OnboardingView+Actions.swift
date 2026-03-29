@@ -27,10 +27,10 @@ extension OnboardingView {
     }
 
     static func finishSurfaceHandoffAction(
-        hasVisibleContentWindow: Bool,
+        hasReplacementContentWindow: Bool,
         attemptsRemaining: Int) -> FinishSurfaceHandoffAction
     {
-        if hasVisibleContentWindow {
+        if hasReplacementContentWindow {
             return .completeClose
         }
         if attemptsRemaining > 0 {
@@ -116,7 +116,10 @@ extension OnboardingView {
         // onboarding window instead of making the whole app look dead.
         OnboardingController.shared.beginVisibleSurfaceHandoff()
         Self.requestFinishVisibleSurface(tab: followUpTab, reason: "finish")
-        Self.monitorFinishVisibleSurfaceHandoff(tab: followUpTab, attemptsRemaining: 4)
+        // Give the replacement surface longer than the generic activation
+        // recovery path. Finishing onboarding can coincide with settings scene
+        // creation, activation-policy churn, and first-run state writes.
+        Self.monitorFinishVisibleSurfaceHandoff(tab: followUpTab, attemptsRemaining: 10)
     }
 
     func copyToPasteboard(_ text: String) {
@@ -142,7 +145,7 @@ extension OnboardingView {
     private static func monitorFinishVisibleSurfaceHandoff(tab: SettingsTab, attemptsRemaining: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             switch Self.finishSurfaceHandoffAction(
-                hasVisibleContentWindow: SettingsWindowOpener.hasVisibleContentWindow(),
+                hasReplacementContentWindow: SettingsWindowOpener.hasReplacementContentWindow(),
                 attemptsRemaining: attemptsRemaining)
             {
             case .completeClose:

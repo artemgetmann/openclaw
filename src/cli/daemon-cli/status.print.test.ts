@@ -18,10 +18,22 @@ vi.mock("../../commands/onboard-helpers.js", () => ({
   resolveControlUiLinks: () => ({ httpUrl: "http://127.0.0.1:18789" }),
 }));
 
-const resolveMacLaunchAgentDisableMarkerPath = vi.hoisted(() => vi.fn(() => null));
+const readMacLaunchAgentDisableMarker = vi.hoisted(() =>
+  vi.fn<
+    () => {
+      path: string;
+      metadata?: {
+        source?: string;
+        reason?: string;
+      };
+    } | null
+  >(() => null),
+);
+const formatMacLaunchAgentDisableMarkerNote = vi.hoisted(() => vi.fn(() => ""));
 
 vi.mock("../../commands/doctor-platform-notes.js", () => ({
-  resolveMacLaunchAgentDisableMarkerPath,
+  readMacLaunchAgentDisableMarker,
+  formatMacLaunchAgentDisableMarkerNote,
 }));
 
 vi.mock("../../daemon/inspect.js", () => ({
@@ -76,8 +88,10 @@ describe("printDaemonStatus", () => {
   beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
-    resolveMacLaunchAgentDisableMarkerPath.mockReset();
-    resolveMacLaunchAgentDisableMarkerPath.mockReturnValue(null);
+    readMacLaunchAgentDisableMarker.mockReset();
+    readMacLaunchAgentDisableMarker.mockReturnValue(null);
+    formatMacLaunchAgentDisableMarkerNote.mockReset();
+    formatMacLaunchAgentDisableMarkerNote.mockReturnValue("");
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -123,6 +137,59 @@ describe("printDaemonStatus", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw gateway restart"));
   });
 
+  it("prints a loud lane-local port mismatch diagnosis", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 35324,
+          portSource: "service args",
+          probeUrl: "ws://127.0.0.1:35324",
+        },
+        port: {
+          port: 35324,
+          status: "busy",
+          listeners: [],
+          hints: [],
+        },
+        portCli: {
+          port: 35624,
+          status: "free",
+          listeners: [],
+          hints: [],
+        },
+        portMismatch: {
+          servicePort: 35324,
+          servicePortSource: "service args",
+          expectedPort: 35624,
+          expectedPortStatus: "free",
+          serviceStateDir: "/tmp/service-state",
+          expectedStateDir: "/tmp/cli-state",
+          serviceConfigPath: "/tmp/service-state/openclaw.json",
+          expectedConfigPath: "/tmp/cli-state/openclaw.json",
+          issues: ["service port=35324, cli port=35624"],
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("does not match this lane's expected runtime ownership"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("restart the gateway from this same lane"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw gateway restart"));
+  });
+
   it("prints the runtime fingerprint in text mode", () => {
     const status: DaemonStatus = {
       runtimeFingerprint: {
@@ -148,8 +215,16 @@ describe("printDaemonStatus", () => {
   });
 
   it("warns when launchagent writes are disabled on local macOS runtime", () => {
-    resolveMacLaunchAgentDisableMarkerPath.mockReturnValue(
-      "/Users/user/.openclaw/disable-launchagent",
+    readMacLaunchAgentDisableMarker.mockReturnValue({
+      path: "/tmp/lane/.openclaw/disable-launchagent",
+      metadata: { source: "scripts/restart-mac.sh", reason: "unsigned-restart" },
+    });
+    formatMacLaunchAgentDisableMarkerNote.mockReturnValue(
+      [
+        "- LaunchAgent writes are disabled via /tmp/lane/.openclaw/disable-launchagent.",
+        "- Provenance: scripts/restart-mac.sh · unsigned-restart.",
+        "  rm /tmp/lane/.openclaw/disable-launchagent",
+      ].join("\n"),
     );
 
     printDaemonStatus(
@@ -175,8 +250,9 @@ describe("printDaemonStatus", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("LaunchAgent writes are disabled"),
     );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("scripts/restart-mac.sh"));
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("rm /Users/user/.openclaw/disable-launchagent"),
+      expect.stringContaining("rm /tmp/lane/.openclaw/disable-launchagent"),
     );
   });
 

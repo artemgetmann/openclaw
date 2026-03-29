@@ -1,4 +1,7 @@
-import { resolveMacLaunchAgentDisableMarkerPath } from "../../commands/doctor-platform-notes.js";
+import {
+  formatMacLaunchAgentDisableMarkerNote,
+  readMacLaunchAgentDisableMarker,
+} from "../../commands/doctor-platform-notes.js";
 import { resolveControlUiLinks } from "../../commands/onboard-helpers.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
@@ -99,21 +102,13 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   if (daemonEnvLines.length > 0) {
     defaultRuntime.log(`${label("Service env:")} ${daemonEnvLines.join(" ")}`);
   }
-  const isLocalGateway = status.config?.cli.gateway?.mode !== "remote";
-  const launchAgentDisableMarkerPath = isLocalGateway
-    ? resolveMacLaunchAgentDisableMarkerPath()
-    : null;
-  if (launchAgentDisableMarkerPath) {
-    defaultRuntime.error(
-      warnText(
-        `LaunchAgent writes are disabled via ${shortenHomePath(launchAgentDisableMarkerPath)}.`,
-      ),
-    );
-    defaultRuntime.error(
-      warnText(
-        `Fix: run rm ${shortenHomePath(launchAgentDisableMarkerPath)} and restart the main gateway.`,
-      ),
-    );
+  const launchAgentDisableMarker = readMacLaunchAgentDisableMarker();
+  if (launchAgentDisableMarker) {
+    for (const line of formatMacLaunchAgentDisableMarkerNote(launchAgentDisableMarker).split(
+      "\n",
+    )) {
+      defaultRuntime.error(warnText(line));
+    }
   }
   spacer();
 
@@ -294,10 +289,45 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     }
   }
 
-  if (status.portCli && status.portCli.port !== status.port?.port) {
-    defaultRuntime.log(
-      `${label("Note:")} CLI config resolves gateway port=${status.portCli.port} (${status.portCli.status}).`,
+  if (status.portMismatch) {
+    defaultRuntime.error(
+      errorText(
+        "Root cause: the loaded LaunchAgent does not match this lane's expected runtime ownership.",
+      ),
     );
+    defaultRuntime.error(
+      errorText(
+        `Service port ${status.portMismatch.servicePort} (${status.portMismatch.servicePortSource}); expected port ${status.portMismatch.expectedPort} (${status.portMismatch.expectedPortStatus}).`,
+      ),
+    );
+    if (status.portMismatch.serviceStateDir !== status.portMismatch.expectedStateDir) {
+      defaultRuntime.error(
+        errorText(
+          `Service state dir ${shortenHomePath(status.portMismatch.serviceStateDir)}; expected ${shortenHomePath(status.portMismatch.expectedStateDir)}.`,
+        ),
+      );
+    }
+    if (status.portMismatch.serviceConfigPath !== status.portMismatch.expectedConfigPath) {
+      defaultRuntime.error(
+        errorText(
+          `Service config ${shortenHomePath(status.portMismatch.serviceConfigPath)}; expected ${shortenHomePath(status.portMismatch.expectedConfigPath)}.`,
+        ),
+      );
+    }
+    for (const issue of status.portMismatch.issues) {
+      defaultRuntime.error(errorText(`Mismatch detail: ${issue}`));
+    }
+    defaultRuntime.error(
+      errorText(
+        `Fix: restart the gateway from this same lane so launchd is reinstalled on port ${status.portMismatch.expectedPort}.`,
+      ),
+    );
+    defaultRuntime.error(
+      errorText(
+        `Recommended command: ${formatCliCommand("openclaw gateway restart", process.env)}`,
+      ),
+    );
+    spacer();
   }
 
   if (

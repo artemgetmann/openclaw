@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -14,46 +15,158 @@ function resolveHomeDir(): string {
   return process.env.HOME ?? os.homedir();
 }
 
-export function resolveMacLaunchAgentDisableMarkerPath(deps?: {
+export type MacLaunchAgentDisableMarkerInfo = {
+  path: string;
+  metadata?: {
+    disabledAt?: string;
+    source?: string;
+    reason?: string;
+    stateDir?: string;
+    worktree?: string;
+    bundlePath?: string;
+    instanceID?: string;
+    pid?: number;
+  };
+};
+
+function resolveMacLaunchAgentDisableStateDir(deps?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): string {
+  const env = deps?.env ?? process.env;
+  const homeDir = deps?.homeDir ?? resolveHomeDir();
+  return resolveStateDir(env, () => homeDir);
+}
+
+function readMarkerMetadata(
+  markerPath: string,
+  readFileSync: (path: string, encoding: BufferEncoding) => string,
+): MacLaunchAgentDisableMarkerInfo["metadata"] | undefined {
+  let raw = "";
+  try {
+    raw = readFileSync(markerPath, "utf8").trim();
+  } catch {
+    return undefined;
+  }
+  if (!raw) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const readString = (key: string) => {
+      const value = parsed[key];
+      return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+    };
+    const pidValue = parsed.pid;
+    const pid =
+      typeof pidValue === "number" && Number.isFinite(pidValue) ? Math.trunc(pidValue) : undefined;
+    return {
+      disabledAt: readString("disabledAt"),
+      source: readString("source"),
+      reason: readString("reason"),
+      stateDir: readString("stateDir"),
+      worktree: readString("worktree"),
+      bundlePath: readString("bundlePath"),
+      instanceID: readString("instanceID"),
+      pid,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function readMacLaunchAgentDisableMarker(deps?: {
   platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
   homeDir?: string;
   existsSync?: (path: string) => boolean;
-}): string | null {
+  readFileSync?: (path: string, encoding: BufferEncoding) => string;
+}): MacLaunchAgentDisableMarkerInfo | null {
   const platform = deps?.platform ?? process.platform;
   if (platform !== "darwin") {
     return null;
   }
-  const home = deps?.homeDir ?? resolveHomeDir();
-  const markerPath = path.join(home, ".openclaw", "disable-launchagent");
+  const markerPath = path.join(
+    resolveMacLaunchAgentDisableStateDir({
+      env: deps?.env,
+      homeDir: deps?.homeDir,
+    }),
+    "disable-launchagent",
+  );
   const existsSync = deps?.existsSync ?? fs.existsSync;
-  return existsSync(markerPath) ? markerPath : null;
+  if (!existsSync(markerPath)) {
+    return null;
+  }
+
+  const readFileSync = deps?.readFileSync ?? fs.readFileSync;
+  return {
+    path: markerPath,
+    metadata: readMarkerMetadata(markerPath, readFileSync),
+  };
 }
 
-function formatMacLaunchAgentDisableMarkerNote(markerPath: string): string {
-  const displayMarkerPath = shortenHomePath(markerPath);
-  return [
-    `- LaunchAgent writes are disabled via ${displayMarkerPath}.`,
-    "- To restore default behavior:",
-    `  rm ${displayMarkerPath}`,
-  ].join("\n");
+export function resolveMacLaunchAgentDisableMarkerPath(deps?: {
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  existsSync?: (path: string) => boolean;
+}): string | null {
+  return (
+    readMacLaunchAgentDisableMarker({
+      platform: deps?.platform,
+      env: deps?.env,
+      homeDir: deps?.homeDir,
+      existsSync: deps?.existsSync,
+    })?.path ?? null
+  );
+}
+
+export function formatMacLaunchAgentDisableMarkerNote(
+  marker: MacLaunchAgentDisableMarkerInfo,
+): string {
+  const displayMarkerPath = shortenHomePath(marker.path);
+  const lines = [`- LaunchAgent writes are disabled via ${displayMarkerPath}.`];
+  if (marker.metadata?.source || marker.metadata?.reason) {
+    const detail = [marker.metadata.source, marker.metadata.reason].filter(Boolean).join(" · ");
+    lines.push(`- Provenance: ${detail}.`);
+  }
+  if (marker.metadata?.disabledAt) {
+    lines.push(`- Set at: ${marker.metadata.disabledAt}.`);
+  }
+  if (marker.metadata?.worktree) {
+    lines.push(`- Worktree: ${shortenHomePath(marker.metadata.worktree)}.`);
+  } else if (marker.metadata?.bundlePath) {
+    lines.push(`- Bundle: ${shortenHomePath(marker.metadata.bundlePath)}.`);
+  }
+  if (marker.metadata?.stateDir) {
+    lines.push(`- Scope: ${shortenHomePath(marker.metadata.stateDir)}.`);
+  }
+  lines.push("- To restore default behavior:");
+  lines.push(`  rm ${displayMarkerPath}`);
+  return lines.join("\n");
 }
 
 export async function noteMacLaunchAgentOverrides(deps?: {
   platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
   homeDir?: string;
   existsSync?: (path: string) => boolean;
+  readFileSync?: (path: string, encoding: BufferEncoding) => string;
   noteFn?: typeof note;
 }) {
-  const markerPath = resolveMacLaunchAgentDisableMarkerPath({
+  const marker = readMacLaunchAgentDisableMarker({
     platform: deps?.platform,
+    env: deps?.env,
     homeDir: deps?.homeDir,
     existsSync: deps?.existsSync,
+    readFileSync: deps?.readFileSync,
   });
-  if (!markerPath) {
+  if (!marker) {
     return;
   }
 
-  (deps?.noteFn ?? note)(formatMacLaunchAgentDisableMarkerNote(markerPath), "Gateway (macOS)");
+  (deps?.noteFn ?? note)(formatMacLaunchAgentDisableMarkerNote(marker), "Gateway (macOS)");
 }
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
