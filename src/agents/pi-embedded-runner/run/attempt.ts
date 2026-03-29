@@ -1497,11 +1497,13 @@ export async function runEmbeddedAttempt(
       seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
       previousSignature: params.bootstrapPromptWarningSignature,
     });
-    const workspaceNotes = hookAdjustedBootstrapFiles.some(
+    const bootstrapActive = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
-    )
-      ? ["Reminder: commit your changes in this workspace after edits."]
-      : undefined;
+    );
+    // First-run bootstrap is consumer-visible product UX, not a coding workflow.
+    // Generic "commit your changes" nudges push the model to narrate repo internals
+    // back to the user, which is exactly the leakage we want to avoid here.
+    const workspaceNotes = undefined;
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
@@ -2925,6 +2927,7 @@ export async function runEmbeddedAttempt(
         timedOutDuringCompaction,
         promptError,
         sessionIdUsed,
+        bootstrapActive: bootstrapActive || undefined,
         bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,

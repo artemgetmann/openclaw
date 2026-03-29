@@ -149,6 +149,14 @@ export function extractTelegramBotTokensFromConfig(config) {
 export function buildTelegramLiveRuntimeConfig(params) {
   const assignedToken = String(params?.assignedToken ?? "").trim();
   const runtimePort = Number.parseInt(String(params?.runtimePort ?? ""), 10);
+  const workspaceDir =
+    typeof params?.workspaceDir === "string" && params.workspaceDir.trim().length > 0
+      ? path.resolve(params.workspaceDir.trim())
+      : null;
+  const dmPolicyOverride =
+    typeof params?.dmPolicy === "string" && params.dmPolicy.trim().length > 0
+      ? params.dmPolicy.trim()
+      : null;
   const baseConfig =
     params?.baseConfig && typeof params.baseConfig === "object"
       ? structuredClone(params.baseConfig)
@@ -183,15 +191,26 @@ export function buildTelegramLiveRuntimeConfig(params) {
     basePlugins.slots && typeof basePlugins.slots === "object" ? basePlugins.slots : {};
   const pluginEntries =
     basePlugins.entries && typeof basePlugins.entries === "object" ? basePlugins.entries : {};
-  const pluginDeny = Array.isArray(basePlugins.deny) ? normalizeStringList(basePlugins.deny) : [];
+  const baseTools =
+    config.tools && typeof config.tools === "object" ? structuredClone(config.tools) : {};
 
   delete telegram.accounts;
+  const nextTelegram = {
+    ...telegram,
+    enabled: true,
+    botToken: assignedToken,
+  };
+  if (dmPolicyOverride) {
+    nextTelegram.dmPolicy = dmPolicyOverride;
+    if (dmPolicyOverride === "open") {
+      const allowFrom = Array.isArray(nextTelegram.allowFrom)
+        ? normalizeStringList(nextTelegram.allowFrom)
+        : [];
+      nextTelegram.allowFrom = allowFrom.includes("*") ? allowFrom : [...allowFrom, "*"];
+    }
+  }
   config.channels = {
-    telegram: {
-      ...telegram,
-      enabled: true,
-      botToken: assignedToken,
-    },
+    telegram: nextTelegram,
   };
 
   const agents = config.agents && typeof config.agents === "object" ? config.agents : {};
@@ -201,6 +220,9 @@ export function buildTelegramLiveRuntimeConfig(params) {
     agentDefaults.model && typeof agentDefaults.model === "object"
       ? structuredClone(agentDefaults.model)
       : {};
+  if (workspaceDir) {
+    agentDefaults.workspace = workspaceDir;
+  }
 
   // Isolated Telegram tester lanes should not depend on the shared Codex OAuth
   // session. If an OpenAI API key already exists, prefer the equivalent GPT-5.4
@@ -221,6 +243,20 @@ export function buildTelegramLiveRuntimeConfig(params) {
       defaults: agentDefaults,
     };
   }
+  if (workspaceDir || !Array.isArray(config.agents?.list) || config.agents.list.length !== 1) {
+    config.agents = {
+      ...config.agents,
+      defaults: agentDefaults,
+      // Keep Telegram live harnesses on a single main agent so inherited
+      // home-workspace/topic bindings cannot leak into supposedly isolated runs.
+      list: [{ id: "main" }],
+    };
+  }
+
+  // The base founder config can carry topic bindings to other agents or ACP
+  // runtimes. The isolated Telegram lane is supposed to prove one clean runtime
+  // only, so inherited bindings are treated as contamination and removed.
+  config.bindings = [];
 
   // Telegram live tester lanes must stay isolated from ACP/acpx because the
   // base config may otherwise auto-enable ACP before Telegram can reply.
@@ -235,9 +271,12 @@ export function buildTelegramLiveRuntimeConfig(params) {
     ...basePlugins,
     enabled: true,
     allow: ["telegram"],
-    deny: normalizeStringList([...pluginDeny, "acpx"]),
+    // The isolated Telegram live harness runs bundled Telegram only. Inherited
+    // deny entries from the founder config can reference plugins unavailable in
+    // the current checkout, which makes doctor reject the runtime before it
+    // even boots. Keep the denylist to the one thing we intentionally block.
+    deny: ["acpx"],
     entries: {
-      ...pluginEntries,
       telegram: {
         ...(pluginEntries.telegram && typeof pluginEntries.telegram === "object"
           ? pluginEntries.telegram
@@ -254,6 +293,12 @@ export function buildTelegramLiveRuntimeConfig(params) {
       memory: "none",
     },
   };
+
+  // Founder-config tool allowlists often include local experimental tool names
+  // that do not exist in isolated Telegram lanes. Keep tool behavior, but drop
+  // allowlist noise that would otherwise pollute live runtime logs.
+  delete baseTools.alsoAllow;
+  config.tools = baseTools;
 
   return config;
 }

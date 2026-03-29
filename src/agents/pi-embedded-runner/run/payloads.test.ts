@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
 
@@ -81,6 +82,18 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expect(payloads).toHaveLength(0);
+  });
+
+  it("suppresses mutating tool warnings during bootstrap", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "write", error: "permission denied" },
+      bootstrapActive: true,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Done.");
   });
 
   it("suppresses assistant text when a deterministic exec approval prompt was already delivered", () => {

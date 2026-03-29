@@ -73,6 +73,8 @@ describe("telegram live runtime helpers", () => {
       },
       assignedToken: "tester-token",
       runtimePort: 24567,
+      workspaceDir: "/tmp/openclaw-live-onboarding",
+      dmPolicy: "open",
     });
 
     expect(config.gateway).toMatchObject({
@@ -83,8 +85,10 @@ describe("telegram live runtime helpers", () => {
     });
     expect(config.channels).toEqual({
       telegram: {
+        allowFrom: ["*"],
         enabled: true,
         requireMention: false,
+        dmPolicy: "open",
         botToken: "tester-token",
       },
     });
@@ -92,16 +96,19 @@ describe("telegram live runtime helpers", () => {
       primary: "openai/gpt-5.4",
       fallbacks: [],
     });
+    expect(config.agents?.defaults?.workspace).toBe("/tmp/openclaw-live-onboarding");
+    expect(config.agents?.list).toEqual([{ id: "main" }]);
     expect(config.acp).toEqual({
       enabled: false,
       dispatch: { enabled: false },
     });
+    expect(config.bindings).toEqual([]);
     expect(config.plugins).toMatchObject({
       enabled: true,
       allow: ["telegram"],
       slots: { memory: "none" },
     });
-    expect(config.plugins?.deny).toEqual(["legacy", "acpx"]);
+    expect(config.plugins?.deny).toEqual(["acpx"]);
     expect(config.plugins?.entries?.telegram).toMatchObject({ enabled: true });
     expect(config.plugins?.entries?.acpx).toMatchObject({ enabled: false });
   });
