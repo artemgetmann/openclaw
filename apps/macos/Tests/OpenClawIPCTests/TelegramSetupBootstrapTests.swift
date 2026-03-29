@@ -141,6 +141,18 @@ struct TelegramSetupBootstrapTests {
         #expect(!decision.shouldTrustReplayCompletion)
     }
 
+    @Test func `telegram first task skips replay when live activity already proves completion`() {
+        #expect(
+            ChannelsStore.consumerTelegramFirstTaskReplayAction(
+                activityAlreadyConfirmed: true) == .trustObservedLiveCompletion)
+    }
+
+    @Test func `telegram first task replays captured message when live activity has not completed yet`() {
+        #expect(
+            ChannelsStore.consumerTelegramFirstTaskReplayAction(
+                activityAlreadyConfirmed: false) == .replayCapturedMessage)
+    }
+
     @Test func `telegram bootstrap reconnect retries until the restarted gateway accepts auth`() async {
         actor Recorder {
             var events: [String] = []

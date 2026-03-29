@@ -159,6 +159,7 @@ export async function replayTelegramSetupDirectMessage(params: {
     accountId: account.accountId,
     botToken: token,
   });
+  let persistOffsetPromise: Promise<void> = Promise.resolve();
   // Seed the bot with the persisted watermark and let the normal bot pipeline
   // advance it. That keeps the setup replay and the long-polling runtime from
   // racing each other into duplicate first-message handling.
@@ -170,11 +171,19 @@ export async function replayTelegramSetupDirectMessage(params: {
     updateOffset: {
       lastUpdateId,
       onUpdateId: async (updateId) => {
-        await writeTelegramUpdateOffset({
+        const writePromise = writeTelegramUpdateOffset({
           accountId: account.accountId,
           botToken: token,
           updateId,
         });
+        // The normal live poller can fire-and-forget watermark persistence, but
+        // setup replay immediately re-enables the real Telegram runtime after
+        // returning. Chain and await those writes here so the restarted poller
+        // cannot see a stale offset and re-consume the same first DM.
+        persistOffsetPromise = persistOffsetPromise.then(async () => {
+          await writePromise;
+        });
+        await writePromise;
       },
     },
   });
@@ -184,6 +193,7 @@ export async function replayTelegramSetupDirectMessage(params: {
     // usual lazy bot-info bootstrap. Initialize explicitly before handleUpdate.
     await bot.init();
     await bot.handleUpdate(buildSyntheticUpdate(payload));
+    await persistOffsetPromise;
   } finally {
     await bot.stop().catch(() => {});
   }
