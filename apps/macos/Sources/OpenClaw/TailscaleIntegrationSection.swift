@@ -311,6 +311,27 @@ struct TailscaleIntegrationSection: View {
         isPaused: Bool) async -> (Bool, String?)
     {
         var root = await ConfigStore.load()
+        root = self.updatedGatewayConfig(
+            root: root,
+            tailscaleMode: tailscaleMode,
+            requireCredentialsForServe: requireCredentialsForServe,
+            password: password)
+
+        do {
+            try await ConfigStore.save(root)
+            return (true, nil)
+        } catch {
+            return (false, error.localizedDescription)
+        }
+    }
+
+    private static func updatedGatewayConfig(
+        root: [String: Any],
+        tailscaleMode: GatewayTailscaleMode,
+        requireCredentialsForServe: Bool,
+        password: String) -> [String: Any]
+    {
+        var root = root
         var gateway = root["gateway"] as? [String: Any] ?? [:]
         var tailscale = gateway["tailscale"] as? [String: Any] ?? [:]
         tailscale["mode"] = tailscaleMode.rawValue
@@ -321,7 +342,17 @@ struct TailscaleIntegrationSection: View {
         }
 
         if tailscaleMode == .off {
-            gateway.removeValue(forKey: "auth")
+            // Turning off Tailscale exposure must not silently delete the local
+            // gateway auth block. Removing `gateway.auth` forces the restarted
+            // daemon to regenerate auth state, which leaves the app reconnecting
+            // with a stale token and surfaces as "gateway not connecting".
+            var auth = gateway["auth"] as? [String: Any] ?? [:]
+            auth.removeValue(forKey: "allowTailscale")
+            if auth.isEmpty {
+                gateway.removeValue(forKey: "auth")
+            } else {
+                gateway["auth"] = auth
+            }
         } else {
             var auth = gateway["auth"] as? [String: Any] ?? [:]
             if tailscaleMode == .serve, !requireCredentialsForServe {
@@ -346,18 +377,14 @@ struct TailscaleIntegrationSection: View {
         } else {
             root["gateway"] = gateway
         }
-
-        do {
-            try await ConfigStore.save(root)
-            return (true, nil)
-        } catch {
-            return (false, error.localizedDescription)
-        }
+        return root
     }
 
     private func restartGatewayIfNeeded() {
         guard self.connectionMode == .local, !self.isPaused else { return }
-        Task { await GatewayLaunchAgentManager.kickstart() }
+        Task { @MainActor in
+            await GatewayProcessManager.shared.restartManagedGateway()
+        }
     }
 
     private func startStatusTimer() {
@@ -396,6 +423,19 @@ extension TailscaleIntegrationSection {
 
     mutating func setTestingService(_ service: TailscaleService?) {
         self.testingService = service
+    }
+
+    static func _testUpdatedGatewayConfig(
+        root: [String: Any],
+        mode: String,
+        requireCredentialsForServe: Bool,
+        password: String) -> [String: Any]
+    {
+        self.updatedGatewayConfig(
+            root: root,
+            tailscaleMode: GatewayTailscaleMode(rawValue: mode) ?? .off,
+            requireCredentialsForServe: requireCredentialsForServe,
+            password: password)
     }
 }
 #endif
