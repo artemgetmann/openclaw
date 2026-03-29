@@ -60,6 +60,20 @@ run_strict() {
   fi
 }
 
+run_best_effort() {
+  local output
+  if output="$("$@" 2>&1)"; then
+    if [[ -n "$output" ]]; then
+      printf '%s\n' "$output"
+    fi
+    return 0
+  fi
+  if [[ -n "$output" ]]; then
+    printf '%s\n' "$output"
+  fi
+  return 1
+}
+
 capture_best_effort() {
   local title="$1"
   shift
@@ -228,9 +242,19 @@ main() {
   wait_for_rpc_probe
 
   log_block "Bootstrap watchdog launch agent"
-  launchctl bootstrap "gui/$(id -u)" "${HOME}/Library/LaunchAgents/${WATCHDOG_LABEL}.plist" 2>/dev/null || true
-  run_strict launchctl kickstart -k "gui/$(id -u)/${WATCHDOG_LABEL}"
-  stabilize_watchdog
+  local watchdog_plist="${HOME}/Library/LaunchAgents/${WATCHDOG_LABEL}.plist"
+  if [[ -f "${watchdog_plist}" ]]; then
+    launchctl bootstrap "gui/$(id -u)" "${watchdog_plist}" 2>/dev/null || true
+    # The gateway is already proven healthy by the listener/RPC gates above.
+    # Missing or flaky watchdog launchd state should not false-fail main handoff.
+    if run_best_effort launchctl kickstart -k "gui/$(id -u)/${WATCHDOG_LABEL}"; then
+      stabilize_watchdog
+    else
+      log "watchdog kickstart failed; continuing because gateway readiness is already satisfied"
+    fi
+  else
+    log "watchdog plist missing (${watchdog_plist}); continuing without watchdog bootstrap"
+  fi
 
   log_block "Final verification"
   assert_main_runtime_path

@@ -1635,7 +1635,9 @@ export async function runEmbeddedPiAgent(
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
-            suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+            suppressToolErrorWarnings:
+              params.suppressToolErrorWarnings || Boolean(attempt.bootstrapActive),
+            bootstrapActive: attempt.bootstrapActive,
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1653,7 +1655,9 @@ export async function runEmbeddedPiAgent(
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
-            suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+            suppressToolErrorWarnings:
+              params.suppressToolErrorWarnings || Boolean(attempt.bootstrapActive),
+            bootstrapActive: attempt.bootstrapActive,
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,

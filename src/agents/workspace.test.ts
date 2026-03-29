@@ -9,6 +9,7 @@ import {
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
@@ -75,9 +76,11 @@ describe("ensureAgentWorkspace", () => {
   it("creates BOOTSTRAP.md and records a seeded marker for brand new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
-    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    const workspace = await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     await expectBootstrapSeeded(tempDir);
+    await expect(fs.access(path.join(tempDir, DEFAULT_MEMORY_FILENAME))).resolves.toBeUndefined();
+    expect(workspace.memoryPath).toBe(path.join(tempDir, DEFAULT_MEMORY_FILENAME));
     expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
   });
 
@@ -121,6 +124,23 @@ describe("ensureAgentWorkspace", () => {
     const state = await readWorkspaceState(tempDir);
     expect(state.bootstrapSeededAt).toBeUndefined();
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("creates MEMORY.md for existing template-only workspaces that predate the memory template", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    for (const [name, content] of [
+      [DEFAULT_AGENTS_FILENAME, "agents"],
+      [DEFAULT_SOUL_FILENAME, "soul"],
+      [DEFAULT_TOOLS_FILENAME, "tools"],
+      [DEFAULT_IDENTITY_FILENAME, "identity"],
+      [DEFAULT_USER_FILENAME, "user"],
+    ] as const) {
+      await writeWorkspaceFile({ dir: tempDir, name, content });
+    }
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(fs.access(path.join(tempDir, DEFAULT_MEMORY_FILENAME))).resolves.toBeUndefined();
   });
 
   it("treats memory-backed workspaces as existing even when template files are missing", async () => {

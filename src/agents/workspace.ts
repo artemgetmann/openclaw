@@ -336,6 +336,7 @@ export async function ensureAgentWorkspace(params?: {
   toolsPath?: string;
   identityPath?: string;
   userPath?: string;
+  memoryPath?: string;
   heartbeatPath?: string;
   bootstrapPath?: string;
 }> {
@@ -352,29 +353,48 @@ export async function ensureAgentWorkspace(params?: {
   const toolsPath = path.join(dir, DEFAULT_TOOLS_FILENAME);
   const identityPath = path.join(dir, DEFAULT_IDENTITY_FILENAME);
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
+  const memoryPath = path.join(dir, DEFAULT_MEMORY_FILENAME);
   const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
   const statePath = resolveWorkspaceStatePath(dir);
 
-  const isBrandNewWorkspace = await (async () => {
-    const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
-    const userContentPaths = [
+  const preexistingUserContent = await (async () => {
+    for (const indicator of [
       path.join(dir, "memory"),
-      path.join(dir, DEFAULT_MEMORY_FILENAME),
+      path.join(dir, DEFAULT_MEMORY_ALT_FILENAME),
       path.join(dir, ".git"),
+    ]) {
+      try {
+        await fs.access(indicator);
+        return true;
+      } catch {
+        // continue
+      }
+    }
+    return false;
+  })();
+
+  const isBrandNewWorkspace = await (async () => {
+    const templatePaths = [
+      agentsPath,
+      soulPath,
+      toolsPath,
+      identityPath,
+      userPath,
+      memoryPath,
+      heartbeatPath,
     ];
-    const paths = [...templatePaths, ...userContentPaths];
-    const existing = await Promise.all(
-      paths.map(async (p) => {
+    const existingTemplatePaths = await Promise.all(
+      templatePaths.map(async (candidatePath) => {
         try {
-          await fs.access(p);
+          await fs.access(candidatePath);
           return true;
         } catch {
           return false;
         }
       }),
     );
-    return existing.every((v) => !v);
+    return existingTemplatePaths.every((exists) => !exists) && !preexistingUserContent;
   })();
 
   const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
@@ -382,12 +402,14 @@ export async function ensureAgentWorkspace(params?: {
   const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
+  const memoryTemplate = await loadTemplate(DEFAULT_MEMORY_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
   await writeFileIfMissing(toolsPath, toolsTemplate);
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
+  await writeFileIfMissing(memoryPath, memoryTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
 
   let state = await readWorkspaceSetupState(statePath);
@@ -415,24 +437,10 @@ export async function ensureAgentWorkspace(params?: {
       fs.readFile(identityPath, "utf-8"),
       fs.readFile(userPath, "utf-8"),
     ]);
-    const hasUserContent = await (async () => {
-      const indicators = [
-        path.join(dir, "memory"),
-        path.join(dir, DEFAULT_MEMORY_FILENAME),
-        path.join(dir, ".git"),
-      ];
-      for (const indicator of indicators) {
-        try {
-          await fs.access(indicator);
-          return true;
-        } catch {
-          // continue
-        }
-      }
-      return false;
-    })();
     const legacySetupCompleted =
-      identityContent !== identityTemplate || userContent !== userTemplate || hasUserContent;
+      identityContent !== identityTemplate ||
+      userContent !== userTemplate ||
+      preexistingUserContent;
     if (legacySetupCompleted) {
       markState({ setupCompletedAt: nowIso() });
     } else {
@@ -461,6 +469,7 @@ export async function ensureAgentWorkspace(params?: {
     toolsPath,
     identityPath,
     userPath,
+    memoryPath,
     heartbeatPath,
     bootstrapPath,
   };

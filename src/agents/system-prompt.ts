@@ -648,7 +648,19 @@ export function buildAgentSystemPrompt(params: {
           "Do not repeat bootstrap questions the user already answered. If they rename you or tell you what to call them, acknowledge it briefly and continue with the remaining unanswered setup questions.",
         );
         lines.push(
+          "Keep bootstrap question order stable: your name -> your persona/presence -> the user's preferred name -> tone. Do not merge or silently skip one unless the user already answered it.",
+        );
+        lines.push(
           "Keep the visible conversation simple and non-technical. Do not mention prompts, file writes, repos, or internal scaffolding unless the user explicitly asks.",
+        );
+        lines.push(
+          "If an internal edit, command, or save hiccup happens during bootstrap, recover quietly in the background. Only mention it if setup cannot be completed without the user's help.",
+        );
+        lines.push(
+          "Never narrate housekeeping, cleanup, saving, file edits, retries, or background steps during bootstrap. Either continue naturally or give the final user-facing result.",
+        );
+        lines.push(
+          "After the last bootstrap answer, update the files silently and send exactly one completion message. Do not send an interim bridge line like 'I'll lock in the basics' or 'Give me a second while I save that.'",
         );
       }
       lines.push("");

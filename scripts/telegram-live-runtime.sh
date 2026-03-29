@@ -512,6 +512,8 @@ prepare_isolated_runtime_config() {
     RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
     ASSIGNED_BOT_TOKEN="$ASSIGNED_BOT_TOKEN" \
     RUNTIME_PORT="$RUNTIME_PORT" \
+    OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR="${OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR:-}" \
+    OPENCLAW_TELEGRAM_LIVE_DM_POLICY="${OPENCLAW_TELEGRAM_LIVE_DM_POLICY:-}" \
     HELPER_MODULE="$HELPER_MODULE" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
@@ -522,6 +524,8 @@ const basePath = process.env.BASE_CONFIG_PATH;
 const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
 const assignedToken = process.env.ASSIGNED_BOT_TOKEN;
 const runtimePort = Number.parseInt(process.env.RUNTIME_PORT ?? "", 10);
+const workspaceDir = process.env.OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR;
+const dmPolicy = process.env.OPENCLAW_TELEGRAM_LIVE_DM_POLICY;
 const helperPath = process.env.HELPER_MODULE;
 
 if (!runtimeConfigPath || !assignedToken || !Number.isFinite(runtimePort) || runtimePort <= 0 || !helperPath) {
@@ -545,6 +549,8 @@ config = buildTelegramLiveRuntimeConfig({
   baseConfig: config,
   assignedToken,
   runtimePort,
+  workspaceDir,
+  dmPolicy,
 });
 
 fs.mkdirSync(path.dirname(runtimeConfigPath), { recursive: true });
@@ -684,24 +690,70 @@ start_isolated_runtime() {
     add_failure "runtime_config_path_missing"
     return
   fi
-  # Use direct Node entrypoint under the current worktree. `pnpm openclaw` can
-  # exit early under nohup in some environments, leaving no listener behind.
-  if (
-    cd "$REPO_ROOT"
-    nohup env \
-      OPENCLAW_STATE_DIR="$RUNTIME_STATE_DIR" \
-      OPENCLAW_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
-      OPENCLAW_GATEWAY_PORT="$RUNTIME_PORT" \
-      OPENCLAW_SKIP_GMAIL_WATCHER=1 \
-      OPENCLAW_SKIP_CRON=1 \
-      OPENCLAW_SKIP_CANVAS_HOST=1 \
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1 \
-      OPENCLAW_DISABLE_BONJOUR=1 \
-      OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE=1 \
-      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-1}" \
-      node scripts/run-node.mjs gateway run --bind loopback --port "$RUNTIME_PORT" --force --allow-unconfigured \
-      >"$RUNTIME_LOG_PATH" 2>&1 &
-  ); then
+  # Shell-level `nohup ... &` is flaky in this environment: the helper shell can
+  # report success while the gateway child dies immediately after detach. Launch
+  # a real detached process from Node instead so the runtime survives the helper
+  # shell exiting and keeps its own stdio on the runtime log file.
+  if REPO_ROOT="$REPO_ROOT" \
+    RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
+    RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
+    RUNTIME_PORT="$RUNTIME_PORT" \
+    RUNTIME_LOG_PATH="$RUNTIME_LOG_PATH" \
+    OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-1}" \
+    node --input-type=module - <<'NODE'
+import fs from "node:fs";
+import { spawn } from "node:child_process";
+
+const repoRoot = process.env.REPO_ROOT;
+const runtimeStateDir = process.env.RUNTIME_STATE_DIR;
+const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
+const runtimePort = process.env.RUNTIME_PORT;
+const runtimeLogPath = process.env.RUNTIME_LOG_PATH;
+const disableExternalCliAuthSync =
+  process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "1";
+
+if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath) {
+  throw new Error("Missing detached runtime launch parameters.");
+}
+
+fs.mkdirSync(runtimeStateDir, { recursive: true });
+const logFd = fs.openSync(runtimeLogPath, "a");
+const child = spawn(
+  process.execPath,
+  [
+    "scripts/run-node.mjs",
+    "gateway",
+    "run",
+    "--bind",
+    "loopback",
+    "--port",
+    runtimePort,
+    "--force",
+    "--allow-unconfigured",
+  ],
+  {
+    cwd: repoRoot,
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: runtimeStateDir,
+      OPENCLAW_CONFIG_PATH: runtimeConfigPath,
+      OPENCLAW_GATEWAY_PORT: runtimePort,
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_DISABLE_BONJOUR: "1",
+      OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE: "1",
+      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC: disableExternalCliAuthSync,
+    },
+  },
+);
+child.unref();
+fs.closeSync(logFd);
+NODE
+  then
     RUNTIME_START_ACTION="started"
   else
     RUNTIME_START_ACTION="start-failed"

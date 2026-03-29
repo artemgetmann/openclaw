@@ -547,7 +547,17 @@ describe("buildAgentSystemPrompt", () => {
       "If BOOTSTRAP.md is present, first-run setup is still active. Stay in bootstrap mode until the required identity details are settled, the files are updated, and BOOTSTRAP.md is removed.",
     );
     expect(prompt).toContain("Do not repeat bootstrap questions the user already answered.");
+    expect(prompt).toContain(
+      "Keep bootstrap question order stable: your name -> your persona/presence -> the user's preferred name -> tone.",
+    );
     expect(prompt).toContain("Do not mention prompts, file writes, repos, or internal scaffolding");
+    expect(prompt).toContain(
+      "If an internal edit, command, or save hiccup happens during bootstrap",
+    );
+    expect(prompt).toContain("Never narrate housekeeping, cleanup, saving, file edits, retries");
+    expect(prompt).toContain(
+      "After the last bootstrap answer, update the files silently and send exactly one completion message.",
+    );
   });
 
   it("renders bootstrap truncation warning even when no context files are injected", () => {

@@ -77,10 +77,17 @@ function resolveToolErrorWarningPolicy(params: {
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
+  bootstrapActive?: boolean;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const includeDetails = isVerboseToolDetailEnabled(params.verboseLevel);
   if (params.suppressToolErrorWarnings) {
+    return { showWarning: false, includeDetails };
+  }
+  // Bootstrap is a consumer-facing onboarding chat, not a coding session.
+  // Keep internal tool hiccups out of the visible thread and let the model
+  // either recover quietly or ask for help only when it is truly blocked.
+  if (params.bootstrapActive) {
     return { showWarning: false, includeDetails };
   }
   const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
@@ -121,6 +128,7 @@ export function buildEmbeddedRunPayloads(params: {
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
+  bootstrapActive?: boolean;
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
@@ -254,6 +262,7 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      bootstrapActive: params.bootstrapActive,
       verboseLevel: params.verboseLevel,
     });
 
@@ -326,6 +335,7 @@ export function resolveEmbeddedRunPayloadErrorAssistant(params: {
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
+  bootstrapActive?: boolean;
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
