@@ -78,6 +78,25 @@ describe("seedTelegramThreadSessionOnTopicCreate", () => {
     });
   });
 
+  it("uses the sender-derived peer id for DM topic seeds when chat id is a wrapper", async () => {
+    const storePath = await makeStorePath();
+    const cfg = { session: { store: storePath, dmScope: "per-channel-peer" } } as OpenClawConfig;
+
+    const seeded = await seedTelegramThreadSessionOnTopicCreate({
+      cfg,
+      accountId: "default",
+      chatId: 777777777,
+      isGroup: false,
+      senderId: "123456789",
+      dmThreadId: 88,
+    });
+
+    expect(seeded).toMatchObject({
+      created: true,
+      sessionKey: "agent:main:telegram:direct:123456789:thread:123456789:88",
+    });
+  });
+
   it("snapshots forum-topic defaults from the parent group at creation time", async () => {
     const storePath = await makeStorePath();
     const cfg = { session: { store: storePath } } as OpenClawConfig;

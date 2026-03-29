@@ -23,7 +23,7 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
 
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:42:42");
   });
 
   it("uses dm topic session key when Telegram sends direct_messages_topic only", async () => {
@@ -38,7 +38,22 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
 
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(314);
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:314");
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:42:314");
+  });
+
+  it("keeps dm topic session keys on the sender-derived peer when chat id is a wrapper", async () => {
+    const ctx = await buildContext({
+      message_id: 11,
+      chat: { id: 777777777, type: "private" },
+      date: 1700000011,
+      text: "hello",
+      direct_messages_topic: { topic_id: 314 },
+      from: { id: 123456789, first_name: "Alice" },
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(314);
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:123456789:314");
   });
 
   it("keeps legacy dm session key when no thread id", async () => {

@@ -61,4 +61,26 @@ describe("resolveTelegramConversationBaseSessionKey", () => {
       }).sessionKey,
     ).toBe("agent:main:telegram:personal:direct:12345:thread:12345:99");
   });
+
+  it("still needs sender-derived DM thread tokens when chat id is a wrapper", () => {
+    const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+      cfg,
+      route: {
+        agentId: "main",
+        accountId: "personal",
+        matchedBy: "default",
+        sessionKey: "agent:main:main",
+      },
+      chatId: 777777777,
+      isGroup: false,
+      senderId: 12345,
+    });
+
+    expect(
+      resolveThreadSessionKeys({
+        baseSessionKey,
+        threadId: "12345:99",
+      }).sessionKey,
+    ).toBe("agent:main:telegram:personal:direct:12345:thread:12345:99");
+  });
 });

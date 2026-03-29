@@ -24,6 +24,7 @@ import { recordInboundSessionMetaSafe } from "../../../src/channels/session-meta
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ChannelGroupPolicy } from "../../../src/config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
+import { resolveStorePath, updateSessionStore } from "../../../src/config/sessions.js";
 import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
@@ -45,7 +46,6 @@ import {
   matchPluginCommand,
 } from "../../../src/plugins/commands.js";
 import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
@@ -59,9 +59,9 @@ import { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
 import {
-  buildTelegramThreadParams,
   buildSenderName,
   buildTelegramGroupFrom,
+  buildTelegramThreadParams,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramInboundThreadId,
   resolveTelegramThreadSpec,
@@ -71,6 +71,10 @@ import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
+import {
+  migrateTelegramDmThreadStoreEntry,
+  resolveTelegramDmThreadSessionRouting,
+} from "./dm-thread-session.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import type { TelegramTransport } from "./fetch.js";
 import {
@@ -744,14 +748,31 @@ export const registerTelegramNativeCommands = ({
           });
           // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-          const threadKeys =
+          const dmThreadSession =
             dmThreadId != null && !hasExplicitDmTopicBinding
-              ? resolveThreadSessionKeys({
+              ? resolveTelegramDmThreadSessionRouting({
                   baseSessionKey,
-                  threadId: `${chatId}:${dmThreadId}`,
+                  chatId,
+                  senderId,
+                  threadId: dmThreadId,
                 })
               : null;
-          const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
+          const sessionKey = dmThreadSession?.sessionKey ?? baseSessionKey;
+          if (dmThreadSession?.legacySessionKeys.length) {
+            const storePath = resolveStorePath(cfg.session?.store, {
+              agentId: route.agentId,
+            });
+            // Native commands must land on the same DM topic session as normal
+            // message turns, even when an older store entry still uses the
+            // pre-fix chat.id-derived thread suffix.
+            await updateSessionStore(storePath, (store) => {
+              migrateTelegramDmThreadStoreEntry({
+                store,
+                sessionKey: dmThreadSession.sessionKey,
+                legacySessionKeys: dmThreadSession.legacySessionKeys,
+              });
+            });
+          }
           const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
             groupConfig,
             topicConfig,

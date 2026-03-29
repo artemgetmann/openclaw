@@ -277,6 +277,27 @@ export function resolveTelegramDirectPeerId(params: {
 }
 
 /**
+ * Build the DM-thread token used for Telegram direct-message topic session keys.
+ *
+ * This must reuse the same direct-peer identity as DM routing. Some Telegram
+ * deliveries expose a wrapper/private-chat `chat.id` that differs from the
+ * actual human sender id, so `chat.id:threadId` can drift across updates for
+ * the same logical DM topic. Anchoring on the direct peer id keeps /model
+ * writes, reads, and topic-create seeding on one stable session key.
+ */
+export function buildTelegramDmThreadToken(params: {
+  chatId: number | string;
+  senderId?: number | string | null;
+  threadId: number | string;
+}) {
+  const directPeerId = resolveTelegramDirectPeerId({
+    chatId: params.chatId,
+    senderId: params.senderId,
+  });
+  return `${directPeerId}:${String(params.threadId).trim()}`;
+}
+
+/**
  * Build a canonical Telegram conversation id for binding lookups.
  *
  * Telegram can report a private-chat wrapper `chat.id` that differs from the
