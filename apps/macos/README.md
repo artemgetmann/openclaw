@@ -12,7 +12,10 @@ Options:
 ```bash
 scripts/restart-mac.sh --no-sign   # fastest dev; ad-hoc signing (TCC permissions do not stick)
 scripts/restart-mac.sh --sign      # force code signing (requires cert)
+scripts/restart-mac.sh --app-scope all   # explicitly kill every OpenClaw app process
 ```
+
+Default scope is `self`, which only restarts the current app bundle and its gateway. Use `--app-scope all` only when you explicitly want to terminate other OpenClaw app instances on the machine.
 
 ## Packaging flow
 

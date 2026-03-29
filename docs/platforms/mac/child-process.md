@@ -40,6 +40,10 @@ signing keys. To prevent launchd from pointing at an unsigned relay binary, it:
 
 - Writes `~/.openclaw/disable-launchagent`.
 
+The restart script now defaults to `--app-scope self`, so it only restarts the
+current app bundle and its gateway. Use `--app-scope all` only when you
+explicitly want to kill other OpenClaw app processes too.
+
 Signed runs of `scripts/restart-mac.sh` clear this override if the marker is
 present. To reset manually:
 
