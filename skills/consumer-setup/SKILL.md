@@ -66,8 +66,9 @@ explicitly ask for the CLI path.
 - Tell the user Apple Notes is not ready on this Mac yet.
 - Offer to help install the dependency and grant permission.
 - Once ready, keep deterministic create/delete on
-  `scripts/apple-notes-local.sh`; do not fall back to interactive `memo` flows
-  for consumer automation unless the user explicitly wants that path.
+  `skills/apple-notes/scripts/apple-notes-local.sh`; do not fall back to
+  interactive `memo` flows for consumer automation unless the user explicitly
+  wants that path.
 
 ### Apple Reminders
 
@@ -75,7 +76,11 @@ explicitly ask for the CLI path.
   access not authorized yet.
 - Tell the user Reminders is not connected yet.
 - Offer to help grant access on this Mac.
-- Verify with `remindctl status` or a read-only list call before creating or
+- If Reminders access is not authorized, tell the user exactly what to do next:
+  approve the macOS permission prompt, or open System Settings > Privacy &
+  Security > Reminders and allow the terminal/app that OpenClaw is using.
+- After the user approves the prompt, re-check with `remindctl status` and/or a
+  read-only list call such as `remindctl today --json` before creating or
   deleting reminders.
 
 ### goplaces

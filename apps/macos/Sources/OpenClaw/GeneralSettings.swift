@@ -173,7 +173,7 @@ struct GeneralSettings: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Browser")
                 .font(.title3.weight(.semibold))
-            Text("OpenClaw is designed to use a separate copy of your Chrome profile, not your live Chrome windows.")
+            Text("OpenClaw uses your live Chrome session for logged-in sites and keeps its own browser lane available for clean public-site tasks.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

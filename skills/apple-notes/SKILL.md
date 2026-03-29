@@ -31,7 +31,8 @@ Use Apple Notes on macOS.
 
 - On a local macOS machine, use the local host directly. Do not route Notes actions through `nodes run` / `system.run`.
 - Keep `memo` for list/search/export and fuzzy note lookup.
-- For deterministic create/delete, use the local helper at `scripts/apple-notes-local.sh`.
+- For deterministic create/delete, use the local helper at
+  `skills/apple-notes/scripts/apple-notes-local.sh`.
 
 ## Setup Routing
 
@@ -46,7 +47,7 @@ Use Apple Notes on macOS.
 Create a note without dropping into an editor:
 
 ```bash
-scripts/apple-notes-local.sh create \
+skills/apple-notes/scripts/apple-notes-local.sh create \
   --folder "Notes" \
   --title "OpenClaw skills audit note" \
   --body "hello from consumer test"
@@ -55,7 +56,7 @@ scripts/apple-notes-local.sh create \
 Delete a note by exact note id:
 
 ```bash
-scripts/apple-notes-local.sh delete --id "x-coredata://REPLACE_ME"
+skills/apple-notes/scripts/apple-notes-local.sh delete --id "x-coredata://REPLACE_ME"
 ```
 
 ## Browse And Search

@@ -5,7 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
-import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
+import { resolveBundledAllowlist, type SkillEntry } from "../../agents/skills.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
@@ -162,10 +162,24 @@ export const skillsHandlers: GatewayRequestHandlers = {
       env?: Record<string, string>;
     };
     const cfg = loadConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const statusReport = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
+    const matchedSkill = statusReport.skills.find((entry) => {
+      return entry.skillKey === p.skillKey || entry.name === p.skillKey;
+    });
     const skills = cfg.skills ? { ...cfg.skills } : {};
     const entries = skills.entries ? { ...skills.entries } : {};
     const current = entries[p.skillKey] ? { ...entries[p.skillKey] } : {};
     if (typeof p.enabled === "boolean") {
+      // Enabling an optional bundled skill after setup must make it actually
+      // reachable, not only write `skills.entries.<key>.enabled=true` while the
+      // allowlist still hides it from the app and gateway status surfaces.
+      if (p.enabled && matchedSkill?.bundled && matchedSkill.source === "openclaw-bundled") {
+        const allowBundled = new Set(resolveBundledAllowlist(cfg) ?? []);
+        allowBundled.add(matchedSkill.skillKey);
+        skills.allowBundled = [...allowBundled].toSorted();
+      }
       current.enabled = p.enabled;
     }
     if (typeof p.apiKey === "string") {

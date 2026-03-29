@@ -23,7 +23,11 @@ NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$RAW_INSTANCE_ID")"
 if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
   export OPENCLAW_CONSUMER_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-$NORMALIZED_INSTANCE_ID}"
   export OPENCLAW_PROFILE="${OPENCLAW_PROFILE:-$(consumer_instance_profile "$NORMALIZED_INSTANCE_ID")}"
-  export OPENCLAW_HOME="${OPENCLAW_HOME:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")}"
+  # Keep restart/install aligned with the app runtime contract:
+  # OPENCLAW_HOME is the lane runtime root, while state/config stay inside
+  # "$OPENCLAW_HOME/.openclaw". Pointing HOME at the state dir causes nested
+  # workspace/config defaults in lane-local CLI validation.
+  export OPENCLAW_HOME="${OPENCLAW_HOME:-$(consumer_instance_runtime_root "$NORMALIZED_INSTANCE_ID")}"
   export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$(consumer_instance_state_dir "$NORMALIZED_INSTANCE_ID")}"
   export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$(consumer_instance_config_path "$NORMALIZED_INSTANCE_ID")}"
   export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-$(consumer_instance_gateway_port "$NORMALIZED_INSTANCE_ID")}"

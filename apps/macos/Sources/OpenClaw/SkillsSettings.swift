@@ -185,6 +185,10 @@ private struct SkillRow: View {
         self.skill.missing.config
     }
 
+    private var blockedByAllowlist: Bool {
+        self.skill.blockedByAllowlist == true
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Text(self.skill.emoji ?? "✨")
@@ -201,6 +205,10 @@ private struct SkillRow: View {
 
                 if self.skill.disabled {
                     Text("Disabled in config")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if self.blockedByAllowlist {
+                    Text("Not enabled for this consumer runtime yet. Turn it on here to add it to this Mac's bundled skills.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else if !self.requirementsMet, self.shouldShowMissingSummary {
@@ -574,6 +582,7 @@ extension SkillsSettings {
             name: "Test Skill",
             description: "Test description",
             source: "openclaw-bundled",
+            bundled: true,
             filePath: "/tmp/skills/test",
             baseDir: "/tmp/skills",
             skillKey: "test",
@@ -582,6 +591,7 @@ extension SkillsSettings {
             homepage: "https://example.com",
             always: false,
             disabled: false,
+            blockedByAllowlist: false,
             eligible: false,
             requirements: SkillRequirements(bins: ["python3"], env: ["API_KEY"], config: ["skills.test"]),
             missing: SkillMissing(bins: ["python3"], env: ["API_KEY"], config: ["skills.test"]),
