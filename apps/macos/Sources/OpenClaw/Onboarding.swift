@@ -20,6 +20,7 @@ enum RemoteOnboardingProbeState: Equatable {
 final class OnboardingController {
     static let shared = OnboardingController()
     private var window: NSWindow?
+    private var waitingForVisibleSurfaceHandoff = false
     private let logger = Logger(subsystem: "ai.openclaw", category: "consumer.launch")
 
     var isVisible: Bool {
@@ -68,9 +69,35 @@ final class OnboardingController {
         // AppKit can leave a just-closed SwiftUI window onscreen until the next
         // run-loop turn. Order it out first so the onboarding surface disappears
         // immediately, then close it to finish teardown.
+        self.waitingForVisibleSurfaceHandoff = false
         window.orderOut(nil)
         window.close()
         self.window = nil
+    }
+
+    func beginVisibleSurfaceHandoff() {
+        guard let window = self.window else { return }
+        // Hide onboarding immediately so users do not see two windows at once,
+        // but keep the controller alive until a replacement surface is proven
+        // visible. If Settings creation flakes, we can still recover instead of
+        // dropping the entire consumer app into invisible accessory mode.
+        self.waitingForVisibleSurfaceHandoff = true
+        window.orderOut(nil)
+    }
+
+    func completeVisibleSurfaceHandoffIfPossible() -> Bool {
+        guard self.waitingForVisibleSurfaceHandoff else { return false }
+        guard SettingsWindowOpener.hasVisibleContentWindow() else { return false }
+        self.close()
+        return true
+    }
+
+    func restoreAfterFailedVisibleSurfaceHandoff() {
+        guard self.waitingForVisibleSurfaceHandoff, let window = self.window else { return }
+        self.waitingForVisibleSurfaceHandoff = false
+        DockIconManager.shared.temporarilyShowDock()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func restart() {

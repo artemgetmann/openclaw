@@ -5,6 +5,12 @@ import OpenClawIPC
 import SwiftUI
 
 extension OnboardingView {
+    enum FinishSurfaceHandoffAction: Equatable {
+        case completeClose
+        case retryVisibleSurface
+        case restoreOnboarding
+    }
+
     static func postFinishSettingsTab(
         isConsumer: Bool,
         connectionMode: AppState.ConnectionMode,
@@ -18,6 +24,19 @@ extension OnboardingView {
             return .channels
         }
         return .general
+    }
+
+    static func finishSurfaceHandoffAction(
+        hasVisibleContentWindow: Bool,
+        attemptsRemaining: Int) -> FinishSurfaceHandoffAction
+    {
+        if hasVisibleContentWindow {
+            return .completeClose
+        }
+        if attemptsRemaining > 0 {
+            return .retryVisibleSurface
+        }
+        return .restoreOnboarding
     }
 
     func selectLocalGateway() {
@@ -86,21 +105,18 @@ extension OnboardingView {
             connectionMode: self.state.connectionMode,
             telegramReady: self.channelsStore.consumerTelegramReadyForFirstTask())
 
-        // Close onboarding before asking the app shell to recover a visible
-        // surface. If onboarding is still visible, the recovery loop thinks a
-        // usable consumer surface already exists and never retries Settings.
-        OnboardingController.shared.close()
-
-        guard let followUpTab else { return }
-        if let delegate = AppDelegate.shared {
-            DispatchQueue.main.async {
-                delegate.requestVisibleSurface(reason: "finish", preferredSettingsTab: followUpTab)
-            }
+        guard let followUpTab else {
+            OnboardingController.shared.close()
             return
         }
-        DispatchQueue.main.async {
-            SettingsWindowOpener.shared.open(tab: followUpTab)
-        }
+
+        // Hide onboarding immediately so the handoff looks clean, but do not
+        // destroy the only visible surface until Settings has actually appeared.
+        // If the settings-open path flakes in accessory mode, we restore the
+        // onboarding window instead of making the whole app look dead.
+        OnboardingController.shared.beginVisibleSurfaceHandoff()
+        Self.requestFinishVisibleSurface(tab: followUpTab, reason: "finish")
+        Self.monitorFinishVisibleSurfaceHandoff(tab: followUpTab, attemptsRemaining: 4)
     }
 
     func copyToPasteboard(_ text: String) {
@@ -109,5 +125,34 @@ extension OnboardingView {
         pb.setString(text, forType: .string)
         self.copied = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.copied = false }
+    }
+
+    private static func requestFinishVisibleSurface(tab: SettingsTab, reason: String) {
+        if let delegate = AppDelegate.shared {
+            DispatchQueue.main.async {
+                delegate.requestVisibleSurface(reason: reason, preferredSettingsTab: tab)
+            }
+            return
+        }
+        DispatchQueue.main.async {
+            SettingsWindowOpener.shared.open(tab: tab)
+        }
+    }
+
+    private static func monitorFinishVisibleSurfaceHandoff(tab: SettingsTab, attemptsRemaining: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            switch Self.finishSurfaceHandoffAction(
+                hasVisibleContentWindow: SettingsWindowOpener.hasVisibleContentWindow(),
+                attemptsRemaining: attemptsRemaining)
+            {
+            case .completeClose:
+                _ = OnboardingController.shared.completeVisibleSurfaceHandoffIfPossible()
+            case .retryVisibleSurface:
+                Self.requestFinishVisibleSurface(tab: tab, reason: "finish-retry")
+                Self.monitorFinishVisibleSurfaceHandoff(tab: tab, attemptsRemaining: attemptsRemaining - 1)
+            case .restoreOnboarding:
+                OnboardingController.shared.restoreAfterFailedVisibleSurfaceHandoff()
+            }
+        }
     }
 }

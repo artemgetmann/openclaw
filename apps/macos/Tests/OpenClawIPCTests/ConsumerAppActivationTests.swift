@@ -181,6 +181,27 @@ struct ConsumerAppActivationTests {
                 telegramReady: true) == .general)
     }
 
+    @Test func `finish handoff closes onboarding once settings is visible`() {
+        #expect(
+            OnboardingView.finishSurfaceHandoffAction(
+                hasVisibleContentWindow: true,
+                attemptsRemaining: 4) == .completeClose)
+    }
+
+    @Test func `finish handoff retries while replacement surface is still missing`() {
+        #expect(
+            OnboardingView.finishSurfaceHandoffAction(
+                hasVisibleContentWindow: false,
+                attemptsRemaining: 4) == .retryVisibleSurface)
+    }
+
+    @Test func `finish handoff restores onboarding after retries are exhausted`() {
+        #expect(
+            OnboardingView.finishSurfaceHandoffAction(
+                hasVisibleContentWindow: false,
+                attemptsRemaining: 0) == .restoreOnboarding)
+    }
+
     @Test func `non consumer finish does not force a settings follow up`() {
         #expect(
             OnboardingView.postFinishSettingsTab(
