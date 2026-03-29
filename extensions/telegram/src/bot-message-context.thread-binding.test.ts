@@ -91,7 +91,7 @@ describe("buildTelegramMessageContext bound conversation override", () => {
 
   it("routes dm messages to the bound session", async () => {
     hoisted.resolveByConversationMock.mockReturnValue({
-      bindingId: "default:1234",
+      bindingId: "default:42",
       targetSessionKey: "agent:codex-acp:session-dm",
     });
 
@@ -108,9 +108,35 @@ describe("buildTelegramMessageContext bound conversation override", () => {
     expect(hoisted.resolveByConversationMock).toHaveBeenCalledWith({
       channel: "telegram",
       accountId: "default",
-      conversationId: "1234",
+      conversationId: "42",
     });
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-dm");
-    expect(hoisted.touchMock).toHaveBeenCalledWith("default:1234", undefined);
+    expect(hoisted.touchMock).toHaveBeenCalledWith("default:42", undefined);
+  });
+
+  it("routes DM topic bindings through the sender-derived direct peer id when chat id differs", async () => {
+    hoisted.resolveByConversationMock.mockReturnValue({
+      bindingId: "default:123456789:topic:55",
+      targetSessionKey: "agent:codex-acp:session-dm-topic",
+    });
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 1,
+        chat: { id: 777777777, type: "private" },
+        direct_messages_topic: { topic_id: 55 },
+        date: 1_700_000_000,
+        text: "hello",
+        from: { id: 123456789, first_name: "Alice" },
+      },
+    });
+
+    expect(hoisted.resolveByConversationMock).toHaveBeenCalledWith({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "123456789:topic:55",
+    });
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-dm-topic");
+    expect(hoisted.touchMock).toHaveBeenCalledWith("default:123456789:topic:55", undefined);
   });
 });

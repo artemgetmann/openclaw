@@ -99,16 +99,17 @@ export const buildTelegramMessageContext = async ({
       : dmPolicy;
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const freshCfg = loadConfig();
-  let { route, configuredBinding, configuredBindingSessionKey } = resolveTelegramConversationRoute({
-    cfg: freshCfg,
-    accountId: account.accountId,
-    chatId,
-    isGroup,
-    resolvedThreadId,
-    replyThreadId,
-    senderId,
-    topicAgentId: topicConfig?.agentId,
-  });
+  let { route, configuredBinding, configuredBindingSessionKey, hasExplicitDmTopicBinding } =
+    resolveTelegramConversationRoute({
+      cfg: freshCfg,
+      accountId: account.accountId,
+      chatId,
+      isGroup,
+      resolvedThreadId,
+      replyThreadId,
+      senderId,
+      topicAgentId: topicConfig?.agentId,
+    });
   const requiresExplicitAccountBinding = (
     candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
   ): boolean => candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
@@ -258,7 +259,7 @@ export const buildTelegramMessageContext = async ({
   });
   // DMs: use thread suffix for session isolation (works regardless of dmScope)
   const threadKeys =
-    dmThreadId != null
+    dmThreadId != null && !hasExplicitDmTopicBinding
       ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
