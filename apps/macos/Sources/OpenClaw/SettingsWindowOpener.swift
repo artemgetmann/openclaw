@@ -80,15 +80,52 @@ final class SettingsWindowOpener {
 
     private static func contentWindows() -> [NSWindow] {
         NSApp.windows.filter { window in
-            window.frame.width > 1 &&
-                window.frame.height > 1 &&
-                !window.isKind(of: NSPanel.self) &&
-                "\(type(of: window))" != "NSPopupMenuWindow" &&
-                window.contentViewController != nil
+            self.isContentWindowCandidate(window)
         }
     }
 
     static func hasVisibleContentWindow() -> Bool {
         self.contentWindows().contains { $0.isVisible }
+    }
+
+    static func hasReplacementContentWindow() -> Bool {
+        return self.contentWindows().contains { window in
+            guard !self.isOnboardingWindow(window) else { return false }
+            return window.isVisible
+        }
+    }
+
+    static func isContentWindowCandidate(_ window: NSWindow) -> Bool {
+        self.isContentWindowCandidate(
+            frameWidth: window.frame.width,
+            frameHeight: window.frame.height,
+            isPanel: window.isKind(of: NSPanel.self),
+            className: "\(type(of: window))",
+            hasContentView: window.contentView != nil,
+            hasContentViewController: window.contentViewController != nil)
+    }
+
+    static func isContentWindowCandidate(
+        frameWidth: CGFloat,
+        frameHeight: CGFloat,
+        isPanel: Bool,
+        className: String,
+        hasContentView: Bool,
+        hasContentViewController: Bool
+    ) -> Bool {
+        guard frameWidth > 1, frameHeight > 1 else { return false }
+        guard !isPanel else { return false }
+        guard className != "NSPopupMenuWindow" else { return false }
+
+        // SwiftUI Settings scenes are real app windows, but AppKit does not
+        // guarantee they have a contentViewController. During finish handoff we
+        // only care whether a real replacement surface exists, and excluding
+        // content-view-only windows is what makes onboarding think Settings is
+        // "missing" and pop itself back on screen.
+        return hasContentView || hasContentViewController
+    }
+
+    static func isOnboardingWindow(_ window: NSWindow) -> Bool {
+        window.identifier == OnboardingController.windowIdentifier
     }
 }
