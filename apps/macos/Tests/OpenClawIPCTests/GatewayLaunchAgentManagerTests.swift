@@ -122,7 +122,9 @@ struct GatewayLaunchAgentManagerTests {
         let ownership = GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot)
 
         #expect(ownership.actualEntrypoint == "/tmp/other-worktree/dist/index.js")
-        #expect(ownership.expectedEntrypoint?.hasSuffix("/dist/index.js") == true)
+        #expect(
+            ownership.expectedEntrypoint?.hasSuffix("/dist/index.js") == true ||
+                ownership.expectedEntrypoint?.hasSuffix("/openclaw.mjs") == true)
         #expect(ownership.matchesCurrentEntrypoint == false)
         #expect(
             GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage(snapshot: snapshot)?

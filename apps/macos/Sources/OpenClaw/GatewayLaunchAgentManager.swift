@@ -2,6 +2,13 @@ import Foundation
 
 enum GatewayLaunchAgentManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
+    #if DEBUG
+    // Test-only hooks. The suite is serialized, so unsafe nonisolated storage keeps the
+    // production implementation simple while still letting tests observe command selection.
+    private nonisolated(unsafe) static var testLaunchAgentWriteDisabledHook: (() -> Bool)?
+    private nonisolated(unsafe) static var testReadDaemonLoadedHook: (() async -> Bool?)?
+    private nonisolated(unsafe) static var testRunDaemonCommandHook: ((_ args: [String], _ timeout: Double, _ quiet: Bool) async -> String?)?
+    #endif
 
     struct EntrypointOwnership: Equatable {
         let expectedEntrypoint: String?
@@ -30,6 +37,11 @@ enum GatewayLaunchAgentManager {
     }
 
     static func isLaunchAgentWriteDisabled() -> Bool {
+        #if DEBUG
+        if let hook = self.testLaunchAgentWriteDisabledHook {
+            return hook()
+        }
+        #endif
         if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) { return true }
         return false
     }
@@ -112,6 +124,11 @@ enum GatewayLaunchAgentManager {
         return await self.runDaemonCommand(["uninstall"], timeout: 20)
     }
 
+    static func restartOrStart(bundlePath: String, port: Int) async -> String? {
+        _ = bundlePath
+        return await self.set(enabled: true, bundlePath: bundlePath, port: port)
+    }
+
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
         LaunchAgentPlist.snapshot(url: self.plistURL)
     }
@@ -154,7 +171,30 @@ enum GatewayLaunchAgentManager {
 }
 
 extension GatewayLaunchAgentManager {
+    #if DEBUG
+    static func _setTestingHooks(
+        launchAgentWriteDisabled: (() -> Bool)? = nil,
+        readDaemonLoaded: (() async -> Bool?)? = nil,
+        runDaemonCommand: ((_ args: [String], _ timeout: Double, _ quiet: Bool) async -> String?)? = nil)
+    {
+        self.testLaunchAgentWriteDisabledHook = launchAgentWriteDisabled
+        self.testReadDaemonLoadedHook = readDaemonLoaded
+        self.testRunDaemonCommandHook = runDaemonCommand
+    }
+
+    static func _clearTestingHooks() {
+        self.testLaunchAgentWriteDisabledHook = nil
+        self.testReadDaemonLoadedHook = nil
+        self.testRunDaemonCommandHook = nil
+    }
+    #endif
+
     private static func readDaemonLoaded() async -> Bool? {
+        #if DEBUG
+        if let hook = self.testReadDaemonLoadedHook {
+            return await hook()
+        }
+        #endif
         let result = await self.runDaemonCommandResult(
             ["status", "--json", "--no-probe"],
             timeout: 15,
@@ -198,6 +238,7 @@ extension GatewayLaunchAgentManager {
         return await self.runDaemonCommand([
             "install",
             "--force",
+            "--allow-shared-service-takeover",
             "--port",
             "\(port)",
             "--runtime",
@@ -232,6 +273,11 @@ extension GatewayLaunchAgentManager {
         timeout: Double = 15,
         quiet: Bool = false) async -> String?
     {
+        #if DEBUG
+        if let hook = self.testRunDaemonCommandHook {
+            return await hook(args, timeout, quiet)
+        }
+        #endif
         let result = await self.runDaemonCommandResult(args, timeout: timeout, quiet: quiet)
         if result.success { return nil }
         return result.message ?? "Gateway daemon command failed"
@@ -242,11 +288,13 @@ extension GatewayLaunchAgentManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
+        let gatewayRoot = CommandResolver.canonicalGatewayProjectRoot()
         let command = CommandResolver.openclawCommand(
             subcommand: "gateway",
             extraArgs: self.withJsonFlag(args),
             // Launchd management must always run locally, even if remote mode is configured.
-            configRoot: ["gateway": ["mode": "local"]])
+            configRoot: ["gateway": ["mode": "local"]],
+            projectRoot: gatewayRoot)
         let env = self.daemonCommandEnvironment(
             base: ProcessInfo.processInfo.environment,
             projectRootHint: CommandResolver.projectRootEnvironmentHint())
