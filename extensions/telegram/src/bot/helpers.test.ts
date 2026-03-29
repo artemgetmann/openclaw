@@ -56,7 +56,15 @@ describe("resolveTelegramInboundThreadId", () => {
       expected: 123,
     },
     {
+      message: { reply_to: { reply_to_msg_id: 200, reply_to_top_id: 123 } },
+      expected: 123,
+    },
+    {
       message: { reply_to: { forum_topic: false, reply_to_top_id: 123 } },
+      expected: undefined,
+    },
+    {
+      message: { reply_to: { reply_to_msg_id: 123, reply_to_top_id: 123 } },
       expected: undefined,
     },
     {
