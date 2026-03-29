@@ -48,6 +48,23 @@ explicitly ask for the CLI path.
 - Verify with read-only commands first: `himalaya account list`,
   `himalaya folder list`, or `himalaya envelope list`.
 
+### WhatsApp CLI
+
+- Missing states usually look like: `wacli` not installed, QR pairing not
+  completed, or `wacli doctor` showing `AUTHENTICATED false`.
+- Tell the user WhatsApp is not connected yet.
+- Offer to help pair it now, usually by showing the QR login flow and waiting
+  for the phone to approve it.
+- If `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, explain
+  the nuance clearly: WhatsApp is paired, history/search may still work, but
+  live sync or sending may be unreliable until the phone is online and the
+  session reconnects.
+- Prefer product-language guidance such as "open WhatsApp on your phone and
+  finish pairing" over dumping `wacli auth` / `wacli sync --follow` into chat
+  unless the user explicitly wants the CLI path.
+- Verify with the cheapest read-only checks first: `wacli doctor`, then
+  `wacli chats list --limit 5 --json`.
+
 ### gog
 
 - Missing states usually look like: no OAuth client credentials, no authorized
