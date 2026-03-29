@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  HEARTBEAT_PROMPT,
   isHeartbeatContentEffectivelyEmpty,
   stripHeartbeatToken,
 } from "./heartbeat.js";
@@ -166,6 +167,13 @@ describe("stripHeartbeatToken", () => {
 });
 
 describe("isHeartbeatContentEffectivelyEmpty", () => {
+  it("keeps the default heartbeat prompt conservative about monitor scope", () => {
+    expect(HEARTBEAT_PROMPT).toContain("conservative, low-frequency ambient awareness only");
+    expect(HEARTBEAT_PROMPT).toContain("do not invent or store ad hoc monitors here");
+    expect(HEARTBEAT_PROMPT).toContain("prefer cron with a cadence, stop condition, and expiry");
+    expect(HEARTBEAT_PROMPT).toContain("Ask before creating new monitoring scope");
+  });
+
   it("returns false for undefined/null (missing file should not skip)", () => {
     expect(isHeartbeatContentEffectivelyEmpty(undefined)).toBe(false);
     expect(isHeartbeatContentEffectivelyEmpty(null)).toBe(false);
@@ -193,13 +201,13 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
   });
 
-  it("returns true for default template content (header + comment)", () => {
+  it("returns true for a comment-only heartbeat template", () => {
     const defaultTemplate = `# HEARTBEAT.md
 
-Keep this file empty unless you want a tiny checklist. Keep it small.
+# Keep this file empty (or comment-only) to skip heartbeat API calls.
+# Heartbeat is for broad, low-frequency awareness. Prefer cron for reminders or explicit monitors.
 `;
-    // Note: The template has actual text content, so it's NOT effectively empty
-    expect(isHeartbeatContentEffectivelyEmpty(defaultTemplate)).toBe(false);
+    expect(isHeartbeatContentEffectivelyEmpty(defaultTemplate)).toBe(true);
   });
 
   it("returns true for header with only empty lines", () => {
