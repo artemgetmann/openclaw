@@ -28,21 +28,17 @@ worktree_guard_reject_shared_root_main_edits \
   worktree \
   --context "scripts/openclaw-local.sh"
 
-if [[ -n "${OPENCLAW_CONSUMER_INSTANCE_ID:-}" ]]; then
-  normalized_instance_id="$(consumer_instance_normalize_id "$OPENCLAW_CONSUMER_INSTANCE_ID")"
-  if [[ -n "$normalized_instance_id" ]]; then
-    # Short local-CLI commands should respect the active consumer lane when the
-    # caller provides an instance id. Without this, re-auth/status commands
-    # quietly fall back to ~/.openclaw and mutate the wrong runtime.
-    export OPENCLAW_PROFILE="${OPENCLAW_PROFILE:-$(consumer_instance_profile "$normalized_instance_id")}"
-    export OPENCLAW_HOME="${OPENCLAW_HOME:-$(consumer_instance_state_dir "$normalized_instance_id")}"
-    export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$(consumer_instance_state_dir "$normalized_instance_id")}"
-    export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$(consumer_instance_config_path "$normalized_instance_id")}"
-    export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-$(consumer_instance_gateway_port "$normalized_instance_id")}"
-    export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
-    export OPENCLAW_LOG_DIR="${OPENCLAW_LOG_DIR:-$(consumer_instance_state_dir "$normalized_instance_id")/logs}"
-    export OPENCLAW_LAUNCHD_LABEL="${OPENCLAW_LAUNCHD_LABEL:-$(consumer_instance_gateway_launchd_label "$normalized_instance_id")}"
-  fi
+RAW_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
+if [[ -z "$RAW_INSTANCE_ID" ]]; then
+  # Consumer worktrees should behave like consumer lanes by default. Requiring
+  # every manual `pnpm openclaw:local ...` call to export an instance id first
+  # is exactly how auth/status commands drift back to ~/.openclaw.
+  RAW_INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT")"
+fi
+
+NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$RAW_INSTANCE_ID")"
+if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
+  consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
 fi
 
 # Short local CLI commands are an easy place to accidentally mutate the shared
