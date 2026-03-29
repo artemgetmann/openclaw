@@ -54,6 +54,16 @@ Setup Routing
   phone reconnects and sync catches up.
 - Use the raw CLI steps below only when you are the one performing setup or the
   user explicitly asks for the terminal path.
+- For local pairing work, prefer
+  `skills/wacli/scripts/wacli-auth-local.sh start`.
+  It runs `wacli auth` in an isolated temp store, captures the terminal QR,
+  renders a real PNG, and returns a session id plus `qrPath`.
+- When returning that QR to the user, send the image itself, not the raw block
+  characters. In CLI-agent flows, include `MEDIA:<qrPath>` in the final reply so
+  the QR remains scannable.
+- After the user scans, confirm completion with
+  `skills/wacli/scripts/wacli-auth-local.sh wait --session <id>` before claiming
+  WhatsApp is ready.
 
 Safety
 
