@@ -405,13 +405,56 @@ extension ChannelsStore {
         guard !self.isPreview else { return }
         guard AppStateStore.shared.connectionMode == .local else { return }
 
-        // Telegram bootstrap mutates gateway.auth.token and channels, which forces
-        // a local gateway restart. The shared macOS control socket must drop its
-        // stale auth and reconnect to the restarted gateway before the onboarding
-        // flow can observe the new Telegram state truthfully.
-        await GatewayConnection.shared.shutdown()
-        await GatewayEndpointStore.shared.refresh()
-        try? await GatewayConnection.shared.refresh()
+        _ = await Self.recoverConsumerGatewayAfterConfigBootstrap(
+            shutdown: {
+                // Drop the app's stale websocket state before every probe. The
+                // gateway may still be on the old token for a short window while
+                // launchd restarts it, and reusing a half-open client keeps the
+                // reconnect loop pinned to that dead auth state.
+                await GatewayConnection.shared.shutdown()
+            },
+            refreshEndpoint: {
+                // Pull the latest lane-local token/port snapshot after the config
+                // write so every retry reflects the new gateway truth on disk.
+                await GatewayEndpointStore.shared.refresh()
+            },
+            refreshConnection: {
+                try await GatewayConnection.shared.refresh()
+            },
+            probe: {
+                // Authenticated status is the cheapest proof that the restarted
+                // gateway is back and the app is no longer speaking with stale auth.
+                _ = try await GatewayConnection.shared.requestRaw(
+                    method: .status,
+                    timeoutMs: 1_500)
+            })
+    }
+
+    private static func recoverConsumerGatewayAfterConfigBootstrap(
+        retryDelayNanoseconds: UInt64 = 350_000_000,
+        maxAttempts: Int = 5,
+        shutdown: @escaping @Sendable () async -> Void,
+        refreshEndpoint: @escaping @Sendable () async -> Void,
+        refreshConnection: @escaping @Sendable () async throws -> Void,
+        probe: @escaping @Sendable () async throws -> Void,
+        sleep: @escaping @Sendable (UInt64) async -> Void = { delay in
+            try? await Task.sleep(nanoseconds: delay)
+        }
+    ) async -> Bool {
+        for attempt in 0..<maxAttempts {
+            await shutdown()
+            await refreshEndpoint()
+            do {
+                try await refreshConnection()
+                try await probe()
+                return true
+            } catch {
+                guard attempt + 1 < maxAttempts else { break }
+                await sleep(retryDelayNanoseconds)
+            }
+        }
+
+        return false
     }
 
     private func telegramReplayGatewayParams(dm: TelegramSetupDirectMessage) -> [String: AnyCodable]? {
@@ -483,6 +526,29 @@ extension ChannelsStore {
             shouldTrustReplayCompletion: false)
     }
 }
+
+#if DEBUG
+extension ChannelsStore {
+    static func _testRecoverConsumerGatewayAfterConfigBootstrap(
+        retryDelayNanoseconds: UInt64 = 350_000_000,
+        maxAttempts: Int = 5,
+        shutdown: @escaping @Sendable () async -> Void,
+        refreshEndpoint: @escaping @Sendable () async -> Void,
+        refreshConnection: @escaping @Sendable () async throws -> Void,
+        probe: @escaping @Sendable () async throws -> Void,
+        sleep: @escaping @Sendable (UInt64) async -> Void = { _ in }
+    ) async -> Bool {
+        await Self.recoverConsumerGatewayAfterConfigBootstrap(
+            retryDelayNanoseconds: retryDelayNanoseconds,
+            maxAttempts: maxAttempts,
+            shutdown: shutdown,
+            refreshEndpoint: refreshEndpoint,
+            refreshConnection: refreshConnection,
+            probe: probe,
+            sleep: sleep)
+    }
+}
+#endif
 
 private enum TelegramBootstrapPersistenceError: LocalizedError {
     case persistedConfigMismatch
