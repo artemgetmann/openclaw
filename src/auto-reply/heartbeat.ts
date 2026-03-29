@@ -2,9 +2,11 @@ import { escapeRegExp } from "../utils.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
-// Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
+// Keep it conservative: heartbeat is for broad ambient sweeps and periodic
+// awareness, not the default home for ad hoc scoped watches or replaying stale
+// open loops.
 export const HEARTBEAT_PROMPT =
-  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
+  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 

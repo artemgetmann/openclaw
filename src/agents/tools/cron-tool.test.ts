@@ -112,6 +112,16 @@ describe("cron tool", () => {
     expect(tool.ownerOnly).toBe(true);
   });
 
+  it("documents cron as the default for reminders and explicit monitors", () => {
+    const tool = createCronTool();
+    expect(tool.description).toContain("Prefer cron for reminders, exact scheduled tasks");
+    expect(tool.description).toContain("watch an inbox, thread, or person until something happens");
+    expect(tool.description).toContain("cadence, stop condition, and expiry/TTL");
+    expect(tool.description).toContain(
+      "Prefer heartbeat only for broad, low-frequency ambient awareness",
+    );
+  });
+
   it.each([
     [
       "update",
