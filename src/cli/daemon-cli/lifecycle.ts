@@ -1,3 +1,6 @@
+import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
+import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../../commands/daemon-runtime.js";
+import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -10,6 +13,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
+import { detectSharedGatewayInstallOwnershipConflict } from "./install-ownership.js";
 import {
   runServiceRestart,
   runServiceStart,
@@ -110,6 +114,79 @@ async function restartGatewayWithoutServiceManager(port: number) {
   };
 }
 
+async function installGatewayServiceForRestart(params: {
+  json: boolean;
+  stdout: NodeJS.WritableStream;
+  warnings: string[];
+  fail: (message: string, hints?: string[]) => void;
+}): Promise<{
+  result: "restarted";
+  message: string;
+  serviceLoaded: true;
+} | null> {
+  const cfg = await readBestEffortConfig();
+  const port = resolveGatewayPort(cfg);
+  const runtime = DEFAULT_GATEWAY_DAEMON_RUNTIME;
+  const service = resolveGatewayService();
+  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
+    env: process.env,
+    port,
+    runtime,
+    warn: (message) => {
+      if (params.json) {
+        params.warnings.push(message);
+      } else {
+        defaultRuntime.log(message);
+      }
+    },
+    config: cfg,
+  });
+
+  const ownershipConflict = await detectSharedGatewayInstallOwnershipConflict({
+    env: process.env,
+    service,
+    programArguments,
+    workingDirectory,
+    environment,
+  });
+  if (ownershipConflict) {
+    params.fail(ownershipConflict.message, ownershipConflict.hints);
+    return null;
+  }
+
+  const tokenResolution = await resolveGatewayInstallToken({
+    config: cfg,
+    env: process.env,
+    autoGenerateWhenMissing: true,
+    persistGeneratedToken: true,
+  });
+  if (tokenResolution.unavailableReason) {
+    params.fail(`Gateway restart blocked: ${tokenResolution.unavailableReason}`);
+    return null;
+  }
+  for (const warning of tokenResolution.warnings) {
+    if (params.json) {
+      params.warnings.push(warning);
+    } else {
+      defaultRuntime.log(warning);
+    }
+  }
+
+  await service.install({
+    env: process.env,
+    stdout: params.stdout,
+    programArguments,
+    workingDirectory,
+    environment,
+  });
+
+  return {
+    result: "restarted",
+    message: "Gateway service was missing; installed and started it.",
+    serviceLoaded: true,
+  };
+}
+
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   return await runServiceUninstall({
     serviceNoun: "Gateway",
@@ -150,6 +227,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
+  const installWarnings: string[] = [];
   let restartedWithoutServiceManager = false;
   const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
     resolveGatewayPortFallback(),
@@ -163,14 +241,30 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
-    onNotLoaded: async () => {
+    onNotLoaded: async (ctx) => {
+      const stdout = ctx?.stdout ?? process.stdout;
+      const fail =
+        ctx?.fail ??
+        ((message: string) => {
+          throw new Error(message);
+        });
       const handled = await restartGatewayWithoutServiceManager(restartPort);
       if (handled) {
         restartedWithoutServiceManager = true;
+        return handled;
       }
-      return handled;
+      return await installGatewayServiceForRestart({
+        json,
+        stdout,
+        warnings: installWarnings,
+        fail,
+      });
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
+      if (installWarnings.length > 0) {
+        warnings.push(...installWarnings);
+        installWarnings.length = 0;
+      }
       if (restartedWithoutServiceManager) {
         const health = await waitForGatewayHealthyListener({
           port: restartPort,
