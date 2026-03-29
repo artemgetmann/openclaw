@@ -5,6 +5,35 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct TailscaleIntegrationSectionTests {
+    @Test func `turning tailscale off preserves local gateway token auth`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "auth": [
+                    "mode": "token",
+                    "token": "stable-token",
+                    "allowTailscale": true,
+                ],
+                "tailscale": [
+                    "mode": "serve",
+                ],
+            ],
+        ]
+
+        let updated = TailscaleIntegrationSection._testUpdatedGatewayConfig(
+            root: root,
+            mode: "off",
+            requireCredentialsForServe: false,
+            password: "")
+        let gateway = updated["gateway"] as? [String: Any]
+        let auth = gateway?["auth"] as? [String: Any]
+        let tailscale = gateway?["tailscale"] as? [String: Any]
+
+        #expect(auth?["mode"] as? String == "token")
+        #expect(auth?["token"] as? String == "stable-token")
+        #expect(auth?["allowTailscale"] == nil)
+        #expect(tailscale?["mode"] as? String == "off")
+    }
+
     @Test func `tailscale section builds body when not installed`() {
         let service = TailscaleService(isInstalled: false, isRunning: false, statusError: "not installed")
         var view = TailscaleIntegrationSection(connectionMode: .local, isPaused: false)

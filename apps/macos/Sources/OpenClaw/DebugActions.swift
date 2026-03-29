@@ -86,11 +86,9 @@ enum DebugActions {
         Task { @MainActor in
             switch AppStateStore.shared.connectionMode {
             case .local:
-                GatewayProcessManager.shared.stop()
-                // Kick the control channel + health check so the UI recovers immediately.
                 await GatewayConnection.shared.shutdown()
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                GatewayProcessManager.shared.setActive(true)
+                await ControlChannel.shared.disconnect()
+                await GatewayProcessManager.shared.restartManagedGateway()
                 Task { try? await ControlChannel.shared.configure(mode: .local) }
                 Task { await HealthStore.shared.refresh(onDemand: true) }
 
