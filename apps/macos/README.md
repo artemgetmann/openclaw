@@ -17,6 +17,12 @@ scripts/restart-mac.sh --app-scope all   # explicitly kill every OpenClaw app pr
 
 Default scope is `self`, which only restarts the current app bundle and its gateway. Use `--app-scope all` only when you explicitly want to terminate other OpenClaw app instances on the machine.
 
+For linked worktrees, prefer the scoped launchers instead of relying on the shared app restart path:
+
+- `bash scripts/dev-launch-mac.sh`
+- `bash scripts/open-consumer-mac-app.sh --instance <id>`
+- `pnpm openclaw:local gateway restart`
+
 ## Packaging flow
 
 ```bash
