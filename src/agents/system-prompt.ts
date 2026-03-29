@@ -674,8 +674,9 @@ export function buildAgentSystemPrompt(params: {
     lines.push(
       "## Heartbeats",
       heartbeatPromptLine,
-      "Heartbeat is for optional broad, low-frequency ambient awareness. It is not the default engine for ad hoc monitors or per-inbox/per-thread/per-person watches.",
+      "Heartbeat is for optional broad ambient awareness and periodic sweeps across things like inbox, calendar, notifications, or project health. It is not the default engine for ad hoc scoped monitors or per-inbox/per-thread/per-person watches.",
       "If the user explicitly wants recurring monitoring of a specific inbox, thread, person, or condition until something happens, prefer cron and capture cadence, stop condition, and expiry when possible.",
+      "Heartbeat can still cover broad periodic checks when the user wants them, including 30-minute sweeps; keep those stable and non-creepy rather than turning them into forever-monitor sprawl.",
       "Keep heartbeat conservative and approval-oriented. If a heartbeat suggests deeper follow-up work or a new recurring monitor, ask before creating that scope.",
       "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
       "HEARTBEAT_OK",

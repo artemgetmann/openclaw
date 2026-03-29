@@ -49,7 +49,7 @@ Example config:
 
 - Interval: `30m` (or `1h` when Anthropic OAuth/setup-token is the detected auth mode). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`):
-  `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Heartbeat is for conservative, low-frequency ambient awareness only; do not invent or store ad hoc monitors here. For reminders, exact scheduled checks, or explicit watches on an inbox, thread, or person until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.`
+  `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, and project status), not for inventing or storing ad hoc scoped monitors. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.`
 - The heartbeat prompt is sent **verbatim** as the user message. The system
   prompt includes a “Heartbeat” section and the run is flagged internally.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone.
@@ -59,16 +59,19 @@ Example config:
 
 The default prompt is intentionally conservative:
 
-- **Ambient awareness only**: heartbeat is for broad, low-frequency sweeps that
-  surface something important, not the default engine for explicit monitors.
+- **Broad periodic sweeps**: heartbeat can cover inbox, calendar, notifications,
+  and project-status style checks when the user wants one shared sweep.
+- **Not the default engine for explicit monitors**: scoped watches like “monitor
+  this inbox/thread/person until something happens” should normally become cron jobs.
 - **No ad hoc monitor pileup**: reminders and scoped watches like “monitor this
   inbox/thread/person until something happens” should normally become cron jobs instead.
 - **Approval-oriented follow-up**: if heartbeat suggests deeper work or a new
   recurring monitor, the model should ask before expanding scope.
 
-If you want a heartbeat to do something specific, keep it broad and stable (for
-example “do one daily sweep and only alert me if something materially changed”).
-For exact schedules or explicit ongoing monitors, use cron instead.
+If you want a heartbeat to do something specific, keep it broad and stable. A
+daily sweep is the safest starter pattern, but 30-minute heartbeat sweeps are
+still valid if that is the cadence the user explicitly wants. For exact
+schedules or explicit ongoing monitors, use cron instead.
 
 ## Response contract
 
@@ -98,7 +101,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
         target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "bluebubbles")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id
-        prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Heartbeat is for conservative, low-frequency ambient awareness only; do not invent or store ad hoc monitors here. For reminders, exact scheduled checks, or explicit watches on an inbox, thread, or person until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.",
+        prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, and project status), not for inventing or storing ad hoc scoped monitors. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.",
         ackMaxChars: 300, // max chars allowed after HEARTBEAT_OK
       },
     },
@@ -139,7 +142,7 @@ Example: two agents, only the second agent runs heartbeats.
           every: "1h",
           target: "whatsapp",
           to: "+15551234567",
-          prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Heartbeat is for conservative, low-frequency ambient awareness only; do not invent or store ad hoc monitors here. For reminders, exact scheduled checks, or explicit watches on an inbox, thread, or person until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.",
+          prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, and project status), not for inventing or storing ad hoc scoped monitors. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.",
         },
       },
     ],
@@ -248,6 +251,9 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `session` only affects the run context; delivery is controlled by `target` and `to`.
 - To deliver to a specific channel/recipient, set `target` + `to`. With
   `target: "last"`, delivery uses the last external channel for that session.
+- For thread-aware channels, `to` can include a thread/topic suffix (for
+  example Telegram `<chatId>:topic:<threadId>`), and `target: "last"` preserves
+  the last routed thread/topic for that session when supported.
 - Heartbeat deliveries allow direct/DM targets by default. Set `directPolicy: "block"` to suppress direct-target sends while still running the heartbeat turn.
 - If the main queue is busy, the heartbeat is skipped and retried later.
 - If `target` resolves to no external destination, the run still happens but no
@@ -338,6 +344,13 @@ Example `HEARTBEAT.md`:
 - Once each morning, do one broad sweep of my world and only alert me if something materially important stands out.
 - If a deeper recurring monitor would help, suggest one cron job with a cadence, stop condition, and expiry first. Otherwise reply HEARTBEAT_OK.
 ```
+
+Other valid heartbeat items, if you want them:
+
+- Check email for urgent messages.
+- Review calendar for events in the next 2 hours.
+- If a background task finished, summarize results.
+- If idle for 8+ hours, send a brief check-in.
 
 ### Can the agent update HEARTBEAT.md?
 

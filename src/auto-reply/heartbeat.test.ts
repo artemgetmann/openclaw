@@ -168,8 +168,8 @@ describe("stripHeartbeatToken", () => {
 
 describe("isHeartbeatContentEffectivelyEmpty", () => {
   it("keeps the default heartbeat prompt conservative about monitor scope", () => {
-    expect(HEARTBEAT_PROMPT).toContain("conservative, low-frequency ambient awareness only");
-    expect(HEARTBEAT_PROMPT).toContain("do not invent or store ad hoc monitors here");
+    expect(HEARTBEAT_PROMPT).toContain("broad ambient awareness and periodic sweeps");
+    expect(HEARTBEAT_PROMPT).toContain("not for inventing or storing ad hoc scoped monitors");
     expect(HEARTBEAT_PROMPT).toContain("prefer cron with a cadence, stop condition, and expiry");
     expect(HEARTBEAT_PROMPT).toContain("Ask before creating new monitoring scope");
   });
@@ -205,7 +205,7 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     const defaultTemplate = `# HEARTBEAT.md
 
 # Keep this file empty (or comment-only) to skip heartbeat API calls.
-# Heartbeat is for broad, low-frequency awareness. Prefer cron for reminders or explicit monitors.
+# Heartbeat is for broad periodic sweeps. Prefer cron for reminders or explicit scoped monitors.
 `;
     expect(isHeartbeatContentEffectivelyEmpty(defaultTemplate)).toBe(true);
   });

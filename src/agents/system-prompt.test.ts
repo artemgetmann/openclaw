@@ -247,12 +247,17 @@ describe("buildAgentSystemPrompt", () => {
       heartbeatPrompt: HEARTBEAT_PROMPT,
     });
 
-    expect(prompt).toContain("Heartbeat is for optional broad, low-frequency ambient awareness.");
     expect(prompt).toContain(
-      "It is not the default engine for ad hoc monitors or per-inbox/per-thread/per-person watches.",
+      "Heartbeat is for optional broad ambient awareness and periodic sweeps across things like inbox, calendar, notifications, or project health.",
+    );
+    expect(prompt).toContain(
+      "It is not the default engine for ad hoc scoped monitors or per-inbox/per-thread/per-person watches.",
     );
     expect(prompt).toContain(
       "If the user explicitly wants recurring monitoring of a specific inbox, thread, person, or condition until something happens, prefer cron",
+    );
+    expect(prompt).toContain(
+      "Heartbeat can still cover broad periodic checks when the user wants them, including 30-minute sweeps",
     );
     expect(prompt).toContain(
       "Keep heartbeat conservative and approval-oriented. If a heartbeat suggests deeper follow-up work or a new recurring monitor, ask before creating that scope.",
