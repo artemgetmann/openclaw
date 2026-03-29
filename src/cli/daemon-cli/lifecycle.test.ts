@@ -20,6 +20,7 @@ type RestartParams = {
 };
 
 const service = {
+  install: vi.fn(),
   readCommand: vi.fn(),
   restart: vi.fn(),
 };
@@ -46,6 +47,9 @@ const probeGateway = vi.fn<
   }>
 >();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
+const buildGatewayInstallPlan = vi.fn();
+const resolveGatewayInstallToken = vi.fn();
+const detectSharedGatewayInstallOwnershipConflict = vi.fn();
 const loadConfig = vi.fn(() => ({}));
 
 vi.mock("../../config/config.js", () => ({
@@ -74,8 +78,25 @@ vi.mock("../../config/commands.js", () => ({
   isRestartEnabled: (config?: { commands?: unknown }) => isRestartEnabled(config),
 }));
 
+vi.mock("../../commands/daemon-install-helpers.js", () => ({
+  buildGatewayInstallPlan: (params: unknown) => buildGatewayInstallPlan(params),
+}));
+
+vi.mock("../../commands/daemon-runtime.js", () => ({
+  DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
+}));
+
+vi.mock("../../commands/gateway-install-token.js", () => ({
+  resolveGatewayInstallToken: (params: unknown) => resolveGatewayInstallToken(params),
+}));
+
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => service,
+}));
+
+vi.mock("./install-ownership.js", () => ({
+  detectSharedGatewayInstallOwnershipConflict: (params: unknown) =>
+    detectSharedGatewayInstallOwnershipConflict(params),
 }));
 
 vi.mock("./restart-health.js", () => ({
@@ -127,6 +148,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   beforeEach(() => {
+    service.install.mockReset();
     service.readCommand.mockReset();
     service.restart.mockReset();
     runServiceRestart.mockReset();
@@ -142,13 +164,27 @@ describe("runDaemonRestart health checks", () => {
     formatGatewayPidList.mockReset();
     probeGateway.mockReset();
     isRestartEnabled.mockReset();
+    buildGatewayInstallPlan.mockReset();
+    resolveGatewayInstallToken.mockReset();
+    detectSharedGatewayInstallOwnershipConflict.mockReset();
     loadConfig.mockReset();
 
+    service.install.mockResolvedValue(undefined);
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
     service.restart.mockResolvedValue({ outcome: "completed" });
+    buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
+      workingDirectory: "/repo",
+      environment: {},
+    });
+    resolveGatewayInstallToken.mockResolvedValue({
+      warnings: [],
+      unavailableReason: undefined,
+    });
+    detectSharedGatewayInstallOwnershipConflict.mockResolvedValue(null);
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
       const fail = (message: string, hints?: string[]) => {
@@ -291,6 +327,37 @@ describe("runDaemonRestart health checks", () => {
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       "Gateway restart is disabled in the running gateway config",
     );
+  });
+
+  it("installs the gateway service when no managed or unmanaged gateway exists", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
+        await params.onNotLoaded?.();
+        await params.postRestartCheck?.({
+          json: Boolean(params.opts?.json),
+          stdout: process.stdout,
+          warnings: [],
+          fail: (message: string) => {
+            throw new Error(message);
+          },
+        });
+        return true;
+      },
+    );
+
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(service.install).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
   });
 
   it("skips unmanaged signaling for pids that are not live gateway processes", async () => {
