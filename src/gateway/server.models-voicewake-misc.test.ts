@@ -149,6 +149,8 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
 
 describe("gateway server models + voicewake", () => {
   const listModels = async () => rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list");
+  const listAllModels = async () =>
+    rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", { all: true });
 
   const seedPiCatalog = () => {
     piSdkMock.enabled = true;
@@ -356,6 +358,70 @@ describe("gateway server models + voicewake", () => {
         },
       ],
     });
+  });
+
+  test("models.list returns full catalog when all=true even if config allowlists one model", async () => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: {
+              "openai/gpt-test-z": {},
+            },
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listAllModels();
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual(expectedSortedCatalog());
+      },
+    );
+  });
+
+  test("models.set updates the configured default model", async () => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: {
+              "openai/gpt-test-z": {},
+            },
+          },
+        },
+      },
+      async () => {
+        const res = await rpcReq<{ ok: true; model: string }>(ws, "models.set", {
+          model: "anthropic/claude-test-a",
+        });
+        expect(res.ok).toBe(true);
+        expect(res.payload).toEqual({
+          ok: true,
+          model: "anthropic/claude-test-a",
+        });
+
+        const configPath = process.env.OPENCLAW_CONFIG_PATH;
+        if (!configPath) {
+          throw new Error("Missing OPENCLAW_CONFIG_PATH");
+        }
+        const written = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+          agents?: {
+            defaults?: {
+              model?: { primary?: string };
+              models?: Record<string, object>;
+            };
+          };
+        };
+        expect(written.agents?.defaults?.model?.primary).toBe("anthropic/claude-test-a");
+        expect(written.agents?.defaults?.models).toMatchObject({
+          "openai/gpt-test-z": {},
+          "anthropic/claude-test-a": {},
+        });
+      },
+    );
   });
 
   test("models.list rejects unknown params", async () => {

@@ -12,6 +12,28 @@ OpenClaw supports OAuth and API keys for model providers. For always-on gateway
 hosts, API keys are usually the most predictable option. Subscription/OAuth
 flows are also supported when they match your provider account model.
 
+## Consumer early-tester login
+
+The consumer macOS app now exposes a narrowed in-app BYOK [bring your own key/account]
+surface for early testers. The v1 shortlist is intentionally small:
+
+- ChatGPT / OpenAI Codex OAuth
+- OpenAI API key
+- Anthropic setup-token
+- Anthropic API key
+- Google Gemini API key
+- MiniMax OAuth (global)
+- MiniMax API key (global)
+- Kimi / Moonshot API key
+
+These credentials are written into the tester-local runtime auth state
+(`auth-profiles.json` plus runtime config updates). They do not ship inside the
+`.app` bundle.
+
+Advanced or less consumer-friendly provider flows still exist in the broader CLI
+and advanced settings surface, but they are intentionally not part of the first
+consumer login shortlist.
+
 See [/concepts/oauth](/concepts/oauth) for the full OAuth flow and storage
 layout.
 For SecretRef-based auth (`env`/`file`/`exec` providers), see [Secrets Management](/gateway/secrets).
