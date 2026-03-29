@@ -130,10 +130,11 @@ email = "work@company.com"
 # ... backend config ...
 ```
 
-Switch accounts with `--account`:
+Switch accounts with `--account` on the concrete subcommand:
 
 ```bash
-himalaya --account work envelope list
+himalaya envelope list -a work
+himalaya folder list -a work
 ```
 
 ## Notmuch Backend (local mail)

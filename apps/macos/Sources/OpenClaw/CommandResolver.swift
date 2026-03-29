@@ -240,7 +240,8 @@ enum CommandResolver {
     static func projectOpenClawExecutable(projectRoot: URL? = nil) -> String? {
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
-        let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
+        let candidate = root.appendingPathComponent("node_modules/.bin")
+            .appendingPathComponent(self.helperName).path
         return FileManager().isExecutableFile(atPath: candidate) ? candidate : nil
         #else
         return nil

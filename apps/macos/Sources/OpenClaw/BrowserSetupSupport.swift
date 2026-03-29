@@ -187,7 +187,7 @@ final class BrowserSetupModel {
                 return
             }
             self.phase = .ready(selected)
-            self.statusLine = "Connected to \(selected.displayName). OpenClaw can use its own Chrome copy when needed."
+            self.statusLine = "Connected to \(selected.displayName). OpenClaw can use your live Chrome tabs for signed-in tasks and its own browser when needed."
             self.lastAutoRecoveryFailureMessage = nil
             return
         }
@@ -223,7 +223,7 @@ final class BrowserSetupModel {
             return
         }
         self.phase = .ready(profile)
-        self.statusLine = "Connected to \(profile.displayName). OpenClaw can use its own Chrome copy when needed."
+        self.statusLine = "Connected to \(profile.displayName). OpenClaw can use your live Chrome tabs for signed-in tasks and its own browser when needed."
         self.lastAutoRecoveryFailureMessage = nil
     }
 

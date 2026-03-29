@@ -35,6 +35,36 @@ Use `wacli` only when the user explicitly asks you to message someone else on Wh
 Do NOT use `wacli` for normal user chats; OpenClaw routes WhatsApp conversations automatically.
 If the user is chatting with you on WhatsApp, you should not reach for this tool unless they ask you to contact a third party.
 
+Automation Rule
+
+- For consumer checks, start with the cheapest read-only probes:
+  `wacli doctor`, then `wacli chats list --limit 5 --json`.
+- If setup is missing or unhealthy, do not dump raw CLI noise back to the user.
+  Treat it as a setup-needed state and use the shared `consumer-setup` skill.
+- Treat send/sync actions as higher-risk than read/list actions. Prove read access
+  first before sending to third parties.
+
+Setup Routing
+
+- If `wacli` is missing, not authenticated, or has no usable chat history yet,
+  route setup through `consumer-setup`.
+- If `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, do not
+  present that as a total failure. Explain that WhatsApp is paired, history may
+  still be readable, but live sync/send reliability may be degraded until the
+  phone reconnects and sync catches up.
+- Use the raw CLI steps below only when you are the one performing setup or the
+  user explicitly asks for the terminal path.
+- For local pairing work, prefer
+  `skills/wacli/scripts/wacli-auth-local.sh start`.
+  It runs `wacli auth` in an isolated temp store, captures the terminal QR,
+  renders a real PNG, and returns a session id plus `qrPath`.
+- When returning that QR to the user, send the image itself, not the raw block
+  characters. In CLI-agent flows, include `MEDIA:<qrPath>` in the final reply so
+  the QR remains scannable.
+- After the user scans, confirm completion with
+  `skills/wacli/scripts/wacli-auth-local.sh wait --session <id>` before claiming
+  WhatsApp is ready.
+
 Safety
 
 - Require explicit recipient + message text.
@@ -70,3 +100,9 @@ Notes
 - Backfill requires your phone online; results are best-effort.
 - WhatsApp CLI is not needed for routine user chats; it’s for messaging other people.
 - JIDs: direct chats look like `<number>@s.whatsapp.net`; groups look like `<id>@g.us` (use `wacli chats list` to find).
+- `wacli doctor` is the health probe:
+  - `AUTHENTICATED false` usually means QR pairing has not been completed yet.
+  - `AUTHENTICATED true` + `CONNECTED false` usually means the account is paired
+    but the phone/session is offline or not actively syncing.
+- `wacli chats list --json` is the cheapest proof that history/search access is
+  actually working before you attempt send or backfill actions.

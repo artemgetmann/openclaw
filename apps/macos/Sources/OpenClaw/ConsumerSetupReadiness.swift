@@ -561,7 +561,12 @@ extension BrowserSetupModel {
         user["color"] = (user["color"] as? String) ?? "#00AA00"
         profiles[consumerBrowserProfileName] = user
         browser["enabled"] = true
-        browser["defaultProfile"] = consumerBrowserProfileName
+        // Consumer browser setup still captures a clone target for the managed
+        // fallback lane, but it should not force clone mode as the browser
+        // default after the core product moved away from the old MVP design.
+        if (browser["defaultProfile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == consumerBrowserProfileName {
+            browser.removeValue(forKey: "defaultProfile")
+        }
         browser["profiles"] = profiles
         root["browser"] = browser
         OpenClawConfigFile.saveDict(root)

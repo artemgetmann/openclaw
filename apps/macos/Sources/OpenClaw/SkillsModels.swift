@@ -11,6 +11,7 @@ struct SkillStatus: Codable, Identifiable {
     let name: String
     let description: String
     let source: String
+    let bundled: Bool?
     let filePath: String
     let baseDir: String
     let skillKey: String
@@ -19,6 +20,7 @@ struct SkillStatus: Codable, Identifiable {
     let homepage: String?
     let always: Bool
     let disabled: Bool
+    let blockedByAllowlist: Bool?
     let eligible: Bool
     let requirements: SkillRequirements
     let missing: SkillMissing

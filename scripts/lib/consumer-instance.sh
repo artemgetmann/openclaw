@@ -216,17 +216,19 @@ consumer_instance_apply_runtime_env() {
     return 0
   fi
 
+  local runtime_root
   local state_dir
+  runtime_root="$(consumer_instance_runtime_root "$normalized")"
   state_dir="$(consumer_instance_state_dir "$normalized")"
 
   # Consumer lanes must derive runtime ownership from the instance id alone.
-  # If a caller leaves stale OPENCLAW_* overrides in the shell, commands like
-  # `browser profiles` can drift onto the wrong gateway while status still
-  # reports the LaunchAgent for this lane. Pin every runtime selector here so
-  # the wrapper, service install, and status flow all share one source of truth.
+  # OPENCLAW_HOME is the lane runtime root. The nested ".openclaw" payload
+  # inside it owns config/workspace/logs. Pointing HOME at the state dir itself
+  # creates poisoned defaults like ".openclaw/.openclaw/workspace-*", which is
+  # how browser/skills checks drift onto fake nested state.
   export OPENCLAW_CONSUMER_INSTANCE_ID="$normalized"
   export OPENCLAW_PROFILE="$(consumer_instance_profile "$normalized")"
-  export OPENCLAW_HOME="$state_dir"
+  export OPENCLAW_HOME="$runtime_root"
   export OPENCLAW_STATE_DIR="$state_dir"
   export OPENCLAW_CONFIG_PATH="$(consumer_instance_config_path "$normalized")"
   export OPENCLAW_GATEWAY_PORT="$(consumer_instance_gateway_port "$normalized")"
