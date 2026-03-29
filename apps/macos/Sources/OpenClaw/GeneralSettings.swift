@@ -16,6 +16,7 @@ struct GeneralSettings: View {
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
     @State private var browserSetup = BrowserSetupModel()
+    @State private var modelSetup = ConsumerModelSetupModel()
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -91,6 +92,10 @@ struct GeneralSettings: View {
                     }
 
                     if self.isConsumer {
+                        self.modelSection
+                    }
+
+                    if self.isConsumer {
                         SettingsToggleRow(
                             title: "Show advanced settings",
                             subtitle: "Reveal the full operator controls without removing them from the app.",
@@ -134,6 +139,7 @@ struct GeneralSettings: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     self.browserSection
+                    self.modelSection
 
                     SettingsToggleRow(
                         title: "\(AppFlavor.current.appName) active",
@@ -188,6 +194,25 @@ struct GeneralSettings: View {
         }
         .task {
             await self.browserSetup.refreshIfNeeded()
+        }
+    }
+
+    private var modelSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("AI access")
+                .font(.title3.weight(.semibold))
+            Text("Consumer testers should use their own AI account here. Shared founder auth is not the default path.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 12) {
+                ConsumerModelSetupCardContent(model: self.modelSetup)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor)))
         }
     }
 

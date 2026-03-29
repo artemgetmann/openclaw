@@ -70,15 +70,29 @@ function inferExpectedStateDirFromConfigPath(configPath: string): string {
   return path.dirname(configPath);
 }
 
-function inferMode(defaultProvider: string): ModelsReadinessMode {
-  // Consumer MVP truthfulness matters more than clever inference. When the
-  // default provider is the founder-managed Codex lane, missing/broken shared
-  // auth must stay "managed" and block instead of silently flipping into BYOK
-  // because some other local profile happens to exist.
-  if (defaultProvider === MANAGED_PROVIDER_ID) {
+function inferMode(params: {
+  cfg: OpenClawConfig;
+  store: ReturnType<typeof ensureAuthProfileStore>;
+  defaultProvider: string;
+}): ModelsReadinessMode {
+  if (params.defaultProvider !== MANAGED_PROVIDER_ID) {
+    return "byok";
+  }
+
+  const orderedProfiles = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store: params.store,
+    provider: MANAGED_PROVIDER_ID,
+  });
+
+  // Shared/founder auth is only the default tester path when the canonical
+  // shared profile is still the profile the runtime would actually use. A
+  // tester-owned Codex login should stay "byok" even though the provider id
+  // remains openai-codex.
+  if (orderedProfiles.length === 0) {
     return "managed";
   }
-  return "byok";
+  return orderedProfiles[0] == CONSUMER_CANONICAL_SHARED_PROFILE_ID ? "managed" : "byok";
 }
 
 function buildBlockedResult(params: {
@@ -230,7 +244,11 @@ export async function resolveModelsReadiness(): Promise<ModelsReadinessResult> {
   const defaultModelRef = resolveDefaultModel(cfg);
   const defaultModel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const store = ensureAuthProfileStore(agentDir);
-  const mode = inferMode(defaultModelRef.provider);
+  const mode = inferMode({
+    cfg,
+    store,
+    defaultProvider: defaultModelRef.provider,
+  });
 
   const expectedStateDir = inferExpectedStateDirFromConfigPath(configPath);
   const defaultAgentId = resolveDefaultAgentId(cfg);
