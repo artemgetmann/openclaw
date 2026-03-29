@@ -237,6 +237,8 @@ export function buildAgentSystemPrompt(params: {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
+  const cronToolSummary =
+    "Manage cron jobs and wake events (default to cron for reminders, exact scheduled checks, and explicit scoped monitors such as watching an inbox, thread, or person until something happens; when creating a monitor, prefer a clear cadence, stop condition, and expiry instead of an indefinite forever-job; use heartbeat only for optional broad low-frequency awareness)";
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
     write: "Create or overwrite files",
@@ -254,7 +256,7 @@ export function buildAgentSystemPrompt(params: {
       'Control web browser; prefer profile="openclaw" for isolated public tasks and most automation, use profile="user-live" only when the task explicitly needs the operator\'s real live browser session/logins/extensions, and do not silently switch lanes when session semantics would change',
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
+    cron: cronToolSummary,
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: acpSpawnRuntimeEnabled
@@ -439,7 +441,7 @@ export function buildAgentSystemPrompt(params: {
           "- browser: control OpenClaw's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
-          "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
+          `- cron: ${cronToolSummary}`,
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
@@ -672,6 +674,10 @@ export function buildAgentSystemPrompt(params: {
     lines.push(
       "## Heartbeats",
       heartbeatPromptLine,
+      "Heartbeat is for optional broad ambient awareness and periodic sweeps across things like inbox, calendar, notifications, or project health. It is not the default engine for ad hoc scoped monitors or per-inbox/per-thread/per-person watches.",
+      "If the user explicitly wants recurring monitoring of a specific inbox, thread, person, or condition until something happens, prefer cron and capture cadence, stop condition, and expiry when possible.",
+      "Heartbeat can still cover broad periodic checks when the user wants them, including 30-minute sweeps; keep those stable and non-creepy rather than turning them into forever-monitor sprawl.",
+      "Keep heartbeat conservative and approval-oriented. If a heartbeat suggests deeper follow-up work or a new recurring monitor, ask before creating that scope.",
       "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
       "HEARTBEAT_OK",
       'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',

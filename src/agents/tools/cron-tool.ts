@@ -215,6 +215,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     ownerOnly: true,
     description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.
 
+CHOOSING CRON VS HEARTBEAT:
+- Prefer cron for reminders, exact scheduled tasks, and explicit scoped monitors (for example: watch an inbox, thread, or person until something happens).
+- Prefer heartbeat only for broad, low-frequency ambient awareness that is already configured in HEARTBEAT.md.
+- For monitors, include a clear cadence, stop condition, and expiry/TTL in the job instructions when possible instead of creating an indefinite forever-job.
+
 ACTIONS:
 - status: Check cron scheduler status
 - list: List jobs (use includeDisabled:true to include disabled)

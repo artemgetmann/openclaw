@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
@@ -225,6 +226,41 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain(
       "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+    );
+  });
+
+  it("classifies cron as the default for reminders and explicit monitors", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["cron"],
+    });
+
+    expect(prompt).toContain("default to cron for reminders, exact scheduled checks");
+    expect(prompt).toContain("watching an inbox, thread, or person until something happens");
+    expect(prompt).toContain("cadence, stop condition, and expiry");
+    expect(prompt).toContain("use heartbeat only for optional broad low-frequency awareness");
+  });
+
+  it("describes heartbeat as ambient awareness rather than the default monitor engine", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      heartbeatPrompt: HEARTBEAT_PROMPT,
+    });
+
+    expect(prompt).toContain(
+      "Heartbeat is for optional broad ambient awareness and periodic sweeps across things like inbox, calendar, notifications, or project health.",
+    );
+    expect(prompt).toContain(
+      "It is not the default engine for ad hoc scoped monitors or per-inbox/per-thread/per-person watches.",
+    );
+    expect(prompt).toContain(
+      "If the user explicitly wants recurring monitoring of a specific inbox, thread, person, or condition until something happens, prefer cron",
+    );
+    expect(prompt).toContain(
+      "Heartbeat can still cover broad periodic checks when the user wants them, including 30-minute sweeps",
+    );
+    expect(prompt).toContain(
+      "Keep heartbeat conservative and approval-oriented. If a heartbeat suggests deeper follow-up work or a new recurring monitor, ask before creating that scope.",
     );
   });
 
