@@ -519,6 +519,7 @@ export const registerTelegramNativeCommands = ({
     chatId: number;
     threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
+    hasExplicitDmTopicBinding: boolean;
     mediaLocalRoots: readonly string[] | undefined;
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: ReturnType<typeof resolveChunkMode>;
@@ -531,7 +532,7 @@ export const registerTelegramNativeCommands = ({
       isForum,
       messageThreadId,
     });
-    let { route, configuredBinding } = resolveTelegramConversationRoute({
+    let { route, configuredBinding, hasExplicitDmTopicBinding } = resolveTelegramConversationRoute({
       cfg,
       accountId,
       chatId,
@@ -570,7 +571,15 @@ export const registerTelegramNativeCommands = ({
       accountId: route.accountId,
     });
     const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
-    return { chatId, threadSpec, route, mediaLocalRoots, tableMode, chunkMode };
+    return {
+      chatId,
+      threadSpec,
+      route,
+      hasExplicitDmTopicBinding,
+      mediaLocalRoots,
+      tableMode,
+      chunkMode,
+    };
   };
   const buildCommandDeliveryBaseOptions = (params: {
     chatId: string | number;
@@ -652,7 +661,14 @@ export const registerTelegramNativeCommands = ({
           if (!runtimeContext) {
             return;
           }
-          const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
+          const {
+            threadSpec,
+            route,
+            hasExplicitDmTopicBinding,
+            mediaLocalRoots,
+            tableMode,
+            chunkMode,
+          } = runtimeContext;
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
           const rawText = ctx.match?.trim() ?? "";
           if (command.name === "ping") {
@@ -729,7 +745,7 @@ export const registerTelegramNativeCommands = ({
           // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
           const threadKeys =
-            dmThreadId != null
+            dmThreadId != null && !hasExplicitDmTopicBinding
               ? resolveThreadSessionKeys({
                   baseSessionKey,
                   threadId: `${chatId}:${dmThreadId}`,

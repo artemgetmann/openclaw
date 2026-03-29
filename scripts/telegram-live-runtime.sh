@@ -641,23 +641,69 @@ start_isolated_runtime() {
     add_failure "runtime_config_path_missing"
     return
   fi
-  # Use direct Node entrypoint under the current worktree. `pnpm openclaw` can
-  # exit early under nohup in some environments, leaving no listener behind.
-  if (
-    cd "$REPO_ROOT"
-    nohup env \
-      OPENCLAW_STATE_DIR="$RUNTIME_STATE_DIR" \
-      OPENCLAW_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
-      OPENCLAW_GATEWAY_PORT="$RUNTIME_PORT" \
-      OPENCLAW_SKIP_GMAIL_WATCHER=1 \
-      OPENCLAW_SKIP_CRON=1 \
-      OPENCLAW_SKIP_CANVAS_HOST=1 \
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1 \
-      OPENCLAW_DISABLE_BONJOUR=1 \
-      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-1}" \
-      node scripts/run-node.mjs gateway run --bind loopback --port "$RUNTIME_PORT" --force --allow-unconfigured \
-      >"$RUNTIME_LOG_PATH" 2>&1 &
-  ); then
+  # Launch from a one-shot Node parent that uses `detached: true` + `unref()`.
+  # Plain `nohup ... &` looks detached, but the exec harness can still reap the
+  # child process after `ensure` exits, which creates fake-passing Telegram E2E.
+  if REPO_ROOT="$REPO_ROOT" \
+    RUNTIME_LOG_PATH="$RUNTIME_LOG_PATH" \
+    RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
+    RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
+    RUNTIME_PORT="$RUNTIME_PORT" \
+    OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-1}" \
+    node --input-type=module - <<'NODE'
+import { openSync } from "node:fs";
+import { spawn } from "node:child_process";
+
+const repoRoot = process.env.REPO_ROOT;
+const runtimeLogPath = process.env.RUNTIME_LOG_PATH;
+const runtimeStateDir = process.env.RUNTIME_STATE_DIR;
+const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
+const runtimePort = process.env.RUNTIME_PORT;
+
+if (!repoRoot || !runtimeLogPath || !runtimeStateDir || !runtimeConfigPath || !runtimePort) {
+  console.error("missing required runtime launch env");
+  process.exit(1);
+}
+
+const logFd = openSync(runtimeLogPath, "a");
+const child = spawn(
+  process.execPath,
+  [
+    "scripts/run-node.mjs",
+    "gateway",
+    "run",
+    "--bind",
+    "loopback",
+    "--port",
+    runtimePort,
+    "--force",
+    "--allow-unconfigured",
+  ],
+  {
+    cwd: repoRoot,
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: runtimeStateDir,
+      OPENCLAW_CONFIG_PATH: runtimeConfigPath,
+      OPENCLAW_GATEWAY_PORT: runtimePort,
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_DISABLE_BONJOUR: "1",
+      OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE: "1",
+      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC:
+        process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "1",
+    },
+  },
+);
+
+child.unref();
+console.log(child.pid);
+NODE
+  then
     RUNTIME_START_ACTION="started"
   else
     RUNTIME_START_ACTION="start-failed"
