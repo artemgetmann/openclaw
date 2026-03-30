@@ -23,7 +23,12 @@ describe("browser config", () => {
     expect(openclaw?.driver).toBe("openclaw");
     expect(openclaw?.cdpPort).toBe(18800);
     expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:18800");
-    expect(resolveProfile(resolved, "user")).toBe(null);
+    const signedIn = resolveProfile(resolved, "signed-in");
+    expect(signedIn?.driver).toBe("openclaw");
+    expect(signedIn?.cloneFromUserProfile).toBe(true);
+    expect(signedIn?.cdpPort).toBe(18801);
+    expect(signedIn?.color).toBe("#1F9D55");
+    expect(resolveProfile(resolved, "user")?.name).toBe("signed-in");
     const userLive = resolveProfile(resolved, "user-live");
     expect(userLive?.driver).toBe("existing-session");
     expect(userLive?.cdpPort).toBe(0);
@@ -413,10 +418,17 @@ describe("browser config", () => {
       expect(resolved.defaultProfile).toBe("custom");
     });
 
-    it("keeps custom clone profiles available without auto-creating built-in user", () => {
+    it("auto-creates the built-in signed-in lane and aliases legacy user to it", () => {
+      const resolved = resolveBrowserConfig({});
+
+      expect(resolveProfile(resolved, "signed-in")?.cloneFromUserProfile).toBe(true);
+      expect(resolveProfile(resolved, "user")?.name).toBe("signed-in");
+    });
+
+    it("preserves an explicit custom user profile instead of aliasing it", () => {
       const resolved = resolveBrowserConfig({
         profiles: {
-          "signed-in": {
+          user: {
             cdpPort: 18833,
             cloneFromUserProfile: true,
             sourceProfileName: "Profile 4",
@@ -425,10 +437,9 @@ describe("browser config", () => {
         },
       });
 
-      expect(resolveProfile(resolved, "user")).toBe(null);
-      const signedIn = resolveProfile(resolved, "signed-in");
-      expect(signedIn?.cloneFromUserProfile).toBe(true);
-      expect(signedIn?.cdpPort).toBe(18833);
+      expect(resolveProfile(resolved, "user")?.name).toBe("user");
+      expect(resolveProfile(resolved, "user")?.cdpPort).toBe(18833);
+      expect(resolveProfile(resolved, "signed-in")?.name).toBe("signed-in");
     });
   });
 });

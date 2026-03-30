@@ -253,7 +253,7 @@ export function buildAgentSystemPrompt(params: {
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser:
-      'Control web browser; prefer profile="openclaw" for isolated public tasks and most automation, use profile="user-live" only when the task explicitly needs the operator\'s real live browser session/logins/extensions, and do not silently switch lanes when session semantics would change',
+      'Control web browser; prefer profile="signed-in" for logged-in or hostile real-world browsing, prefer profile="openclaw" for isolated public tasks and fallback, use profile="user-live" only when the task explicitly needs the operator\'s real live browser session/logins/extensions, and do not silently switch lanes when session semantics would change',
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: cronToolSummary,
