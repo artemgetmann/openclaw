@@ -118,8 +118,17 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
-echo "📦 Ensuring deps (pnpm install)"
-(cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
+  # Packaging used to re-run `pnpm install` on every local rebuild. That keeps
+  # a cold checkout honest, but for founder/tester iteration it burns seconds
+  # even when the lockfile and node_modules are already warm, and it can fail in
+  # non-interactive environments that do not provide a TTY. Keep the safe
+  # default, but let explicit fast-path callers skip the dependency churn.
+  echo "📦 Ensuring deps (pnpm install)"
+  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+else
+  echo "📦 Skipping deps install (SKIP_PNPM_INSTALL=1)"
+fi
 
 if [[ -z "${APP_BUILD:-}" ]]; then
   APP_BUILD="$GIT_BUILD_NUMBER"
@@ -182,6 +191,10 @@ cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${APP_BUILD}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :OpenClawAppVariant ${APP_VARIANT}" "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Delete :OpenClawConsumerInstanceID" "$APP_ROOT/Contents/Info.plist" >/dev/null 2>&1 || true
+if [[ "$APP_VARIANT" == "consumer" && -n "${APP_INSTANCE_ID:-}" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :OpenClawConsumerInstanceID string ${APP_INSTANCE_ID}" "$APP_ROOT/Contents/Info.plist" || true
+fi
 /usr/libexec/PlistBuddy -c "Set :OpenClawBuildTimestamp ${BUILD_TS}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :OpenClawGitCommit ${GIT_COMMIT}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 ${URL_SCHEME}" "$APP_ROOT/Contents/Info.plist" || true
