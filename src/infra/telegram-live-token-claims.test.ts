@@ -3,22 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  collectClaimedTelegramBotTokens,
+  collectProtectedCanonicalTelegramBotTokens,
   detectProtectedTelegramTokenConflict,
   extractTelegramBotTokensFromConfig,
-  isTelegramLiveRuntimeConfigPath,
+  isCanonicalSharedGatewayConfigPath,
+  resolveCanonicalSharedGatewayConfigPath,
 } from "./telegram-live-token-claims.js";
 
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-claims-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-protected-"));
   tempDirs.push(dir);
   return dir;
-}
-
-function canonicalize(targetPath: string): string {
-  return fs.realpathSync.native(targetPath);
 }
 
 function writeFile(targetPath: string, contents: string): void {
@@ -32,7 +29,7 @@ afterEach(() => {
   }
 });
 
-describe("telegram live token claims", () => {
+describe("telegram shared-token protection", () => {
   it("extracts Telegram bot tokens from top-level and account config", () => {
     expect(
       extractTelegramBotTokensFromConfig({
@@ -49,86 +46,112 @@ describe("telegram live token claims", () => {
     ).toEqual(["default-token", "finance-token"]);
   });
 
-  it("collects claimed tokens from the canonical repo root and worktrees", () => {
-    const repoRoot = makeTempDir();
-    const canonicalRepoRoot = canonicalize(repoRoot);
-    writeFile(path.join(repoRoot, ".git"), "gitdir: /tmp/fake\n");
-    writeFile(path.join(repoRoot, ".env.local"), 'TELEGRAM_BOT_TOKEN="root-token"\n');
-    writeFile(
-      path.join(repoRoot, ".worktrees", "alpha", ".env.local"),
-      "TELEGRAM_BOT_TOKEN=alpha-token\n",
+  it("resolves the canonical shared gateway config path under ~/.openclaw", () => {
+    const home = makeTempDir();
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    writeFile(configPath, "{}\n");
+
+    expect(resolveCanonicalSharedGatewayConfigPath({ HOME: home })).toBe(
+      fs.realpathSync.native(configPath),
     );
+    expect(isCanonicalSharedGatewayConfigPath(configPath, { HOME: home })).toBe(true);
+  });
+
+  it("reads protected Telegram bot tokens from the canonical shared config", () => {
+    const home = makeTempDir();
     writeFile(
-      path.join(repoRoot, ".worktrees", "beta", ".env.local"),
-      "TELEGRAM_BOT_TOKEN=alpha-token\n",
+      path.join(home, ".openclaw", "openclaw.json"),
+      JSON.stringify({
+        channels: {
+          telegram: {
+            botToken: "main-token",
+            accounts: {
+              finance: { botToken: "finance-token" },
+              coder: { botToken: "coder-token" },
+            },
+          },
+        },
+      }),
     );
 
-    const claims = collectClaimedTelegramBotTokens({
-      HOME: path.dirname(path.dirname(repoRoot)),
-      OPENCLAW_MAIN_REPO: repoRoot,
-    });
-
-    expect(claims.get("root-token")).toEqual([canonicalRepoRoot]);
-    expect(claims.get("alpha-token")).toEqual([
-      path.join(canonicalRepoRoot, ".worktrees", "alpha"),
-      path.join(canonicalRepoRoot, ".worktrees", "beta"),
+    expect(collectProtectedCanonicalTelegramBotTokens({ HOME: home })).toEqual([
+      "main-token",
+      "finance-token",
+      "coder-token",
     ]);
   });
 
-  it("treats telegram-live runtime configs as exempt from the protected-token guard", () => {
+  it("allows the canonical shared config to use protected tokens", () => {
     const home = makeTempDir();
-    const liveConfigPath = path.join(
-      home,
-      ".openclaw",
-      "telegram-live-worktrees",
-      "tg-live-deadbeef00",
-      "openclaw.telegram-live.json",
+    const canonicalConfigPath = path.join(home, ".openclaw", "openclaw.json");
+    writeFile(
+      canonicalConfigPath,
+      JSON.stringify({
+        channels: {
+          telegram: {
+            botToken: "main-token",
+          },
+        },
+      }),
     );
 
-    expect(isTelegramLiveRuntimeConfigPath(liveConfigPath, { HOME: home })).toBe(true);
     expect(
       detectProtectedTelegramTokenConflict({
         config: {
           channels: {
             telegram: {
-              botToken: "finance-token",
+              botToken: "main-token",
             },
           },
         },
-        configPath: liveConfigPath,
-        env: { HOME: home, OPENCLAW_MAIN_REPO: home },
+        configPath: canonicalConfigPath,
+        env: { HOME: home },
       }),
     ).toBeNull();
   });
 
-  it("flags non-telegram-live configs that try to use claimed live tokens", () => {
-    const repoRoot = makeTempDir();
-    const canonicalRepoRoot = canonicalize(repoRoot);
+  it("blocks noncanonical runtimes from using canonical shared tokens", () => {
     const home = makeTempDir();
-    writeFile(path.join(repoRoot, ".git"), "gitdir: /tmp/fake\n");
-    writeFile(path.join(repoRoot, ".env.local"), "TELEGRAM_BOT_TOKEN=finance-token\n");
+    const canonicalConfigPath = path.join(home, ".openclaw", "openclaw.json");
+    writeFile(
+      canonicalConfigPath,
+      JSON.stringify({
+        channels: {
+          telegram: {
+            botToken: "main-token",
+            accounts: {
+              finance: { botToken: "finance-token" },
+            },
+          },
+        },
+      }),
+    );
 
     const conflict = detectProtectedTelegramTokenConflict({
       config: {
         channels: {
           telegram: {
-            botToken: "finance-token",
+            botToken: "main-token",
             accounts: {
-              coder: { botToken: "coder-token" },
+              tester: { botToken: "tester-token" },
+              finance: { botToken: "finance-token" },
             },
           },
         },
       },
-      configPath: path.join(home, ".openclaw", "openclaw.json"),
-      env: {
-        HOME: home,
-        OPENCLAW_MAIN_REPO: repoRoot,
-      },
+      configPath: path.join(
+        home,
+        ".openclaw",
+        "telegram-live-worktrees",
+        "tg-live-1",
+        "openclaw.telegram-live.json",
+      ),
+      env: { HOME: home },
     });
 
     expect(conflict).toEqual({
-      tokens: ["finance-token"],
-      claimPaths: [canonicalRepoRoot],
+      tokens: ["main-token", "finance-token"],
+      protectedBy: fs.realpathSync.native(canonicalConfigPath),
     });
   });
 });
