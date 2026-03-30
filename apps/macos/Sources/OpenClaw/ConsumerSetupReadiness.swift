@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import OpenClawKit
@@ -282,7 +283,28 @@ final class ConsumerModelSetupModel {
     }
 
     func refreshIfNeeded() async {
-        guard self.phase == .idle else { return }
+        switch self.phase {
+        case .checking:
+            return
+        case .idle, .failed:
+            break
+        case .ready:
+            return
+        }
+        // A transient gateway/auth probe failure should not stick forever in the
+        // Settings card. When the view appears again after the runtime recovers,
+        // allow one more live readiness check instead of forcing the user to
+        // change auth/model state just to clear a stale error.
+        await self.refresh()
+    }
+
+    func refreshOnAppActivationIfNeeded() async {
+        // Settings can stay mounted while external auth/gateway recovery
+        // happens elsewhere. Re-probe on app activation so stale readiness
+        // errors do not linger after the runtime has already recovered.
+        guard self.phase != .checking else { return }
+        guard !self.isApplyingAuth else { return }
+        guard !self.isApplyingModel else { return }
         await self.refresh()
     }
 
@@ -725,6 +747,9 @@ struct ConsumerModelSetupCardContent: View {
         }
         .task {
             await self.model.refreshIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await self.model.refreshOnAppActivationIfNeeded() }
         }
     }
 

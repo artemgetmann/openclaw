@@ -158,6 +158,57 @@ struct ConsumerSetupReadinessTests {
         #expect(model.selectedOptionId == "openai-api-key")
     }
 
+    @Test func `consumer model rechecks stale failure on app activation`() async {
+        let probeCalls = SendableCounter()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                return probeCalls.value == 1 ? blockedReadinessPayload() : readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        await model.refresh()
+        #expect(model.phase == .failed("OpenClaw-managed AI is configured, but the shared auth is no longer usable."))
+
+        await model.refreshOnAppActivationIfNeeded()
+
+        #expect(probeCalls.value == 2)
+        #expect(model.phase == .ready("openai-codex/gpt-5.4"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.4.")
+    }
+
+    @Test func `consumer model refreshIfNeeded retries after transient failure`() async {
+        let probeCalls = SendableCounter()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                if probeCalls.value == 1 {
+                    throw NSError(
+                        domain: "test",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "consumer control endpoint timed out"])
+                }
+                return readyReadinessPayload()
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        await model.refreshIfNeeded()
+        #expect(model.phase == .failed("consumer control endpoint timed out"))
+
+        await model.refreshIfNeeded()
+
+        #expect(probeCalls.value == 2)
+        #expect(model.phase == .ready("openai-codex/gpt-5.4"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.4.")
+    }
+
     @Test func `consumer model apply auth consumes returned readiness and marks ready`() async {
         let model = ConsumerModelSetupModel(
             probeReadiness: {
