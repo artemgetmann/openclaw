@@ -18,6 +18,7 @@ Beginner view:
 - Think of it as a **separate, agent-only browser**.
 - The `openclaw` profile does **not** touch your personal browser profile.
 - The agent can **open tabs, read pages, click, and type** in a safe lane.
+- The built-in `signed-in` profile launches a green-tinted cloned Chrome session from your real profile state.
 - The built-in `user-live` profile attaches to your actual host-local Chrome session when a task truly depends on your real browser state.
 
 ## What you get
@@ -42,14 +43,16 @@ openclaw browser --browser-profile openclaw snapshot
 If you get “Browser disabled”, enable it in config (see below) and restart the
 Gateway.
 
-## Profiles: `openclaw` vs `user-live`
+## Profiles: `signed-in` vs `openclaw` vs `user-live`
 
+- `signed-in`: managed cloned Chrome lane for signed-in/hostile real-world browsing.
 - `openclaw`: managed, isolated browser (no extension required).
 - `user-live`: host-local live-session lane for your real Chrome tabs, extensions, and login state.
 
 For agent browser tool calls:
 
-- Prefer `profile="openclaw"` by default for public browsing, clean isolated runs, and most automation.
+- Prefer `profile="signed-in"` for signed-in sites, anti-bot-sensitive flows, and tasks that benefit from your real Chrome cookies/session state in a managed clone.
+- Prefer `profile="openclaw"` for public browsing, clean isolated runs, and fallback when the signed-in lane is unavailable or worse on a specific site.
 - Use `profile="user-live"` only when the task explicitly depends on your real signed-in browser session, existing tabs, or installed extensions.
 - If the task clearly depends on existing login state and `profile="user-live"` is unavailable, stop and surface the blocker instead of silently switching to a clean isolated browser.
 - If multiple Chrome profiles may exist, use a named `existing-session` profile pinned by `userDataDir`, `profileDirectory`, or `cdpUrl` instead of guessing.
@@ -82,7 +85,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
-      work: { cdpPort: 18801, color: "#0066CC" },
+      "signed-in": { cdpPort: 18801, cloneFromUserProfile: true, color: "#1F9D55" },
+      work: { cdpPort: 18802, color: "#0066CC" },
       "user-live": {
         driver: "existing-session",
         attachOnly: true,
@@ -123,7 +127,8 @@ Notes:
 - Set `browser.profiles.<name>.userDataDir` when an existing-session profile
   should attach to a non-default Chromium user profile such as Brave or Edge.
 - `driver: "existing-session"` is the explicit live-browser attach mode.
-- `cloneFromUserProfile` still exists for advanced custom profiles, but the built-in cloned `user` lane is no longer created by default.
+- `signed-in` is the built-in cloned-profile lane.
+- Legacy `profile="user"` resolves to `signed-in` unless you explicitly configure a custom profile literally named `user`.
 
 ## Use Brave (or another Chromium-based browser)
 

@@ -55,6 +55,34 @@ function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[]
   return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
+function collectCloneProfiles(
+  cfg: OpenClawConfig,
+): Array<{ name: string; sourceProfileName?: string }> {
+  const browser = asRecord(cfg.browser);
+  const configuredProfiles = asRecord(browser?.profiles);
+  if (!configuredProfiles) {
+    return [];
+  }
+
+  return Object.entries(configuredProfiles)
+    .flatMap(([name, rawProfile]) => {
+      const profile = asRecord(rawProfile);
+      if (!profile?.cloneFromUserProfile) {
+        return [];
+      }
+      return [
+        {
+          name,
+          sourceProfileName:
+            typeof profile.sourceProfileName === "string"
+              ? profile.sourceProfileName.trim()
+              : undefined,
+        },
+      ];
+    })
+    .toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function noteChromeMcpBrowserReadiness(
   cfg: OpenClawConfig,
   deps?: {
@@ -64,12 +92,29 @@ export async function noteChromeMcpBrowserReadiness(
     readVersion?: (executablePath: string) => string | null;
   },
 ) {
+  const noteFn = deps?.noteFn ?? note;
+  const cloneProfiles = collectCloneProfiles(cfg);
+  if (cloneProfiles.length > 0) {
+    const cloneLabels = cloneProfiles.map((profile) => {
+      return profile.sourceProfileName
+        ? `${profile.name} (sourceProfileName=${profile.sourceProfileName})`
+        : profile.name;
+    });
+    noteFn(
+      [
+        `- Cloned signed-in browser profile(s): ${cloneLabels.join(", ")}.`,
+        "- These lanes launch a managed Chrome instance from a copy of the user's real Chrome profile state.",
+        '- Pin browser.profiles.<name>.sourceProfileName (for example "Profile 4") when multiple signed-in Chrome profiles exist and you want deterministic cloning.',
+      ].join("\n"),
+      "Browser",
+    );
+  }
+
   const profiles = collectChromeMcpProfiles(cfg);
   if (profiles.length === 0) {
     return;
   }
 
-  const noteFn = deps?.noteFn ?? note;
   const platform = deps?.platform ?? process.platform;
   const resolveChromeExecutable =
     deps?.resolveChromeExecutable ?? resolveGoogleChromeExecutableForPlatform;

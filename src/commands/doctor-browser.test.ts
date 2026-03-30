@@ -19,6 +19,31 @@ describe("doctor browser readiness", () => {
     expect(noteFn).not.toHaveBeenCalled();
   });
 
+  it("reports cloned signed-in browser readiness guidance", async () => {
+    const noteFn = vi.fn();
+    await noteChromeMcpBrowserReadiness(
+      {
+        browser: {
+          profiles: {
+            "signed-in": {
+              cloneFromUserProfile: true,
+              sourceProfileName: "Profile 4",
+              cdpPort: 18801,
+              color: "#1F9D55",
+            },
+          },
+        },
+      },
+      {
+        noteFn,
+      },
+    );
+
+    expect(noteFn).toHaveBeenCalled();
+    expect(String(noteFn.mock.calls[0]?.[0])).toContain("Cloned signed-in browser profile(s)");
+    expect(String(noteFn.mock.calls[0]?.[0])).toContain("sourceProfileName=Profile 4");
+  });
+
   it("warns when Chrome MCP is configured but Chrome is missing", async () => {
     const noteFn = vi.fn();
     await noteChromeMcpBrowserReadiness(
