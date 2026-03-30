@@ -15,6 +15,7 @@ GATEWAY_ERR_LOG="${HOME}/.openclaw/logs/gateway.err.log"
 WATCHDOG_ERR_LOG="/tmp/openclaw/gateway-watchdog.err.log"
 WATCHDOG_STABILIZE_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_STABILIZE_SECONDS:-8}"
 WATCHDOG_AUTO_DISABLE_ON_DUPLICATE="${OPENCLAW_GATEWAY_WATCHDOG_AUTO_DISABLE_ON_DUPLICATE:-1}"
+MANAGE_WATCHDOG="${OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG:-1}"
 
 log() {
   printf '[gateway-recover-main] %s\n' "$*"
@@ -204,7 +205,9 @@ main() {
   local uid
   uid="$(id -u)"
   launchctl bootout "gui/${uid}/${GATEWAY_LABEL}" 2>/dev/null || true
-  launchctl bootout "gui/${uid}/${WATCHDOG_LABEL}" 2>/dev/null || true
+  if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
+    launchctl bootout "gui/${uid}/${WATCHDOG_LABEL}" 2>/dev/null || true
+  fi
   openclaw gateway stop 2>/dev/null || true
   pkill -9 -f openclaw-gateway 2>/dev/null || true
   pkill -9 -f 'dist/index.js gateway' 2>/dev/null || true
@@ -227,10 +230,12 @@ main() {
   wait_for_listener
   wait_for_rpc_probe
 
-  log_block "Bootstrap watchdog launch agent"
-  launchctl bootstrap "gui/$(id -u)" "${HOME}/Library/LaunchAgents/${WATCHDOG_LABEL}.plist" 2>/dev/null || true
-  run_strict launchctl kickstart -k "gui/$(id -u)/${WATCHDOG_LABEL}"
-  stabilize_watchdog
+  if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
+    log_block "Bootstrap watchdog launch agent"
+    launchctl bootstrap "gui/$(id -u)" "${HOME}/Library/LaunchAgents/${WATCHDOG_LABEL}.plist" 2>/dev/null || true
+    run_strict launchctl kickstart -k "gui/$(id -u)/${WATCHDOG_LABEL}"
+    stabilize_watchdog
+  fi
 
   log_block "Final verification"
   assert_main_runtime_path
