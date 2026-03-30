@@ -194,7 +194,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Telegram groups are stricter than DMs: if BotFather Group Privacy stays on, the bot will usually ignore normal group messages unless someone tags it or replies to it. If you want normal group chat behavior, disable Group Privacy in BotFather, then remove and re-add the bot so Telegram actually applies the change. Enable topics/threaded mode for the cleanest multi-task setup.")
+            Text("Telegram groups are stricter than DMs. Simplest path: make the bot an admin in the group. If the bot is not an admin, BotFather Group Privacy usually means it will only see commands, replies, and tagged messages. If you want normal group chat behavior without tags, disable Group Privacy in BotFather, then remove and re-add the bot so Telegram actually applies the change. Enable topics/threaded mode for the cleanest multi-task setup.")
                 .font(.callout)
                 .foregroundStyle(.primary)
 

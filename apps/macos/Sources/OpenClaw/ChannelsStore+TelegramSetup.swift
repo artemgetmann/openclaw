@@ -235,7 +235,13 @@ extension ChannelsStore {
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("enabled")], value: enabled)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("botToken")], value: token)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("dmPolicy")], value: dmPolicy)
-        self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("groupPolicy")], value: "open")
+        // Mirror the founder runtime's Telegram group defaults for consumer
+        // onboarding: groups should work for the verified owner without forcing
+        // @mentions once the bot has the needed Telegram-side visibility.
+        self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("groupPolicy")], value: "allowlist")
+        self.updateConfigValue(
+            path: [.key("channels"), .key("telegram"), .key("groups"), .key("*"), .key("requireMention")],
+            value: false)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("allowFrom")], value: allowFrom)
         let persisted: [String: Any]
         if AppFlavor.current.isConsumer,
@@ -262,14 +268,17 @@ extension ChannelsStore {
     }
 
     private func waitForConsumerTelegramFirstTaskActivityRefreshes(
-        attempts: Int = 4,
+        attempts: Int = 12,
         delayNanoseconds: UInt64 = 1_000_000_000
     ) async -> Bool {
         guard self.consumerTelegramLooksLive() else { return false }
 
         // The snapshot can lag a real Telegram reply right after config reloads.
-        // Spend a short grace period on the live activity signal before forcing
-        // the user to send another DM that may not actually be necessary.
+        // Spend a bounded grace period on the live activity signal before
+        // forcing the user to send another DM that may not actually be
+        // necessary. A setup replay timeout can be followed by a gateway
+        // restart plus Telegram provider warm-up, which routinely burns more
+        // than the original 4-second window while still producing a real reply.
         for attempt in 0..<attempts {
             await self.refresh(probe: true)
             if self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible() {
@@ -350,6 +359,17 @@ extension ChannelsStore {
         let persistedPolicy = (telegram["dmPolicy"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard persistedPolicy == dmPolicy else {
+            throw TelegramBootstrapPersistenceError.persistedConfigMismatch
+        }
+        let persistedGroupPolicy = (telegram["groupPolicy"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard persistedGroupPolicy == "allowlist" else {
+            throw TelegramBootstrapPersistenceError.persistedConfigMismatch
+        }
+        let persistedGroups = telegram["groups"] as? [String: Any]
+        let wildcardGroup = persistedGroups?["*"] as? [String: Any]
+        let persistedRequireMention = wildcardGroup?["requireMention"] as? Bool
+        guard persistedRequireMention == false else {
             throw TelegramBootstrapPersistenceError.persistedConfigMismatch
         }
 
@@ -494,25 +514,43 @@ extension ChannelsStore {
         guard (text?.isEmpty == false) || (caption?.isEmpty == false) else {
             return nil
         }
-        let payload = TelegramSetupReplayPayload(
-            updateId: dm.updateId,
-            messageId: dm.messageId,
-            chatId: dm.chatId,
-            chatUsername: dm.chatUsername,
-            senderId: dm.senderId,
-            senderUsername: dm.senderUsername,
-            senderFirstName: dm.senderFirstName,
-            text: text?.isEmpty == false ? text : nil,
-            caption: caption?.isEmpty == false ? caption : nil,
-            date: dm.date,
-            messageThreadId: dm.messageThreadId)
-        guard let data = try? JSONEncoder().encode(payload),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return nil
+        // Build the replay payload with explicit Swift integer types instead of
+        // round-tripping through JSONSerialization. That bridge can coerce
+        // numeric fields into NSNumber-backed doubles, and the gateway schema
+        // rejects non-integer messageId/updateId values during first-task replay.
+        var object: [String: AnyCodable] = [
+            "updateId": AnyCodable(dm.updateId),
+            "messageId": AnyCodable(dm.messageId),
+            "chatId": AnyCodable(Int(dm.chatId)),
+            "senderId": AnyCodable(dm.senderId),
+            "date": AnyCodable(dm.date),
+        ]
+        if let chatUsername = dm.chatUsername?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !chatUsername.isEmpty
+        {
+            object["chatUsername"] = AnyCodable(chatUsername)
+        }
+        if let senderUsername = dm.senderUsername?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !senderUsername.isEmpty
+        {
+            object["senderUsername"] = AnyCodable(senderUsername)
+        }
+        if let senderFirstName = dm.senderFirstName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !senderFirstName.isEmpty
+        {
+            object["senderFirstName"] = AnyCodable(senderFirstName)
+        }
+        if let text, !text.isEmpty {
+            object["text"] = AnyCodable(text)
+        }
+        if let caption, !caption.isEmpty {
+            object["caption"] = AnyCodable(caption)
+        }
+        if let messageThreadId = dm.messageThreadId {
+            object["messageThreadId"] = AnyCodable(messageThreadId)
         }
         return [
-            "payload": AnyCodable(object),
+            "payload": AnyCodable(object.mapValues(\.value)),
             // Mirror the backend timeout so the gateway call stays bounded even
             // when local reconnect/retry logic adds a little transport overhead.
             "timeoutMs": AnyCodable(8_000),
@@ -623,3 +661,11 @@ private struct TelegramSetupReplayResult: Decodable {
     let replyCompleted: Bool?
     let error: String?
 }
+
+#if DEBUG
+extension ChannelsStore {
+    func _testTelegramReplayGatewayParams(dm: TelegramSetupDirectMessage) -> [String: AnyCodable]? {
+        self.telegramReplayGatewayParams(dm: dm)
+    }
+}
+#endif

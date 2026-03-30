@@ -71,10 +71,12 @@ openclaw pairing approve telegram <CODE>
     commands, replies, and messages that explicitly tag it. That is Telegram
     behavior, not an OpenClaw bug.
 
-    If you want the bot to react to normal group messages, disable **Privacy
-    Mode** in BotFather and then remove + re-add the bot in the group so
-    Telegram applies the new mode. For topic-based group work, also enable
-    threaded mode/topics.
+    Simplest path: make the bot an admin in the group.
+
+    If you are not making it an admin and still want the bot to react to normal
+    group messages, disable **Privacy Mode** in BotFather and then remove +
+    re-add the bot in the group so Telegram applies the new mode. For
+    topic-based group work, also enable threaded mode/topics.
   </Step>
 </Steps>
 
