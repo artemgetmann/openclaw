@@ -10,6 +10,13 @@ const backendMocks = vi.hoisted(() => ({
   sleep: vi.fn(async () => {}),
 }));
 
+const backendMeta = {
+  api_hash_source: "env-file" as const,
+  api_id_source: "process-env" as const,
+  env_file: "scripts/telegram-e2e/.env.local",
+  session_path: "scripts/telegram-e2e/tmp/userbot.session",
+};
+
 vi.mock("../telegram-user/backend.js", () => backendMocks);
 
 const runtime: RuntimeEnv = {
@@ -32,6 +39,7 @@ describe("telegram-user commands", () => {
 
   it("renders precheck JSON output", async () => {
     backendMocks.runTelegramUserPrecheck.mockResolvedValueOnce({
+      backend_meta: backendMeta,
       chat: { chat_id: 10, peer_type: "User", title: null, username: "jarvis_tester_1_bot" },
       session_path: "scripts/telegram-e2e/tmp/userbot.session",
       user: { first_name: "Tester", user_id: 99, username: "artem" },
@@ -44,6 +52,7 @@ describe("telegram-user commands", () => {
 
   it("renders send text output with raw reply metadata", async () => {
     backendMocks.runTelegramUserSend.mockResolvedValueOnce({
+      backend_meta: backendMeta,
       message: {
         chat_id: 10,
         chat_title: null,
@@ -67,13 +76,16 @@ describe("telegram-user commands", () => {
     );
 
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("message_id=123"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("env_file="));
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("direct_messages_topic.topic_id=7001"),
     );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('text="hello"'));
   });
 
   it("renders recent messages as a table", async () => {
     backendMocks.runTelegramUserRead.mockResolvedValueOnce({
+      backend_meta: backendMeta,
       messages: [
         {
           chat_id: 10,
@@ -97,11 +109,13 @@ describe("telegram-user commands", () => {
 
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("reply text"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("200"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("messages=1"));
   });
 
   it("waits until a reply matches by DM topic id", async () => {
     backendMocks.runTelegramUserRead
       .mockResolvedValueOnce({
+        backend_meta: backendMeta,
         messages: [
           {
             chat_id: 10,
@@ -121,6 +135,7 @@ describe("telegram-user commands", () => {
         ],
       })
       .mockResolvedValueOnce({
+        backend_meta: backendMeta,
         messages: [
           {
             chat_id: 10,
@@ -155,6 +170,9 @@ describe("telegram-user commands", () => {
 
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("via direct_messages_topic.topic_id"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("session=scripts/telegram-e2e/tmp/userbot.session"),
     );
   });
 

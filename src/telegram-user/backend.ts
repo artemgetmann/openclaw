@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import dotenv from "dotenv";
 import type {
+  TelegramUserBackendMeta,
   TelegramUserBackendError,
   TelegramUserBackendOptions,
   TelegramUserPrecheck,
@@ -58,6 +59,11 @@ type PythonInvocation = {
 
 type BackendCallOptions = TelegramUserBackendOptions & {
   args: string[];
+};
+
+type BackendEnvBuild = {
+  env: NodeJS.ProcessEnv;
+  meta: TelegramUserBackendMeta;
 };
 
 function resolveVenvPythonPath(): string {
@@ -159,14 +165,36 @@ async function ensureTelethonPython(): Promise<string> {
   return venvPython;
 }
 
-async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<NodeJS.ProcessEnv> {
+function resolveTelegramCredSource(
+  loadedEnv: Record<string, string>,
+  key: "TELEGRAM_API_ID" | "TELEGRAM_API_HASH",
+): TelegramUserBackendMeta["api_id_source"] {
+  if ((loadedEnv[key] ?? "").trim()) {
+    return "env-file";
+  }
+  if ((process.env[key] ?? "").trim()) {
+    return "process-env";
+  }
+  return "missing";
+}
+
+async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<BackendEnvBuild> {
   const envFilePath = options.envFile ? path.resolve(options.envFile) : defaultEnvFilePath;
   const loadedEnv = await loadScopedEnvFile(envFilePath);
+  const sessionPath = path.resolve(options.session ?? defaultSessionPath);
   return {
-    ...process.env,
-    ...loadedEnv,
-    OPENCLAW_TELEGRAM_USER_ENV_FILE: envFilePath,
-    OPENCLAW_TELEGRAM_USER_SESSION: path.resolve(options.session ?? defaultSessionPath),
+    env: {
+      ...process.env,
+      ...loadedEnv,
+      OPENCLAW_TELEGRAM_USER_ENV_FILE: envFilePath,
+      OPENCLAW_TELEGRAM_USER_SESSION: sessionPath,
+    },
+    meta: {
+      api_hash_source: resolveTelegramCredSource(loadedEnv, "TELEGRAM_API_HASH"),
+      api_id_source: resolveTelegramCredSource(loadedEnv, "TELEGRAM_API_ID"),
+      env_file: envFilePath,
+      session_path: sessionPath,
+    },
   };
 }
 
@@ -178,7 +206,11 @@ function parseBackendJson<T>(raw: string, fallbackMessage: string): T {
   }
 }
 
-function parseBackendError(stderr: string, env: NodeJS.ProcessEnv): Error {
+function parseBackendError(
+  stderr: string,
+  env: NodeJS.ProcessEnv,
+  meta: TelegramUserBackendMeta,
+): Error {
   const sanitized = sanitizeBackendText(stderr, env);
   if (!sanitized) {
     return new Error("Telegram user backend failed without diagnostic output.");
@@ -186,7 +218,11 @@ function parseBackendError(stderr: string, env: NodeJS.ProcessEnv): Error {
   try {
     const parsed = JSON.parse(sanitized) as { error?: TelegramUserBackendError };
     if (parsed?.error?.message) {
-      return new Error(`${parsed.error.code}: ${parsed.error.message}`);
+      const details =
+        parsed.error.code === "E_MISSING_CREDS"
+          ? ` env_file=${meta.env_file} session=${meta.session_path} api_id_source=${meta.api_id_source} api_hash_source=${meta.api_hash_source}`
+          : "";
+      return new Error(`${parsed.error.code}: ${parsed.error.message}${details}`);
     }
   } catch {
     // Fall back to the raw sanitized stderr.
@@ -210,7 +246,7 @@ function readExecErrorStderr(error: unknown): string {
 
 async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
   const python = await ensureTelethonPython();
-  const env = await buildBackendEnv(options);
+  const { env, meta } = await buildBackendEnv(options);
   try {
     const { stdout } = await execFileAsync(python, [backendScriptPath, ...options.args], {
       cwd: repoRoot,
@@ -219,12 +255,14 @@ async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
       maxBuffer: 4 * 1024 * 1024,
     });
     const sanitizedStdout = sanitizeBackendText(stdout, env);
-    return parseBackendJson<T>(
+    const parsed = parseBackendJson<T & { backend_meta?: TelegramUserBackendMeta }>(
       sanitizedStdout,
       "Telegram user backend returned invalid JSON output.",
     );
+    parsed.backend_meta ??= meta;
+    return parsed;
   } catch (error) {
-    throw parseBackendError(readExecErrorStderr(error), env);
+    throw parseBackendError(readExecErrorStderr(error), env, meta);
   }
 }
 
