@@ -1,7 +1,10 @@
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { buildAllowedModelSet } from "../../agents/model-selection.js";
 import { applyConsumerAuth, listConsumerAuthOptions } from "../../commands/models/consumer-auth.js";
-import { listConsumerModelOptions } from "../../commands/models/consumer-models.js";
+import {
+  applyConsumerModel,
+  listConsumerModelOptions,
+} from "../../commands/models/consumer-models.js";
 import { resolveModelsReadiness } from "../../commands/models/readiness.js";
 import { setDefaultModel } from "../../commands/models/set.js";
 import { loadConfig } from "../../config/config.js";
@@ -80,6 +83,34 @@ export const modelsHandlers: GatewayRequestHandlers = {
     }
     try {
       respond(true, await listConsumerModelOptions(), undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    }
+  },
+  "models.consumer.apply": async ({ params, respond }) => {
+    if (!validateModelsSetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid models.consumer.apply params: ${formatValidationErrors(validateModelsSetParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    try {
+      const rawModel = (params as { model?: unknown }).model;
+      const model = typeof rawModel === "string" ? rawModel : "";
+      const updated = await applyConsumerModel({ model });
+      respond(
+        true,
+        {
+          ok: true,
+          model: updated.defaultModel,
+        },
+        undefined,
+      );
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }

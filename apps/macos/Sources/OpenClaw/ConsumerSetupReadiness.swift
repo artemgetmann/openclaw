@@ -126,6 +126,7 @@ final class ConsumerModelSetupModel {
     typealias AuthApply = @Sendable (_ optionId: String, _ secret: String?) async throws -> ConsumerModelsAuthApplyPayload
     typealias ModelsLoader = @Sendable () async throws -> ConsumerModelsModelListPayload
     typealias ModelApply = @Sendable (_ modelId: String) async throws -> ConsumerModelsSetPayload
+    typealias RuntimeOwnershipBlocker = @Sendable () -> String?
 
     enum Phase: Equatable {
         case idle
@@ -156,19 +157,24 @@ final class ConsumerModelSetupModel {
     private let applyAuth: AuthApply
     private let listModels: ModelsLoader
     private let applyModel: ModelApply
+    private let runtimeOwnershipBlocker: RuntimeOwnershipBlocker
 
     init(
         probeReadiness: ReadinessProbe? = nil,
         listAuthOptions: AuthOptionsLoader? = nil,
         applyAuth: AuthApply? = nil,
         listModels: ModelsLoader? = nil,
-        applyModel: ModelApply? = nil)
+        applyModel: ModelApply? = nil,
+        runtimeOwnershipBlocker: RuntimeOwnershipBlocker? = nil)
     {
         self.probeReadiness = probeReadiness ?? Self.gatewayReadinessProbe
         self.listAuthOptions = listAuthOptions ?? Self.gatewayAuthOptionsLoader
         self.applyAuth = applyAuth ?? Self.gatewayAuthApply
         self.listModels = listModels ?? Self.gatewayModelsLoader
         self.applyModel = applyModel ?? Self.gatewayModelApply
+        self.runtimeOwnershipBlocker = runtimeOwnershipBlocker ?? {
+            GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage()
+        }
     }
 
     var isComplete: Bool {
@@ -283,6 +289,17 @@ final class ConsumerModelSetupModel {
     func refresh() async {
         self.phase = .checking
         self.statusLine = "Checking OpenClaw's AI access…"
+
+        if let blocker = self.runtimeOwnershipBlocker() {
+            // If launchd is pinned to a different checkout, do not let the UI
+            // probe auth or model readiness. That would just lie about the real
+            // runtime the user is about to rely on.
+            self.phase = .failed(blocker)
+            self.statusLine = blocker
+            self.authSectionExpanded = true
+            return
+        }
+
         await self.loadAuthOptionsIfNeeded()
 
         do {
@@ -465,7 +482,7 @@ final class ConsumerModelSetupModel {
 
     private static func gatewayModelApply(modelId: String) async throws -> ConsumerModelsSetPayload {
         return try await GatewayConnection.shared.requestDecoded(
-            method: .modelsSet,
+            method: .modelsConsumerApply,
             params: ["model": AnyCodable(modelId)],
             timeoutMs: 20_000)
     }

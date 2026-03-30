@@ -39,6 +39,7 @@ const BASE_METHODS = [
   "models.auth.list",
   "models.auth.apply",
   "models.consumer.list",
+  "models.consumer.apply",
   "models.list",
   "models.set",
   "models.readiness",

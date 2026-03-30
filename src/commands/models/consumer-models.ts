@@ -144,14 +144,23 @@ async function resolveConsumerModelOptions(params: {
     useCache: false,
   });
   // The picker is intentionally narrower than the full catalog, but it must not
-  // inherit the current config allowlist. Otherwise a fresh auth flow looks
-  // broken because only the already-selected model survives.
+  // disappear just because the live provider catalog is sparse or temporarily
+  // degraded. Consumer bootstrap seeds a small set of approved models in the
+  // config; keep those visible alongside anything the live catalog exposes.
   const availableKeys = new Set(catalog.map((entry) => modelKey(entry.provider, entry.id)));
+  const configuredKeys = new Set(
+    Object.keys(params.config.agents?.defaults?.models ?? {}).filter((entry) => {
+      return resolveConsumerModelFamily(entry) === family;
+    }),
+  );
 
   // Keep the consumer picker deliberately tiny and provider-scoped. The app
-  // should only expose models that match the currently working credential path.
+  // should only expose models that match the current credential family, but it
+  // should still show the seeded defaults even if the provider catalog is slow
+  // or missing a row for one of them.
   const options = CONSUMER_MODEL_SHORTLIST.filter(
-    (entry) => entry.family == family && availableKeys.has(entry.id),
+    (entry) =>
+      entry.family == family && (availableKeys.has(entry.id) || configuredKeys.has(entry.id)),
   ).map((entry) => ({
     id: entry.id,
     title: entry.title,

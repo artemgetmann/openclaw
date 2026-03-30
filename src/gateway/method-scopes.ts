@@ -102,6 +102,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "tts.convert",
     "tts.setProvider",
     "models.auth.apply",
+    "models.consumer.apply",
     "models.set",
     "voicewake.set",
     "node.invoke",

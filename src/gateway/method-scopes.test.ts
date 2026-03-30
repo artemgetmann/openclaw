@@ -12,6 +12,7 @@ describe("method scope resolution", () => {
     ["sessions.resolve", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
     ["poll", ["operator.write"]],
+    ["models.consumer.apply", ["operator.write"]],
     ["models.set", ["operator.write"]],
     ["config.patch", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
