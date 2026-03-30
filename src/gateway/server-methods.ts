@@ -39,6 +39,7 @@ const CONTROL_PLANE_WRITE_METHODS = new Set([
   "config.apply",
   "config.patch",
   "models.auth.apply",
+  "models.consumer.apply",
   "models.set",
   "update.run",
 ]);

@@ -27,6 +27,19 @@ function buildConfig(model: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function buildConfigWithSeededModels(model: string, models: string[]): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: {
+          primary: model,
+        },
+        models: Object.fromEntries(models.map((entry) => [entry, {}])),
+      },
+    },
+  } as OpenClawConfig;
+}
+
 function readyReadiness(defaultModel: string) {
   return {
     status: "ready" as const,
@@ -111,6 +124,22 @@ describe("consumer model picker", () => {
       "anthropic/claude-sonnet-4-6",
       "anthropic/claude-opus-4-6",
       "anthropic/claude-haiku-4-5",
+    ]);
+  });
+
+  it("keeps seeded consumer models visible even when the live catalog is sparse", async () => {
+    catalogEntries = [{ provider: "openai-codex", id: "gpt-5.4" }];
+
+    const result = await listConsumerModelOptions({
+      config: buildConfigWithSeededModels("openai-codex/gpt-5.4", [
+        "openai-codex/gpt-5.4",
+        "openai-codex/gpt-5.3-codex",
+      ]),
+    });
+
+    expect(result.options.map((entry) => entry.id)).toEqual([
+      "openai-codex/gpt-5.4",
+      "openai-codex/gpt-5.3-codex",
     ]);
   });
 

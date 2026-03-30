@@ -175,6 +175,28 @@ describe("gateway control-plane write rate limit", () => {
     );
   });
 
+  it("treats models.consumer.apply as a control-plane write", async () => {
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext();
+    const client = buildClient();
+
+    await runRequest({ method: "models.consumer.apply", context, client, handler });
+    await runRequest({ method: "models.consumer.apply", context, client, handler });
+    await runRequest({ method: "models.consumer.apply", context, client, handler });
+    const blocked = await runRequest({ method: "models.consumer.apply", context, client, handler });
+
+    expect(handlerCalls).toHaveBeenCalledTimes(3);
+    expect(blocked).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+  });
+
   it("treats models.set as a control-plane write", async () => {
     const handlerCalls = vi.fn();
     const handler: GatewayRequestHandler = (opts) => {
