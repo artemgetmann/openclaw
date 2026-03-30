@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "../../../src/config/config.js";
 import { loadConfig } from "../../../src/config/config.js";
 import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
 import { formatErrorMessage } from "../../../src/infra/errors.js";
+import {
+  acquireTelegramTokenLease,
+  TelegramTokenLeaseConflictError,
+} from "../../../src/infra/telegram-token-lease.js";
 import { registerUnhandledRejectionHandler } from "../../../src/infra/unhandled-rejections.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -78,6 +82,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
   let pollingSession: TelegramPollingSession | undefined;
   let execApprovalsHandler: TelegramExecApprovalHandler | undefined;
+  let tokenLease: Awaited<ReturnType<typeof acquireTelegramTokenLease>> | undefined;
 
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
     const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
@@ -112,6 +117,21 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       throw new Error(
         `Telegram bot token missing for account "${account.accountId}" (set channels.telegram.accounts.${account.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
       );
+    }
+
+    try {
+      // Long polling must have exactly one owner per bot token. Without a hard
+      // lease, parallel worktrees, LaunchAgents, or stray tester runtimes race
+      // into getUpdates and create fake product failures via 409 conflicts.
+      tokenLease = await acquireTelegramTokenLease({
+        token,
+        accountId: account.accountId,
+      });
+    } catch (err) {
+      if (err instanceof TelegramTokenLeaseConflictError) {
+        log(`[telegram] ${err.message}`);
+      }
+      throw err;
     }
 
     const proxyFetch =
@@ -192,6 +212,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     });
     await pollingSession.runUntilAbort();
   } finally {
+    await tokenLease?.release().catch(() => {});
     await execApprovalsHandler?.stop().catch(() => {});
     unregisterHandler();
   }
