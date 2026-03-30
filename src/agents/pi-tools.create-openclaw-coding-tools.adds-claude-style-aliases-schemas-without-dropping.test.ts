@@ -157,11 +157,12 @@ describe("createOpenClawCodingTools", () => {
     expect(schema.type).toBe("object");
     expect(schema.anyOf).toBeUndefined();
   });
-  it("mentions the two-browser MVP guidance in browser tool description", () => {
+  it("mentions the three-lane browser guidance in browser tool description", () => {
     const browser = createBrowserTool();
+    expect(browser.description).toMatch(/profile="signed-in"/i);
     expect(browser.description).toMatch(/profile="user-live"/i);
     expect(browser.description).toMatch(/profile="openclaw"/i);
-    expect(browser.description).toMatch(/deprecated/i);
+    expect(browser.description).toMatch(/legacy profile="user" aliases to profile="signed-in"/i);
     expect(browser.description).toMatch(/do not silently fall back/i);
     expect(browser.description).toMatch(/chrome:\/\/inspect\/#remote-debugging/i);
   });

@@ -96,17 +96,27 @@ function resolveBrowserProfileAlias(profileName?: string): string | undefined {
 
   const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  if (resolveProfile(resolved, normalized)) {
-    return normalized;
+  const resolvedProfile = resolveProfile(resolved, normalized);
+  if (resolvedProfile) {
+    return resolvedProfile.name;
   }
 
   const lower = normalized.toLowerCase();
+  // Keep prompt-level shorthands stable so the model can say "clone" or
+  // "signedin" without having to memorize exact config ids.
+  if (lower === "signedin" || lower === "signed-in-clone" || lower === "clone") {
+    const signedInProfile = resolveProfile(resolved, "signed-in");
+    if (signedInProfile) {
+      return signedInProfile.name;
+    }
+  }
   // Models still sometimes ask for `profile="chrome"` when they mean the
   // user's live Chrome session. Prefer the explicit live lane, but keep a
   // custom profile named `chrome` working if the user configured one.
   if (lower === "chrome" || lower === "chrome-live") {
-    if (resolveProfile(resolved, "user-live")) {
-      return "user-live";
+    const liveProfile = resolveProfile(resolved, "user-live");
+    if (liveProfile) {
+      return liveProfile.name;
     }
   }
 
@@ -379,14 +389,15 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Browser choice: prefer profile="openclaw" by default for public browsing, clean isolated runs, and most automation.',
+      'Browser choice: prefer profile="signed-in" for signed-in sites, anti-bot-sensitive flows, and tasks that benefit from a cloned real Chrome profile.',
+      'Prefer profile="openclaw" for public browsing, clean isolated runs, and fallback when the signed-in lane is unavailable or behaving worse on a specific site.',
       'Use profile="user-live" only when the task explicitly depends on the user\'s real live browser session, existing tabs, logged-in state, or installed extensions.',
-      'The old built-in profile="user" cloned lane is deprecated and is no longer created by default. If you need that behavior, use an explicit custom profile instead of guessing.',
+      'Legacy profile="user" aliases to profile="signed-in" unless the operator configured a custom profile literally named "user".',
       'Do not silently fall back to profile="openclaw" when the task depends on existing logins/cookies; surface the blocker instead.',
       'profile="user-live" attaches to the user\'s real Chrome session through the existing-session lane and is host-only.',
       'If profile="user-live" fails to attach, first try the official Chrome live-session recovery path: keep normal Google Chrome running, open chrome://inspect/#remote-debugging in that same browser, enable remote debugging, accept the attach prompt if Chrome shows one, then retry before escalating.',
-      "If multiple Chrome profiles may exist, prefer a named custom existing-session profile pinned by userDataDir, profileDirectory, or cdpUrl instead of guessing.",
-      "Custom profiles can still target Brave, Edge, Chromium, non-default Chrome profiles, or explicit cloned-session flows when the default two-lane setup is insufficient.",
+      "If multiple Chrome profiles may exist, pin the signed-in lane with sourceProfileName or use a named custom existing-session profile instead of guessing.",
+      "Custom profiles can still target Brave, Edge, Chromium, non-default Chrome profiles, or additional cloned-session flows when the default three-lane setup is insufficient.",
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',

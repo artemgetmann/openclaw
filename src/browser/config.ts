@@ -14,8 +14,14 @@ import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  DEFAULT_SIGNED_IN_BROWSER_COLOR,
+  DEFAULT_SIGNED_IN_BROWSER_PROFILE_NAME,
+  DEFAULT_USER_LIVE_BROWSER_COLOR,
+  DEFAULT_USER_LIVE_BROWSER_PROFILE_NAME,
+  LEGACY_SIGNED_IN_BROWSER_PROFILE_ALIAS,
 } from "./constants.js";
 import { CDP_PORT_RANGE_START } from "./profiles.js";
+import { allocateCdpPort, getUsedPorts } from "./profiles.js";
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
@@ -196,17 +202,44 @@ function ensureDefaultProfile(
  */
 function ensureDefaultSignedInBrowserProfiles(
   profiles: Record<string, BrowserProfileConfig>,
+  cdpRange: { start: number; end: number },
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
-  if (!result["user-live"]) {
+  if (!result[DEFAULT_SIGNED_IN_BROWSER_PROFILE_NAME]) {
+    // The signed-in lane needs its own managed CDP port because it launches a
+    // separate cloned Chrome session instead of piggybacking on openclaw.
+    const signedInCdpPort = allocateCdpPort(getUsedPorts(result), cdpRange) ?? cdpRange.start;
+    result[DEFAULT_SIGNED_IN_BROWSER_PROFILE_NAME] = {
+      cdpPort: signedInCdpPort,
+      cloneFromUserProfile: true,
+      color: DEFAULT_SIGNED_IN_BROWSER_COLOR,
+    };
+  }
+  if (!result[DEFAULT_USER_LIVE_BROWSER_PROFILE_NAME]) {
     // Keep the live lane visually distinct so operators can tell the cloned
     // browser and the user's actual browser apart at a glance.
-    result["user-live"] = {
+    result[DEFAULT_USER_LIVE_BROWSER_PROFILE_NAME] = {
       driver: "existing-session",
-      color: "#2D7FF9",
+      color: DEFAULT_USER_LIVE_BROWSER_COLOR,
     };
   }
   return result;
+}
+
+function resolveProfileNameAlias(
+  profiles: Record<string, BrowserProfileConfig>,
+  profileName: string,
+): string {
+  // Keep old `profile="user"` callers working, but never override a real
+  // explicitly configured custom `user` profile.
+  if (
+    profileName === LEGACY_SIGNED_IN_BROWSER_PROFILE_ALIAS &&
+    !profiles[LEGACY_SIGNED_IN_BROWSER_PROFILE_ALIAS] &&
+    profiles[DEFAULT_SIGNED_IN_BROWSER_PROFILE_NAME]
+  ) {
+    return DEFAULT_SIGNED_IN_BROWSER_PROFILE_NAME;
+  }
+  return profileName;
 }
 
 export function resolveBrowserConfig(
@@ -276,16 +309,20 @@ export function resolveBrowserConfig(
       cdpPortRangeStart,
       legacyCdpUrl,
     ),
+    { start: cdpPortRangeStart, end: cdpPortRangeEnd },
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
 
+  const configuredDefaultProfile = defaultProfileFromConfig
+    ? resolveProfileNameAlias(profiles, defaultProfileFromConfig)
+    : undefined;
   const defaultProfile =
-    defaultProfileFromConfig ??
+    configuredDefaultProfile ??
     (profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
       : profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
         ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
-        : "user-live");
+        : DEFAULT_USER_LIVE_BROWSER_PROFILE_NAME);
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
@@ -322,7 +359,8 @@ export function resolveProfile(
   resolved: ResolvedBrowserConfig,
   profileName: string,
 ): ResolvedBrowserProfile | null {
-  const profile = resolved.profiles[profileName];
+  const resolvedProfileName = resolveProfileNameAlias(resolved.profiles, profileName);
+  const profile = resolved.profiles[resolvedProfileName];
   if (!profile) {
     return null;
   }
@@ -338,7 +376,7 @@ export function resolveProfile(
     // profile directory alongside the user-data root so the attach layer can
     // fail closed when multiple Chrome profiles are live under one root.
     return {
-      name: profileName,
+      name: resolvedProfileName,
       cdpPort: 0,
       cdpUrl: "",
       cdpHost: "",
@@ -353,18 +391,18 @@ export function resolveProfile(
   }
 
   if (rawProfileUrl) {
-    const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
+    const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${resolvedProfileName}.cdpUrl`);
     cdpHost = parsed.parsed.hostname;
     cdpPort = parsed.port;
     cdpUrl = parsed.normalized;
   } else if (cdpPort) {
     cdpUrl = `${resolved.cdpProtocol}://${resolved.cdpHost}:${cdpPort}`;
   } else {
-    throw new Error(`Profile "${profileName}" must define cdpPort or cdpUrl.`);
+    throw new Error(`Profile "${resolvedProfileName}" must define cdpPort or cdpUrl.`);
   }
 
   return {
-    name: profileName,
+    name: resolvedProfileName,
     cdpPort,
     cdpUrl,
     cdpHost,

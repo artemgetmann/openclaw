@@ -10,10 +10,11 @@ title: "Browser Login"
 
 ## Manual login (recommended)
 
-When a site requires login, use the **real live browser lane** first if it is available.
+When a site requires login, use the **managed signed-in browser lane** first if it is available.
 
 If the task depends on existing cookies or logged-in sessions, prefer the
-**user-live** browser profile over the isolated `openclaw` browser. If that lane is
+**signed-in** browser profile over the isolated `openclaw` browser. Reach for
+**user-live** only when the task really needs your already-open tabs/extensions. If the right lane is
 not available, surface the blocker instead of silently switching to a clean
 browser that will just ask for login again.
 
@@ -23,14 +24,16 @@ Back to the main browser docs: [Browser](/tools/browser).
 
 ## Which Chrome profile is used?
 
-OpenClaw can use two browser lanes:
+OpenClaw can use three browser lanes:
 
+- `signed-in`: a green-tinted managed Chrome clone seeded from your real Chrome profile state
 - `openclaw`: a dedicated Chrome profile (orange-tinted UI) isolated from your daily browser
 - `user-live`: your actual live Chrome session with your real tabs/extensions/login state
 
 For agent browser tool calls:
 
-- Prefer `profile="openclaw"` by default for public browsing, clean isolated runs, or anything that does not require your real browser state.
+- Prefer `profile="signed-in"` for signed-in browsing and hostile sites where the clean browser gets worse results.
+- Prefer `profile="openclaw"` for public browsing, clean isolated runs, or anything that does not require your real browser state.
 - Use `profile="user-live"` only when the task truly depends on your actual signed-in browser session, existing tabs, or installed extensions.
 - If `profile="user-live"` is required for the task and is unavailable, stop and report the blocker instead of silently switching to `openclaw`.
 - If you have multiple Chrome profiles, create or use an explicit `existing-session` profile instead of guessing.
@@ -50,8 +53,8 @@ of having the agent guess. The default managed profile remains `openclaw`.
 
 ## X/Twitter: recommended flow
 
-- **Read/search/threads:** prefer the live **user-live** browser lane.
-- **Post updates:** prefer the live **user-live** browser lane.
+- **Read/search/threads:** prefer the managed **signed-in** lane first.
+- **Post updates:** prefer **signed-in** first, escalate to **user-live** only when the site depends on your active live session or extensions.
 
 ## Sandboxing + host browser access
 
