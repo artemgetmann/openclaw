@@ -19,6 +19,7 @@ export type TelegramUserMessage = {
 };
 
 export type TelegramUserPrecheck = {
+  backend_meta?: TelegramUserBackendMeta;
   chat: {
     chat_id: number | null;
     peer_type: string | null;
@@ -34,10 +35,12 @@ export type TelegramUserPrecheck = {
 };
 
 export type TelegramUserSendResult = {
+  backend_meta?: TelegramUserBackendMeta;
   message: TelegramUserMessage;
 };
 
 export type TelegramUserReadResult = {
+  backend_meta?: TelegramUserBackendMeta;
   messages: TelegramUserMessage[];
 };
 
@@ -50,6 +53,13 @@ export type TelegramUserBackendError = {
 export type TelegramUserBackendOptions = {
   envFile?: string | null;
   session?: string | null;
+};
+
+export type TelegramUserBackendMeta = {
+  api_hash_source: "env-file" | "process-env" | "missing";
+  api_id_source: "env-file" | "process-env" | "missing";
+  env_file: string;
+  session_path: string;
 };
 
 export type TelegramUserWaitMatchReason =
@@ -66,6 +76,7 @@ export type TelegramUserWaitCandidate = TelegramUserMessage & {
 
 export type TelegramUserWaitResult = {
   attempts: number;
+  backend_meta?: TelegramUserBackendMeta;
   elapsed_ms: number;
   ignored_recent: TelegramUserWaitCandidate[];
   matched: TelegramUserMessage;
