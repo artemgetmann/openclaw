@@ -45,10 +45,13 @@ bootout_conflicting_gateway_label() {
   local target_config_path="$4"
   local target_port="$5"
 
-  [[ "$label" == "$target_label" ]] && return
+  # This helper is advisory cleanup for stale launchd labels, not a required
+  # gate. It runs under `set -e`, so every "nothing to do" exit path must return
+  # success explicitly or the relaunch flow aborts before the gateway refresh.
+  [[ "$label" == "$target_label" ]] && return 0
 
   local plist_path="$HOME/Library/LaunchAgents/${label}.plist"
-  [[ -f "$plist_path" ]] || return
+  [[ -f "$plist_path" ]] || return 0
 
   local existing_state_dir
   local existing_config_path
@@ -74,7 +77,7 @@ bootout_conflicting_gateway_label() {
   done
 
   if [[ "$existing_state_dir" != "$target_state_dir" && "$existing_config_path" != "$target_config_path" && "$existing_port" != "$target_port" ]]; then
-    return
+    return 0
   fi
 
   /bin/launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
