@@ -50,9 +50,20 @@ explicitly ask for the CLI path.
 
 ### WhatsApp CLI
 
+- First separate the two product surfaces:
+  - The WhatsApp channel is the live bot transport for real conversations.
+  - `wacli` is the local Mac tool for searching, reading, and optionally sending
+    messages from the user’s paired WhatsApp data.
+- Do not describe those as the same thing. If the user wants the bot to reply
+  to people in live WhatsApp conversations, they need the WhatsApp channel. If
+  they want local inbox/search/send utility on this Mac, `wacli` is the right
+  tool.
+- Be blunt when the user mixes them up: "That is the wrong setup surface."
 - Missing states usually look like: `wacli` not installed, QR pairing not
   completed, or `wacli doctor` showing `AUTHENTICATED false`.
-- Tell the user WhatsApp is not connected yet.
+- Tell the user exactly which thing is not connected yet:
+  - "The WhatsApp channel is not connected yet." for live chat transport.
+  - "`wacli` is not connected yet." for the local Mac utility.
 - Offer to help pair it now, usually by showing the QR login flow and waiting
   for the phone to approve it.
 - If `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, explain

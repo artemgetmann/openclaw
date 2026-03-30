@@ -30,6 +30,10 @@ Healthy baseline:
 
 ## WhatsApp
 
+This section is for the live WhatsApp channel that OpenClaw uses to reply in
+real chats. If you are debugging the local Mac inbox/search tool, that is
+`wacli`, which is a separate setup surface.
+
 ### WhatsApp failure signatures
 
 | Symptom                         | Fastest check                                       | Fix                                                     |
@@ -47,7 +51,7 @@ Full troubleshooting: [/channels/whatsapp#troubleshooting-quick](/channels/whats
 | Symptom                             | Fastest check                                   | Fix                                                                         |
 | ----------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------- |
 | `/start` but no usable reply flow   | `openclaw pairing list telegram`                | Approve pairing or change DM policy.                                        |
-| Bot online but group stays silent   | Verify mention requirement and bot privacy mode | Disable privacy mode for group visibility or mention bot.                   |
+| Bot online but group stays silent   | Verify mention requirement and bot privacy mode | If you need normal group replies, disable Group Privacy in BotFather, then remove + re-add the bot so Telegram applies it. |
 | Send failures with network errors   | Inspect logs for Telegram API call failures     | Fix DNS/IPv6/proxy routing to `api.telegram.org`.                           |
 | `setMyCommands` rejected at startup | Inspect logs for `BOT_COMMANDS_TOO_MUCH`        | Reduce plugin/skill/custom Telegram commands or disable native menus.       |
 | Upgraded and allowlist blocks you   | `openclaw security audit` and config allowlists | Run `openclaw doctor --fix` or replace `@username` with numeric sender IDs. |

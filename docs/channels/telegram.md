@@ -65,6 +65,16 @@ openclaw pairing approve telegram <CODE>
 
   <Step title="Add the bot to a group">
     Add the bot to your group, then set `channels.telegram.groups` and `groupPolicy` to match your access model.
+
+    Telegram group behavior confuses people for one reason over and over:
+    **Privacy Mode**. If Privacy Mode stays on, the bot usually sees only
+    commands, replies, and messages that explicitly tag it. That is Telegram
+    behavior, not an OpenClaw bug.
+
+    If you want the bot to react to normal group messages, disable **Privacy
+    Mode** in BotFather and then remove + re-add the bot in the group so
+    Telegram applies the new mode. For topic-based group work, also enable
+    threaded mode/topics.
   </Step>
 </Steps>
 
@@ -83,7 +93,13 @@ Token resolution order is account-aware. In practice, config values win over env
     - disable privacy mode via `/setprivacy`, or
     - make the bot a group admin.
 
-    When toggling privacy mode, remove + re-add the bot in each group so Telegram applies the change.
+    When toggling privacy mode, remove + re-add the bot in each group so
+    Telegram applies the change. Changing the BotFather toggle alone is not
+    enough.
+
+    If you keep privacy mode enabled, expect the bot to respond only when it is
+    explicitly mentioned or replied to in the group. That is normal Telegram
+    behavior, not a failure in OpenClaw.
 
   </Accordion>
 
@@ -847,7 +863,7 @@ pnpm openclaw:local telegram-user wait --chat @jarvis_tester_1_bot --after-id 12
 
     - If `requireMention=false`, Telegram privacy mode must allow full visibility.
       - BotFather: `/setprivacy` -> Disable
-      - then remove + re-add bot to group
+      - then remove + re-add bot to group, or Telegram usually keeps the old behavior
     - `openclaw channels status` warns when config expects unmentioned group messages.
     - `openclaw channels status --probe` can check explicit numeric group IDs; wildcard `"*"` cannot be membership-probed.
     - quick session test: `/activation always`.
