@@ -58,16 +58,18 @@ const browserConfigMocks = vi.hoisted(() => ({
     defaultProfile: "openclaw",
   })),
   resolveProfile: vi.fn((resolved: Record<string, unknown>, name: string) => {
-    const profile = (resolved.profiles as Record<string, Record<string, unknown>> | undefined)?.[
-      name
-    ];
+    const profiles =
+      (resolved.profiles as Record<string, Record<string, unknown>> | undefined) ?? {};
+    const canonicalName =
+      name === "user" && !profiles.user && profiles["signed-in"] ? "signed-in" : name;
+    const profile = profiles[canonicalName];
     if (!profile) {
       return null;
     }
     const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
     if (driver === "existing-session") {
       return {
-        name,
+        name: canonicalName,
         driver,
         cdpPort: 0,
         cdpUrl: "",
@@ -78,7 +80,7 @@ const browserConfigMocks = vi.hoisted(() => ({
       };
     }
     return {
-      name,
+      name: canonicalName,
       driver,
       cdpPort: typeof profile.cdpPort === "number" ? profile.cdpPort : 18792,
       cdpUrl: typeof profile.cdpUrl === "string" ? profile.cdpUrl : "http://127.0.0.1:18792",
@@ -301,6 +303,34 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.("call-1", {
       action: "snapshot",
       profile: "signed-in",
+      snapshotFormat: "ai",
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        profile: "signed-in",
+      }),
+    );
+  });
+
+  it("maps the legacy user alias onto the signed-in lane", async () => {
+    setResolvedBrowserProfiles({
+      "signed-in": {
+        driver: "openclaw",
+        attachOnly: false,
+        color: "#1F9D55",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cloneFromUserProfile: true,
+      },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      profile: "user",
       snapshotFormat: "ai",
     });
 
