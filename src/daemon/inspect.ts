@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
+  GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -117,7 +118,9 @@ function tryExtractPlistLabel(contents: string): string | null {
 }
 
 function isIgnoredLaunchdLabel(label: string): boolean {
-  return label === resolveGatewayLaunchAgentLabel();
+  return (
+    label === resolveGatewayLaunchAgentLabel() || label === GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL
+  );
 }
 
 function isIgnoredSystemdName(name: string): boolean {

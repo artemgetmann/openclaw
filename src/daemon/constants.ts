@@ -1,6 +1,7 @@
 // Default service labels (canonical + legacy compatibility)
 export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
 export const CONSUMER_GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.consumer.gateway";
+export const GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway-watchdog";
 export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
 export const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
 export const GATEWAY_SERVICE_MARKER = "openclaw";

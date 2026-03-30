@@ -15,6 +15,7 @@ GATEWAY_ERR_LOG="${HOME}/.openclaw/logs/gateway.err.log"
 WATCHDOG_ERR_LOG="/tmp/openclaw/gateway-watchdog.err.log"
 WATCHDOG_STABILIZE_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_STABILIZE_SECONDS:-8}"
 WATCHDOG_AUTO_DISABLE_ON_DUPLICATE="${OPENCLAW_GATEWAY_WATCHDOG_AUTO_DISABLE_ON_DUPLICATE:-1}"
+MANAGE_WATCHDOG="${OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG:-1}"
 
 log() {
   printf '[gateway-recover-main] %s\n' "$*"
@@ -218,7 +219,9 @@ main() {
   local uid
   uid="$(id -u)"
   launchctl bootout "gui/${uid}/${GATEWAY_LABEL}" 2>/dev/null || true
-  launchctl bootout "gui/${uid}/${WATCHDOG_LABEL}" 2>/dev/null || true
+  if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
+    launchctl bootout "gui/${uid}/${WATCHDOG_LABEL}" 2>/dev/null || true
+  fi
   openclaw gateway stop 2>/dev/null || true
   pkill -9 -f openclaw-gateway 2>/dev/null || true
   pkill -9 -f 'dist/index.js gateway' 2>/dev/null || true
@@ -241,19 +244,21 @@ main() {
   wait_for_listener
   wait_for_rpc_probe
 
-  log_block "Bootstrap watchdog launch agent"
-  local watchdog_plist="${HOME}/Library/LaunchAgents/${WATCHDOG_LABEL}.plist"
-  if [[ -f "${watchdog_plist}" ]]; then
-    launchctl bootstrap "gui/$(id -u)" "${watchdog_plist}" 2>/dev/null || true
-    # The gateway is already proven healthy by the listener/RPC gates above.
-    # Missing or flaky watchdog launchd state should not false-fail main handoff.
-    if run_best_effort launchctl kickstart -k "gui/$(id -u)/${WATCHDOG_LABEL}"; then
-      stabilize_watchdog
+  if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
+    log_block "Bootstrap watchdog launch agent"
+    local watchdog_plist="${HOME}/Library/LaunchAgents/${WATCHDOG_LABEL}.plist"
+    if [[ -f "${watchdog_plist}" ]]; then
+      launchctl bootstrap "gui/$(id -u)" "${watchdog_plist}" 2>/dev/null || true
+      # The gateway is already proven healthy by the listener/RPC gates above.
+      # Missing or flaky watchdog launchd state should not false-fail main handoff.
+      if run_best_effort launchctl kickstart -k "gui/$(id -u)/${WATCHDOG_LABEL}"; then
+        stabilize_watchdog
+      else
+        log "watchdog kickstart failed; continuing because gateway readiness is already satisfied"
+      fi
     else
-      log "watchdog kickstart failed; continuing because gateway readiness is already satisfied"
+      log "watchdog plist missing (${watchdog_plist}); continuing without watchdog bootstrap"
     fi
-  else
-    log "watchdog plist missing (${watchdog_plist}); continuing without watchdog bootstrap"
   fi
 
   log_block "Final verification"
