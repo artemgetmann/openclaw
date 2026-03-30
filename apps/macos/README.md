@@ -21,6 +21,7 @@ For linked worktrees, prefer the scoped launchers instead of relying on the shar
 
 - `bash scripts/dev-launch-mac.sh`
 - `bash scripts/open-consumer-mac-app.sh --instance <id>`
+- `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>`
 - `pnpm openclaw:local gateway restart`
 
 ## Packaging flow
@@ -40,6 +41,17 @@ bash scripts/package-consumer-mac-app.sh
 bash scripts/verify-consumer-mac-app.sh
 bash scripts/open-consumer-mac-app.sh
 ```
+
+For fast local founder/tester iteration after dependencies and JS assets are
+already warm:
+
+```bash
+bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>
+```
+
+This keeps the final packaged artifact in `dist/`, but skips the repeated
+dependency reinstall, JS build, and Control UI build that are usually unrelated
+to a native-app relaunch loop.
 
 This consumer flavor defaults to its own runtime identity:
 
