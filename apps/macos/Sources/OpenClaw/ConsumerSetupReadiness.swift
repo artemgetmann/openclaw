@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import OpenClawKit
@@ -126,6 +127,7 @@ final class ConsumerModelSetupModel {
     typealias AuthApply = @Sendable (_ optionId: String, _ secret: String?) async throws -> ConsumerModelsAuthApplyPayload
     typealias ModelsLoader = @Sendable () async throws -> ConsumerModelsModelListPayload
     typealias ModelApply = @Sendable (_ modelId: String) async throws -> ConsumerModelsSetPayload
+    typealias RuntimeOwnershipBlocker = @Sendable () -> String?
 
     enum Phase: Equatable {
         case idle
@@ -156,19 +158,24 @@ final class ConsumerModelSetupModel {
     private let applyAuth: AuthApply
     private let listModels: ModelsLoader
     private let applyModel: ModelApply
+    private let runtimeOwnershipBlocker: RuntimeOwnershipBlocker
 
     init(
         probeReadiness: ReadinessProbe? = nil,
         listAuthOptions: AuthOptionsLoader? = nil,
         applyAuth: AuthApply? = nil,
         listModels: ModelsLoader? = nil,
-        applyModel: ModelApply? = nil)
+        applyModel: ModelApply? = nil,
+        runtimeOwnershipBlocker: RuntimeOwnershipBlocker? = nil)
     {
         self.probeReadiness = probeReadiness ?? Self.gatewayReadinessProbe
         self.listAuthOptions = listAuthOptions ?? Self.gatewayAuthOptionsLoader
         self.applyAuth = applyAuth ?? Self.gatewayAuthApply
         self.listModels = listModels ?? Self.gatewayModelsLoader
         self.applyModel = applyModel ?? Self.gatewayModelApply
+        self.runtimeOwnershipBlocker = runtimeOwnershipBlocker ?? {
+            GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage()
+        }
     }
 
     var isComplete: Bool {
@@ -276,13 +283,45 @@ final class ConsumerModelSetupModel {
     }
 
     func refreshIfNeeded() async {
-        guard self.phase == .idle else { return }
+        switch self.phase {
+        case .checking:
+            return
+        case .idle, .failed:
+            break
+        case .ready:
+            return
+        }
+        // A transient gateway/auth probe failure should not stick forever in the
+        // Settings card. When the view appears again after the runtime recovers,
+        // allow one more live readiness check instead of forcing the user to
+        // change auth/model state just to clear a stale error.
+        await self.refresh()
+    }
+
+    func refreshOnAppActivationIfNeeded() async {
+        // Settings can stay mounted while external auth/gateway recovery
+        // happens elsewhere. Re-probe on app activation so stale readiness
+        // errors do not linger after the runtime has already recovered.
+        guard self.phase != .checking else { return }
+        guard !self.isApplyingAuth else { return }
+        guard !self.isApplyingModel else { return }
         await self.refresh()
     }
 
     func refresh() async {
         self.phase = .checking
         self.statusLine = "Checking OpenClaw's AI access…"
+
+        if let blocker = self.runtimeOwnershipBlocker() {
+            // If launchd is pinned to a different checkout, do not let the UI
+            // probe auth or model readiness. That would just lie about the real
+            // runtime the user is about to rely on.
+            self.phase = .failed(blocker)
+            self.statusLine = blocker
+            self.authSectionExpanded = true
+            return
+        }
+
         await self.loadAuthOptionsIfNeeded()
 
         do {
@@ -708,6 +747,9 @@ struct ConsumerModelSetupCardContent: View {
         }
         .task {
             await self.model.refreshIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await self.model.refreshOnAppActivationIfNeeded() }
         }
     }
 
