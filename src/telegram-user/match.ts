@@ -110,6 +110,7 @@ export function buildTelegramUserWaitTimeoutError(
 
 export function buildTelegramUserWaitResult(params: {
   attempts: number;
+  backendMeta?: TelegramUserWaitResult["backend_meta"];
   elapsedMs: number;
   ignoredRecent: TelegramUserWaitCandidate[];
   matched: TelegramUserMessage;
@@ -121,6 +122,7 @@ export function buildTelegramUserWaitResult(params: {
 }): TelegramUserWaitResult {
   return {
     attempts: params.attempts,
+    backend_meta: params.backendMeta,
     elapsed_ms: params.elapsedMs,
     ignored_recent: params.ignoredRecent,
     matched: params.matched,
