@@ -6,6 +6,7 @@ import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { resolveCanonicalMainRepoRoot } from "../infra/telegram-live-token-claims.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
+  GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL,
   resolveGatewayServiceDescription,
   resolveGatewayLaunchAgentLabel,
   resolveLegacyGatewayLaunchAgentLabels,
@@ -35,6 +36,8 @@ import type {
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
+const WATCHDOG_STDOUT_PATH = "/tmp/openclaw/gateway-watchdog.log";
+const WATCHDOG_STDERR_PATH = "/tmp/openclaw/gateway-watchdog.err.log";
 
 function normalizePathForComparison(filePath: string | null | undefined): string | null {
   const trimmed = filePath?.trim();
@@ -83,6 +86,89 @@ function assertCanonicalSharedLaunchAgentContext(args: {
   throw new Error(
     `${args.action} blocked: the default shared LaunchAgent can only be managed from the canonical main checkout (${canonicalMainRepo}). Use an isolated --profile for worktree runtimes instead.`,
   );
+}
+
+function resolveSharedGatewayWatchdogPlistPath(env: GatewayServiceEnv): string {
+  return resolveLaunchAgentPlistPathForLabel(env, GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL);
+}
+
+function resolveSharedGatewayWatchdogScript(env: GatewayServiceEnv): string {
+  const canonicalMainRepo = resolveCanonicalMainRepoRoot(env);
+  if (!canonicalMainRepo) {
+    throw new Error(
+      "Shared gateway watchdog install failed: canonical main checkout could not be resolved.",
+    );
+  }
+  return path.join(canonicalMainRepo, "scripts", "gateway-watchdog.sh");
+}
+
+async function installSharedGatewayWatchdogLaunchAgent(args: {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  // Only the canonical shared service gets an always-on watchdog. Isolated
+  // profiles are expected to be disposable and should not auto-reclaim prod.
+  if (!isDefaultSharedLaunchAgentTarget(args.env)) {
+    return;
+  }
+
+  const canonicalMainRepo = resolveCanonicalMainRepoRoot(args.env);
+  if (!canonicalMainRepo) {
+    return;
+  }
+
+  const scriptPath = resolveSharedGatewayWatchdogScript(args.env);
+  const plistPath = resolveSharedGatewayWatchdogPlistPath(args.env);
+  const domain = resolveGuiDomain();
+  const home = toPosixPath(resolveHomeDir(args.env));
+  const libraryDir = path.posix.join(home, "Library");
+  await ensureSecureDirectory(home);
+  await ensureSecureDirectory(libraryDir);
+  await ensureSecureDirectory(path.dirname(plistPath));
+
+  const plist = buildLaunchAgentPlist({
+    label: GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL,
+    comment: "OpenClaw Shared Gateway Watchdog",
+    programArguments: ["/bin/bash", scriptPath],
+    workingDirectory: canonicalMainRepo,
+    stdoutPath: WATCHDOG_STDOUT_PATH,
+    stderrPath: WATCHDOG_STDERR_PATH,
+    environment: {
+      OPENCLAW_MAIN_REPO: canonicalMainRepo,
+      OPENCLAW_GATEWAY_PORT: args.env.OPENCLAW_GATEWAY_PORT?.trim() || "18789",
+      OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG: "0",
+    },
+  });
+
+  await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
+  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  await execLaunchctl(["bootout", domain, plistPath]);
+  await execLaunchctl(["unload", plistPath]);
+  await bootstrapLaunchAgentOrThrow({
+    domain,
+    serviceTarget: `${domain}/${GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL}`,
+    plistPath,
+    actionHint: "shared gateway watchdog install",
+  });
+
+  writeFormattedLines(
+    args.stdout,
+    [{ label: "Installed Watchdog LaunchAgent", value: plistPath }],
+    { leadingBlankLine: false },
+  );
+}
+
+async function bootoutSharedGatewayWatchdogLaunchAgent(env: GatewayServiceEnv): Promise<void> {
+  if (!isDefaultSharedLaunchAgentTarget(env)) {
+    return;
+  }
+
+  // Stop the watchdog first so deliberate stop/uninstall operations do not get
+  // immediately "fixed" out from under the operator.
+  const domain = resolveGuiDomain();
+  const plistPath = resolveSharedGatewayWatchdogPlistPath(env);
+  await execLaunchctl(["bootout", domain, plistPath]);
+  await execLaunchctl(["unload", plistPath]);
 }
 
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
@@ -466,6 +552,7 @@ export async function uninstallLaunchAgent({
     env,
     action: "LaunchAgent uninstall",
   });
+  await bootoutSharedGatewayWatchdogLaunchAgent(env);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
@@ -513,6 +600,7 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
     env,
     action: "LaunchAgent stop",
   });
+  await bootoutSharedGatewayWatchdogLaunchAgent(env);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
@@ -593,6 +681,7 @@ export async function installLaunchAgent({
     ],
     { leadingBlankLine: true },
   );
+  await installSharedGatewayWatchdogLaunchAgent({ env, stdout });
   return { plistPath };
 }
 
@@ -634,6 +723,7 @@ export async function restartLaunchAgent({
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
+    await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
     return { outcome: "completed" };
   }
 
@@ -654,5 +744,6 @@ export async function restartLaunchAgent({
     throw new Error(`launchctl kickstart failed: ${retry.stderr || retry.stdout}`.trim());
   }
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
+  await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
   return { outcome: "completed" };
 }

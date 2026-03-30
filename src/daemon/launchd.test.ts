@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL } from "./constants.js";
 import {
   LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
   LAUNCH_AGENT_UMASK_DECIMAL,
@@ -15,6 +16,7 @@ import {
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
   stopLaunchAgent,
+  uninstallLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -148,6 +150,19 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     }),
     unlink: vi.fn(async (p: string) => {
       state.files.delete(String(p));
+    }),
+    rename: vi.fn(async (from: string, to: string) => {
+      const source = String(from);
+      const dest = String(to);
+      const contents = state.files.get(source);
+      if (contents === undefined) {
+        throw new Error(`ENOENT: no such file or directory, rename '${source}'`);
+      }
+      state.files.delete(source);
+      state.files.set(dest, contents);
+      state.fileModes.set(dest, state.fileModes.get(source) ?? 0o666);
+      state.fileModes.delete(source);
+      state.dirs.add(String(dest.split("/").slice(0, -1).join("/")));
     }),
     writeFile: vi.fn(async (p: string, data: string, opts?: { mode?: number }) => {
       const key = String(p);
@@ -285,6 +300,15 @@ describe("launchd install", () => {
       HOME: "/Users/test",
       OPENCLAW_PROFILE: "default",
     };
+  }
+
+  function resolveWatchdogPlistPath(env: Record<string, string | undefined>): string {
+    return path.posix.join(
+      env.HOME ?? "/Users/test",
+      "Library",
+      "LaunchAgents",
+      `${GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL}.plist`,
+    );
   }
 
   it("enables service before bootstrap without self-restarting the fresh agent", async () => {
@@ -549,6 +573,102 @@ describe("launchd install", () => {
     });
 
     expect(state.launchctlCalls.length).toBeGreaterThan(0);
+  });
+
+  it("installs a watchdog launch agent for canonical shared main", async () => {
+    const canonicalMain = makeTempDir();
+    fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_MAIN_REPO: canonicalMain,
+    };
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      workingDirectory: canonicalMain,
+    });
+
+    const watchdogPlistPath = resolveWatchdogPlistPath(env);
+    const watchdogPlist = state.files.get(watchdogPlistPath) ?? "";
+    expect(watchdogPlist).toContain("OpenClaw Shared Gateway Watchdog");
+    expect(watchdogPlist).toContain(`${canonicalMain}/scripts/gateway-watchdog.sh`);
+    expect(watchdogPlist).toContain("<key>OPENCLAW_MAIN_REPO</key>");
+    expect(state.launchctlCalls).toContainEqual([
+      "bootstrap",
+      typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501",
+      watchdogPlistPath,
+    ]);
+  });
+
+  it("does not install a watchdog launch agent for isolated profiles", async () => {
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/tmp/feature-worktree");
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_PROFILE: "tester",
+    };
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      workingDirectory: "/tmp/feature-worktree",
+    });
+
+    expect(state.files.has(resolveWatchdogPlistPath(env))).toBe(false);
+    expect(
+      state.launchctlCalls.some((call) => call.includes(GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL)),
+    ).toBe(false);
+  });
+
+  it("boots out the watchdog before stopping the canonical shared service", async () => {
+    const canonicalMain = makeTempDir();
+    fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_MAIN_REPO: canonicalMain,
+    };
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(canonicalMain);
+
+    await stopLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(
+      state.launchctlCalls.some(
+        (call) =>
+          call[0] === "bootout" &&
+          call.some((part) => part.includes(GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL)),
+      ),
+    ).toBe(true);
+  });
+
+  it("boots out the watchdog before uninstalling the canonical shared service", async () => {
+    const canonicalMain = makeTempDir();
+    fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_MAIN_REPO: canonicalMain,
+    };
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(canonicalMain);
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "<plist/>");
+    state.fileModes.set(plistPath, 0o644);
+
+    await uninstallLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(
+      state.launchctlCalls.some(
+        (call) =>
+          call[0] === "bootout" &&
+          call.some((part) => part.includes(GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL)),
+      ),
+    ).toBe(true);
   });
 });
 
