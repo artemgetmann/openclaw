@@ -41,10 +41,18 @@ enum ConfigStore {
         if let override = overrides.loadLocal {
             return override()
         }
+        // Local mode owns the config file on disk. Gateway `config.get` is
+        // intentionally redacted, so treating that snapshot as the source of
+        // truth causes later local writes to persist placeholders such as
+        // `__OPENCLAW_REDACTED__` back into the real config.
+        let local = OpenClawConfigFile.loadDict()
+        if !local.isEmpty {
+            return local
+        }
         if let gateway = await self.loadFromGateway() {
             return gateway
         }
-        return OpenClawConfigFile.loadDict()
+        return local
     }
 
     @MainActor
@@ -60,11 +68,11 @@ enum ConfigStore {
             if let override = overrides.saveLocal {
                 override(root)
             } else {
-                do {
-                    try await self.saveToGateway(root)
-                } catch {
-                    OpenClawConfigFile.saveDict(root)
-                }
+                // Local mode should write the lane-owned file directly. Pushing
+                // a full raw config through gateway RPC in local mode is both
+                // unnecessary and risky because the last loaded snapshot may
+                // have come from redacted gateway state instead of the real file.
+                OpenClawConfigFile.saveDict(root)
             }
         }
 

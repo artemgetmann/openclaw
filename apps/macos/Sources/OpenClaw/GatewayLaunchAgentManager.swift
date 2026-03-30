@@ -316,7 +316,12 @@ extension GatewayLaunchAgentManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
-        let gatewayRoot = CommandResolver.canonicalGatewayProjectRoot()
+        // Consumer lanes must execute the gateway from the same bundle/worktree
+        // as the app UI. Only the non-consumer shared runtime is allowed to
+        // collapse worktrees back to the canonical checkout.
+        let gatewayRoot = AppFlavor.current.isConsumer
+            ? CommandResolver.projectRoot()
+            : CommandResolver.canonicalGatewayProjectRoot()
         let command = CommandResolver.openclawCommand(
             subcommand: "gateway",
             extraArgs: self.withJsonFlag(args),

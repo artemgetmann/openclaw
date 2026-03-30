@@ -118,6 +118,11 @@ Consumer copy caveat:
 - Do not describe `wacli` as if it powers the normal WhatsApp bot/channel
   experience, because it does not.
 
+  - WhatsApp CLI here means the local inbox/search/send utility, not the live
+    WhatsApp channel. The live channel is a separate runtime path and should be
+    documented as such so users do not expect the CLI tool to power normal chat
+    replies.
+
 - Accessibility and Screen Recording can remain visually pending until the app restarts, even after the user grants them in System Settings.
 - Screen Recording may open System Settings directly instead of showing an in-app prompt.
 - The consumer permissions screen should explain this plainly and offer a restart path instead of showing only a stale pending state.

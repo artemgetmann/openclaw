@@ -38,4 +38,13 @@ struct MenuContentSmokeTests {
         let view = MenuContent(state: state, updater: nil)
         _ = view.body
     }
+
+    @Test func `consumer menu content builds body`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let state = AppState(preview: true)
+            state.connectionMode = .local
+            let view = MenuContent(state: state, updater: nil)
+            _ = view.body
+        }
+    }
 }

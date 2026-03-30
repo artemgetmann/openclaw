@@ -78,14 +78,26 @@ enum CommandResolver {
 
     static func canonicalGatewayProjectRoot(projectRoot: URL? = nil) -> URL {
         let resolvedRoot = projectRoot ?? self.projectRoot()
+        // Isolated consumer lanes are explicitly packaged from a worktree so the app
+        // bundle and gateway can exercise the same code during fresh-install sweeps.
+        // For those lanes, collapsing back to the shared checkout bootstraps stale
+        // dist assets and breaks onboarding RPC compatibility (for example models.*).
+        if AppFlavor.current.isConsumer, !ConsumerInstance.current.isDefault {
+            return resolvedRoot
+        }
+        if AppFlavor.current.isConsumer {
+            return resolvedRoot
+        }
+
         let pathComponents = resolvedRoot.pathComponents
         guard let worktreesIndex = pathComponents.firstIndex(of: ".worktrees"), worktreesIndex > 0 else {
             return resolvedRoot
         }
 
-        // Gateway ownership must stay pinned to the canonical shared checkout.
-        // If the app is running from a worktree bundle, strip the worktree
-        // suffix and use the repo root that owns the shared LaunchAgent.
+        // Gateway ownership must stay pinned to the canonical shared checkout
+        // for founder/shared lanes.
+        // Consumer lanes intentionally keep the exact bundle/worktree root so
+        // the gateway cannot silently drift to a different checkout.
         let canonicalPath = NSString.path(withComponents: Array(pathComponents.prefix(worktreesIndex)))
         let canonicalRoot = URL(fileURLWithPath: canonicalPath)
         if self.isRepoRoot(canonicalRoot), self.gatewayEntrypoint(in: canonicalRoot) != nil {

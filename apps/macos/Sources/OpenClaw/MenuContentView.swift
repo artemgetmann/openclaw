@@ -110,8 +110,15 @@ struct MenuContent: View {
     private var consumerActions: some View {
         Button("Settings…") { self.open(tab: .general) }
             .keyboardShortcut(",", modifiers: [.command])
+        Button {
+            self.state.isPaused.toggle()
+        } label: {
+            Label(
+                self.state.isPaused ? "Resume AI Operator" : "Stop AI Operator",
+                systemImage: self.state.isPaused ? "play.fill" : "pause.fill")
+        }
         Button("About \(AppFlavor.current.appName)") { self.open(tab: .about) }
-        Button("Quit \(AppFlavor.current.appName)") { NSApplication.shared.terminate(nil) }
+        Button("Quit App Only") { NSApplication.shared.terminate(nil) }
     }
 
     @ViewBuilder
