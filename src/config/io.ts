@@ -72,6 +72,9 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "SYNTHETIC_API_KEY",
   "KILOCODE_API_KEY",
   "ELEVENLABS_API_KEY",
+  "BRAVE_API_KEY",
+  "FIRECRAWL_API_KEY",
+  "GOOGLE_PLACES_API_KEY",
   "TELEGRAM_BOT_TOKEN",
   "DISCORD_BOT_TOKEN",
   "SLACK_BOT_TOKEN",
@@ -79,6 +82,10 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
 ];
+
+export function getShellEnvExpectedKeys(): string[] {
+  return [...SHELL_ENV_EXPECTED_KEYS];
+}
 
 const OPEN_DM_POLICY_ALLOW_FROM_RE =
   /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;

@@ -155,6 +155,15 @@ struct SettingsViewSmokeTests {
         }
     }
 
+    @Test func `consumer general settings builds body`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let state = AppState(preview: true)
+            state.showAdvancedSettings = false
+            let view = GeneralSettings(state: state)
+            _ = view.body
+        }
+    }
+
     @Test func `settings root view builds body`() {
         let state = AppState(preview: true)
         let view = SettingsRootView(state: state, updater: nil, initialTab: .general)

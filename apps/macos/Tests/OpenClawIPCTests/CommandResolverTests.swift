@@ -205,6 +205,13 @@ import Testing
     @Test func `project root override keeps gateway commands pinned to canonical repo entrypoint`() throws {
         let defaults = self.makeLocalDefaults()
 
+        // This assertion covers the shared/founder runtime rule. Consumer lanes
+        // intentionally keep their own worktree root, so force a non-consumer
+        // environment here instead of inheriting whatever the outer test runner
+        // exported.
+        unsetenv("OPENCLAW_APP_VARIANT")
+        unsetenv(ConsumerInstance.envKey)
+
         let repoRoot = try makeTempDirForTests()
         let worktreeRoot = repoRoot.appendingPathComponent(".worktrees/bugfix")
         try FileManager().createDirectory(at: worktreeRoot, withIntermediateDirectories: true)
@@ -265,6 +272,76 @@ import Testing
         if cmd.count >= 3 {
             #expect(cmd[0] == nodePath.path)
             #expect(cmd[1] == canonicalEntry.path)
+            #expect(cmd[2] == "gateway")
+        }
+    }
+
+    @Test func `isolated consumer worktree keeps gateway commands on the worktree entrypoint`() throws {
+        let defaults = self.makeLocalDefaults()
+
+        let repoRoot = try makeTempDirForTests()
+        let worktreeRoot = repoRoot.appendingPathComponent(".worktrees/mvp-sweep")
+        try FileManager().createDirectory(at: worktreeRoot, withIntermediateDirectories: true)
+
+        let packageJson = "{\n  \"name\": \"openclaw\"\n}\n"
+        try packageJson.write(
+            to: repoRoot.appendingPathComponent("package.json"),
+            atomically: true,
+            encoding: .utf8)
+        try "export {}\n".write(
+            to: repoRoot.appendingPathComponent("openclaw.mjs"),
+            atomically: true,
+            encoding: .utf8)
+        let canonicalEntry = repoRoot.appendingPathComponent("dist/index.js")
+        try FileManager().createDirectory(
+            at: canonicalEntry.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try "export {}\n".write(to: canonicalEntry, atomically: true, encoding: .utf8)
+
+        try packageJson.write(
+            to: worktreeRoot.appendingPathComponent("package.json"),
+            atomically: true,
+            encoding: .utf8)
+        try "export {}\n".write(
+            to: worktreeRoot.appendingPathComponent("openclaw.mjs"),
+            atomically: true,
+            encoding: .utf8)
+        let worktreeEntry = worktreeRoot.appendingPathComponent("dist/index.js")
+        try FileManager().createDirectory(
+            at: worktreeEntry.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try "export {}\n".write(to: worktreeEntry, atomically: true, encoding: .utf8)
+
+        let nodeDir = repoRoot.appendingPathComponent("node-bin")
+        try FileManager().createDirectory(at: nodeDir, withIntermediateDirectories: true)
+        let nodePath = nodeDir.appendingPathComponent("node")
+        try """
+        #!/bin/sh
+        echo v22.16.0
+        """.write(to: nodePath, atomically: true, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
+
+        setenv("OPENCLAW_APP_VARIANT", "consumer", 1)
+        setenv(ConsumerInstance.envKey, "mvp-sweep", 1)
+        defer {
+            unsetenv("OPENCLAW_APP_VARIANT")
+            unsetenv(ConsumerInstance.envKey)
+        }
+
+        let resolvedRoot = CommandResolver.canonicalGatewayProjectRoot(projectRoot: worktreeRoot)
+        #expect(resolvedRoot.path == worktreeRoot.path)
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "gateway",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [nodeDir.path],
+            projectRoot: resolvedRoot)
+
+        #expect(cmd.count >= 3)
+        if cmd.count >= 3 {
+            #expect(cmd[0] == nodePath.path)
+            #expect(cmd[1] == worktreeEntry.path)
             #expect(cmd[2] == "gateway")
         }
     }

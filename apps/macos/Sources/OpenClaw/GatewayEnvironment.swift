@@ -125,6 +125,14 @@ enum GatewayEnvironment {
         }
 
         let launchdSnapshot = GatewayLaunchAgentManager.launchdConfigSnapshot()
+        if let blocker = GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage(snapshot: launchdSnapshot) {
+            return GatewayEnvironmentStatus(
+                kind: .error(blocker),
+                nodeVersion: nil,
+                gatewayVersion: nil,
+                requiredGateway: nil,
+                message: blocker)
+        }
         let launchdLoaded = await self.isConsumerGatewayLaunchdLoaded()
         let config = GatewayEndpointStore.localConfig(
             root: OpenClawConfigFile.loadDict(),

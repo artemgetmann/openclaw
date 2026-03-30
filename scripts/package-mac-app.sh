@@ -146,17 +146,8 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
-if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
-  # Packaging used to re-run `pnpm install` on every local rebuild. That keeps
-  # a cold checkout honest, but for founder/tester iteration it burns seconds
-  # even when the lockfile and node_modules are already warm, and it can fail in
-  # non-interactive environments that do not provide a TTY. Keep the safe
-  # default, but let explicit fast-path callers skip the dependency churn.
-  echo "📦 Ensuring deps (pnpm install)"
-  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
-else
-  echo "📦 Skipping deps install (SKIP_PNPM_INSTALL=1)"
-fi
+echo "📦 Ensuring deps (pnpm install)"
+(cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
 
 if [[ -z "${APP_BUILD:-}" ]]; then
   APP_BUILD="$GIT_BUILD_NUMBER"
@@ -290,6 +281,12 @@ if [ -d "$TEMPLATE_SRC" ]; then
   cp -R "$TEMPLATE_SRC" "$TEMPLATE_DEST"
 else
   echo "WARN: consumer template source missing at $TEMPLATE_SRC (continuing)" >&2
+fi
+
+if [[ "$APP_VARIANT" == "consumer" ]]; then
+  echo "🔐 Seeding bundled consumer defaults"
+  node "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" \
+    "$APP_ROOT/Contents/Resources/consumer-seeded-defaults.json"
 fi
 
 echo "📦 Copying model catalog"

@@ -172,10 +172,18 @@ extension ChannelsStore {
                 forKey: ChannelsStore.consumerTelegramBotUsernameDefaultsKey)
         }
 
-        if self.telegramSetupStatus == nil
+        // A setup replay can time out locally even though the bot actually
+        // answered once the channel came back up. Every healthy refresh should
+        // re-check live Telegram activity so the wizard can self-heal instead of
+        // trapping the user behind a stale timeout message.
+        let activityConfirmed = self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible()
+        let shouldRefreshStatus = self.telegramSetupStatus == nil
             || self.telegramSetupStatus == "Waiting for your first Telegram task..."
             || self.telegramSetupStatus == "Saving Telegram setup..."
             || self.telegramSetupStatus?.hasPrefix("Token verified") == true
+            || self.telegramSetupStatus?.hasPrefix("Telegram setup is saved, but OpenClaw could not") == true
+
+        if shouldRefreshStatus || activityConfirmed
         {
             let username = status.probe?.bot?.username ?? self.telegramSetupBotUsername
             if self.consumerTelegramFirstTaskVerified {
@@ -190,6 +198,14 @@ extension ChannelsStore {
         }
     }
 }
+
+#if DEBUG
+extension ChannelsStore {
+    func _testReconcileTelegramSetupProgress(with snap: ChannelsStatusSnapshot) {
+        self.reconcileTelegramSetupProgress(with: snap)
+    }
+}
+#endif
 
 private struct WhatsAppLoginStartResult: Codable {
     let qrDataUrl: String?
