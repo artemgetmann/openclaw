@@ -82,15 +82,31 @@ struct ConsumerTelegramSetupCardContent: View {
                     ? "The bot is connected, but onboarding is not complete until OpenClaw answers one Telegram task end-to-end on this Mac."
                     : "Create a bot in BotFather, verify the token here, then send the first task you want OpenClaw to handle.")
 
-            Text("1. Open @BotFather and create the bot if you have not already.")
+            Text("1. Open @BotFather, send /newbot, choose a name + username, then copy the full token BotFather gives you.")
                 .font(.callout)
 
-            Button("Open BotFather") {
-                self.store.openTelegramBotFather()
-            }
-            .buttonStyle(.bordered)
+            HStack(spacing: 10) {
+                Button("Open BotFather") {
+                    self.store.openTelegramBotFather()
+                }
+                .buttonStyle(.bordered)
 
-            Text("2. Paste the BotFather token here and verify it.")
+                if let _ = AppFlavor.current.telegramSetupGuideURL {
+                    Button("Written guide") {
+                        self.store.openTelegramSetupGuide()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if let _ = AppFlavor.current.telegramSetupVideoURL {
+                    Button("Video walkthrough") {
+                        self.store.openTelegramSetupVideo()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            Text("2. Paste that exact token here and verify it. Do not trim it, shorten it, or copy the bot username instead.")
                 .font(.callout)
 
             TextField("BotFather token", text: self.$store.telegramSetupToken)
@@ -116,16 +132,15 @@ struct ConsumerTelegramSetupCardContent: View {
                     ProgressView().controlSize(.small)
                 }
 
-                if self.presentation == .settings {
+                if self.presentation == .settings, AppFlavor.current.telegramSetupVideoURL != nil {
                     Button("Video walkthrough") {
                         self.store.openTelegramSetupVideo()
                     }
                     .buttonStyle(.bordered)
-                    .disabled(AppFlavor.current.telegramSetupVideoURL == nil)
                 }
             }
 
-            Text("3. Open the bot, send your first real task in Telegram, then click Verify first task.")
+            Text("3. Open the bot, press Start if Telegram shows it, send one real task in DM, then click Verify first task here.")
                 .font(.callout)
 
             HStack(spacing: 10) {
@@ -179,7 +194,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Optional but recommended: in BotFather -> your bot -> Bot Settings, enable Threaded Mode for a better experience.")
+            Text("Telegram groups are stricter than DMs. Simplest path: make the bot an admin in the group. If the bot is not an admin, BotFather Group Privacy usually means it will only see commands, replies, and tagged messages. If you want normal group chat behavior without tags, disable Group Privacy in BotFather, then remove and re-add the bot so Telegram actually applies the change. Enable topics/threaded mode for the cleanest multi-task setup.")
                 .font(.callout)
                 .foregroundStyle(.primary)
 

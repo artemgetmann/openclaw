@@ -329,7 +329,7 @@ final class ConsumerModelSetupModel {
             self.applyReadiness(payload)
             await self.syncModelOptions(readiness: payload)
         } catch {
-            let detail = error.localizedDescription
+            let detail = Self.consumerFriendlyReadinessError(error)
             self.phase = .failed(detail)
             self.statusLine = detail
         }
@@ -474,6 +474,23 @@ final class ConsumerModelSetupModel {
         return try await GatewayConnection.shared.requestDecoded(
             method: .modelsReadiness,
             timeoutMs: 20_000)
+    }
+
+    private static func consumerFriendlyReadinessError(_ error: Error) -> String {
+        let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !detail.isEmpty else {
+            return "OpenClaw could not check AI access yet. Try again in a moment."
+        }
+
+        let lowercased = detail.lowercased()
+        if lowercased.contains("gateway connect")
+            || lowercased.contains("could not connect to the server")
+            || lowercased.contains("connection refused")
+        {
+            return "OpenClaw could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."
+        }
+
+        return detail
     }
 
     private static func gatewayAuthOptionsLoader() async throws -> ConsumerModelsAuthListPayload {

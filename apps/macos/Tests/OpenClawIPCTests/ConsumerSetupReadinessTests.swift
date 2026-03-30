@@ -279,6 +279,31 @@ struct ConsumerSetupReadinessTests {
         #expect(model.authError == "bad key")
     }
 
+    @Test func `consumer model rewrites raw gateway connect errors into startup guidance`() async {
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                throw NSError(
+                    domain: "gateway",
+                    code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "gateway connect: connect to gateway @ ws://127.0.0.1:21068: Could not connect to the server.",
+                    ])
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+            })
+
+        await model.refresh()
+
+        #expect(
+            model.phase
+                == .failed(
+                    "OpenClaw could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."))
+        #expect(
+            model.statusLine
+                == "OpenClaw could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again.")
+    }
+
     @Test func `consumer model groups auth options by subscription and api key`() async {
         let model = ConsumerModelSetupModel(
             probeReadiness: {

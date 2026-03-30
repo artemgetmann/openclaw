@@ -107,10 +107,16 @@ Bundled skills are intentionally curated, not universal.
   - `bear-notes`
   - `camsnap`
   - `canvas`
-  - WhatsApp CLI
+  - `wacli` / WhatsApp CLI
   - extra Google CLI setup beyond the seeded Google lane
   - manually provisioned founder-only skills
-    macOS caveat:
+
+Consumer copy caveat:
+
+- `wacli` / WhatsApp CLI is the local inbox/search/send utility on this Mac.
+- The live WhatsApp channel is a separate runtime path for real chat replies.
+- Do not describe `wacli` as if it powers the normal WhatsApp bot/channel
+  experience, because it does not.
 
 - Accessibility and Screen Recording can remain visually pending until the app restarts, even after the user grants them in System Settings.
 - Screen Recording may open System Settings directly instead of showing an in-app prompt.

@@ -9,6 +9,17 @@ title: "WhatsApp"
 
 Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session(s).
 
+Do not conflate the two WhatsApp surfaces:
+
+- This page is for the live WhatsApp channel. It powers real inbound and
+  outbound chats through the gateway.
+- `wacli` is a separate local Mac utility for reading, searching, syncing, and
+  optionally sending from the user’s paired WhatsApp data.
+
+If you want OpenClaw to reply to real people in WhatsApp chats, use the channel
+documented here. If you want local inbox/history utility on this Mac, use
+`wacli`.
+
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Default DM policy is pairing for unknown senders.

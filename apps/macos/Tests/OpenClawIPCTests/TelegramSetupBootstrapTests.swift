@@ -1,6 +1,8 @@
 import Testing
 @testable import OpenClaw
 
+private typealias SnapshotAnyCodable = OpenClaw.AnyCodable
+
 @Suite(.serialized)
 @MainActor
 struct TelegramSetupBootstrapTests {
@@ -40,8 +42,64 @@ struct TelegramSetupBootstrapTests {
                     #expect(gateway?["port"] as? Int == 19001)
                     #expect(telegram["enabled"] as? Bool == true)
                     #expect(telegram["dmPolicy"] as? String == "allowlist")
+                    #expect(telegram["groupPolicy"] as? String == "allowlist")
                     #expect(telegram["allowFrom"] as? [String] == ["42"])
+                    let groups = telegram["groups"] as? [String: Any]
+                    let wildcardGroup = groups?["*"] as? [String: Any]
+                    #expect(wildcardGroup?["requireMention"] as? Bool == false)
                     #expect(persistedGateway?["mode"] as? String == "local")
+                }
+    }
+
+    @Test func `telegram bootstrap keeps the real local gateway token when draft was redacted`() async throws {
+        var currentRoot: [String: Any] = [
+            "gateway": [
+                "auth": [
+                    "mode": "token",
+                    "token": "real-local-gateway-token",
+                ],
+                "mode": "local",
+                "port": 19001,
+                "bind": "loopback",
+            ],
+            "channels": [
+                "telegram": [
+                    "enabled": true,
+                    "dmPolicy": "pairing",
+                ],
+            ],
+        ]
+
+        try await TestIsolation.withConfigStoreOverrides(
+            .init(
+                isRemoteMode: { false },
+                loadLocal: { currentRoot },
+                saveLocal: { root in currentRoot = root })) {
+                    let store = ChannelsStore(isPreview: true)
+                    store.configDraft = [
+                        "gateway": [
+                            "auth": [
+                                "mode": "token",
+                                "token": "__OPENCLAW_REDACTED__",
+                            ],
+                            "mode": "local",
+                            "port": 19001,
+                            "bind": "loopback",
+                        ],
+                    ]
+
+                    let persisted = try await store.applyTelegramSetupBootstrap(
+                        token: "123456:abc",
+                        dmPolicy: "allowlist",
+                        allowFrom: ["42"])
+
+                    let gateway = currentRoot["gateway"] as? [String: Any]
+                    let auth = gateway?["auth"] as? [String: Any]
+                    let persistedGateway = persisted["gateway"] as? [String: Any]
+                    let persistedAuth = persistedGateway?["auth"] as? [String: Any]
+
+                    #expect(auth?["token"] as? String == "real-local-gateway-token")
+                    #expect(persistedAuth?["token"] as? String == "real-local-gateway-token")
                 }
     }
 
@@ -76,10 +134,14 @@ struct TelegramSetupBootstrapTests {
 
                     let telegram = ((currentRoot["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
                     let persistedTelegram = ((persisted["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
+                    let groups = telegram["groups"] as? [String: Any]
+                    let wildcardGroup = groups?["*"] as? [String: Any]
 
                     #expect(telegram["enabled"] as? Bool == false)
                     #expect(telegram["dmPolicy"] as? String == "allowlist")
+                    #expect(telegram["groupPolicy"] as? String == "allowlist")
                     #expect(telegram["allowFrom"] as? [String] == ["42"])
+                    #expect(wildcardGroup?["requireMention"] as? Bool == false)
                     #expect(persistedTelegram["enabled"] as? Bool == false)
                 }
     }
@@ -153,6 +215,75 @@ struct TelegramSetupBootstrapTests {
                 activityAlreadyConfirmed: false) == .replayCapturedMessage)
     }
 
+    @Test func `healthy telegram refresh promotes timed out setup once outbound activity proves completion`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.telegramSetupBotId = 8_582_422_927
+            store.telegramSetupBotUsername = "jarvis_consumer_smoke_2_bot"
+            store.telegramSetupStatus =
+                "Telegram setup is saved, but OpenClaw could not finish the first Telegram task. OpenClaw started the first Telegram task, but the setup handoff timed out before completion was confirmed."
+            store.telegramSetupBaselineInboundAt = 1_000
+
+            let snapshot = ChannelsStatusSnapshot(
+                ts: 1_700_000_000_000,
+                channelOrder: ["telegram"],
+                channelLabels: ["telegram": "Telegram"],
+                channelDetailLabels: nil,
+                channelSystemImages: nil,
+                channelMeta: nil,
+                channels: [
+                    "telegram": SnapshotAnyCodable([
+                        "configured": true,
+                        "running": true,
+                        "mode": "polling",
+                    ]),
+                ],
+                channelAccounts: [
+                    "telegram": [
+                        .init(
+                            accountId: "default",
+                            name: nil,
+                            enabled: true,
+                            configured: true,
+                            linked: nil,
+                            running: true,
+                            connected: nil,
+                            reconnectAttempts: nil,
+                            lastConnectedAt: nil,
+                            lastError: nil,
+                            lastStartAt: nil,
+                            lastStopAt: nil,
+                            lastInboundAt: 1_000,
+                            lastOutboundAt: 1_500,
+                            lastProbeAt: nil,
+                            mode: "polling",
+                            dmPolicy: "allowlist",
+                            allowFrom: ["1336356696"],
+                            tokenSource: "config",
+                            botTokenSource: nil,
+                            appTokenSource: nil,
+                            baseUrl: nil,
+                            allowUnmentionedGroups: nil,
+                            cliPath: nil,
+                            dbPath: nil,
+                            port: nil,
+                            probe: nil,
+                            audit: nil,
+                            application: nil),
+                    ],
+                ],
+                channelDefaultAccountId: ["telegram": "default"])
+
+            store.snapshot = snapshot
+            store._testReconcileTelegramSetupProgress(with: snapshot)
+
+            #expect(store.consumerTelegramFirstTaskVerified)
+            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. First task verified.")
+        }
+    }
+
     @Test func `telegram bootstrap reconnect retries until the restarted gateway accepts auth`() async {
         actor Recorder {
             var events: [String] = []
@@ -218,6 +349,28 @@ struct TelegramSetupBootstrapTests {
             "refresh-connection",
             "probe-3",
         ])
+    }
+
+    @Test func `telegram replay params keep messageId as integer`() throws {
+        let store = ChannelsStore(isPreview: true)
+        let params = try #require(store._testTelegramReplayGatewayParams(
+            dm: TelegramSetupDirectMessage(
+                updateId: 101,
+                messageId: 202,
+                chatId: 303,
+                chatUsername: "jarvis_consumer_smoke_2",
+                senderId: 404,
+                senderUsername: "artem",
+                senderFirstName: "Artem",
+                text: "/start",
+                caption: nil,
+                date: 505,
+                messageThreadId: nil)))
+
+        let payload = try #require(params["payload"]?.value as? [String: Any])
+        #expect(payload["messageId"] as? Int == 202)
+        #expect(payload["updateId"] as? Int == 101)
+        #expect(payload["chatId"] as? Int == 303)
     }
 
     @Test func `telegram bootstrap reconnect gives up after bounded retries`() async {
