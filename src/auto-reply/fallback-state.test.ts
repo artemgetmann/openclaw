@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildFallbackClearedNotice,
+  buildFallbackNotice,
   resolveActiveFallbackState,
   resolveFallbackTransition,
   type FallbackNoticeState,
@@ -119,5 +121,31 @@ describe("fallback-state", () => {
     expect(resolved.nextState.selectedModel).toBeUndefined();
     expect(resolved.nextState.activeModel).toBeUndefined();
     expect(resolved.nextState.reason).toBeUndefined();
+  });
+
+  it("builds a consumer-facing fallback notice", () => {
+    expect(
+      buildFallbackNotice({
+        selectedProvider: "anthropic",
+        selectedModel: "claude-sonnet-4-6",
+        activeProvider: "openai-codex",
+        activeModel: "gpt-5.4",
+        attempts: [{ ...baseAttempt, reason: "rate_limit" }],
+      }),
+    ).toBe(
+      "⚠️ Selected model unavailable. Using openai-codex/gpt-5.4 for this reply instead of anthropic/claude-sonnet-4-6 (rate limit).",
+    );
+  });
+
+  it("builds a consumer-facing fallback cleared notice", () => {
+    expect(
+      buildFallbackClearedNotice({
+        selectedProvider: "anthropic",
+        selectedModel: "claude-sonnet-4-6",
+        previousActiveModel: "openai-codex/gpt-5.4",
+      }),
+    ).toBe(
+      "✅ Back on your selected model: anthropic/claude-sonnet-4-6 (was using openai-codex/gpt-5.4).",
+    );
   });
 });

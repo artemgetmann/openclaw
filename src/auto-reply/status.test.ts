@@ -350,7 +350,7 @@ describe("buildStatusMessage", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Model: openai/gpt-4.1-mini");
-    expect(normalized).toContain("Fallback: anthropic/claude-haiku-4-5");
+    expect(normalized).toContain("Using instead: anthropic/claude-haiku-4-5");
     expect(normalized).toContain("(rate limit)");
     expect(normalized).not.toContain(" - Reason:");
     expect(normalized).not.toContain("Active:");
@@ -381,7 +381,7 @@ describe("buildStatusMessage", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Model: openai/gpt-4.1-mini");
-    expect(normalized).not.toContain("Fallback:");
+    expect(normalized).not.toContain("Using instead:");
     expect(normalized).not.toContain("(rate limit)");
   });
 
@@ -405,7 +405,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).not.toContain("Fallback:");
+    expect(normalized).not.toContain("Using instead:");
   });
 
   it("keeps provider prefix from configured model", () => {
