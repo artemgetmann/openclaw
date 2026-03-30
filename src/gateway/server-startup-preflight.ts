@@ -8,6 +8,7 @@ import {
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { detectProtectedTelegramTokenConflict } from "../infra/telegram-live-token-claims.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { GatewayRuntimeConfig } from "./server-runtime-config.js";
 
@@ -147,6 +148,20 @@ function buildInvalidConfigMessageForStartupSecretPrecheck(snapshot: ConfigFileS
   return `Invalid config at ${snapshot.path}.\n${issues}`;
 }
 
+function buildProtectedTelegramTokenConflictMessage(params: {
+  configPath: string;
+  tokens: string[];
+  claimPaths: string[];
+}): string {
+  return [
+    `Refusing to start gateway with Telegram bot token(s) reserved for telegram-live lanes: ${params.tokens.join(", ")}.`,
+    `Config path: ${params.configPath}`,
+    `Claimed by:`,
+    ...params.claimPaths.map((claimPath) => `- ${claimPath}`),
+    "Use the matching telegram-live runtime for that bot token, or switch this shared config to a different token.",
+  ].join("\n");
+}
+
 /**
  * Startup phase: normalize and validate config before runtime boot.
  * This keeps startup-side writes explicit and phase-scoped.
@@ -188,6 +203,25 @@ export async function runGatewayStartupConfigPreflight(
     throw new GatewayStartupPreflightError(
       "config_validation",
       buildInvalidConfigMessage(configSnapshot),
+    );
+  }
+
+  // Prevent the shared gateway from booting against Telegram tokens already
+  // claimed by isolated telegram-live lanes. Failing here is cheaper than
+  // discovering the conflict later via 409s after multiple pollers start.
+  const protectedTokenConflict = detectProtectedTelegramTokenConflict({
+    config: configSnapshot.config,
+    configPath: configSnapshot.path,
+    env,
+  });
+  if (protectedTokenConflict) {
+    throw new GatewayStartupPreflightError(
+      "config_validation",
+      buildProtectedTelegramTokenConflictMessage({
+        configPath: configSnapshot.path,
+        tokens: protectedTokenConflict.tokens,
+        claimPaths: protectedTokenConflict.claimPaths,
+      }),
     );
   }
 

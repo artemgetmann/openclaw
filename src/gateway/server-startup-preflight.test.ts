@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   ConfigFileSnapshot,
@@ -31,6 +34,10 @@ function createSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFile
     legacyIssues: [],
     ...overrides,
   };
+}
+
+function makeTempDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-preflight-"));
 }
 
 describe("runGatewayStartupConfigPreflight", () => {
@@ -114,6 +121,49 @@ describe("runGatewayStartupConfigPreflight", () => {
       expect.objectContaining({
         preflightSnapshot: phaseThree,
         config: phaseThree.config,
+      }),
+    );
+  });
+
+  it("refuses shared startup when a telegram-live lane already claims the token", async () => {
+    const repoRoot = makeTempDir();
+    fs.writeFileSync(path.join(repoRoot, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    fs.writeFileSync(
+      path.join(repoRoot, ".env.local"),
+      "TELEGRAM_BOT_TOKEN=finance-token\n",
+      "utf8",
+    );
+
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(
+      createSnapshot({
+        path: "/Users/user/.openclaw/openclaw.json",
+        config: {
+          channels: {
+            telegram: {
+              botToken: "finance-token",
+            },
+          },
+        },
+      }),
+    );
+
+    await expect(
+      runGatewayStartupConfigPreflight({
+        readSnapshot,
+        writeConfig: vi.fn(),
+        log: { info: vi.fn(), warn: vi.fn() },
+        isNixMode: false,
+        env: {
+          HOME: "/Users/user",
+          OPENCLAW_MAIN_REPO: repoRoot,
+        },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "config_validation",
+        message: expect.stringContaining(
+          "Refusing to start gateway with Telegram bot token(s) reserved for telegram-live lanes: finance-token.",
+        ),
       }),
     );
   });
