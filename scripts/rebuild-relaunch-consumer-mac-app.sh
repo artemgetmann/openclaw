@@ -49,6 +49,7 @@ done
 
 PACKAGE_ARGS=()
 OPEN_ARGS=()
+DEFAULT_SKIP_PNPM_INSTALL="${SKIP_PNPM_INSTALL:-1}"
 DEFAULT_SKIP_TSC="${SKIP_TSC:-1}"
 
 if [[ -n "$INSTANCE_ID" ]]; then
@@ -58,6 +59,14 @@ fi
 
 if [[ "$REPLACE" == "1" ]]; then
   OPEN_ARGS+=(--replace)
+fi
+
+# A fresh worktree may not have node_modules yet. Keep the warm-path default,
+# but automatically allow one dependency install when the checkout is obviously
+# not bootstrapped so the helper can succeed end-to-end on first run.
+if [[ "${SKIP_PNPM_INSTALL+x}" != x && ! -d "$ROOT_DIR/node_modules" ]]; then
+  DEFAULT_SKIP_PNPM_INSTALL=0
+  echo "📦 node_modules missing; allowing pnpm install once so the fast path can bootstrap itself"
 fi
 
 # The relaunch path eventually runs the worktree doctor, which expects the
@@ -73,7 +82,7 @@ fi
 # artifact still lands in dist/, but we stop pretending every relaunch needs
 # dependency resolution and unrelated frontend rebuilds.
 CI="${CI:-true}" \
-SKIP_PNPM_INSTALL="${SKIP_PNPM_INSTALL:-1}" \
+SKIP_PNPM_INSTALL="$DEFAULT_SKIP_PNPM_INSTALL" \
 SKIP_TSC="$DEFAULT_SKIP_TSC" \
 SKIP_UI_BUILD="${SKIP_UI_BUILD:-1}" \
 BUILD_CONFIG="${BUILD_CONFIG:-debug}" \
