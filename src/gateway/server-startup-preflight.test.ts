@@ -125,22 +125,40 @@ describe("runGatewayStartupConfigPreflight", () => {
     );
   });
 
-  it("refuses shared startup when a telegram-live lane already claims the token", async () => {
-    const repoRoot = makeTempDir();
-    fs.writeFileSync(path.join(repoRoot, ".git"), "gitdir: /tmp/fake\n", "utf8");
+  it("refuses noncanonical startup when the canonical shared config owns the token", async () => {
+    const home = makeTempDir();
+    fs.mkdirSync(path.join(home, ".openclaw"), { recursive: true });
     fs.writeFileSync(
-      path.join(repoRoot, ".env.local"),
-      "TELEGRAM_BOT_TOKEN=finance-token\n",
+      path.join(home, ".openclaw", "openclaw.json"),
+      JSON.stringify({
+        channels: {
+          telegram: {
+            botToken: "main-token",
+            accounts: {
+              finance: { botToken: "finance-token" },
+            },
+          },
+        },
+      }),
       "utf8",
     );
 
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(
       createSnapshot({
-        path: "/Users/user/.openclaw/openclaw.json",
+        path: path.join(
+          home,
+          ".openclaw",
+          "telegram-live-worktrees",
+          "tg-live-1",
+          "openclaw.telegram-live.json",
+        ),
         config: {
           channels: {
             telegram: {
-              botToken: "finance-token",
+              botToken: "main-token",
+              accounts: {
+                finance: { botToken: "finance-token" },
+              },
             },
           },
         },
@@ -154,15 +172,14 @@ describe("runGatewayStartupConfigPreflight", () => {
         log: { info: vi.fn(), warn: vi.fn() },
         isNixMode: false,
         env: {
-          HOME: "/Users/user",
-          OPENCLAW_MAIN_REPO: repoRoot,
+          HOME: home,
         },
       }),
     ).rejects.toEqual(
       expect.objectContaining<Partial<GatewayStartupPreflightError>>({
         phase: "config_validation",
         message: expect.stringContaining(
-          "Refusing to start gateway with Telegram bot token(s) reserved for telegram-live lanes: finance-token.",
+          "Refusing to start gateway with Telegram bot token(s) reserved for the canonical shared gateway: main-token, finance-token.",
         ),
       }),
     );

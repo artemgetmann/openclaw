@@ -1,7 +1,9 @@
+import fssync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { resolveCanonicalMainRepoRoot } from "../infra/telegram-live-token-claims.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayServiceDescription,
@@ -33,6 +35,55 @@ import type {
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
+
+function normalizePathForComparison(filePath: string | null | undefined): string | null {
+  const trimmed = filePath?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const resolved = path.resolve(trimmed);
+  try {
+    return fssync.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function isDefaultSharedLaunchAgentTarget(env: GatewayServiceEnv): boolean {
+  return (
+    !env.OPENCLAW_LAUNCHD_LABEL?.trim() &&
+    resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE) === GATEWAY_LAUNCH_AGENT_LABEL
+  );
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function assertCanonicalSharedLaunchAgentContext(args: {
+  env: GatewayServiceEnv;
+  action: string;
+  cwd?: string;
+}): void {
+  if (!isDefaultSharedLaunchAgentTarget(args.env)) {
+    return;
+  }
+
+  const canonicalMainRepo = resolveCanonicalMainRepoRoot(args.env);
+  if (!canonicalMainRepo) {
+    return;
+  }
+
+  const normalizedCwd = normalizePathForComparison(args.cwd ?? process.cwd());
+  if (normalizedCwd && isPathInside(canonicalMainRepo, normalizedCwd)) {
+    return;
+  }
+
+  throw new Error(
+    `${args.action} blocked: the default shared LaunchAgent can only be managed from the canonical main checkout (${canonicalMainRepo}). Use an isolated --profile for worktree runtimes instead.`,
+  );
+}
 
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
@@ -316,7 +367,12 @@ export async function readLaunchAgentRuntime(
 export async function repairLaunchAgentBootstrap(args: {
   env?: Record<string, string | undefined>;
 }): Promise<{ ok: boolean; detail?: string }> {
-  const env = args.env ?? (process.env as Record<string, string | undefined>);
+  const env = (args.env ??
+    (process.env as Record<string, string | undefined>)) as GatewayServiceEnv;
+  assertCanonicalSharedLaunchAgentContext({
+    env,
+    action: "LaunchAgent bootstrap repair",
+  });
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
@@ -406,6 +462,10 @@ export async function uninstallLaunchAgent({
   env,
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
+  assertCanonicalSharedLaunchAgentContext({
+    env,
+    action: "LaunchAgent uninstall",
+  });
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
@@ -449,6 +509,10 @@ function isUnsupportedGuiDomain(detail: string): boolean {
 }
 
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+  assertCanonicalSharedLaunchAgentContext({
+    env,
+    action: "LaunchAgent stop",
+  });
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
@@ -466,6 +530,11 @@ export async function installLaunchAgent({
   environment,
   description,
 }: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
+  assertCanonicalSharedLaunchAgentContext({
+    env,
+    action: "LaunchAgent install",
+    cwd: workingDirectory,
+  });
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
   await ensureSecureDirectory(logDir);
 
@@ -532,6 +601,10 @@ export async function restartLaunchAgent({
   env,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
+  assertCanonicalSharedLaunchAgentContext({
+    env: serviceEnv,
+    action: "LaunchAgent restart",
+  });
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
