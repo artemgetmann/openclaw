@@ -71,7 +71,7 @@ export function buildFallbackNotice(params: {
     return null;
   }
   const reasonSummary = buildFallbackReasonSummary(params.attempts);
-  return `↪️ Model Fallback: ${active} (selected ${selected}; ${reasonSummary})`;
+  return `⚠️ Selected model unavailable. Using ${active} for this reply instead of ${selected} (${reasonSummary}).`;
 }
 
 export function buildFallbackClearedNotice(params: {
@@ -82,9 +82,9 @@ export function buildFallbackClearedNotice(params: {
   const selected = formatProviderModelRef(params.selectedProvider, params.selectedModel);
   const previous = normalizeFallbackModelRef(params.previousActiveModel);
   if (previous && previous !== selected) {
-    return `↪️ Model Fallback cleared: ${selected} (was ${previous})`;
+    return `✅ Back on your selected model: ${selected} (was using ${previous}).`;
   }
-  return `↪️ Model Fallback cleared: ${selected}`;
+  return `✅ Back on your selected model: ${selected}.`;
 }
 
 export function resolveActiveFallbackState(params: {

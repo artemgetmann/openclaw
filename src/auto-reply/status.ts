@@ -654,7 +654,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
-    ? `↪️ Fallback: ${activeModelLabel}${
+    ? `↪️ Using instead: ${activeModelLabel}${
         showFallbackAuth ? ` · 🔑 ${activeAuthLabelValue}` : ""
       } (${fallbackState.reason ?? "selected model unavailable"})`
     : null;

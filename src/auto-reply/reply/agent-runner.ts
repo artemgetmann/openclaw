@@ -602,8 +602,11 @@ export async function runReplyAgent(params: {
       }
     }
 
-    // If verbose is enabled, prepend operational run notices.
+    // Always surface model switches. Consumers need to know when the selected
+    // model was unavailable, otherwise the product quietly lies about what just
+    // handled their message.
     let finalPayloads = guardedReplyPayloads;
+    const runNotices: ReplyPayload[] = [];
     const verboseNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
@@ -626,17 +629,15 @@ export async function runReplyAgent(params: {
           attempts: fallbackAttempts,
         },
       });
-      if (verboseEnabled) {
-        const fallbackNotice = buildFallbackNotice({
-          selectedProvider,
-          selectedModel,
-          activeProvider: providerUsed,
-          activeModel: modelUsed,
-          attempts: fallbackAttempts,
-        });
-        if (fallbackNotice) {
-          verboseNotices.push({ text: fallbackNotice });
-        }
+      const fallbackNotice = buildFallbackNotice({
+        selectedProvider,
+        selectedModel,
+        activeProvider: providerUsed,
+        activeModel: modelUsed,
+        attempts: fallbackAttempts,
+      });
+      if (fallbackNotice) {
+        runNotices.push({ text: fallbackNotice });
       }
     }
     if (fallbackTransition.fallbackCleared) {
@@ -653,15 +654,13 @@ export async function runReplyAgent(params: {
           previousActiveModel: fallbackTransition.previousState.activeModel,
         },
       });
-      if (verboseEnabled) {
-        verboseNotices.push({
-          text: buildFallbackClearedNotice({
-            selectedProvider,
-            selectedModel,
-            previousActiveModel: fallbackTransition.previousState.activeModel,
-          }),
-        });
-      }
+      runNotices.push({
+        text: buildFallbackClearedNotice({
+          selectedProvider,
+          selectedModel,
+          previousActiveModel: fallbackTransition.previousState.activeModel,
+        }),
+      });
     }
 
     if (autoCompactionCount > 0) {
@@ -694,8 +693,8 @@ export async function runReplyAgent(params: {
         verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
       }
     }
-    if (verboseNotices.length > 0) {
-      finalPayloads = [...verboseNotices, ...finalPayloads];
+    if (runNotices.length > 0 || verboseNotices.length > 0) {
+      finalPayloads = [...runNotices, ...verboseNotices, ...finalPayloads];
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);

@@ -716,7 +716,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         params.onAgentEvent?.({
           stream: "compaction",
-          data: { phase: "end", willRetry: false },
+          data: { phase: "end", completed: true, willRetry: false },
         });
         return { payloads: [{ text: "final" }], meta: {} };
       });
@@ -729,18 +729,19 @@ describe("runReplyAgent typing (heartbeat)", () => {
         storePath,
       });
       const res = await run();
-      expect(Array.isArray(res)).toBe(true);
-      const payloads = res as { text?: string }[];
-      expect(payloads[0]?.text).toContain("Auto-compaction complete");
-      expect(payloads[0]?.text).toContain("count 1");
+      const payloads = Array.isArray(res) ? res : [res];
+      expect(payloads.some((payload) => payload?.text?.includes("Auto-compaction complete"))).toBe(
+        true,
+      );
+      expect(payloads.some((payload) => payload?.text?.includes("count 1"))).toBe(true);
       expect(sessionStore.main.compactionCount).toBe(1);
     });
   });
 
-  it("announces model fallback only when verbose mode is enabled", async () => {
+  it("announces model fallback even when verbose mode is off", async () => {
     const cases = [
-      { name: "verbose on", verbose: "on" as const, expectNotice: true },
-      { name: "verbose off", verbose: "off" as const, expectNotice: false },
+      { name: "verbose on", verbose: "on" as const },
+      { name: "verbose off", verbose: "off" as const },
     ] as const;
     for (const testCase of cases) {
       const sessionEntry: SessionEntry = {
@@ -786,13 +787,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const payload = Array.isArray(res)
         ? (res[0] as { text?: string })
         : (res as { text?: string });
-      if (testCase.expectNotice) {
-        expect(payload.text, testCase.name).toContain("Model Fallback:");
-        expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
-        expect(sessionEntry.fallbackNoticeReason, testCase.name).toBe("rate limit");
-        continue;
-      }
-      expect(payload.text, testCase.name).not.toContain("Model Fallback:");
+      expect(payload.text, testCase.name).toContain("Selected model unavailable.");
+      expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
+      expect(sessionEntry.fallbackNoticeReason, testCase.name).toBe("rate limit");
       expect(
         phases.filter((phase) => phase === "fallback"),
         testCase.name,
@@ -847,8 +844,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
-      expect(firstText).toContain("Model Fallback:");
-      expect(secondText).not.toContain("Model Fallback:");
+      expect(firstText).toContain("Selected model unavailable.");
+      expect(secondText).not.toContain("Selected model unavailable.");
       expect(fallbackEvents).toHaveLength(1);
     } finally {
       fallbackSpy.mockRestore();
@@ -917,9 +914,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
       const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
-      expect(firstText).toContain("Model Fallback:");
-      expect(secondText).not.toContain("Model Fallback:");
-      expect(thirdText).toContain("Model Fallback:");
+      expect(firstText).toContain("Selected model unavailable.");
+      expect(secondText).not.toContain("Selected model unavailable.");
+      expect(thirdText).toContain("Selected model unavailable.");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -995,9 +992,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
       const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
-      expect(firstText).toContain("Model Fallback:");
-      expect(secondText).toContain("Model Fallback cleared:");
-      expect(thirdText).not.toContain("Model Fallback cleared:");
+      expect(firstText).toContain("Selected model unavailable.");
+      expect(secondText).toContain("Back on your selected model:");
+      expect(thirdText).not.toContain("Back on your selected model:");
       expect(phases.filter((phase) => phase === "fallback")).toHaveLength(1);
       expect(phases.filter((phase) => phase === "fallback_cleared")).toHaveLength(1);
     } finally {
@@ -1005,7 +1002,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("emits fallback lifecycle events while verbose is off", async () => {
+  it("announces fallback transitions even while verbose is off", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1073,8 +1070,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
-      expect(firstText).not.toContain("Model Fallback:");
-      expect(secondText).not.toContain("Model Fallback cleared:");
+      expect(firstText).toContain("Selected model unavailable.");
+      expect(secondText).toContain("Back on your selected model:");
       expect(phases.filter((phase) => phase === "fallback")).toHaveLength(1);
       expect(phases.filter((phase) => phase === "fallback_cleared")).toHaveLength(1);
     } finally {
@@ -1143,7 +1140,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         });
         const res = await run();
         const firstText = Array.isArray(res) ? res[0]?.text : res?.text;
-        expect(firstText).not.toContain("Model Fallback:");
+        expect(firstText).not.toContain("Selected model unavailable.");
         expect(sessionEntry.fallbackNoticeReason).toBe(testCase.expectedReason);
       } finally {
         fallbackSpy.mockRestore();
