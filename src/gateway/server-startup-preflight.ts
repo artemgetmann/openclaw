@@ -151,14 +151,13 @@ function buildInvalidConfigMessageForStartupSecretPrecheck(snapshot: ConfigFileS
 function buildProtectedTelegramTokenConflictMessage(params: {
   configPath: string;
   tokens: string[];
-  claimPaths: string[];
+  protectedBy: string;
 }): string {
   return [
-    `Refusing to start gateway with Telegram bot token(s) reserved for telegram-live lanes: ${params.tokens.join(", ")}.`,
+    `Refusing to start gateway with Telegram bot token(s) reserved for the canonical shared gateway: ${params.tokens.join(", ")}.`,
     `Config path: ${params.configPath}`,
-    `Claimed by:`,
-    ...params.claimPaths.map((claimPath) => `- ${claimPath}`),
-    "Use the matching telegram-live runtime for that bot token, or switch this shared config to a different token.",
+    `Protected by: ${params.protectedBy}`,
+    "Use dedicated tester bot tokens for this runtime, or run the canonical shared gateway from the main checkout.",
   ].join("\n");
 }
 
@@ -206,9 +205,9 @@ export async function runGatewayStartupConfigPreflight(
     );
   }
 
-  // Prevent the shared gateway from booting against Telegram tokens already
-  // claimed by isolated telegram-live lanes. Failing here is cheaper than
-  // discovering the conflict later via 409s after multiple pollers start.
+  // Prevent noncanonical runtimes from booting with Telegram tokens that are
+  // already owned by the canonical shared gateway config. Failing here keeps
+  // worktree/tester lanes from stealing real production bot identities.
   const protectedTokenConflict = detectProtectedTelegramTokenConflict({
     config: configSnapshot.config,
     configPath: configSnapshot.path,
@@ -220,7 +219,7 @@ export async function runGatewayStartupConfigPreflight(
       buildProtectedTelegramTokenConflictMessage({
         configPath: configSnapshot.path,
         tokens: protectedTokenConflict.tokens,
-        claimPaths: protectedTokenConflict.claimPaths,
+        protectedBy: protectedTokenConflict.protectedBy,
       }),
     );
   }
