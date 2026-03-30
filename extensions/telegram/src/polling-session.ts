@@ -166,21 +166,7 @@ export class TelegramPollingSession {
     }
   }
 
-  async #confirmPersistedOffset(bot: TelegramBot): Promise<void> {
-    const lastUpdateId = this.opts.getLastUpdateId();
-    if (lastUpdateId === null || lastUpdateId >= Number.MAX_SAFE_INTEGER) {
-      return;
-    }
-    try {
-      await bot.api.getUpdates({ offset: lastUpdateId + 1, limit: 1, timeout: 0 });
-    } catch {
-      // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
-    }
-  }
-
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
-    await this.#confirmPersistedOffset(bot);
-
     let lastGetUpdatesAt = Date.now();
     bot.api.config.use((prev, method, payload, signal) => {
       if (method === "getUpdates") {

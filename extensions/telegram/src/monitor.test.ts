@@ -154,12 +154,6 @@ async function runMonitorAndCaptureStartupOrder(params?: { persistedOffset?: num
     order.push("deleteWebhook");
     return true;
   });
-  if (typeof params?.persistedOffset === "number") {
-    api.getUpdates.mockImplementationOnce(async () => {
-      order.push("getUpdates");
-      return [];
-    });
-  }
   runSpy.mockImplementationOnce(() => {
     order.push("run");
     return makeAbortRunner(abort);
@@ -604,13 +598,13 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
-  it("confirms persisted offset with Telegram before starting runner", async () => {
+  it("does not issue a pre-run getUpdates confirmation when a persisted offset exists", async () => {
     const { order } = await runMonitorAndCaptureStartupOrder({
       persistedOffset: 549076203,
     });
 
-    expect(api.getUpdates).toHaveBeenCalledWith({ offset: 549076204, limit: 1, timeout: 0 });
-    expect(order).toEqual(["deleteWebhook", "getUpdates", "run"]);
+    expect(api.getUpdates).not.toHaveBeenCalled();
+    expect(order).toEqual(["deleteWebhook", "run"]);
   });
 
   it("skips offset confirmation when no persisted offset exists", async () => {
