@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
   LAUNCH_AGENT_UMASK_DECIMAL,
@@ -11,6 +14,7 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  stopLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -33,6 +37,14 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number) => number[]>(() => []),
 );
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
+const tempDirs: string[] = [];
+let cwdSpy: { mockRestore: () => void } | null = null;
+
+function makeTempDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-launchd-"));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function expectLaunchctlEnableBootstrapOrder(env: Record<string, string | undefined>) {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
@@ -167,7 +179,17 @@ beforeEach(() => {
     ok: true,
     pid: 7331,
   });
+  cwdSpy?.mockRestore();
+  cwdSpy = null;
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  cwdSpy?.mockRestore();
+  cwdSpy = null;
+  while (tempDirs.length > 0) {
+    fs.rmSync(tempDirs.pop() as string, { recursive: true, force: true });
+  }
 });
 
 describe("launchd runtime parsing", () => {
@@ -465,6 +487,68 @@ describe("launchd install", () => {
         programArguments: defaultProgramArguments,
       }),
     ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+  });
+
+  it("blocks shared LaunchAgent install from outside canonical main", async () => {
+    const canonicalMain = makeTempDir();
+    fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/tmp/feature-worktree");
+
+    await expect(
+      installLaunchAgent({
+        env: {
+          ...createDefaultLaunchdEnv(),
+          OPENCLAW_MAIN_REPO: canonicalMain,
+        },
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+        workingDirectory: "/tmp/feature-worktree",
+      }),
+    ).rejects.toThrow("LaunchAgent install blocked");
+
+    expect(state.launchctlCalls).toEqual([]);
+  });
+
+  it("blocks shared LaunchAgent restart from outside canonical main", async () => {
+    const canonicalMain = makeTempDir();
+    fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/tmp/feature-worktree");
+
+    await expect(
+      restartLaunchAgent({
+        env: {
+          ...createDefaultLaunchdEnv(),
+          OPENCLAW_MAIN_REPO: canonicalMain,
+        },
+        stdout: new PassThrough(),
+      }),
+    ).rejects.toThrow("LaunchAgent restart blocked");
+
+    expect(state.launchctlCalls).toEqual([]);
+  });
+
+  it("still allows isolated profile service operations from worktrees", async () => {
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/tmp/feature-worktree");
+
+    await installLaunchAgent({
+      env: {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_PROFILE: "tester",
+      },
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      workingDirectory: "/tmp/feature-worktree",
+    });
+
+    await stopLaunchAgent({
+      env: {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_PROFILE: "tester",
+      },
+      stdout: new PassThrough(),
+    });
+
+    expect(state.launchctlCalls.length).toBeGreaterThan(0);
   });
 });
 
