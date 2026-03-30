@@ -59,6 +59,23 @@ export function resolveTelegramDmThreadSessionRouting(params: {
   };
 }
 
+export function resolveTelegramDmThreadSessionReference(params: {
+  baseSessionKey: string;
+  chatId: number | string;
+  senderId?: number | string | null;
+  threadId?: number | string | null;
+  sessionKey?: string | null;
+}): TelegramDmThreadRouting | null {
+  const explicitSessionKey = params.sessionKey?.trim().toLowerCase();
+  if (!explicitSessionKey) {
+    return null;
+  }
+  const routing = resolveTelegramDmThreadSessionRouting(params);
+  return [routing.sessionKey, ...routing.legacySessionKeys].includes(explicitSessionKey)
+    ? routing
+    : null;
+}
+
 export function resolveTelegramDmThreadStoreEntry(params: {
   store: Record<string, SessionEntry>;
   sessionKey: string;

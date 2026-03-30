@@ -77,6 +77,7 @@ import {
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
   migrateTelegramDmThreadStoreEntry,
+  resolveTelegramDmThreadSessionReference,
   resolveTelegramDmThreadSessionRouting,
   resolveTelegramDmThreadStoreEntry,
 } from "./dm-thread-session.js";
@@ -328,37 +329,126 @@ export const registerTelegramHandlers = ({
     sessionKey: string;
     model?: string;
   } => {
-    const explicitSessionKey = params.sessionKey?.trim();
-    if (explicitSessionKey) {
-      const agentId =
-        resolveAgentIdFromSessionKey(explicitSessionKey) || resolveDefaultAgentId(cfg);
-      const storePath = resolveStorePath(cfg.session?.store, { agentId });
-      const store = loadSessionStore(storePath);
-      const entry = resolveSessionStoreEntry({ store, sessionKey: explicitSessionKey }).existing;
+    const resolveSessionModel = (input: {
+      agentId: string;
+      sessionKey: string;
+      sessionEntry: ReturnType<typeof loadSessionStore>[string] | undefined;
+      sessionStore: ReturnType<typeof loadSessionStore>;
+      legacySessionKeys?: string[];
+    }) => {
       const storedOverride = resolveStoredModelOverride({
-        sessionEntry: entry,
-        sessionStore: store,
-        sessionKey: explicitSessionKey,
+        sessionEntry: input.sessionEntry,
+        sessionStore: input.sessionStore,
+        sessionKey: input.sessionKey,
       });
       if (storedOverride) {
         return {
-          agentId,
-          legacySessionKeys: [],
-          sessionEntry: entry,
-          sessionKey: explicitSessionKey,
+          agentId: input.agentId,
+          legacySessionKeys: input.legacySessionKeys ?? [],
+          sessionEntry: input.sessionEntry,
+          sessionKey: input.sessionKey,
           model: storedOverride.provider
             ? `${storedOverride.provider}/${storedOverride.model}`
             : storedOverride.model,
         };
       }
-      const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId });
+      const provider = input.sessionEntry?.modelProvider?.trim();
+      const model = input.sessionEntry?.model?.trim();
+      if (provider && model) {
+        return {
+          agentId: input.agentId,
+          legacySessionKeys: input.legacySessionKeys ?? [],
+          sessionEntry: input.sessionEntry,
+          sessionKey: input.sessionKey,
+          model: `${provider}/${model}`,
+        };
+      }
+      const resolvedDefault = resolveDefaultModelForAgent({
+        cfg,
+        agentId: input.agentId,
+      });
       return {
-        agentId,
-        legacySessionKeys: [],
-        sessionEntry: entry,
-        sessionKey: explicitSessionKey,
+        agentId: input.agentId,
+        legacySessionKeys: input.legacySessionKeys ?? [],
+        sessionEntry: input.sessionEntry,
+        sessionKey: input.sessionKey,
         model: `${resolvedDefault.provider}/${resolvedDefault.model}`,
       };
+    };
+
+    const explicitSessionKey = params.sessionKey?.trim();
+    if (explicitSessionKey) {
+      // Telegram DM-topic callback payloads can point back at a previously sent
+      // bot message whose cached metadata still carries a legacy thread alias
+      // (`...:thread:<topic>` or `...:thread:<chat>:<topic>`). Normalize those
+      // aliases onto the canonical sender-derived DM thread key here so model
+      // callbacks, /status, and the next inbound DM all share one session.
+      if (!params.isGroup && params.messageThreadId != null) {
+        const resolvedThreadId =
+          params.resolvedThreadId ??
+          resolveTelegramForumThreadId({
+            isForum: params.isForum,
+            messageThreadId: params.messageThreadId,
+          });
+        const dmThreadId = params.messageThreadId;
+        const topicThreadId = resolvedThreadId ?? dmThreadId;
+        const { topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
+        const { route, hasExplicitDmTopicBinding } = resolveTelegramConversationRoute({
+          cfg,
+          accountId,
+          chatId: params.chatId,
+          isGroup: params.isGroup,
+          resolvedThreadId,
+          replyThreadId: topicThreadId,
+          senderId: params.senderId,
+          topicAgentId: topicConfig?.agentId,
+        });
+        if (!hasExplicitDmTopicBinding) {
+          const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+            cfg,
+            route,
+            chatId: params.chatId,
+            isGroup: params.isGroup,
+            senderId: params.senderId,
+          });
+          const dmThreadSession = resolveTelegramDmThreadSessionReference({
+            baseSessionKey,
+            chatId: params.chatId,
+            senderId: params.senderId,
+            threadId: dmThreadId,
+            sessionKey: explicitSessionKey,
+          });
+          if (dmThreadSession) {
+            const storePath = resolveStorePath(cfg.session?.store, {
+              agentId: route.agentId,
+            });
+            const store = loadSessionStore(storePath);
+            const resolvedEntry = resolveTelegramDmThreadStoreEntry({
+              store,
+              sessionKey: dmThreadSession.sessionKey,
+              legacySessionKeys: dmThreadSession.legacySessionKeys,
+            });
+            return resolveSessionModel({
+              agentId: route.agentId,
+              sessionKey: resolvedEntry.normalizedKey,
+              sessionEntry: resolvedEntry.existing,
+              sessionStore: store,
+              legacySessionKeys: resolvedEntry.legacyKeys,
+            });
+          }
+        }
+      }
+      const agentId =
+        resolveAgentIdFromSessionKey(explicitSessionKey) || resolveDefaultAgentId(cfg);
+      const storePath = resolveStorePath(cfg.session?.store, { agentId });
+      const store = loadSessionStore(storePath);
+      const entry = resolveSessionStoreEntry({ store, sessionKey: explicitSessionKey }).existing;
+      return resolveSessionModel({
+        agentId,
+        sessionKey: explicitSessionKey,
+        sessionEntry: entry,
+        sessionStore: store,
+      });
     }
 
     const resolvedThreadId =
@@ -406,41 +496,13 @@ export const registerTelegramHandlers = ({
           legacySessionKeys: dmThreadSession.legacySessionKeys,
         }).existing
       : resolveSessionStoreEntry({ store, sessionKey }).existing;
-    const storedOverride = resolveStoredModelOverride({
-      sessionEntry: entry,
-      sessionStore: store,
-      sessionKey,
-    });
-    if (storedOverride) {
-      return {
-        agentId: route.agentId,
-        legacySessionKeys: dmThreadSession?.legacySessionKeys ?? [],
-        sessionEntry: entry,
-        sessionKey,
-        model: storedOverride.provider
-          ? `${storedOverride.provider}/${storedOverride.model}`
-          : storedOverride.model,
-      };
-    }
-    const provider = entry?.modelProvider?.trim();
-    const model = entry?.model?.trim();
-    if (provider && model) {
-      return {
-        agentId: route.agentId,
-        legacySessionKeys: dmThreadSession?.legacySessionKeys ?? [],
-        sessionEntry: entry,
-        sessionKey,
-        model: `${provider}/${model}`,
-      };
-    }
-    const modelCfg = cfg.agents?.defaults?.model;
-    return {
+    return resolveSessionModel({
       agentId: route.agentId,
       legacySessionKeys: dmThreadSession?.legacySessionKeys ?? [],
       sessionEntry: entry,
       sessionKey,
-      model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
-    };
+      sessionStore: store,
+    });
   };
 
   const processMediaGroup = async (entry: MediaGroupEntry) => {
