@@ -14,7 +14,10 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  resolveTelegramThreadParentSessionKey,
+  resolveThreadParentSessionKey,
+} from "../../sessions/session-key-utils.js";
 import type { ThinkLevel } from "./directives.js";
 
 export type ModelDirectiveSelection = {
@@ -129,6 +132,23 @@ function resolveParentSessionKeyCandidate(params: {
   return null;
 }
 
+function shouldSkipParentModelOverrideInheritance(params: {
+  sessionKey?: string;
+  parentSessionKey?: string;
+}): boolean {
+  // Telegram topics/DM threads snapshot parent model defaults when the child
+  // session is created. After that point they must not live-inherit the parent
+  // override again, or a local "reset to default" simply falls straight back
+  // to whatever stale model the parent chat used to carry.
+  return (
+    resolveTelegramThreadParentSessionKey({
+      sessionKey: params.sessionKey,
+      parentSessionKey: params.parentSessionKey,
+      channelHint: "telegram",
+    }) != null
+  );
+}
+
 export function resolveStoredModelOverride(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -138,6 +158,9 @@ export function resolveStoredModelOverride(params: {
   const direct = resolveModelOverrideFromEntry(params.sessionEntry);
   if (direct) {
     return { ...direct, source: "session" };
+  }
+  if (shouldSkipParentModelOverrideInheritance(params)) {
+    return null;
   }
   const parentKey = resolveParentSessionKeyCandidate({
     sessionKey: params.sessionKey,
