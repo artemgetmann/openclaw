@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../../src/config/sessions.js";
 import {
   migrateTelegramDmThreadStoreEntry,
+  resolveTelegramDmThreadSessionReference,
   resolveTelegramDmThreadSessionRouting,
   resolveTelegramDmThreadStoreEntry,
 } from "./dm-thread-session.js";
@@ -20,6 +21,35 @@ describe("resolveTelegramDmThreadSessionRouting", () => {
       "agent:main:main:thread:777777777:55",
       "agent:main:main:thread:55",
     ]);
+  });
+});
+
+describe("resolveTelegramDmThreadSessionReference", () => {
+  it("canonicalizes a legacy bare-thread alias back onto the sender-derived DM topic key", () => {
+    const resolved = resolveTelegramDmThreadSessionReference({
+      baseSessionKey: "agent:main:main",
+      chatId: 777777777,
+      senderId: 123456789,
+      threadId: 55,
+      sessionKey: "agent:main:main:thread:55",
+    });
+
+    expect(resolved).toEqual({
+      sessionKey: "agent:main:main:thread:123456789:55",
+      legacySessionKeys: ["agent:main:main:thread:777777777:55", "agent:main:main:thread:55"],
+    });
+  });
+
+  it("ignores explicit session keys outside the DM topic alias family", () => {
+    const resolved = resolveTelegramDmThreadSessionReference({
+      baseSessionKey: "agent:main:main",
+      chatId: 777777777,
+      senderId: 123456789,
+      threadId: 55,
+      sessionKey: "agent:main:telegram:slash:123456789",
+    });
+
+    expect(resolved).toBeNull();
   });
 });
 
