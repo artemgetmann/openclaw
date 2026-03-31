@@ -29,7 +29,7 @@ import {
 // Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
 const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
   await import("../../../src/auto-reply/commands-registry.js");
-const { loadSessionStore } = await import("../../../src/config/sessions.js");
+const { loadSessionStore, updateSessionStore } = await import("../../../src/config/sessions.js");
 const { normalizeTelegramCommandName } =
   await import("../../../src/config/telegram-custom-commands.js");
 const { createTelegramBot } = await import("./bot.js");
@@ -739,6 +739,93 @@ describe("createTelegramBot", () => {
       expect(store[baseSessionKey]?.providerOverride).toBeUndefined();
       expect(store[baseSessionKey]?.modelOverride).toBeUndefined();
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-dm-topic-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
+  });
+
+  it("resets DM topic callbacks to the agent default instead of re-inheriting the parent override", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-model-dm-topic-reset-${process.pid}-${Date.now()}.json`;
+    const baseSessionKey = "agent:main:telegram:default:direct:12345";
+    const threadSessionKey = `${baseSessionKey}:thread:12345:99`;
+
+    await rm(storePath, { force: true });
+    try {
+      createTelegramBot({
+        token: "tok",
+        config: {
+          agents: {
+            defaults: {
+              model: "openai-codex/gpt-5.4",
+              models: {
+                "anthropic/claude-sonnet-4-6": {},
+                "openai-codex/gpt-5.4": {},
+              },
+            },
+          },
+          channels: {
+            telegram: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+            },
+          },
+          session: {
+            store: storePath,
+          },
+        },
+      });
+
+      await updateSessionStore(storePath, (store) => {
+        store[baseSessionKey] = {
+          sessionId: "parent-session",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-6",
+        };
+        store[threadSessionKey] = {
+          sessionId: "thread-session",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-6",
+        };
+        return null;
+      });
+
+      recordSentMessage(12345, 78, {
+        sessionKey: threadSessionKey,
+        messageThreadId: 99,
+      });
+
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(callbackHandler).toBeDefined();
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-dm-topic-reset-1",
+          data: "mdl_sel_openai-codex/gpt-5.4",
+          from: { id: 12345, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 12345, type: "private" },
+            date: 1736380800,
+            message_id: 78,
+            text: "Current: anthropic/claude-sonnet-4-6",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("✅ Model reset to default");
+      expect(store[threadSessionKey]?.providerOverride).toBeUndefined();
+      expect(store[threadSessionKey]?.modelOverride).toBeUndefined();
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-dm-topic-reset-1");
     } finally {
       await rm(storePath, { force: true });
     }
