@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import dotenv from "dotenv";
 import type {
+  TelegramUserClickResult,
   TelegramUserBackendMeta,
   TelegramUserBackendError,
   TelegramUserBackendOptions,
@@ -328,6 +329,33 @@ export async function runTelegramUserRead(
   pushOptionalNumberArg(args, "--after-id", params.afterId);
   pushOptionalNumberArg(args, "--before-id", params.beforeId);
   return runBackendCommand<TelegramUserReadResult>({
+    ...params,
+    args,
+  });
+}
+
+export async function runTelegramUserClick(
+  params: {
+    chat: string;
+    messageId: number;
+    buttonText?: string | null;
+    buttonSubstring?: string | null;
+    callbackData?: string | null;
+    afterClickSleepMs?: number | null;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserClickResult> {
+  const args = [
+    "click",
+    "--chat",
+    params.chat,
+    "--message-id",
+    String(Math.trunc(params.messageId)),
+  ];
+  pushOptionalStringArg(args, "--button-text", params.buttonText);
+  pushOptionalStringArg(args, "--button-substring", params.buttonSubstring);
+  pushOptionalStringArg(args, "--callback-data", params.callbackData);
+  pushOptionalNumberArg(args, "--after-click-sleep-ms", params.afterClickSleepMs);
+  return runBackendCommand<TelegramUserClickResult>({
     ...params,
     args,
   });

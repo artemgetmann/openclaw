@@ -810,6 +810,7 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 ```bash
 pnpm openclaw:local telegram-user send --chat @jarvis_tester_1_bot --message "hi" --json
 pnpm openclaw:local telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json
+pnpm openclaw:local telegram-user click --chat @jarvis_tester_1_bot --message-id 123 --button-text "Browse providers" --json
 pnpm openclaw:local telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json
 ```
 
@@ -821,6 +822,12 @@ pnpm openclaw:local telegram-user wait --chat @jarvis_tester_1_bot --after-id 12
     - `reply_to_top_id`
     - `direct_messages_topic.topic_id`
     - `chat_id`
+
+    `telegram-user click` is the callback operator path for inline keyboards:
+
+    - anchor on one known `message_id`
+    - match exactly one button selector: `--button-text`, `--button-substring`, or `--callback-data`
+    - prefer `--callback-data` in scripted `/model` picker flows so provider/model clicks stay deterministic
 
     Action gating:
 

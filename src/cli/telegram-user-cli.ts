@@ -40,6 +40,10 @@ export function registerTelegramUserCli(program: Command) {
             "pnpm openclaw:local telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json",
             "Wait for a matching reply with structured diagnostics.",
           ],
+          [
+            'pnpm openclaw:local telegram-user click --chat @jarvis_tester_1_bot --message-id 123 --button-text "Browse providers"',
+            "Click one inline button on a known Telegram message.",
+          ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/channels/telegram",
           "docs.openclaw.ai/channels/telegram",
@@ -90,6 +94,31 @@ export function registerTelegramUserCli(program: Command) {
       await runTelegramUserCommand(async () => {
         const { telegramUserReadCommand } = await import("../commands/telegram-user.js");
         await telegramUserReadCommand(opts, defaultRuntime);
+      });
+    });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("click")
+      .description("Click one Telegram inline button on a known message")
+      .requiredOption("--chat <target>", "Target chat username or id")
+      .requiredOption("--message-id <id>", "Telegram message id that currently owns the buttons"),
+  )
+    .option("--button-text <text>", "Click the button whose text matches exactly")
+    .option(
+      "--button-substring <text>",
+      "Click the first button whose text contains this substring",
+    )
+    .option("--callback-data <data>", "Click the button with this callback_data value")
+    .option(
+      "--after-click-sleep-ms <ms>",
+      "Wait this long before refetching the message after the click",
+      "800",
+    )
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { telegramUserClickCommand } = await import("../commands/telegram-user.js");
+        await telegramUserClickCommand(opts, defaultRuntime);
       });
     });
 

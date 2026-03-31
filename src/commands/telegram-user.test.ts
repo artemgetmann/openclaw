@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../runtime.js";
 const backendMocks = vi.hoisted(() => ({
   getTelegramUserDefaultPollIntervalMs: vi.fn(() => 1),
   getTelegramUserDefaultWaitTimeoutMs: vi.fn(() => 5),
+  runTelegramUserClick: vi.fn(),
   runTelegramUserPrecheck: vi.fn(),
   runTelegramUserRead: vi.fn(),
   runTelegramUserSend: vi.fn(),
@@ -26,6 +27,7 @@ const runtime: RuntimeEnv = {
 };
 
 const {
+  telegramUserClickCommand,
   telegramUserPrecheckCommand,
   telegramUserReadCommand,
   telegramUserSendCommand,
@@ -54,6 +56,7 @@ describe("telegram-user commands", () => {
     backendMocks.runTelegramUserSend.mockResolvedValueOnce({
       backend_meta: backendMeta,
       message: {
+        buttons: [],
         chat_id: 10,
         chat_title: null,
         chat_username: "jarvis_tester_1_bot",
@@ -88,6 +91,7 @@ describe("telegram-user commands", () => {
       backend_meta: backendMeta,
       messages: [
         {
+          buttons: [[{ callback_data: "mdl_prov", column: 0, row: 0, text: "Browse providers" }]],
           chat_id: 10,
           chat_title: null,
           chat_username: "jarvis_tester_1_bot",
@@ -110,6 +114,46 @@ describe("telegram-user commands", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("reply text"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("200"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("messages=1"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Browse providers"));
+  });
+
+  it("clicks a Telegram inline button and renders updated message details", async () => {
+    backendMocks.runTelegramUserClick.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      callback_answer: { alert: false, message: "Opening provider list" },
+      clicked_button: { callback_data: "mdl_prov", column: 0, row: 0, text: "Browse providers" },
+      matched_by: "button_text",
+      message: {
+        buttons: [[{ callback_data: "mdl_list_openai_1", column: 0, row: 0, text: "openai (12)" }]],
+        chat_id: 10,
+        chat_title: null,
+        chat_username: "jarvis_tester_1_bot",
+        date: "2026-03-24T00:00:00.000Z",
+        direct_messages_topic: null,
+        direct_messages_topic_id: null,
+        message_id: 123,
+        out: false,
+        reply_to_msg_id: 122,
+        reply_to_top_id: 120,
+        sender_id: 555,
+        text: "Select a provider:",
+        thread_anchor: 120,
+      },
+    });
+
+    await telegramUserClickCommand(
+      {
+        buttonText: "Browse providers",
+        chat: "@jarvis_tester_1_bot",
+        messageId: "123",
+      },
+      runtime,
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Telegram user click ok."));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"Browse providers"'));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Opening provider list"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("openai (12)"));
   });
 
   it("waits until a reply matches by DM topic id", async () => {
@@ -118,6 +162,7 @@ describe("telegram-user commands", () => {
         backend_meta: backendMeta,
         messages: [
           {
+            buttons: [],
             chat_id: 10,
             chat_title: null,
             chat_username: "jarvis_tester_1_bot",
@@ -138,6 +183,7 @@ describe("telegram-user commands", () => {
         backend_meta: backendMeta,
         messages: [
           {
+            buttons: [],
             chat_id: 10,
             chat_title: null,
             chat_username: "jarvis_tester_1_bot",
@@ -180,6 +226,7 @@ describe("telegram-user commands", () => {
     backendMocks.runTelegramUserRead.mockResolvedValue({
       messages: [
         {
+          buttons: [],
           chat_id: 10,
           chat_title: null,
           chat_username: "jarvis_tester_1_bot",

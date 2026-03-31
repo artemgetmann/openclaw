@@ -43,6 +43,7 @@ Use the repo-local CLI first:
 - `pnpm openclaw:local telegram-user precheck ...`
 - `pnpm openclaw:local telegram-user send ...`
 - `pnpm openclaw:local telegram-user read ...`
+- `pnpm openclaw:local telegram-user click ...`
 - `pnpm openclaw:local telegram-user wait ...`
 
 Use lower-level scripts only when the CLI path is missing the required feature.
@@ -61,6 +62,39 @@ For model switching, think in separate lanes:
    - model button
 
 If the feature relies on buttons, validate the button path explicitly.
+
+## Callback playbook for /model
+
+When validating the Telegram model picker, use this paved path instead of a throwaway Telethon snippet:
+
+1. prove runtime ownership first
+   - `scripts/telegram-live-runtime.sh ensure`
+2. resolve the bot/user lane
+   - `pnpm openclaw:local telegram-user precheck --chat <bot>`
+3. send the entry command
+   - `pnpm openclaw:local telegram-user send --chat <bot> --message "/model" --json`
+4. click the first picker button on that exact message id
+   - `pnpm openclaw:local telegram-user click --chat <bot> --message-id <id> --button-text "Browse providers" --json`
+5. click provider and model on the same edited message id
+   - provider list page: `--callback-data "mdl_list_<provider>_1"`
+   - model select: `--callback-data "mdl_sel_<provider/model>"` or the compact fallback returned by the helper
+6. verify persistence with a separate command
+   - `pnpm openclaw:local telegram-user send --chat <bot> --message "/model status" --json`
+   - `pnpm openclaw:local telegram-user wait --chat <bot> --after-id <sent_id> --sender-id <bot_id> --contains "<provider/model>" --json`
+
+Why this is the paved path:
+
+- button clicks stay anchored to one known Telegram message id
+- provider/model callback_data stays deterministic
+- `/model status` proves the session state, not just a transient edited picker UI
+
+## One-command smoke
+
+Use:
+
+- `scripts/telegram-e2e/run-model-callback-smoke.sh --chat <bot> --provider <provider> --model <model>`
+
+Add `--restart-runtime` when the bug might be restart-related.
 
 ## Restart-aware verification
 

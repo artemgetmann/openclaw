@@ -2,7 +2,15 @@ export type TelegramUserDirectMessagesTopic = {
   topic_id: number | null;
 };
 
+export type TelegramUserInlineButton = {
+  callback_data: string | null;
+  row: number;
+  text: string;
+  column: number;
+};
+
 export type TelegramUserMessage = {
+  buttons: TelegramUserInlineButton[][];
   chat_id: number | null;
   chat_username: string | null;
   chat_title: string | null;
@@ -42,6 +50,17 @@ export type TelegramUserSendResult = {
 export type TelegramUserReadResult = {
   backend_meta?: TelegramUserBackendMeta;
   messages: TelegramUserMessage[];
+};
+
+export type TelegramUserClickResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  callback_answer: {
+    alert: boolean;
+    message: string | null;
+  } | null;
+  clicked_button: TelegramUserInlineButton;
+  message: TelegramUserMessage;
+  matched_by: "callback_data" | "button_substring" | "button_text";
 };
 
 export type TelegramUserBackendError = {

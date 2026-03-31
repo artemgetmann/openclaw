@@ -34,6 +34,7 @@ from telethon import TelegramClient
 
 DEFAULT_SESSION = Path(__file__).resolve().parent / "tmp" / "userbot.session"
 DEFAULT_LOCK_TIMEOUT_SECONDS = 15
+DEFAULT_AFTER_CLICK_SLEEP_MS = 800
 
 
 def emit(payload: object, *, stream = sys.stdout) -> int:
@@ -136,6 +137,41 @@ def build_chat_payload(chat) -> dict[str, object | None]:
   }
 
 
+def decode_callback_data(raw: object) -> str | None:
+  if raw is None:
+    return None
+  if isinstance(raw, bytes):
+    try:
+      return raw.decode("utf-8")
+    except UnicodeDecodeError:
+      return None
+  if isinstance(raw, str):
+    return raw
+  return None
+
+
+def build_button_payload(button, *, row: int, column: int) -> dict[str, object | None]:
+  return {
+    "callback_data": decode_callback_data(getattr(button, "data", None)),
+    "column": column,
+    "row": row,
+    "text": (getattr(button, "text", "") or "").strip(),
+  }
+
+
+def build_buttons_payload(message) -> list[list[dict[str, object | None]]]:
+  rows = getattr(message, "buttons", None) or []
+  normalized: list[list[dict[str, object | None]]] = []
+  for row_index, row in enumerate(rows):
+    normalized_row = []
+    for column_index, button in enumerate(row):
+      normalized_row.append(
+        build_button_payload(button, row = row_index, column = column_index)
+      )
+    normalized.append(normalized_row)
+  return normalized
+
+
 def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
   reply_to = getattr(message, "reply_to", None)
   direct_topic_id = getattr(getattr(message, "direct_messages_topic", None), "topic_id", None)
@@ -150,6 +186,7 @@ def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
   )
   resolved_chat = chat if chat is not None else getattr(message, "chat", None)
   return {
+    "buttons": build_buttons_payload(message),
     "chat_id": int(getattr(message, "chat_id", 0) or 0) or None,
     "chat_title": getattr(resolved_chat, "title", None),
     "chat_username": getattr(resolved_chat, "username", None),
@@ -184,6 +221,19 @@ def build_parser() -> argparse.ArgumentParser:
   read.add_argument("--limit", type = int, default = 20, help = "Maximum number of messages")
   read.add_argument("--after-id", type = int, default = 0, help = "Only return newer messages")
   read.add_argument("--before-id", type = int, default = 0, help = "Only return older messages")
+
+  click = subparsers.add_parser("click", help = "Click one inline button on a known message")
+  click.add_argument("--chat", required = True, help = "Target chat username or id")
+  click.add_argument("--message-id", type = int, required = True, help = "Target Telegram message id")
+  click.add_argument("--button-text", help = "Require an exact button text match")
+  click.add_argument("--button-substring", help = "Require button text to contain this substring")
+  click.add_argument("--callback-data", help = "Require this callback_data value")
+  click.add_argument(
+    "--after-click-sleep-ms",
+    type = int,
+    default = DEFAULT_AFTER_CLICK_SLEEP_MS,
+    help = "Wait this long before refetching the message after the click",
+  )
   return parser
 
 
@@ -265,6 +315,101 @@ async def run_read(args: argparse.Namespace) -> int:
       await client.disconnect()
 
 
+def resolve_button_match(args: argparse.Namespace) -> tuple[str, str]:
+  matchers = [
+    ("button_text", (args.button_text or "").strip()),
+    ("button_substring", (args.button_substring or "").strip()),
+    ("callback_data", (args.callback_data or "").strip()),
+  ]
+  selected = [(kind, value) for kind, value in matchers if value]
+  if len(selected) != 1:
+    raise ValueError(
+      "click requires exactly one of --button-text, --button-substring, or --callback-data."
+    )
+  return selected[0]
+
+
+def find_button(message, *, match_kind: str, match_value: str):
+  buttons = getattr(message, "buttons", None) or []
+  available = []
+
+  for row_index, row in enumerate(buttons):
+    for column_index, button in enumerate(row):
+      payload = build_button_payload(button, row = row_index, column = column_index)
+      available.append(payload)
+
+      if match_kind == "button_text" and payload["text"] == match_value:
+        return button, payload
+      if match_kind == "button_substring" and match_value in payload["text"]:
+        return button, payload
+      if match_kind == "callback_data" and payload["callback_data"] == match_value:
+        return button, payload
+
+  raise LookupError(json.dumps(available, ensure_ascii = True))
+
+
+def build_callback_answer_payload(answer) -> dict[str, object | None] | None:
+  if answer is None:
+    return None
+  return {
+    "alert": bool(getattr(answer, "alert", False)),
+    "message": (getattr(answer, "message", None) or None),
+  }
+
+
+async def run_click(args: argparse.Namespace) -> int:
+  session_path = resolve_session_path(args.session)
+  match_kind, match_value = resolve_button_match(args)
+
+  with acquire_session_lock(session_path):
+    client, _ = await connect_client(session_path)
+    try:
+      message = await client.get_messages(resolve_chat(args.chat), ids = args.message_id)
+      if not message:
+        return fail(
+          "E_MESSAGE_NOT_FOUND",
+          f"Could not resolve message id {args.message_id} in {args.chat}.",
+          details = {"chat": args.chat, "message_id": args.message_id},
+        )
+
+      try:
+        button, clicked_payload = find_button(
+          message,
+          match_kind = match_kind,
+          match_value = match_value,
+        )
+      except LookupError as err:
+        return fail(
+          "E_BUTTON_NOT_FOUND",
+          f"No inline button matched {match_kind}={match_value!r} on message {args.message_id}.",
+          details = {
+            "available_buttons": json.loads(str(err)),
+            "chat": args.chat,
+            "match_kind": match_kind,
+            "message_id": args.message_id,
+          },
+        )
+
+      # Telegram often edits the same picker message in place after a callback,
+      # so always refetch the original message id after clicking.
+      answer = await button.click()
+      await asyncio.sleep(max(0, int(args.after_click_sleep_ms or 0)) / 1000)
+
+      refreshed = await client.get_messages(resolve_chat(args.chat), ids = args.message_id)
+      final_message = refreshed or message
+      final_chat = await final_message.get_chat()
+      return emit(
+        {
+          "callback_answer": build_callback_answer_payload(answer),
+          "clicked_button": clicked_payload,
+          "matched_by": match_kind,
+          "message": build_message_payload(final_message, chat = final_chat),
+        }
+      )
+    finally:
+      await client.disconnect()
+
+
 async def run() -> int:
   args = build_parser().parse_args()
   try:
@@ -279,6 +424,8 @@ async def run() -> int:
       return await run_send(args)
     if args.command == "read":
       return await run_read(args)
+    if args.command == "click":
+      return await run_click(args)
     return fail("E_USAGE", f"Unsupported command: {args.command}")
   except TimeoutError as err:
     return fail("E_SESSION_LOCK_TIMEOUT", sanitize_error_text(str(err)))
