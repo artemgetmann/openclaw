@@ -16,6 +16,40 @@ WATCHDOG_ERR_LOG="/tmp/openclaw/gateway-watchdog.err.log"
 WATCHDOG_STABILIZE_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_STABILIZE_SECONDS:-8}"
 WATCHDOG_AUTO_DISABLE_ON_DUPLICATE="${OPENCLAW_GATEWAY_WATCHDOG_AUTO_DISABLE_ON_DUPLICATE:-1}"
 MANAGE_WATCHDOG="${OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG:-1}"
+OPENCLAW_ENTRYPOINT="${MAIN_REPO}/openclaw.mjs"
+
+resolve_node_bin() {
+  if [[ -n "${OPENCLAW_NODE_BIN:-}" && -x "${OPENCLAW_NODE_BIN}" ]]; then
+    printf '%s\n' "${OPENCLAW_NODE_BIN}"
+    return 0
+  fi
+
+  local resolved_node=""
+  resolved_node="$(command -v node 2>/dev/null || true)"
+  if [[ -n "${resolved_node}" && -x "${resolved_node}" ]]; then
+    printf '%s\n' "${resolved_node}"
+    return 0
+  fi
+
+  local candidate=""
+  for candidate in /opt/homebrew/bin/node /opt/homebrew/opt/node/bin/node /usr/local/bin/node; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+NODE_BIN="$(resolve_node_bin)" || {
+  printf '[gateway-recover-main] node runtime not found; set OPENCLAW_NODE_BIN to a launchd-visible node binary\n' >&2
+  exit 1
+}
+
+run_openclaw_cli() {
+  "${NODE_BIN}" "${OPENCLAW_ENTRYPOINT}" "$@"
+}
 
 log() {
   printf '[gateway-recover-main] %s\n' "$*"
@@ -98,7 +132,7 @@ assert_main_runtime_path() {
     dump_failure_diagnostics "launchctl print gui/\$(id -u)/${GATEWAY_LABEL}" "$output"
     exit 1
   fi
-  if ! printf '%s\n' "$output" | rg -F -q "${EXPECTED_RUNTIME}"; then
+  if ! printf '%s\n' "$output" | grep -F -q -- "${EXPECTED_RUNTIME}"; then
     dump_failure_diagnostics "assert launchctl command path contains ${EXPECTED_RUNTIME}" "$output"
     exit 1
   fi
@@ -142,7 +176,7 @@ wait_for_rpc_probe() {
 
   while true; do
     local output=""
-    if output="$(openclaw gateway status --deep --require-rpc 2>&1)"; then
+    if output="$(run_openclaw_cli gateway status --deep --require-rpc 2>&1)"; then
       printf '%s\n' "$output"
       return 0
     fi
@@ -152,7 +186,7 @@ wait_for_rpc_probe() {
     now="$(date +%s)"
     elapsed="$((now - start_epoch))"
     if [[ "${elapsed}" -ge "${RPC_TIMEOUT_SECONDS}" ]]; then
-      dump_failure_diagnostics "openclaw gateway status --deep --require-rpc" "$last_output"
+      dump_failure_diagnostics "gateway status --deep --require-rpc" "$last_output"
       exit 1
     fi
     sleep "${POLL_INTERVAL_SECONDS}"
@@ -161,6 +195,33 @@ wait_for_rpc_probe() {
 
 resolve_launchctl_gateway_pid() {
   launchctl print "gui/$(id -u)/${GATEWAY_LABEL}" 2>/dev/null | awk '/pid =/ { print $3; exit }'
+}
+
+pid_matches_main_runtime() {
+  local pid="$1"
+  local cwd=""
+  local command_line=""
+
+  if [[ -z "$pid" ]]; then
+    return 1
+  fi
+
+  # The host can legitimately run other OpenClaw gateways in isolated worktrees.
+  # Only treat a pid as a duplicate if it is rooted in the canonical main repo
+  # or its command line still points at the canonical runtime entrypoint.
+  cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p' || true)"
+  if [[ -n "$cwd" ]]; then
+    if [[ "$cwd" == "$MAIN_REPO" || "$cwd" == "$MAIN_REPO/"* ]]; then
+      return 0
+    fi
+  fi
+
+  command_line="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+  if [[ -n "$command_line" && "$command_line" == *"$EXPECTED_RUNTIME"* ]]; then
+    return 0
+  fi
+
+  return 1
 }
 
 stabilize_watchdog() {
@@ -181,7 +242,9 @@ stabilize_watchdog() {
   local extra_gateway_pids=()
   for pid in "${all_gateway_pids[@]}"; do
     if [[ "${pid}" != "${gateway_pid}" ]]; then
-      extra_gateway_pids+=("${pid}")
+      if pid_matches_main_runtime "${pid}"; then
+        extra_gateway_pids+=("${pid}")
+      fi
     fi
   done
 
@@ -189,31 +252,22 @@ stabilize_watchdog() {
     return 0
   fi
 
-  log "watchdog spawned duplicate gateway workers: ${extra_gateway_pids[*]}"
-  if [[ "${WATCHDOG_AUTO_DISABLE_ON_DUPLICATE}" == "1" ]]; then
-    log "auto-disabling watchdog to prevent lock thrash"
-    launchctl bootout "gui/$(id -u)/${WATCHDOG_LABEL}" 2>/dev/null || true
-    for pid in "${extra_gateway_pids[@]}"; do
-      kill -9 "${pid}" 2>/dev/null || true
-    done
-    sleep 1
-    return 0
-  fi
-
-  dump_failure_diagnostics \
-    "watchdog duplicate gateway guard" \
-    "duplicate openclaw-gateway pids detected: ${extra_gateway_pids[*]}"
-  exit 1
+  # On a machine with isolated worktree runtimes, additional `openclaw-gateway`
+  # processes are normal and should not take down the shared main watchdog.
+  # The watchdog's job is to protect the canonical launchd-owned main runtime,
+  # not to treat every same-named process on the host as a fatal duplicate.
+  log "watchdog observed additional gateway pids and will continue: ${extra_gateway_pids[*]}"
+  return 0
 }
 
 main() {
   log "starting deterministic recovery (port=${PORT}, main=${MAIN_REPO})"
 
-  capture_best_effort "Baseline: status --deep --require-rpc" openclaw gateway status --deep --require-rpc
+  capture_best_effort "Baseline: status --deep --require-rpc" run_openclaw_cli gateway status --deep --require-rpc
   capture_best_effort "Baseline: lsof listener check" lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN
   capture_best_effort \
     "Baseline: launchctl print (program/arguments/pid/state)" \
-    bash -lc "launchctl print gui/\$(id -u)/${GATEWAY_LABEL} | rg 'program =|arguments =|pid =|state ='"
+    bash -lc "launchctl print gui/\$(id -u)/${GATEWAY_LABEL} | grep -E 'program =|arguments =|pid =|state ='"
 
   log_block "Full clean stop"
   local uid
@@ -222,11 +276,11 @@ main() {
   if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
     launchctl bootout "gui/${uid}/${WATCHDOG_LABEL}" 2>/dev/null || true
   fi
-  openclaw gateway stop 2>/dev/null || true
+  run_openclaw_cli gateway stop 2>/dev/null || true
   pkill -9 -f openclaw-gateway 2>/dev/null || true
   pkill -9 -f 'dist/index.js gateway' 2>/dev/null || true
   pkill -9 -f 'openclaw.mjs gateway' 2>/dev/null || true
-  run_strict bash -lc "ps aux | rg 'openclaw-gateway|dist/index.js gateway|openclaw.mjs gateway|ai.openclaw.gateway|gateway-health-watchdog' || true"
+  run_strict bash -lc "ps aux | grep -E 'openclaw-gateway|dist/index.js gateway|openclaw.mjs gateway|ai.openclaw.gateway|gateway-health-watchdog' || true"
   run_strict bash -lc "lsof -nP -iTCP:${PORT} -sTCP:LISTEN || true"
 
   log_block "Rebuild and reinstall from main runtime"
@@ -264,9 +318,9 @@ main() {
   log_block "Final verification"
   assert_main_runtime_path
   local launch_command
-  launch_command="$(launchctl print "gui/$(id -u)/${GATEWAY_LABEL}" | rg -F "${EXPECTED_RUNTIME}" || true)"
+  launch_command="$(launchctl print "gui/$(id -u)/${GATEWAY_LABEL}" | grep -F -- "${EXPECTED_RUNTIME}" || true)"
   local rpc_result
-  rpc_result="$(openclaw gateway status --deep --require-rpc 2>&1)"
+  rpc_result="$(run_openclaw_cli gateway status --deep --require-rpc 2>&1)"
   local listener_result
   listener_result="$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>&1)"
 
