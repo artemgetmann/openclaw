@@ -255,4 +255,28 @@ struct ConsumerAppActivationTests {
         #expect(!AppState.defaultLaunchAtLogin(isConsumer: false))
         #expect(!AppState.defaultShowDockIcon(storedValue: nil, isConsumer: false))
     }
+
+    @Test func `consumer launch defers gateway fanout until after local runtime bootstrap`() async {
+        var events: [String] = []
+
+        await AppDelegate.bootstrapDeferredConsumerStartupWorkIfNeeded(
+            isConsumer: true,
+            startNodePairing: { events.append("node-pairing") },
+            startDevicePairing: { events.append("device-pairing") },
+            startExecApprovalsGateway: { events.append("exec-approvals") },
+            startMacNodeMode: { events.append("mac-node") },
+            startVoiceWakeSettingsSync: { events.append("voicewake") },
+            startPresenceReporter: { events.append("presence") },
+            refreshHealth: { events.append("health") })
+
+        #expect(events == [
+            "node-pairing",
+            "device-pairing",
+            "exec-approvals",
+            "mac-node",
+            "voicewake",
+            "presence",
+            "health",
+        ])
+    }
 }

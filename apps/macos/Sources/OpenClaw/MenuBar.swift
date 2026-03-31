@@ -294,17 +294,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
         self.installVisibleSurfaceObserverIfNeeded()
         if let state {
-            Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
+            Task { @MainActor in
+                await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused)
+                await Self.bootstrapDeferredConsumerStartupWorkIfNeeded(
+                    isConsumer: AppFlavor.current.isConsumer,
+                    startNodePairing: { NodePairingApprovalPrompter.shared.start() },
+                    startDevicePairing: { DevicePairingApprovalPrompter.shared.start() },
+                    startExecApprovalsGateway: { ExecApprovalsGatewayPrompter.shared.start() },
+                    startMacNodeMode: { MacNodeModeCoordinator.shared.start() },
+                    startVoiceWakeSettingsSync: { VoiceWakeGlobalSettingsSync.shared.start() },
+                    startPresenceReporter: { PresenceReporter.shared.start() },
+                    refreshHealth: { await HealthStore.shared.refresh(onDemand: true) })
+            }
         }
         TerminationSignalWatcher.shared.start()
-        NodePairingApprovalPrompter.shared.start()
-        DevicePairingApprovalPrompter.shared.start()
         ExecApprovalsPromptServer.shared.start()
-        ExecApprovalsGatewayPrompter.shared.start()
-        MacNodeModeCoordinator.shared.start()
-        VoiceWakeGlobalSettingsSync.shared.start()
-        Task { PresenceReporter.shared.start() }
-        Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
         Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
         self.scheduleInitialVisibleSurfaceIfNeeded()
@@ -519,6 +523,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             !Self.hasVisibleConsumerSurface(
                 hasVisibleContentWindow: hasVisibleContentWindow,
                 hasVisibleOnboardingWindow: hasVisibleOnboardingWindow)
+    }
+
+    @MainActor
+    static func bootstrapDeferredConsumerStartupWorkIfNeeded(
+        isConsumer: Bool,
+        startNodePairing: @escaping @MainActor () -> Void = { NodePairingApprovalPrompter.shared.start() },
+        startDevicePairing: @escaping @MainActor () -> Void = { DevicePairingApprovalPrompter.shared.start() },
+        startExecApprovalsGateway: @escaping @MainActor () -> Void = { ExecApprovalsGatewayPrompter.shared.start() },
+        startMacNodeMode: @escaping @MainActor () -> Void = { MacNodeModeCoordinator.shared.start() },
+        startVoiceWakeSettingsSync: @escaping @MainActor () -> Void = { VoiceWakeGlobalSettingsSync.shared.start() },
+        startPresenceReporter: @escaping @MainActor () -> Void = { PresenceReporter.shared.start() },
+        refreshHealth: @escaping @MainActor () async -> Void = { await HealthStore.shared.refresh(onDemand: true) }) async
+    {
+        guard isConsumer else { return }
+
+        // Keep gateway-facing startup behind the local runtime bootstrap so the
+        // app does not fire a burst of pairing/health work while launchd is still
+        // getting the gateway ready.
+        startNodePairing()
+        startDevicePairing()
+        startExecApprovalsGateway()
+        startMacNodeMode()
+        startVoiceWakeSettingsSync()
+        startPresenceReporter()
+        await refreshHealth()
     }
 }
 

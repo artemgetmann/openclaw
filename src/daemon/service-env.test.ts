@@ -257,6 +257,19 @@ describe("buildMinimalServicePath", () => {
     const unique = [...new Set(parts)];
     expect(parts.length).toBe(unique.length);
   });
+
+  it("prepends clean-room path prefixes from env", () => {
+    const result = buildMinimalServicePath({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/testuser",
+        OPENCLAW_SERVICE_PATH_PREFIX: "/tmp/openclaw-clean/bin:/tmp/openclaw-alt/bin",
+      },
+    });
+    const parts = splitPath(result, "darwin");
+    expect(parts[0]).toBe("/tmp/openclaw-clean/bin");
+    expect(parts[1]).toBe("/tmp/openclaw-alt/bin");
+  });
 });
 
 describe("buildServiceEnvironment", () => {
@@ -371,12 +384,22 @@ describe("buildServiceEnvironment", () => {
         HOME: "/home/user",
         GOOGLE_PLACES_API_KEY: "  test-google-places-key  ",
         HIMALAYA_CONFIG: "  /tmp/himalaya-empty.toml  ",
+        BRAVE_API_KEY: "  brave-key  ",
+        FIRECRAWL_API_KEY: "  firecrawl-key  ",
+        XDG_CONFIG_HOME: "  /tmp/gog-xdg  ",
+        XDG_DATA_HOME: "  /tmp/gog-data  ",
+        GOG_KEYRING_PASSWORD: "  temporary-password  ",
       },
       port: 18789,
     });
 
     expect(env.GOOGLE_PLACES_API_KEY).toBe("test-google-places-key");
     expect(env.HIMALAYA_CONFIG).toBe("/tmp/himalaya-empty.toml");
+    expect(env.BRAVE_API_KEY).toBe("brave-key");
+    expect(env.FIRECRAWL_API_KEY).toBe("firecrawl-key");
+    expect(env.XDG_CONFIG_HOME).toBe("/tmp/gog-xdg");
+    expect(env.XDG_DATA_HOME).toBe("/tmp/gog-data");
+    expect(env.GOG_KEYRING_PASSWORD).toBe("temporary-password");
   });
 
   it("omits PATH on Windows so Scheduled Tasks can inherit the current shell path", () => {

@@ -439,10 +439,25 @@ final class GatewayProcessManager {
         self.appendLog("\(diagnostics)\n")
         self.logger.info("\(diagnostics, privacy: .public)")
 
-        // When a LaunchAgent plist already exists, prefer the CLI restart/bootstrap path first.
-        // That path already knows how to recover a booted-out/missing launchd label without
-        // rewriting the plist and SIGTERM-churning a healthy gateway process.
-        if preferKickstart || GatewayLaunchAgentManager.launchdConfigSnapshot() != nil {
+        // Do not kickstart just because a plist exists. During clean-room setup the app can
+        // observe a registered launchd job while that same job is still booting, and `kickstart -k`
+        // will SIGTERM the fresh gateway mid-start. That turns a normal slow boot into the exact
+        // fake browser-readiness failure the user keeps seeing. Only use the destructive restart
+        // path after a confirmed connection loss explicitly asked for recovery.
+        if Self.shouldWaitForLoadedLaunchAgent(preferKickstart: preferKickstart, serviceLoaded: await GatewayLaunchAgentManager.isLoaded()) {
+            self.appendLog("[gateway] launchd job already loaded; waiting for existing startup before restart\n")
+            self.logger.info("gateway waiting for existing launchd startup before restart")
+            if await self.waitForLaunchdGatewayToAcceptConnections(port: port, context: "launchdExistingWait") {
+                return
+            }
+
+            self.appendLog("[gateway] existing launchd job never became reachable; falling back to start/install\n")
+            self.logger.warning("gateway existing launchd job never became reachable; falling back to start/install")
+        }
+
+        // Force-recovery flows can still use the restart/bootstrap path once we know the
+        // previous runtime actually lost the connection and needs an explicit bounce.
+        if preferKickstart {
             self.appendLog("[gateway] restarting launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
             self.logger.info("gateway restarting existing launchd job port=\(port)")
             await GatewayLaunchAgentManager.kickstart()
@@ -604,6 +619,10 @@ final class GatewayProcessManager {
         !desiredActive && currentGeneration == scheduledGeneration
     }
 
+    private static func shouldWaitForLoadedLaunchAgent(preferKickstart: Bool, serviceLoaded: Bool) -> Bool {
+        serviceLoaded && !preferKickstart
+    }
+
     private func startupDiagnostics(context: String) -> String {
         let mode = CommandResolver.connectionModeIsRemote() ? "remote" : "local"
         let instanceID = ConsumerInstance.current.id ?? "default"
@@ -662,6 +681,10 @@ extension GatewayProcessManager {
             desiredActive: desiredActive,
             currentGeneration: currentGeneration,
             scheduledGeneration: scheduledGeneration)
+    }
+
+    static func _testShouldWaitForLoadedLaunchAgent(preferKickstart: Bool, serviceLoaded: Bool) -> Bool {
+        self.shouldWaitForLoadedLaunchAgent(preferKickstart: preferKickstart, serviceLoaded: serviceLoaded)
     }
 }
 #endif

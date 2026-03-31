@@ -2,6 +2,22 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
+private final class SendableIntBox: @unchecked Sendable {
+    var value: Int
+
+    init(_ value: Int = 0) {
+        self.value = value
+    }
+}
+
+private final class SendableClockBox: @unchecked Sendable {
+    var seconds: Int
+
+    init(_ seconds: Int = 0) {
+        self.seconds = seconds
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct BrowserSetupSupportTests {
@@ -252,6 +268,51 @@ struct BrowserSetupSupportTests {
         }
     }
 
+    @Test func `transient browser readiness failure auto-recovers when gateway reconnects`() async {
+        let defaults = self.makeDefaults()
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        var verificationAttempts = 0
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)
+            defaults.set("Artem", forKey: browserSelectedChromeProfileNameKey)
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in
+                    verificationAttempts += 1
+                    if verificationAttempts == 1 {
+                        return "OpenClaw saved the Chrome profile, but browser readiness failed. gateway timeout after 45000ms"
+                    }
+                    return nil
+                })
+
+            await model.refresh()
+            #expect(model.phase == .failed("OpenClaw saved the Chrome profile, but browser readiness failed. gateway timeout after 45000ms"))
+
+            await model.retryTransientFailureAfterGatewayStatusChange(.running(details: "port 33054"))
+
+            #expect(verificationAttempts == 2)
+            #expect(model.phase == .ready(selected))
+            #expect(model.isComplete)
+        }
+    }
+
     @Test func `stable browser readiness failure does not auto-recover on app activation`() async {
         let defaults = self.makeDefaults()
         let selected = ChromeProfileCandidate(
@@ -433,6 +494,161 @@ struct BrowserSetupSupportTests {
             #expect(browserStatusCalled)
             #expect(result == nil)
             #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
+        }
+    }
+
+    @Test func `consumer browser readiness waits through extended transient gateway churn`() async {
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        var attempts = 0
+        var recordedTimeout: TimeInterval?
+        let slept = SendableIntBox()
+        let clock = SendableClockBox()
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let result = await BrowserSetupModel.verifyConsumerBrowserSelection(
+                expectedProfile: selected,
+                runBrowserStatus: { _, _, timeout in
+                    recordedTimeout = timeout
+                    attempts += 1
+                    if attempts <= 6 {
+                        return ConsumerShellCommandResult(
+                            stdout: "",
+                            stderr: "Error: gateway closed (1006 abnormal closure (no close frame))",
+                            exitCode: 1,
+                            success: false)
+                    }
+                    return ConsumerShellCommandResult(
+                        stdout: """
+                        {
+                          "enabled": true,
+                          "running": false,
+                          "chosenBrowser": null,
+                          "detectedBrowser": "chrome",
+                          "detectedExecutablePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                          "detectError": null
+                        }
+                        """,
+                        stderr: "",
+                        exitCode: 0,
+                        success: true)
+                },
+                sleep: { _ in
+                    slept.value += 1
+                    clock.seconds += 10
+                },
+                now: {
+                    Date(timeIntervalSinceReferenceDate: TimeInterval(clock.seconds))
+                })
+
+            #expect(result == nil)
+            #expect(attempts == 7)
+            #expect(slept.value == 6)
+            #expect(clock.seconds == 60)
+            #expect(recordedTimeout == 60)
+        }
+    }
+
+    @Test func `consumer browser readiness treats timeout text as transient setup churn`() async {
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        var attempts = 0
+        let slept = SendableIntBox()
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let result = await BrowserSetupModel.verifyConsumerBrowserSelection(
+                expectedProfile: selected,
+                runBrowserStatus: { _, _, _ in
+                    attempts += 1
+                    if attempts == 1 {
+                        return ConsumerShellCommandResult(
+                            stdout: "",
+                            stderr: "Error: command timed out while waiting for browser status",
+                            exitCode: 1,
+                            success: false)
+                    }
+                    return ConsumerShellCommandResult(
+                        stdout: """
+                        {
+                          "enabled": true,
+                          "running": false,
+                          "chosenBrowser": null,
+                          "detectedBrowser": "chrome",
+                          "detectedExecutablePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                          "detectError": null
+                        }
+                        """,
+                        stderr: "",
+                        exitCode: 0,
+                        success: true)
+                },
+                sleep: { _ in
+                    slept.value += 1
+                })
+
+            #expect(result == nil)
+            #expect(attempts == 2)
+            #expect(slept.value == 1)
+        }
+    }
+
+    @Test func `consumer browser readiness reports disk full honestly`() async {
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let result = await BrowserSetupModel.verifyConsumerBrowserSelection(
+                expectedProfile: selected,
+                runBrowserStatus: { _, _, _ in
+                    ConsumerShellCommandResult(
+                        stdout: "",
+                        stderr: "Error: ENOSPC: no space left on device",
+                        exitCode: 1,
+                        success: false)
+                })
+
+            #expect(
+                result ==
+                    "This Mac is out of disk space, so OpenClaw could not finish browser setup. Free some space and try again.")
         }
     }
 
