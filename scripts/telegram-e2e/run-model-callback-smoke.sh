@@ -190,13 +190,26 @@ PY
 
 run_callback_flow() {
   local label="$1"
-  local send_output send_json picker_message_id
+  local send_output send_json picker_wait_output picker_wait_json picker_after_id picker_message_id
   local browse_output browse_json provider_output provider_json model_output model_json
   local status_json
 
   send_output="$(run_telegram_user_json send --chat "${chat}" --message "/model")"
   send_json="$(extract_json_payload "${send_output}")"
-  picker_message_id="$(json_field "${send_json}" 'data["message"]["message_id"]')"
+  picker_after_id="$(json_field "${send_json}" 'data["message"]["message_id"]')"
+
+  # `/model` returns the picker as a separate bot message, so wait for that
+  # reply before trying to click anything.
+  picker_wait_output="$(
+    run_telegram_user_json \
+      wait \
+      --chat "${chat}" \
+      --after-id "${picker_after_id}" \
+      --sender-id "${bot_id}" \
+      --timeout-ms "$(( timeout * 1000 ))"
+  )"
+  picker_wait_json="$(extract_json_payload "${picker_wait_output}")"
+  picker_message_id="$(json_field "${picker_wait_json}" 'data["matched"]["message_id"]')"
 
   browse_output="$(
     run_telegram_user_json \
@@ -229,6 +242,7 @@ run_callback_flow() {
 
   CALLBACK_LABEL="${label}" \
   PICKER_MESSAGE_ID="${picker_message_id}" \
+  PICKER_JSON="${picker_wait_json}" \
   BROWSE_JSON="${browse_json}" \
   PROVIDER_JSON="${provider_json}" \
   MODEL_JSON="${model_json}" \
@@ -240,6 +254,7 @@ import os
 summary = {
     "label": os.environ["CALLBACK_LABEL"],
     "picker_message_id": int(os.environ["PICKER_MESSAGE_ID"]),
+    "picker_text": json.loads(os.environ["PICKER_JSON"])["matched"]["text"],
     "browse_text": json.loads(os.environ["BROWSE_JSON"])["message"]["text"],
     "provider_text": json.loads(os.environ["PROVIDER_JSON"])["message"]["text"],
     "model_text": json.loads(os.environ["MODEL_JSON"])["message"]["text"],
