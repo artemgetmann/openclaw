@@ -54,7 +54,6 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         }
 
         self.startControlChannelObservation()
-        self.nodesStore.start()
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -64,6 +63,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
         self.inject(into: menu)
         self.injectNodes(into: menu)
+        self.nodesStore.start()
 
         // Refresh in background for the next open; keep width stable while open.
         self.loadTask?.cancel()
@@ -98,6 +98,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.loadTask?.cancel()
         self.nodesLoadTask?.cancel()
         self.cancelPreviewTasks()
+        self.nodesStore.stop()
     }
 
     private func startControlChannelObservation() {

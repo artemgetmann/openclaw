@@ -105,6 +105,34 @@ refresh_gateway_service_env() {
   profile="$(consumer_instance_profile "$normalized")"
   launchd_label="$(consumer_instance_gateway_launchd_label "$normalized")"
 
+  local passthrough_keys=(
+    GOOGLE_PLACES_API_KEY
+    HIMALAYA_CONFIG
+    BRAVE_API_KEY
+    FIRECRAWL_API_KEY
+    XDG_CONFIG_HOME
+    XDG_DATA_HOME
+    GOG_KEYRING_PASSWORD
+  )
+  local wants_env_refresh=0
+  local key=""
+  for key in "${passthrough_keys[@]}"; do
+    if [[ -n "${!key:-}" ]]; then
+      wants_env_refresh=1
+      break
+    fi
+  done
+  if [[ -n "${OPENCLAW_SERVICE_PATH_PREFIX:-}" ]]; then
+    wants_env_refresh=1
+  fi
+
+  # Do not SIGTERM-churn a healthy gateway when the caller is just opening the
+  # app normally. The forced reinstall path exists only to inject explicit shell
+  # overrides that launchd would otherwise miss.
+  if [[ "$wants_env_refresh" != "1" ]]; then
+    return
+  fi
+
   # The app process launched through `open -n` does not reliably inherit arbitrary shell env.
   # Reinstall the dedicated gateway lane from this shell once bootstrap has written the instance
   # config so allowlisted skill env vars land in the supervised runtime for that instance.

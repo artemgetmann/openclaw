@@ -185,9 +185,14 @@ actor GatewayConnection {
 
             // Auto-recover in local mode by spawning/attaching a gateway and retrying a few times.
             // Canvas interactions should "just work" even if the local gateway isn't running yet.
+            // But slow startup or shutdown spillover can also surface as timeouts/AbortErrors while
+            // the gateway is still alive. Restarting on those turns transient load into a SIGTERM loop.
             let mode = await MainActor.run { AppStateStore.shared.connectionMode }
             switch mode {
             case .local:
+                guard Self.shouldAutoRecoverLocalGateway(from: error) else {
+                    throw error
+                }
                 let recoveryReason = (error as NSError).localizedDescription
                 await MainActor.run {
                     GatewayProcessManager.shared.recoverAfterConnectionLoss(reason: recoveryReason)
@@ -433,7 +438,46 @@ actor GatewayConnection {
     private static func defaultConfigProvider() async throws -> Config {
         try await GatewayEndpointStore.shared.requireConfig()
     }
+
+    private static func shouldAutoRecoverLocalGateway(from error: Error) -> Bool {
+        if error is CancellationError {
+            return false
+        }
+
+        let nsError = error as NSError
+        let detail = nsError.localizedDescription.lowercased()
+
+        if detail.contains("aborterror") || detail.contains("this operation was aborted") {
+            return false
+        }
+        if detail.contains("timed out") || detail.contains("timeout") {
+            return false
+        }
+
+        if nsError.domain == NSURLErrorDomain {
+            switch URLError.Code(rawValue: nsError.code) {
+            case .timedOut, .cancelled:
+                return false
+            case .cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .notConnectedToInternet:
+                return true
+            default:
+                break
+            }
+        }
+
+        return detail.contains("gateway closed") ||
+            detail.contains("cannot connect to host") ||
+            detail.contains("connection lost")
+    }
 }
+
+#if DEBUG
+extension GatewayConnection {
+    static func _testShouldAutoRecoverLocalGateway(from error: Error) -> Bool {
+        self.shouldAutoRecoverLocalGateway(from: error)
+    }
+}
+#endif
 
 // MARK: - Typed gateway API
 

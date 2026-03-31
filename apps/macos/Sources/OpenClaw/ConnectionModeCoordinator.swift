@@ -35,13 +35,13 @@ final class ConnectionModeCoordinator {
             let shouldStart = GatewayAutostartPolicy.shouldStartGateway(mode: .local, paused: paused)
             if shouldStart {
                 GatewayProcessManager.shared.setActive(true)
+                _ = await GatewayProcessManager.shared.waitForGatewayReady()
                 if GatewayAutostartPolicy.shouldEnsureLaunchAgent(
                     mode: .local,
                     paused: paused)
                 {
-                    Task { await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded() }
+                    await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
                 }
-                _ = await GatewayProcessManager.shared.waitForGatewayReady()
             } else {
                 GatewayProcessManager.shared.stop()
             }

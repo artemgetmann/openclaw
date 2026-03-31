@@ -48,7 +48,15 @@ const SERVICE_PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 
-const SERVICE_SKILL_ENV_KEYS = ["GOOGLE_PLACES_API_KEY", "HIMALAYA_CONFIG"] as const;
+const SERVICE_SKILL_ENV_KEYS = [
+  "GOOGLE_PLACES_API_KEY",
+  "HIMALAYA_CONFIG",
+  "BRAVE_API_KEY",
+  "FIRECRAWL_API_KEY",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "GOG_KEYRING_PASSWORD",
+] as const;
 
 function readServiceProxyEnvironment(
   env: Record<string, string | undefined>,
@@ -260,7 +268,16 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
     return env.PATH ?? "";
   }
 
-  return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
+  const prefixedDirs =
+    env.OPENCLAW_SERVICE_PATH_PREFIX?.split(path.posix.delimiter)
+      .map((dir) => dir.trim())
+      .filter(Boolean) ?? [];
+
+  return getMinimalServicePathPartsFromEnv({
+    ...options,
+    extraDirs: [...prefixedDirs, ...(options.extraDirs ?? [])],
+    env,
+  }).join(path.posix.delimiter);
 }
 
 export function buildServiceEnvironment(params: {

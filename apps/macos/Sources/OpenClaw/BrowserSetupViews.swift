@@ -4,6 +4,7 @@ import SwiftUI
 struct BrowserSetupCardContent: View {
     @Bindable var model: BrowserSetupModel
     let presentation: BrowserSetupPresentation
+    private let gatewayManager = GatewayProcessManager.shared
 
     enum BrowserSetupPresentation {
         case onboarding
@@ -36,6 +37,9 @@ struct BrowserSetupCardContent: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await self.model.retryTransientFailureIfNeeded() }
+        }
+        .onChange(of: self.gatewayManager.status) { _, status in
+            Task { await self.model.retryTransientFailureAfterGatewayStatusChange(status) }
         }
     }
 
