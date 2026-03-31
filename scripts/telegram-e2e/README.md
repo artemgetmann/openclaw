@@ -66,6 +66,12 @@ pnpm openclaw:local telegram-user read \
   --limit 5 \
   --json
 
+pnpm openclaw:local telegram-user click \
+  --chat @jarvis_tester_1_bot \
+  --message-id 12345 \
+  --button-text "Browse providers" \
+  --json
+
 pnpm openclaw:local telegram-user wait \
   --chat @jarvis_tester_1_bot \
   --after-id 12345 \
@@ -76,10 +82,47 @@ pnpm openclaw:local telegram-user wait \
 
 Why this is the preferred path:
 
-1. one command surface for send/read/wait instead of scattered scripts
-2. shared thread matching for `reply_to_top_id`, `reply_to_msg_id`, and DM topic ids
-3. session locking so parallel probes fail loudly instead of corrupting Telethon state
-4. secrets stay in env and env-files, not process arguments
+1. one command surface for send/read/wait/click instead of scattered scripts
+2. inline callback clicks stay on the same operator surface with message-id anchoring
+3. shared thread matching for `reply_to_top_id`, `reply_to_msg_id`, and DM topic ids
+4. session locking so parallel probes fail loudly instead of corrupting Telethon state
+5. secrets stay in env and env-files, not process arguments
+
+### Inline callback helper
+
+`telegram-user click` is the paved operator path for Telegram inline buttons.
+
+Rules:
+
+1. always target a known `--message-id`
+2. use exactly one matcher:
+   - `--button-text`
+   - `--button-substring`
+   - `--callback-data`
+3. prefer `--callback-data` for scripted model-picker flows because provider/model buttons are deterministic there
+
+Typical sequence:
+
+```bash
+picker_json="$(
+  pnpm openclaw:local telegram-user send \
+    --chat @jarvis_tester_1_bot \
+    --message "/model" \
+    --json
+)"
+
+picker_message_id="$(PICKER_JSON="${picker_json}" python3 - <<'PY'
+import json, os
+print(json.loads(os.environ["PICKER_JSON"])["message"]["message_id"])
+PY
+)"
+
+pnpm openclaw:local telegram-user click \
+  --chat @jarvis_tester_1_bot \
+  --message-id "${picker_message_id}" \
+  --button-text "Browse providers" \
+  --json
+```
 
 ### Compatibility wrapper
 
@@ -388,6 +431,40 @@ The probe now:
 - accepts multiple valid DM-thread reply shapes
 - prints ignored-message diagnostics on timeout
 - fails fast when another Telethon process already owns the same userbot session
+
+## Model callback smoke
+
+Use this when `/model` validation depends on real Telegram inline callback clicks:
+
+```bash
+scripts/telegram-live-runtime.sh ensure
+
+scripts/telegram-e2e/run-model-callback-smoke.sh \
+  --chat @jarvis_tester_1_bot \
+  --provider anthropic \
+  --model claude-sonnet-4-6
+```
+
+What it proves:
+
+1. sends `/model`
+2. clicks `Browse providers`
+3. clicks the provider button
+4. clicks the model button
+5. sends `/model status`
+6. waits for the bot to confirm the expected `provider/model`
+
+Optional restart proof:
+
+```bash
+scripts/telegram-e2e/run-model-callback-smoke.sh \
+  --chat @jarvis_tester_1_bot \
+  --provider anthropic \
+  --model claude-sonnet-4-6 \
+  --restart-runtime
+```
+
+That reruns status verification after `scripts/telegram-live-runtime.sh release && ensure`.
 
 ## Deterministic gateway recovery (main runtime)
 

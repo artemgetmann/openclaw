@@ -2,6 +2,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   getTelegramUserDefaultPollIntervalMs,
   getTelegramUserDefaultWaitTimeoutMs,
+  runTelegramUserClick,
   runTelegramUserPrecheck,
   runTelegramUserRead,
   runTelegramUserSend,
@@ -16,6 +17,7 @@ import {
 import type {
   TelegramUserBackendMeta,
   TelegramUserBackendOptions,
+  TelegramUserClickResult,
   TelegramUserMessage,
   TelegramUserPrecheck,
   TelegramUserReadResult,
@@ -59,12 +61,17 @@ function resolveBackendOptions(opts: Record<string, unknown>): TelegramUserBacke
 function renderTelegramUserMessageRows(messages: TelegramUserMessage[]) {
   return messages.map((message) => {
     const topicId = message.direct_messages_topic?.topic_id ?? message.direct_messages_topic_id;
+    const buttons = message.buttons
+      .flat()
+      .map((button) => button.text)
+      .join(" | ");
     return {
       Id: String(message.message_id),
       Sender: message.sender_id == null ? "-" : String(message.sender_id),
       "Reply To": message.reply_to_msg_id == null ? "-" : String(message.reply_to_msg_id),
       "Top Id": message.reply_to_top_id == null ? "-" : String(message.reply_to_top_id),
       Topic: topicId == null ? "-" : String(topicId),
+      Buttons: buttons || "-",
       Text: message.text.replace(/\s+/g, " ").trim(),
     };
   });
@@ -79,6 +86,7 @@ function formatTelegramUserMessages(messages: TelegramUserMessage[]): string {
       { key: "Reply To", header: "Reply To", minWidth: 10 },
       { key: "Top Id", header: "Top Id", minWidth: 10 },
       { key: "Topic", header: "Topic", minWidth: 10 },
+      { key: "Buttons", header: "Buttons", minWidth: 20, maxWidth: 36 },
       { key: "Text", header: "Text", flex: true, minWidth: 24 },
     ],
     rows: renderTelegramUserMessageRows(messages),
@@ -136,6 +144,31 @@ function logReadText(runtime: RuntimeEnv, result: TelegramUserReadResult) {
     return;
   }
   runtime.log(formatTelegramUserMessages(result.messages));
+}
+
+function logClickText(runtime: RuntimeEnv, result: TelegramUserClickResult) {
+  const rich = isRich();
+  const ok = rich ? theme.success : (text: string) => text;
+  const topicId =
+    result.message.direct_messages_topic?.topic_id ?? result.message.direct_messages_topic_id;
+  const answer = result.callback_answer?.message
+    ? ` callback_answer=${JSON.stringify(result.callback_answer.message)} alert=${String(result.callback_answer.alert)}`
+    : "";
+  runtime.log(
+    ok(
+      `Telegram user click ok. matched_by=${result.matched_by} button=${JSON.stringify(result.clicked_button.text)} message_id=${result.message.message_id} chat_id=${result.message.chat_id}${answer}`,
+    ),
+  );
+  runtime.log(formatBackendMeta(result.backend_meta));
+  runtime.log(
+    `sender_id=${result.message.sender_id ?? "-"} reply_to_msg_id=${result.message.reply_to_msg_id ?? "-"} reply_to_top_id=${result.message.reply_to_top_id ?? "-"} direct_messages_topic.topic_id=${topicId ?? "-"} button_row=${result.clicked_button.row} button_column=${result.clicked_button.column}`,
+  );
+  runtime.log(`text=${JSON.stringify(result.message.text)}`);
+  if (result.message.buttons.length > 0) {
+    runtime.log(
+      `buttons=${JSON.stringify(result.message.buttons.map((row) => row.map((button) => button.text)))}`,
+    );
+  }
 }
 
 function logWaitText(runtime: RuntimeEnv, result: TelegramUserWaitResult) {
@@ -204,6 +237,39 @@ export async function telegramUserReadCommand(opts: Record<string, unknown>, run
     return;
   }
   logReadText(runtime, result);
+}
+
+export async function telegramUserClickCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
+  const chat = readStringOpt(opts, "chat");
+  const messageId = readNumberOpt(opts, "messageId");
+  if (!chat || !messageId) {
+    throw new Error("Telegram user click requires --chat and --message-id.");
+  }
+
+  const buttonText = readStringOpt(opts, "buttonText");
+  const buttonSubstring = readStringOpt(opts, "buttonSubstring");
+  const callbackData = readStringOpt(opts, "callbackData");
+  const matchCount = [buttonText, buttonSubstring, callbackData].filter(Boolean).length;
+  if (matchCount !== 1) {
+    throw new Error(
+      "Telegram user click requires exactly one of --button-text, --button-substring, or --callback-data.",
+    );
+  }
+
+  const result = await runTelegramUserClick({
+    ...resolveBackendOptions(opts),
+    afterClickSleepMs: readNumberOpt(opts, "afterClickSleepMs"),
+    buttonSubstring,
+    buttonText,
+    callbackData,
+    chat,
+    messageId,
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logClickText(runtime, result);
 }
 
 export async function telegramUserWaitCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {

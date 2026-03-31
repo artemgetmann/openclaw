@@ -8,6 +8,7 @@ import type { TelegramUserMessage } from "./types.js";
 
 function createMessage(overrides: Partial<TelegramUserMessage> = {}): TelegramUserMessage {
   return {
+    buttons: [],
     chat_id: 1,
     chat_title: null,
     chat_username: null,
