@@ -10,17 +10,41 @@ FAIL_THRESHOLD="${OPENCLAW_GATEWAY_WATCHDOG_FAIL_THRESHOLD:-2}"
 RECOVER_SCRIPT="${MAIN_REPO}/scripts/gateway-recover-main.sh"
 LOCK_DIR="${HOME}/.openclaw/watchdog"
 LOCK_PATH="${LOCK_DIR}/gateway-watchdog.lock"
+LOCK_PID_PATH="${LOCK_PATH}/pid"
 
 mkdir -p "${LOCK_DIR}"
 
-# The watchdog is itself launched by launchd. A simple lock dir keeps accidental
-# duplicate watchdog workers from fighting over the same shared gateway.
-if ! mkdir "${LOCK_PATH}" 2>/dev/null; then
-  echo "[gateway-watchdog] another watchdog instance is already active; exiting"
-  exit 0
-fi
+acquire_lock() {
+  # The watchdog is itself launched by launchd. Use a lock directory plus pid
+  # file so a crash or forced stop does not leave a permanent stale lock behind.
+  if mkdir "${LOCK_PATH}" 2>/dev/null; then
+    printf '%s\n' "$$" >"${LOCK_PID_PATH}"
+    return 0
+  fi
+
+  if [[ -f "${LOCK_PID_PATH}" ]]; then
+    local lock_pid
+    lock_pid="$(tr -d '[:space:]' <"${LOCK_PID_PATH}" 2>/dev/null || true)"
+    if [[ -n "${lock_pid}" ]] && kill -0 "${lock_pid}" 2>/dev/null; then
+      echo "[gateway-watchdog] another watchdog instance is already active; exiting"
+      exit 0
+    fi
+  fi
+
+  rm -rf "${LOCK_PATH}"
+  if mkdir "${LOCK_PATH}" 2>/dev/null; then
+    printf '%s\n' "$$" >"${LOCK_PID_PATH}"
+    return 0
+  fi
+
+  echo "[gateway-watchdog] unable to acquire watchdog lock; exiting"
+  exit 1
+}
+
+acquire_lock
 
 cleanup() {
+  rm -f "${LOCK_PID_PATH}" 2>/dev/null || true
   rmdir "${LOCK_PATH}" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -37,7 +61,7 @@ gateway_healthy() {
     return 1
   fi
 
-  printf '%s\n' "${launch_state}" | rg -F -q "${EXPECTED_RUNTIME}"
+  printf '%s\n' "${launch_state}" | grep -F -q -- "${EXPECTED_RUNTIME}"
 }
 
 failures=0
