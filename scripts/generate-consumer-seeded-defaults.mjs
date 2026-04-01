@@ -60,6 +60,31 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
 
   // Keep bundled defaults intentionally small. Packaging should only embed the
   // keys and config surfaces the consumer bootstrap already tests and relies on.
+  const openAiApiKey =
+    readSeededEnvValue("OPENAI_API_KEY", env) ??
+    readNestedString(founderConfig, [
+      ["env", "vars", "OPENAI_API_KEY"],
+      ["env", "OPENAI_API_KEY"],
+      ["models", "providers", "openai", "apiKey"],
+    ]);
+  if (openAiApiKey) {
+    // Consumer launchd runtimes do not automatically inherit a regular OpenAI
+    // API key, so seed it explicitly when available. Media/STT resolves the
+    // plain `openai` provider first, and memory-lancedb expects an embeddings
+    // key even when the slot is enabled later by product/runtime config.
+    setNestedValue(seeded, ["env", "vars", "OPENAI_API_KEY"], openAiApiKey);
+    setNestedValue(
+      seeded,
+      ["plugins", "entries", "memory-lancedb", "config", "embedding", "apiKey"],
+      "${OPENAI_API_KEY}",
+    );
+    setNestedValue(
+      seeded,
+      ["plugins", "entries", "memory-lancedb", "config", "embedding", "model"],
+      "text-embedding-3-small",
+    );
+  }
+
   const googlePlacesApiKey =
     readSeededEnvValue("GOOGLE_PLACES_API_KEY", env) ??
     readNestedString(founderConfig, [
