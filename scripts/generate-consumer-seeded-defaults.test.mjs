@@ -9,6 +9,7 @@ void test("returns an empty object when no consumer keys are available", () => {
 void test("seeds only the supported consumer defaults from env", () => {
   const seeded = buildConsumerSeededDefaults({
     env: {
+      OPENAI_API_KEY: " openai-key ",
       GOOGLE_PLACES_API_KEY: " places-key ",
       FIRECRAWL_API_KEY: " firecrawl-key ",
       BRAVE_API_KEY: " brave-key ",
@@ -19,9 +20,22 @@ void test("seeds only the supported consumer defaults from env", () => {
   assert.deepEqual(seeded, {
     env: {
       vars: {
+        OPENAI_API_KEY: "openai-key",
         GOOGLE_PLACES_API_KEY: "places-key",
         FIRECRAWL_API_KEY: "firecrawl-key",
         BRAVE_API_KEY: "brave-key",
+      },
+    },
+    plugins: {
+      entries: {
+        "memory-lancedb": {
+          config: {
+            embedding: {
+              apiKey: "${OPENAI_API_KEY}",
+              model: "text-embedding-3-small",
+            },
+          },
+        },
       },
     },
     skills: {
@@ -64,6 +78,13 @@ void test("falls back to founder config when shell env is empty", () => {
         },
         FIRECRAWL_API_KEY: "founder-firecrawl",
       },
+      models: {
+        providers: {
+          openai: {
+            apiKey: "founder-openai",
+          },
+        },
+      },
       skills: {
         entries: {
           goplaces: {
@@ -77,9 +98,22 @@ void test("falls back to founder config when shell env is empty", () => {
   assert.deepEqual(seeded, {
     env: {
       vars: {
+        OPENAI_API_KEY: "founder-openai",
         GOOGLE_PLACES_API_KEY: "founder-places",
         FIRECRAWL_API_KEY: "founder-firecrawl",
         BRAVE_API_KEY: "founder-brave",
+      },
+    },
+    plugins: {
+      entries: {
+        "memory-lancedb": {
+          config: {
+            embedding: {
+              apiKey: "${OPENAI_API_KEY}",
+              model: "text-embedding-3-small",
+            },
+          },
+        },
       },
     },
     skills: {
@@ -132,6 +166,34 @@ void test("falls back to Brave search when Firecrawl is not available", () => {
           provider: "brave",
           brave: {
             apiKey: "brave-key",
+          },
+        },
+      },
+    },
+  });
+});
+
+void test("seeds OpenAI provider defaults without forcing memory-lancedb on", () => {
+  const seeded = buildConsumerSeededDefaults({
+    env: {
+      OPENAI_API_KEY: " openai-key ",
+    },
+  });
+
+  assert.deepEqual(seeded, {
+    env: {
+      vars: {
+        OPENAI_API_KEY: "openai-key",
+      },
+    },
+    plugins: {
+      entries: {
+        "memory-lancedb": {
+          config: {
+            embedding: {
+              apiKey: "${OPENAI_API_KEY}",
+              model: "text-embedding-3-small",
+            },
           },
         },
       },
