@@ -60,6 +60,56 @@ log_block() {
   printf '\n[gateway-recover-main] %s\n' "$title"
 }
 
+resolve_fd_path() {
+  local fd="$1"
+  lsof -a -p "$$" -d "$fd" -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p'
+}
+
+same_file_path() {
+  local left="$1"
+  local right="$2"
+  if [[ -z "$left" || -z "$right" ]]; then
+    return 1
+  fi
+  [[ "$(python3 - <<'PY' "$left" "$right"
+import os
+import sys
+
+left = sys.argv[1]
+right = sys.argv[2]
+
+try:
+    left_real = os.path.realpath(left)
+except Exception:
+    left_real = os.path.abspath(left)
+
+try:
+    right_real = os.path.realpath(right)
+except Exception:
+    right_real = os.path.abspath(right)
+
+print("1" if left_real == right_real else "0")
+PY
+)" == "1" ]]
+}
+
+tail_file_to_stderr_unless_self() {
+  local file_path="$1"
+  if [[ ! -f "${file_path}" ]]; then
+    printf 'missing: %s\n' "${file_path}" >&2
+    return 0
+  fi
+
+  local stderr_target=""
+  stderr_target="$(resolve_fd_path 2)"
+  if same_file_path "${stderr_target}" "${file_path}"; then
+    printf 'skipped tail for %s because stderr points at the same file\n' "${file_path}" >&2
+    return 0
+  fi
+
+  tail -n 120 "${file_path}" >&2 || true
+}
+
 dump_failure_diagnostics() {
   local failed_command="$1"
   local failed_output="$2"
@@ -70,18 +120,10 @@ dump_failure_diagnostics() {
   fi
 
   log_block "Tail ${GATEWAY_ERR_LOG} (last 120 lines)"
-  if [[ -f "${GATEWAY_ERR_LOG}" ]]; then
-    tail -n 120 "${GATEWAY_ERR_LOG}" >&2 || true
-  else
-    printf 'missing: %s\n' "${GATEWAY_ERR_LOG}" >&2
-  fi
+  tail_file_to_stderr_unless_self "${GATEWAY_ERR_LOG}"
 
   log_block "Tail ${WATCHDOG_ERR_LOG} (last 120 lines)"
-  if [[ -f "${WATCHDOG_ERR_LOG}" ]]; then
-    tail -n 120 "${WATCHDOG_ERR_LOG}" >&2 || true
-  else
-    printf 'missing: %s\n' "${WATCHDOG_ERR_LOG}" >&2
-  fi
+  tail_file_to_stderr_unless_self "${WATCHDOG_ERR_LOG}"
 }
 
 run_strict() {
@@ -124,6 +166,10 @@ capture_best_effort() {
 
 listener_ready() {
   lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { found = 1 } END { exit(found ? 0 : 1) }'
+}
+
+http_ready() {
+  curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/" >/dev/null 2>&1
 }
 
 assert_main_runtime_path() {
@@ -169,24 +215,21 @@ wait_for_listener() {
   done
 }
 
-wait_for_rpc_probe() {
+wait_for_http_probe() {
   local start_epoch
   start_epoch="$(date +%s)"
-  local last_output=""
 
   while true; do
-    local output=""
-    if output="$(run_openclaw_cli gateway status --deep --require-rpc 2>&1)"; then
-      printf '%s\n' "$output"
+    if http_ready; then
+      printf 'HTTP probe reachable on http://127.0.0.1:%s/\n' "${PORT}"
       return 0
     fi
 
-    last_output="$output"
     local now elapsed
     now="$(date +%s)"
     elapsed="$((now - start_epoch))"
     if [[ "${elapsed}" -ge "${RPC_TIMEOUT_SECONDS}" ]]; then
-      dump_failure_diagnostics "gateway status --deep --require-rpc" "$last_output"
+      dump_failure_diagnostics "curl -fsS http://127.0.0.1:${PORT}/" "HTTP probe failed before timeout"
       exit 1
     fi
     sleep "${POLL_INTERVAL_SECONDS}"
@@ -263,7 +306,7 @@ stabilize_watchdog() {
 main() {
   log "starting deterministic recovery (port=${PORT}, main=${MAIN_REPO})"
 
-  capture_best_effort "Baseline: status --deep --require-rpc" run_openclaw_cli gateway status --deep --require-rpc
+  capture_best_effort "Baseline: HTTP probe" curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/"
   capture_best_effort "Baseline: lsof listener check" lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN
   capture_best_effort \
     "Baseline: launchctl print (program/arguments/pid/state)" \
@@ -296,7 +339,7 @@ main() {
 
   log_block "Readiness gates"
   wait_for_listener
-  wait_for_rpc_probe
+  wait_for_http_probe
 
   if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
     log_block "Bootstrap watchdog launch agent"
@@ -319,13 +362,13 @@ main() {
   assert_main_runtime_path
   local launch_command
   launch_command="$(launchctl print "gui/$(id -u)/${GATEWAY_LABEL}" | grep -F -- "${EXPECTED_RUNTIME}" || true)"
-  local rpc_result
-  rpc_result="$(run_openclaw_cli gateway status --deep --require-rpc 2>&1)"
+  local http_result
+  http_result="$(curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/" 2>&1 | head -n 5)"
   local listener_result
   listener_result="$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>&1)"
 
   printf 'LaunchAgent command path:\n%s\n' "${launch_command}"
-  printf '\nRPC probe result:\n%s\n' "${rpc_result}"
+  printf '\nHTTP probe result:\n%s\n' "${http_result}"
   printf '\nListener result on %s:\n%s\n' "${PORT}" "${listener_result}"
 }
 
