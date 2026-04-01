@@ -33,6 +33,8 @@ const { loadSessionStore, updateSessionStore } = await import("../../../src/conf
 const { normalizeTelegramCommandName } =
   await import("../../../src/config/telegram-custom-commands.js");
 const { createTelegramBot } = await import("./bot.js");
+const { buildTelegramProviderSetupHint } = await import("./bot-handlers.js");
+const modelAuthModule = await import("../../../src/agents/model-auth.js");
 
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
@@ -828,6 +830,42 @@ describe("createTelegramBot", () => {
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-dm-topic-reset-1");
     } finally {
       await rm(storePath, { force: true });
+    }
+  });
+
+  it("adds Claude setup guidance when Anthropic auth is missing", () => {
+    const ensureAuthProfileStoreSpy = vi
+      .spyOn(modelAuthModule, "ensureAuthProfileStore")
+      .mockReturnValue({ profiles: {} } as Parameters<
+        typeof modelAuthModule.resolveModelAuthMode
+      >[2]);
+    const resolveModelAuthModeSpy = vi
+      .spyOn(modelAuthModule, "resolveModelAuthMode")
+      .mockReturnValue("unknown");
+    try {
+      const text = buildTelegramProviderSetupHint({
+        provider: "anthropic",
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai-codex/gpt-5.4",
+            },
+          },
+          channels: {
+            telegram: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-telegram-model-anthropic-guidance",
+      });
+      expect(text).not.toBeNull();
+      expect(text).toContain("Claude is not configured for this OpenClaw runtime yet.");
+      expect(text).toContain("Settings -> AI access -> Use different AI accounts -> Claude.");
+    } finally {
+      ensureAuthProfileStoreSpy.mockRestore();
+      resolveModelAuthModeSpy.mockRestore();
     }
   });
 
