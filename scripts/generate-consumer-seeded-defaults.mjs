@@ -85,8 +85,13 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
     setNestedValue(seeded, ["env", "vars", "FIRECRAWL_API_KEY"], firecrawlApiKey);
     // `web_fetch` works without Firecrawl, but when a key is available we want
     // the consumer bundle to advertise the richer fallback path immediately.
+    // Consumer setup is simpler when the same provider handles both search and
+    // fetch, so prefer Firecrawl for search whenever we seed its key.
     setNestedValue(seeded, ["tools", "web", "fetch", "enabled"], true);
     setNestedValue(seeded, ["tools", "web", "fetch", "firecrawl", "enabled"], true);
+    setNestedValue(seeded, ["tools", "web", "search", "enabled"], true);
+    setNestedValue(seeded, ["tools", "web", "search", "provider"], "firecrawl");
+    setNestedValue(seeded, ["tools", "web", "search", "firecrawl", "apiKey"], firecrawlApiKey);
   }
 
   const braveApiKey =
@@ -97,12 +102,15 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
       ["tools", "web", "search", "apiKey"],
     ]);
   if (braveApiKey) {
-    // Web search should stay explicit instead of relying on provider auto-detect
-    // when the bundle is intentionally shipping a founder-supplied Brave key.
+    // Keep the Brave key available for manual/provider-level overrides, but do
+    // not let it steal the default search path away from Firecrawl when both
+    // keys are seeded into the consumer bundle.
     setNestedValue(seeded, ["env", "vars", "BRAVE_API_KEY"], braveApiKey);
-    setNestedValue(seeded, ["tools", "web", "search", "enabled"], true);
-    setNestedValue(seeded, ["tools", "web", "search", "provider"], "brave");
-    setNestedValue(seeded, ["tools", "web", "search", "apiKey"], braveApiKey);
+    if (!firecrawlApiKey) {
+      setNestedValue(seeded, ["tools", "web", "search", "enabled"], true);
+      setNestedValue(seeded, ["tools", "web", "search", "provider"], "brave");
+    }
+    setNestedValue(seeded, ["tools", "web", "search", "brave", "apiKey"], braveApiKey);
   }
 
   return seeded;

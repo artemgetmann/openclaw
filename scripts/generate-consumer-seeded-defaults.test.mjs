@@ -41,8 +41,13 @@ void test("seeds only the supported consumer defaults from env", () => {
         },
         search: {
           enabled: true,
-          provider: "brave",
-          apiKey: "brave-key",
+          provider: "firecrawl",
+          firecrawl: {
+            apiKey: "firecrawl-key",
+          },
+          brave: {
+            apiKey: "brave-key",
+          },
         },
       },
     },
@@ -94,8 +99,40 @@ void test("falls back to founder config when shell env is empty", () => {
         },
         search: {
           enabled: true,
+          provider: "firecrawl",
+          firecrawl: {
+            apiKey: "founder-firecrawl",
+          },
+          brave: {
+            apiKey: "founder-brave",
+          },
+        },
+      },
+    },
+  });
+});
+
+void test("falls back to Brave search when Firecrawl is not available", () => {
+  const seeded = buildConsumerSeededDefaults({
+    env: {
+      BRAVE_API_KEY: " brave-key ",
+    },
+  });
+
+  assert.deepEqual(seeded, {
+    env: {
+      vars: {
+        BRAVE_API_KEY: "brave-key",
+      },
+    },
+    tools: {
+      web: {
+        search: {
+          enabled: true,
           provider: "brave",
-          apiKey: "founder-brave",
+          brave: {
+            apiKey: "brave-key",
+          },
         },
       },
     },
