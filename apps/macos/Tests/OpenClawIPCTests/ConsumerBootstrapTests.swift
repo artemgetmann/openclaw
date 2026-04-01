@@ -143,8 +143,28 @@ struct ConsumerBootstrapTests {
         let bundledDefaults: [String: Any] = [
             "env": [
                 "vars": [
+                    "OPENAI_API_KEY": "openai-seeded", // pragma: allowlist secret
                     "FIRECRAWL_API_KEY": "fc-seeded", // pragma: allowlist secret
                     "GOOGLE_PLACES_API_KEY": "places-seeded", // pragma: allowlist secret
+                ],
+            ],
+            "plugins": [
+                "slots": [
+                    "memory": "memory-lancedb",
+                ],
+                "entries": [
+                    "memory-lancedb": [
+                        "enabled": true,
+                        "config": [
+                            "embedding": [
+                                "apiKey": "${OPENAI_API_KEY}",
+                                "model": "text-embedding-3-small",
+                            ],
+                        ],
+                    ],
+                    "memory-core": [
+                        "enabled": false,
+                    ],
                 ],
             ],
             "skills": [
@@ -176,6 +196,13 @@ struct ConsumerBootstrapTests {
 
         let env = root["env"] as? [String: Any]
         let vars = env?["vars"] as? [String: Any]
+        let plugins = root["plugins"] as? [String: Any]
+        let slots = plugins?["slots"] as? [String: Any]
+        let entriesPlugin = plugins?["entries"] as? [String: Any]
+        let memoryLancedb = entriesPlugin?["memory-lancedb"] as? [String: Any]
+        let memoryCore = entriesPlugin?["memory-core"] as? [String: Any]
+        let memoryConfig = memoryLancedb?["config"] as? [String: Any]
+        let embedding = memoryConfig?["embedding"] as? [String: Any]
         let skills = root["skills"] as? [String: Any]
         let entries = skills?["entries"] as? [String: Any]
         let goplaces = entries?["goplaces"] as? [String: Any]
@@ -186,8 +213,14 @@ struct ConsumerBootstrapTests {
         let firecrawl = fetch?["firecrawl"] as? [String: Any]
 
         #expect(changed)
+        #expect(vars?["OPENAI_API_KEY"] as? String == "openai-seeded")
         #expect(vars?["FIRECRAWL_API_KEY"] as? String == "fc-seeded")
         #expect(vars?["GOOGLE_PLACES_API_KEY"] as? String == "places-seeded")
+        #expect(slots?["memory"] as? String == "memory-lancedb")
+        #expect(memoryLancedb?["enabled"] as? Bool == true)
+        #expect(memoryCore?["enabled"] as? Bool == false)
+        #expect(embedding?["apiKey"] as? String == "${OPENAI_API_KEY}")
+        #expect(embedding?["model"] as? String == "text-embedding-3-small")
         #expect(goplaces?["apiKey"] as? String == "places-seeded")
         #expect(search?["enabled"] as? Bool == true)
         #expect(search?["provider"] as? String == "firecrawl")
