@@ -1,6 +1,5 @@
 import { rmSync, statSync } from "node:fs";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
-import { EdgeTTS } from "node-edge-tts";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
@@ -22,6 +21,17 @@ import type {
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+
+type EdgeTTSConstructor = typeof import("node-edge-tts").EdgeTTS;
+let edgeTTSConstructorPromise: Promise<EdgeTTSConstructor> | null = null;
+
+async function loadEdgeTTSConstructor(): Promise<EdgeTTSConstructor> {
+  if (!edgeTTSConstructorPromise) {
+    // Keep the optional Edge TTS dependency off the gateway startup path.
+    edgeTTSConstructorPromise = import("node-edge-tts").then((mod) => mod.EdgeTTS);
+  }
+  return edgeTTSConstructorPromise;
+}
 
 export function isValidVoiceId(voiceId: string): boolean {
   return /^[a-zA-Z0-9]{10,40}$/.test(voiceId);
@@ -703,6 +713,7 @@ export async function edgeTTS(params: {
   timeoutMs: number;
 }): Promise<void> {
   const { text, outputPath, config, timeoutMs } = params;
+  const EdgeTTS = await loadEdgeTTSConstructor();
   const tts = new EdgeTTS({
     voice: config.voice,
     lang: config.lang,
