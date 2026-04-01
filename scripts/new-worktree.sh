@@ -199,56 +199,6 @@ PY
   fi
 }
 
-link_bootstrap_directory() {
-  local source_dir="$1"
-  local dest_dir="$2"
-  local label="$3"
-
-  if [[ ! -d "$source_dir" || -e "$dest_dir" ]]; then
-    return 0
-  fi
-
-  ln -s "$source_dir" "$dest_dir"
-  echo "bootstrap_${label}=linked" >&2
-}
-
-copy_bootstrap_directory() {
-  local source_dir="$1"
-  local dest_dir="$2"
-  local label="$3"
-
-  if [[ ! -d "$source_dir" || -e "$dest_dir" ]]; then
-    return 0
-  fi
-
-  mkdir -p "$(dirname "$dest_dir")"
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a "$source_dir/" "$dest_dir/"
-  else
-    cp -R "$source_dir" "$dest_dir"
-  fi
-  echo "bootstrap_${label}=copied" >&2
-}
-
-bootstrap_worktree_artifacts() {
-  local source_root="$1"
-  local worktree_root="$2"
-  local source_head="$3"
-  local worktree_head="$4"
-
-  # Dependency installs are branch-agnostic enough to reuse safely across
-  # fresh worktrees; symlink them so a new lane can start immediately.
-  link_bootstrap_directory "$source_root/node_modules" "$worktree_root/node_modules" "node_modules"
-  link_bootstrap_directory "$source_root/ui/node_modules" "$worktree_root/ui/node_modules" "ui_node_modules"
-
-  # Built output is branch-sensitive. Only copy it when the source checkout and
-  # new worktree point at the same commit, otherwise we would seed the lane with
-  # artifacts from the wrong code and create a more subtle footgun.
-  if [[ -n "$source_head" && "$source_head" == "$worktree_head" ]]; then
-    copy_bootstrap_directory "$source_root/dist" "$worktree_root/dist" "dist"
-  fi
-}
-
 if [[ $# -lt 1 ]]; then
   usage >&2
   exit 1
@@ -308,6 +258,13 @@ if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
 fi
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd -P)"
 source "${REPO_ROOT}/scripts/lib/worktree-guards.sh"
+source "${REPO_ROOT}/scripts/lib/validated-node.sh"
+
+# Resolve the repo-validated runtime before we shell out to any Node-backed
+# helper. Fresh worktree creation is where drift begins, so this path cannot
+# depend on whichever Node version the interactive shell happened to load.
+openclaw_use_validated_node "$REPO_ROOT" >/dev/null
+VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 
 worktree_guard_reject_shared_root_main_edits \
   "$REPO_ROOT" \
@@ -358,13 +315,9 @@ assert_base_branch_synced_with_remote "$BASE_BRANCH"
 TARGET_REF="origin/${BASE_BRANCH}"
 git worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" "$TARGET_REF"
 
-SOURCE_HEAD="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
-WORKTREE_HEAD="$(git -C "$WORKTREE_PATH" rev-parse HEAD 2>/dev/null || true)"
-bootstrap_worktree_artifacts "$REPO_ROOT" "$WORKTREE_PATH" "$SOURCE_HEAD" "$WORKTREE_HEAD"
-
 (cd "$WORKTREE_PATH" && bash "$BOOTSTRAP_SCRIPT" --optional)
 
-DEV_PORT="$(WORKTREE_PATH="$WORKTREE_PATH" node --input-type=module - <<'NODE'
+DEV_PORT="$(WORKTREE_PATH="$WORKTREE_PATH" "$VALIDATED_NODE_BIN" --input-type=module - <<'NODE'
 import crypto from "node:crypto";
 import path from "node:path";
 
@@ -391,9 +344,9 @@ fi
 
 BOOTSTRAP_RUNTIME_STATUS="disabled"
 if [[ "$NO_BOOTSTRAP" != "1" ]] && [[ -f "$RUNTIME_BOOTSTRAP_SCRIPT" ]]; then
-  # Fresh git worktrees inherit source only. Bootstrap deps/build artifacts
-  # here so the lane is immediately usable instead of failing on missing
-  # node_modules/dist the first time someone tries to validate anything.
+  # Fresh git worktrees now bootstrap their own dependency tree in-place. We do
+  # not symlink node_modules from the source checkout because that lets one lane
+  # resolve packages out of another lane's filesystem state.
   if bash "$RUNTIME_BOOTSTRAP_SCRIPT" --root "$WORKTREE_PATH" --quiet; then
     BOOTSTRAP_RUNTIME_STATUS="ok"
   else

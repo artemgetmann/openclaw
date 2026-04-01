@@ -3,14 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
-NODE="${OPENCLAW_NODE_BIN:-$(command -v node)}"
+source "$ROOT/scripts/lib/validated-node.sh"
+openclaw_use_validated_node "$ROOT" >/dev/null
+NODE="$OPENCLAW_NODE_BIN"
 CLI="$ROOT/openclaw.mjs"
 EXPECTED_ENTRY="$ROOT/dist/index.js"
 PREFLIGHT="$ROOT/scripts/local-runtime-preflight.sh"
-PLIST="$HOME/Library/LaunchAgents/ai.openclaw.gateway.plist"
-LAUNCHD_DOMAIN="gui/${UID}"
-LAUNCHD_LABEL="ai.openclaw.gateway"
-LAUNCHD_TARGET="${LAUNCHD_DOMAIN}/${LAUNCHD_LABEL}"
 DEFERRED_RESTART_DELAY_SECONDS="${OPENCLAW_DEFERRED_RESTART_DELAY_SECONDS:-1}"
 HELPER_LOG_PATH="${OPENCLAW_RESTART_HELPER_LOG:-/tmp/openclaw-restart-helper.log}"
 source "$ROOT/scripts/lib/consumer-instance.sh"
@@ -32,10 +30,6 @@ LAUNCHD_DOMAIN="gui/${UID}"
 LAUNCHD_LABEL="${OPENCLAW_LAUNCHD_LABEL:-ai.openclaw.gateway}"
 PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
 LAUNCHD_TARGET="${LAUNCHD_DOMAIN}/${LAUNCHD_LABEL}"
-if [[ ! -x "$NODE" ]]; then
-  echo "ERROR: node runtime not found. Install Node 22+ or set OPENCLAW_NODE_BIN." >&2
-  exit 1
-fi
 
 if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet

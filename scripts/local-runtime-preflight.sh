@@ -3,7 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
-NODE="${OPENCLAW_NODE_BIN:-$(command -v node)}"
+source "$ROOT/scripts/lib/validated-node.sh"
+openclaw_use_validated_node "$ROOT" >/dev/null
+NODE="$OPENCLAW_NODE_BIN"
 QUIET="${1:-}"
 PKG_JSON="$ROOT/package.json"
 CLI="$ROOT/openclaw.mjs"
@@ -20,10 +22,6 @@ fail() {
   printf 'ERROR: %s\n' "$1" >&2
   exit 1
 }
-
-if [[ ! -x "$NODE" ]]; then
-  fail "node runtime not found. Install Node 22+ or set OPENCLAW_NODE_BIN."
-fi
 
 if [[ ! -f "$PKG_JSON" || ! -f "$CLI" ]]; then
   fail "not a valid OpenClaw repo root: $ROOT"

@@ -67,10 +67,13 @@ if [[ ! -f "$ROOT/package.json" ]]; then
   exit 1
 fi
 
-if ! command -v pnpm >/dev/null 2>&1; then
-  warn "pnpm is not available; skipping worktree runtime bootstrap."
-  exit 2
-fi
+source "$ROOT/scripts/lib/validated-node.sh"
+
+# Worktree bootstrap is the first dependency install/build a fresh lane sees.
+# Pin the runtime here so pnpm scripts and shebangs do not inherit a random
+# shell-default Node that differs from the consumer runtime we validate.
+openclaw_use_validated_node "$ROOT" >/dev/null || exit 1
+VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 
 did_work=0
 
@@ -80,7 +83,7 @@ if [[ ! -d "$ROOT/node_modules" ]]; then
     exit 2
   fi
   log "Bootstrapping worktree dependencies in $ROOT"
-  (cd "$ROOT" && pnpm install --frozen-lockfile)
+  openclaw_run_repo_pnpm "$ROOT" install --frozen-lockfile
   did_work=1
 fi
 
@@ -90,10 +93,11 @@ if [[ ! -f "$ROOT/dist/index.js" ]]; then
     exit 2
   fi
   log "Bootstrapping worktree build artifacts in $ROOT"
-  (cd "$ROOT" && pnpm build)
+  openclaw_run_repo_pnpm "$ROOT" build
   did_work=1
 fi
 
 if [[ "$did_work" == "0" ]]; then
   log "Worktree runtime bootstrap already satisfied for $ROOT"
+  log "Validated node: $VALIDATED_NODE_BIN"
 fi

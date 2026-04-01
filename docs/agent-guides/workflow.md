@@ -10,13 +10,13 @@
 - Allowed there: `git status`, `git pull --ff-only`, `bash scripts/new-worktree.sh ...`, PR/review/orchestration commands, and shared-runtime operations.
 - Not allowed there: tracked implementation edits, feature development, or commits. Move into a worktree before changing repo files.
 - Before creating a new worktree, fast-forward the chosen base branch locally so it exactly matches `origin/<base>`. `scripts/new-worktree.sh` now fails if the named base branch is ahead of or behind its remote tracking branch. Use `git checkout <base> && git pull --ff-only` first, then create the worktree.
-- `scripts/new-worktree.sh` now bootstraps fresh lanes by default so `node_modules` and `dist/index.js` exist before the first validation run. Use `--no-bootstrap` only when you intentionally want a bare source-only lane.
+- `scripts/new-worktree.sh` now bootstraps fresh lanes by default with a per-worktree dependency install/build. It must not symlink `node_modules` or `ui/node_modules` from another checkout because that leaks cross-worktree package state into clean-room validation.
+- Worktree/bootstrap/consumer runtime scripts pin to the repo-validated Node version from `.node-version` / `.nvmrc` instead of trusting the shell-default `node`. If that exact version is missing, install it first or point `OPENCLAW_NODE_BIN` at a binary with the same version.
 - Use upstream `https://github.com/openclaw/openclaw` only when the user explicitly asks for upstream review, triage, or PR flow.
 - `consumer` is legacy. Do not target new PRs there unless the user explicitly asks.
 - Do not recreate `consumer` for new work. The active product branch is `codex/consumer-openclaw-project`.
 - If the user says "consumer branch", interpret that as `codex/consumer-openclaw-project` unless they explicitly say they want the legacy `consumer` branch.
 - Never run `git merge upstream/main` on this fork. Port upstream changes selectively via `main`.
-- Validate new bot behavior in a feature worktree first when possible, ideally with a tester bot or other isolated runtime. Do not repoint the long-lived main bot or LaunchAgent at a feature worktree. For the production bot, merge to `main` first, then restart and exercise the gateway from the `main` checkout. See `docs/debug/worktree-branch-survival.md` for the runtime truth model.
 
 ## Worktree durability
 
