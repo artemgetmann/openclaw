@@ -1,5 +1,6 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../../src/agents/agent-scope.js";
+import { ensureAuthProfileStore, resolveModelAuthMode } from "../../../src/agents/model-auth.js";
 import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
 import {
   createInboundDebouncer,
@@ -139,6 +140,36 @@ function resolveInboundMediaFileId(msg: Message): string | undefined {
     msg.audio?.file_id ??
     msg.voice?.file_id
   );
+}
+
+export function buildTelegramProviderSetupHint(params: {
+  provider: string;
+  cfg: RegisterTelegramHandlerParams["cfg"];
+  agentDir: string;
+}): string | null {
+  const provider = params.provider.trim().toLowerCase();
+  if (provider !== "anthropic") {
+    return null;
+  }
+
+  // Model-picker callbacks fire before the next model run, so surface the
+  // missing-provider truth immediately instead of letting the next message
+  // quietly fall back and making Telegram look broken/confusing.
+  const authMode = resolveModelAuthMode(
+    provider,
+    params.cfg,
+    ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false }),
+  );
+  if (authMode && authMode !== "unknown") {
+    return null;
+  }
+
+  return [
+    "",
+    "Claude is not configured for this OpenClaw runtime yet.",
+    "In the macOS app: Settings -> AI access -> Use different AI accounts -> Claude.",
+    "Then choose Continue with Claude, Paste Claude setup token, or Bring your Anthropic API key.",
+  ].join("\n");
 }
 
 export const registerTelegramHandlers = ({
@@ -1597,6 +1628,7 @@ export const registerTelegramHandlers = ({
 
           // Directly set model override in session
           try {
+            const agentDir = resolveAgentDir(cfg, sessionState.agentId);
             // Get session store path
             const storePath = resolveStorePath(cfg.session?.store, {
               agentId: sessionState.agentId,
@@ -1662,8 +1694,23 @@ export const registerTelegramHandlers = ({
             const actionText = isDefaultSelection
               ? "reset to default"
               : `changed to **${selection.provider}/${selection.model}**`;
+            const providerSetupHint =
+              !isDefaultSelection && selection.provider
+                ? buildTelegramProviderSetupHint({
+                    provider: selection.provider,
+                    cfg,
+                    agentDir,
+                  })
+                : null;
             await editMessageWithButtons(
-              `✅ Model ${actionText}\n\nThis model will be used for your next message.`,
+              [
+                `✅ Model ${actionText}`,
+                "",
+                "This model will be used for your next message.",
+                providerSetupHint,
+              ]
+                .filter(Boolean)
+                .join("\n"),
               [], // Empty buttons = remove inline keyboard
             );
           } catch (err) {
