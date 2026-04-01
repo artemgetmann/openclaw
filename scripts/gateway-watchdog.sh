@@ -4,10 +4,14 @@ set -euo pipefail
 
 MAIN_REPO="${OPENCLAW_MAIN_REPO:-/Users/user/Programming_Projects/openclaw}"
 EXPECTED_RUNTIME="${MAIN_REPO}/dist/index.js"
+OPENCLAW_ENTRYPOINT="${MAIN_REPO}/openclaw.mjs"
 PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 CHECK_INTERVAL_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_CHECK_INTERVAL_SECONDS:-15}"
 FAIL_THRESHOLD="${OPENCLAW_GATEWAY_WATCHDOG_FAIL_THRESHOLD:-2}"
-RECOVER_SCRIPT="${MAIN_REPO}/scripts/gateway-recover-main.sh"
+RECOVER_SCRIPT="${OPENCLAW_GATEWAY_RECOVER_SCRIPT:-${MAIN_REPO}/scripts/gateway-recover-main.sh}"
+WATCHDOG_STDOUT_PATH="${OPENCLAW_GATEWAY_WATCHDOG_STDOUT_PATH:-/tmp/openclaw/gateway-watchdog.log}"
+WATCHDOG_STDERR_PATH="${OPENCLAW_GATEWAY_WATCHDOG_STDERR_PATH:-/tmp/openclaw/gateway-watchdog.err.log}"
+WATCHDOG_LOG_MAX_BYTES="${OPENCLAW_GATEWAY_WATCHDOG_LOG_MAX_BYTES:-1048576}"
 LOCK_DIR="${HOME}/.openclaw/watchdog"
 LOCK_PATH="${LOCK_DIR}/gateway-watchdog.lock"
 LOCK_PID_PATH="${LOCK_PATH}/pid"
@@ -49,10 +53,86 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+resolve_node_bin() {
+  if [[ -n "${OPENCLAW_NODE_BIN:-}" && -x "${OPENCLAW_NODE_BIN}" ]]; then
+    printf '%s\n' "${OPENCLAW_NODE_BIN}"
+    return 0
+  fi
+
+  local resolved_node=""
+  resolved_node="$(command -v node 2>/dev/null || true)"
+  if [[ -n "${resolved_node}" && -x "${resolved_node}" ]]; then
+    printf '%s\n' "${resolved_node}"
+    return 0
+  fi
+
+  local candidate=""
+  for candidate in /opt/homebrew/bin/node /opt/homebrew/opt/node/bin/node /usr/local/bin/node; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+NODE_BIN="$(resolve_node_bin)" || {
+  printf '[gateway-watchdog] node runtime not found; set OPENCLAW_NODE_BIN to a launchd-visible node binary\n' >&2
+  exit 1
+}
+
+run_openclaw_cli() {
+  "${NODE_BIN}" "${OPENCLAW_ENTRYPOINT}" "$@"
+}
+
+file_size_bytes() {
+  local file_path="$1"
+  if [[ ! -e "${file_path}" ]]; then
+    printf '0\n'
+    return 0
+  fi
+
+  if stat -f '%z' "${file_path}" >/dev/null 2>&1; then
+    stat -f '%z' "${file_path}"
+    return 0
+  fi
+
+  stat -c '%s' "${file_path}" 2>/dev/null || printf '0\n'
+}
+
+cap_watchdog_log_file() {
+  local file_path="$1"
+  local size
+  size="$(file_size_bytes "${file_path}")"
+  if [[ "${size}" =~ ^[0-9]+$ ]] && (( size > WATCHDOG_LOG_MAX_BYTES )); then
+    # launchd keeps these files open as the live stdout/stderr sink. Truncate
+    # the active inode in place so disk is released immediately.
+    : > "${file_path}"
+    printf '[gateway-watchdog] truncated oversized log file path=%s previous_bytes=%s max_bytes=%s\n' \
+      "${file_path}" "${size}" "${WATCHDOG_LOG_MAX_BYTES}"
+  fi
+}
+
+cap_watchdog_logs() {
+  mkdir -p "$(dirname "${WATCHDOG_STDOUT_PATH}")"
+  cap_watchdog_log_file "${WATCHDOG_STDOUT_PATH}"
+  cap_watchdog_log_file "${WATCHDOG_STDERR_PATH}"
+}
+
+http_ready() {
+  curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/" >/dev/null 2>&1
+}
+
 gateway_healthy() {
-  # Require both the RPC health probe and the launchd program path match. That
-  # prevents a random gateway on the same port from being treated as prod main.
-  if ! openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+  # Stage the cheaper checks first so a broken CLI path cannot dominate the hot
+  # loop. The watchdog only needs enough confidence to decide whether recovery
+  # is warranted; it should not be the source of heavyweight failures itself.
+  if ! lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if ! http_ready; then
     return 1
   fi
 
@@ -61,12 +141,19 @@ gateway_healthy() {
     return 1
   fi
 
-  printf '%s\n' "${launch_state}" | grep -F -q -- "${EXPECTED_RUNTIME}"
+  if ! printf '%s\n' "${launch_state}" | grep -F -q -- "${EXPECTED_RUNTIME}"; then
+    return 1
+  fi
+
+  # Keep the direct-entry RPC probe as the last gate. If the CLI dependency
+  # graph regresses again, the loop still stays bounded by the log truncation.
+  run_openclaw_cli gateway status --deep --require-rpc >/dev/null 2>&1
 }
 
 failures=0
 
 while true; do
+  cap_watchdog_logs
   if gateway_healthy; then
     failures=0
   else
