@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/validated-node.sh"
+openclaw_use_validated_node "$ROOT_DIR" >/dev/null
+VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 REPLACE=1
 PACKAGE_FIRST=1
@@ -102,9 +105,13 @@ env \
   /opt/homebrew/bin/gog auth keyring file >/dev/null 2>&1 || true
 
 if [[ "$PACKAGE_FIRST" == "1" ]]; then
+  # Packaging from the clean-room entrypoint must use the same validated Node
+  # line as the runtime bootstrap. Otherwise "fresh app" testing still depends
+  # on whichever Node the operator's shell exported before launch.
   CI="${CI:-true}" \
   SKIP_TSC="${SKIP_TSC:-1}" \
   SKIP_UI_BUILD="${SKIP_UI_BUILD:-1}" \
+  OPENCLAW_NODE_BIN="$VALIDATED_NODE_BIN" \
     bash "$ROOT_DIR/scripts/package-consumer-mac-app.sh" --instance "$INSTANCE_ID"
 fi
 
@@ -113,7 +120,8 @@ if [[ "$REPLACE" == "1" ]]; then
   OPEN_ARGS+=(--replace)
 fi
 
-bash "$ROOT_DIR/scripts/open-consumer-mac-app.sh" "${OPEN_ARGS[@]}"
+OPENCLAW_NODE_BIN="$VALIDATED_NODE_BIN" \
+  bash "$ROOT_DIR/scripts/open-consumer-mac-app.sh" "${OPEN_ARGS[@]}"
 
 cat <<EOF
 Clean-room runtime prepared:

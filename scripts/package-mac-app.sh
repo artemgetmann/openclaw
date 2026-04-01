@@ -5,6 +5,9 @@ set -euo pipefail
 # Outputs to dist/OpenClaw.app by default, or a custom bundle name when requested.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/validated-node.sh"
+openclaw_use_validated_node "$ROOT_DIR" >/dev/null
+VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 APP_NAME="${APP_NAME:-OpenClaw Consumer}"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"
 APP_ROOT="$ROOT_DIR/dist/${APP_BUNDLE_NAME}"
@@ -14,7 +17,7 @@ BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.consumer.mac.debug}"
 APP_VARIANT="${APP_VARIANT:-consumer}"
 APP_INSTANCE_ID="${APP_INSTANCE_ID:-}"
 URL_SCHEME="${URL_SCHEME:-openclaw-consumer}"
-PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
+PKG_VERSION="$(cd "$ROOT_DIR" && "$VALIDATED_NODE_BIN" -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
@@ -70,7 +73,7 @@ if [[ "$BUNDLE_ID" == *.debug || -z "$SPARKLE_FEED_URL" ]]; then
 fi
 
 sparkle_canonical_build_from_version() {
-  node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
+  "$VALIDATED_NODE_BIN" --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
 }
 
 build_path_for_arch() {
@@ -148,7 +151,7 @@ merge_framework_machos() {
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install)"
-  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+  openclaw_run_repo_pnpm "$ROOT_DIR" install --no-frozen-lockfile --config.node-linker=hoisted
 else
   echo "📦 Skipping dependency install (SKIP_PNPM_INSTALL=1)"
 fi
@@ -173,14 +176,14 @@ fi
 
 if [[ "${SKIP_TSC:-0}" != "1" ]]; then
   echo "📦 Building JS (pnpm build)"
-  (cd "$ROOT_DIR" && pnpm build)
+  openclaw_run_repo_pnpm "$ROOT_DIR" build
 else
   echo "📦 Skipping JS build (SKIP_TSC=1)"
 fi
 
 if [[ "${SKIP_UI_BUILD:-0}" != "1" ]]; then
   echo "🖥  Building Control UI (ui:build)"
-  (cd "$ROOT_DIR" && node scripts/ui.js build)
+  (cd "$ROOT_DIR" && "$VALIDATED_NODE_BIN" scripts/ui.js build)
 else
   echo "🖥  Skipping Control UI build (SKIP_UI_BUILD=1)"
 fi
@@ -289,7 +292,7 @@ fi
 
 if [[ "$APP_VARIANT" == "consumer" ]]; then
   echo "🔐 Seeding bundled consumer defaults"
-  node "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" \
+  "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" \
     "$APP_ROOT/Contents/Resources/consumer-seeded-defaults.json"
 fi
 
