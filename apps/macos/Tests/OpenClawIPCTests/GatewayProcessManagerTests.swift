@@ -23,6 +23,12 @@ struct GatewayProcessManagerTests {
         #expect(GatewayProcessManager._testShouldSkipGatewayStart(for: .starting, forceRecovery: true))
     }
 
+    @Test func `loaded launch agent waits instead of kickstarting during normal startup`() {
+        #expect(GatewayProcessManager._testShouldWaitForLoadedLaunchAgent(preferKickstart: false, serviceLoaded: true))
+        #expect(!GatewayProcessManager._testShouldWaitForLoadedLaunchAgent(preferKickstart: true, serviceLoaded: true))
+        #expect(!GatewayProcessManager._testShouldWaitForLoadedLaunchAgent(preferKickstart: false, serviceLoaded: false))
+    }
+
     @Test func `stale scheduled stop is ignored after a newer activation request`() {
         #expect(
             !GatewayProcessManager._testShouldExecuteScheduledStop(

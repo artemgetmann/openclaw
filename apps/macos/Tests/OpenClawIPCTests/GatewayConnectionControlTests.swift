@@ -39,6 +39,27 @@ private func makeTestGatewayConnection() -> GatewayConnection {
 }
 
 @Suite(.serialized) struct GatewayConnectionControlTests {
+    @Test func `local gateway auto recovery ignores timeout and abort noise`() {
+        #expect(!GatewayConnection._testShouldAutoRecoverLocalGateway(from: URLError(.timedOut)))
+
+        let aborted = NSError(
+            domain: NSCocoaErrorDomain,
+            code: NSUserCancelledError,
+            userInfo: [NSLocalizedDescriptionKey: "AbortError: This operation was aborted"])
+        #expect(!GatewayConnection._testShouldAutoRecoverLocalGateway(from: aborted))
+    }
+
+    @Test func `local gateway auto recovery still handles real connection loss`() {
+        #expect(GatewayConnection._testShouldAutoRecoverLocalGateway(from: URLError(.cannotConnectToHost)))
+        #expect(GatewayConnection._testShouldAutoRecoverLocalGateway(from: URLError(.networkConnectionLost)))
+
+        let closed = NSError(
+            domain: "Gateway",
+            code: 1006,
+            userInfo: [NSLocalizedDescriptionKey: "gateway closed (1006 abnormal closure): no close reason"])
+        #expect(GatewayConnection._testShouldAutoRecoverLocalGateway(from: closed))
+    }
+
     @Test func `status fails when process missing`() async {
         let connection = makeTestGatewayConnection()
         let result = await connection.status()

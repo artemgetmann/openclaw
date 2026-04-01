@@ -71,6 +71,27 @@ private enum ConsumerSetupCommandRunner {
         }
         return "command failed"
     }
+
+    static func isTransientBrowserStatusFailure(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("gateway closed") ||
+            normalized.contains("abnormal closure") ||
+            normalized.contains("no close reason") ||
+            normalized.contains("could not connect to the server") ||
+            normalized.contains("connect to gateway") ||
+            normalized.contains("gateway connection dropped") ||
+            normalized.contains("gateway not connected") ||
+            normalized.contains("timed out") ||
+            normalized.contains("timeout") ||
+            normalized.contains("retry")
+    }
+
+    static func isDiskFullFailure(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("enospc") ||
+            normalized.contains("no space left on device") ||
+            normalized.contains("disk is full")
+    }
 }
 
 private struct ConsumerBrowserStatusPayload: Decodable {
@@ -655,7 +676,9 @@ extension BrowserSetupModel {
 
     static func verifyConsumerBrowserSelection(
         expectedProfile: ChromeProfileCandidate? = nil,
-        runBrowserStatus: ((String, [String], TimeInterval) async -> ConsumerShellCommandResult)? = nil) async -> String?
+        runBrowserStatus: ((String, [String], TimeInterval) async -> ConsumerShellCommandResult)? = nil,
+        sleep: (@Sendable (UInt64) async -> Void)? = nil,
+        now: (@Sendable () -> Date)? = nil) async -> String?
     {
         if let expectedProfile {
             let persistedProfile = self.persistedConsumerBrowserSourceProfileName() ?? ""
@@ -664,42 +687,68 @@ extension BrowserSetupModel {
             }
         }
 
-        // Browser readiness should follow the direct browser-status command path.
-        // First-run onboarding can hit gateway pairing races that are unrelated to
-        // whether Chrome itself is ready, so we avoid treating control-channel
-        // readiness as a prerequisite here.
-        let result = if let runBrowserStatus {
-            await runBrowserStatus(
-                "browser",
-                ["--json", "--browser-profile", consumerBrowserProfileName, "status"],
-                20)
-        } else {
-            await ConsumerSetupCommandRunner.runOpenClaw(
-                subcommand: "browser",
-                extraArgs: ["--json", "--browser-profile", consumerBrowserProfileName, "status"],
-                timeout: 20)
+        // Saving the chosen Chrome profile can trigger a gateway restart at the
+        // exact moment onboarding probes browser readiness. On this machine the
+        // supervised restart can take well beyond a couple of seconds, so a tiny
+        // fixed retry window still surfaces a fake-broken browser card and forces
+        // the user to hammer "Try Again" until the runtime restabilizes.
+        // Keep the probe on the real browser-status path, but retry transient
+        // loopback disconnects for long enough to survive the slow reconnect
+        // window after Accessibility/permissions restarts.
+        let browserStatusArgs = ["--json", "--browser-profile", consumerBrowserProfileName, "status"]
+        let sleepImpl = sleep ?? { duration in
+            try? await Task.sleep(nanoseconds: duration)
         }
-        guard result.success else {
-            return "OpenClaw saved the Chrome profile, but browser readiness failed. \(ConsumerSetupCommandRunner.bestEffortMessage(for: result))"
+        let retryIntervalNanos: UInt64 = 2_000_000_000
+        let browserStatusCommandTimeout: TimeInterval = 60
+        let nowImpl = now ?? Date.init
+        let deadline = nowImpl().addingTimeInterval(GatewayProcessManager.gatewayReadinessTimeout + 60)
+        var attempt = 0
+
+        while true {
+            attempt += 1
+            let result = if let runBrowserStatus {
+                await runBrowserStatus("browser", browserStatusArgs, browserStatusCommandTimeout)
+            } else {
+                await ConsumerSetupCommandRunner.runOpenClaw(
+                    subcommand: "browser",
+                    extraArgs: browserStatusArgs,
+                    timeout: browserStatusCommandTimeout)
+            }
+
+            if !result.success {
+                let message = ConsumerSetupCommandRunner.bestEffortMessage(for: result)
+                if ConsumerSetupCommandRunner.isDiskFullFailure(message) {
+                    return "This Mac is out of disk space, so OpenClaw could not finish browser setup. Free some space and try again."
+                }
+                if ConsumerSetupCommandRunner.isTransientBrowserStatusFailure(message) &&
+                    nowImpl().addingTimeInterval(1) < deadline
+                {
+                    await sleepImpl(retryIntervalNanos)
+                    continue
+                }
+                return "OpenClaw saved the Chrome profile, but browser readiness failed. \(message)"
+            }
+
+            let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let data = stdout.data(using: .utf8),
+                  let payload = try? JSONDecoder().decode(ConsumerBrowserStatusPayload.self, from: data)
+            else {
+                return "OpenClaw saved the Chrome profile, but browser readiness returned unreadable output."
+            }
+            if payload.enabled == false {
+                return "Browser control is disabled in config. Re-enable it and try again."
+            }
+            if let detectError = payload.detectError?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !detectError.isEmpty
+            {
+                return "OpenClaw saved the Chrome profile, but could not prepare Chrome on this Mac: \(detectError)"
+            }
+            if payload.chosenBrowser == nil && payload.detectedBrowser == nil && payload.detectedExecutablePath == nil {
+                return "OpenClaw saved the Chrome profile, but Chrome still does not look ready on this Mac."
+            }
+            return nil
         }
-        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let data = stdout.data(using: .utf8),
-              let payload = try? JSONDecoder().decode(ConsumerBrowserStatusPayload.self, from: data)
-        else {
-            return "OpenClaw saved the Chrome profile, but browser readiness returned unreadable output."
-        }
-        if payload.enabled == false {
-            return "Browser control is disabled in config. Re-enable it and try again."
-        }
-        if let detectError = payload.detectError?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !detectError.isEmpty
-        {
-            return "OpenClaw saved the Chrome profile, but could not prepare Chrome on this Mac: \(detectError)"
-        }
-        if payload.chosenBrowser == nil && payload.detectedBrowser == nil && payload.detectedExecutablePath == nil {
-            return "OpenClaw saved the Chrome profile, but Chrome still does not look ready on this Mac."
-        }
-        return nil
     }
 }
 

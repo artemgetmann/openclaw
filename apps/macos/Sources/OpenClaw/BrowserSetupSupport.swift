@@ -144,6 +144,15 @@ final class BrowserSetupModel {
         await self.refresh()
     }
 
+    func retryTransientFailureAfterGatewayStatusChange(_ status: GatewayProcessManager.Status) async {
+        switch status {
+        case .running, .attachedExisting:
+            await self.retryTransientFailureIfNeeded()
+        case .stopped, .starting, .failed:
+            return
+        }
+    }
+
     func refresh() async {
         self.phase = .checking
         self.statusLine = "Checking Chrome on this Mac…"
