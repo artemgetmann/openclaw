@@ -12,14 +12,14 @@ vi.mock("../plugins/web-search-providers.js", () => {
   return {
     resolvePluginWebSearchProviders: () => [
       {
-        id: "brave",
-        envVars: ["BRAVE_API_KEY"],
-        getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
-      },
-      {
         id: "firecrawl",
         envVars: ["FIRECRAWL_API_KEY"],
         getCredentialValue: getScoped("firecrawl"),
+      },
+      {
+        id: "brave",
+        envVars: ["BRAVE_API_KEY"],
+        getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
       },
       {
         id: "gemini",
@@ -153,8 +153,8 @@ describe("web search provider auto-detection", () => {
     vi.restoreAllMocks();
   });
 
-  it("falls back to brave when no keys available", () => {
-    expect(resolveSearchProvider({})).toBe("brave");
+  it("falls back to firecrawl when no keys available", () => {
+    expect(resolveSearchProvider({})).toBe("firecrawl");
   });
 
   it("auto-detects brave when only BRAVE_API_KEY is set", () => {
@@ -202,12 +202,13 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("kimi");
   });
 
-  it("follows alphabetical order — brave wins when multiple keys available", () => {
+  it("prefers firecrawl when multiple keys are available", () => {
+    process.env.FIRECRAWL_API_KEY = "fc-test-key"; // pragma: allowlist secret
     process.env.BRAVE_API_KEY = "test-brave-key"; // pragma: allowlist secret
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
-    expect(resolveSearchProvider({})).toBe("brave");
+    expect(resolveSearchProvider({})).toBe("firecrawl");
   });
 
   it("gemini wins over grok, kimi, and perplexity when brave unavailable", () => {
