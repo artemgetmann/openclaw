@@ -5,7 +5,7 @@ import * as secretResolve from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
 
-type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+type ProviderUnderTest = "brave" | "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -53,6 +53,9 @@ function createProviderSecretRefConfig(
 function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): unknown {
   if (provider === "brave") {
     return config.tools?.web?.search?.apiKey;
+  }
+  if (provider === "firecrawl") {
+    return config.tools?.web?.search?.firecrawl?.apiKey;
   }
   if (provider === "gemini") {
     return config.tools?.web?.search?.gemini?.apiKey;
@@ -116,6 +119,11 @@ describe("runtime web tools resolution", () => {
       resolvedKey: "brave-provider-key",
     },
     {
+      provider: "firecrawl" as const,
+      envRefId: "FIRECRAWL_PROVIDER_REF",
+      resolvedKey: "firecrawl-provider-key",
+    },
+    {
       provider: "gemini" as const,
       envRefId: "GEMINI_PROVIDER_REF",
       resolvedKey: "gemini-provider-key",
@@ -166,6 +174,9 @@ describe("runtime web tools resolution", () => {
           web: {
             search: {
               apiKey: { source: "env", provider: "default", id: "BRAVE_REF" },
+              firecrawl: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_REF" },
+              },
               gemini: {
                 apiKey: { source: "env", provider: "default", id: "GEMINI_REF" },
               },
@@ -184,6 +195,7 @@ describe("runtime web tools resolution", () => {
       }),
       env: {
         BRAVE_REF: "brave-precedence-key",
+        FIRECRAWL_REF: "firecrawl-precedence-key",
         GEMINI_REF: "gemini-precedence-key",
         GROK_REF: "grok-precedence-key",
         KIMI_REF: "kimi-precedence-key",
@@ -192,10 +204,11 @@ describe("runtime web tools resolution", () => {
     });
 
     expect(metadata.search.providerSource).toBe("auto-detect");
-    expect(metadata.search.selectedProvider).toBe("brave");
-    expect(resolvedConfig.tools?.web?.search?.apiKey).toBe("brave-precedence-key");
+    expect(metadata.search.selectedProvider).toBe("firecrawl");
+    expect(resolvedConfig.tools?.web?.search?.firecrawl?.apiKey).toBe("firecrawl-precedence-key");
     expect(context.warnings).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ path: "tools.web.search.apiKey" }),
         expect.objectContaining({ path: "tools.web.search.gemini.apiKey" }),
         expect.objectContaining({ path: "tools.web.search.grok.apiKey" }),
         expect.objectContaining({ path: "tools.web.search.kimi.apiKey" }),
@@ -210,7 +223,9 @@ describe("runtime web tools resolution", () => {
         tools: {
           web: {
             search: {
-              apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY_REF" },
+              firecrawl: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY_REF" },
+              },
               gemini: {
                 apiKey: {
                   source: "env",
@@ -223,14 +238,14 @@ describe("runtime web tools resolution", () => {
         },
       }),
       env: {
-        BRAVE_API_KEY_REF: "brave-runtime-key", // pragma: allowlist secret
+        FIRECRAWL_API_KEY_REF: "firecrawl-runtime-key", // pragma: allowlist secret
       },
     });
 
     expect(metadata.search.providerSource).toBe("auto-detect");
-    expect(metadata.search.selectedProvider).toBe("brave");
+    expect(metadata.search.selectedProvider).toBe("firecrawl");
     expect(metadata.search.selectedProviderKeySource).toBe("secretRef");
-    expect(resolvedConfig.tools?.web?.search?.apiKey).toBe("brave-runtime-key");
+    expect(resolvedConfig.tools?.web?.search?.firecrawl?.apiKey).toBe("firecrawl-runtime-key");
     expect(resolvedConfig.tools?.web?.search?.gemini?.apiKey).toEqual({
       source: "env",
       provider: "default",
@@ -255,7 +270,9 @@ describe("runtime web tools resolution", () => {
         tools: {
           web: {
             search: {
-              apiKey: { source: "env", provider: "default", id: "MISSING_BRAVE_API_KEY_REF" },
+              firecrawl: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_FIRECRAWL_API_KEY_REF" },
+              },
               gemini: {
                 apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
               },
@@ -275,7 +292,7 @@ describe("runtime web tools resolution", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.search.apiKey",
+          path: "tools.web.search.firecrawl.apiKey",
         }),
       ]),
     );

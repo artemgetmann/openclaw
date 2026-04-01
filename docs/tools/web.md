@@ -41,16 +41,16 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 
 ### Auto-detection
 
-The table above is alphabetical. If no `provider` is explicitly set, runtime auto-detection checks providers in this order:
+The table above is alphabetical. If no `provider` is explicitly set, fork `main` currently auto-detects providers in this order:
 
-1. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
-2. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
-3. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
-4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
-5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
-6. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `tools.web.search.firecrawl.apiKey` config
+1. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `tools.web.search.firecrawl.apiKey` config
+2. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
+3. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
+4. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
+5. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
+6. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
 
-If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
+If no keys are found, setup flows and runtime fallback default to Firecrawl (you'll get a missing-key error prompting you to configure one).
 
 Runtime SecretRef behavior:
 

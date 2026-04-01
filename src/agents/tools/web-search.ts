@@ -91,7 +91,7 @@ function resolveSearchProvider(search?: WebSearchConfig): string {
     }
   }
 
-  return providers[0]?.id ?? "brave";
+  return providers[0]?.id ?? "firecrawl";
 }
 
 export function createWebSearchTool(options?: {

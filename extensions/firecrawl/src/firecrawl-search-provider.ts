@@ -45,7 +45,8 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
     placeholder: "fc-...",
     signupUrl: "https://www.firecrawl.dev/",
     docsUrl: "https://docs.openclaw.ai/tools/firecrawl",
-    autoDetectOrder: 60,
+    // Keep Firecrawl first so fork main defaults to it across auto-detect and setup flows.
+    autoDetectOrder: 5,
     getCredentialValue: getScopedCredentialValue,
     setCredentialValue: setScopedCredentialValue,
     createTool: (ctx) => ({
