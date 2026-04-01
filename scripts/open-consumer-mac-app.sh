@@ -4,6 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/worktree-guards.sh"
+source "$ROOT_DIR/scripts/lib/validated-node.sh"
+
+# Opening the consumer app can reinstall the lane-local gateway service. Pin
+# the runtime before that happens so launchd and the packaged app agree on the
+# exact Node line we validated for consumer bootstrap.
+openclaw_use_validated_node "$ROOT_DIR" >/dev/null
+VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
@@ -110,7 +117,7 @@ refresh_gateway_service_env() {
         OPENCLAW_CONFIG_PATH="$config_path" \
         OPENCLAW_PROFILE="$profile" \
         OPENCLAW_LAUNCHD_LABEL="$launchd_label" \
-        pnpm --dir "$ROOT_DIR" openclaw:local gateway install --force --port "$gateway_port" --runtime node >/dev/null
+        openclaw_run_repo_pnpm "$ROOT_DIR" openclaw:local gateway install --force --port "$gateway_port" --runtime node >/dev/null
       return
     fi
     /bin/sleep 0.25
@@ -227,7 +234,7 @@ if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
     USER="${USER:-$(id -un)}" \
     LOGNAME="${LOGNAME:-$(id -un)}" \
     TMPDIR="${TMPDIR:-/tmp}" \
-    PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+    PATH="$(dirname "$VALIDATED_NODE_BIN"):/usr/bin:/bin:/usr/sbin:/sbin" \
     LANG="${LANG:-en_US.UTF-8}" \
     GOOGLE_PLACES_API_KEY="${GOOGLE_PLACES_API_KEY:-}" \
     HIMALAYA_CONFIG="${HIMALAYA_CONFIG:-}" \
@@ -239,7 +246,7 @@ else
     USER="${USER:-$(id -un)}" \
     LOGNAME="${LOGNAME:-$(id -un)}" \
     TMPDIR="${TMPDIR:-/tmp}" \
-    PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+    PATH="$(dirname "$VALIDATED_NODE_BIN"):/usr/bin:/bin:/usr/sbin:/sbin" \
     LANG="${LANG:-en_US.UTF-8}" \
     GOOGLE_PLACES_API_KEY="${GOOGLE_PLACES_API_KEY:-}" \
     HIMALAYA_CONFIG="${HIMALAYA_CONFIG:-}" \
