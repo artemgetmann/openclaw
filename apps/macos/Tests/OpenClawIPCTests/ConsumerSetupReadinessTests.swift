@@ -10,6 +10,22 @@ private func blockedReadinessPayload() -> ConsumerModelsReadinessPayload {
         reasonCodes: ["probe_auth_failed"])
 }
 
+private func authMissingReadinessPayload() -> ConsumerModelsReadinessPayload {
+    ConsumerModelsReadinessPayload(
+        status: "blocked",
+        defaultModel: "openai-codex/gpt-5.4",
+        summary: "OpenClaw-managed AI is selected, but the canonical shared auth profile is missing from this consumer runtime.",
+        reasonCodes: ["missing_auth"])
+}
+
+private func readinessFailedPayload() -> ConsumerModelsReadinessPayload {
+    ConsumerModelsReadinessPayload(
+        status: "blocked",
+        defaultModel: "openai-codex/gpt-5.4",
+        summary: "OpenClaw-managed AI did not answer the readiness probe in time.",
+        reasonCodes: ["probe_timeout"])
+}
+
 private func readyReadinessPayload() -> ConsumerModelsReadinessPayload {
     ConsumerModelsReadinessPayload(
         status: "ready",
@@ -134,6 +150,46 @@ struct ConsumerSetupReadinessTests {
         #expect(model.phase == .failed("OpenClaw-managed AI is configured, but the shared auth is no longer usable."))
         #expect(model.statusLine == "OpenClaw-managed AI is configured, but the shared auth is no longer usable.")
         #expect(model.authSectionExpanded)
+        #expect(model.failureKind == .providerAuthFailed)
+        #expect(!model.canRestartOperator)
+    }
+
+    @Test func `consumer model readiness surfaces missing auth as provider auth failure`() async {
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                authMissingReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        await model.refresh()
+
+        #expect(model.failureKind == .providerAuthFailed)
+        #expect(model.phase == .failed("OpenClaw-managed AI is selected, but the canonical shared auth profile is missing from this consumer runtime."))
+        #expect(!model.canRestartOperator)
+    }
+
+    @Test func `consumer model readiness surfaces readiness failures as restartable`() async {
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                readinessFailedPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        await model.refresh()
+
+        #expect(model.failureKind == .readinessFailed)
+        #expect(model.phase == .failed("OpenClaw-managed AI did not answer the readiness probe in time."))
+        #expect(model.canRestartOperator)
     }
 
     @Test func `consumer model loads auth options only once after blocked readiness`() async {
@@ -302,6 +358,8 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.statusLine
                 == "OpenClaw could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again.")
+        #expect(model.failureKind == .gatewayUnreachable)
+        #expect(model.canRestartOperator)
     }
 
     @Test func `consumer model groups auth options by subscription and api key`() async {
@@ -392,6 +450,42 @@ struct ConsumerSetupReadinessTests {
         #expect(model.phase == .ready("openai-codex/gpt-5.3-codex"))
         #expect(model.statusLine == "AI ready on openai-codex/gpt-5.3-codex.")
         #expect(model.activeModelId == "openai-codex/gpt-5.3-codex")
+    }
+
+    @Test func `consumer model restart operator retries readiness and recovers`() async {
+        let restartCalls = SendableCounter()
+        let probeCalls = SendableCounter()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                if probeCalls.value == 1 {
+                    return readinessFailedPayload()
+                }
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            restartGateway: {
+                restartCalls.value += 1
+            })
+
+        await model.refresh()
+        #expect(model.failureKind == .readinessFailed)
+        #expect(model.canRestartOperator)
+
+        await model.restartOperator()
+
+        #expect(restartCalls.value == 1)
+        #expect(probeCalls.value == 2)
+        #expect(model.phase == .ready("openai-codex/gpt-5.4"))
+        #expect(model.failureKind == nil)
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.4.")
+        #expect(!model.canRestartOperator)
+        #expect(!model.isRestartingOperator)
     }
 
     @Test func `consumer auth option input kind decodes api key correctly`() throws {

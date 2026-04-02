@@ -114,6 +114,25 @@ struct ConsumerAuthProviderChoice: Identifiable, Equatable {
     let label: String
 }
 
+enum ConsumerAIAccessFailureKind: Equatable {
+    case gatewayUnreachable
+    case providerAuthFailed
+    case readinessFailed
+}
+
+extension ConsumerAIAccessFailureKind {
+    var title: String {
+        switch self {
+        case .gatewayUnreachable:
+            return "AI operator is offline"
+        case .providerAuthFailed:
+            return "AI account needs attention"
+        case .readinessFailed:
+            return "AI is reachable, but not ready"
+        }
+    }
+}
+
 struct ConsumerModelsModelListPayload: Decodable {
     let currentModel: String?
     let options: [ConsumerSelectableModel]
@@ -149,6 +168,7 @@ final class ConsumerModelSetupModel {
     typealias ModelsLoader = @Sendable () async throws -> ConsumerModelsModelListPayload
     typealias ModelApply = @Sendable (_ modelId: String) async throws -> ConsumerModelsSetPayload
     typealias RuntimeOwnershipBlocker = @Sendable () -> String?
+    typealias RestartGateway = @Sendable () async -> Void
 
     enum Phase: Equatable {
         case idle
@@ -168,6 +188,8 @@ final class ConsumerModelSetupModel {
     private(set) var modelOptions: [ConsumerSelectableModel] = []
     private(set) var modelError: String?
     private(set) var applyingModelId: String?
+    private(set) var failureKind: ConsumerAIAccessFailureKind?
+    private(set) var isRestartingOperator = false
     var authCategory: AuthCategory = .subscription
     var authSectionExpanded = true
     var alternateMethodExpanded = false
@@ -180,6 +202,7 @@ final class ConsumerModelSetupModel {
     private let listModels: ModelsLoader
     private let applyModel: ModelApply
     private let runtimeOwnershipBlocker: RuntimeOwnershipBlocker
+    private let restartGateway: RestartGateway
 
     init(
         probeReadiness: ReadinessProbe? = nil,
@@ -187,7 +210,8 @@ final class ConsumerModelSetupModel {
         applyAuth: AuthApply? = nil,
         listModels: ModelsLoader? = nil,
         applyModel: ModelApply? = nil,
-        runtimeOwnershipBlocker: RuntimeOwnershipBlocker? = nil)
+        runtimeOwnershipBlocker: RuntimeOwnershipBlocker? = nil,
+        restartGateway: RestartGateway? = nil)
     {
         self.probeReadiness = probeReadiness ?? Self.gatewayReadinessProbe
         self.listAuthOptions = listAuthOptions ?? Self.gatewayAuthOptionsLoader
@@ -196,6 +220,12 @@ final class ConsumerModelSetupModel {
         self.applyModel = applyModel ?? Self.gatewayModelApply
         self.runtimeOwnershipBlocker = runtimeOwnershipBlocker ?? {
             GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage()
+        }
+        self.restartGateway = restartGateway ?? {
+            await GatewayConnection.shared.shutdown()
+            await ControlChannel.shared.disconnect()
+            await GatewayProcessManager.shared.restartManagedGateway()
+            try? await ControlChannel.shared.configure(mode: .local)
         }
     }
 
@@ -217,6 +247,12 @@ final class ConsumerModelSetupModel {
 
     var isApplyingModel: Bool {
         self.applyingModelId != nil
+    }
+
+    var canRestartOperator: Bool {
+        guard self.failureKind != .providerAuthFailed else { return false }
+        guard self.failureKind != nil else { return false }
+        return !self.isRestartingOperator
     }
 
     var hasModelOptions: Bool {
@@ -326,12 +362,14 @@ final class ConsumerModelSetupModel {
         guard self.phase != .checking else { return }
         guard !self.isApplyingAuth else { return }
         guard !self.isApplyingModel else { return }
+        guard !self.isRestartingOperator else { return }
         await self.refresh()
     }
 
     func refresh() async {
         self.phase = .checking
         self.statusLine = "Checking OpenClaw's AI access…"
+        self.failureKind = nil
 
         if let blocker = self.runtimeOwnershipBlocker() {
             // If launchd is pinned to a different checkout, do not let the UI
@@ -339,6 +377,7 @@ final class ConsumerModelSetupModel {
             // runtime the user is about to rely on.
             self.phase = .failed(blocker)
             self.statusLine = blocker
+            self.failureKind = nil
             self.authSectionExpanded = true
             return
         }
@@ -351,9 +390,21 @@ final class ConsumerModelSetupModel {
             await self.syncModelOptions(readiness: payload)
         } catch {
             let detail = Self.consumerFriendlyReadinessError(error)
+            self.failureKind = Self.consumerAccessFailureKind(for: error)
             self.phase = .failed(detail)
             self.statusLine = detail
         }
+    }
+
+    func restartOperator() async {
+        guard self.canRestartOperator else { return }
+        self.isRestartingOperator = true
+        defer { self.isRestartingOperator = false }
+
+        self.phase = .checking
+        self.statusLine = "Restarting AI operator…"
+        await self.restartGateway()
+        await self.refresh()
     }
 
     func loadAuthOptionsIfNeeded() async {
@@ -421,12 +472,14 @@ final class ConsumerModelSetupModel {
             self.activeModelId = trimmedModel
             self.phase = .ready(display)
             self.statusLine = "AI ready on \(display)."
+            self.failureKind = nil
             self.authSectionExpanded = false
             return
         }
 
         let detail = payload.consumerFailureMessage
         self.activeModelId = nil
+        self.failureKind = payload.consumerFailureKind
         self.phase = .failed(detail)
         self.statusLine = detail
         self.authSectionExpanded = true
@@ -503,15 +556,38 @@ final class ConsumerModelSetupModel {
             return "OpenClaw could not check AI access yet. Try again in a moment."
         }
 
-        let lowercased = detail.lowercased()
-        if lowercased.contains("gateway connect")
-            || lowercased.contains("could not connect to the server")
-            || lowercased.contains("connection refused")
+        if Self.consumerAccessFailureKind(for: error) == .gatewayUnreachable
         {
             return "OpenClaw could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."
         }
 
         return detail
+    }
+
+    private static func consumerAccessFailureKind(for error: Error) -> ConsumerAIAccessFailureKind {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            switch URLError.Code(rawValue: nsError.code) {
+            case .cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .notConnectedToInternet:
+                return .gatewayUnreachable
+            default:
+                break
+            }
+        }
+
+        let lowercased = nsError.localizedDescription.lowercased()
+        if lowercased.contains("gateway connect")
+            || lowercased.contains("could not connect to the server")
+            || lowercased.contains("connection refused")
+            || lowercased.contains("gateway not configured")
+            || lowercased.contains("gateway closed")
+            || lowercased.contains("gateway connection dropped")
+            || lowercased.contains("gateway not connected")
+        {
+            return .gatewayUnreachable
+        }
+
+        return .readinessFailed
     }
 
     private static func gatewayAuthOptionsLoader() async throws -> ConsumerModelsAuthListPayload {
@@ -554,6 +630,13 @@ struct ConsumerModelsReadinessPayload: Decodable {
     let summary: String
     let reasonCodes: [String]
 
+    var consumerFailureKind: ConsumerAIAccessFailureKind {
+        if self.reasonCodes.contains("missing_auth") || self.reasonCodes.contains("probe_auth_failed") {
+            return .providerAuthFailed
+        }
+        return .readinessFailed
+    }
+
     var consumerFailureMessage: String {
         if self.status == "ready" {
             return "OpenClaw's AI access is ready."
@@ -565,7 +648,14 @@ struct ConsumerModelsReadinessPayload: Decodable {
         if !trimmedSummary.isEmpty {
             return trimmedSummary
         }
-        return "OpenClaw is not ready for a first task yet. Reopen the app or switch to your own model in Advanced."
+        switch self.consumerFailureKind {
+        case .gatewayUnreachable:
+            return "OpenClaw could not reach the local consumer gateway yet."
+        case .providerAuthFailed:
+            return "OpenClaw could not verify a usable AI account for this runtime yet."
+        case .readinessFailed:
+            return "OpenClaw reached the AI provider, but it is not ready yet."
+        }
     }
 }
 
@@ -780,7 +870,7 @@ struct ConsumerModelSetupCardContent: View {
                     title: "AI is ready",
                     body: "OpenClaw is ready to run the first delegated task on \(modelRef).")
             case let .failed(message):
-                self.callout(title: "AI setup still needs attention", body: message)
+                self.failureCallout(message: message)
             }
 
             if let option = self.model.selectedOption {
@@ -884,6 +974,33 @@ struct ConsumerModelSetupCardContent: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private func failureCallout(message: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(self.model.failureKind?.title ?? "AI setup still needs attention")
+                .font(.subheadline.weight(.semibold))
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if self.model.canRestartOperator {
+                Button {
+                    Task { await self.model.restartOperator() }
+                } label: {
+                    if self.model.isRestartingOperator {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label("Restart AI Operator", systemImage: "arrow.clockwise")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.model.isRestartingOperator)
+            }
         }
     }
 
