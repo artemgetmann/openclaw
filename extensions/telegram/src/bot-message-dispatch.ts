@@ -482,6 +482,19 @@ export const dispatchTelegramMessage = async ({
     }
     return result.delivered;
   };
+  const sendToolPayload = async (payload: ReplyPayload) => {
+    // Tool payloads already arrive fully structured, including media URLs from
+    // trusted tool results. Deliver them directly so Telegram does not have to
+    // infer media from assistant prose after the model paraphrases the tool.
+    const hasContent =
+      Boolean(payload.text?.length) ||
+      Boolean(payload.mediaUrl) ||
+      Boolean(payload.mediaUrls?.length);
+    if (!hasContent) {
+      return;
+    }
+    await sendPayload(payload);
+  };
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
     archivedAnswerPreviews,
@@ -668,6 +681,10 @@ export const dispatchTelegramMessage = async ({
       replyOptions: {
         skillFilter,
         disableBlockStreaming,
+        onToolResult: (payload) =>
+          enqueueDraftLaneEvent(async () => {
+            await sendToolPayload(payload);
+          }),
         onPartialReply:
           answerLane.stream || reasoningLane.stream
             ? (payload) =>
