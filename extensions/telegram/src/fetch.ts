@@ -49,7 +49,7 @@ const FALLBACK_RETRY_ERROR_CODES = [
   "UND_ERR_SOCKET",
 ] as const;
 
-type Ipv4FallbackContext = {
+type Ipv4FallbackCandidate = {
   message: string;
   codes: Set<string>;
 };
@@ -370,23 +370,59 @@ function collectErrorCodes(err: unknown): Set<string> {
   return codes;
 }
 
+function collectIpv4FallbackCandidates(err: unknown): Ipv4FallbackCandidate[] {
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+  const candidates: Ipv4FallbackCandidate[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    candidates.push({
+      message:
+        current instanceof Error
+          ? current.message.toLowerCase()
+          : typeof current === "object" && current && "message" in current
+            ? String((current as { message?: unknown }).message).toLowerCase()
+            : "",
+      codes: collectErrorCodes(current),
+    });
+    if (typeof current === "object") {
+      const cause = (current as { cause?: unknown }).cause;
+      if (cause && !seen.has(cause)) {
+        queue.push(cause);
+      }
+      const error = (current as { error?: unknown }).error;
+      if (error && !seen.has(error)) {
+        queue.push(error);
+      }
+      const errors = (current as { errors?: unknown }).errors;
+      if (Array.isArray(errors)) {
+        for (const nested of errors) {
+          if (nested && !seen.has(nested)) {
+            queue.push(nested);
+          }
+        }
+      }
+    }
+  }
+
+  return candidates;
+}
+
 function formatErrorCodes(err: unknown): string {
   const codes = [...collectErrorCodes(err)];
   return codes.length > 0 ? codes.join(",") : "none";
 }
 
 function shouldRetryWithIpv4Fallback(err: unknown): boolean {
-  const ctx: Ipv4FallbackContext = {
-    message:
-      err && typeof err === "object" && "message" in err ? String(err.message).toLowerCase() : "",
-    codes: collectErrorCodes(err),
-  };
-  for (const rule of IPV4_FALLBACK_RULES) {
-    if (!rule.matches(ctx)) {
-      return false;
-    }
-  }
-  return true;
+  const candidates = collectIpv4FallbackCandidates(err);
+  return candidates.some((candidate) =>
+    IPV4_FALLBACK_RULES.every((rule) => rule.matches(candidate)),
+  );
 }
 
 export function shouldRetryTelegramIpv4Fallback(err: unknown): boolean {
