@@ -5,37 +5,8 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { IPty } from "@lydell/node-pty";
+import { deflateSync } from "node:zlib";
 import ptyModule from "@lydell/node-pty";
-import { encodePngRgba, fillPixel } from "../../../src/media/png-encode.ts";
-
-type Phase =
-  | "starting"
-  | "waiting_for_qr"
-  | "qr_ready"
-  | "authenticated"
-  | "expired"
-  | "stopped"
-  | "error";
-
-type SessionStatus = {
-  sessionId: string;
-  phase: Phase;
-  message: string;
-  sessionDir: string;
-  storeDir: string;
-  qrPath?: string;
-  qrTextPath?: string;
-  logPath: string;
-  pid?: number;
-  workerPid?: number;
-  authenticated?: boolean;
-  connected?: boolean;
-  exitCode?: number | null;
-  signal?: number | null;
-  error?: string;
-  updatedAt: string;
-};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,19 +19,18 @@ const QR_FILE = "qr.png";
 const QR_TEXT_FILE = "qr.txt";
 const BLOCK_CHARS = new Set(["█", "▀", "▄", " "]);
 const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-const ptySpawn: typeof ptyModule.spawn =
-  (ptyModule as unknown as { spawn?: typeof ptyModule.spawn }).spawn ?? ptyModule.spawn;
+const ptySpawn = ptyModule.spawn ?? ptyModule.spawn;
 
 function resolvePreferredOpenClawTmpDir() {
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const fallbackPath = path.join(os.tmpdir(), uid === undefined ? "openclaw" : `openclaw-${uid}`);
-  const isSecureDirForUser = (st: { mode?: number; uid?: number }) => {
+  const isSecureDirForUser = (st) => {
     if (uid !== undefined && typeof st.uid === "number" && st.uid !== uid) {
       return false;
     }
     return typeof st.mode !== "number" || (st.mode & 0o022) === 0;
   };
-  const ensureTrustedDir = (candidatePath: string): string | null => {
+  const ensureTrustedDir = (candidatePath) => {
     try {
       const st = fs.lstatSync(candidatePath);
       if (!st.isDirectory() || st.isSymbolicLink() || !isSecureDirForUser(st)) {
@@ -69,12 +39,7 @@ function resolvePreferredOpenClawTmpDir() {
       fs.accessSync(candidatePath, TMP_DIR_ACCESS_MODE);
       return candidatePath;
     } catch (error) {
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        (error as { code?: string }).code !== "ENOENT"
-      ) {
+      if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
         return null;
       }
     }
@@ -93,27 +58,86 @@ function resolvePreferredOpenClawTmpDir() {
   return ensureTrustedDir(POSIX_OPENCLAW_TMP_DIR) ?? ensureTrustedDir(fallbackPath) ?? fallbackPath;
 }
 
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let c = i;
+    for (let k = 0; k < 8; k += 1) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[i] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buf) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i += 1) {
+    crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const typeBuf = Buffer.from(type, "ascii");
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const crc = crc32(Buffer.concat([typeBuf, data]));
+  const crcBuf = Buffer.alloc(4);
+  crcBuf.writeUInt32BE(crc, 0);
+  return Buffer.concat([len, typeBuf, data, crcBuf]);
+}
+
+function fillPixel(buf, x, y, width, r, g, b, a = 255) {
+  if (x < 0 || y < 0 || x >= width) return;
+  const idx = (y * width + x) * 4;
+  if (idx < 0 || idx + 3 >= buf.length) return;
+  buf[idx] = r;
+  buf[idx + 1] = g;
+  buf[idx + 2] = b;
+  buf[idx + 3] = a;
+}
+
+function encodePngRgba(buffer, width, height) {
+  const stride = width * 4;
+  const raw = Buffer.alloc((stride + 1) * height);
+  for (let row = 0; row < height; row += 1) {
+    const rawOffset = row * (stride + 1);
+    raw[rawOffset] = 0;
+    buffer.copy(raw, rawOffset + 1, row * stride, row * stride + stride);
+  }
+  const compressed = deflateSync(raw);
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  return Buffer.concat([
+    signature,
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", compressed),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
 function usage() {
   console.error(`Usage:
   wacli-auth-local.sh start [--session <id>] [--store <dir>] [--idle-exit <duration>] [--wait-ms <ms>] [--follow]
   wacli-auth-local.sh status --session <id>
   wacli-auth-local.sh wait --session <id> [--timeout-ms <ms>]
-  wacli-auth-local.sh stop --session <id>
-
-Notes:
-  - start runs wacli auth in an isolated temp store and returns a PNG path for the QR.
-  - wait checks whether authentication completed after the QR was scanned.
-  - stop terminates the isolated auth worker and leaves your main ~/.wacli untouched.`);
+  wacli-auth-local.sh stop --session <id>`);
 }
 
-function parseArgs(argv: string[]) {
+function parseArgs(argv) {
   const [command, ...rest] = argv;
-  const flags = new Map<string, string | boolean>();
+  const flags = new Map();
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
-    if (!arg.startsWith("--")) {
-      throw new Error(`Unexpected argument: ${arg}`);
-    }
+    if (!arg.startsWith("--")) throw new Error(`Unexpected argument: ${arg}`);
     const next = rest[index + 1];
     if (!next || next.startsWith("--")) {
       flags.set(arg, true);
@@ -125,35 +149,29 @@ function parseArgs(argv: string[]) {
   return { command, flags };
 }
 
-function requireSessionId(flags: Map<string, string | boolean>) {
+function requireSessionId(flags) {
   const sessionId = flags.get("--session");
-  if (typeof sessionId !== "string" || !sessionId.trim()) {
-    throw new Error("--session is required");
-  }
+  if (typeof sessionId !== "string" || !sessionId.trim()) throw new Error("--session is required");
   return sessionId.trim();
 }
 
-function sessionDirFor(sessionId: string) {
+function sessionDirFor(sessionId) {
   return path.join(SESSIONS_ROOT, sessionId);
 }
-
-function statusPathFor(sessionDir: string) {
+function statusPathFor(sessionDir) {
   return path.join(sessionDir, STATUS_FILE);
 }
-
 async function ensureSessionsRoot() {
   await fsp.mkdir(SESSIONS_ROOT, { recursive: true });
 }
 
-async function writeStatus(sessionDir: string, patch: Partial<SessionStatus>) {
+async function writeStatus(sessionDir, patch) {
   const statusPath = statusPathFor(sessionDir);
-  let current: SessionStatus | null = null;
+  let current = null;
   try {
-    current = JSON.parse(await fsp.readFile(statusPath, "utf8")) as SessionStatus;
-  } catch {
-    current = null;
-  }
-  const next: SessionStatus = {
+    current = JSON.parse(await fsp.readFile(statusPath, "utf8"));
+  } catch {}
+  const next = {
     sessionId: patch.sessionId ?? current?.sessionId ?? path.basename(sessionDir),
     phase: patch.phase ?? current?.phase ?? "starting",
     message: patch.message ?? current?.message ?? "Starting WhatsApp CLI auth helper…",
@@ -175,80 +193,50 @@ async function writeStatus(sessionDir: string, patch: Partial<SessionStatus>) {
   return next;
 }
 
-async function readStatus(sessionId: string) {
-  const sessionDir = sessionDirFor(sessionId);
-  const statusPath = statusPathFor(sessionDir);
-  const raw = await fsp.readFile(statusPath, "utf8");
-  return JSON.parse(raw) as SessionStatus;
+async function readStatus(sessionId) {
+  return JSON.parse(await fsp.readFile(statusPathFor(sessionDirFor(sessionId)), "utf8"));
 }
 
-function parseDurationMs(raw: string | boolean | undefined, fallbackMs: number) {
-  if (typeof raw !== "string" || !raw.trim()) {
-    return fallbackMs;
-  }
+function parseDurationMs(raw, fallbackMs) {
+  if (typeof raw !== "string" || !raw.trim()) return fallbackMs;
   const trimmed = raw.trim();
-  if (/^\d+$/.test(trimmed)) {
-    return Number.parseInt(trimmed, 10);
-  }
+  if (/^\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10);
   const match = trimmed.match(/^(\d+)(ms|s|m)$/i);
-  if (!match) {
-    throw new Error(`Unsupported duration: ${raw}`);
-  }
+  if (!match) throw new Error(`Unsupported duration: ${raw}`);
   const value = Number.parseInt(match[1] ?? "0", 10);
   const unit = (match[2] ?? "ms").toLowerCase();
-  switch (unit) {
-    case "ms":
-      return value;
-    case "s":
-      return value * 1000;
-    case "m":
-      return value * 60_000;
-    default:
-      throw new Error(`Unsupported duration unit: ${unit}`);
-  }
+  if (unit === "ms") return value;
+  if (unit === "s") return value * 1000;
+  if (unit === "m") return value * 60000;
+  throw new Error(`Unsupported duration unit: ${unit}`);
 }
 
-function sanitizeChunk(input: string) {
+function sanitizeChunk(input) {
   return input.replace(/\r/g, "\n").replace(ANSI_RE, "");
 }
-
-function isQrLine(line: string) {
+function isQrLine(line) {
   const trimmed = line.trimEnd();
-  if (trimmed.length < 20) {
-    return false;
-  }
-  for (const char of trimmed) {
-    if (!BLOCK_CHARS.has(char)) {
-      return false;
-    }
-  }
+  if (trimmed.length < 20) return false;
+  for (const char of trimmed) if (!BLOCK_CHARS.has(char)) return false;
   return true;
 }
 
-function extractQrLines(rawLog: string): string[] | null {
+function extractQrLines(rawLog) {
   const lines = sanitizeChunk(rawLog)
     .split("\n")
     .map((line) => line.replace(/\r/g, ""));
   let sawMarker = false;
-  const qrLines: string[] = [];
+  const qrLines = [];
   let blankRun = 0;
   for (const line of lines) {
     if (!sawMarker) {
-      if (line.includes("Scan this QR code with WhatsApp")) {
-        sawMarker = true;
-      }
+      if (line.includes("Scan this QR code with WhatsApp")) sawMarker = true;
       continue;
     }
     if (!line.trim()) {
-      if (qrLines.length === 0) {
-        continue;
-      }
+      if (qrLines.length === 0) continue;
       blankRun += 1;
-      // PTY output commonly inserts spacer lines between QR rows; ignore short
-      // blank runs instead of treating them as the end of the QR block.
-      if (blankRun <= 2) {
-        continue;
-      }
+      if (blankRun <= 2) continue;
       break;
     }
     blankRun = 0;
@@ -256,33 +244,22 @@ function extractQrLines(rawLog: string): string[] | null {
       qrLines.push(line.trimEnd());
       continue;
     }
-    if (qrLines.length > 0) {
-      break;
-    }
+    if (qrLines.length > 0) break;
   }
-  if (qrLines.length < 10) {
-    return null;
-  }
-  const widthCounts = new Map<number, number>();
-  for (const line of qrLines) {
-    widthCounts.set(line.length, (widthCounts.get(line.length) ?? 0) + 1);
-  }
+  if (qrLines.length < 10) return null;
+  const widthCounts = new Map();
+  for (const line of qrLines) widthCounts.set(line.length, (widthCounts.get(line.length) ?? 0) + 1);
   const dominantWidth =
-    [...widthCounts.entries()].sort(
-      (left, right) => right[1] - left[1] || right[0] - left[0],
-    )[0]?.[0] ?? 0;
+    [...widthCounts.entries()].sort((l, r) => r[1] - l[1] || r[0] - l[0])[0]?.[0] ?? 0;
   const normalized = qrLines.filter((line) => Math.abs(line.length - dominantWidth) <= 1);
   return normalized.length >= 10 ? normalized : qrLines;
 }
 
-function isSolidBorder(line: string, allowed: ReadonlySet<string>) {
+function isSolidBorder(line, allowed) {
   return [...line].every((char) => allowed.has(char));
 }
-
-function looksLikeCompleteQr(qrLines: string[]) {
-  if (qrLines.length < 20) {
-    return false;
-  }
+function looksLikeCompleteQr(qrLines) {
+  if (qrLines.length < 20) return false;
   const firstLine = qrLines[0] ?? "";
   const secondLine = qrLines[1] ?? "";
   const lastLine = qrLines.at(-1) ?? "";
@@ -293,12 +270,7 @@ function looksLikeCompleteQr(qrLines: string[]) {
   );
 }
 
-type BlockCell = {
-  top: boolean;
-  bottom: boolean;
-};
-
-function blockCellForChar(char: string): BlockCell {
+function blockCellForChar(char) {
   switch (char) {
     case "█":
       return { top: true, bottom: true };
@@ -311,95 +283,78 @@ function blockCellForChar(char: string): BlockCell {
   }
 }
 
-async function renderQrBlockPng(qrLines: string[], outputPath: string) {
+async function renderQrBlockPng(qrLines, outputPath) {
   const width = Math.max(...qrLines.map((line) => line.length));
-  const cellWidth = 8;
-  const cellHeight = 16;
-  const marginCells = 4;
+  const cellWidth = 8,
+    cellHeight = 16,
+    marginCells = 4;
   const outputWidth = (width + marginCells * 2) * cellWidth;
   const outputHeight = (qrLines.length + marginCells * 2) * cellHeight;
   const rgba = Buffer.alloc(outputWidth * outputHeight * 4, 255);
-
   for (let row = 0; row < qrLines.length; row += 1) {
     const padded = (qrLines[row] ?? "").padEnd(width, " ");
     for (let col = 0; col < width; col += 1) {
       const cell = blockCellForChar(padded[col] ?? " ");
-      if (!cell.top && !cell.bottom) {
-        continue;
-      }
+      if (!cell.top && !cell.bottom) continue;
       const startX = (col + marginCells) * cellWidth;
       const startY = (row + marginCells) * cellHeight;
       for (let y = 0; y < cellHeight; y += 1) {
         const inTopHalf = y < cellHeight / 2;
-        if ((inTopHalf && !cell.top) || (!inTopHalf && !cell.bottom)) {
-          continue;
-        }
+        if ((inTopHalf && !cell.top) || (!inTopHalf && !cell.bottom)) continue;
         const pixelY = startY + y;
-        for (let x = 0; x < cellWidth; x += 1) {
-          const pixelX = startX + x;
-          fillPixel(rgba, pixelX, pixelY, outputWidth, 0, 0, 0, 255);
-        }
+        for (let x = 0; x < cellWidth; x += 1)
+          fillPixel(rgba, startX + x, pixelY, outputWidth, 0, 0, 0, 255);
       }
     }
   }
-
-  const png = encodePngRgba(rgba, outputWidth, outputHeight);
-  await fsp.writeFile(outputPath, png);
+  await fsp.writeFile(outputPath, encodePngRgba(rgba, outputWidth, outputHeight));
 }
 
-async function readAuthStatus(storeDir: string) {
+async function readAuthStatus(storeDir) {
   const child = spawnChild("wacli", ["--store", storeDir, "auth", "status", "--json"], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   const [stdout, stderr, exitCode] = await Promise.all([
-    new Promise<string>((resolve) => {
+    new Promise((resolve) => {
       let out = "";
       child.stdout?.on("data", (chunk) => {
         out += chunk.toString();
       });
       child.stdout?.on("end", () => resolve(out));
     }),
-    new Promise<string>((resolve) => {
+    new Promise((resolve) => {
       let out = "";
       child.stderr?.on("data", (chunk) => {
         out += chunk.toString();
       });
       child.stderr?.on("end", () => resolve(out));
     }),
-    new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code))),
+    new Promise((resolve) => child.on("exit", (code) => resolve(code))),
   ]);
-  if (exitCode !== 0) {
+  if (exitCode !== 0)
     return {
       authenticated: false,
       error: stderr.trim() || `wacli auth status exited with ${String(exitCode)}`,
     };
-  }
   try {
-    const parsed = JSON.parse(stdout) as { data?: { authenticated?: boolean } };
+    const parsed = JSON.parse(stdout);
     return { authenticated: parsed.data?.authenticated === true };
   } catch (error) {
     return { authenticated: false, error: String(error) };
   }
 }
 
-async function waitForPhase(
-  sessionId: string,
-  opts: { timeoutMs: number; acceptable: Phase[] },
-): Promise<SessionStatus> {
+async function waitForPhase(sessionId, opts) {
   const deadline = Date.now() + opts.timeoutMs;
   while (true) {
     const status = await readStatus(sessionId);
-    if (opts.acceptable.includes(status.phase)) {
-      return status;
-    }
-    if (Date.now() >= deadline) {
-      return status;
-    }
+    if (opts.acceptable.includes(status.phase)) return status;
+    if (Date.now() >= deadline) return status;
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 }
 
-async function startCommand(flags: Map<string, string | boolean>) {
+async function startCommand(flags) {
   await ensureSessionsRoot();
   const sessionId =
     (typeof flags.get("--session") === "string" ? String(flags.get("--session")) : "").trim() ||
@@ -410,9 +365,8 @@ async function startCommand(flags: Map<string, string | boolean>) {
     path.join(sessionDir, "store");
   const idleExit =
     typeof flags.get("--idle-exit") === "string" ? String(flags.get("--idle-exit")) : "120s";
-  const waitMs = parseDurationMs(flags.get("--wait-ms"), 15_000);
+  const waitMs = parseDurationMs(flags.get("--wait-ms"), 15000);
   const follow = flags.get("--follow") === true;
-
   await fsp.mkdir(sessionDir, { recursive: true });
   await fsp.mkdir(storeDir, { recursive: true });
   const logPath = path.join(sessionDir, LOG_FILE);
@@ -424,12 +378,9 @@ async function startCommand(flags: Map<string, string | boolean>) {
     storeDir,
     logPath,
   });
-
   const child = spawnChild(
     process.execPath,
     [
-      "--import",
-      "tsx",
       __filename,
       "worker",
       "--session",
@@ -440,20 +391,10 @@ async function startCommand(flags: Map<string, string | boolean>) {
       idleExit,
       ...(follow ? ["--follow"] : []),
     ],
-    {
-      cwd: process.cwd(),
-      detached: true,
-      stdio: "ignore",
-      env: process.env,
-    },
+    { cwd: process.cwd(), detached: true, stdio: "ignore", env: process.env },
   );
   child.unref();
-
-  await writeStatus(sessionDir, {
-    workerPid: child.pid,
-    message: "Waiting for WhatsApp QR…",
-  });
-
+  await writeStatus(sessionDir, { workerPid: child.pid, message: "Waiting for WhatsApp QR…" });
   const status = await waitForPhase(sessionId, {
     timeoutMs: waitMs,
     acceptable: ["qr_ready", "authenticated", "error"],
@@ -462,7 +403,7 @@ async function startCommand(flags: Map<string, string | boolean>) {
   process.exit(status.phase === "error" ? 1 : 0);
 }
 
-async function statusCommand(flags: Map<string, string | boolean>) {
+async function statusCommand(flags) {
   const sessionId = requireSessionId(flags);
   const status = await readStatus(sessionId);
   const auth = await readAuthStatus(status.storeDir);
@@ -478,9 +419,9 @@ async function statusCommand(flags: Map<string, string | boolean>) {
   console.log(JSON.stringify(status, null, 2));
 }
 
-async function waitCommand(flags: Map<string, string | boolean>) {
+async function waitCommand(flags) {
   const sessionId = requireSessionId(flags);
-  const timeoutMs = parseDurationMs(flags.get("--timeout-ms"), 120_000);
+  const timeoutMs = parseDurationMs(flags.get("--timeout-ms"), 120000);
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const status = await readStatus(sessionId);
@@ -506,16 +447,14 @@ async function waitCommand(flags: Map<string, string | boolean>) {
   }
 }
 
-async function stopCommand(flags: Map<string, string | boolean>) {
+async function stopCommand(flags) {
   const sessionId = requireSessionId(flags);
   const status = await readStatus(sessionId);
   const pid = status.workerPid ?? status.pid;
   if (typeof pid === "number" && pid > 0) {
     try {
       process.kill(pid, "SIGTERM");
-    } catch {
-      // ignore dead processes
-    }
+    } catch {}
   }
   const next = await writeStatus(status.sessionDir, {
     phase: "stopped",
@@ -524,7 +463,7 @@ async function stopCommand(flags: Map<string, string | boolean>) {
   console.log(JSON.stringify(next, null, 2));
 }
 
-async function workerCommand(flags: Map<string, string | boolean>) {
+async function workerCommand(flags) {
   const sessionId = requireSessionId(flags);
   const sessionDir = sessionDirFor(sessionId);
   const storeDir =
@@ -536,24 +475,21 @@ async function workerCommand(flags: Map<string, string | boolean>) {
   const logPath = path.join(sessionDir, LOG_FILE);
   const qrPath = path.join(sessionDir, QR_FILE);
   const qrTextPath = path.join(sessionDir, QR_TEXT_FILE);
-
   await fsp.mkdir(sessionDir, { recursive: true });
   await fsp.mkdir(storeDir, { recursive: true });
   await fsp.writeFile(logPath, "", "utf8");
   const logStream = fs.createWriteStream(logPath, { flags: "a" });
-
-  const ptyProcess: IPty = ptySpawn(
+  const ptyProcess = ptySpawn(
     "wacli",
     ["--store", storeDir, "auth", "--idle-exit", idleExit, ...(follow ? ["--follow"] : [])],
     {
       cwd: process.cwd(),
-      env: process.env as Record<string, string>,
+      env: process.env,
       name: process.env.TERM ?? "xterm-256color",
       cols: 200,
       rows: 80,
     },
   );
-
   await writeStatus(sessionDir, {
     phase: "waiting_for_qr",
     message: "Waiting for WhatsApp QR…",
@@ -565,20 +501,13 @@ async function workerCommand(flags: Map<string, string | boolean>) {
     sessionDir,
     storeDir,
   });
-
   let fullLog = "";
   let qrWritten = false;
   const maybeWriteQr = async () => {
-    if (qrWritten) {
-      return;
-    }
+    if (qrWritten) return;
     const qrLines = extractQrLines(fullLog);
-    if (!qrLines) {
-      return;
-    }
-    if (!looksLikeCompleteQr(qrLines)) {
-      return;
-    }
+    if (!qrLines) return;
+    if (!looksLikeCompleteQr(qrLines)) return;
     qrWritten = true;
     await fsp.writeFile(qrTextPath, `${qrLines.join("\n")}\n`, "utf8");
     await renderQrBlockPng(qrLines, qrPath);
@@ -589,18 +518,15 @@ async function workerCommand(flags: Map<string, string | boolean>) {
       qrTextPath,
     });
   };
-
   ptyProcess.onData((chunk) => {
     const sanitized = sanitizeChunk(chunk);
     fullLog += sanitized;
     logStream.write(sanitized);
     void maybeWriteQr();
   });
-
-  const exitEvent = await new Promise<{ exitCode: number; signal?: number }>((resolve) => {
+  const exitEvent = await new Promise((resolve) => {
     ptyProcess.onExit((event) => resolve(event));
   });
-
   logStream.end();
   const auth = await readAuthStatus(storeDir);
   if (auth.authenticated) {

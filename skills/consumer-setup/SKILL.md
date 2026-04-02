@@ -16,8 +16,9 @@ API credentials.
 - Explain the missing setup in plain product language, not raw CLI noise.
 - Offer to help complete setup now.
 - Ask only for the information, approval, or login step the user must provide.
-- Prefer GUI or browser-assisted setup when that will be clearer than sending
-  the user to a terminal.
+- Prefer the product-native setup surface first.
+- For QR-based flows, prefer a direct image attachment over browser or
+  terminal workarounds.
 - Do not expose secrets in chat, logs, or pasted commands.
 - Distinguish missing user setup from missing product/runtime setup.
 - Once setup finishes, verify the skill with the cheapest read-only check before
@@ -78,6 +79,12 @@ explicitly ask for the CLI path.
   the nuance clearly: WhatsApp is paired, history/search may still work, but
   live sync or sending may be unreliable until the phone is online and the
   session reconnects.
+- When pairing via QR, the normal path is to deliver a real image attachment
+  from the helper. Do not transcribe QR block text or force a browser screenshot
+  as the first response.
+- If the QR image cannot be delivered, say that explicitly and stop. Do not
+  retry with text QR noise unless the user explicitly asks for the terminal
+  path.
 - For the terminal path in consumer lanes, prefer the lane-local
   `wacli-auth-local.sh start` helper instead of the repo script path.
 - Prefer product-language guidance such as "open WhatsApp on your phone and
