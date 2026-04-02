@@ -185,6 +185,24 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   if (!shellPath) {
     return;
   }
+  const pathKey = findPathKey(env);
+  const existingEntries = (env[pathKey] ?? "")
+    .split(path.delimiter)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (existingEntries.length === 0) {
+    const merged = mergePathPrepend(
+      undefined,
+      shellPath
+        .split(path.delimiter)
+        .map((part) => part.trim())
+        .filter(Boolean),
+    );
+    if (merged) {
+      env[pathKey] = merged;
+    }
+    return;
+  }
   const entries = shellPath
     .split(path.delimiter)
     .map((part) => part.trim())
@@ -192,11 +210,14 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   if (entries.length === 0) {
     return;
   }
-  const pathKey = findPathKey(env);
-  const merged = mergePathPrepend(env[pathKey], entries);
-  if (merged) {
-    env[pathKey] = merged;
+  const merged = mergePathPrepend(shellPath, existingEntries);
+  if (!merged) {
+    return;
   }
+  // Keep service/runtime PATH precedence intact. Login-shell PATH is only a
+  // fallback source of extra directories, never a reason to outrank lane-local
+  // wrappers that were already injected into PATH by the runtime.
+  env[pathKey] = merged;
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
