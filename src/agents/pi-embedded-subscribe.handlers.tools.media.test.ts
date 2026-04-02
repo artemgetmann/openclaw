@@ -94,6 +94,22 @@ async function emitUntrustedToolMediaResult(
   });
 }
 
+async function emitWhatsAppQrToolResult(ctx: EmbeddedPiSubscribeContext) {
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: "whatsapp_login",
+    toolCallId: "tc-wa-1",
+    isError: false,
+    result: {
+      content: [
+        { type: "text", text: "Scan this QR in WhatsApp → Linked Devices." },
+        { type: "image", data: "base64", mimeType: "image/png" },
+      ],
+      details: { path: "/tmp/openclaw-whatsapp-qr-default.png" },
+    },
+  });
+}
+
 describe("handleToolExecutionEnd media emission", () => {
   it("does not warn for read tool when path is provided via file_path alias", async () => {
     const ctx = createMockContext();
@@ -116,6 +132,17 @@ describe("handleToolExecutionEnd media emission", () => {
 
     expect(onToolResult).toHaveBeenCalledWith({
       mediaUrls: ["/tmp/screenshot.png"],
+    });
+  });
+
+  it("trusts whatsapp_login temp QR files for direct media delivery", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await emitWhatsAppQrToolResult(ctx);
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/openclaw-whatsapp-qr-default.png"],
     });
   });
 

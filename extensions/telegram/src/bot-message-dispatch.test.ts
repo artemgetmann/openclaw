@@ -1897,6 +1897,34 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers tool-result media without falling back to empty response", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolResult?.({
+        text: "Scan this QR in WhatsApp → Linked Devices.",
+        mediaUrls: ["/tmp/openclaw-whatsapp-qr-default.png"],
+      });
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: "Scan this QR in WhatsApp → Linked Devices.",
+            mediaUrls: ["/tmp/openclaw-whatsapp-qr-default.png"],
+          }),
+        ],
+      }),
+    );
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
   it("clears stale preview when response is NO_REPLY", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
