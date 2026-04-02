@@ -78,6 +78,8 @@ explicitly ask for the CLI path.
   the nuance clearly: WhatsApp is paired, history/search may still work, but
   live sync or sending may be unreliable until the phone is online and the
   session reconnects.
+- For the terminal path in consumer lanes, prefer the lane-local
+  `wacli-auth-local.sh start` helper instead of the repo script path.
 - Prefer product-language guidance such as "open WhatsApp on your phone and
   finish pairing" over dumping `wacli auth` / `wacli sync --follow` into chat
   unless the user explicitly wants the CLI path.
