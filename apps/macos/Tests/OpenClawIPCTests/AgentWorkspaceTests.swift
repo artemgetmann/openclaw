@@ -55,14 +55,19 @@ struct AgentWorkspaceTests {
     }
 
     @Test
-    func `bootstrap template requires continuing after rename and prefers Jarvis as the default`() {
+    func `bootstrap template requires emoji completion and prefers Jarvis as the default`() {
         let template = AgentWorkspace.defaultBootstrapTemplate()
 
+        #expect(template.contains("Do not interrogate."))
+        #expect(template.contains("Who am I? Who are you?"))
         #expect(template.contains("Do not stop after the naming step."))
         #expect(template.contains("use those exact options first"))
         #expect(template.contains("lead with"))
         #expect(template.contains("default suggestion"))
         #expect(template.contains("Jarvis"))
+        #expect(template.contains("Your emoji. Everyone needs a signature."))
+        #expect(template.contains("all five first-run questions"))
+        #expect(template.contains("emoji, and Telegram style"))
         #expect(template.contains("Do not end with"))
         #expect(!template.contains("openclaw.json"))
         #expect(!template.contains("private git repo"))
