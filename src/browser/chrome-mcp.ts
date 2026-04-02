@@ -7,6 +7,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { loadConfig } from "../config/config.js";
+import { resolveHostChromeUserDataDir } from "./chrome-host-paths.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
@@ -56,10 +57,7 @@ const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
 // the very next retry should reconnect instead of failing closed for a minute.
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 const DEFAULT_CHROME_MCP_REQUEST_TIMEOUT_MS = 30_000;
-const DEFAULT_CHROME_USER_DATA_DIR = path.join(
-  os.homedir(),
-  "Library/Application Support/Google/Chrome",
-);
+const DEFAULT_CHROME_USER_DATA_DIR = resolveHostChromeUserDataDir("darwin");
 let processCommandLinesReader: (() => string[]) | null = null;
 const profileDirectoryOverrides = new Map<string, string>();
 
@@ -582,7 +580,7 @@ async function resolveChromeMcpArgs(profileName: string, userDataDir?: string): 
   if (discoveredTarget) {
     return [...DEFAULT_CHROME_MCP_ARGS, discoveredTarget.flag, discoveredTarget.url];
   }
-  const normalizedUserDataDir = normalizeChromeMcpUserDataDir(userDataDir);
+  const normalizedUserDataDir = resolveExistingSessionUserDataDir(profileName, userDataDir);
   if (normalizedUserDataDir) {
     traceChromeMcpStage(
       `chrome-mcp-attach-mode profile=${profileName} mode=autoConnect+userDataDir path=${normalizedUserDataDir}`,
