@@ -146,6 +146,82 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("uses the real account home for the built-in live Chrome attach lane", async () => {
+    const cleanroomHome =
+      "/Users/user/Library/Application Support/OpenClaw Consumer/cleanroom-home";
+    const realHome = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-account-home-"));
+    const chromeDir = path.join(realHome, "Library/Application Support/Google/Chrome");
+    await fs.mkdir(chromeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(chromeDir, "DevToolsActivePort"),
+      "9222\n/devtools/browser/live\n",
+    );
+
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/live",
+      }),
+    }));
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      uid: 501,
+      gid: 20,
+      username: "user",
+      homedir: realHome,
+      shell: "/bin/zsh",
+    } as ReturnType<typeof os.userInfo>);
+    vi.stubEnv("HOME", cleanroomHome);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("user-live")).resolves.toEqual([
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--experimentalStructuredContent",
+        "--experimental-page-id-routing",
+        "--browserUrl",
+        "http://127.0.0.1:9222",
+      ]);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:9222/json/version",
+        expect.anything(),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+      await fs.rm(realHome, { recursive: true, force: true });
+    }
+  });
+
+  it("passes the real account Chrome userDataDir to autoConnect when DevToolsActivePort is absent", async () => {
+    const cleanroomHome =
+      "/Users/user/Library/Application Support/OpenClaw Consumer/cleanroom-home";
+    const realHome = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-account-home-"));
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      uid: 501,
+      gid: 20,
+      username: "user",
+      homedir: realHome,
+      shell: "/bin/zsh",
+    } as ReturnType<typeof os.userInfo>);
+    vi.stubEnv("HOME", cleanroomHome);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("user-live")).resolves.toEqual([
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--autoConnect",
+        "--experimentalStructuredContent",
+        "--experimental-page-id-routing",
+        "--userDataDir",
+        "/Users/user/Library/Application Support/Google/Chrome",
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(realHome, { recursive: true, force: true });
+    }
+  });
+
   it("prefers a discovered browserUrl over autoConnect when Chrome exposes /json/version", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-profile-"));
     await fs.writeFile(path.join(tempDir, "DevToolsActivePort"), "9222\n/devtools/browser/stale\n");

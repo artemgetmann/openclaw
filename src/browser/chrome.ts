@@ -26,6 +26,7 @@ import {
   openCdpWebSocket,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
+import { resolveHostChromeUserDataDir } from "./chrome-host-paths.js";
 import {
   type BrowserExecutable,
   resolveGoogleChromeExecutableForPlatform,
@@ -96,15 +97,7 @@ export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSE
 }
 
 function resolveDefaultChromeUserDataDir() {
-  if (process.platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Application Support", "Google", "Chrome");
-  }
-  if (process.platform === "win32") {
-    const localAppData =
-      process.env.LOCALAPPDATA?.trim() || path.join(os.homedir(), "AppData", "Local");
-    return path.join(localAppData, "Google", "Chrome", "User Data");
-  }
-  return path.join(os.homedir(), ".config", "google-chrome");
+  return resolveHostChromeUserDataDir(process.platform);
 }
 
 function readJsonFile(filePath: string): unknown {
