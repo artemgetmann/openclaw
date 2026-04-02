@@ -108,11 +108,12 @@ extension OnboardingView {
     }
 
     func consumerSetupPage() -> some View {
-        self.onboardingPage {
+        let helperBootstrap = ConsumerLocalHelperBootstrap.shared
+        return self.onboardingPage {
             VStack(spacing: 22) {
                 Text("Set up OpenClaw")
                     .font(.largeTitle.weight(.semibold))
-                Text("Connect Chrome first. Then OpenClaw will guide you through the Mac permissions it needs and verify Telegram.")
+                Text("Connect Chrome first. OpenClaw prepares its local helper automatically, then guides you through Mac permissions, AI readiness, and Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -120,6 +121,59 @@ extension OnboardingView {
                     .fixedSize(horizontal: false, vertical: true)
 
                 self.onboardingCard(spacing: 10, padding: 14) {
+                    if helperBootstrap.shouldShowStatusCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: helperBootstrap.hasFailure ? "exclamationmark.triangle.fill" : "gearshape.2.fill")
+                                    .foregroundStyle(helperBootstrap.hasFailure ? .orange : .accentColor)
+                                    .frame(width: 18)
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Preparing OpenClaw on this Mac")
+                                        .font(.headline)
+                                    Text(
+                                        helperBootstrap.hasFailure
+                                            ? "OpenClaw could not finish local bootstrap automatically. Retry here first; Terminal is only a backup path."
+                                            : "This local helper keeps the gateway running in the background. You do not need Terminal for the normal setup flow.")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+
+                            if helperBootstrap.isInstalling {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+
+                            if let status = helperBootstrap.statusMessage {
+                                Text(status)
+                                    .font(.footnote)
+                                    .foregroundStyle(helperBootstrap.hasFailure ? .orange : .secondary)
+                            }
+
+                            if helperBootstrap.hasFailure && !helperBootstrap.isInstalling {
+                                HStack(spacing: 12) {
+                                    Button("Retry local setup") {
+                                        Task {
+                                            await helperBootstrap.ensureInstalledIfNeeded(
+                                                connectionMode: self.state.connectionMode)
+                                        }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+
+                                    Button(self.copied ? "Copied" : "Copy fallback command") {
+                                        self.copyToPasteboard(self.devLinkCommand)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                        }
+
+                        Divider()
+                            .padding(.vertical, 6)
+                    }
+
                     BrowserSetupCardContent(
                         model: self.browserSetup,
                         presentation: .onboarding)
@@ -183,6 +237,10 @@ extension OnboardingView {
                 .frame(maxWidth: 520)
             }
             .padding(.top, 16)
+        }
+        .task {
+            helperBootstrap.refresh()
+            await helperBootstrap.ensureInstalledIfNeeded(connectionMode: self.state.connectionMode)
         }
     }
 

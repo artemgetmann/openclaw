@@ -2,6 +2,12 @@ import Foundation
 
 @MainActor
 enum CLIInstaller {
+    enum EnsureResult: Equatable {
+        case alreadyInstalled(String)
+        case installed(String)
+        case failed(String)
+    }
+
     static func installedLocation() -> String? {
         self.installedLocation(
             searchPaths: CommandResolver.preferredPaths(),
@@ -32,6 +38,23 @@ enum CLIInstaller {
 
     static func isInstalled() -> Bool {
         self.installedLocation() != nil
+    }
+
+    static func ensureInstalledIfNeeded(
+        statusHandler: @escaping @MainActor @Sendable (String) async -> Void = { _ in })
+        async -> EnsureResult
+    {
+        if let location = self.installedLocation() {
+            return .alreadyInstalled(location)
+        }
+
+        await self.install(statusHandler: statusHandler)
+
+        if let location = self.installedLocation() {
+            return .installed(location)
+        }
+
+        return .failed("OpenClaw could not install its local helper.")
     }
 
     static func install(statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async {

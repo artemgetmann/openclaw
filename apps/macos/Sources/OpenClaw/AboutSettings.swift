@@ -81,7 +81,10 @@ struct AboutSettings: View {
                         Button("Check for Updates…") { updater.checkForUpdates(nil) }
                     }
                 } else {
-                    Text("Updates unavailable in this build.")
+                    Text(
+                        self.isConsumer
+                            ? "Beta updates are delivered manually in this build."
+                            : "Updates unavailable in this build.")
                         .foregroundStyle(.secondary)
                         .padding(.top, 4)
                 }
