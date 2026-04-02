@@ -45,6 +45,34 @@ plist_value() {
   /usr/libexec/PlistBuddy -c "Print :${key_path}" "$plist_path" 2>/dev/null || true
 }
 
+seed_launchd_session_env() {
+  local key=""
+  local value=""
+  local keys=(
+    GOOGLE_PLACES_API_KEY
+    HIMALAYA_CONFIG
+    BRAVE_API_KEY
+    FIRECRAWL_API_KEY
+    XDG_CONFIG_HOME
+    XDG_DATA_HOME
+    GOG_KEYRING_PASSWORD
+    OPENCLAW_SERVICE_PATH_PREFIX
+    OPENCLAW_CONSUMER_INSTANCE_ID
+  )
+
+  # `open -n` does not reliably preserve ad-hoc shell env for GUI apps.
+  # Seed the current GUI session explicitly so the consumer app and any launchd
+  # children inherit the cleanroom paths instead of drifting back to founder state.
+  for key in "${keys[@]}"; do
+    value="${!key:-}"
+    if [[ -n "$value" ]]; then
+      /bin/launchctl setenv "$key" "$value" >/dev/null 2>&1 || true
+    else
+      /bin/launchctl unsetenv "$key" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
 bootout_conflicting_gateway_label() {
   local label="$1"
   local target_label="$2"
@@ -255,6 +283,8 @@ fi
 if [[ "$REPLACE" == "1" ]]; then
   terminate_matching_app_binary "$APP_PATH/Contents/MacOS/OpenClaw"
 fi
+
+seed_launchd_session_env
 
 if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
   # The GUI app process itself must inherit the clean-room tool paths.

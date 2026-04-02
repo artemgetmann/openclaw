@@ -1,6 +1,6 @@
 # Consumer First-Run Friction Report
 
-Last updated: 2026-03-24
+Last updated: 2026-04-02
 Scope: install -> permissions -> browser -> Telegram -> first delegated task
 
 ## What blocked first-run users
@@ -55,11 +55,11 @@ Scope: install -> permissions -> browser -> Telegram -> first delegated task
     - `gog`
     - `goplaces`
     - `himalaya`
+    - `wacli`
   - Not part of the clean default promise for this MVP:
     - `bear-notes`
     - `camsnap`
     - `canvas`
-    - WhatsApp CLI
     - generic Google CLI setup beyond the seeded Google lane
     - other founder-only or manually provisioned skills
 

@@ -103,11 +103,11 @@ Bundled skills are intentionally curated, not universal.
   - `gog`
   - `goplaces`
   - `himalaya`
+  - `wacli` / WhatsApp CLI
 - Not part of the clean first-run promise for this MVP:
   - `bear-notes`
   - `camsnap`
   - `canvas`
-  - `wacli` / WhatsApp CLI
   - extra Google CLI setup beyond the seeded Google lane
   - manually provisioned founder-only skills
 
@@ -117,7 +117,6 @@ Consumer copy caveat:
 - The live WhatsApp channel is a separate runtime path for real chat replies.
 - Do not describe `wacli` as if it powers the normal WhatsApp bot/channel
   experience, because it does not.
-
   - WhatsApp CLI here means the local inbox/search/send utility, not the live
     WhatsApp channel. The live channel is a separate runtime path and should be
     documented as such so users do not expect the CLI tool to power normal chat
