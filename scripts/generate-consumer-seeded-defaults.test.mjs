@@ -59,9 +59,7 @@ void test("seeds only the supported consumer defaults from env", () => {
           firecrawl: {
             apiKey: "firecrawl-key",
           },
-          brave: {
-            apiKey: "brave-key",
-          },
+          apiKey: "brave-key",
         },
       },
     },
@@ -137,9 +135,7 @@ void test("falls back to founder config when shell env is empty", () => {
           firecrawl: {
             apiKey: "founder-firecrawl",
           },
-          brave: {
-            apiKey: "founder-brave",
-          },
+          apiKey: "founder-brave",
         },
       },
     },
@@ -164,9 +160,7 @@ void test("falls back to Brave search when Firecrawl is not available", () => {
         search: {
           enabled: true,
           provider: "brave",
-          brave: {
-            apiKey: "brave-key",
-          },
+          apiKey: "brave-key",
         },
       },
     },
@@ -195,6 +189,40 @@ void test("seeds OpenAI provider defaults without forcing memory-lancedb on", ()
               model: "text-embedding-3-small",
             },
           },
+        },
+      },
+    },
+  });
+});
+
+void test("reads legacy founder Brave keys from the nested provider path but rewrites them to search.apiKey", () => {
+  const seeded = buildConsumerSeededDefaults({
+    env: {},
+    founderConfig: {
+      tools: {
+        web: {
+          search: {
+            brave: {
+              apiKey: "legacy-brave-key",
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(seeded, {
+    env: {
+      vars: {
+        BRAVE_API_KEY: "legacy-brave-key",
+      },
+    },
+    tools: {
+      web: {
+        search: {
+          enabled: true,
+          provider: "brave",
+          apiKey: "legacy-brave-key",
         },
       },
     },

@@ -92,7 +92,10 @@ struct ConsumerBootstrapTests {
                     "search": [
                         "provider": "brave",
                         "enabled": true,
-                        "apiKey": "brave-test-key", // pragma: allowlist secret
+                        "brave": [
+                            "apiKey": "brave-test-key", // pragma: allowlist secret
+                            "mode": "llm-context",
+                        ],
                     ],
                     "fetch": [
                         "enabled": true,
@@ -124,9 +127,42 @@ struct ConsumerBootstrapTests {
             #expect(search?["provider"] as? String == "brave")
             #expect(search?["enabled"] as? Bool == true)
             #expect(search?["apiKey"] as? String == "brave-test-key")
+            let brave = search?["brave"] as? [String: Any]
+            #expect(brave?["mode"] as? String == "llm-context")
+            #expect(brave?["apiKey"] == nil)
             #expect(fetch?["enabled"] as? Bool == true)
             #expect(firecrawl?["enabled"] as? Bool == true)
             #expect(firecrawl?["apiKey"] as? String == "firecrawl-test-key")
+        }
+    }
+
+    @Test func `consumer bootstrap migrates existing legacy Brave search keys in place`() async {
+        await TestIsolation.withIsolatedState(env: [ConsumerInstance.envKey: nil]) {
+            var root: [String: Any] = [
+                "tools": [
+                    "web": [
+                        "search": [
+                            "enabled": true,
+                            "provider": "brave",
+                            "brave": [
+                                "apiKey": "legacy-brave-key", // pragma: allowlist secret
+                                "mode": "web",
+                            ],
+                        ],
+                    ],
+                ],
+            ]
+
+            let changed = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+            let tools = root["tools"] as? [String: Any]
+            let web = tools?["web"] as? [String: Any]
+            let search = web?["search"] as? [String: Any]
+            let brave = search?["brave"] as? [String: Any]
+
+            #expect(changed)
+            #expect(search?["apiKey"] as? String == "legacy-brave-key")
+            #expect(brave?["mode"] as? String == "web")
+            #expect(brave?["apiKey"] == nil)
         }
     }
 
@@ -270,5 +306,31 @@ struct ConsumerBootstrapTests {
             #expect(agentDefaults?["workspace"] as? String == ConsumerRuntime.workspaceURL.path)
             #expect((agentDefaults?["workspace"] as? String)?.contains("/instances/smoke-1/.openclaw/workspace") == true)
         }
+    }
+
+    @Test func `consumer bootstrap migrates legacy brave search api key shape`() async {
+        var root: [String: Any] = [
+            "tools": [
+                "web": [
+                    "search": [
+                        "provider": "brave",
+                        "enabled": true,
+                        "brave": [
+                            "apiKey": "legacy-brave-key", // pragma: allowlist secret
+                        ],
+                    ],
+                ],
+            ],
+        ]
+
+        let changed = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+
+        let tools = root["tools"] as? [String: Any]
+        let web = tools?["web"] as? [String: Any]
+        let search = web?["search"] as? [String: Any]
+
+        #expect(changed)
+        #expect(search?["apiKey"] as? String == "legacy-brave-key")
+        #expect(search?["brave"] == nil)
     }
 }

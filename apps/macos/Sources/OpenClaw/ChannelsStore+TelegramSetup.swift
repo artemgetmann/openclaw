@@ -2,6 +2,8 @@ import AppKit
 import Foundation
 
 extension ChannelsStore {
+    private static let consumerDefaultTelegramAccountId = "default"
+
     func telegramRuntimeOwnershipIssue() -> String? {
         guard AppFlavor.current.isConsumer else { return nil }
         guard !self.isPreview else { return nil }
@@ -233,7 +235,17 @@ extension ChannelsStore {
         // captured first DM. Otherwise the live poller can wake up mid-setup and
         // race the replay path into duplicate replies or fake ownership conflicts.
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("enabled")], value: enabled)
+        self.updateConfigValue(
+            path: [.key("channels"), .key("telegram"), .key("defaultAccount")],
+            value: Self.consumerDefaultTelegramAccountId)
+        // The consumer onboarding flow is still single-account, but setup replay
+        // resolves Telegram through the account-scoped helpers. Mirror the token
+        // into accounts.default so the first-task replay and the live poller use
+        // the same bot identity instead of splitting across legacy vs account paths.
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("botToken")], value: token)
+        self.updateConfigValue(
+            path: [.key("channels"), .key("telegram"), .key("accounts"), .key(Self.consumerDefaultTelegramAccountId), .key("botToken")],
+            value: token)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("dmPolicy")], value: dmPolicy)
         // Mirror the founder runtime's Telegram group defaults for consumer
         // onboarding: groups should work for the verified owner without forcing
@@ -356,6 +368,19 @@ extension ChannelsStore {
         guard persistedEnabled == enabled else {
             throw TelegramBootstrapPersistenceError.persistedConfigMismatch
         }
+        let persistedDefaultAccount = (telegram["defaultAccount"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard persistedDefaultAccount == Self.consumerDefaultTelegramAccountId else {
+            throw TelegramBootstrapPersistenceError.persistedConfigMismatch
+        }
+        let persistedAccounts = telegram["accounts"] as? [String: Any]
+        let persistedDefault = persistedAccounts?[Self.consumerDefaultTelegramAccountId] as? [String: Any]
+        let persistedToken = TelegramSetupVerifier.normalizeToken((telegram["botToken"] as? String) ?? "")
+        let persistedAccountToken = TelegramSetupVerifier.normalizeToken(
+            (persistedDefault?["botToken"] as? String) ?? "")
+        guard !persistedToken.isEmpty, persistedToken == persistedAccountToken else {
+            throw TelegramBootstrapPersistenceError.persistedConfigMismatch
+        }
         let persistedPolicy = (telegram["dmPolicy"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard persistedPolicy == dmPolicy else {
@@ -392,7 +417,7 @@ extension ChannelsStore {
 
         await self.restoreConfigDraftFromCurrentSource()
         let telegram = ((self.configDraft["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
-        let configuredToken = TelegramSetupVerifier.normalizeToken((telegram["botToken"] as? String) ?? "")
+        let configuredToken = self.consumerConfiguredTelegramToken(in: telegram)
         let enabled = telegram["enabled"] as? Bool ?? false
 
         guard enabled, configuredToken == token else {
@@ -415,6 +440,16 @@ extension ChannelsStore {
         Task { await self.refresh(probe: true) }
         try await Task.sleep(nanoseconds: 1_500_000_000)
         return true
+    }
+
+    func consumerConfiguredTelegramToken(in telegram: [String: Any]) -> String {
+        let legacyToken = TelegramSetupVerifier.normalizeToken((telegram["botToken"] as? String) ?? "")
+        if !legacyToken.isEmpty {
+            return legacyToken
+        }
+        let accounts = telegram["accounts"] as? [String: Any]
+        let defaultAccount = accounts?[Self.consumerDefaultTelegramAccountId] as? [String: Any]
+        return TelegramSetupVerifier.normalizeToken((defaultAccount?["botToken"] as? String) ?? "")
     }
 
     private func restoreTelegramPairingAfterSetupPause(token: String) async throws {

@@ -5,7 +5,7 @@ import {
   readTelegramUpdateOffset,
   writeTelegramUpdateOffset,
 } from "../../../extensions/telegram/src/update-offset-store.js";
-import { loadConfig } from "../../config/config.js";
+import { createConfigIO } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 export type ChannelsTelegramReplaySetupDmOptions = {
@@ -145,7 +145,11 @@ export async function replayTelegramSetupDirectMessage(params: {
   // Parse and validate the captured DM once inside the backend process so the
   // gateway and CLI wrapper share the exact same replay behavior.
   const payload = parsePayload(params.payloadJson);
-  const cfg = loadConfig();
+  // Consumer onboarding writes the lane-local config file directly, then asks
+  // the live gateway to replay the first Telegram DM immediately. Reading via
+  // the long-lived runtime snapshot can lag that write and falsely claim the
+  // bot token is missing. Re-read the authoritative config file here instead.
+  const cfg = createConfigIO().loadConfigReadOnly();
   const account = resolveTelegramAccount({
     cfg,
     accountId: params.account,
