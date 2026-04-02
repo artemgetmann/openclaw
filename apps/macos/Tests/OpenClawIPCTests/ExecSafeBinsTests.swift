@@ -34,8 +34,14 @@ struct ExecSafeBinsTests {
             profilesByName: [
                 "wacli": ExecSafeBinProfile(
                     minPositional: nil,
-                    maxPositional: 1,
-                    allowedValueFlags: Set(),
+                    maxPositional: 3,
+                    allowedValueFlags: Set([
+                        "--limit",
+                        "--query",
+                        "--after",
+                        "--before",
+                        "--chat",
+                    ]),
                     deniedFlags: Set()),
             ],
             trustedDirs: Set(["/tmp/openclaw-cleanroom/bin"]))
@@ -52,14 +58,55 @@ struct ExecSafeBinsTests {
                 policy: policy))
     }
 
+    @Test func `allows lane local wacli chats list read shape`() {
+        let policy = ExecSafeBinPolicy(
+            safeBins: Set(["wacli"]),
+            profilesByName: [
+                "wacli": ExecSafeBinProfile(
+                    minPositional: nil,
+                    maxPositional: 3,
+                    allowedValueFlags: Set([
+                        "--limit",
+                        "--query",
+                        "--after",
+                        "--before",
+                        "--chat",
+                    ]),
+                    deniedFlags: Set()),
+            ],
+            trustedDirs: Set(["/tmp/openclaw-cleanroom/bin"]))
+        let resolution = ExecCommandResolution(
+            rawExecutable: "wacli",
+            resolvedPath: "/tmp/openclaw-cleanroom/bin/wacli",
+            executableName: "wacli",
+            cwd: nil)
+
+        #expect(
+            ExecSafeBins._testIsAllowed(
+                command: ["wacli", "chats", "list", "--limit", "5"],
+                resolution: resolution,
+                policy: policy))
+        #expect(
+            ExecSafeBins._testIsAllowed(
+                command: ["wacli", "messages", "list", "--limit", "5", "--chat", "971552857036@s.whatsapp.net"],
+                resolution: resolution,
+                policy: policy))
+    }
+
     @Test func `rejects same basename outside trusted cleanroom`() {
         let policy = ExecSafeBinPolicy(
             safeBins: Set(["wacli"]),
             profilesByName: [
                 "wacli": ExecSafeBinProfile(
                     minPositional: nil,
-                    maxPositional: 1,
-                    allowedValueFlags: Set(),
+                    maxPositional: 3,
+                    allowedValueFlags: Set([
+                        "--limit",
+                        "--query",
+                        "--after",
+                        "--before",
+                        "--chat",
+                    ]),
                     deniedFlags: Set()),
             ],
             trustedDirs: Set(["/tmp/openclaw-cleanroom/bin"]))
@@ -82,8 +129,14 @@ struct ExecSafeBinsTests {
             profilesByName: [
                 "wacli": ExecSafeBinProfile(
                     minPositional: nil,
-                    maxPositional: 1,
-                    allowedValueFlags: Set(),
+                    maxPositional: 3,
+                    allowedValueFlags: Set([
+                        "--limit",
+                        "--query",
+                        "--after",
+                        "--before",
+                        "--chat",
+                    ]),
                     deniedFlags: Set()),
             ],
             trustedDirs: Set(["/tmp/openclaw-cleanroom/bin"]))

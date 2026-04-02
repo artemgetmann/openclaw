@@ -94,7 +94,7 @@ explicitly ask for the CLI path.
   finish pairing" over dumping `wacli auth` / `wacli sync --follow` into chat
   unless the user explicitly wants the CLI path.
 - Verify with the cheapest read-only checks first: `wacli doctor`, then
-  `wacli chats list --limit 5 --json`.
+  `wacli chats list --limit 5`.
 - Run those checks as separate direct invocations. Never combine them into one
   shell command with `&&` or similar operators in consumer chat flows.
 - If an attempted command is blocked because you used the wrong execution
