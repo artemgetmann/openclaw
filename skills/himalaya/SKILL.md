@@ -38,6 +38,8 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 - If configuration is missing, do not dump raw CLI noise back to the user.
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
 - Treat send/reply/forward as higher-risk actions; prove read-only access first.
+- For the stock Homebrew build, prefer password or app-password auth. The local
+  `himalaya v1.1.0` build here does not include OAuth2 support.
 
 ## Setup Routing
 
@@ -46,6 +48,44 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
   inline setup blob here.
 - `references/configuration.md` still holds the raw config details for the
   opt-in CLI/manual path when you are the one executing setup.
+- If you need the manual CLI path, the account wizard requires an explicit
+  account name in v1.1.x:
+
+```bash
+himalaya account configure personal
+```
+
+Or create `~/.config/himalaya/config.toml` manually:
+
+```toml
+[accounts.personal]
+email = "you@example.com"
+display-name = "Your Name"
+default = true
+
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "Sent"
+folder.aliases.drafts = "Drafts"
+folder.aliases.trash = "Trash"
+
+backend.type = "imap"
+backend.host = "imap.example.com"
+backend.port = 993
+backend.encryption.type = "tls"
+backend.login = "you@example.com"
+backend.auth.type = "password"
+backend.auth.cmd = "pass show email/imap"  # or use keyring
+
+message.send.backend.type = "smtp"
+message.send.backend.host = "smtp.example.com"
+message.send.backend.port = 587
+message.send.backend.encryption.type = "start-tls"
+message.send.backend.login = "you@example.com"
+message.send.backend.auth.type = "password"
+message.send.backend.auth.cmd = "pass show email/smtp"
+```
+
+Use the provider-specific Gmail and iCloud templates in `references/configuration.md` instead of guessing mailbox names.
 
 ## Common Operations
 
@@ -131,7 +171,7 @@ himalaya message write
 Send directly using template:
 
 ```bash
-cat << 'EOF' | himalaya template send
+cat << 'EOF' | himalaya template send -a personal
 From: you@example.com
 To: recipient@example.com
 Subject: Test Message
@@ -151,13 +191,13 @@ himalaya message write -H "To:recipient@example.com" -H "Subject:Test" "Message 
 Move to folder:
 
 ```bash
-himalaya message move 42 "Archive"
+himalaya message move "Archive" 42
 ```
 
 Copy to folder:
 
 ```bash
-himalaya message copy 42 "Important"
+himalaya message copy "Important" 42
 ```
 
 ### Delete an Email
@@ -171,13 +211,13 @@ himalaya message delete 42
 Add flag:
 
 ```bash
-himalaya flag add 42 --flag seen
+himalaya flag add 42 seen
 ```
 
 Remove flag:
 
 ```bash
-himalaya flag remove 42 --flag seen
+himalaya flag remove 42 seen
 ```
 
 ## Multiple Accounts
@@ -234,6 +274,7 @@ RUST_LOG=trace RUST_BACKTRACE=1 himalaya envelope list
 ## Tips
 
 - Use `himalaya --help` or `himalaya <command> --help` for detailed usage.
+- In v1.1.x, account selection lives on the subcommand: `himalaya envelope list -a work`, not `himalaya --account work ...`.
 - Message IDs are relative to the current folder; re-list after folder changes.
 - For composing rich emails with attachments, use MML syntax (see `references/message-composition.md`).
 - Store passwords securely using `pass`, system keyring, or a command that outputs the password.

@@ -45,8 +45,12 @@ explicitly ask for the CLI path.
 - Ask for the mail provider and permission to walk through login/config.
 - Prefer provider login or app-password guidance over dumping a manual TOML
   template into chat.
+- For Gmail and iCloud on the stock Homebrew build, prefer app-password setup
+  with provider-specific folder aliases. Do not default to OAuth2 unless the
+  installed Himalaya build actually includes that feature.
 - Verify with read-only commands first: `himalaya account list`,
-  `himalaya folder list`, or `himalaya envelope list`.
+  `himalaya folder list -a <account>`, or
+  `himalaya envelope list -a <account>`.
 
 ### WhatsApp CLI
 
