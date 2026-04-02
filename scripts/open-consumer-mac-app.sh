@@ -257,6 +257,9 @@ if [[ "$REPLACE" == "1" ]]; then
 fi
 
 if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
+  # The GUI app process itself must inherit the clean-room tool paths.
+  # Launchd only gets the environment we hand to `open`, so if we drop these
+  # here the onboarding shell-outs can silently fall back to shared host config.
   env -i \
     HOME="${HOME}" \
     USER="${USER:-$(id -un)}" \
@@ -266,9 +269,15 @@ if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
     LANG="${LANG:-en_US.UTF-8}" \
     GOOGLE_PLACES_API_KEY="${GOOGLE_PLACES_API_KEY:-}" \
     HIMALAYA_CONFIG="${HIMALAYA_CONFIG:-}" \
+    XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" \
+    XDG_DATA_HOME="${XDG_DATA_HOME:-}" \
+    GOG_KEYRING_PASSWORD="${GOG_KEYRING_PASSWORD:-}" \
+    OPENCLAW_SERVICE_PATH_PREFIX="${OPENCLAW_SERVICE_PATH_PREFIX:-}" \
     OPENCLAW_CONSUMER_INSTANCE_ID="$NORMALIZED_INSTANCE_ID" \
     /usr/bin/open -n "$APP_PATH"
 else
+  # Keep the default consumer lane equally isolated when we open the app
+  # without a named instance.
   env -i \
     HOME="${HOME}" \
     USER="${USER:-$(id -un)}" \
@@ -278,6 +287,10 @@ else
     LANG="${LANG:-en_US.UTF-8}" \
     GOOGLE_PLACES_API_KEY="${GOOGLE_PLACES_API_KEY:-}" \
     HIMALAYA_CONFIG="${HIMALAYA_CONFIG:-}" \
+    XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" \
+    XDG_DATA_HOME="${XDG_DATA_HOME:-}" \
+    GOG_KEYRING_PASSWORD="${GOG_KEYRING_PASSWORD:-}" \
+    OPENCLAW_SERVICE_PATH_PREFIX="${OPENCLAW_SERVICE_PATH_PREFIX:-}" \
     /usr/bin/open -n "$APP_PATH"
 fi
 
