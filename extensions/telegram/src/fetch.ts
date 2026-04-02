@@ -56,7 +56,7 @@ type Ipv4FallbackCandidate = {
 
 type Ipv4FallbackRule = {
   name: string;
-  matches: (ctx: Ipv4FallbackContext) => boolean;
+  matches: (ctx: Ipv4FallbackCandidate) => boolean;
 };
 
 const IPV4_FALLBACK_RULES: readonly Ipv4FallbackRule[] = [

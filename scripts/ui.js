@@ -45,10 +45,116 @@ function which(cmd) {
   return null;
 }
 
-function resolveRunner() {
-  const pnpm = which("pnpm");
+function prependPathEntry(entry, currentPath = process.env.PATH ?? "") {
+  if (!entry) {
+    return currentPath;
+  }
+  const segments = currentPath.split(path.delimiter).filter(Boolean);
+  if (segments.includes(entry)) {
+    return currentPath || entry;
+  }
+  return currentPath ? `${entry}${path.delimiter}${currentPath}` : entry;
+}
+
+function collectNodeToolchainCandidates({
+  nodeExecPath = process.execPath,
+  envNodeBin = process.env.OPENCLAW_NODE_BIN,
+  realpathSync = fs.realpathSync,
+} = {}) {
+  const candidates = [];
+  const seen = new Set();
+
+  function pushCandidate(candidate) {
+    if (!candidate || seen.has(candidate)) {
+      return;
+    }
+    seen.add(candidate);
+    candidates.push(candidate);
+  }
+
+  pushCandidate(envNodeBin);
+  pushCandidate(nodeExecPath);
+
+  // Homebrew and similar package managers often expose one stable symlink and
+  // one versioned cellar path. Probe both so the fallback survives whichever
+  // path Node used to launch this script.
+  for (const candidate of candidates) {
+    try {
+      pushCandidate(realpathSync(candidate));
+    } catch {
+      // ignore
+    }
+  }
+
+  return candidates;
+}
+
+export function resolveCorepackBinary({
+  nodeExecPath = process.execPath,
+  envNodeBin = process.env.OPENCLAW_NODE_BIN,
+  platform = process.platform,
+  existsSync = fs.existsSync,
+  realpathSync = fs.realpathSync,
+} = {}) {
+  const corepackName = platform === "win32" ? "corepack.cmd" : "corepack";
+
+  for (const candidateNode of collectNodeToolchainCandidates({
+    nodeExecPath,
+    envNodeBin,
+    realpathSync,
+  })) {
+    const candidate = path.join(path.dirname(candidateNode), corepackName);
+    try {
+      if (existsSync(candidate)) {
+        return {
+          corepackPath: candidate,
+          nodeExecPath: candidateNode,
+        };
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
+}
+
+export function resolveRunner({
+  pnpmPath,
+  nodeExecPath = process.execPath,
+  envNodeBin = process.env.OPENCLAW_NODE_BIN,
+  platform = process.platform,
+  existsSync = fs.existsSync,
+  realpathSync = fs.realpathSync,
+} = {}) {
+  const pnpm = pnpmPath === undefined ? which("pnpm") : pnpmPath;
   if (pnpm) {
-    return { cmd: pnpm, kind: "pnpm" };
+    return { cmd: pnpm, argvPrefix: [], kind: "pnpm" };
+  }
+
+  // launchd often starts without the interactive shell PATH, so fall back to
+  // the Corepack binary shipped with the active Node runtime before declaring
+  // pnpm missing.
+  const toolchain = resolveCorepackBinary({
+    nodeExecPath,
+    envNodeBin,
+    platform,
+    existsSync,
+    realpathSync,
+  });
+  if (toolchain) {
+    const nodeDir = path.dirname(toolchain.nodeExecPath);
+    // Corepack itself is a node script (`#!/usr/bin/env node`), so launchd
+    // recovery needs the exact Node/Corepack pair that lived together on disk
+    // instead of trusting `node` to be on PATH or mixing two installs.
+    return {
+      cmd: toolchain.nodeExecPath,
+      argvPrefix: [toolchain.corepackPath, "pnpm"],
+      envPatch: {
+        PATH: prependPathEntry(nodeDir),
+      },
+      kind: "corepack-pnpm",
+    };
   }
   return null;
 }
@@ -89,10 +195,10 @@ function createSpawnOptions(cmd, args, envOverride) {
   };
 }
 
-function run(cmd, args) {
+function run(cmd, args, envOverride) {
   let child;
   try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    child = spawn(cmd, args, createSpawnOptions(cmd, args, envOverride));
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -168,7 +274,9 @@ export function main(argv = process.argv.slice(2)) {
 
   const runner = resolveRunner();
   if (!runner) {
-    process.stderr.write("Missing UI runner: install pnpm, then retry.\n");
+    process.stderr.write(
+      "Missing UI runner: install pnpm or use Node with corepack, then retry.\n",
+    );
     process.exit(1);
   }
 
@@ -179,18 +287,21 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   if (action === "install") {
-    run(runner.cmd, ["install", ...rest]);
+    const installEnv = runner.envPatch ? { ...process.env, ...runner.envPatch } : undefined;
+    run(runner.cmd, [...runner.argvPrefix, "install", ...rest], installEnv);
     return;
   }
 
   if (!depsInstalled(action === "test" ? "test" : "build")) {
-    const installEnv =
+    const baseInstallEnv =
       action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;
+    const installEnv = runner.envPatch ? { ...baseInstallEnv, ...runner.envPatch } : baseInstallEnv;
     const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
-    runSync(runner.cmd, installArgs, installEnv);
+    runSync(runner.cmd, [...runner.argvPrefix, ...installArgs], installEnv);
   }
 
-  run(runner.cmd, ["run", script, ...rest]);
+  const runEnv = runner.envPatch ? { ...process.env, ...runner.envPatch } : undefined;
+  run(runner.cmd, [...runner.argvPrefix, "run", script, ...rest], runEnv);
 }
 
 const isDirectExecution = (() => {
