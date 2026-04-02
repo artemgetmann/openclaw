@@ -132,6 +132,7 @@ openclaw_run_repo_pnpm() {
   local node_bin=""
   local node_dir=""
   local corepack_bin=""
+  local corepack_shim_dir=""
   local expected_package_manager=""
   local actual_pnpm_version=""
 
@@ -145,9 +146,20 @@ openclaw_run_repo_pnpm() {
   # Prefer the Corepack binary that ships with the validated Node install so
   # pnpm resolution is anchored to the same runtime line instead of shell PATH.
   if [[ -x "$corepack_bin" ]]; then
+    # Package scripts in this repo shell out to `pnpm` again (for example the
+    # main build script). When launchd starts without pnpm on PATH, expose a
+    # tiny repo-local shim so nested `pnpm ...` calls resolve back through the
+    # same validated Node/Corepack pair instead of failing mid-build.
+    corepack_shim_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm-shim.XXXXXX")"
+    cat > "${corepack_shim_dir}/pnpm" <<EOF
+#!/usr/bin/env bash
+exec "${node_bin}" "${corepack_bin}" pnpm "\$@"
+EOF
+    chmod 700 "${corepack_shim_dir}/pnpm"
     (
+      trap 'rm -rf "'"${corepack_shim_dir}"'"' EXIT
       cd "$root"
-      "$corepack_bin" pnpm "$@"
+      PATH="${corepack_shim_dir}:${node_dir}:${PATH:-}" "$node_bin" "$corepack_bin" pnpm "$@"
     )
     return $?
   fi

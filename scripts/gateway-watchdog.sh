@@ -15,6 +15,12 @@ WATCHDOG_LOG_MAX_BYTES="${OPENCLAW_GATEWAY_WATCHDOG_LOG_MAX_BYTES:-1048576}"
 LOCK_DIR="${HOME}/.openclaw/watchdog"
 LOCK_PATH="${LOCK_DIR}/gateway-watchdog.lock"
 LOCK_PID_PATH="${LOCK_PATH}/pid"
+VALIDATED_NODE_HELPER="${MAIN_REPO}/scripts/lib/validated-node.sh"
+
+if [[ -f "${VALIDATED_NODE_HELPER}" ]]; then
+  # shellcheck disable=SC1090
+  source "${VALIDATED_NODE_HELPER}"
+fi
 
 mkdir -p "${LOCK_DIR}"
 
@@ -53,7 +59,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-resolve_node_bin() {
+resolve_node_bin_fallback() {
   if [[ -n "${OPENCLAW_NODE_BIN:-}" && -x "${OPENCLAW_NODE_BIN}" ]]; then
     printf '%s\n' "${OPENCLAW_NODE_BIN}"
     return 0
@@ -75,6 +81,19 @@ resolve_node_bin() {
   done
 
   return 1
+}
+
+resolve_node_bin() {
+  # The watchdog decides whether prod needs recovery. Pin it to the same
+  # validated Node/runtime line as the shared gateway so status probes do not
+  # fail simply because launchd inherited a different PATH after reboot.
+  if declare -F openclaw_use_validated_node >/dev/null 2>&1 &&
+    openclaw_use_validated_node "${MAIN_REPO}" >/dev/null 2>&1; then
+    printf '%s\n' "${OPENCLAW_NODE_BIN}"
+    return 0
+  fi
+
+  resolve_node_bin_fallback
 }
 
 NODE_BIN="$(resolve_node_bin)" || {
