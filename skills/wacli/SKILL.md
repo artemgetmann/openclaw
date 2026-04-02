@@ -67,11 +67,14 @@ Setup Routing
 - For local pairing work, prefer
   `wacli-auth-local.sh start`.
   In consumer lanes this resolves to the lane-local cleanroom wrapper, which
-  runs `wacli auth` in an isolated temp store, captures the terminal QR,
+  runs `wacli auth` in an isolated temp store, captures the login QR,
   renders a real PNG, and returns a session id plus `qrPath`.
-- When returning that QR to the user, send the image itself, not the raw block
-  characters. In CLI-agent flows, include `MEDIA:<qrPath>` in the final reply so
-  the QR remains scannable.
+- Deliver the QR as a real image attachment first. Do not paste the raw QR
+  blocks into chat and do not use a browser-tab screenshot as the normal path.
+- In CLI-agent flows, include `MEDIA:<qrPath>` only as the transport hint the
+  platform needs for the attachment. Keep the surrounding text short and clean.
+- If the image cannot be delivered, say so explicitly and stop. Do not retry
+  with text QR noise unless the user explicitly asks for the terminal path.
 - After the user scans, confirm completion with
   `wacli-auth-local.sh wait --session <id>` before claiming
   WhatsApp is ready.
