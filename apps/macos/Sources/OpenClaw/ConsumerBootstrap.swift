@@ -18,6 +18,10 @@ enum ConsumerBootstrap {
         // Email is a core operator surface; keep one provider-agnostic inbox
         // skill bundled so early users can read, draft, and triage mail.
         "himalaya",
+        // WhatsApp CLI is lane-local through the cleanroom wrapper, so it belongs
+        // in the consumer starter set even though live WhatsApp chat is a separate
+        // product surface.
+        "wacli",
         "peekaboo",
         "summarize",
         "weather",
@@ -140,6 +144,9 @@ enum ConsumerBootstrap {
             in: &root,
             path: ["skills", "allowBundled"],
             value: Self.bundledSkillAllowlist) || changed
+        // Append any newly curated starter skills to already-written consumer
+        // configs so existing installs pick up the same baseline as fresh ones.
+        changed = self.ensureBundledSkillAllowlistIncludesStarterSkills(into: &root) || changed
         changed = self.setDefaultValue(
             in: &root,
             path: ["discovery", "mdns", "mode"],
@@ -331,6 +338,32 @@ enum ConsumerBootstrap {
             value: value)
         guard childChanged else { return false }
         root[key] = child
+        return true
+    }
+
+    private static func ensureBundledSkillAllowlistIncludesStarterSkills(
+        into root: inout [String: Any])
+        -> Bool
+    {
+        guard let skills = root["skills"] as? [String: Any] else {
+            return false
+        }
+
+        let existing = (skills["allowBundled"] as? [Any])?
+            .compactMap { $0 as? String }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty } ?? []
+        var merged = existing
+        for skill in Self.bundledSkillAllowlist where !merged.contains(skill) {
+            merged.append(skill)
+        }
+        guard merged != existing else {
+            return false
+        }
+
+        var nextSkills = skills
+        nextSkills["allowBundled"] = merged
+        root["skills"] = nextSkills
         return true
     }
 }

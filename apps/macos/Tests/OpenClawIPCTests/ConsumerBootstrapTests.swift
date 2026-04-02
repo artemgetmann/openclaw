@@ -47,6 +47,7 @@ struct ConsumerBootstrapTests {
                 "gog",
                 "goplaces",
                 "himalaya",
+                "wacli",
                 "peekaboo",
                 "summarize",
                 "weather",
@@ -289,6 +290,29 @@ struct ConsumerBootstrapTests {
             #expect(gateway?["bind"] as? String == "tailnet")
             #expect(modelDefaults?["primary"] as? String == "anthropic/claude-opus-4-6")
             #expect(mdns?["mode"] as? String == "full")
+        }
+    }
+
+    @Test func `consumer bootstrap appends missing bundled skills to existing allowlist`() async {
+        await TestIsolation.withIsolatedState(env: [ConsumerInstance.envKey: nil]) {
+            var root: [String: Any] = [
+                "skills": [
+                    "allowBundled": [
+                        "consumer-setup",
+                        "gog",
+                    ],
+                ],
+            ]
+
+            let changed = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+
+            let skills = root["skills"] as? [String: Any]
+            let allowBundled = skills?["allowBundled"] as? [String]
+
+            #expect(changed)
+            #expect(allowBundled?.contains("consumer-setup") == true)
+            #expect(allowBundled?.contains("gog") == true)
+            #expect(allowBundled?.contains("wacli") == true)
         }
     }
 
