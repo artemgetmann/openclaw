@@ -1,4 +1,6 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
@@ -95,6 +97,11 @@ async function emitUntrustedToolMediaResult(
 }
 
 async function emitWhatsAppQrToolResult(ctx: EmbeddedPiSubscribeContext) {
+  const qrPath = path.join(
+    resolvePreferredOpenClawTmpDir(),
+    "whatsapp-login",
+    "openclaw-whatsapp-qr-default.png",
+  );
   await handleToolExecutionEnd(ctx, {
     type: "tool_execution_end",
     toolName: "whatsapp_login",
@@ -105,7 +112,7 @@ async function emitWhatsAppQrToolResult(ctx: EmbeddedPiSubscribeContext) {
         { type: "text", text: "Scan this QR in WhatsApp → Linked Devices." },
         { type: "image", data: "base64", mimeType: "image/png" },
       ],
-      details: { path: "/tmp/openclaw-whatsapp-qr-default.png" },
+      details: { path: qrPath },
     },
   });
 }
@@ -138,12 +145,15 @@ describe("handleToolExecutionEnd media emission", () => {
   it("trusts whatsapp_login temp QR files for direct media delivery", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+    const qrPath = path.join(
+      resolvePreferredOpenClawTmpDir(),
+      "whatsapp-login",
+      "openclaw-whatsapp-qr-default.png",
+    );
 
     await emitWhatsAppQrToolResult(ctx);
 
-    expect(onToolResult).toHaveBeenCalledWith({
-      mediaUrls: ["/tmp/openclaw-whatsapp-qr-default.png"],
-    });
+    expect(onToolResult).toHaveBeenCalledWith({ mediaUrls: [qrPath] });
   });
 
   it("does NOT emit local media for untrusted tools", async () => {

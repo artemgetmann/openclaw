@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import { createWhatsAppLoginTool } from "./agent-tools-login.js";
 
 const loginMocks = vi.hoisted(() => ({
@@ -42,6 +44,10 @@ describe("createWhatsAppLoginTool", () => {
     ).not.toContain("data:image/png;base64");
     const detailsPath = (result?.details as { path?: string } | undefined)?.path;
     if (detailsPath) {
+      const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+      expect(path.resolve(detailsPath)).toMatch(
+        new RegExp(`^${tmpRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:${path.sep}|$)`),
+      );
       await fs.rm(detailsPath, { force: true });
     }
   });
