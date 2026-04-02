@@ -594,6 +594,37 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("arms sticky IPv4 fallback for wrapped polling failures that lose the fetch envelope", async () => {
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect ETIMEDOUT api.telegram.org:443"), {
+        code: "ETIMEDOUT",
+      }),
+    });
+    const wrappedConnectError = Object.assign(
+      new Error("Network request for 'getUpdates' failed!"),
+      {
+        error: fetchError,
+      },
+    );
+    undiciFetch
+      .mockRejectedValueOnce(wrappedConnectError)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/getUpdates");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(2);
+    expectPinnedIpv4ConnectDispatcher({
+      firstCall: 1,
+      pinnedCall: 2,
+    });
+  });
+
   it("keeps per-resolver transport policy isolated across multiple accounts", async () => {
     undiciFetch.mockResolvedValue({ ok: true } as Response);
 
