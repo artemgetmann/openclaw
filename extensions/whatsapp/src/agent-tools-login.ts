@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import { imageResult } from "../../../src/agents/tools/common.js";
 import { decodeDataUrl } from "../../../src/agents/tools/image-tool.helpers.js";
 import type { ChannelAgentTool } from "../../../src/channels/plugins/types.js";
+import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 
 export function createWhatsAppLoginTool(): ChannelAgentTool {
   return {
@@ -63,10 +63,9 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
       }
 
       const { buffer, mimeType } = decodeDataUrl(result.qrDataUrl);
-      const qrPath = path.join(
-        os.tmpdir(),
-        `openclaw-whatsapp-qr-${Date.now()}-${randomUUID()}.png`,
-      );
+      const qrDir = path.join(resolvePreferredOpenClawTmpDir(), "whatsapp-login");
+      await fs.mkdir(qrDir, { recursive: true, mode: 0o700 });
+      const qrPath = path.join(qrDir, `openclaw-whatsapp-qr-${Date.now()}-${randomUUID()}.png`);
       await fs.writeFile(qrPath, buffer);
       return await imageResult({
         label: "whatsapp-login",
