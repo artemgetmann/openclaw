@@ -24,7 +24,12 @@ struct ExecHostRequestEvaluatorTests {
     }
 
     @Test func `evaluate requires prompt on allowlist miss without decision`() {
-        let context = Self.makeContext(security: .allowlist, ask: .onMiss, allowlistSatisfied: false, skillAllow: false)
+        let context = Self.makeContext(
+            security: .allowlist,
+            ask: .onMiss,
+            allowlistSatisfied: false,
+            safeBinAllow: false,
+            skillAllow: false)
         let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: nil)
         switch decision {
         case .requiresPrompt:
@@ -37,7 +42,12 @@ struct ExecHostRequestEvaluatorTests {
     }
 
     @Test func `evaluate allows allow once decision on allowlist miss`() {
-        let context = Self.makeContext(security: .allowlist, ask: .onMiss, allowlistSatisfied: false, skillAllow: false)
+        let context = Self.makeContext(
+            security: .allowlist,
+            ask: .onMiss,
+            allowlistSatisfied: false,
+            safeBinAllow: false,
+            skillAllow: false)
         let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: .allowOnce)
         switch decision {
         case let .allow(approvedByAsk):
@@ -49,8 +59,31 @@ struct ExecHostRequestEvaluatorTests {
         }
     }
 
+    @Test func `evaluate allows safe bin path without prompting`() {
+        let context = Self.makeContext(
+            security: .allowlist,
+            ask: .onMiss,
+            allowlistSatisfied: false,
+            safeBinAllow: true,
+            skillAllow: false)
+        let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: nil)
+        switch decision {
+        case let .allow(approvedByAsk):
+            #expect(!approvedByAsk)
+        case .requiresPrompt:
+            Issue.record("expected safe-bin allow")
+        case let .deny(error):
+            Issue.record("unexpected deny: \(error.message)")
+        }
+    }
+
     @Test func `evaluate denies on explicit deny decision`() {
-        let context = Self.makeContext(security: .full, ask: .off, allowlistSatisfied: true, skillAllow: false)
+        let context = Self.makeContext(
+            security: .full,
+            ask: .off,
+            allowlistSatisfied: true,
+            safeBinAllow: false,
+            skillAllow: false)
         let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: .deny)
         switch decision {
         case let .deny(error):
@@ -66,6 +99,7 @@ struct ExecHostRequestEvaluatorTests {
         security: ExecSecurity,
         ask: ExecAsk,
         allowlistSatisfied: Bool,
+        safeBinAllow: Bool,
         skillAllow: Bool) -> ExecApprovalEvaluation
     {
         ExecApprovalEvaluation(
@@ -80,6 +114,7 @@ struct ExecHostRequestEvaluatorTests {
             allowlistMatches: [],
             allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: nil,
+            safeBinAllow: safeBinAllow,
             skillAllow: skillAllow)
     }
 }

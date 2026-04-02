@@ -1,3 +1,4 @@
+import path from "node:path";
 import { resolveSafeBins } from "./exec-approvals-allowlist.js";
 import {
   normalizeSafeBinProfileFixtures,
@@ -18,6 +19,30 @@ export type ExecSafeBinConfigScope = {
   safeBinProfiles?: SafeBinProfileFixtures | null;
   safeBinTrustedDirs?: string[] | null;
 };
+
+function resolveManagedTrustedSafeBinDirsFromEnv(
+  env: Record<string, string | undefined> | undefined,
+): string[] {
+  if (!env) {
+    return [];
+  }
+  const trustedDirs: string[] = [];
+  const servicePrefix = env.OPENCLAW_SERVICE_PATH_PREFIX?.trim();
+  if (servicePrefix) {
+    trustedDirs.push(
+      ...servicePrefix
+        .split(path.delimiter)
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    );
+  }
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim();
+  if (stateDir) {
+    trustedDirs.push(path.join(stateDir, "bin"));
+    trustedDirs.push(path.join(stateDir, "tools", "node", "bin"));
+  }
+  return trustedDirs;
+}
 
 const INTERPRETER_LIKE_SAFE_BINS = new Set([
   "ash",
@@ -105,6 +130,7 @@ export function resolveMergedSafeBinProfileFixtures(params: {
 export function resolveExecSafeBinRuntimePolicy(params: {
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;
+  env?: Record<string, string | undefined>;
   onWarning?: (message: string) => void;
 }): {
   safeBins: Set<string>;
@@ -128,8 +154,9 @@ export function resolveExecSafeBinRuntimePolicy(params: {
     ...normalizeTrustedSafeBinDirs(params.global?.safeBinTrustedDirs),
     ...normalizeTrustedSafeBinDirs(params.local?.safeBinTrustedDirs),
   ];
+  const managedTrustedSafeBinDirs = resolveManagedTrustedSafeBinDirsFromEnv(params.env);
   const trustedSafeBinDirs = getTrustedSafeBinDirs({
-    extraDirs: explicitTrustedSafeBinDirs,
+    extraDirs: [...explicitTrustedSafeBinDirs, ...managedTrustedSafeBinDirs],
   });
   const writableTrustedSafeBinDirs = listWritableExplicitTrustedSafeBinDirs(
     explicitTrustedSafeBinDirs,

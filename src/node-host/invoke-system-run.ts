@@ -291,6 +291,7 @@ async function evaluateSystemRunPolicyPhase(
   const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
     global: cfg.tools?.exec,
     local: agentExec,
+    env: parsed.env,
     onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];

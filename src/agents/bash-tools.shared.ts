@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { mergePathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxBackendExecSpec } from "./sandbox/backend.js";
@@ -42,6 +43,18 @@ export function buildSandboxEnv(params: {
   }
   for (const [key, value] of Object.entries(params.paramsEnv ?? {})) {
     env[key] = value;
+  }
+  const managedPathPrepend = normalizePathPrepend([
+    ...(env.OPENCLAW_SERVICE_PATH_PREFIX?.split(path.delimiter) ?? []),
+    ...(env.OPENCLAW_STATE_DIR?.trim()
+      ? [
+          path.join(env.OPENCLAW_STATE_DIR, "bin"),
+          path.join(env.OPENCLAW_STATE_DIR, "tools", "node", "bin"),
+        ]
+      : []),
+  ]);
+  if (managedPathPrepend.length > 0) {
+    env.PATH = mergePathPrepend(env.PATH, managedPathPrepend) ?? env.PATH;
   }
   return env;
 }

@@ -38,6 +38,7 @@ import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 
 export type ProcessGatewayAllowlistParams = {
   command: string;
+  execCommandPrefix?: string;
   workdir: string;
   env: Record<string, string>;
   pty: boolean;
@@ -66,6 +67,14 @@ export type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   pendingResult?: AgentToolResult<ExecToolDetails>;
 };
+
+function applyExecCommandPrefix(command: string, prefix?: string): string {
+  const trimmedPrefix = prefix?.trim();
+  if (!trimmedPrefix) {
+    return command;
+  }
+  return `${trimmedPrefix} ${command}`;
+}
 
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
@@ -102,6 +111,10 @@ export async function processGatewayAllowlist(
     }
     enforcedCommand = enforced.command;
   }
+  const effectiveExecCommand = applyExecCommandPrefix(
+    enforcedCommand ?? params.command,
+    params.execCommandPrefix,
+  );
   const obfuscation = detectCommandObfuscation(params.command);
   if (obfuscation.detected) {
     logInfo(`exec: obfuscation detected (gateway): ${obfuscation.reasons.join(", ")}`);
@@ -257,7 +270,7 @@ export async function processGatewayAllowlist(
       try {
         run = await runExecProcess({
           command: params.command,
-          execCommand: enforcedCommand,
+          execCommand: effectiveExecCommand,
           workdir: params.workdir,
           env: params.env,
           sandbox: undefined,
@@ -315,5 +328,5 @@ export async function processGatewayAllowlist(
 
   recordMatchedAllowlistUse(allowlistEval.segments[0]?.resolution?.resolvedPath);
 
-  return { execCommandOverride: enforcedCommand };
+  return { execCommandOverride: effectiveExecCommand };
 }

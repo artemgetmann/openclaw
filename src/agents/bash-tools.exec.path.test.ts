@@ -70,7 +70,12 @@ describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["PATH", "SHELL"]);
+    envSnapshot = captureEnv([
+      "PATH",
+      "SHELL",
+      "OPENCLAW_SERVICE_PATH_PREFIX",
+      "OPENCLAW_STATE_DIR",
+    ]);
   });
 
   afterEach(() => {
@@ -115,6 +120,134 @@ describe("exec PATH login shell merge", () => {
       "/opt/homebrew/bin",
     ]);
     expect(shellPathMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("prepends service-managed wrapper dirs ahead of inherited host PATH", async () => {
+    if (isWin) {
+      return;
+    }
+    process.env.PATH = "/opt/homebrew/bin:/usr/bin";
+    process.env.OPENCLAW_SERVICE_PATH_PREFIX =
+      "/tmp/openclaw-consumer-cleanroom/lane/bin:/tmp/openclaw-consumer-cleanroom/lane/alt-bin";
+
+    const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+    shellPathMock.mockClear();
+    shellPathMock.mockReturnValue("/opt/homebrew/bin:/usr/bin");
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-service-prefix-path", { command: "echo $PATH" });
+    const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
+
+    expect(entries).toEqual([
+      "/tmp/openclaw-consumer-cleanroom/lane/bin",
+      "/tmp/openclaw-consumer-cleanroom/lane/alt-bin",
+      "/opt/homebrew/bin",
+      "/usr/bin",
+    ]);
+    expect(shellPathMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces gateway commands to resolve service-managed wacli before Homebrew", async () => {
+    if (isWin) {
+      return;
+    }
+    process.env.PATH = "/opt/homebrew/bin:/usr/bin";
+    const cleanroomRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wacli-cleanroom-"));
+    const cleanroomBin = path.join(cleanroomRoot, "bin");
+    fs.mkdirSync(cleanroomBin, { recursive: true });
+    const wacliPath = path.join(cleanroomBin, "wacli");
+    fs.writeFileSync(
+      wacliPath,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "doctor" ]; then',
+        '  printf "STORE %s\\n" "/tmp/openclaw-cleanroom/wacli-store"',
+        '  printf "AUTHENTICATED true\\n"',
+        '  printf "CONNECTED true\\n"',
+        "  exit 0",
+        "fi",
+        'printf "%s\\n" "$0"',
+      ].join("\n"),
+      {
+        encoding: "utf8",
+        mode: 0o755,
+      },
+    );
+    process.env.OPENCLAW_SERVICE_PATH_PREFIX = cleanroomBin;
+
+    const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+    shellPathMock.mockClear();
+    shellPathMock.mockReturnValue("/opt/homebrew/bin:/usr/bin");
+
+    try {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call-cleanroom-wacli-doctor", {
+        command: "wacli doctor",
+      });
+      const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+      expect(text).toContain("STORE /tmp/openclaw-cleanroom/wacli-store");
+      expect(text).toContain("AUTHENTICATED true");
+      expect(text).toContain("CONNECTED true");
+      expect(shellPathMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(cleanroomRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the service-managed wacli prefix in gateway allowlist mode", async () => {
+    if (isWin) {
+      return;
+    }
+    process.env.PATH = "/opt/homebrew/bin:/usr/bin";
+    const cleanroomRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wacli-allowlist-"));
+    const cleanroomBin = path.join(cleanroomRoot, "bin");
+    fs.mkdirSync(cleanroomBin, { recursive: true });
+    const wacliPath = path.join(cleanroomBin, "wacli");
+    fs.writeFileSync(
+      wacliPath,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "doctor" ]; then',
+        '  printf "STORE %s\\n" "/tmp/openclaw-allowlist-cleanroom/wacli-store"',
+        "  exit 0",
+        "fi",
+        'printf "%s\\n" "$0"',
+      ].join("\n"),
+      {
+        encoding: "utf8",
+        mode: 0o755,
+      },
+    );
+    process.env.OPENCLAW_SERVICE_PATH_PREFIX = cleanroomBin;
+
+    const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+    shellPathMock.mockClear();
+    shellPathMock.mockReturnValue("/opt/homebrew/bin:/usr/bin");
+
+    try {
+      const tool = createExecTool({
+        host: "gateway",
+        security: "allowlist",
+        ask: "off",
+        safeBins: ["wacli"],
+        safeBinTrustedDirs: [cleanroomBin],
+        safeBinProfiles: {
+          wacli: {
+            maxPositional: 1,
+          },
+        },
+      });
+      const result = await tool.execute("call-cleanroom-wacli-allowlist", {
+        command: "wacli doctor",
+      });
+      const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+      expect(text).toContain("STORE /tmp/openclaw-allowlist-cleanroom/wacli-store");
+      expect(shellPathMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(cleanroomRoot, { recursive: true, force: true });
+    }
   });
 
   it("sets OPENCLAW_SHELL for host=gateway commands", async () => {

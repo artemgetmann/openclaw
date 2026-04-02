@@ -334,6 +334,17 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_CONSUMER_MINIMAL_STARTUP).toBeUndefined();
   });
 
+  it("preserves lane-local service path prefixes for gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_SERVICE_PATH_PREFIX: "/tmp/openclaw-clean/bin:/tmp/openclaw-alt/bin",
+      },
+      port: 18789,
+    });
+    expect(env.OPENCLAW_SERVICE_PATH_PREFIX).toBe("/tmp/openclaw-clean/bin:/tmp/openclaw-alt/bin");
+  });
+
   it("uses profile-specific unit and label", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", OPENCLAW_PROFILE: "work" },

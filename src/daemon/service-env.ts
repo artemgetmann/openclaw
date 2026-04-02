@@ -339,6 +339,9 @@ function buildCommonServiceEnvironment(
     TMPDIR: sharedEnv.tmpDir,
     ...sharedEnv.proxyEnv,
     ...sharedEnv.skillEnv,
+    // Preserve the lane-local wrapper path so service-launched CLIs keep
+    // resolving clean-room tools like wacli instead of founder binaries.
+    OPENCLAW_SERVICE_PATH_PREFIX: env.OPENCLAW_SERVICE_PATH_PREFIX,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     // Consumer launch agents must keep this flag so gateway sidecars stay

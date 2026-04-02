@@ -10,6 +10,10 @@ struct ConsumerBootstrapTests {
             let changed = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
 
             let gateway = root["gateway"] as? [String: Any]
+            let tools = root["tools"] as? [String: Any]
+            let exec = tools?["exec"] as? [String: Any]
+            let safeBinProfiles = exec?["safeBinProfiles"] as? [String: Any]
+            let wacliProfile = safeBinProfiles?["wacli"] as? [String: Any]
             let agents = root["agents"] as? [String: Any]
             let agentDefaults = agents?["defaults"] as? [String: Any]
             let modelDefaults = agentDefaults?["model"] as? [String: Any]
@@ -30,6 +34,9 @@ struct ConsumerBootstrapTests {
             #expect(gateway?["mode"] as? String == "local")
             #expect(gateway?["port"] as? Int == ConsumerRuntime.gatewayPort)
             #expect(gateway?["bind"] as? String == ConsumerRuntime.gatewayBind)
+            #expect(exec?["host"] as? String == "gateway")
+            #expect(exec?["safeBins"] as? [String] == ["wacli"])
+            #expect(wacliProfile?["maxPositional"] as? Int == 1)
             #expect(agentDefaults?["workspace"] as? String == ConsumerRuntime.workspaceURL.path)
             #expect(modelDefaults?["primary"] as? String == "openai-codex/gpt-5.4")
             #expect(agentDefaults?["thinkingDefault"] as? String == "adaptive")
@@ -261,6 +268,17 @@ struct ConsumerBootstrapTests {
                     "port": 28888,
                     "bind": "tailnet",
                 ],
+                "tools": [
+                    "exec": [
+                        "host": "node",
+                        "safeBins": ["custom-cli"],
+                        "safeBinProfiles": [
+                            "custom-cli": [
+                                "maxPositional": 0,
+                            ],
+                        ],
+                    ],
+                ],
                 "agents": [
                     "defaults": [
                         "model": [
@@ -278,6 +296,9 @@ struct ConsumerBootstrapTests {
             let changed = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
 
             let gateway = root["gateway"] as? [String: Any]
+            let tools = root["tools"] as? [String: Any]
+            let exec = tools?["exec"] as? [String: Any]
+            let safeBinProfiles = exec?["safeBinProfiles"] as? [String: Any]
             let agents = root["agents"] as? [String: Any]
             let agentDefaults = agents?["defaults"] as? [String: Any]
             let modelDefaults = agentDefaults?["model"] as? [String: Any]
@@ -288,6 +309,12 @@ struct ConsumerBootstrapTests {
             #expect(gateway?["mode"] as? String == "remote")
             #expect(gateway?["port"] as? Int == 28888)
             #expect(gateway?["bind"] as? String == "tailnet")
+            #expect(exec?["host"] as? String == "node")
+            #expect(exec?["safeBins"] as? [String] == ["custom-cli", "wacli"])
+            let customProfile = safeBinProfiles?["custom-cli"] as? [String: Any]
+            let wacliProfile = safeBinProfiles?["wacli"] as? [String: Any]
+            #expect(customProfile?["maxPositional"] as? Int == 0)
+            #expect(wacliProfile?["maxPositional"] as? Int == 1)
             #expect(modelDefaults?["primary"] as? String == "anthropic/claude-opus-4-6")
             #expect(mdns?["mode"] as? String == "full")
         }

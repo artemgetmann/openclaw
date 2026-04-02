@@ -126,12 +126,14 @@ refresh_gateway_service_env() {
   local gateway_port
   local profile
   local launchd_label
+  local plist_path
 
   state_dir="$(consumer_instance_state_dir "$normalized")"
   config_path="$state_dir/openclaw.json"
   gateway_port="$(consumer_instance_gateway_port "$normalized")"
   profile="$(consumer_instance_profile "$normalized")"
   launchd_label="$(consumer_instance_gateway_launchd_label "$normalized")"
+  plist_path="$HOME/Library/LaunchAgents/${launchd_label}.plist"
 
   local passthrough_keys=(
     GOOGLE_PLACES_API_KEY
@@ -173,7 +175,20 @@ refresh_gateway_service_env() {
         OPENCLAW_CONFIG_PATH="$config_path" \
         OPENCLAW_PROFILE="$profile" \
         OPENCLAW_LAUNCHD_LABEL="$launchd_label" \
+        OPENCLAW_SERVICE_PATH_PREFIX="${OPENCLAW_SERVICE_PATH_PREFIX:-}" \
         openclaw_run_repo_pnpm "$ROOT_DIR" openclaw:local gateway install --force --port "$gateway_port" --runtime node >/dev/null
+
+      # `openclaw gateway install` is supposed to carry the clean-room wrapper
+      # path into the LaunchAgent plist, but GUI launches on this lane have been
+      # dropping that field before launchd snapshots it. Stamp the plist after
+      # install so the live gateway cannot fall back to founder `wacli`.
+      if [[ -n "${OPENCLAW_SERVICE_PATH_PREFIX:-}" && -f "$plist_path" ]]; then
+        /usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:OPENCLAW_SERVICE_PATH_PREFIX ${OPENCLAW_SERVICE_PATH_PREFIX}" "$plist_path" 2>/dev/null \
+          || /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:OPENCLAW_SERVICE_PATH_PREFIX string ${OPENCLAW_SERVICE_PATH_PREFIX}" "$plist_path"
+        /bin/launchctl bootout "gui/$(id -u)/${launchd_label}" >/dev/null 2>&1 || true
+        /bin/launchctl bootstrap "gui/$(id -u)" "$plist_path" >/dev/null 2>&1 || true
+        /bin/launchctl kickstart -k "gui/$(id -u)/${launchd_label}" >/dev/null 2>&1 || true
+      fi
       return
     fi
     /bin/sleep 0.25
