@@ -12,6 +12,7 @@ struct ExecApprovalEvaluation {
     let allowlistMatches: [ExecAllowlistEntry]
     let allowlistSatisfied: Bool
     let allowlistMatch: ExecAllowlistEntry?
+    let safeBinAllow: Bool
     let skillAllow: Bool
 }
 
@@ -43,6 +44,19 @@ enum ExecApprovalEvaluator {
             !allowlistResolutions.isEmpty &&
             allowlistMatches.count == allowlistResolutions.count
 
+        // The macOS node host needs the same safe-bin affordance as the gateway
+        // exec path. Consumer cleanroom wrappers like `wacli` are intentionally
+        // not broad allowlist entries; they are constrained by bin name, trusted
+        // directory, and argv shape.
+        let safeBinPolicy = ExecSafeBins.resolvePolicy(env: env)
+        let safeBinAllow = command.count > 0 &&
+            !allowlistResolutions.isEmpty &&
+            allowlistResolutions.count == 1 &&
+            ExecSafeBins.isAllowed(
+                command: command,
+                resolution: allowlistResolutions.first,
+                policy: safeBinPolicy)
+
         let skillAllow: Bool
         if approvals.agent.autoAllowSkills, !allowlistResolutions.isEmpty {
             let bins = await SkillBinsCache.shared.currentTrust()
@@ -63,6 +77,7 @@ enum ExecApprovalEvaluator {
             allowlistMatches: allowlistMatches,
             allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,
+            safeBinAllow: safeBinAllow,
             skillAllow: skillAllow)
     }
 

@@ -106,6 +106,23 @@ describe("exec safe-bin runtime policy", () => {
     expect(policy.trustedSafeBinDirs.has(path.resolve(agentDir))).toBe(true);
   });
 
+  it("trusts lane-managed service wrapper dirs from runtime env", () => {
+    const cleanroomDir = path.join(os.tmpdir(), "openclaw-cleanroom", "lane", "bin");
+    const stateDir = path.join(os.tmpdir(), "openclaw-state", "lane");
+    const policy = resolveExecSafeBinRuntimePolicy({
+      env: {
+        OPENCLAW_SERVICE_PATH_PREFIX: `${cleanroomDir}${path.delimiter}/ignored/second/bin`,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+    });
+
+    expect(policy.trustedSafeBinDirs.has(path.resolve(cleanroomDir))).toBe(true);
+    expect(policy.trustedSafeBinDirs.has(path.resolve(path.join(stateDir, "bin")))).toBe(true);
+    expect(
+      policy.trustedSafeBinDirs.has(path.resolve(path.join(stateDir, "tools", "node", "bin"))),
+    ).toBe(true);
+  });
+
   it("does not trust package-manager bin dirs unless explicitly configured", () => {
     const defaultPolicy = resolveExecSafeBinRuntimePolicy({});
     expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(false);

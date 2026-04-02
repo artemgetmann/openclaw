@@ -747,10 +747,18 @@ enum ExecApprovalHelpers {
         ask: ExecAsk,
         security: ExecSecurity,
         allowlistMatch: ExecAllowlistEntry?,
+        safeBinAllow: Bool,
         skillAllow: Bool) -> Bool
     {
         if ask == .always { return true }
-        if ask == .onMiss, security == .allowlist, allowlistMatch == nil, !skillAllow { return true }
+        if ask == .onMiss,
+           security == .allowlist,
+           allowlistMatch == nil,
+           !safeBinAllow,
+           !skillAllow
+        {
+            return true
+        }
         return false
     }
 

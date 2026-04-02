@@ -62,6 +62,7 @@ enum ExecHostRequestEvaluator {
             ask: context.ask,
             security: context.security,
             allowlistMatch: context.allowlistMatch,
+            safeBinAllow: context.safeBinAllow,
             skillAllow: context.skillAllow) && approvalDecision == nil
         if requiresPrompt {
             return .requiresPrompt
@@ -69,6 +70,7 @@ enum ExecHostRequestEvaluator {
 
         if context.security == .allowlist,
            !context.allowlistSatisfied,
+           !context.safeBinAllow,
            !context.skillAllow,
            !approvedByAsk
         {

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveSandboxWorkdir } from "./bash-tools.shared.js";
+import { buildSandboxEnv, resolveSandboxWorkdir } from "./bash-tools.shared.js";
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bash-workdir-"));
@@ -73,5 +73,31 @@ describe("resolveSandboxWorkdir", () => {
       expect(resolved.containerWorkdir).toBe("/sandbox-root/project");
       expect(warnings).toEqual([]);
     });
+  });
+});
+
+describe("buildSandboxEnv", () => {
+  it("prepends service-managed paths ahead of sandbox PATH", () => {
+    const env = buildSandboxEnv({
+      defaultPath: "/usr/bin:/bin",
+      containerWorkdir: "/workspace",
+      sandboxEnv: {
+        PATH: "/opt/homebrew/bin:/usr/bin:/bin",
+        OPENCLAW_SERVICE_PATH_PREFIX: "/tmp/openclaw-consumer-cleanroom/lane/bin",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-consumer-state",
+      },
+    });
+
+    expect(env.PATH).toBe(
+      [
+        "/tmp/openclaw-consumer-cleanroom/lane/bin",
+        "/tmp/openclaw-consumer-state/bin",
+        "/tmp/openclaw-consumer-state/tools/node/bin",
+        "/opt/homebrew/bin",
+        "/usr/bin",
+        "/bin",
+      ].join(":"),
+    );
+    expect(env.HOME).toBe("/workspace");
   });
 });

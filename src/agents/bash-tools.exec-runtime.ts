@@ -4,7 +4,7 @@ import { Type } from "@sinclair/typebox";
 import { type ExecHost } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
-import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
+import { findPathKey, mergePathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import type { ProcessSession } from "./bash-process-registry.js";
@@ -218,6 +218,31 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   // fallback source of extra directories, never a reason to outrank lane-local
   // wrappers that were already injected into PATH by the runtime.
   env[pathKey] = merged;
+}
+
+export function resolveManagedExecPathPrepend(env: Record<string, string>): string[] {
+  const entries: string[] = [];
+  const servicePrefix = env.OPENCLAW_SERVICE_PATH_PREFIX?.trim();
+  if (servicePrefix) {
+    entries.push(
+      ...servicePrefix
+        .split(path.delimiter)
+        .map((part) => part.trim())
+        .filter(Boolean),
+    );
+  }
+
+  // Gateway services may carry OPENCLAW_STATE_DIR even when the launch wrapper
+  // omitted OPENCLAW_SERVICE_PATH_PREFIX from PATH. Re-prepend the managed bins
+  // so host exec commands resolve lane-local wrappers (for example wacli) before
+  // any founder/homebrew binary on the host PATH.
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim();
+  if (stateDir) {
+    entries.push(path.join(stateDir, "bin"));
+    entries.push(path.join(stateDir, "tools", "node", "bin"));
+  }
+
+  return normalizePathPrepend(entries);
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {

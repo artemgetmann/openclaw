@@ -53,26 +53,37 @@ struct ExecApprovalHelpersTests {
             ask: .always,
             security: .deny,
             allowlistMatch: nil,
+            safeBinAllow: false,
             skillAllow: false))
         #expect(ExecApprovalHelpers.requiresAsk(
             ask: .onMiss,
             security: .allowlist,
             allowlistMatch: nil,
+            safeBinAllow: false,
             skillAllow: false))
         #expect(!ExecApprovalHelpers.requiresAsk(
             ask: .onMiss,
             security: .allowlist,
             allowlistMatch: entry,
+            safeBinAllow: false,
             skillAllow: false))
         #expect(!ExecApprovalHelpers.requiresAsk(
             ask: .onMiss,
             security: .allowlist,
             allowlistMatch: nil,
+            safeBinAllow: false,
             skillAllow: true))
+        #expect(!ExecApprovalHelpers.requiresAsk(
+            ask: .onMiss,
+            security: .allowlist,
+            allowlistMatch: nil,
+            safeBinAllow: true,
+            skillAllow: false))
         #expect(!ExecApprovalHelpers.requiresAsk(
             ask: .off,
             security: .allowlist,
             allowlistMatch: nil,
+            safeBinAllow: false,
             skillAllow: false))
     }
 }

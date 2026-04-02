@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
 const bundledPluginsDirSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
 
@@ -177,6 +177,56 @@ describe("createOpenClawCodingTools safeBins", () => {
         ).rejects.toThrow("exec denied: allowlist miss");
       },
     );
+  });
+
+  it("allows profiled service-wrapped safe bins from lane-managed cleanroom dirs", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_SERVICE_PATH_PREFIX", "OPENCLAW_STATE_DIR"]);
+    const laneRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-safe-bins-lane-"));
+    const laneBin = path.join(laneRoot, "bin");
+    fs.mkdirSync(laneBin, { recursive: true });
+    const wrapperPath = path.join(laneBin, "wacli");
+    fs.writeFileSync(
+      wrapperPath,
+      ["#!/bin/sh", 'printf "STORE %s\\n" "$OPENCLAW_STATE_DIR"', 'printf "ARG %s\\n" "$1"'].join(
+        "\n",
+      ),
+      { encoding: "utf8", mode: 0o755 },
+    );
+
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_SERVICE_PATH_PREFIX: laneBin,
+          OPENCLAW_STATE_DIR: laneRoot,
+        },
+        async () => {
+          await withSafeBinsExecTool(
+            {
+              tmpPrefix: "openclaw-safe-bins-managed-",
+              safeBins: ["wacli"],
+              safeBinProfiles: {
+                wacli: { maxPositional: 1 },
+              },
+            },
+            async ({ tmpDir, execTool }) => {
+              const result = await execTool.execute("call-managed", {
+                command: "wacli doctor",
+                workdir: tmpDir,
+              });
+              const text = result.content.find((content) => content.type === "text")?.text ?? "";
+              const resultDetails = result.details as { status?: string };
+
+              expect(resultDetails.status).toBe("completed");
+              expect(text).toContain(`STORE ${laneRoot}`);
+              expect(text).toContain("ARG doctor");
+            },
+          );
+        },
+      );
+    } finally {
+      envSnapshot.restore();
+      fs.rmSync(laneRoot, { recursive: true, force: true });
+    }
   });
 
   it("does not allow env var expansion to smuggle file args via safeBins", async () => {

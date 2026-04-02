@@ -107,6 +107,26 @@ enum ConsumerBootstrap {
             in: &root,
             path: ["gateway", "bind"],
             value: ConsumerRuntime.gatewayBind) || changed
+        // Consumer setup-sensitive CLIs (for example wacli/himalaya/gog) are
+        // lane-local host tools wrapped by the gateway LaunchAgent. If exec
+        // falls back to the global sandbox default, those wrappers can resolve
+        // against founder/global state instead of the consumer cleanroom.
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["tools", "exec", "host"],
+            value: "gateway") || changed
+        // The consumer lane relies on the gateway host for lane-local CLI
+        // wrappers. Seed a minimal safe-bin entry so the agent can introspect
+        // WhatsApp state via `wacli doctor` without dropping back to raw shell
+        // approvals or the sandbox fallback path.
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["tools", "exec", "safeBins"],
+            value: ["wacli"]) || changed
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["tools", "exec", "safeBinProfiles", "wacli", "maxPositional"],
+            value: 1) || changed
         changed = self.setDefaultValue(
             in: &root,
             path: ["agents", "defaults", "workspace"],
@@ -147,6 +167,7 @@ enum ConsumerBootstrap {
         // Append any newly curated starter skills to already-written consumer
         // configs so existing installs pick up the same baseline as fresh ones.
         changed = self.ensureBundledSkillAllowlistIncludesStarterSkills(into: &root) || changed
+        changed = self.ensureExecSafeBinsIncludeStarterTools(into: &root) || changed
         changed = self.setDefaultValue(
             in: &root,
             path: ["discovery", "mdns", "mode"],
@@ -364,6 +385,43 @@ enum ConsumerBootstrap {
         var nextSkills = skills
         nextSkills["allowBundled"] = merged
         root["skills"] = nextSkills
+        return true
+    }
+
+    private static func ensureExecSafeBinsIncludeStarterTools(
+        into root: inout [String: Any])
+        -> Bool
+    {
+        guard var tools = root["tools"] as? [String: Any] else {
+            return false
+        }
+        var exec = tools["exec"] as? [String: Any] ?? [:]
+        let existingSafeBins = (exec["safeBins"] as? [Any])?
+            .compactMap { $0 as? String }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty } ?? []
+        var mergedSafeBins = existingSafeBins
+        if !mergedSafeBins.contains("wacli") {
+            mergedSafeBins.append("wacli")
+        }
+
+        var changed = mergedSafeBins != existingSafeBins
+        if changed {
+            exec["safeBins"] = mergedSafeBins
+        }
+
+        var safeBinProfiles = exec["safeBinProfiles"] as? [String: Any] ?? [:]
+        if safeBinProfiles["wacli"] == nil {
+            safeBinProfiles["wacli"] = ["maxPositional": 1]
+            exec["safeBinProfiles"] = safeBinProfiles
+            changed = true
+        }
+
+        guard changed else {
+            return false
+        }
+        tools["exec"] = exec
+        root["tools"] = tools
         return true
     }
 }

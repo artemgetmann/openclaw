@@ -22,6 +22,7 @@ import {
   normalizeExecHost,
   normalizeExecSecurity,
   normalizePathPrepend,
+  resolveManagedExecPathPrepend,
   renderExecHostLabel,
   resolveApprovalRunningNoticeMs,
   runExecProcess,
@@ -86,6 +87,48 @@ function splitShellCommandSegments(command: string): string[] {
     .split(/[\n;]+/u)
     .map((segment) => normalizeShellSegment(segment))
     .filter(Boolean);
+}
+
+function buildGatewayPathPrelude(env: Record<string, string>): {
+  prepend: string;
+  commandPrefix: string;
+} | null {
+  const managedPrepend = resolveManagedExecPathPrepend(env);
+  if (managedPrepend.length === 0) {
+    return null;
+  }
+
+  // Shell startup files can still reshuffle PATH after we inject env values.
+  // Re-assert the lane-local wrapper path at command start so the live shell
+  // resolves clean-room tools such as `wacli` before any founder/Homebrew bin.
+  const pathValue = managedPrepend.join(path.delimiter);
+  return {
+    prepend: pathValue,
+    commandPrefix:
+      'case ":$PATH:" in *":${OPENCLAW_PREPEND_PATH}:"*) ;; *) export PATH="${OPENCLAW_PREPEND_PATH}:$PATH";; esac; hash -r 2>/dev/null || rehash 2>/dev/null || true; unset OPENCLAW_PREPEND_PATH; ',
+  };
+}
+
+function trimCommandPrefix(commandPrefix?: string | null): string | undefined {
+  const trimmed = commandPrefix?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function ensureGatewayManagedCommandPrefix(params: {
+  command: string;
+  execCommandOverride?: string;
+  env: Record<string, string>;
+}): string | undefined {
+  const gatewayPathPrelude = buildGatewayPathPrelude(params.env);
+  if (!gatewayPathPrelude) {
+    return params.execCommandOverride;
+  }
+  params.env.OPENCLAW_PREPEND_PATH = gatewayPathPrelude.prepend;
+  const existing = params.execCommandOverride ?? params.command;
+  if (existing.includes("OPENCLAW_PREPEND_PATH")) {
+    return existing;
+  }
+  return `${gatewayPathPrelude.commandPrefix}${existing}`;
 }
 
 function isGatewaySupervisorMutationSegment(segment: string): boolean {
@@ -253,6 +296,7 @@ export function createExecTool(
       safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
       safeBinProfiles: defaults?.safeBinProfiles,
     },
+    env: process.env,
     onWarning: (message) => {
       logInfo(message);
     },
@@ -307,6 +351,7 @@ export function createExecTool(
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
       let execCommandOverride: string | undefined;
+      let gatewayExecCommandPrefix: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
       if (!allowBackground && (backgroundRequested || yieldRequested)) {
@@ -476,6 +521,19 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
+      if (!sandbox && host === "gateway") {
+        // Re-assert lane-local wrappers after any shell fallback or request
+        // path prepends so `wacli` resolves to the clean-room wrapper first.
+        applyPathPrepend(env, resolveManagedExecPathPrepend(baseEnv));
+
+        const gatewayPathPrelude = buildGatewayPathPrelude(env);
+        if (gatewayPathPrelude) {
+          env.OPENCLAW_PREPEND_PATH = gatewayPathPrelude.prepend;
+          gatewayExecCommandPrefix = trimCommandPrefix(gatewayPathPrelude.commandPrefix);
+          execCommandOverride = `${gatewayPathPrelude.commandPrefix}${execCommandOverride ?? params.command}`;
+        }
+      }
+
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
@@ -504,6 +562,7 @@ export function createExecTool(
       if (host === "gateway" && !bypassApprovals) {
         const gatewayResult = await processGatewayAllowlist({
           command: params.command,
+          execCommandPrefix: gatewayExecCommandPrefix,
           workdir,
           env,
           pty: params.pty === true && !sandbox,
@@ -530,7 +589,20 @@ export function createExecTool(
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;
         }
-        execCommandOverride = gatewayResult.execCommandOverride;
+        execCommandOverride = gatewayResult.execCommandOverride ?? execCommandOverride;
+      }
+
+      if (!sandbox && host === "gateway") {
+        // Last-mile guard: the live gateway path can still be reshuffled by
+        // upstream env merges or allowlist command rewriting. Recompute from the
+        // final env object right before spawn so lane-local wrappers win even if
+        // earlier stages preserved service metadata but reordered PATH.
+        applyPathPrepend(env, resolveManagedExecPathPrepend(env));
+        execCommandOverride = ensureGatewayManagedCommandPrefix({
+          command: params.command,
+          execCommandOverride,
+          env,
+        });
       }
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
@@ -541,6 +613,20 @@ export function createExecTool(
         : (explicitTimeoutSec ?? defaultTimeoutSec);
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
+      const shouldTraceWacliResolution = /\bwacli\b/u.test(params.command);
+
+      if (shouldTraceWacliResolution) {
+        logInfo(
+          [
+            "exec wacli trace:",
+            `host=${host}`,
+            `command=${truncateMiddle(params.command, 240)}`,
+            `execCommand=${truncateMiddle(execCommandOverride ?? params.command, 320)}`,
+            `path=${truncateMiddle(env.PATH ?? "", 320)}`,
+            `servicePrefix=${env.OPENCLAW_SERVICE_PATH_PREFIX ?? ""}`,
+          ].join(" "),
+        );
+      }
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.

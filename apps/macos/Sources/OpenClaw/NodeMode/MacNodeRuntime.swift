@@ -497,6 +497,7 @@ actor MacNodeRuntime {
                 agentId: evaluation.agentId,
                 resolution: evaluation.resolution,
                 allowlistMatch: evaluation.allowlistMatch,
+                safeBinAllow: evaluation.safeBinAllow,
                 skillAllow: evaluation.skillAllow,
                 sessionKey: sessionKey,
                 runId: runId))
@@ -510,7 +511,12 @@ actor MacNodeRuntime {
             command: command,
             allowlistResolutions: evaluation.allowlistResolutions)
 
-        if evaluation.security == .allowlist, !evaluation.allowlistSatisfied, !evaluation.skillAllow, !approvedByAsk {
+        if evaluation.security == .allowlist,
+           !evaluation.allowlistSatisfied,
+           !evaluation.safeBinAllow,
+           !evaluation.skillAllow,
+           !approvedByAsk
+        {
             await self.emitExecEvent(
                 "exec.denied",
                 payload: ExecEventPayload(
@@ -593,6 +599,7 @@ actor MacNodeRuntime {
         var agentId: String?
         var resolution: ExecCommandResolution?
         var allowlistMatch: ExecAllowlistEntry?
+        var safeBinAllow: Bool
         var skillAllow: Bool
         var sessionKey: String
         var runId: String
@@ -607,6 +614,7 @@ actor MacNodeRuntime {
             ask: context.ask,
             security: context.security,
             allowlistMatch: context.allowlistMatch,
+            safeBinAllow: context.safeBinAllow,
             skillAllow: context.skillAllow)
 
         let decisionFromParams = ExecApprovalHelpers.parseDecision(params.approvalDecision)
