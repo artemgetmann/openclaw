@@ -42,6 +42,11 @@ Automation Rule
 
 - For consumer checks, start with the cheapest read-only probes:
   `wacli doctor`, then `wacli chats list --limit 5 --json`.
+- Do not claim WhatsApp is paired, readable, or ready unless those probes ran in
+  the current turn and the results support that claim.
+- If you did not run `wacli doctor`, do not infer status from prior chat context,
+  old screenshots, or generic expectations. Present it as unverified and offer
+  to check now.
 - If setup is missing or unhealthy, do not dump raw CLI noise back to the user.
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
 - Treat send/sync actions as higher-risk than read/list actions. Prove read access
@@ -51,6 +56,8 @@ Setup Routing
 
 - If `wacli` is missing, not authenticated, or has no usable chat history yet,
   route setup through `consumer-setup`.
+- If `wacli doctor` shows `AUTHENTICATED false`, explicitly say `wacli` is not
+  connected yet. Do not soften that into "paired" or "history is readable".
 - If `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, do not
   present that as a total failure. Explain that WhatsApp is paired, history may
   still be readable, but live sync/send reliability may be degraded until the
