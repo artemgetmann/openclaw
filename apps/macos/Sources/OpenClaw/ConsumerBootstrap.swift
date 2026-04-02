@@ -122,11 +122,28 @@ enum ConsumerBootstrap {
         changed = self.setDefaultValue(
             in: &root,
             path: ["tools", "exec", "safeBins"],
-            value: ["wacli"]) || changed
+            value: ["wacli", "wacli-auth-local.sh"]) || changed
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["tools", "exec", "safeBinTrustedDirs"],
+            value: self.consumerCleanroomTrustedDirs()) || changed
         changed = self.setDefaultValue(
             in: &root,
             path: ["tools", "exec", "safeBinProfiles", "wacli", "maxPositional"],
             value: 1) || changed
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["tools", "exec", "safeBinProfiles", "wacli-auth-local.sh", "maxPositional"],
+            value: 1) || changed
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["tools", "exec", "safeBinProfiles", "wacli-auth-local.sh", "allowedValueFlags"],
+            value: [
+                "--session",
+                "--wait-ms",
+                "--idle-exit",
+                "--timeout-ms",
+            ]) || changed
         changed = self.setDefaultValue(
             in: &root,
             path: ["agents", "defaults", "workspace"],
@@ -168,6 +185,7 @@ enum ConsumerBootstrap {
         // configs so existing installs pick up the same baseline as fresh ones.
         changed = self.ensureBundledSkillAllowlistIncludesStarterSkills(into: &root) || changed
         changed = self.ensureExecSafeBinsIncludeStarterTools(into: &root) || changed
+        changed = self.ensureExecSafeBinTrustedDirsIncludeCleanroomPrefix(into: &root) || changed
         changed = self.setDefaultValue(
             in: &root,
             path: ["discovery", "mdns", "mode"],
@@ -404,6 +422,9 @@ enum ConsumerBootstrap {
         if !mergedSafeBins.contains("wacli") {
             mergedSafeBins.append("wacli")
         }
+        if !mergedSafeBins.contains("wacli-auth-local.sh") {
+            mergedSafeBins.append("wacli-auth-local.sh")
+        }
 
         var changed = mergedSafeBins != existingSafeBins
         if changed {
@@ -416,12 +437,67 @@ enum ConsumerBootstrap {
             exec["safeBinProfiles"] = safeBinProfiles
             changed = true
         }
+        if safeBinProfiles["wacli-auth-local.sh"] == nil {
+            safeBinProfiles["wacli-auth-local.sh"] = [
+                "maxPositional": 1,
+                "allowedValueFlags": [
+                    "--session",
+                    "--wait-ms",
+                    "--idle-exit",
+                    "--timeout-ms",
+                ],
+            ]
+            exec["safeBinProfiles"] = safeBinProfiles
+            changed = true
+        }
 
         guard changed else {
             return false
         }
         tools["exec"] = exec
         root["tools"] = tools
+        return true
+    }
+
+    private static func consumerCleanroomTrustedDirs() -> [String] {
+        let env = ProcessInfo.processInfo.environment
+        let servicePrefix = env["OPENCLAW_SERVICE_PATH_PREFIX"]?
+            .split(separator: ":")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty } ?? []
+        return servicePrefix
+    }
+
+    private static func ensureExecSafeBinTrustedDirsIncludeCleanroomPrefix(
+        into root: inout [String: Any])
+        -> Bool
+    {
+        guard let tools = root["tools"] as? [String: Any] else {
+            return false
+        }
+        var exec = tools["exec"] as? [String: Any] ?? [:]
+        let existingTrustedDirs = (exec["safeBinTrustedDirs"] as? [Any])?
+            .compactMap { $0 as? String }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty } ?? []
+        let cleanroomTrustedDirs = self.consumerCleanroomTrustedDirs()
+        guard !cleanroomTrustedDirs.isEmpty else {
+            return false
+        }
+
+        var mergedTrustedDirs = existingTrustedDirs
+        for dir in cleanroomTrustedDirs where !mergedTrustedDirs.contains(dir) {
+            mergedTrustedDirs.append(dir)
+        }
+
+        guard mergedTrustedDirs != existingTrustedDirs else {
+            return false
+        }
+
+        exec["safeBinTrustedDirs"] = mergedTrustedDirs
+        var nextTools = tools
+        nextTools["exec"] = exec
+        root["tools"] = nextTools
         return true
     }
 }

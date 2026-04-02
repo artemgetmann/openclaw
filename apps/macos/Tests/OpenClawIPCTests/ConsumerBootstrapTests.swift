@@ -12,8 +12,10 @@ struct ConsumerBootstrapTests {
             let gateway = root["gateway"] as? [String: Any]
             let tools = root["tools"] as? [String: Any]
             let exec = tools?["exec"] as? [String: Any]
+            let trustedDirs = exec?["safeBinTrustedDirs"] as? [String]
             let safeBinProfiles = exec?["safeBinProfiles"] as? [String: Any]
             let wacliProfile = safeBinProfiles?["wacli"] as? [String: Any]
+            let wacliAuthLocalProfile = safeBinProfiles?["wacli-auth-local.sh"] as? [String: Any]
             let agents = root["agents"] as? [String: Any]
             let agentDefaults = agents?["defaults"] as? [String: Any]
             let modelDefaults = agentDefaults?["model"] as? [String: Any]
@@ -35,8 +37,17 @@ struct ConsumerBootstrapTests {
             #expect(gateway?["port"] as? Int == ConsumerRuntime.gatewayPort)
             #expect(gateway?["bind"] as? String == ConsumerRuntime.gatewayBind)
             #expect(exec?["host"] as? String == "gateway")
-            #expect(exec?["safeBins"] as? [String] == ["wacli"])
+            #expect(exec?["safeBins"] as? [String] == ["wacli", "wacli-auth-local.sh"])
+            #expect(trustedDirs == [])
             #expect(wacliProfile?["maxPositional"] as? Int == 1)
+            #expect(wacliAuthLocalProfile?["maxPositional"] as? Int == 1)
+            #expect(
+                wacliAuthLocalProfile?["allowedValueFlags"] as? [String] == [
+                    "--session",
+                    "--wait-ms",
+                    "--idle-exit",
+                    "--timeout-ms",
+                ])
             #expect(agentDefaults?["workspace"] as? String == ConsumerRuntime.workspaceURL.path)
             #expect(modelDefaults?["primary"] as? String == "openai-codex/gpt-5.4")
             #expect(agentDefaults?["thinkingDefault"] as? String == "adaptive")
@@ -60,6 +71,26 @@ struct ConsumerBootstrapTests {
                 "weather",
             ])
             #expect(mdns?["mode"] as? String == "off")
+        }
+    }
+
+    @Test func `consumer bootstrap trusts the cleanroom helper dir when present`() async {
+        await TestIsolation.withIsolatedState(
+            env: [
+                ConsumerInstance.envKey: "user-e2e-20260402",
+                "OPENCLAW_SERVICE_PATH_PREFIX": "/tmp/openclaw-consumer-cleanroom/user-e2e-20260402/bin",
+            ]) {
+            var root: [String: Any] = [:]
+
+            let changed = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+
+            let exec = (root["tools"] as? [String: Any])?["exec"] as? [String: Any]
+            let trustedDirs = exec?["safeBinTrustedDirs"] as? [String]
+
+            #expect(changed)
+            #expect(trustedDirs == [
+                "/tmp/openclaw-consumer-cleanroom/user-e2e-20260402/bin",
+            ])
         }
     }
 
@@ -261,7 +292,11 @@ struct ConsumerBootstrapTests {
     }
 
     @Test func `consumer bootstrap preserves existing user choices`() async {
-        await TestIsolation.withIsolatedState(env: [ConsumerInstance.envKey: nil]) {
+        await TestIsolation.withIsolatedState(
+            env: [
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_SERVICE_PATH_PREFIX": "",
+            ]) {
             var root: [String: Any] = [
                 "gateway": [
                     "mode": "remote",
@@ -272,6 +307,7 @@ struct ConsumerBootstrapTests {
                     "exec": [
                         "host": "node",
                         "safeBins": ["custom-cli"],
+                        "safeBinTrustedDirs": ["/tmp/openclaw-consumer-cleanroom/custom/bin"],
                         "safeBinProfiles": [
                             "custom-cli": [
                                 "maxPositional": 0,
@@ -310,11 +346,22 @@ struct ConsumerBootstrapTests {
             #expect(gateway?["port"] as? Int == 28888)
             #expect(gateway?["bind"] as? String == "tailnet")
             #expect(exec?["host"] as? String == "node")
-            #expect(exec?["safeBins"] as? [String] == ["custom-cli", "wacli"])
+            #expect(
+                exec?["safeBins"] as? [String] == [
+                    "custom-cli",
+                    "wacli",
+                    "wacli-auth-local.sh",
+                ])
+            #expect(
+                exec?["safeBinTrustedDirs"] as? [String] == [
+                    "/tmp/openclaw-consumer-cleanroom/custom/bin",
+                ])
             let customProfile = safeBinProfiles?["custom-cli"] as? [String: Any]
             let wacliProfile = safeBinProfiles?["wacli"] as? [String: Any]
+            let wacliAuthLocalProfile = safeBinProfiles?["wacli-auth-local.sh"] as? [String: Any]
             #expect(customProfile?["maxPositional"] as? Int == 0)
             #expect(wacliProfile?["maxPositional"] as? Int == 1)
+            #expect(wacliAuthLocalProfile?["maxPositional"] as? Int == 1)
             #expect(modelDefaults?["primary"] as? String == "anthropic/claude-opus-4-6")
             #expect(mdns?["mode"] as? String == "full")
         }

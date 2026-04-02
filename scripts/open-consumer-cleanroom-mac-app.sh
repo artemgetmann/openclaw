@@ -15,6 +15,7 @@ Packages and opens a consumer app instance while forcing setup-sensitive
 skills onto disposable local state on this Mac:
   - himalaya via HIMALAYA_CONFIG
   - wacli via a wrapper on OPENCLAW_SERVICE_PATH_PREFIX
+  - wacli auth helper via the same cleanroom bin path
   - gog via XDG_CONFIG_HOME/XDG_DATA_HOME + file keyring
 EOF
 }
@@ -85,6 +86,12 @@ cat > "$BIN_DIR/wacli" <<EOF
 exec /opt/homebrew/bin/wacli --store "$WACLI_STORE" "\$@"
 EOF
 chmod +x "$BIN_DIR/wacli"
+
+cat > "$BIN_DIR/wacli-auth-local.sh" <<EOF
+#!/bin/sh
+exec "$ROOT_DIR/skills/wacli/scripts/wacli-auth-local.sh" "\$@"
+EOF
+chmod +x "$BIN_DIR/wacli-auth-local.sh"
 
 export HIMALAYA_CONFIG="$HIMALAYA_CONFIG_PATH"
 export XDG_CONFIG_HOME="$XDG_CONFIG_DIR"

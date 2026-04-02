@@ -99,4 +99,38 @@ struct ExecSafeBinsTests {
                 resolution: resolution,
                 policy: policy))
     }
+
+    @Test func `allows lane local wacli auth helper via safe bin profile`() {
+        let policy = ExecSafeBinPolicy(
+            safeBins: Set(["wacli-auth-local.sh"]),
+            profilesByName: [
+                "wacli-auth-local.sh": ExecSafeBinProfile(
+                    minPositional: nil,
+                    maxPositional: 1,
+                    allowedValueFlags: Set([
+                        "--session",
+                        "--wait-ms",
+                        "--idle-exit",
+                        "--timeout-ms",
+                    ]),
+                    deniedFlags: Set()),
+            ],
+            trustedDirs: Set(["/tmp/openclaw-cleanroom/bin"]))
+        let resolution = ExecCommandResolution(
+            rawExecutable: "wacli-auth-local.sh",
+            resolvedPath: "/tmp/openclaw-cleanroom/bin/wacli-auth-local.sh",
+            executableName: "wacli-auth-local.sh",
+            cwd: nil)
+
+        #expect(
+            ExecSafeBins._testIsAllowed(
+                command: ["wacli-auth-local.sh", "start", "--session", "abc123", "--wait-ms", "5000"],
+                resolution: resolution,
+                policy: policy))
+        #expect(
+            !ExecSafeBins._testIsAllowed(
+                command: ["wacli-auth-local.sh", "start", "--store", "/Users/user/.wacli"],
+                resolution: resolution,
+                policy: policy))
+    }
 }
