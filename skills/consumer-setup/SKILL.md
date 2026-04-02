@@ -19,6 +19,9 @@ API credentials.
 - Prefer the product-native setup surface first.
 - For QR-based flows, prefer a direct image attachment over browser or
   terminal workarounds.
+- In consumer lanes, prefer the direct safe-bin execution surface for local
+  tools. Do not build compound shell strings or use `nodes/system.run` for
+  checks that already have approved lane-local binaries.
 - Do not expose secrets in chat, logs, or pasted commands.
 - Distinguish missing user setup from missing product/runtime setup.
 - Once setup finishes, verify the skill with the cheapest read-only check before
@@ -92,6 +95,11 @@ explicitly ask for the CLI path.
   unless the user explicitly wants the CLI path.
 - Verify with the cheapest read-only checks first: `wacli doctor`, then
   `wacli chats list --limit 5 --json`.
+- Run those checks as separate direct invocations. Never combine them into one
+  shell command with `&&` or similar operators in consumer chat flows.
+- If an attempted command is blocked because you used the wrong execution
+  surface, say that plainly and retry with the direct safe-bin call. Do not tell
+  the user the lane lacks `wacli` unless the direct invocation actually fails.
 
 ### gog
 

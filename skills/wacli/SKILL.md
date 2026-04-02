@@ -42,6 +42,11 @@ Automation Rule
 
 - For consumer checks, start with the cheapest read-only probes:
   `wacli doctor`, then `wacli chats list --limit 5 --json`.
+- In consumer lanes, run those as separate direct tool invocations. One command
+  per call. Do not chain them with shell operators like `&&`, pipes, or
+  redirection.
+- Do not route these checks through `nodes.invoke system.run` or other node-run
+  wrappers. Use the direct `exec` surface with the safe bin itself.
 - Do not claim WhatsApp is paired, readable, or ready unless those probes ran in
   the current turn and the results support that claim.
 - If you did not run `wacli doctor`, do not infer status from prior chat context,
@@ -56,6 +61,10 @@ Setup Routing
 
 - If `wacli` is missing, not authenticated, or has no usable chat history yet,
   route setup through `consumer-setup`.
+- If a policy denial came from your own command shape, describe that truthfully.
+  Say the attempted command format was blocked and retry with a direct safe-bin
+  call. Do not tell the user that `wacli` itself is unavailable unless a direct
+  `wacli` invocation actually failed.
 - If `wacli doctor` shows `AUTHENTICATED false`, explicitly say `wacli` is not
   connected yet. Do not soften that into "paired" or "history is readable".
 - If `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, do not
@@ -69,6 +78,8 @@ Setup Routing
   In consumer lanes this resolves to the lane-local cleanroom wrapper, which
   runs `wacli auth` in an isolated temp store, captures the login QR,
   renders a real PNG, and returns a session id plus `qrPath`.
+- Run pairing helpers directly too. Do not wrap `wacli-auth-local.sh` inside a
+  shell string or node/system-run command.
 - Deliver the QR as a real image attachment first. Do not paste the raw QR
   blocks into chat and do not use a browser-tab screenshot as the normal path.
 - In CLI-agent flows, include `MEDIA:<qrPath>` only as the transport hint the
