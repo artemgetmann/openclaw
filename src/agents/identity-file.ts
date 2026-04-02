@@ -14,7 +14,7 @@ export type AgentIdentityFile = {
 const IDENTITY_PLACEHOLDER_VALUES = new Set([
   "pick something you like",
   "ai? robot? familiar? ghost in the machine? something weirder?",
-  "engineering copilot, sharp general assistant, operator, programming friend, or something more specific",
+  "engineering copilot, sharp general helper, operator, programming friend, or something more specific",
   "how do you come across? sharp? warm? chaotic? calm?",
   "your signature - pick one that feels right",
   "workspace-relative path, http(s) url, or data uri",

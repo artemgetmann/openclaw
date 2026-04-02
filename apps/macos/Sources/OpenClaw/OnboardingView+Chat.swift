@@ -16,7 +16,7 @@ extension OnboardingView {
             let kickoff =
                 "Hi! I just installed OpenClaw and you’re my brand-new agent. " +
                 "Start with BOOTSTRAP.md and ask one question at a time so we can figure out your name, " +
-                "what kind of assistant you should be, what vibe you should have, and what to call me. Use IDENTITY.md, USER.md, and SOUL.md as needed, " +
+                "what role you should play, what vibe you should have, and what to call me. Use IDENTITY.md, USER.md, and SOUL.md as needed, " +
                 "but keep the conversation simple and non-technical. Then walk me through Telegram setup, " +
                 "start with DMs, and mention groups or topics only if they’ll actually help."
             self.onboardingChatModel.input = kickoff

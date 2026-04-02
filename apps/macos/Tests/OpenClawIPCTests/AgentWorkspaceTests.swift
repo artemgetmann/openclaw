@@ -60,7 +60,7 @@ struct AgentWorkspaceTests {
 
         #expect(template.contains("Do not interrogate."))
         #expect(template.contains("Who am I? Who are you?"))
-        #expect(template.contains("What kind of assistant should I be for the human?"))
+        #expect(template.contains("What kind of role should I play for the human?"))
         #expect(template.contains("What vibe should I have most of the time?"))
         #expect(template.contains("engineering copilot"))
         #expect(template.contains("Do not stop after the naming step."))

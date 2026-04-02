@@ -9,7 +9,7 @@ read_when:
 Fill this in during the first conversation. Make it yours.
 
 - **Name:**
-- **Role / persona:** _(engineering copilot, sharp general assistant, operator, programming friend, or something more specific)_
+- **Role / persona:** _(engineering copilot, sharp general helper, operator, programming friend, or something more specific)_
 - **Vibe:**
 - **Emoji:**
 - **Telegram style:**
