@@ -1,4 +1,10 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
+import { imageResult } from "../../../src/agents/tools/common.js";
+import { decodeDataUrl } from "../../../src/agents/tools/image-tool.helpers.js";
 import type { ChannelAgentTool } from "../../../src/channels/plugins/types.js";
 
 export function createWhatsAppLoginTool(): ChannelAgentTool {
@@ -56,17 +62,20 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
         };
       }
 
-      const text = [
-        result.message,
-        "",
-        "Open WhatsApp → Linked Devices and scan:",
-        "",
-        `![whatsapp-qr](${result.qrDataUrl})`,
-      ].join("\n");
-      return {
-        content: [{ type: "text", text }],
+      const { buffer, mimeType } = decodeDataUrl(result.qrDataUrl);
+      const qrPath = path.join(
+        os.tmpdir(),
+        `openclaw-whatsapp-qr-${Date.now()}-${randomUUID()}.png`,
+      );
+      await fs.writeFile(qrPath, buffer);
+      return await imageResult({
+        label: "whatsapp-login",
+        path: qrPath,
+        base64: buffer.toString("base64"),
+        mimeType,
+        extraText: `${result.message}\n\nOpen WhatsApp → Linked Devices and scan the image below.`,
         details: { qr: true },
-      };
+      });
     },
   };
 }
