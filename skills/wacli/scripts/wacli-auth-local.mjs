@@ -10,7 +10,9 @@ import ptyModule from "@lydell/node-pty";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const SESSIONS_ROOT = path.join(os.tmpdir(), "openclaw-wacli-auth");
+const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
+const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
+const SESSIONS_ROOT = path.join(resolvePreferredOpenClawTmpDir(), "openclaw-wacli-auth");
 const STATUS_FILE = "status.json";
 const LOG_FILE = "wacli-auth.log";
 const QR_FILE = "qr.png";
@@ -18,6 +20,43 @@ const QR_TEXT_FILE = "qr.txt";
 const BLOCK_CHARS = new Set(["█", "▀", "▄", " "]);
 const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 const ptySpawn = ptyModule.spawn ?? ptyModule.spawn;
+
+function resolvePreferredOpenClawTmpDir() {
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const fallbackPath = path.join(os.tmpdir(), uid === undefined ? "openclaw" : `openclaw-${uid}`);
+  const isSecureDirForUser = (st) => {
+    if (uid !== undefined && typeof st.uid === "number" && st.uid !== uid) {
+      return false;
+    }
+    return typeof st.mode !== "number" || (st.mode & 0o022) === 0;
+  };
+  const ensureTrustedDir = (candidatePath) => {
+    try {
+      const st = fs.lstatSync(candidatePath);
+      if (!st.isDirectory() || st.isSymbolicLink() || !isSecureDirForUser(st)) {
+        return null;
+      }
+      fs.accessSync(candidatePath, TMP_DIR_ACCESS_MODE);
+      return candidatePath;
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
+        return null;
+      }
+    }
+    try {
+      fs.mkdirSync(candidatePath, { recursive: true, mode: 0o700 });
+      fs.chmodSync(candidatePath, 0o700);
+      fs.accessSync(candidatePath, TMP_DIR_ACCESS_MODE);
+      return candidatePath;
+    } catch {
+      return null;
+    }
+  };
+
+  // The QR image must live under OpenClaw's trusted media roots. os.tmpdir() on
+  // macOS resolves to /var/folders/..., which Telegram delivery rejects.
+  return ensureTrustedDir(POSIX_OPENCLAW_TMP_DIR) ?? ensureTrustedDir(fallbackPath) ?? fallbackPath;
+}
 
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
