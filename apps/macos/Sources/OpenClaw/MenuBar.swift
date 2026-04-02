@@ -295,6 +295,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.installVisibleSurfaceObserverIfNeeded()
         if let state {
             Task { @MainActor in
+                await ConsumerLocalHelperBootstrap.shared.ensureInstalledIfNeeded(
+                    connectionMode: state.connectionMode)
                 await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused)
                 await Self.bootstrapDeferredConsumerStartupWorkIfNeeded(
                     isConsumer: AppFlavor.current.isConsumer,
@@ -312,8 +314,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
         Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
         self.scheduleInitialVisibleSurfaceIfNeeded()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+        if !AppFlavor.current.isConsumer {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+            }
         }
 
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).

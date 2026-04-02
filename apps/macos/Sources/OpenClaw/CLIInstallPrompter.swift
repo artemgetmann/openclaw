@@ -37,12 +37,16 @@ final class CLIInstallPrompter {
 
     private func shouldPrompt() -> Bool {
         guard !self.isPrompting else { return false }
-        guard AppStateStore.shared.onboardingSeen else { return false }
-        guard AppStateStore.shared.connectionMode == .local else { return false }
-        guard CLIInstaller.installedLocation() == nil else { return false }
         guard let version = Self.appVersion() else { return false }
         let lastPrompt = UserDefaults.standard.string(forKey: cliInstallPromptedVersionKey)
-        return lastPrompt != version
+        return Self.shouldPrompt(
+            isPrompting: self.isPrompting,
+            isConsumer: AppFlavor.current.isConsumer,
+            onboardingSeen: AppStateStore.shared.onboardingSeen,
+            connectionMode: AppStateStore.shared.connectionMode,
+            installedLocation: CLIInstaller.installedLocation(),
+            appVersion: version,
+            lastPromptedVersion: lastPrompt)
     }
 
     private func installCLI() async {
@@ -89,6 +93,25 @@ final class CLIInstallPrompter {
 
     private static func appVersion() -> String? {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+    }
+
+    static func shouldPrompt(
+        isPrompting: Bool,
+        isConsumer: Bool,
+        onboardingSeen: Bool,
+        connectionMode: AppState.ConnectionMode,
+        installedLocation: String?,
+        appVersion: String,
+        lastPromptedVersion: String?) -> Bool
+    {
+        guard !isPrompting else { return false }
+        // Consumer local bootstrap now installs the helper automatically; a modal
+        // "Install CLI" prompt only drags the setup back into power-user land.
+        guard !isConsumer else { return false }
+        guard onboardingSeen else { return false }
+        guard connectionMode == .local else { return false }
+        guard installedLocation == nil else { return false }
+        return lastPromptedVersion != appVersion
     }
 }
 

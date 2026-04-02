@@ -32,6 +32,10 @@ final class ConnectionModeCoordinator {
             NodesStore.shared.lastError = nil
             await RemoteTunnelManager.shared.stopAll()
             WebChatManager.shared.resetTunnels()
+            // Consumer local mode should not ask the user to install a helper by
+            // hand. Bootstrap the user-space CLI/runtime first so gateway start
+            // can stay product-owned from the first launch.
+            await ConsumerLocalHelperBootstrap.shared.ensureInstalledIfNeeded(connectionMode: .local)
             let shouldStart = GatewayAutostartPolicy.shouldStartGateway(mode: .local, paused: paused)
             if shouldStart {
                 GatewayProcessManager.shared.setActive(true)
