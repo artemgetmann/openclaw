@@ -82,6 +82,11 @@ Find chats + messages
 - `wacli chats list --limit 20 --query "name or number"`
 - `wacli messages search "query" --limit 20 --chat <jid>`
 - `wacli messages search "invoice" --after 2025-01-01 --before 2025-12-31`
+- Recent-reply reconciliation:
+  `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json`
+  This inspects the local `wacli.db`, resolves real sibling chats from stored
+  names/contacts/aliases, and returns the newest inbound `from_me=0` across all
+  candidate chats.
 
 History backfill
 
@@ -100,6 +105,14 @@ Notes
 - Backfill requires your phone online; results are best-effort.
 - WhatsApp CLI is not needed for routine user chats; it’s for messaging other people.
 - JIDs: direct chats look like `<number>@s.whatsapp.net`; groups look like `<id>@g.us` (use `wacli chats list` to find).
+- Do not fabricate `<digits>@lid`.
+  Linked-ID chats can use opaque `@lid` values that do not share the phone
+  digits. If you need to check whether a DM got a reply, resolve candidate chats
+  from actual stored data first, then inspect all of them.
+- Media replies count as replies.
+  A valid inbound row may have `media_type=image` (or another media type) with a
+  caption/body, or a media row with empty text where `display_text` is the only
+  visible clue.
 - `wacli doctor` is the health probe:
   - `AUTHENTICATED false` usually means QR pairing has not been completed yet.
   - `AUTHENTICATED true` + `CONNECTED false` usually means the account is paired
