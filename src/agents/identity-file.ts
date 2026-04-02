@@ -14,6 +14,7 @@ export type AgentIdentityFile = {
 const IDENTITY_PLACEHOLDER_VALUES = new Set([
   "pick something you like",
   "ai? robot? familiar? ghost in the machine? something weirder?",
+  "engineering copilot, sharp general helper, operator, programming friend, or something more specific",
   "how do you come across? sharp? warm? chaotic? calm?",
   "your signature - pick one that feels right",
   "workspace-relative path, http(s) url, or data uri",
@@ -33,6 +34,14 @@ function normalizeIdentityValue(value: string): string {
 function isIdentityPlaceholder(value: string): boolean {
   const normalized = normalizeIdentityValue(value);
   return IDENTITY_PLACEHOLDER_VALUES.has(normalized);
+}
+
+function isCreatureLabel(label: string): boolean {
+  return label === "creature" || label === "creature / persona";
+}
+
+function isRoleLabel(label: string): boolean {
+  return label === "role" || label === "role / persona" || label === "persona";
 }
 
 export function parseIdentityMarkdown(content: string): AgentIdentityFile {
@@ -61,7 +70,7 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
     if (label === "emoji") {
       identity.emoji = value;
     }
-    if (label === "creature") {
+    if (isCreatureLabel(label) || isRoleLabel(label)) {
       identity.creature = value;
     }
     if (label === "vibe") {
