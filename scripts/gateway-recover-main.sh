@@ -17,8 +17,14 @@ WATCHDOG_STABILIZE_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_STABILIZE_SECONDS:-8}"
 WATCHDOG_AUTO_DISABLE_ON_DUPLICATE="${OPENCLAW_GATEWAY_WATCHDOG_AUTO_DISABLE_ON_DUPLICATE:-1}"
 MANAGE_WATCHDOG="${OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG:-1}"
 OPENCLAW_ENTRYPOINT="${MAIN_REPO}/openclaw.mjs"
+VALIDATED_NODE_HELPER="${MAIN_REPO}/scripts/lib/validated-node.sh"
 
-resolve_node_bin() {
+if [[ -f "${VALIDATED_NODE_HELPER}" ]]; then
+  # shellcheck disable=SC1090
+  source "${VALIDATED_NODE_HELPER}"
+fi
+
+resolve_node_bin_fallback() {
   if [[ -n "${OPENCLAW_NODE_BIN:-}" && -x "${OPENCLAW_NODE_BIN}" ]]; then
     printf '%s\n' "${OPENCLAW_NODE_BIN}"
     return 0
@@ -42,6 +48,19 @@ resolve_node_bin() {
   return 1
 }
 
+resolve_node_bin() {
+  # Recovery must not depend on launchd inheriting an interactive shell PATH.
+  # Reuse the repo-pinned Node/Corepack toolchain first, then fall back only
+  # for older installs that do not ship the helper.
+  if declare -F openclaw_use_validated_node >/dev/null 2>&1 &&
+    openclaw_use_validated_node "${MAIN_REPO}" >/dev/null 2>&1; then
+    printf '%s\n' "${OPENCLAW_NODE_BIN}"
+    return 0
+  fi
+
+  resolve_node_bin_fallback
+}
+
 NODE_BIN="$(resolve_node_bin)" || {
   printf '[gateway-recover-main] node runtime not found; set OPENCLAW_NODE_BIN to a launchd-visible node binary\n' >&2
   exit 1
@@ -49,6 +68,31 @@ NODE_BIN="$(resolve_node_bin)" || {
 
 run_openclaw_cli() {
   "${NODE_BIN}" "${OPENCLAW_ENTRYPOINT}" "$@"
+}
+
+run_repo_pnpm() {
+  if declare -F openclaw_run_repo_pnpm >/dev/null 2>&1; then
+    # Propagate the helper exit code so recovery stops on a failed build rather
+    # than reinstalling whatever stale dist/ happened to already exist.
+    openclaw_run_repo_pnpm "${MAIN_REPO}" "$@"
+    return $?
+  fi
+
+  local corepack_bin
+  corepack_bin="$(dirname "${NODE_BIN}")/corepack"
+  if [[ -x "${corepack_bin}" ]]; then
+    (
+      cd "${MAIN_REPO}"
+      "${NODE_BIN}" "${corepack_bin}" pnpm "$@"
+    )
+    return $?
+  fi
+
+  (
+    cd "${MAIN_REPO}"
+    pnpm "$@"
+  )
+  return $?
 }
 
 log() {
@@ -253,6 +297,13 @@ pid_matches_main_runtime() {
   return 1
 }
 
+install_main_launch_agent() {
+  (
+    cd "${MAIN_REPO}"
+    "${NODE_BIN}" dist/index.js gateway install --force --allow-shared-service-takeover --runtime node --port "${PORT}"
+  )
+}
+
 stabilize_watchdog() {
   local gateway_pid
   gateway_pid="$(resolve_launchctl_gateway_pid)"
@@ -313,11 +364,11 @@ main() {
   run_strict bash -lc "lsof -nP -iTCP:${PORT} -sTCP:LISTEN || true"
 
   log_block "Rebuild and reinstall from main runtime"
-  run_strict bash -lc "cd '${MAIN_REPO}' && pnpm build"
+  run_strict run_repo_pnpm build
   # Recovery is specifically about reclaiming the default shared service for
   # the canonical main runtime, so install from the built repo entrypoint with
   # explicit takeover instead of going through a wrapper that can drift.
-  run_strict bash -lc "cd '${MAIN_REPO}' && node dist/index.js gateway install --force --allow-shared-service-takeover --runtime node --port '${PORT}'"
+  run_strict install_main_launch_agent
 
   log_block "Bootstrap gateway launch agent"
   launchctl bootstrap "gui/$(id -u)" "${HOME}/Library/LaunchAgents/${GATEWAY_LABEL}.plist" 2>/dev/null || true
