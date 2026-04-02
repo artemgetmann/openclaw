@@ -17,6 +17,7 @@ extension ChannelsStore {
         self.telegramSetupBotUsername = nil
         self.telegramSetupFirstSenderId = nil
         self.telegramSetupBaselineInboundAt = nil
+        self.telegramSetupBaselineOutboundAt = nil
         self.telegramSetupWaitingForDM = false
         self.telegramSetupPhase = .idle
     }
@@ -130,8 +131,13 @@ extension ChannelsStore {
             // bootstrap reply starts. Record that edge explicitly so a later bot
             // reply can satisfy the completion check even if the replay helper
             // process stalls while the gateway restarts.
-            self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestActivityAt()
+            // Track inbound and outbound separately. The reply that proves
+            // first-task completion can land in the same Telegram second as the
+            // original DM, so a single max(activity) baseline is too lossy and
+            // can miss a real completion edge.
+            self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestInboundAt()
                 ?? Double(dm.date * 1_000)
+            self.telegramSetupBaselineOutboundAt = self.consumerTelegramLatestOutboundAt()
             let persisted = try await self.applyTelegramSetupBootstrap(
                 token: token,
                 dmPolicy: "allowlist",
@@ -283,8 +289,6 @@ extension ChannelsStore {
         attempts: Int = 12,
         delayNanoseconds: UInt64 = 1_000_000_000
     ) async -> Bool {
-        guard self.consumerTelegramLooksLive() else { return false }
-
         // The snapshot can lag a real Telegram reply right after config reloads.
         // Spend a bounded grace period on the live activity signal before
         // forcing the user to send another DM that may not actually be
@@ -293,7 +297,13 @@ extension ChannelsStore {
         // than the original 4-second window while still producing a real reply.
         for attempt in 0..<attempts {
             await self.refresh(probe: true)
-            if self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible() {
+            // Do not require the lane to look live before entering the wait.
+            // During setup replay we intentionally churn config and restart the
+            // gateway; healthy Telegram status can arrive a beat after the real
+            // reply. Waiting through that restart window is the whole point.
+            if self.consumerTelegramLooksLive(),
+               self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible()
+            {
                 return true
             }
             guard attempt + 1 < attempts else { break }

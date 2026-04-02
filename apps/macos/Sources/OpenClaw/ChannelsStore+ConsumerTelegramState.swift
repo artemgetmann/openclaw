@@ -52,20 +52,49 @@ extension ChannelsStore {
     }
 
     func primeConsumerTelegramFirstTaskBaselineIfNeeded() {
-        guard self.telegramSetupBaselineInboundAt == nil else { return }
-        // Track the last seen Telegram activity, not only inbound traffic.
-        // The onboarding success condition is "the first task finished end-to-end",
-        // which may surface as the bot's outbound reply even when inbound timing is
-        // unchanged or was observed too late.
-        self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestActivityAt()
+        guard self.telegramSetupBaselineInboundAt == nil,
+              self.telegramSetupBaselineOutboundAt == nil
+        else { return }
+        // Track inbound and outbound edges independently. Using only the max
+        // activity timestamp can miss a real reply when inbound/outbound happen
+        // in the same second or when only one side advances after replay.
+        self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestInboundAt()
+        self.telegramSetupBaselineOutboundAt = self.consumerTelegramLatestOutboundAt()
     }
 
     func consumerTelegramCanVerifyFirstTaskFromActivity() -> Bool {
-        guard let latestActivityAt = self.consumerTelegramLatestActivityAt() else { return false }
-        guard let baselineInboundAt = self.telegramSetupBaselineInboundAt else {
-            return false
+        let latestInboundAt = self.consumerTelegramLatestInboundAt()
+        let latestOutboundAt = self.consumerTelegramLatestOutboundAt()
+        let inboundAdvanced: Bool
+        if let baselineInboundAt = self.telegramSetupBaselineInboundAt,
+           let latestInboundAt
+        {
+            inboundAdvanced = latestInboundAt > baselineInboundAt
+        } else {
+            inboundAdvanced = false
         }
-        return latestActivityAt > baselineInboundAt
+
+        let outboundAdvanced: Bool
+        if let baselineOutboundAt = self.telegramSetupBaselineOutboundAt,
+           let latestOutboundAt
+        {
+            outboundAdvanced = latestOutboundAt > baselineOutboundAt
+        } else {
+            outboundAdvanced = false
+        }
+
+        // Fall back to the historical single-baseline behavior when older state
+        // only captured one edge. This preserves self-healing for lanes that
+        // started before the richer baseline existed.
+        if self.telegramSetupBaselineOutboundAt == nil,
+           let baselineInboundAt = self.telegramSetupBaselineInboundAt,
+           let latestActivityAt = self.consumerTelegramLatestActivityAt(),
+           latestActivityAt > baselineInboundAt
+        {
+            return true
+        }
+
+        return inboundAdvanced || outboundAdvanced
     }
 
     @discardableResult

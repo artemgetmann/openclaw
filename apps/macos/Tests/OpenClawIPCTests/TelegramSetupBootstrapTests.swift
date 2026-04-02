@@ -258,6 +258,7 @@ struct TelegramSetupBootstrapTests {
             store.telegramSetupStatus =
                 "Telegram setup is saved, but OpenClaw could not finish the first Telegram task. OpenClaw started the first Telegram task, but the setup handoff timed out before completion was confirmed."
             store.telegramSetupBaselineInboundAt = 1_000
+            store.telegramSetupBaselineOutboundAt = 1_000
 
             let snapshot = ChannelsStatusSnapshot(
                 ts: 1_700_000_000_000,
