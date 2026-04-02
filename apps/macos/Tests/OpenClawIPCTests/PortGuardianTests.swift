@@ -21,4 +21,23 @@ struct PortGuardianTests {
 
         #expect(!expected)
     }
+
+    @Test func `resolves openclaw runtime paths from config file`() {
+        let paths = PortGuardian._testResolveOpenClawRuntimePaths(filePaths: [
+            "/Users/test/Library/Application Support/OpenClaw Consumer/instances/user-a/.openclaw/openclaw.json",
+            "/tmp/other.txt",
+        ])
+
+        #expect(paths.configPath == "/Users/test/Library/Application Support/OpenClaw Consumer/instances/user-a/.openclaw/openclaw.json")
+        #expect(paths.stateDir == "/Users/test/Library/Application Support/OpenClaw Consumer/instances/user-a/.openclaw")
+    }
+
+    @Test func `resolves openclaw runtime state dir from gateway log path`() {
+        let paths = PortGuardian._testResolveOpenClawRuntimePaths(filePaths: [
+            "/Users/test/Library/Application Support/OpenClaw Consumer/instances/user-b/.openclaw/logs/gateway.log",
+        ])
+
+        #expect(paths.configPath == nil)
+        #expect(paths.stateDir == "/Users/test/Library/Application Support/OpenClaw Consumer/instances/user-b/.openclaw")
+    }
 }

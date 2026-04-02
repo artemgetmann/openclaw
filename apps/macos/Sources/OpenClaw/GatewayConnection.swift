@@ -179,6 +179,9 @@ actor GatewayConnection {
         do {
             return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
         } catch {
+            if let rewritten = await Self.rewriteLocalAuthFailureIfNeeded(error: error, config: cfg) {
+                throw rewritten
+            }
             if error is GatewayResponseError || error is GatewayDecodingError {
                 throw error
             }
@@ -476,6 +479,93 @@ actor GatewayConnection {
             detail.contains("cannot connect to host") ||
             detail.contains("connection lost")
     }
+
+    private static func rewriteLocalAuthFailureIfNeeded(
+        error: Error,
+        config: Config) async -> NSError?
+    {
+        guard self.isGatewayAuthFailure(error) else { return nil }
+        guard self.isLoopbackGatewayURL(config.url) else { return nil }
+        guard let port = config.url.port else { return nil }
+
+        let expectedStateDir = OpenClawConfigFile.stateDirURL().path
+        let expectedConfigPath = OpenClawConfigFile.url().path
+        guard
+            let runtime = await PortGuardian.shared.describeOpenClawRuntime(port: port),
+            self.isForeignLocalRuntime(
+                runtime,
+                expectedStateDir: expectedStateDir,
+                expectedConfigPath: expectedConfigPath)
+        else {
+            return nil
+        }
+
+        let detail = self.foreignLocalRuntimeMessage(
+            port: port,
+            runtime: runtime,
+            expectedStateDir: expectedStateDir,
+            expectedConfigPath: expectedConfigPath)
+        return NSError(
+            domain: "Gateway",
+            code: 1008,
+            userInfo: [NSLocalizedDescriptionKey: detail])
+    }
+
+    private static func isGatewayAuthFailure(_ error: Error) -> Bool {
+        if let urlError = error as? URLError, urlError.code == .dataNotAllowed {
+            return true
+        }
+        let nsError = error as NSError
+        if nsError.domain == "Gateway", nsError.code == 1008 { return true }
+        let detail = nsError.localizedDescription.lowercased()
+        return detail.contains("unauthorized") || detail.contains("auth")
+    }
+
+    private static func isLoopbackGatewayURL(_ url: URL) -> Bool {
+        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+        return host == "127.0.0.1" || host == "localhost" || host == "::1"
+    }
+
+    private static func isForeignLocalRuntime(
+        _ runtime: PortGuardian.OpenClawRuntimeDescriptor,
+        expectedStateDir: String,
+        expectedConfigPath: String) -> Bool
+    {
+        let expectedState = self.normalizePath(expectedStateDir)
+        let expectedConfig = self.normalizePath(expectedConfigPath)
+        let actualState = runtime.stateDir.map(self.normalizePath)
+        let actualConfig = runtime.configPath.map(self.normalizePath)
+
+        if let actualState, actualState != expectedState {
+            return true
+        }
+        if let actualConfig, actualConfig != expectedConfig {
+            return true
+        }
+        return false
+    }
+
+    private static func foreignLocalRuntimeMessage(
+        port: Int,
+        runtime: PortGuardian.OpenClawRuntimeDescriptor,
+        expectedStateDir: String,
+        expectedConfigPath: String) -> String
+    {
+        let actualState = runtime.stateDir ?? "unknown"
+        let actualConfig = runtime.configPath ?? "unknown"
+        return """
+        OpenClaw reached a different local gateway on port \(port). Expected state dir \(expectedStateDir), \
+        config \(expectedConfigPath), but the listener is using state dir \(actualState), config \(actualConfig) \
+        (pid \(runtime.pid) \(runtime.command)). Restart the consumer gateway from this app build so this instance \
+        owns the port.
+        """
+    }
+
+    private static func normalizePath(_ path: String) -> String {
+        URL(fileURLWithPath: path, isDirectory: false).standardizedFileURL.path
+    }
 }
 
 #if DEBUG
@@ -486,6 +576,30 @@ extension GatewayConnection {
 
     static func _testShouldAutoRecoverLocalGateway(method: String?, from error: Error) -> Bool {
         self.shouldAutoRecoverLocalGateway(method: method, from: error)
+    }
+
+    static func _testIsForeignLocalRuntime(
+        _ runtime: PortGuardian.OpenClawRuntimeDescriptor,
+        expectedStateDir: String,
+        expectedConfigPath: String) -> Bool
+    {
+        self.isForeignLocalRuntime(
+            runtime,
+            expectedStateDir: expectedStateDir,
+            expectedConfigPath: expectedConfigPath)
+    }
+
+    static func _testForeignLocalRuntimeMessage(
+        port: Int,
+        runtime: PortGuardian.OpenClawRuntimeDescriptor,
+        expectedStateDir: String,
+        expectedConfigPath: String) -> String
+    {
+        self.foreignLocalRuntimeMessage(
+            port: port,
+            runtime: runtime,
+            expectedStateDir: expectedStateDir,
+            expectedConfigPath: expectedConfigPath)
     }
 }
 #endif
