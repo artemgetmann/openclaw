@@ -184,13 +184,13 @@ actor GatewayConnection {
             }
 
             // Auto-recover in local mode by spawning/attaching a gateway and retrying a few times.
-            // Canvas interactions should "just work" even if the local gateway isn't running yet.
-            // But slow startup or shutdown spillover can also surface as timeouts/AbortErrors while
-            // the gateway is still alive. Restarting on those turns transient load into a SIGTERM loop.
+            // Health probes are the exception: they are used by startup/restart readiness checks,
+            // so letting a failed probe trigger recovery would recurse into launchd churn while the
+            // gateway is still trying to come back.
             let mode = await MainActor.run { AppStateStore.shared.connectionMode }
             switch mode {
             case .local:
-                guard Self.shouldAutoRecoverLocalGateway(from: error) else {
+                guard Self.shouldAutoRecoverLocalGateway(method: method, from: error) else {
                     throw error
                 }
                 let recoveryReason = (error as NSError).localizedDescription
@@ -440,6 +440,13 @@ actor GatewayConnection {
     }
 
     private static func shouldAutoRecoverLocalGateway(from error: Error) -> Bool {
+        self.shouldAutoRecoverLocalGateway(method: nil, from: error)
+    }
+
+    private static func shouldAutoRecoverLocalGateway(method: String?, from error: Error) -> Bool {
+        if method == Method.health.rawValue {
+            return false
+        }
         if error is CancellationError {
             return false
         }
@@ -475,6 +482,10 @@ actor GatewayConnection {
 extension GatewayConnection {
     static func _testShouldAutoRecoverLocalGateway(from error: Error) -> Bool {
         self.shouldAutoRecoverLocalGateway(from: error)
+    }
+
+    static func _testShouldAutoRecoverLocalGateway(method: String?, from error: Error) -> Bool {
+        self.shouldAutoRecoverLocalGateway(method: method, from: error)
     }
 }
 #endif

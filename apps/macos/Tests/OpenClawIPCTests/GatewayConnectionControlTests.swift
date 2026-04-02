@@ -60,6 +60,17 @@ private func makeTestGatewayConnection() -> GatewayConnection {
         #expect(GatewayConnection._testShouldAutoRecoverLocalGateway(from: closed))
     }
 
+    @Test func `health probes do not self-recover into launchd churn`() {
+        #expect(
+            !GatewayConnection._testShouldAutoRecoverLocalGateway(
+                method: "health",
+                from: URLError(.cannotConnectToHost)))
+        #expect(
+            GatewayConnection._testShouldAutoRecoverLocalGateway(
+                method: "config.get",
+                from: URLError(.cannotConnectToHost)))
+    }
+
     @Test func `status fails when process missing`() async {
         let connection = makeTestGatewayConnection()
         let result = await connection.status()
