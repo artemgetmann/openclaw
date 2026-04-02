@@ -91,7 +91,29 @@ describe("exec PATH login shell merge", () => {
     const result = await tool.execute("call1", { command: "echo $PATH" });
     const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
-    expect(entries).toEqual(["/custom/bin", "/opt/bin", "/usr/bin"]);
+    expect(entries).toEqual(["/usr/bin", "/custom/bin", "/opt/bin"]);
+    expect(shellPathMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps lane-local PATH prefixes ahead of login-shell PATH", async () => {
+    if (isWin) {
+      return;
+    }
+    process.env.PATH = "/tmp/openclaw-consumer-cleanroom/lane/bin:/usr/bin";
+
+    const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+    shellPathMock.mockClear();
+    shellPathMock.mockReturnValue("/opt/homebrew/bin:/usr/bin");
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-cleanroom-path", { command: "echo $PATH" });
+    const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
+
+    expect(entries).toEqual([
+      "/tmp/openclaw-consumer-cleanroom/lane/bin",
+      "/usr/bin",
+      "/opt/homebrew/bin",
+    ]);
     expect(shellPathMock).toHaveBeenCalledTimes(1);
   });
 
