@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadConfig = vi.fn();
+const loadConfigReadOnly = vi.fn();
 const resolveTelegramAccount = vi.fn();
 const readTelegramUpdateOffset = vi.fn();
 const writeTelegramUpdateOffset = vi.fn();
@@ -14,7 +14,9 @@ const createTelegramBot = vi.fn((_params: unknown) => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: () => loadConfig(),
+  createConfigIO: () => ({
+    loadConfigReadOnly: () => loadConfigReadOnly(),
+  }),
 }));
 
 vi.mock("../../../extensions/telegram/src/accounts.js", () => ({
@@ -34,7 +36,7 @@ const { channelsTelegramReplaySetupDmCommand } = await import("./telegram-replay
 
 describe("channelsTelegramReplaySetupDmCommand", () => {
   beforeEach(() => {
-    loadConfig.mockReset().mockReturnValue({ channels: { telegram: {} } });
+    loadConfigReadOnly.mockReset().mockReturnValue({ channels: { telegram: {} } });
     resolveTelegramAccount.mockReset().mockReturnValue({
       accountId: "default",
       token: "123456:telegram-token",
@@ -46,6 +48,35 @@ describe("channelsTelegramReplaySetupDmCommand", () => {
     handleUpdate.mockReset().mockImplementation(async () => undefined);
     stopBot.mockReset().mockResolvedValue(undefined);
     createTelegramBot.mockClear();
+  });
+
+  it("loads the latest config file snapshot for replay instead of the runtime cache", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await channelsTelegramReplaySetupDmCommand(
+      {
+        json: true,
+        payloadJson: JSON.stringify({
+          updateId: 41,
+          messageId: 99,
+          chatId: 123456789,
+          senderId: 123456789,
+          text: "hello there",
+          date: 1_711_234_567,
+        }),
+      },
+      runtime as never,
+    );
+
+    expect(loadConfigReadOnly).toHaveBeenCalledTimes(1);
+    expect(resolveTelegramAccount).toHaveBeenCalledWith({
+      cfg: { channels: { telegram: {} } },
+      accountId: undefined,
+    });
   });
 
   it("replays a captured DM through the Telegram bot pipeline and logs JSON", async () => {

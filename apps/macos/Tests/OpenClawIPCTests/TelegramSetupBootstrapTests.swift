@@ -37,10 +37,15 @@ struct TelegramSetupBootstrapTests {
                     let gateway = currentRoot["gateway"] as? [String: Any]
                     let telegram = ((currentRoot["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
                     let persistedGateway = persisted["gateway"] as? [String: Any]
+                    let accounts = telegram["accounts"] as? [String: Any]
+                    let defaultAccount = accounts?["default"] as? [String: Any]
 
                     #expect(gateway?["mode"] as? String == "local")
                     #expect(gateway?["port"] as? Int == 19001)
                     #expect(telegram["enabled"] as? Bool == true)
+                    #expect(telegram["defaultAccount"] as? String == "default")
+                    #expect(telegram["botToken"] as? String == "123456:abc")
+                    #expect(defaultAccount?["botToken"] as? String == "123456:abc")
                     #expect(telegram["dmPolicy"] as? String == "allowlist")
                     #expect(telegram["groupPolicy"] as? String == "allowlist")
                     #expect(telegram["allowFrom"] as? [String] == ["42"])
@@ -134,16 +139,44 @@ struct TelegramSetupBootstrapTests {
 
                     let telegram = ((currentRoot["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
                     let persistedTelegram = ((persisted["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
+                    let accounts = telegram["accounts"] as? [String: Any]
+                    let defaultAccount = accounts?["default"] as? [String: Any]
                     let groups = telegram["groups"] as? [String: Any]
                     let wildcardGroup = groups?["*"] as? [String: Any]
 
                     #expect(telegram["enabled"] as? Bool == false)
+                    #expect(telegram["defaultAccount"] as? String == "default")
+                    #expect(telegram["botToken"] as? String == "123456:abc")
+                    #expect(defaultAccount?["botToken"] as? String == "123456:abc")
                     #expect(telegram["dmPolicy"] as? String == "allowlist")
                     #expect(telegram["groupPolicy"] as? String == "allowlist")
                     #expect(telegram["allowFrom"] as? [String] == ["42"])
                     #expect(wildcardGroup?["requireMention"] as? Bool == false)
                     #expect(persistedTelegram["enabled"] as? Bool == false)
                 }
+    }
+
+    @Test func `consumer telegram setup field reads nested default-account token`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.configDraft = [:]
+
+            store._testApplyLoadedConfigRoot([
+                "channels": [
+                    "telegram": [
+                        "accounts": [
+                            "default": [
+                                "botToken": "123456:abc",
+                            ],
+                        ],
+                    ],
+                ],
+            ])
+
+            #expect(store.telegramSetupToken == "123456:abc")
+        }
     }
 
     @Test func `telegram bootstrap throws when persisted config does not keep lockin`() async throws {

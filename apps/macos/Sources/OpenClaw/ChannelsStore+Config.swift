@@ -69,7 +69,7 @@ extension ChannelsStore {
         guard AppFlavor.current.isConsumer else { return }
 
         let telegram = ((root["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
-        let configuredToken = TelegramSetupVerifier.normalizeToken((telegram["botToken"] as? String) ?? "")
+        let configuredToken = self.consumerConfiguredTelegramToken(in: telegram)
 
         // The onboarding field must reflect the lane-local config on disk. If it
         // drifts stale in memory, users can unknowingly verify an old bot token
@@ -231,3 +231,11 @@ private func cloneConfigValue(_ value: Any) -> Any {
         return value
     }
 }
+
+#if DEBUG
+extension ChannelsStore {
+    func _testApplyLoadedConfigRoot(_ root: [String: Any], status: String? = nil) {
+        self.applyLoadedConfigRoot(root, status: status)
+    }
+}
+#endif
