@@ -406,6 +406,7 @@ struct ChannelsSettingsSmokeTests {
                 channelDefaultAccountId: ["telegram": "default"])
 
             store.telegramSetupBaselineInboundAt = 150
+            store.telegramSetupBaselineOutboundAt = 100
             #expect(store.consumerTelegramCanVerifyFirstTaskFromActivity())
         }
     }
@@ -466,6 +467,7 @@ struct ChannelsSettingsSmokeTests {
                 channelDefaultAccountId: ["telegram": "default"])
 
             store.telegramSetupBaselineInboundAt = 250
+            store.telegramSetupBaselineOutboundAt = 250
             #expect(store.consumerTelegramCanVerifyFirstTaskFromActivity())
         }
     }
@@ -526,7 +528,8 @@ struct ChannelsSettingsSmokeTests {
                 channelDefaultAccountId: ["telegram": "default"])
 
             store.primeConsumerTelegramFirstTaskBaselineIfNeeded()
-            #expect(store.telegramSetupBaselineInboundAt == 150)
+            #expect(store.telegramSetupBaselineInboundAt == 123)
+            #expect(store.telegramSetupBaselineOutboundAt == 150)
             store.snapshot = ChannelsStatusSnapshot(
                 ts: 1_700_000_100_000,
                 channelOrder: ["telegram"],
@@ -577,7 +580,8 @@ struct ChannelsSettingsSmokeTests {
                 ],
                 channelDefaultAccountId: ["telegram": "default"])
             store.primeConsumerTelegramFirstTaskBaselineIfNeeded()
-            #expect(store.telegramSetupBaselineInboundAt == 150)
+            #expect(store.telegramSetupBaselineInboundAt == 123)
+            #expect(store.telegramSetupBaselineOutboundAt == 150)
         }
     }
 
@@ -654,6 +658,7 @@ struct ChannelsSettingsSmokeTests {
                 ],
                 channelDefaultAccountId: ["telegram": "default"])
             store.telegramSetupBaselineInboundAt = 250
+            store.telegramSetupBaselineOutboundAt = 250
             store.telegramSetupWaitingForDM = true
             store.telegramSetupPhase = .capturingFirstMessage
 
@@ -663,6 +668,68 @@ struct ChannelsSettingsSmokeTests {
             #expect(store.telegramSetupWaitingForDM == false)
             #expect(store.telegramSetupPhase == .idle)
             #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_bot. First task verified.")
+        }
+    }
+
+    @Test func `consumer telegram verification waits for outbound edge even when inbound is unchanged`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.snapshot = ChannelsStatusSnapshot(
+                ts: 1_700_000_000_000,
+                channelOrder: ["telegram"],
+                channelLabels: ["telegram": "Telegram"],
+                channelDetailLabels: nil,
+                channelSystemImages: nil,
+                channelMeta: nil,
+                channels: [
+                    "telegram": SnapshotAnyCodable([
+                        "configured": true,
+                        "running": true,
+                        "mode": "polling",
+                    ]),
+                ],
+                channelAccounts: [
+                    "telegram": [
+                        .init(
+                            accountId: "default",
+                            name: nil,
+                            enabled: true,
+                            configured: true,
+                            linked: nil,
+                            running: true,
+                            connected: nil,
+                            reconnectAttempts: nil,
+                            lastConnectedAt: nil,
+                            lastError: nil,
+                            lastStartAt: nil,
+                            lastStopAt: nil,
+                            lastInboundAt: 1_000,
+                            lastOutboundAt: 1_001,
+                            lastProbeAt: nil,
+                            mode: "polling",
+                            dmPolicy: "allowlist",
+                            allowFrom: ["42"],
+                            tokenSource: "config",
+                            botTokenSource: nil,
+                            appTokenSource: nil,
+                            baseUrl: nil,
+                            allowUnmentionedGroups: nil,
+                            cliPath: nil,
+                            dbPath: nil,
+                            port: nil,
+                            probe: nil,
+                            audit: nil,
+                            application: nil),
+                    ],
+                ],
+                channelDefaultAccountId: ["telegram": "default"])
+
+            store.telegramSetupBaselineInboundAt = 1_000
+            store.telegramSetupBaselineOutboundAt = 1_000
+
+            #expect(store.consumerTelegramCanVerifyFirstTaskFromActivity())
         }
     }
 }
