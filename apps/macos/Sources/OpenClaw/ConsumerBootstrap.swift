@@ -83,6 +83,12 @@ enum ConsumerBootstrap {
     static func applyMissingConfigDefaults(to root: inout [String: Any]) -> Bool {
         var changed = false
 
+        // Older consumer bundles seeded Brave credentials under
+        // tools.web.search.brave.apiKey. The config schema now expects the
+        // shared search-level apiKey field, so migrate the legacy shape before
+        // browser readiness or gateway startup re-reads the config.
+        changed = self.migrateLegacyBraveSearchAPIKey(in: &root) || changed
+
         // Seed only missing values so we keep the consumer runtime opinionated
         // without stomping on settings a user already changed.
         changed = self.setDefaultValue(
@@ -148,6 +154,62 @@ enum ConsumerBootstrap {
         return changed
     }
 
+    private static func migrateLegacyBraveSearchAPIKey(
+        in root: inout [String: Any])
+        -> Bool
+    {
+        guard
+            var tools = root["tools"] as? [String: Any],
+            var web = tools["web"] as? [String: Any]
+        else {
+            return false
+        }
+
+        guard self.migrateLegacyBraveSearchAPIKey(inWeb: &web) else {
+            return false
+        }
+
+        tools["web"] = web
+        root["tools"] = tools
+        return true
+    }
+
+    private static func migrateLegacyBraveSearchAPIKey(inWeb web: inout [String: Any]) -> Bool {
+        guard var search = web["search"] as? [String: Any] else {
+            return false
+        }
+
+        let existingAPIKey = (search["apiKey"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var changed = false
+
+        if
+            var brave = search["brave"] as? [String: Any],
+            let legacyAPIKey = (brave["apiKey"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !legacyAPIKey.isEmpty
+        {
+            if existingAPIKey?.isEmpty != false {
+                search["apiKey"] = legacyAPIKey
+                changed = true
+            }
+            brave.removeValue(forKey: "apiKey")
+            if brave.isEmpty {
+                search.removeValue(forKey: "brave")
+            } else {
+                search["brave"] = brave
+            }
+            changed = true
+        }
+
+        guard changed else {
+            return false
+        }
+
+        web["search"] = search
+        return true
+    }
+
     private static func ensureConsumerWorkspace() {
         let workspaceURL = ConsumerRuntime.workspaceURL
         guard AgentWorkspace.bootstrapSafety(for: workspaceURL).unsafeReason == nil else {
@@ -170,9 +232,10 @@ enum ConsumerBootstrap {
         guard (root["tools"] as? [String: Any])?["web"] == nil else {
             return false
         }
-        guard let legacyWeb = self.loadLegacyWebDefaults() else {
+        guard var legacyWeb = self.loadLegacyWebDefaults() else {
             return false
         }
+        _ = self.migrateLegacyBraveSearchAPIKey(inWeb: &legacyWeb)
         var tools = root["tools"] as? [String: Any] ?? [:]
         tools["web"] = legacyWeb
         root["tools"] = tools

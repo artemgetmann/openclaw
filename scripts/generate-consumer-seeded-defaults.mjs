@@ -125,6 +125,7 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
       ["env", "vars", "BRAVE_API_KEY"],
       ["env", "BRAVE_API_KEY"],
       ["tools", "web", "search", "apiKey"],
+      ["tools", "web", "search", "brave", "apiKey"],
     ]);
   if (braveApiKey) {
     // Keep the Brave key available for manual/provider-level overrides, but do
@@ -135,7 +136,9 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
       setNestedValue(seeded, ["tools", "web", "search", "enabled"], true);
       setNestedValue(seeded, ["tools", "web", "search", "provider"], "brave");
     }
-    setNestedValue(seeded, ["tools", "web", "search", "brave", "apiKey"], braveApiKey);
+    // Brave keys now live at the shared search-level path. Seeding the old
+    // provider-nested location breaks config validation during consumer setup.
+    setNestedValue(seeded, ["tools", "web", "search", "apiKey"], braveApiKey);
   }
 
   return seeded;
