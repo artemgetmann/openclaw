@@ -72,14 +72,7 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
     // API key, so seed it explicitly when available. Media/STT resolves the
     // plain `openai` provider first, and memory-lancedb expects an embeddings
     // key even when the slot is enabled later by product/runtime config.
-    // The memory slot is exclusive, so we flip the default to lancedb here and
-    // explicitly disable memory-core in the same seeded config. That keeps the
-    // consumer on vector memory when OpenAI is present without pretending core
-    // is a live fallback once lancedb is selected.
     setNestedValue(seeded, ["env", "vars", "OPENAI_API_KEY"], openAiApiKey);
-    setNestedValue(seeded, ["plugins", "slots", "memory"], "memory-lancedb");
-    setNestedValue(seeded, ["plugins", "entries", "memory-lancedb", "enabled"], true);
-    setNestedValue(seeded, ["plugins", "entries", "memory-core", "enabled"], false);
     setNestedValue(
       seeded,
       ["plugins", "entries", "memory-lancedb", "config", "embedding", "apiKey"],

@@ -27,21 +27,14 @@ void test("seeds only the supported consumer defaults from env", () => {
       },
     },
     plugins: {
-      slots: {
-        memory: "memory-lancedb",
-      },
       entries: {
         "memory-lancedb": {
-          enabled: true,
           config: {
             embedding: {
               apiKey: "${OPENAI_API_KEY}",
               model: "text-embedding-3-small",
             },
           },
-        },
-        "memory-core": {
-          enabled: false,
         },
       },
     },
@@ -112,21 +105,14 @@ void test("falls back to founder config when shell env is empty", () => {
       },
     },
     plugins: {
-      slots: {
-        memory: "memory-lancedb",
-      },
       entries: {
         "memory-lancedb": {
-          enabled: true,
           config: {
             embedding: {
               apiKey: "${OPENAI_API_KEY}",
               model: "text-embedding-3-small",
             },
           },
-        },
-        "memory-core": {
-          enabled: false,
         },
       },
     },
@@ -187,7 +173,7 @@ void test("falls back to Brave search when Firecrawl is not available", () => {
   });
 });
 
-void test("enables memory-lancedb by default only when OpenAI is seeded", () => {
+void test("seeds OpenAI provider defaults without forcing memory-lancedb on", () => {
   const seeded = buildConsumerSeededDefaults({
     env: {
       OPENAI_API_KEY: " openai-key ",
@@ -201,21 +187,14 @@ void test("enables memory-lancedb by default only when OpenAI is seeded", () => 
       },
     },
     plugins: {
-      slots: {
-        memory: "memory-lancedb",
-      },
       entries: {
         "memory-lancedb": {
-          enabled: true,
           config: {
             embedding: {
               apiKey: "${OPENAI_API_KEY}",
               model: "text-embedding-3-small",
             },
           },
-        },
-        "memory-core": {
-          enabled: false,
         },
       },
     },
