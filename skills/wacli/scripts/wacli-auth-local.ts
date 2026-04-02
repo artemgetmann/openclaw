@@ -101,9 +101,9 @@ function usage() {
   wacli-auth-local.sh stop --session <id>
 
 Notes:
-  - start runs wacli auth in an isolated temp store and returns a PNG path for the QR.
+  - start runs wacli auth against the active wacli store and returns a PNG path for the QR.
   - wait checks whether authentication completed after the QR was scanned.
-  - stop terminates the isolated auth worker and leaves your main ~/.wacli untouched.`);
+  - stop terminates the auth worker without deleting the underlying wacli store.`);
 }
 
 function parseArgs(argv: string[]) {
@@ -382,6 +382,42 @@ async function readAuthStatus(storeDir: string) {
   }
 }
 
+async function resolveDefaultWacliStoreDir() {
+  const child = spawnChild("wacli", ["doctor"], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Promise<string>((resolve) => {
+      let out = "";
+      child.stdout?.on("data", (chunk) => {
+        out += chunk.toString();
+      });
+      child.stdout?.on("end", () => resolve(out));
+    }),
+    new Promise<string>((resolve) => {
+      let out = "";
+      child.stderr?.on("data", (chunk) => {
+        out += chunk.toString();
+      });
+      child.stderr?.on("end", () => resolve(out));
+    }),
+    new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code))),
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(stderr.trim() || `wacli doctor exited with ${String(exitCode)}`);
+  }
+  const storeLine = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("STORE"));
+  const match = storeLine?.match(/^STORE\s+(.+)$/);
+  const storeDir = match?.[1]?.trim();
+  if (!storeDir) {
+    throw new Error("Unable to resolve STORE from `wacli doctor`");
+  }
+  return storeDir;
+}
+
 async function waitForPhase(
   sessionId: string,
   opts: { timeoutMs: number; acceptable: Phase[] },
@@ -405,9 +441,9 @@ async function startCommand(flags: Map<string, string | boolean>) {
     (typeof flags.get("--session") === "string" ? String(flags.get("--session")) : "").trim() ||
     randomUUID();
   const sessionDir = sessionDirFor(sessionId);
-  const storeDir =
-    (typeof flags.get("--store") === "string" ? String(flags.get("--store")) : "").trim() ||
-    path.join(sessionDir, "store");
+  const requestedStoreDir =
+    typeof flags.get("--store") === "string" ? String(flags.get("--store")).trim() : "";
+  const storeDir = requestedStoreDir || (await resolveDefaultWacliStoreDir());
   const idleExit =
     typeof flags.get("--idle-exit") === "string" ? String(flags.get("--idle-exit")) : "120s";
   const waitMs = parseDurationMs(flags.get("--wait-ms"), 15_000);
@@ -419,7 +455,7 @@ async function startCommand(flags: Map<string, string | boolean>) {
   await writeStatus(sessionDir, {
     sessionId,
     phase: "starting",
-    message: "Starting isolated WhatsApp CLI auth…",
+    message: "Starting WhatsApp CLI auth…",
     sessionDir,
     storeDir,
     logPath,
@@ -519,7 +555,7 @@ async function stopCommand(flags: Map<string, string | boolean>) {
   }
   const next = await writeStatus(status.sessionDir, {
     phase: "stopped",
-    message: "Stopped isolated WhatsApp CLI auth helper.",
+    message: "Stopped WhatsApp CLI auth helper.",
   });
   console.log(JSON.stringify(next, null, 2));
 }
@@ -527,9 +563,9 @@ async function stopCommand(flags: Map<string, string | boolean>) {
 async function workerCommand(flags: Map<string, string | boolean>) {
   const sessionId = requireSessionId(flags);
   const sessionDir = sessionDirFor(sessionId);
-  const storeDir =
-    (typeof flags.get("--store") === "string" ? String(flags.get("--store")) : "").trim() ||
-    path.join(sessionDir, "store");
+  const requestedStoreDir =
+    typeof flags.get("--store") === "string" ? String(flags.get("--store")).trim() : "";
+  const storeDir = requestedStoreDir || (await resolveDefaultWacliStoreDir());
   const idleExit =
     typeof flags.get("--idle-exit") === "string" ? String(flags.get("--idle-exit")) : "120s";
   const follow = flags.get("--follow") === true;
