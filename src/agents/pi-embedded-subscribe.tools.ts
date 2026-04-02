@@ -157,6 +157,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "tts",
   "web_fetch",
   "web_search",
+  "whatsapp_login",
   "write",
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
