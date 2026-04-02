@@ -393,6 +393,7 @@ extension GatewayLaunchAgentManager {
         if let projectRootHint, !projectRootHint.isEmpty {
             env["OPENCLAW_FORK_ROOT"] = projectRootHint
         }
+        ConsumerRuntime.applyInheritedToolIsolationEnvironment(to: &env, base: base)
         return env
     }
 

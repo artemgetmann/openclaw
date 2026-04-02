@@ -361,6 +361,8 @@ final class AppState {
             self.startConfigWatcher()
             Task.detached(priority: .utility) {
                 let launchAgentEnabled = await LaunchAgentManager.status()
+                let launchAgentNeedsRefresh = LaunchAgentManager.needsRefresh(
+                    bundlePath: Bundle.main.bundlePath)
                 if launchAgentEnabled != launchAtLoginPreference.enabled {
                     if launchAtLoginPreference.needsBootstrapInstall && launchAtLoginPreference.enabled {
                         await LaunchAgentManager.registerForNextLogin(bundlePath: Bundle.main.bundlePath)
@@ -369,6 +371,8 @@ final class AppState {
                             enabled: launchAtLoginPreference.enabled,
                             bundlePath: Bundle.main.bundlePath)
                     }
+                } else if launchAgentEnabled && launchAtLoginPreference.enabled && launchAgentNeedsRefresh {
+                    await LaunchAgentManager.registerForNextLogin(bundlePath: Bundle.main.bundlePath)
                 }
             }
         }

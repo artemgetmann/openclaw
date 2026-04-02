@@ -1,8 +1,22 @@
 import Foundation
 
 enum LaunchAgentManager {
+    struct LaunchAgentSnapshot: Equatable {
+        let programArguments: [String]
+        let environment: [String: String]
+    }
+
     private static var plistURL: URL {
         ConsumerRuntime.appLaunchAgentPlistURL
+    }
+
+    private static func plistEscape(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     static func status() async -> Bool {
@@ -10,6 +24,16 @@ enum LaunchAgentManager {
         // current GUI session already has the launchd job loaded. The plist is the durable
         // source of truth for next-login behavior, which is what consumer onboarding needs.
         FileManager().fileExists(atPath: self.plistURL.path)
+    }
+
+    static func needsRefresh(
+        bundlePath: String,
+        base: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        self.needsRefresh(
+            snapshot: self.snapshot(),
+            bundlePath: bundlePath,
+            base: base)
     }
 
     static func set(enabled: Bool, bundlePath: String) async {
@@ -31,17 +55,37 @@ enum LaunchAgentManager {
         self.writePlist(bundlePath: bundlePath)
     }
 
-    private static func writePlist(bundlePath: String) {
+    static func launchAgentEnvironment(
+        base: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
         let instance = ConsumerInstance.current
-        let instanceEnvLines: String
+        var env: [String: String] = [
+            "PATH": CommandResolver.preferredPaths().joined(separator: ":"),
+            "OPENCLAW_PROFILE": ConsumerRuntime.profile,
+            "OPENCLAW_HOME": ConsumerRuntime.runtimeRootURL.path,
+            "OPENCLAW_STATE_DIR": ConsumerRuntime.stateDirURL.path,
+            "OPENCLAW_CONFIG_PATH": ConsumerRuntime.configURL.path,
+            "OPENCLAW_GATEWAY_PORT": ConsumerRuntime.gatewayPort.description,
+            "OPENCLAW_GATEWAY_BIND": ConsumerRuntime.gatewayBind,
+            "OPENCLAW_LOG_DIR": ConsumerRuntime.logsDirURL.path,
+            "OPENCLAW_LAUNCHD_LABEL": ConsumerRuntime.gatewayLaunchdLabel,
+        ]
         if let id = instance.id {
-            instanceEnvLines = """
-          <key>\(ConsumerInstance.envKey)</key>
-          <string>\(id)</string>
-        """
-        } else {
-            instanceEnvLines = ""
+            env[ConsumerInstance.envKey] = id
         }
+        ConsumerRuntime.applyInheritedToolIsolationEnvironment(to: &env, base: base)
+        return env
+    }
+
+    private static func writePlist(bundlePath: String) {
+        let env = self.launchAgentEnvironment()
+        let envLines = env.keys.sorted().compactMap { key -> String? in
+            guard let value = env[key], !value.isEmpty else { return nil }
+            return """
+          <key>\(self.plistEscape(key))</key>
+          <string>\(self.plistEscape(value))</string>
+        """
+        }.joined(separator: "\n")
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -61,25 +105,7 @@ enum LaunchAgentManager {
           <true/>
         <key>EnvironmentVariables</key>
         <dict>
-          <key>PATH</key>
-          <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
-          <key>OPENCLAW_PROFILE</key>
-          <string>\(ConsumerRuntime.profile)</string>
-          <key>OPENCLAW_HOME</key>
-          <string>\(ConsumerRuntime.runtimeRootURL.path)</string>
-          <key>OPENCLAW_STATE_DIR</key>
-          <string>\(ConsumerRuntime.stateDirURL.path)</string>
-          <key>OPENCLAW_CONFIG_PATH</key>
-          <string>\(ConsumerRuntime.configURL.path)</string>
-          <key>OPENCLAW_GATEWAY_PORT</key>
-          <string>\(ConsumerRuntime.gatewayPort)</string>
-          <key>OPENCLAW_GATEWAY_BIND</key>
-          <string>\(ConsumerRuntime.gatewayBind)</string>
-          <key>OPENCLAW_LOG_DIR</key>
-          <string>\(ConsumerRuntime.logsDirURL.path)</string>
-          <key>OPENCLAW_LAUNCHD_LABEL</key>
-          <string>\(ConsumerRuntime.gatewayLaunchdLabel)</string>
-          \(instanceEnvLines)
+        \(envLines)
         </dict>
           <key>StandardOutPath</key>
           <string>\(LogLocator.launchdLogPath)</string>
@@ -89,6 +115,37 @@ enum LaunchAgentManager {
         </plist>
         """
         try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
+    }
+
+    private static func snapshot() -> LaunchAgentSnapshot? {
+        guard
+            let data = try? Data(contentsOf: self.plistURL),
+            let raw = try? PropertyListSerialization.propertyList(
+                from: data,
+                format: nil) as? [String: Any]
+        else {
+            return nil
+        }
+        let programArguments = raw["ProgramArguments"] as? [String] ?? []
+        let environment = raw["EnvironmentVariables"] as? [String: String] ?? [:]
+        return LaunchAgentSnapshot(programArguments: programArguments, environment: environment)
+    }
+
+    static func needsRefresh(
+        snapshot: LaunchAgentSnapshot?,
+        bundlePath: String,
+        base: [String: String]
+    ) -> Bool {
+        guard let snapshot else { return true }
+        let expectedBinary = "\(bundlePath)/Contents/MacOS/OpenClaw"
+        guard snapshot.programArguments.first == expectedBinary else { return true }
+        let expectedEnv = self.launchAgentEnvironment(base: base)
+        for (key, value) in expectedEnv {
+            if snapshot.environment[key] != value {
+                return true
+            }
+        }
+        return false
     }
 
     @discardableResult

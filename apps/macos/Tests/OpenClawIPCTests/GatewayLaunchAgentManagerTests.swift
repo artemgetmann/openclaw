@@ -70,6 +70,26 @@ struct GatewayLaunchAgentManagerTests {
         }
     }
 
+    @Test func `daemon command environment preserves cleanroom tool env`() async {
+        await TestIsolation.withEnvValues([ConsumerInstance.envKey: "ux-audit"]) {
+            let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
+                base: [
+                    "HIMALAYA_CONFIG": " /tmp/openclaw-clean/himalaya/config.toml ",
+                    "XDG_CONFIG_HOME": " /tmp/openclaw-clean/xdg-config ",
+                    "XDG_DATA_HOME": " /tmp/openclaw-clean/xdg-data ",
+                    "GOG_KEYRING_PASSWORD": " openclaw-consumer-cleanroom ",
+                    "OPENCLAW_SERVICE_PATH_PREFIX": " /tmp/openclaw-clean/bin ",
+                ],
+                projectRootHint: "/tmp/openclaw-worktree")
+
+            #expect(env["HIMALAYA_CONFIG"] == "/tmp/openclaw-clean/himalaya/config.toml")
+            #expect(env["XDG_CONFIG_HOME"] == "/tmp/openclaw-clean/xdg-config")
+            #expect(env["XDG_DATA_HOME"] == "/tmp/openclaw-clean/xdg-data")
+            #expect(env["GOG_KEYRING_PASSWORD"] == "openclaw-consumer-cleanroom")
+            #expect(env["OPENCLAW_SERVICE_PATH_PREFIX"] == "/tmp/openclaw-clean/bin")
+        }
+    }
+
     @Test func `preferred enable action restarts loaded service`() {
         #expect(
             GatewayLaunchAgentManager._testDesiredEnableAction(

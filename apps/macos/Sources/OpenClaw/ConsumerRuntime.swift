@@ -2,6 +2,14 @@ import Darwin
 import Foundation
 
 enum ConsumerRuntime {
+    private static let toolIsolationEnvironmentKeys = [
+        "HIMALAYA_CONFIG",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "GOG_KEYRING_PASSWORD",
+        "OPENCLAW_SERVICE_PATH_PREFIX",
+    ]
+
     private static var instance: ConsumerInstance {
         .current
     }
@@ -89,6 +97,23 @@ enum ConsumerRuntime {
             // Seed the worktree root explicitly so child commands do not fall back to
             // whatever founder checkout happened to export `openclaw` first.
             self.setEnv("OPENCLAW_FORK_ROOT", value: projectRoot)
+        }
+    }
+
+    static func applyInheritedToolIsolationEnvironment(
+        to env: inout [String: String],
+        base: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        // Setup-sensitive CLIs must stay inside the lane-local cleanroom once the app
+        // is launched there. Persist only the explicit allowlist so relaunch agents do
+        // not accidentally inherit unrelated shell junk.
+        for key in self.toolIsolationEnvironmentKeys {
+            let value = base[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !value.isEmpty else {
+                env.removeValue(forKey: key)
+                continue
+            }
+            env[key] = value
         }
     }
 

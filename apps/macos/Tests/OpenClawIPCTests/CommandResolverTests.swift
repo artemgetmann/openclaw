@@ -382,6 +382,18 @@ import Testing
         #expect(first == tmp.appendingPathComponent("node_modules/.bin").path)
     }
 
+    @Test func `preferred paths prepend cleanroom service path prefix`() throws {
+        let tmp = try self.makeRepoRoot()
+        let prefixed = CommandResolver.preferredPaths(
+            home: FileManager().homeDirectoryForCurrentUser,
+            current: ["/usr/bin", "/bin"],
+            projectRoot: tmp,
+            servicePathPrefix: ["/tmp/openclaw-clean/bin"])
+
+        #expect(prefixed.first == "/tmp/openclaw-clean/bin")
+        #expect(prefixed.contains(tmp.appendingPathComponent("node_modules/.bin").path))
+    }
+
     @Test func `infers project root from packaged app bundle path`() throws {
         let tmp = try makeTempDirForTests()
         let root = tmp.appendingPathComponent("repo", isDirectory: true)
