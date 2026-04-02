@@ -33,4 +33,20 @@ describe("parseIdentityMarkdown", () => {
       avatar: "avatars/openclaw.png",
     });
   });
+
+  it("parses role / persona labels as the identity role", () => {
+    const content = `
+- **Name:** Jarvis
+- **Role / persona:** Engineering copilot
+- **Vibe:** Sharp and direct
+- **Emoji:** :wrench:
+`;
+    const parsed = parseIdentityMarkdown(content);
+    expect(parsed).toEqual({
+      name: "Jarvis",
+      creature: "Engineering copilot",
+      vibe: "Sharp and direct",
+      emoji: ":wrench:",
+    });
+  });
 });

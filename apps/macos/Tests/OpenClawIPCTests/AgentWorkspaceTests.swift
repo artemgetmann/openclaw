@@ -60,6 +60,9 @@ struct AgentWorkspaceTests {
 
         #expect(template.contains("Do not interrogate."))
         #expect(template.contains("Who am I? Who are you?"))
+        #expect(template.contains("What kind of assistant should I be for the human?"))
+        #expect(template.contains("What vibe should I have most of the time?"))
+        #expect(template.contains("engineering copilot"))
         #expect(template.contains("Do not stop after the naming step."))
         #expect(template.contains("use those exact options first"))
         #expect(template.contains("lead with"))
@@ -67,7 +70,7 @@ struct AgentWorkspaceTests {
         #expect(template.contains("Jarvis"))
         #expect(template.contains("Your emoji. Everyone needs a signature."))
         #expect(template.contains("all five first-run questions"))
-        #expect(template.contains("emoji, and Telegram style"))
+        #expect(template.contains("role/persona, vibe, emoji, and Telegram style"))
         #expect(template.contains("Do not end with"))
         #expect(!template.contains("openclaw.json"))
         #expect(!template.contains("private git repo"))
