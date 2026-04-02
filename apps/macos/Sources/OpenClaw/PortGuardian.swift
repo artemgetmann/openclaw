@@ -18,7 +18,17 @@ actor PortGuardian {
     struct Descriptor {
         let pid: Int32
         let command: String
+        let fullCommand: String
         let executablePath: String?
+    }
+
+    struct OpenClawRuntimeDescriptor {
+        let pid: Int32
+        let command: String
+        let fullCommand: String
+        let executablePath: String?
+        let stateDir: String?
+        let configPath: String?
     }
 
     private var records: [Record] = []
@@ -47,7 +57,11 @@ actor PortGuardian {
             let listeners = await self.listeners(on: port)
             guard !listeners.isEmpty else { continue }
             for listener in listeners {
-                if Self.isExpected(listener, port: port, mode: mode) {
+                let expected =
+                    mode == .local
+                    ? await self.isExpectedLocalListener(listener, port: port)
+                    : Self.isExpected(listener, port: port, mode: mode)
+                if expected {
                     let message = """
                     port \(port) already served by expected \(listener.command)
                     (pid \(listener.pid)) — keeping
@@ -132,7 +146,25 @@ actor PortGuardian {
     func describe(port: Int) async -> Descriptor? {
         guard let listener = await self.listeners(on: port).first else { return nil }
         let path = Self.executablePath(for: listener.pid)
-        return Descriptor(pid: listener.pid, command: listener.command, executablePath: path)
+        return Descriptor(
+            pid: listener.pid,
+            command: listener.command,
+            fullCommand: listener.fullCommand,
+            executablePath: path)
+    }
+
+    func describeOpenClawRuntime(port: Int) async -> OpenClawRuntimeDescriptor? {
+        guard let listener = await self.listeners(on: port).first else { return nil }
+        let executablePath = Self.executablePath(for: listener.pid)
+        let filePaths = await self.openFilePaths(pid: listener.pid)
+        let runtimePaths = Self.resolveOpenClawRuntimePaths(from: filePaths)
+        return OpenClawRuntimeDescriptor(
+            pid: listener.pid,
+            command: listener.command,
+            fullCommand: listener.fullCommand,
+            executablePath: executablePath,
+            stateDir: runtimePaths.stateDir,
+            configPath: runtimePaths.configPath)
     }
 
     // MARK: - Internals
@@ -265,6 +297,95 @@ actor PortGuardian {
         }
         flush()
         return listeners
+    }
+
+    private func openFilePaths(pid: Int32) async -> [String] {
+        let res = await ShellExecutor.run(
+            command: ["lsof", "-nP", "-p", "\(pid)", "-Fn"],
+            cwd: nil,
+            env: nil,
+            timeout: 5)
+        guard res.ok, let data = res.payload, !data.isEmpty else { return [] }
+        let text = String(data: data, encoding: .utf8) ?? ""
+        return Self.parseFilePaths(from: text)
+    }
+
+    private func isExpectedLocalListener(_ listener: Listener, port: Int) async -> Bool {
+        guard Self.isExpected(listener, port: port, mode: .local) else { return false }
+
+        // A consumer lane may only keep the gateway that serves this lane's
+        // config/state dir. Treating "any OpenClaw gateway" as acceptable is
+        // exactly how a previous isolated instance kept hijacking the new
+        // instance port and surfaced as gateway token mismatch in onboarding.
+        guard let runtime = await self.describeOpenClawRuntime(listener: listener) else {
+            return true
+        }
+
+        let expectedStateDir = URL(fileURLWithPath: OpenClawConfigFile.stateDirURL().path)
+            .standardizedFileURL
+            .path
+        let expectedConfigPath = URL(fileURLWithPath: OpenClawConfigFile.url().path)
+            .standardizedFileURL
+            .path
+        if let actualState = runtime.stateDir,
+           URL(fileURLWithPath: actualState).standardizedFileURL.path != expectedStateDir
+        {
+            return false
+        }
+        if let actualConfig = runtime.configPath,
+           URL(fileURLWithPath: actualConfig).standardizedFileURL.path != expectedConfigPath
+        {
+            return false
+        }
+        return true
+    }
+
+    private static func parseFilePaths(from text: String) -> [String] {
+        text.split(separator: "\n").compactMap { line in
+            guard line.first == "n" else { return nil }
+            let value = String(line.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard value.hasPrefix("/") else { return nil }
+            return value
+        }
+    }
+
+    private static func resolveOpenClawRuntimePaths(
+        from filePaths: [String]) -> (stateDir: String?, configPath: String?)
+    {
+        let normalized = filePaths.map {
+            URL(fileURLWithPath: $0, isDirectory: false).standardizedFileURL.path
+        }
+
+        if let configPath = normalized.first(where: { $0.hasSuffix("/openclaw.json") }) {
+            let stateDir = URL(fileURLWithPath: configPath, isDirectory: false)
+                .deletingLastPathComponent()
+                .standardizedFileURL
+                .path
+            return (stateDir, configPath)
+        }
+
+        for path in normalized {
+            let marker = "/.openclaw/"
+            if let range = path.range(of: marker) {
+                let stateDir = String(path[..<range.upperBound].dropLast())
+                return (stateDir, nil)
+            }
+        }
+
+        return (nil, nil)
+    }
+
+    private func describeOpenClawRuntime(listener: Listener) async -> OpenClawRuntimeDescriptor? {
+        let executablePath = Self.executablePath(for: listener.pid)
+        let filePaths = await self.openFilePaths(pid: listener.pid)
+        let runtimePaths = Self.resolveOpenClawRuntimePaths(from: filePaths)
+        return OpenClawRuntimeDescriptor(
+            pid: listener.pid,
+            command: listener.command,
+            fullCommand: listener.fullCommand,
+            executablePath: executablePath,
+            stateDir: runtimePaths.stateDir,
+            configPath: runtimePaths.configPath)
     }
 
     private static func buildReport(
@@ -449,6 +570,16 @@ extension PortGuardian {
             fullCommand: $0.fullCommand,
             user: $0.user) }
         return Self.buildReport(port: port, listeners: mapped, mode: mode, tunnelHealthy: nil)
+    }
+
+    static func _testParseFilePaths(_ text: String) -> [String] {
+        Self.parseFilePaths(from: text)
+    }
+
+    static func _testResolveOpenClawRuntimePaths(
+        filePaths: [String]) -> (stateDir: String?, configPath: String?)
+    {
+        Self.resolveOpenClawRuntimePaths(from: filePaths)
     }
 }
 #endif

@@ -88,4 +88,40 @@ private func makeTestGatewayConnection() -> GatewayConnection {
             to: nil)
         #expect(result.ok == false)
     }
+
+    @Test func `classifies foreign local runtime by state dir`() {
+        let runtime = PortGuardian.OpenClawRuntimeDescriptor(
+            pid: 17767,
+            command: "openclaw-gateway",
+            fullCommand: "openclaw-gateway",
+            executablePath: "/usr/local/bin/openclaw-gateway",
+            stateDir: "/Users/test/Library/Application Support/OpenClaw Consumer/instances/other/.openclaw",
+            configPath: "/Users/test/Library/Application Support/OpenClaw Consumer/instances/other/.openclaw/openclaw.json")
+
+        #expect(
+            GatewayConnection._testIsForeignLocalRuntime(
+                runtime,
+                expectedStateDir: "/Users/test/Library/Application Support/OpenClaw Consumer/instances/user/.openclaw",
+                expectedConfigPath: "/Users/test/Library/Application Support/OpenClaw Consumer/instances/user/.openclaw/openclaw.json"))
+    }
+
+    @Test func `foreign local runtime message points to wrong listener`() {
+        let runtime = PortGuardian.OpenClawRuntimeDescriptor(
+            pid: 17767,
+            command: "openclaw-gateway",
+            fullCommand: "openclaw-gateway",
+            executablePath: "/usr/local/bin/openclaw-gateway",
+            stateDir: "/Users/test/Library/Application Support/OpenClaw Consumer/instances/other/.openclaw",
+            configPath: "/Users/test/Library/Application Support/OpenClaw Consumer/instances/other/.openclaw/openclaw.json")
+
+        let message = GatewayConnection._testForeignLocalRuntimeMessage(
+            port: 34964,
+            runtime: runtime,
+            expectedStateDir: "/Users/test/Library/Application Support/OpenClaw Consumer/instances/user/.openclaw",
+            expectedConfigPath: "/Users/test/Library/Application Support/OpenClaw Consumer/instances/user/.openclaw/openclaw.json")
+
+        #expect(message.contains("different local gateway"))
+        #expect(message.contains("34964"))
+        #expect(message.contains("instances/other/.openclaw"))
+    }
 }
