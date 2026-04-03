@@ -39,6 +39,11 @@ IFS=' ' read -r -a BUILD_ARCHS <<< "$BUILD_ARCHS_VALUE"
 PRIMARY_ARCH="${BUILD_ARCHS[0]}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
 DEFAULT_STANDARD_SPARKLE_FEED_URL="https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml"
+BUNDLED_CLI_ARCHIVE_NAME="openclaw-cli-bundle.tgz"
+VALIDATED_NPM_BIN="$(dirname "$VALIDATED_NODE_BIN")/npm"
+if [[ ! -x "$VALIDATED_NPM_BIN" ]]; then
+  VALIDATED_NPM_BIN="$(command -v npm || true)"
+fi
 
 default_sparkle_feed_url_for_bundle() {
   local bundle_id="$1"
@@ -149,6 +154,31 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
+bundle_consumer_cli_archive() {
+  local resources_dir="$1"
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+  if [[ -z "$VALIDATED_NPM_BIN" || ! -x "$VALIDATED_NPM_BIN" ]]; then
+    echo "ERROR: npm is required to bundle the consumer CLI archive." >&2
+    exit 1
+  fi
+
+  local archive_src="$resources_dir/openclaw-${PKG_VERSION}.tgz"
+  local archive_dest="$resources_dir/$BUNDLED_CLI_ARCHIVE_NAME"
+  rm -f "$archive_src" "$archive_dest"
+  echo "📦 Bundling consumer CLI archive"
+  (
+    cd "$ROOT_DIR"
+    "$VALIDATED_NPM_BIN" pack --ignore-scripts --pack-destination "$resources_dir" >/dev/null
+  )
+  if [[ ! -f "$archive_src" ]]; then
+    echo "ERROR: expected bundled CLI archive missing: $archive_src" >&2
+    exit 1
+  fi
+  mv "$archive_src" "$archive_dest"
+}
+
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install)"
   openclaw_run_repo_pnpm "$ROOT_DIR" install --no-frozen-lockfile --config.node-linker=hoisted
@@ -246,6 +276,8 @@ fi
 chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
+
+bundle_consumer_cli_archive "$APP_ROOT/Contents/Resources"
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then

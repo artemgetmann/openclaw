@@ -82,6 +82,8 @@ struct ConsumerGatewayLaneStatusSnapshot {
 enum GatewayEnvironment {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.env")
     private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
+    private static let bundledCLIArchiveName = "openclaw-cli-bundle"
+    private static let bundledCLIArchiveExtension = "tgz"
 
     static func gatewayPort() -> Int {
         if let raw = ProcessInfo.processInfo.environment["OPENCLAW_GATEWAY_PORT"] {
@@ -107,19 +109,41 @@ enum GatewayEnvironment {
     static func preferredInstallTargetString() -> String {
         self.preferredInstallTargetString(
             isConsumer: AppFlavor.current.isConsumer,
-            bundleVersion: self.expectedGatewayVersionString())
+            bundleVersion: self.expectedGatewayVersionString(),
+            bundledCLIInstallSpec: self.bundledCLIInstallSpec())
     }
 
-    static func preferredInstallTargetString(isConsumer: Bool, bundleVersion: String?) -> String {
+    static func preferredInstallTargetString(
+        isConsumer: Bool,
+        bundleVersion: String?,
+        bundledCLIInstallSpec: String? = nil) -> String
+    {
         // Consumer app bundles are not guaranteed to have a matching npm publish
         // for every marketing/build version. Fresh installs should therefore use a
-        // stable dist-tag instead of blindly pinning the bundle version.
+        // bundled CLI artifact when present, falling back to a stable dist-tag
+        // only for older/debug bundles that do not yet ship a pinned package.
         if isConsumer {
+            if let bundledCLIInstallSpec, !bundledCLIInstallSpec.isEmpty {
+                return bundledCLIInstallSpec
+            }
             return "latest"
         }
 
         let trimmed = bundleVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty == false) ? trimmed! : "latest"
+    }
+
+    static func bundledCLIInstallSpec(bundleResourceURL: URL?) -> String? {
+        guard let bundleResourceURL else { return nil }
+        let archiveURL = bundleResourceURL
+            .appendingPathComponent(self.bundledCLIArchiveName)
+            .appendingPathExtension(self.bundledCLIArchiveExtension)
+        guard FileManager.default.fileExists(atPath: archiveURL.path) else { return nil }
+        return archiveURL.absoluteURL.absoluteString
+    }
+
+    static func bundledCLIInstallSpec(bundle: Bundle = .main) -> String? {
+        self.bundledCLIInstallSpec(bundleResourceURL: bundle.resourceURL)
     }
 
     /// Exposed for tests so we can inject fake version checks without rewriting bundle metadata.
