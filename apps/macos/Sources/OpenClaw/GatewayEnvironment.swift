@@ -139,7 +139,10 @@ enum GatewayEnvironment {
             .appendingPathComponent(self.bundledCLIArchiveName)
             .appendingPathExtension(self.bundledCLIArchiveExtension)
         guard FileManager.default.fileExists(atPath: archiveURL.path) else { return nil }
-        return archiveURL.absoluteURL.absoluteString
+        // npm expects a real filesystem path here. Passing a percent-encoded
+        // file:// URL leaves spaces escaped (for example `%20`) and makes npm
+        // look for a path that does not exist on disk.
+        return archiveURL.path
     }
 
     static func bundledCLIInstallSpec(bundle: Bundle = .main) -> String? {

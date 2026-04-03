@@ -98,7 +98,7 @@ struct GatewayEnvironmentTests {
 
         let bundledSpec = try #require(
             GatewayEnvironment.bundledCLIInstallSpec(bundleResourceURL: root))
-        #expect(bundledSpec.hasPrefix("file://"))
+        #expect(bundledSpec == archive.path)
         #expect(bundledSpec.contains("openclaw-cli-bundle.tgz"))
         #expect(
             GatewayEnvironment.preferredInstallTargetString(
