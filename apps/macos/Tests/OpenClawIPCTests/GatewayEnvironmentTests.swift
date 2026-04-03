@@ -79,6 +79,16 @@ struct GatewayEnvironmentTests {
         #expect(GatewayEnvironment.expectedGatewayVersion(from: nil) == nil)
     }
 
+    @Test func `consumer install target uses latest instead of bundle version`() {
+        #expect(GatewayEnvironment.preferredInstallTargetString(isConsumer: true, bundleVersion: "2026.3.14") == "latest")
+        #expect(GatewayEnvironment.preferredInstallTargetString(isConsumer: true, bundleVersion: nil) == "latest")
+    }
+
+    @Test func `standard install target preserves explicit bundle version`() {
+        #expect(GatewayEnvironment.preferredInstallTargetString(isConsumer: false, bundleVersion: "2026.3.14") == "2026.3.14")
+        #expect(GatewayEnvironment.preferredInstallTargetString(isConsumer: false, bundleVersion: "  ") == "latest")
+    }
+
     @Test func `consumer lane status reports healthy consumer endpoint without global install checks`() throws {
         let status = GatewayEnvironment.describeConsumerLaneStatus(.init(
             launchdPlistExists: true,

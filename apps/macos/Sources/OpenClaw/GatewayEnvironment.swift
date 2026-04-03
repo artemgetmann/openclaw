@@ -104,6 +104,24 @@ enum GatewayEnvironment {
         return (trimmed?.isEmpty == false) ? trimmed : nil
     }
 
+    static func preferredInstallTargetString() -> String {
+        self.preferredInstallTargetString(
+            isConsumer: AppFlavor.current.isConsumer,
+            bundleVersion: self.expectedGatewayVersionString())
+    }
+
+    static func preferredInstallTargetString(isConsumer: Bool, bundleVersion: String?) -> String {
+        // Consumer app bundles are not guaranteed to have a matching npm publish
+        // for every marketing/build version. Fresh installs should therefore use a
+        // stable dist-tag instead of blindly pinning the bundle version.
+        if isConsumer {
+            return "latest"
+        }
+
+        let trimmed = bundleVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty == false) ? trimmed! : "latest"
+    }
+
     /// Exposed for tests so we can inject fake version checks without rewriting bundle metadata.
     static func expectedGatewayVersion(from versionString: String?) -> Semver? {
         Semver.parse(versionString)
