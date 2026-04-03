@@ -17,6 +17,7 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
+  classifySuspiciousTrustedSafeBinDir,
   getTrustedSafeBinDirs,
   isTrustedSafeBinPath,
   normalizeTrustedSafeBinDirs,
@@ -1351,6 +1352,12 @@ type ExecSafeBinTrustedDirHintHit = {
   resolvedPath: string;
 };
 
+type ExecSafeBinTrustedDirDriftHit = {
+  scopePath: string;
+  dir: string;
+  reason: string;
+};
+
 function normalizeConfiguredSafeBins(entries: unknown): string[] {
   if (!Array.isArray(entries)) {
     return [];
@@ -1465,6 +1472,25 @@ function scanExecSafeBinTrustedDirHints(cfg: OpenClawConfig): ExecSafeBinTrusted
         scopePath: scope.scopePath,
         bin,
         resolvedPath: resolution.resolvedPath,
+      });
+    }
+  }
+  return hits;
+}
+
+function scanExecSafeBinTrustedDirDrift(cfg: OpenClawConfig): ExecSafeBinTrustedDirDriftHit[] {
+  const hits: ExecSafeBinTrustedDirDriftHit[] = [];
+  for (const scope of collectExecSafeBinScopes(cfg)) {
+    const configured = normalizeConfiguredTrustedSafeBinDirs(scope.exec.safeBinTrustedDirs);
+    for (const dir of configured) {
+      const suspicious = classifySuspiciousTrustedSafeBinDir(dir);
+      if (!suspicious) {
+        continue;
+      }
+      hits.push({
+        scopePath: scope.scopePath,
+        dir: suspicious.dir,
+        reason: suspicious.reason,
       });
     }
   }
@@ -1925,6 +1951,25 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       }
       lines.push(
         "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
+      );
+      note(lines.join("\n"), "Doctor warnings");
+    }
+
+    const safeBinTrustedDirDrift = scanExecSafeBinTrustedDirDrift(candidate);
+    if (safeBinTrustedDirDrift.length > 0) {
+      const lines = safeBinTrustedDirDrift
+        .slice(0, 5)
+        .map(
+          (hit) =>
+            `- ${hit.scopePath}.safeBinTrustedDirs includes '${hit.dir}' (${hit.reason}). This can make one runtime trust another runtime's wrapper/bin path.`,
+        );
+      if (safeBinTrustedDirDrift.length > 5) {
+        lines.push(
+          `- ${safeBinTrustedDirDrift.length - 5} more safeBinTrustedDirs entries look like stale cross-runtime trust.`,
+        );
+      }
+      lines.push(
+        "- Remove stale consumer/worktree trusted dirs and trust only the active runtime's wrapper/bin directory.",
       );
       note(lines.join("\n"), "Doctor warnings");
     }

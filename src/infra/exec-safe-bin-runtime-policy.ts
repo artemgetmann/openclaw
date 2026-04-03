@@ -7,6 +7,7 @@ import {
   type SafeBinProfileFixtures,
 } from "./exec-safe-bin-policy.js";
 import {
+  classifySuspiciousTrustedSafeBinDir,
   getTrustedSafeBinDirs,
   listWritableExplicitTrustedSafeBinDirs,
   normalizeTrustedSafeBinDirs,
@@ -135,6 +136,15 @@ export function resolveExecSafeBinRuntimePolicy(params: {
     explicitTrustedSafeBinDirs,
   );
   if (params.onWarning) {
+    for (const entry of explicitTrustedSafeBinDirs) {
+      const suspicious = classifySuspiciousTrustedSafeBinDir(entry);
+      if (!suspicious) {
+        continue;
+      }
+      params.onWarning(
+        `exec: safeBinTrustedDirs includes ${suspicious.reason} '${suspicious.dir}'; remove stale cross-runtime trust and point the active runtime at its own wrapper/bin directory.`,
+      );
+    }
     for (const hit of writableTrustedSafeBinDirs) {
       const scope =
         hit.worldWritable || hit.groupWritable

@@ -26,6 +26,11 @@ export type WritableTrustedSafeBinDir = {
   worldWritable: boolean;
 };
 
+export type SuspiciousTrustedSafeBinDirHit = {
+  dir: string;
+  reason: string;
+};
+
 let trustedSafeBinCache: TrustedSafeBinCache | null = null;
 
 function normalizeTrustedDir(value: string): string | null {
@@ -42,6 +47,37 @@ export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null):
   }
   const normalized = entries.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
   return Array.from(new Set(normalized));
+}
+
+export function classifySuspiciousTrustedSafeBinDir(
+  value: string,
+): SuspiciousTrustedSafeBinDirHit | null {
+  const dir = normalizeTrustedDir(value);
+  if (!dir) {
+    return null;
+  }
+  const normalized = dir.replace(/\\/g, "/").toLowerCase();
+
+  // Consumer runtimes are isolated on purpose. Founder/main trusting a consumer
+  // Application Support cleanroom silently points exec at the wrong wrapper set.
+  if (normalized.includes("/library/application support/openclaw consumer/")) {
+    return {
+      dir,
+      reason: "consumer runtime cleanroom directory",
+    };
+  }
+
+  // Worktree-local runtime bins are durable only for that lane. Trusting them
+  // from another runtime creates stale exec policy that looks valid but misses
+  // at runtime when the active wrapper set lives elsewhere.
+  if (normalized.includes("/.worktrees/")) {
+    return {
+      dir,
+      reason: "worktree-scoped runtime directory",
+    };
+  }
+
+  return null;
 }
 
 function resolveTrustedSafeBinDirs(entries: readonly string[]): string[] {

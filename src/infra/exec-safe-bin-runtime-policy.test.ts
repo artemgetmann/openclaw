@@ -149,4 +149,24 @@ describe("exec safe-bin runtime policy", () => {
       await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
+
+  it("warns when trusted dirs point at consumer cleanrooms or worktree-local runtimes", () => {
+    const onWarning = vi.fn();
+    resolveExecSafeBinRuntimePolicy({
+      global: {
+        safeBinTrustedDirs: [
+          "/Users/user/Library/Application Support/OpenClaw Consumer/.openclaw/bin",
+          "/Users/user/Programming_Projects/openclaw/.worktrees/founder-fix/.openclaw/bin",
+        ],
+      },
+      onWarning,
+    });
+
+    expect(onWarning).toHaveBeenCalledWith(
+      expect.stringContaining("consumer runtime cleanroom directory"),
+    );
+    expect(onWarning).toHaveBeenCalledWith(
+      expect.stringContaining("worktree-scoped runtime directory"),
+    );
+  });
 });

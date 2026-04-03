@@ -12,7 +12,7 @@ vi.mock("./tools/gateway.js", () => ({
 
 vi.mock("./tools/nodes-utils.js", () => ({
   listNodes: vi.fn(async () => [
-    { nodeId: "node-1", commands: ["system.run"], platform: "darwin" },
+    { nodeId: "node-1", commands: ["system.run", "system.run.prepare"], platform: "darwin" },
   ]),
   resolveNodeIdFromList: vi.fn((nodes: Array<{ nodeId: string }>) => nodes[0]?.nodeId),
 }));
@@ -28,6 +28,7 @@ vi.mock("../infra/exec-obfuscation-detect.js", () => ({
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
+let listNodesMock: typeof import("./tools/nodes-utils.js").listNodes;
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -207,6 +208,7 @@ describe("exec approvals", () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
     ({ createExecTool } = await import("./bash-tools.exec.js"));
     ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
+    ({ listNodes: listNodesMock } = await import("./tools/nodes-utils.js"));
   });
 
   beforeEach(async () => {
@@ -333,6 +335,21 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approvals.node.get");
     expect(calls).toContain("node.invoke");
     expect(calls).not.toContain("exec.approval.request");
+  });
+
+  it("fails fast when node fallback lacks system.run.prepare support", async () => {
+    vi.mocked(listNodesMock).mockResolvedValueOnce([
+      { nodeId: "node-1", commands: ["system.run"], platform: "darwin" },
+    ]);
+
+    const tool = createExecTool({
+      host: "node",
+      approvalRunningNoticeMs: 0,
+    });
+
+    await expect(tool.execute("call2b", { command: "echo ok" })).rejects.toThrow(
+      "system.run.prepare",
+    );
   });
 
   it("honors ask=off for elevated gateway exec without prompting", async () => {
