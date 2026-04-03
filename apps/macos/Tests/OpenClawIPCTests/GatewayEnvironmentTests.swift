@@ -84,6 +84,29 @@ struct GatewayEnvironmentTests {
         #expect(GatewayEnvironment.preferredInstallTargetString(isConsumer: true, bundleVersion: nil) == "latest")
     }
 
+    @Test func `consumer install target prefers bundled cli archive when present`() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(
+            "openclaw-gateway-env-\(UUID().uuidString)",
+            isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let archive = root
+            .appendingPathComponent("openclaw-cli-bundle")
+            .appendingPathExtension("tgz")
+        fm.createFile(atPath: archive.path, contents: Data("tgz".utf8))
+
+        let bundledSpec = try #require(
+            GatewayEnvironment.bundledCLIInstallSpec(bundleResourceURL: root))
+        #expect(bundledSpec.hasPrefix("file://"))
+        #expect(bundledSpec.contains("openclaw-cli-bundle.tgz"))
+        #expect(
+            GatewayEnvironment.preferredInstallTargetString(
+                isConsumer: true,
+                bundleVersion: "2026.3.14",
+                bundledCLIInstallSpec: bundledSpec) == bundledSpec)
+    }
+
     @Test func `standard install target preserves explicit bundle version`() {
         #expect(GatewayEnvironment.preferredInstallTargetString(isConsumer: false, bundleVersion: "2026.3.14") == "2026.3.14")
         #expect(GatewayEnvironment.preferredInstallTargetString(isConsumer: false, bundleVersion: "  ") == "latest")
