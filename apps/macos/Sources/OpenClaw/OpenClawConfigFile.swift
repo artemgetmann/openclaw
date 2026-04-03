@@ -49,9 +49,11 @@ enum OpenClawConfigFile {
         let previousBytes = previousData?.count
         let hadMetaBefore = self.hasMeta(previousRoot)
         let gatewayModeBefore = self.gatewayMode(previousRoot)
+        let previousBundlePath = self.lastTouchedBundlePath(previousRoot)
 
         var output = dict
         self.stampMeta(&output)
+        let nextBundlePath = self.lastTouchedBundlePath(output)
 
         do {
             let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
@@ -67,7 +69,9 @@ enum OpenClawConfigFile {
                 nextBytes: nextBytes,
                 hadMetaBefore: hadMetaBefore,
                 gatewayModeBefore: gatewayModeBefore,
-                gatewayModeAfter: gatewayModeAfter)
+                gatewayModeAfter: gatewayModeAfter,
+                previousBundlePath: previousBundlePath,
+                nextBundlePath: nextBundlePath)
             if !suspicious.isEmpty {
                 self.logger.warning("config write anomaly (\(suspicious.joined(separator: ", "))) at \(url.path)")
             }
@@ -81,6 +85,8 @@ enum OpenClawConfigFile {
                 "hasMetaAfter": self.hasMeta(output),
                 "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
                 "gatewayModeAfter": gatewayModeAfter ?? NSNull(),
+                "bundlePathBefore": previousBundlePath ?? NSNull(),
+                "bundlePathAfter": nextBundlePath ?? NSNull(),
                 "suspicious": suspicious,
             ])
         } catch {
@@ -95,6 +101,8 @@ enum OpenClawConfigFile {
                 "hasMetaAfter": self.hasMeta(output),
                 "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
                 "gatewayModeAfter": self.gatewayMode(output) ?? NSNull(),
+                "bundlePathBefore": previousBundlePath ?? NSNull(),
+                "bundlePathAfter": nextBundlePath ?? NSNull(),
                 "suspicious": [],
                 "error": error.localizedDescription,
             ])
@@ -393,6 +401,10 @@ enum OpenClawConfigFile {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "macos-app"
         meta["lastTouchedVersion"] = version
         meta["lastTouchedAt"] = ISO8601DateFormatter().string(from: Date())
+        meta["lastTouchedBundlePath"] = Bundle.main.bundlePath
+        if let bundleIdentifier = Bundle.main.bundleIdentifier, !bundleIdentifier.isEmpty {
+            meta["lastTouchedBundleIdentifier"] = bundleIdentifier
+        }
         root["meta"] = meta
     }
 
@@ -418,13 +430,23 @@ enum OpenClawConfigFile {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func lastTouchedBundlePath(_ root: [String: Any]?) -> String? {
+        guard let meta = root?["meta"] as? [String: Any],
+              let raw = meta["lastTouchedBundlePath"] as? String
+        else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private static func configWriteSuspiciousReasons(
         existsBefore: Bool,
         previousBytes: Int?,
         nextBytes: Int,
         hadMetaBefore: Bool,
         gatewayModeBefore: String?,
-        gatewayModeAfter: String?) -> [String]
+        gatewayModeAfter: String?,
+        previousBundlePath: String?,
+        nextBundlePath: String?) -> [String]
     {
         var reasons: [String] = []
         if !existsBefore {
@@ -438,6 +460,14 @@ enum OpenClawConfigFile {
         }
         if gatewayModeBefore != nil, gatewayModeAfter == nil {
             reasons.append("gateway-mode-removed")
+        }
+        if let previousBundlePath,
+           let nextBundlePath,
+           !previousBundlePath.isEmpty,
+           !nextBundlePath.isEmpty,
+           previousBundlePath != nextBundlePath
+        {
+            reasons.append("bundle-path-changed")
         }
         return reasons
     }
@@ -455,6 +485,7 @@ enum OpenClawConfigFile {
             "event": "config.write",
             "pid": ProcessInfo.processInfo.processIdentifier,
             "argv": Array(ProcessInfo.processInfo.arguments.prefix(8)),
+            "bundlePath": Bundle.main.bundlePath,
         ]
         for (key, value) in fields {
             record[key] = value is NSNull ? NSNull() : value
