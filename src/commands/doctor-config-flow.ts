@@ -1895,18 +1895,20 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       if (customHits.length > 0) {
         for (const hit of customHits.slice(0, 5)) {
           lines.push(
-            `- ${hit.scopePath}.safeBins entry '${hit.bin}' is missing safeBinProfiles.${hit.bin}.`,
+            `- ${hit.scopePath}.safeBins entry '${hit.bin}' has no explicit profile; this is allowed for trusted non-interpreter local CLIs, but add safeBinProfiles.${hit.bin} if you need tighter flag/argument fencing.`,
           );
         }
         if (customHits.length > 5) {
           lines.push(
-            `- ${customHits.length - 5} more custom safeBins entries are missing profiles.`,
+            `- ${customHits.length - 5} more custom safeBins entries have no explicit profiles.`,
           );
         }
       }
-      lines.push(
-        `- Run "${formatCliCommand("openclaw doctor --fix")}" to scaffold missing custom safeBinProfiles entries.`,
-      );
+      if (interpreterHits.length > 0) {
+        lines.push(
+          `- Run "${formatCliCommand("openclaw doctor --fix")}" to scaffold missing custom safeBinProfiles entries.`,
+        );
+      }
       note(lines.join("\n"), "Doctor warnings");
     }
 

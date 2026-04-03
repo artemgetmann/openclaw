@@ -162,16 +162,35 @@ describe("createOpenClawCodingTools safeBins", () => {
     );
   });
 
-  it("rejects unprofiled custom safe-bin entries", async () => {
+  it("allows trusted unprofiled non-interpreter safe-bin entries", async () => {
     await withSafeBinsExecTool(
       {
         tmpPrefix: "openclaw-safe-bins-unprofiled-",
         safeBins: ["echo"],
       },
       async ({ tmpDir, execTool }) => {
+        const result = await execTool.execute("call1", {
+          command: "echo hello",
+          workdir: tmpDir,
+        });
+        const text = result.content.find((content) => content.type === "text")?.text ?? "";
+        const resultDetails = result.details as { status?: string };
+        expect(resultDetails.status).toBe("completed");
+        expect(text).toContain("hello");
+      },
+    );
+  });
+
+  it("still rejects unprofiled interpreter-like safe-bin entries", async () => {
+    await withSafeBinsExecTool(
+      {
+        tmpPrefix: "openclaw-safe-bins-unprofiled-interpreter-",
+        safeBins: ["python3"],
+      },
+      async ({ tmpDir, execTool }) => {
         await expect(
           execTool.execute("call1", {
-            command: "echo hello",
+            command: "python3 -c 'print(1)'",
             workdir: tmpDir,
           }),
         ).rejects.toThrow("exec denied: allowlist miss");

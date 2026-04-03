@@ -75,7 +75,7 @@ mask_token() {
 
 usage() {
   cat <<'EOF'
-Usage: scripts/new-worktree.sh <feature-name> [--base <branch>] [--no-bootstrap]
+Usage: scripts/new-worktree.sh <feature-name> [--base <branch>] [--mode <clean|warm>] [--no-bootstrap]
 EOF
 }
 
@@ -207,6 +207,7 @@ fi
 FEATURE_NAME=""
 BASE_BRANCH=""
 BASE_SOURCE="auto"
+LANE_MODE="clean"
 NO_BOOTSTRAP=0
 
 while [[ $# -gt 0 ]]; do
@@ -218,6 +219,14 @@ while [[ $# -gt 0 ]]; do
       fi
       BASE_BRANCH="$2"
       BASE_SOURCE="flag"
+      shift 2
+      ;;
+    --mode)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --mode requires a value." >&2
+        exit 1
+      fi
+      LANE_MODE="$2"
       shift 2
       ;;
     --no-bootstrap)
@@ -244,6 +253,11 @@ done
 if [[ -z "$FEATURE_NAME" ]]; then
   echo "Error: feature name is required." >&2
   usage >&2
+  exit 1
+fi
+
+if [[ "$LANE_MODE" != "clean" && "$LANE_MODE" != "warm" ]]; then
+  echo "Error: --mode must be one of: clean, warm." >&2
   exit 1
 fi
 
@@ -315,7 +329,11 @@ assert_base_branch_synced_with_remote "$BASE_BRANCH"
 TARGET_REF="origin/${BASE_BRANCH}"
 git worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" "$TARGET_REF"
 
-(cd "$WORKTREE_PATH" && bash "$BOOTSTRAP_SCRIPT" --optional)
+TELEGRAM_BOOTSTRAP_STATUS="skipped"
+if [[ "$LANE_MODE" == "clean" ]]; then
+  (cd "$WORKTREE_PATH" && bash "$BOOTSTRAP_SCRIPT" --optional)
+  TELEGRAM_BOOTSTRAP_STATUS="optional"
+fi
 
 DEV_PORT="$(WORKTREE_PATH="$WORKTREE_PATH" "$VALIDATED_NODE_BIN" --input-type=module - <<'NODE'
 import crypto from "node:crypto";
@@ -343,7 +361,9 @@ if [[ -x "$DOCTOR_SCRIPT" ]]; then
 fi
 
 BOOTSTRAP_RUNTIME_STATUS="disabled"
-if [[ "$NO_BOOTSTRAP" != "1" ]] && [[ -f "$RUNTIME_BOOTSTRAP_SCRIPT" ]]; then
+if [[ "$LANE_MODE" == "warm" ]]; then
+  BOOTSTRAP_RUNTIME_STATUS="skipped (warm mode)"
+elif [[ "$NO_BOOTSTRAP" != "1" ]] && [[ -f "$RUNTIME_BOOTSTRAP_SCRIPT" ]]; then
   # Fresh git worktrees now bootstrap their own dependency tree in-place. We do
   # not symlink node_modules from the source checkout because that lets one lane
   # resolve packages out of another lane's filesystem state.
@@ -355,8 +375,10 @@ if [[ "$NO_BOOTSTRAP" != "1" ]] && [[ -f "$RUNTIME_BOOTSTRAP_SCRIPT" ]]; then
   fi
 fi
 
-if [[ -f "$WORKTREE_PATH/.env.local" ]]; then
+if [[ "$LANE_MODE" == "clean" ]] && [[ -f "$WORKTREE_PATH/.env.local" ]]; then
   run_ensure_with_timeout "$WORKTREE_PATH"
+elif [[ "$LANE_MODE" == "warm" ]]; then
+  echo "info: warm mode skips Telegram lane claim/ensure and runtime bootstrap for faster setup" >&2
 else
   echo "warning: no Telegram token claim was assigned; skipping telegram-live-runtime ensure" >&2
 fi
@@ -373,6 +395,11 @@ echo "worktree=${WORKTREE_PATH}"
 echo "branch=${BRANCH_NAME}"
 echo "base_branch=${BASE_BRANCH}"
 echo "base_source=${BASE_SOURCE}"
+echo "lane_mode=${LANE_MODE}"
 echo "bot_fingerprint=${BOT_FINGERPRINT}"
 echo "dev_port=${DEV_PORT}"
+echo "telegram_bootstrap=${TELEGRAM_BOOTSTRAP_STATUS}"
 echo "bootstrap_runtime=${BOOTSTRAP_RUNTIME_STATUS}"
+if [[ "$LANE_MODE" == "warm" ]]; then
+  echo "prewarm_hint=cd ${WORKTREE_PATH} && bash scripts/prewarm-worktree.sh --root ${WORKTREE_PATH} --macos"
+fi

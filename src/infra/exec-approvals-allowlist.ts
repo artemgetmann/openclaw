@@ -17,6 +17,7 @@ import {
   type SafeBinProfile,
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
+import { isInterpreterLikeSafeBin } from "./exec-safe-bin-runtime-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 import {
   extractShellWrapperInlineCommand,
@@ -90,7 +91,13 @@ export function isSafeBinUsage(params: {
   const safeBinProfiles = params.safeBinProfiles ?? SAFE_BIN_PROFILES;
   const profile = safeBinProfiles[execName];
   if (!profile) {
-    return false;
+    // Trusted, non-interpreter local CLIs are allowed as whole binaries. This is the
+    // consumer-product path for tools like gog/himalaya, and it keeps us from
+    // forcing fake "profiles" onto normal command surfaces just to make them usable.
+    //
+    // Interpreter-like binaries stay denied here because once we trust `python`,
+    // `node`, `bash`, etc. as whole bins, safeBins becomes a generic code-exec backdoor.
+    return !isInterpreterLikeSafeBin(execName);
   }
   return validateSafeBinArgv(argv, profile);
 }
