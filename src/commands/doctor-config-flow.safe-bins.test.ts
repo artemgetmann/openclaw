@@ -131,4 +131,33 @@ describe("doctor config flow safe bins", () => {
       await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
+
+  it("warns when safeBinTrustedDirs points at consumer or worktree runtime bins", async () => {
+    await runDoctorConfigWithInput({
+      config: {
+        tools: {
+          exec: {
+            safeBins: ["jq"],
+            safeBinProfiles: {
+              jq: {},
+            },
+            safeBinTrustedDirs: [
+              "/Users/user/Library/Application Support/OpenClaw Consumer/.openclaw/bin",
+              "/Users/user/Programming_Projects/openclaw/.worktrees/founder-fix/.openclaw/bin",
+            ],
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("consumer runtime cleanroom directory"),
+      "Doctor warnings",
+    );
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("worktree-scoped runtime directory"),
+      "Doctor warnings",
+    );
+  });
 });
