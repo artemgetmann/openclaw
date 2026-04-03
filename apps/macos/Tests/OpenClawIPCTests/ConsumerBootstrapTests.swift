@@ -4,7 +4,11 @@ import Testing
 
 struct ConsumerBootstrapTests {
     @Test func `consumer bootstrap fills in missing isolated defaults`() async {
-        await TestIsolation.withIsolatedState(env: [ConsumerInstance.envKey: nil]) {
+        await TestIsolation.withIsolatedState(
+            env: [
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_SERVICE_PATH_PREFIX": "",
+            ]) {
             var root: [String: Any] = [:]
 
             let changed = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
@@ -39,7 +43,15 @@ struct ConsumerBootstrapTests {
             #expect(exec?["host"] as? String == "gateway")
             #expect(exec?["safeBins"] as? [String] == ["wacli", "wacli-auth-local.sh"])
             #expect(trustedDirs == [])
-            #expect(wacliProfile?["maxPositional"] as? Int == 1)
+            #expect(wacliProfile?["maxPositional"] as? Int == 3)
+            #expect(
+                wacliProfile?["allowedValueFlags"] as? [String] == [
+                    "--limit",
+                    "--query",
+                    "--after",
+                    "--before",
+                    "--chat",
+                ])
             #expect(wacliAuthLocalProfile?["maxPositional"] as? Int == 1)
             #expect(
                 wacliAuthLocalProfile?["allowedValueFlags"] as? [String] == [
@@ -360,7 +372,15 @@ struct ConsumerBootstrapTests {
             let wacliProfile = safeBinProfiles?["wacli"] as? [String: Any]
             let wacliAuthLocalProfile = safeBinProfiles?["wacli-auth-local.sh"] as? [String: Any]
             #expect(customProfile?["maxPositional"] as? Int == 0)
-            #expect(wacliProfile?["maxPositional"] as? Int == 1)
+            #expect(wacliProfile?["maxPositional"] as? Int == 3)
+            #expect(
+                wacliProfile?["allowedValueFlags"] as? [String] == [
+                    "--limit",
+                    "--query",
+                    "--after",
+                    "--before",
+                    "--chat",
+                ])
             #expect(wacliAuthLocalProfile?["maxPositional"] as? Int == 1)
             #expect(modelDefaults?["primary"] as? String == "anthropic/claude-opus-4-6")
             #expect(mdns?["mode"] as? String == "full")
