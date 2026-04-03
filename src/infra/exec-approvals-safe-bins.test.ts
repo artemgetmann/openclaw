@@ -333,7 +333,7 @@ describe("exec approvals safe bins", () => {
     expect(defaults.has("grep")).toBe(false);
   });
 
-  it("does not auto-allow unprofiled safe-bin entries", () => {
+  it("does not auto-allow unprofiled interpreter-like safe-bin entries", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -345,6 +345,23 @@ describe("exec approvals safe bins", () => {
     });
     expect(result.analysisOk).toBe(true);
     expect(result.allowlistSatisfied).toBe(false);
+  });
+
+  it("allows trusted unprofiled non-interpreter safe-bin entries", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const ok = isSafeBinUsage({
+      argv: ["gog", "auth", "list"],
+      resolution: {
+        rawExecutable: "gog",
+        resolvedPath: "/usr/bin/gog",
+        executableName: "gog",
+      },
+      safeBins: normalizeSafeBins(["gog"]),
+      trustedSafeBinDirs: new Set(["/usr/bin"]),
+    });
+    expect(ok).toBe(true);
   });
 
   it("allows caller-defined custom safe-bin profiles", () => {

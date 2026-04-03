@@ -42,6 +42,8 @@ Automation Rule
 
 - For consumer checks, start with the cheapest read-only probes:
   `wacli doctor`, then `wacli chats list --limit 5`.
+- In consumer chat flows, prefer the plain human-readable `wacli doctor` shape.
+  Do not add `--json` unless the user explicitly asked for raw machine output.
 - In consumer lanes, run those as separate direct tool invocations. One command
   per call. Do not chain them with shell operators like `&&`, pipes, or
   redirection.
@@ -70,7 +72,9 @@ Setup Routing
 - If `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, do not
   present that as a total failure. Explain that WhatsApp is paired, history may
   still be readable, but live sync/send reliability may be degraded until the
-  phone reconnects and sync catches up.
+  phone reconnects and sync catches up. Tell the user exactly what to do next:
+  keep WhatsApp open on the phone, make sure the phone stays online, and leave
+  the linked session active long enough for a bounded sync refresh to finish.
 - Use the raw CLI steps below only when you are the one performing setup or the
   user explicitly asks for the terminal path.
 - For local pairing work, prefer
@@ -89,6 +93,10 @@ Setup Routing
 - After the user scans, confirm completion with
   `wacli-auth-local.sh wait --session <id>` before claiming
   WhatsApp is ready.
+- In consumer lanes, if the account is paired but the latest messages are still
+  stale, use a bounded refresh only:
+  `wacli sync --once --idle-exit 30s`.
+  Do not use `wacli sync --follow` as the default product path.
 
 Safety
 
@@ -99,7 +107,7 @@ Safety
 Auth + sync
 
 - `wacli auth` (QR login + initial sync)
-- `wacli sync --follow` (continuous sync)
+- `wacli sync --once --idle-exit 30s` (bounded refresh for consumer lanes)
 - `wacli doctor`
 
 Find chats + messages
@@ -142,5 +150,9 @@ Notes
   - `AUTHENTICATED false` usually means QR pairing has not been completed yet.
   - `AUTHENTICATED true` + `CONNECTED false` usually means the account is paired
     but the phone/session is offline or not actively syncing.
+- For consumer product flows, `CONNECTED false` should trigger clear guidance:
+  keep WhatsApp open on the phone, keep the phone online, and wait for the
+  linked session to catch up. Use a bounded sync refresh if the current turn
+  actually needs fresher data.
 - `wacli chats list` is the cheapest proof that history/search access is
   actually working before you attempt send or backfill actions.

@@ -77,6 +77,20 @@ describe("exec safe-bin runtime policy", () => {
     expect(policy.unprofiledInterpreterSafeBins).toEqual(["python3"]);
   });
 
+  it("keeps trusted non-interpreter bins visible as unprofiled without classifying them as interpreters", () => {
+    const policy = resolveExecSafeBinRuntimePolicy({
+      local: {
+        safeBins: ["gog", "himalaya", "wacli"],
+        safeBinProfiles: {
+          wacli: { maxPositional: 1 },
+        },
+      },
+    });
+
+    expect(policy.unprofiledSafeBins).toEqual(["gog", "himalaya"]);
+    expect(policy.unprofiledInterpreterSafeBins).toEqual([]);
+  });
+
   it("prefers local safe bins over global ones when both are configured", () => {
     const policy = resolveExecSafeBinRuntimePolicy({
       global: {

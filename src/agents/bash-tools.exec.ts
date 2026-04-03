@@ -303,7 +303,7 @@ export function createExecTool(
   });
   if (unprofiledSafeBins.length > 0) {
     logInfo(
-      `exec: ignoring unprofiled safeBins entries (${unprofiledSafeBins.toSorted().join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
+      `exec: allowing trusted non-interpreter safeBins without profiles (${unprofiledSafeBins.toSorted().join(", ")}); interpreter/runtime bins still require allowlist entries or explicit tools.exec.safeBinProfiles.<bin>`,
     );
   }
   if (unprofiledInterpreterSafeBins.length > 0) {

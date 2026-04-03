@@ -41,8 +41,12 @@ struct ExecSafeBinsTests {
                         "--after",
                         "--before",
                         "--chat",
+                        "--once",
+                        "--idle-exit",
+                        "--refresh-contacts",
+                        "--refresh-groups",
                     ]),
-                    deniedFlags: Set()),
+                    deniedFlags: Set(["--follow"])),
             ],
             trustedDirs: Set(["/tmp/openclaw-cleanroom/bin"]))
         let resolution = ExecCommandResolution(
@@ -71,8 +75,12 @@ struct ExecSafeBinsTests {
                         "--after",
                         "--before",
                         "--chat",
+                        "--once",
+                        "--idle-exit",
+                        "--refresh-contacts",
+                        "--refresh-groups",
                     ]),
-                    deniedFlags: Set()),
+                    deniedFlags: Set(["--follow"])),
             ],
             trustedDirs: Set(["/tmp/openclaw-cleanroom/bin"]))
         let resolution = ExecCommandResolution(
@@ -91,6 +99,16 @@ struct ExecSafeBinsTests {
                 command: ["wacli", "messages", "list", "--limit", "5", "--chat", "971552857036@s.whatsapp.net"],
                 resolution: resolution,
                 policy: policy))
+        #expect(
+            ExecSafeBins._testIsAllowed(
+                command: ["wacli", "sync", "--once", "--idle-exit", "30s"],
+                resolution: resolution,
+                policy: policy))
+        #expect(
+            !ExecSafeBins._testIsAllowed(
+                command: ["wacli", "sync", "--follow"],
+                resolution: resolution,
+                policy: policy))
     }
 
     @Test func `rejects same basename outside trusted cleanroom`() {
@@ -106,8 +124,12 @@ struct ExecSafeBinsTests {
                         "--after",
                         "--before",
                         "--chat",
+                        "--once",
+                        "--idle-exit",
+                        "--refresh-contacts",
+                        "--refresh-groups",
                     ]),
-                    deniedFlags: Set()),
+                    deniedFlags: Set(["--follow"])),
             ],
             trustedDirs: Set(["/tmp/openclaw-cleanroom/bin"]))
         let resolution = ExecCommandResolution(
@@ -136,8 +158,12 @@ struct ExecSafeBinsTests {
                         "--after",
                         "--before",
                         "--chat",
+                        "--once",
+                        "--idle-exit",
+                        "--refresh-contacts",
+                        "--refresh-groups",
                     ]),
-                    deniedFlags: Set()),
+                    deniedFlags: Set(["--follow"])),
             ],
             trustedDirs: Set(["/tmp/openclaw-cleanroom/bin"]))
         let resolution = ExecCommandResolution(
@@ -183,6 +209,52 @@ struct ExecSafeBinsTests {
         #expect(
             !ExecSafeBins._testIsAllowed(
                 command: ["wacli-auth-local.sh", "start", "--store", "/Users/user/.wacli"],
+                resolution: resolution,
+                policy: policy))
+    }
+
+    @Test func `allows trusted gog without a subcommand profile`() {
+        let policy = ExecSafeBinPolicy(
+            safeBins: Set(["gog"]),
+            profilesByName: [:],
+            trustedDirs: Set(["/tmp/openclaw-cleanroom/bin"]))
+        let resolution = ExecCommandResolution(
+            rawExecutable: "gog",
+            resolvedPath: "/tmp/openclaw-cleanroom/bin/gog",
+            executableName: "gog",
+            cwd: nil)
+
+        #expect(
+            ExecSafeBins._testIsAllowed(
+                command: ["gog", "auth", "list"],
+                resolution: resolution,
+                policy: policy))
+        #expect(
+            ExecSafeBins._testIsAllowed(
+                command: ["gog", "auth", "add", "artemnaumenko1@gmail.com", "--services", "drive", "--drive-scope", "readonly"],
+                resolution: resolution,
+                policy: policy))
+    }
+
+    @Test func `allows trusted himalaya without a subcommand profile`() {
+        let policy = ExecSafeBinPolicy(
+            safeBins: Set(["himalaya"]),
+            profilesByName: [:],
+            trustedDirs: Set(["/tmp/openclaw-cleanroom/bin"]))
+        let resolution = ExecCommandResolution(
+            rawExecutable: "himalaya",
+            resolvedPath: "/tmp/openclaw-cleanroom/bin/himalaya",
+            executableName: "himalaya",
+            cwd: nil)
+
+        #expect(
+            ExecSafeBins._testIsAllowed(
+                command: ["himalaya", "account", "list"],
+                resolution: resolution,
+                policy: policy))
+        #expect(
+            ExecSafeBins._testIsAllowed(
+                command: ["himalaya", "envelope", "list", "-a", "gmail"],
                 resolution: resolution,
                 policy: policy))
     }
