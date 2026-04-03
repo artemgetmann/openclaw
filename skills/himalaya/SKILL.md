@@ -35,6 +35,9 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 
 - For local macOS/email checks, prefer read-only commands first:
   `himalaya account list`, `himalaya folder list`, `himalaya envelope list`.
+- In consumer lanes, run those as separate direct `himalaya` invocations. Do
+  not prepend `which`, `--version`, `set -o pipefail`, or other shell-chain
+  noise before the real check.
 - If configuration is missing, do not dump raw CLI noise back to the user.
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
 - Treat send/reply/forward as higher-risk actions; prove read-only access first.
@@ -46,6 +49,9 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 - If `himalaya` cannot find configuration, account setup, or working auth, use
   the shared `consumer-setup` skill instead of walking the user through a large
   inline setup blob here.
+- If a direct `himalaya account list` succeeds but returns no accounts, say
+  email is not connected yet. Do not tell the user the CLI itself is blocked or
+  unavailable unless the direct `himalaya` call actually failed.
 - `references/configuration.md` still holds the raw config details for the
   opt-in CLI/manual path when you are the one executing setup.
 - If you need the manual CLI path, the account wizard requires an explicit

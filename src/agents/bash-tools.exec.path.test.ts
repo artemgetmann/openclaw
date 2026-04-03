@@ -250,6 +250,69 @@ describe("exec PATH login shell merge", () => {
     }
   });
 
+  it("preserves service-managed gog and himalaya wrappers in gateway allowlist mode", async () => {
+    if (isWin) {
+      return;
+    }
+    process.env.PATH = "/opt/homebrew/bin:/usr/bin";
+    const cleanroomRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-cleanroom-"));
+    const cleanroomBin = path.join(cleanroomRoot, "bin");
+    fs.mkdirSync(cleanroomBin, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(cleanroomBin, "gog"),
+      ["#!/bin/sh", 'printf "WRAPPER %s\\n" "$0"', 'printf "ARGV %s\\n" "$*"'].join("\n"),
+      {
+        encoding: "utf8",
+        mode: 0o755,
+      },
+    );
+    fs.writeFileSync(
+      path.join(cleanroomBin, "himalaya"),
+      ["#!/bin/sh", 'printf "WRAPPER %s\\n" "$0"', 'printf "ARGV %s\\n" "$*"'].join("\n"),
+      {
+        encoding: "utf8",
+        mode: 0o755,
+      },
+    );
+
+    process.env.OPENCLAW_SERVICE_PATH_PREFIX = cleanroomBin;
+
+    const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+    shellPathMock.mockClear();
+    shellPathMock.mockReturnValue("/opt/homebrew/bin:/usr/bin");
+
+    try {
+      const tool = createExecTool({
+        host: "gateway",
+        security: "allowlist",
+        ask: "off",
+        safeBins: ["gog", "himalaya"],
+        safeBinTrustedDirs: [cleanroomBin],
+      });
+      const gogResult = await tool.execute("call-cleanroom-gog-allowlist", {
+        command: "gog auth list",
+      });
+      const himalayaResult = await tool.execute("call-cleanroom-himalaya-allowlist", {
+        command: "himalaya account list",
+      });
+      const gogText = normalizeText(gogResult.content.find((c) => c.type === "text")?.text);
+      const himalayaText = normalizeText(
+        himalayaResult.content.find((c) => c.type === "text")?.text,
+      );
+
+      expect(gogText).toContain("WRAPPER ");
+      expect(gogText).toContain("/bin/gog");
+      expect(gogText).toContain("ARGV auth list");
+      expect(himalayaText).toContain("WRAPPER ");
+      expect(himalayaText).toContain("/bin/himalaya");
+      expect(himalayaText).toContain("ARGV account list");
+      expect(shellPathMock).toHaveBeenCalledTimes(2);
+    } finally {
+      fs.rmSync(cleanroomRoot, { recursive: true, force: true });
+    }
+  });
+
   it("sets OPENCLAW_SHELL for host=gateway commands", async () => {
     if (isWin) {
       return;

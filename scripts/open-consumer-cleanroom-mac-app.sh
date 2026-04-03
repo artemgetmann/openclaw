@@ -14,9 +14,10 @@ Usage: scripts/open-consumer-cleanroom-mac-app.sh --instance <id> [--root <dir>]
 Packages and opens a consumer app instance while forcing setup-sensitive
 skills onto disposable local state on this Mac:
   - himalaya via HIMALAYA_CONFIG
+  - himalaya via a clean-room wrapper on OPENCLAW_SERVICE_PATH_PREFIX
   - wacli via a wrapper on OPENCLAW_SERVICE_PATH_PREFIX
   - wacli auth helper via the same cleanroom bin path
-  - gog via XDG_CONFIG_HOME/XDG_DATA_HOME + file keyring
+  - gog via XDG_CONFIG_HOME/XDG_DATA_HOME + file keyring + clean-room wrapper
 EOF
 }
 
@@ -77,9 +78,42 @@ XDG_DATA_DIR="$CLEANROOM_ROOT/xdg-data"
 
 mkdir -p "$BIN_DIR" "$HIMALAYA_DIR" "$WACLI_STORE" "$XDG_CONFIG_DIR" "$XDG_DATA_DIR"
 
+# Resolve host binaries before we prepend the clean-room bin to PATH. Once the
+# wrappers exist, `command -v gog` / `command -v himalaya` would just point back
+# at the wrappers themselves and recurse forever.
+HOST_GOG_BIN="$(command -v gog || true)"
+HOST_HIMALAYA_BIN="$(command -v himalaya || true)"
+
+if [[ -z "$HOST_GOG_BIN" ]]; then
+  HOST_GOG_BIN="/opt/homebrew/bin/gog"
+fi
+if [[ -z "$HOST_HIMALAYA_BIN" ]]; then
+  HOST_HIMALAYA_BIN="/opt/homebrew/bin/himalaya"
+fi
+
 cat > "$HIMALAYA_CONFIG_PATH" <<'EOF'
 accounts = {}
 EOF
+
+cat > "$BIN_DIR/gog" <<EOF
+#!/bin/sh
+if [ ! -x "$HOST_GOG_BIN" ]; then
+  echo "gog missing at $HOST_GOG_BIN" >&2
+  exit 127
+fi
+exec "$HOST_GOG_BIN" "\$@"
+EOF
+chmod +x "$BIN_DIR/gog"
+
+cat > "$BIN_DIR/himalaya" <<EOF
+#!/bin/sh
+if [ ! -x "$HOST_HIMALAYA_BIN" ]; then
+  echo "himalaya missing at $HOST_HIMALAYA_BIN" >&2
+  exit 127
+fi
+exec "$HOST_HIMALAYA_BIN" "\$@"
+EOF
+chmod +x "$BIN_DIR/himalaya"
 
 cat > "$BIN_DIR/wacli" <<EOF
 #!/bin/sh
