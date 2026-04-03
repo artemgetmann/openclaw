@@ -116,9 +116,10 @@ enum ConsumerBootstrap {
             path: ["tools", "exec", "host"],
             value: "gateway") || changed
         // The consumer lane relies on the gateway host for lane-local CLI
-        // wrappers. Seed a minimal safe-bin entry so the agent can introspect
-        // WhatsApp state via `wacli doctor` without dropping back to raw shell
-        // approvals or the sandbox fallback path.
+        // wrappers. Seed a constrained safe-bin entry so the agent can inspect
+        // WhatsApp auth state and perform the smallest read-only history checks
+        // without dropping back to raw shell approvals or the sandbox fallback
+        // path.
         changed = self.setDefaultValue(
             in: &root,
             path: ["tools", "exec", "safeBins"],
@@ -130,7 +131,17 @@ enum ConsumerBootstrap {
         changed = self.setDefaultValue(
             in: &root,
             path: ["tools", "exec", "safeBinProfiles", "wacli", "maxPositional"],
-            value: 1) || changed
+            value: 3) || changed
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["tools", "exec", "safeBinProfiles", "wacli", "allowedValueFlags"],
+            value: [
+                "--limit",
+                "--query",
+                "--after",
+                "--before",
+                "--chat",
+            ]) || changed
         changed = self.setDefaultValue(
             in: &root,
             path: ["tools", "exec", "safeBinProfiles", "wacli-auth-local.sh", "maxPositional"],
@@ -432,11 +443,34 @@ enum ConsumerBootstrap {
         }
 
         var safeBinProfiles = exec["safeBinProfiles"] as? [String: Any] ?? [:]
-        if safeBinProfiles["wacli"] == nil {
-            safeBinProfiles["wacli"] = ["maxPositional": 1]
-            exec["safeBinProfiles"] = safeBinProfiles
+        // Keep the wacli profile narrow: allow only the subcommand shapes needed
+        // for read-only consumer checks (`doctor`, `chats list`, `messages list`)
+        // plus literal-valued filter flags. This fixes message-read E2E without
+        // broadening the lane into a generic WhatsApp shell surface.
+        let requiredWacliFlags = [
+            "--limit",
+            "--query",
+            "--after",
+            "--before",
+            "--chat",
+        ]
+        var wacliProfile = safeBinProfiles["wacli"] as? [String: Any] ?? [:]
+        let existingWacliMaxPositional = wacliProfile["maxPositional"] as? Int
+        if existingWacliMaxPositional == nil || existingWacliMaxPositional! < 3 {
+            wacliProfile["maxPositional"] = 3
             changed = true
         }
+        let existingWacliFlags = (wacliProfile["allowedValueFlags"] as? [Any])?
+            .compactMap { $0 as? String }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty } ?? []
+        var mergedWacliFlags = existingWacliFlags
+        for flag in requiredWacliFlags where !mergedWacliFlags.contains(flag) {
+            mergedWacliFlags.append(flag)
+            changed = true
+        }
+        wacliProfile["allowedValueFlags"] = mergedWacliFlags
+        safeBinProfiles["wacli"] = wacliProfile
         if safeBinProfiles["wacli-auth-local.sh"] == nil {
             safeBinProfiles["wacli-auth-local.sh"] = [
                 "maxPositional": 1,
@@ -447,9 +481,9 @@ enum ConsumerBootstrap {
                     "--timeout-ms",
                 ],
             ]
-            exec["safeBinProfiles"] = safeBinProfiles
             changed = true
         }
+        exec["safeBinProfiles"] = safeBinProfiles
 
         guard changed else {
             return false

@@ -41,7 +41,7 @@ channel setup, not the CLI utility.
 Automation Rule
 
 - For consumer checks, start with the cheapest read-only probes:
-  `wacli doctor`, then `wacli chats list --limit 5 --json`.
+  `wacli doctor`, then `wacli chats list --limit 5`.
 - In consumer lanes, run those as separate direct tool invocations. One command
   per call. Do not chain them with shell operators like `&&`, pipes, or
   redirection.
@@ -142,5 +142,5 @@ Notes
   - `AUTHENTICATED false` usually means QR pairing has not been completed yet.
   - `AUTHENTICATED true` + `CONNECTED false` usually means the account is paired
     but the phone/session is offline or not actively syncing.
-- `wacli chats list --json` is the cheapest proof that history/search access is
+- `wacli chats list` is the cheapest proof that history/search access is
   actually working before you attempt send or backfill actions.
