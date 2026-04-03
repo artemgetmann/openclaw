@@ -88,7 +88,11 @@ enum ExecSafeBins {
         let resolvedDir = URL(fileURLWithPath: resolvedPath).deletingLastPathComponent().standardizedFileURL.path
         guard policy.trustedDirs.contains(resolvedDir) else { return false }
 
-        guard let profile = policy.profilesByName[executableName] else { return false }
+        // Some consumer-local CLIs (for example gog/himalaya) are intentionally
+        // trusted as whole binaries once they resolve inside the lane-local
+        // service prefix. Others (notably wacli) still need per-flag fences
+        // because the product contract only supports a narrower surface.
+        guard let profile = policy.profilesByName[executableName] else { return true }
         return self.validateArgs(Array(command.dropFirst()), profile: profile)
     }
 

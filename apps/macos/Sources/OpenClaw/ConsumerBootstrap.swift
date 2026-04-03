@@ -115,15 +115,14 @@ enum ConsumerBootstrap {
             in: &root,
             path: ["tools", "exec", "host"],
             value: "gateway") || changed
-        // The consumer lane relies on the gateway host for lane-local CLI
-        // wrappers. Seed a constrained safe-bin entry so the agent can inspect
-        // WhatsApp auth state and perform the smallest read-only history checks
-        // without dropping back to raw shell approvals or the sandbox fallback
-        // path.
+        // Consumer starter skills rely on lane-local host CLIs wrapped by the
+        // gateway LaunchAgent. Trust those binaries only when they resolve
+        // inside the lane-local cleanroom/service prefix so product flows do not
+        // silently fall back to founder/global state after a restart.
         changed = self.setDefaultValue(
             in: &root,
             path: ["tools", "exec", "safeBins"],
-            value: ["wacli", "wacli-auth-local.sh"]) || changed
+            value: ["gog", "himalaya", "wacli", "wacli-auth-local.sh"]) || changed
         changed = self.setDefaultValue(
             in: &root,
             path: ["tools", "exec", "safeBinTrustedDirs"],
@@ -141,6 +140,16 @@ enum ConsumerBootstrap {
                 "--after",
                 "--before",
                 "--chat",
+                "--once",
+                "--idle-exit",
+                "--refresh-contacts",
+                "--refresh-groups",
+            ]) || changed
+        changed = self.setDefaultValue(
+            in: &root,
+            path: ["tools", "exec", "safeBinProfiles", "wacli", "deniedFlags"],
+            value: [
+                "--follow",
             ]) || changed
         changed = self.setDefaultValue(
             in: &root,
@@ -430,6 +439,12 @@ enum ConsumerBootstrap {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty } ?? []
         var mergedSafeBins = existingSafeBins
+        if !mergedSafeBins.contains("gog") {
+            mergedSafeBins.append("gog")
+        }
+        if !mergedSafeBins.contains("himalaya") {
+            mergedSafeBins.append("himalaya")
+        }
         if !mergedSafeBins.contains("wacli") {
             mergedSafeBins.append("wacli")
         }
@@ -443,16 +458,22 @@ enum ConsumerBootstrap {
         }
 
         var safeBinProfiles = exec["safeBinProfiles"] as? [String: Any] ?? [:]
-        // Keep the wacli profile narrow: allow only the subcommand shapes needed
-        // for read-only consumer checks (`doctor`, `chats list`, `messages list`)
-        // plus literal-valued filter flags. This fixes message-read E2E without
-        // broadening the lane into a generic WhatsApp shell surface.
+        // Keep the wacli profile narrow: WhatsApp is the only consumer local
+        // CLI here where the product contract intentionally fences subcommands.
+        // Gog and Himalaya stay fully trusted once they resolve from the
+        // cleanroom bin, because their read/setup/send surfaces are already the
+        // product surface and trying to whitelist them flag-by-flag caused the
+        // current command whack-a-mole.
         let requiredWacliFlags = [
             "--limit",
             "--query",
             "--after",
             "--before",
             "--chat",
+            "--once",
+            "--idle-exit",
+            "--refresh-contacts",
+            "--refresh-groups",
         ]
         var wacliProfile = safeBinProfiles["wacli"] as? [String: Any] ?? [:]
         let existingWacliMaxPositional = wacliProfile["maxPositional"] as? Int
@@ -470,6 +491,16 @@ enum ConsumerBootstrap {
             changed = true
         }
         wacliProfile["allowedValueFlags"] = mergedWacliFlags
+        let existingWacliDeniedFlags = (wacliProfile["deniedFlags"] as? [Any])?
+            .compactMap { $0 as? String }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty } ?? []
+        var mergedWacliDeniedFlags = existingWacliDeniedFlags
+        if !mergedWacliDeniedFlags.contains("--follow") {
+            mergedWacliDeniedFlags.append("--follow")
+            changed = true
+        }
+        wacliProfile["deniedFlags"] = mergedWacliDeniedFlags
         safeBinProfiles["wacli"] = wacliProfile
         if safeBinProfiles["wacli-auth-local.sh"] == nil {
             safeBinProfiles["wacli-auth-local.sh"] = [

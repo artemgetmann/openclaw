@@ -41,7 +41,7 @@ struct ConsumerBootstrapTests {
             #expect(gateway?["port"] as? Int == ConsumerRuntime.gatewayPort)
             #expect(gateway?["bind"] as? String == ConsumerRuntime.gatewayBind)
             #expect(exec?["host"] as? String == "gateway")
-            #expect(exec?["safeBins"] as? [String] == ["wacli", "wacli-auth-local.sh"])
+            #expect(exec?["safeBins"] as? [String] == ["gog", "himalaya", "wacli", "wacli-auth-local.sh"])
             #expect(trustedDirs == [])
             #expect(wacliProfile?["maxPositional"] as? Int == 3)
             #expect(
@@ -51,7 +51,12 @@ struct ConsumerBootstrapTests {
                     "--after",
                     "--before",
                     "--chat",
+                    "--once",
+                    "--idle-exit",
+                    "--refresh-contacts",
+                    "--refresh-groups",
                 ])
+            #expect(wacliProfile?["deniedFlags"] as? [String] == ["--follow"])
             #expect(wacliAuthLocalProfile?["maxPositional"] as? Int == 1)
             #expect(
                 wacliAuthLocalProfile?["allowedValueFlags"] as? [String] == [
@@ -361,6 +366,8 @@ struct ConsumerBootstrapTests {
             #expect(
                 exec?["safeBins"] as? [String] == [
                     "custom-cli",
+                    "gog",
+                    "himalaya",
                     "wacli",
                     "wacli-auth-local.sh",
                 ])
@@ -380,7 +387,12 @@ struct ConsumerBootstrapTests {
                     "--after",
                     "--before",
                     "--chat",
+                    "--once",
+                    "--idle-exit",
+                    "--refresh-contacts",
+                    "--refresh-groups",
                 ])
+            #expect(wacliProfile?["deniedFlags"] as? [String] == ["--follow"])
             #expect(wacliAuthLocalProfile?["maxPositional"] as? Int == 1)
             #expect(modelDefaults?["primary"] as? String == "anthropic/claude-opus-4-6")
             #expect(mdns?["mode"] as? String == "full")

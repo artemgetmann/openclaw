@@ -81,7 +81,9 @@ explicitly ask for the CLI path.
 - If `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, explain
   the nuance clearly: WhatsApp is paired, history/search may still work, but
   live sync or sending may be unreliable until the phone is online and the
-  session reconnects.
+  session reconnects. Tell the user what to do next in plain language:
+  keep WhatsApp open on the phone, make sure the phone stays online, and leave
+  the linked session active long enough for a short sync refresh to complete.
 - When pairing via QR, the normal path is to deliver a real image attachment
   from the helper. Do not transcribe QR block text or force a browser screenshot
   as the first response.
@@ -93,8 +95,13 @@ explicitly ask for the CLI path.
 - Prefer product-language guidance such as "open WhatsApp on your phone and
   finish pairing" over dumping `wacli auth` / `wacli sync --follow` into chat
   unless the user explicitly wants the CLI path.
+- For consumer product flows, do not suggest `wacli sync --follow` as the
+  default next step. If a refresh is actually needed after pairing, prefer the
+  bounded path `wacli sync --once --idle-exit 30s`.
 - Verify with the cheapest read-only checks first: `wacli doctor`, then
   `wacli chats list --limit 5`.
+- In consumer chat flows, use the plain `wacli doctor` shape unless the user
+  explicitly asks for JSON output. Do not invent `--json` on your own here.
 - Run those checks as separate direct invocations. Never combine them into one
   shell command with `&&` or similar operators in consumer chat flows.
 - If an attempted command is blocked because you used the wrong execution
@@ -109,6 +116,18 @@ explicitly ask for the CLI path.
 - Ask which Google account and which surfaces they want enabled first
   (Gmail, Calendar, Drive, Docs, Sheets, Contacts).
 - Prefer a browser-assisted OAuth flow when available.
+- In consumer lanes, use direct lane-local `gog` invocations for checks and
+  setup steps that already map to the product flow. Do not wrap `gog` inside a
+  shell string, pipes, or `nodes/system.run`.
+- Run the cheapest truthful checks first: `gog auth list`, then a read-only call
+  for the requested surface such as `gog gmail search`, `gog drive search`, or
+  `gog calendar events`.
+- If `gog auth list` comes back empty, say Google is not connected yet. Do not
+  pretend the CLI itself is unavailable unless the direct `gog` invocation
+  failed.
+- If OAuth/test-user/client setup is the blocker, say that early in plain
+  product language. Do not spend several turns debugging around it before
+  telling the user what is actually missing.
 - Verify with a read-only command such as `gog auth list`, `gog gmail search`,
   or a calendar/list call before creating drafts or events.
 
