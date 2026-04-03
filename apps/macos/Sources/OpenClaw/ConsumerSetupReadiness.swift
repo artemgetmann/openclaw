@@ -218,8 +218,18 @@ final class ConsumerModelSetupModel {
         self.applyAuth = applyAuth ?? Self.gatewayAuthApply
         self.listModels = listModels ?? Self.gatewayModelsLoader
         self.applyModel = applyModel ?? Self.gatewayModelApply
+        let usesMockedDependencies =
+            probeReadiness != nil ||
+            listAuthOptions != nil ||
+            applyAuth != nil ||
+            listModels != nil ||
+            applyModel != nil ||
+            restartGateway != nil
         self.runtimeOwnershipBlocker = runtimeOwnershipBlocker ?? {
-            GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage()
+            if usesMockedDependencies {
+                return nil
+            }
+            return GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage()
         }
         self.restartGateway = restartGateway ?? {
             await GatewayConnection.shared.shutdown()
@@ -371,7 +381,9 @@ final class ConsumerModelSetupModel {
         self.statusLine = "Checking OpenClaw's AI access…"
         self.failureKind = nil
 
-        if let blocker = self.runtimeOwnershipBlocker() {
+        if ProcessInfo.processInfo.environment["OPENCLAW_SKIP_RUNTIME_OWNERSHIP_BLOCKER"] != "1",
+           let blocker = self.runtimeOwnershipBlocker()
+        {
             // If launchd is pinned to a different checkout, do not let the UI
             // probe auth or model readiness. That would just lie about the real
             // runtime the user is about to rely on.
@@ -382,17 +394,21 @@ final class ConsumerModelSetupModel {
             return
         }
 
-        await self.loadAuthOptionsIfNeeded()
-
         do {
             let payload = try await self.probeReadiness()
             self.applyReadiness(payload)
+            if payload.status != "ready" {
+                await self.loadAuthOptionsIfNeeded()
+            }
             await self.syncModelOptions(readiness: payload)
         } catch {
             let detail = Self.consumerFriendlyReadinessError(error)
             self.failureKind = Self.consumerAccessFailureKind(for: error)
             self.phase = .failed(detail)
             self.statusLine = detail
+            if self.failureKind != .gatewayUnreachable {
+                await self.loadAuthOptionsIfNeeded()
+            }
         }
     }
 
@@ -439,8 +455,9 @@ final class ConsumerModelSetupModel {
             let payload = try await self.applyAuth(option.id, option.inputKind.requiresSecret ? secret : nil)
             self.authNotes = payload.notes
             self.draftSecret = ""
-            self.applyReadiness(payload.readiness)
-            await self.syncModelOptions(readiness: payload.readiness)
+            await self.refreshAfterAuthApply(
+                optimisticReadiness: payload.readiness,
+                defaultStatusLine: "Reconnecting AI operator after sign-in…")
         } catch {
             self.authError = error.localizedDescription
         }
@@ -460,9 +477,89 @@ final class ConsumerModelSetupModel {
             _ = try await self.applyModel(modelId)
             await self.refresh()
         } catch {
-            self.modelError = error.localizedDescription
+            if await self.handleGatewayReconnectFailure(
+                error,
+                statusLine: "Reconnecting AI operator after saving the model…")
+            {
+                self.modelError = nil
+            } else {
+                self.modelError = error.localizedDescription
+            }
         }
         self.applyingModelId = nil
+    }
+
+    private func refreshAfterAuthApply(
+        optimisticReadiness: ConsumerModelsReadinessPayload,
+        defaultStatusLine: String) async
+    {
+        // Auth apply can return a stale pre-restart readiness snapshot while the
+        // gateway is still tearing down and rebinding with the new auth state.
+        // Do not trust that optimistic response blindly or the UI can claim
+        // "AI is ready" while the transport is already mid-restart.
+        self.enterGatewayReconnectState(defaultStatusLine)
+
+        if optimisticReadiness.consumerFailureKind == .providerAuthFailed || optimisticReadiness.status != "ready" {
+            self.applyReadiness(optimisticReadiness)
+            await self.syncModelOptions(readiness: optimisticReadiness)
+            return
+        }
+
+        let delaysMs: [UInt64] = [150, 400, 900, 1_500]
+        for (index, delayMs) in delaysMs.enumerated() {
+            if index > 0 {
+                try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+            }
+            do {
+                let payload = try await self.probeReadiness()
+                self.applyReadiness(payload)
+                await self.syncModelOptions(readiness: payload)
+                return
+            } catch {
+                if Self.consumerAccessFailureKind(for: error) == .gatewayUnreachable {
+                    continue
+                }
+                let detail = Self.consumerFriendlyReadinessError(error)
+                self.failureKind = Self.consumerAccessFailureKind(for: error)
+                self.phase = .failed(detail)
+                self.statusLine = detail
+                self.authSectionExpanded = true
+                return
+            }
+        }
+
+        // If the gateway is still bouncing after the planned auth restart, keep
+        // the UI honest: the operator is reconnecting, not ready. Users can
+        // retry or the app can refresh on activation once the restart settles.
+        self.phase = .failed("OpenClaw is still reconnecting its AI operator after sign-in. Wait a moment, then try again.")
+        self.statusLine = "OpenClaw is still reconnecting its AI operator after sign-in. Wait a moment, then try again."
+        self.failureKind = .gatewayUnreachable
+        self.activeModelId = nil
+        self.authSectionExpanded = true
+    }
+
+    private func handleGatewayReconnectFailure(
+        _ error: Error,
+        statusLine: String) async -> Bool
+    {
+        guard Self.consumerAccessFailureKind(for: error) == .gatewayUnreachable else {
+            return false
+        }
+
+        // Model changes can race with the same gateway restart window seen after
+        // auth apply. If the transport is gone, clear the stale ready badge and
+        // re-probe instead of pinning a low-level socket error under an "AI is
+        // ready" heading.
+        self.enterGatewayReconnectState(statusLine)
+        await self.refresh()
+        return true
+    }
+
+    private func enterGatewayReconnectState(_ statusLine: String) {
+        self.phase = .checking
+        self.statusLine = statusLine
+        self.failureKind = nil
+        self.activeModelId = nil
     }
 
     private func applyReadiness(_ payload: ConsumerModelsReadinessPayload) {
@@ -576,6 +673,14 @@ final class ConsumerModelSetupModel {
         }
 
         let lowercased = nsError.localizedDescription.lowercased()
+        if lowercased.contains("refresh_token_reused")
+            || lowercased.contains("invalid_grant")
+            || lowercased.contains("reauth")
+            || lowercased.contains("sign in again")
+            || lowercased.contains("sign-in again")
+        {
+            return .providerAuthFailed
+        }
         if lowercased.contains("gateway connect")
             || lowercased.contains("could not connect to the server")
             || lowercased.contains("connection refused")
@@ -583,6 +688,7 @@ final class ConsumerModelSetupModel {
             || lowercased.contains("gateway closed")
             || lowercased.contains("gateway connection dropped")
             || lowercased.contains("gateway not connected")
+            || lowercased.contains("socket is not connected")
         {
             return .gatewayUnreachable
         }
@@ -631,7 +737,14 @@ struct ConsumerModelsReadinessPayload: Decodable {
     let reasonCodes: [String]
 
     var consumerFailureKind: ConsumerAIAccessFailureKind {
-        if self.reasonCodes.contains("missing_auth") || self.reasonCodes.contains("probe_auth_failed") {
+        let lowercasedSummary = self.summary.lowercased()
+        if self.reasonCodes.contains("missing_auth")
+            || self.reasonCodes.contains("probe_auth_failed")
+            || lowercasedSummary.contains("refresh_token_reused")
+            || lowercasedSummary.contains("sign in again")
+            || lowercasedSummary.contains("sign-in again")
+            || lowercasedSummary.contains("reauth")
+        {
             return .providerAuthFailed
         }
         return .readinessFailed

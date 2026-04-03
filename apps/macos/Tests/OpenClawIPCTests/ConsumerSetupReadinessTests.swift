@@ -18,6 +18,14 @@ private func authMissingReadinessPayload() -> ConsumerModelsReadinessPayload {
         reasonCodes: ["missing_auth"])
 }
 
+private func refreshTokenReusedPayload() -> ConsumerModelsReadinessPayload {
+    ConsumerModelsReadinessPayload(
+        status: "blocked",
+        defaultModel: "openai-codex/gpt-5.4",
+        summary: "ChatGPT sign-in expired for this Mac (refresh_token_reused). Sign in again to continue.",
+        reasonCodes: ["probe_auth_failed"])
+}
+
 private func readinessFailedPayload() -> ConsumerModelsReadinessPayload {
     ConsumerModelsReadinessPayload(
         status: "blocked",
@@ -266,9 +274,17 @@ struct ConsumerSetupReadinessTests {
     }
 
     @Test func `consumer model apply auth consumes returned readiness and marks ready`() async {
+        let probeCalls = SendableCounter()
         let model = ConsumerModelSetupModel(
             probeReadiness: {
-                blockedReadinessPayload()
+                probeCalls.value += 1
+                return probeCalls.value == 1
+                    ? blockedReadinessPayload()
+                    : ConsumerModelsReadinessPayload(
+                        status: "ready",
+                        defaultModel: "openai/gpt-5.4",
+                        summary: "AI ready on openai/gpt-5.4.",
+                        reasonCodes: [])
             },
             listAuthOptions: {
                 ConsumerModelsAuthListPayload(options: [authOptionPayload()])
@@ -302,6 +318,7 @@ struct ConsumerSetupReadinessTests {
         model.draftSecret = "sk-test"
         await model.submitSelectedAuth()
 
+        #expect(probeCalls.value == 2)
         #expect(model.isComplete)
         #expect(model.phase == .ready("openai/gpt-5.4"))
         #expect(model.statusLine == "AI ready on openai/gpt-5.4.")
@@ -309,6 +326,52 @@ struct ConsumerSetupReadinessTests {
         #expect(model.draftSecret.isEmpty)
         #expect(model.modelOptions.map(\.id) == ["openai/gpt-5.4", "openai-codex/gpt-5.3-codex"])
         #expect(model.selectedModelId == "openai/gpt-5.4")
+    }
+
+    @Test func `consumer model apply auth re-probes after restart churn and routes reused token to reauth`() async {
+        let probeCalls = SendableCounter()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                if probeCalls.value == 1 {
+                    return blockedReadinessPayload()
+                }
+                if probeCalls.value == 2 {
+                    throw NSError(
+                        domain: "gateway",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "gateway receive: The operation couldn't be completed. Socket is not connected"])
+                }
+                return refreshTokenReusedPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [subscriptionOptionPayload()])
+            },
+            applyAuth: { optionId, _ in
+                #expect(optionId == "openai-codex-oauth")
+                return ConsumerModelsAuthApplyPayload(
+                    optionId: optionId,
+                    providerId: "openai-codex",
+                    methodId: "oauth",
+                    defaultModel: "openai-codex/gpt-5.4",
+                    notes: ["Opened the ChatGPT sign-in flow."],
+                    profileIds: ["openai-codex:default"],
+                    readiness: readyReadinessPayload())
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        await model.refresh()
+        await model.submitSelectedAuth()
+
+        #expect(probeCalls.value == 3)
+        #expect(!model.isComplete)
+        #expect(model.failureKind == .providerAuthFailed)
+        #expect(model.phase == .failed("ChatGPT sign-in expired for this Mac (refresh_token_reused). Sign in again to continue."))
+        #expect(model.statusLine == "ChatGPT sign-in expired for this Mac (refresh_token_reused). Sign in again to continue.")
+        #expect(model.authNotes == ["Opened the ChatGPT sign-in flow."])
+        #expect(model.modelOptions.isEmpty)
     }
 
     @Test func `consumer model apply auth failure keeps blocker and surfaces auth error`() async {
@@ -450,6 +513,34 @@ struct ConsumerSetupReadinessTests {
         #expect(model.phase == .ready("openai-codex/gpt-5.3-codex"))
         #expect(model.statusLine == "AI ready on openai-codex/gpt-5.3-codex.")
         #expect(model.activeModelId == "openai-codex/gpt-5.3-codex")
+    }
+
+    @Test func `consumer model clears stale ready state when model save races gateway restart`() async {
+        let probeCalls = SendableCounter()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                return readyReadinessPayload()
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            applyModel: { _ in
+                throw NSError(
+                    domain: "gateway",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "gateway receive: The operation couldn't be completed. Socket is not connected"])
+            })
+
+        await model.refresh()
+        model.selectedModelId = "openai-codex/gpt-5.3-codex"
+        await model.submitSelectedModel()
+
+        #expect(probeCalls.value == 2)
+        #expect(model.phase == .ready("openai-codex/gpt-5.4"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.4.")
+        #expect(model.modelError == nil)
+        #expect(model.failureKind == nil)
     }
 
     @Test func `consumer model restart operator retries readiness and recovers`() async {
