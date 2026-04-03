@@ -31,6 +31,15 @@ Setup routing
 - If OAuth client credentials, account auth, or `gog auth list` are missing,
   use the shared `consumer-setup` skill instead of pushing raw setup commands at
   the user.
+- In consumer lanes, run `gog` as a direct lane-local exec call. Do not wrap it
+  in shell chains, pipes, or `nodes/system.run`.
+- Start with the cheapest truthful checks: `gog auth list`, then a read-only
+  surface probe such as `gog gmail search`, `gog drive search`, or
+  `gog calendar events`.
+- If a direct `gog auth list` succeeds but returns no accounts, say the Google
+  connection is missing. Do not tell the user `gog` itself is unavailable.
+- If the real blocker is OAuth client/test-user setup, say that immediately in
+  plain product language instead of burning turns on unrelated command retries.
 - Keep the CLI setup path opt-in. If the user explicitly wants the terminal
   flow, you can execute the normal `gog auth ...` commands yourself.
 

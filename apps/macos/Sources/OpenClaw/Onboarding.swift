@@ -305,7 +305,7 @@ struct OnboardingView: View {
     }
 
     var devLinkCommand: String {
-        let version = GatewayEnvironment.expectedGatewayVersionString() ?? "latest"
+        let version = GatewayEnvironment.preferredInstallTargetString()
         if AppFlavor.current.isConsumer {
             let prefix = ConsumerRuntime.installPrefixURL.path.replacingOccurrences(of: "'", with: "'\"'\"'")
             return "curl -fsSL https://openclaw.bot/install-cli.sh | bash -s -- --json --no-onboard --prefix '\(prefix)' --version \(version)"

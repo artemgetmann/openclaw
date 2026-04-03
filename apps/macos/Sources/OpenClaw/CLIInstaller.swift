@@ -58,7 +58,7 @@ enum CLIInstaller {
     }
 
     static func install(statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async {
-        let expected = GatewayEnvironment.expectedGatewayVersionString() ?? "latest"
+        let expected = GatewayEnvironment.preferredInstallTargetString()
         let prefix = Self.installPrefix()
         await statusHandler("Installing openclaw CLI…")
         let cmd = self.installScriptCommand(version: expected, prefix: prefix)
