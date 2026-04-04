@@ -361,14 +361,22 @@ if [[ -x "$DOCTOR_SCRIPT" ]]; then
 fi
 
 BOOTSTRAP_RUNTIME_STATUS="disabled"
-if [[ "$LANE_MODE" == "warm" ]]; then
-  BOOTSTRAP_RUNTIME_STATUS="skipped (warm mode)"
-elif [[ "$NO_BOOTSTRAP" != "1" ]] && [[ -f "$RUNTIME_BOOTSTRAP_SCRIPT" ]]; then
-  # Fresh git worktrees now bootstrap their own dependency tree in-place. We do
-  # not symlink node_modules from the source checkout because that lets one lane
-  # resolve packages out of another lane's filesystem state.
-  if bash "$RUNTIME_BOOTSTRAP_SCRIPT" --root "$WORKTREE_PATH" --quiet; then
-    BOOTSTRAP_RUNTIME_STATUS="ok"
+if [[ "$NO_BOOTSTRAP" != "1" ]] && [[ -f "$RUNTIME_BOOTSTRAP_SCRIPT" ]]; then
+  # Fresh git worktrees bootstrap their own dependency tree in-place. We do
+  # not symlink node_modules from the source checkout because that lets one
+  # lane resolve packages out of another lane's filesystem state.
+  RUNTIME_BOOTSTRAP_ARGS=(--root "$WORKTREE_PATH" --quiet)
+  if [[ "$LANE_MODE" == "warm" ]]; then
+    # Warm lanes keep the dependency install, but skip the slower build step so
+    # the lane is usable faster while still remaining isolated.
+    RUNTIME_BOOTSTRAP_ARGS+=(--skip-build)
+  fi
+  if bash "$RUNTIME_BOOTSTRAP_SCRIPT" "${RUNTIME_BOOTSTRAP_ARGS[@]}"; then
+    if [[ "$LANE_MODE" == "warm" ]]; then
+      BOOTSTRAP_RUNTIME_STATUS="dependencies-only"
+    else
+      BOOTSTRAP_RUNTIME_STATUS="ok"
+    fi
   else
     BOOTSTRAP_RUNTIME_STATUS="failed"
     echo "warning: worktree runtime bootstrap failed; the lane may still need pnpm install/build" >&2
@@ -378,7 +386,7 @@ fi
 if [[ "$LANE_MODE" == "clean" ]] && [[ -f "$WORKTREE_PATH/.env.local" ]]; then
   run_ensure_with_timeout "$WORKTREE_PATH"
 elif [[ "$LANE_MODE" == "warm" ]]; then
-  echo "info: warm mode skips Telegram lane claim/ensure and runtime bootstrap for faster setup" >&2
+  echo "info: warm mode skips Telegram lane claim/ensure and the build step; dependencies are installed in-place" >&2
 else
   echo "warning: no Telegram token claim was assigned; skipping telegram-live-runtime ensure" >&2
 fi
