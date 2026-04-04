@@ -271,6 +271,11 @@ export async function buildTelegramInboundContextPayload(params: {
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
+    // A brand-new DM topic must inherit model/thinking from its parent before
+    // metadata writes create the child entry. Otherwise the child exists as a
+    // blank session and later session init correctly skips inheritance because
+    // it no longer looks brand new.
+    createIfMissing: !(threadSpec.scope === "dm" && threadSpec.id != null),
     updateLastRoute: !isGroup
       ? {
           sessionKey: updateLastRouteSessionKey,

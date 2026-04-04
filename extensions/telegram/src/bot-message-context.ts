@@ -6,7 +6,6 @@ import {
   createStatusReactionController,
   type StatusReactionController,
 } from "../../../src/channels/status-reactions.js";
-import { loadConfig } from "../../../src/config/config.js";
 import { resolveStorePath, updateSessionStore } from "../../../src/config/sessions.js";
 import type { TelegramDirectConfig, TelegramGroupConfig } from "../../../src/config/types.js";
 import { logVerbose } from "../../../src/globals.js";
@@ -39,6 +38,7 @@ import {
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
+import { seedTelegramThreadSessionOnTopicCreate } from "./thread-session-seeding.js";
 
 export type {
   BuildTelegramMessageContextParams,
@@ -102,11 +102,14 @@ export const buildTelegramMessageContext = async ({
     !isGroup && groupConfig && "dmPolicy" in groupConfig
       ? (groupConfig.dmPolicy ?? dmPolicy)
       : dmPolicy;
-  // Fresh config for bindings lookup; other routing inputs are payload-derived.
-  const freshCfg = loadConfig();
+  // Use the caller-provided config snapshot for route/session shaping so
+  // thread seeding and runtime session init operate against the same store.
+  // Re-loading a different snapshot here can make inheritance look flaky when
+  // one path seeds into a different store/config view than the rest.
+  const effectiveCfg = cfg;
   let { route, configuredBinding, configuredBindingSessionKey, hasExplicitDmTopicBinding } =
     resolveTelegramConversationRoute({
-      cfg: freshCfg,
+      cfg: effectiveCfg,
       accountId: account.accountId,
       chatId,
       isGroup,
@@ -234,7 +237,7 @@ export const buildTelegramMessageContext = async ({
       return true;
     }
     const ensured = await ensureConfiguredAcpRouteReady({
-      cfg: freshCfg,
+      cfg: effectiveCfg,
       configuredBinding,
     });
     if (ensured.ok) {
@@ -256,12 +259,29 @@ export const buildTelegramMessageContext = async ({
   };
 
   const baseSessionKey = resolveTelegramConversationBaseSessionKey({
-    cfg: freshCfg,
+    cfg: effectiveCfg,
     route,
     chatId,
     isGroup,
     senderId,
   });
+  if (threadSpec.scope !== "none") {
+    // Plain text can be the first thing a user sends in a brand-new DM topic.
+    // Seed that thread from the parent future-thread defaults before generic
+    // route/session init runs, otherwise the first normal turn creates a blank
+    // thread session and later /model or /status falls back to the global
+    // default even though the parent already carries the right defaults.
+    await seedTelegramThreadSessionOnTopicCreate({
+      cfg: effectiveCfg,
+      accountId: route.accountId,
+      chatId,
+      isGroup,
+      senderId,
+      resolvedThreadId: threadSpec.scope === "forum" ? threadSpec.id : undefined,
+      dmThreadId: threadSpec.scope === "dm" ? threadSpec.id : undefined,
+      topicAgentId: topicConfig?.agentId,
+    });
+  }
   const dmThreadSession =
     dmThreadId != null && !hasExplicitDmTopicBinding
       ? resolveTelegramDmThreadSessionRouting({
@@ -273,7 +293,7 @@ export const buildTelegramMessageContext = async ({
       : null;
   const sessionKey = dmThreadSession?.sessionKey ?? baseSessionKey;
   if (dmThreadSession?.legacySessionKeys.length) {
-    const storePath = resolveStorePath(freshCfg.session?.store, {
+    const storePath = resolveStorePath(effectiveCfg.session?.store, {
       agentId: route.agentId,
     });
     // Older DM topic sessions used chat.id-derived suffixes. Migrate them onto
