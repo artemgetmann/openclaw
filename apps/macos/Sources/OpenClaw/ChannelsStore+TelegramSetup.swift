@@ -138,11 +138,23 @@ extension ChannelsStore {
             self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestInboundAt()
                 ?? Double(dm.date * 1_000)
             self.telegramSetupBaselineOutboundAt = self.consumerTelegramLatestOutboundAt()
-            let persisted = try await self.applyTelegramSetupBootstrap(
-                token: token,
-                dmPolicy: "allowlist",
-                allowFrom: [String(dm.senderId)],
-                enabled: false)
+            let persisted: [String: Any]
+            if Self.consumerTelegramNeedsBootstrapBeforeReplay(
+                pausedPollingProvider: pausedPollingProvider)
+            {
+                persisted = try await self.applyTelegramSetupBootstrap(
+                    token: token,
+                    dmPolicy: "allowlist",
+                    allowFrom: [String(dm.senderId)],
+                    enabled: false)
+            } else {
+                // If setup already paused the same live Telegram poller for this
+                // token, writing an identical enabled:false bootstrap here would
+                // force a second gateway reload before the replay even starts.
+                // Reuse the existing paused config and wait to persist the final
+                // allowlist/enabled state until replay completion.
+                persisted = self.configRoot
+            }
             self.telegramSetupFirstSenderId = String(dm.senderId)
 
             // If the live Telegram poller already handled this first task before
@@ -488,6 +500,38 @@ extension ChannelsStore {
                 params: params,
                 timeoutMs: 8_500)
         } catch {
+            if Self.consumerTelegramReplayShouldRetryAfterRestart(error) {
+                self.telegramSetupStatus = "Gateway restarting… retrying your first Telegram task."
+                let recovered = await Self.recoverConsumerGatewayAfterConfigBootstrap(
+                    shutdown: {
+                        await GatewayConnection.shared.shutdown()
+                    },
+                    refreshEndpoint: {
+                        await GatewayEndpointStore.shared.refresh()
+                    },
+                    refreshConnection: {
+                        try await GatewayConnection.shared.refresh()
+                    },
+                    probe: {
+                        _ = try await GatewayConnection.shared.requestRaw(
+                            method: .status,
+                            timeoutMs: 1_500)
+                    })
+                if recovered {
+                    do {
+                        return try await GatewayConnection.shared.requestDecoded(
+                            method: .channelsTelegramSetupReplay,
+                            params: params,
+                            timeoutMs: 8_500)
+                    } catch {
+                        return TelegramSetupReplayResult(
+                            ok: false,
+                            replyStarted: false,
+                            replyCompleted: false,
+                            error: error.localizedDescription)
+                    }
+                }
+            }
             return TelegramSetupReplayResult(
                 ok: false,
                 replyStarted: false,
@@ -649,6 +693,19 @@ extension ChannelsStore {
         activityAlreadyConfirmed: Bool
     ) -> ConsumerTelegramFirstTaskReplayAction {
         activityAlreadyConfirmed ? .trustObservedLiveCompletion : .replayCapturedMessage
+    }
+
+    static func consumerTelegramNeedsBootstrapBeforeReplay(
+        pausedPollingProvider: Bool
+    ) -> Bool {
+        !pausedPollingProvider
+    }
+
+    static func consumerTelegramReplayShouldRetryAfterRestart(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("socket is not connected")
+            || message.contains("gateway connection dropped")
+            || message.contains("abnormal closure")
     }
 }
 

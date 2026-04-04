@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import OpenClaw
 
@@ -246,6 +247,34 @@ struct TelegramSetupBootstrapTests {
         #expect(
             ChannelsStore.consumerTelegramFirstTaskReplayAction(
                 activityAlreadyConfirmed: false) == .replayCapturedMessage)
+    }
+
+    @Test func `telegram setup skips redundant bootstrap write when polling provider was already paused`() {
+        #expect(
+            !ChannelsStore.consumerTelegramNeedsBootstrapBeforeReplay(
+                pausedPollingProvider: true))
+        #expect(
+            ChannelsStore.consumerTelegramNeedsBootstrapBeforeReplay(
+                pausedPollingProvider: false))
+    }
+
+    @Test func `telegram replay retries when the gateway socket drops during planned restart`() {
+        let socketError = NSError(
+            domain: "gateway",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "gateway receive: The operation couldn't be completed. Socket is not connected"])
+        let droppedError = NSError(
+            domain: "gateway",
+            code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "Gateway connection dropped; gateway likely restarted—retry."])
+        let unrelatedError = NSError(
+            domain: "gateway",
+            code: 3,
+            userInfo: [NSLocalizedDescriptionKey: "permission denied"])
+
+        #expect(ChannelsStore.consumerTelegramReplayShouldRetryAfterRestart(socketError))
+        #expect(ChannelsStore.consumerTelegramReplayShouldRetryAfterRestart(droppedError))
+        #expect(!ChannelsStore.consumerTelegramReplayShouldRetryAfterRestart(unrelatedError))
     }
 
     @Test func `healthy telegram refresh promotes timed out setup once outbound activity proves completion`() async throws {
