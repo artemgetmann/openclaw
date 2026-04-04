@@ -48,7 +48,7 @@ export function createFirecrawlSearchTool(api: OpenClawPluginApi) {
     name: "firecrawl_search",
     label: "Firecrawl Search",
     description:
-      "Search the web using Firecrawl v2/search. Can optionally include scraped content from result pages.",
+      "Search the web using Firecrawl v2/search. Can optionally include scraped content from result pages. When you use the results in an answer, cite the source URLs inline or include a short Sources list.",
     parameters: FirecrawlSearchToolSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
       const query = readStringParam(rawParams, "query", { required: true });

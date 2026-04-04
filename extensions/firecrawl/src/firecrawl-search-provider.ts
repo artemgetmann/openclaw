@@ -50,7 +50,7 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
     setCredentialValue: setScopedCredentialValue,
     createTool: (ctx) => ({
       description:
-        "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
+        "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. When you answer with these results, cite the source URLs inline or include a short Sources list. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
       parameters: GenericFirecrawlSearchSchema,
       execute: async (args) =>
         await runFirecrawlSearch({
