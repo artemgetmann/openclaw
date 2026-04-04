@@ -60,6 +60,7 @@ function consumeLongOptionToken(params: {
   index: number;
   flag: string;
   inlineValue: string | undefined;
+  allowedFlags: ReadonlySet<string>;
   allowedValueFlags: ReadonlySet<string>;
   deniedFlags: ReadonlySet<string>;
   knownLongFlagsSet: ReadonlySet<string>;
@@ -76,12 +77,16 @@ function consumeLongOptionToken(params: {
   if (params.deniedFlags.has(canonicalFlag)) {
     return -1;
   }
+  const allowsBareFlag = params.allowedFlags.has(canonicalFlag);
   const expectsValue = params.allowedValueFlags.has(canonicalFlag);
   if (params.inlineValue !== undefined) {
     if (!expectsValue) {
       return -1;
     }
     return isSafeLiteralToken(params.inlineValue) ? params.index + 1 : -1;
+  }
+  if (allowsBareFlag) {
+    return params.index + 1;
   }
   if (!expectsValue) {
     return params.index + 1;
@@ -131,10 +136,11 @@ function validatePositionalCount(positional: string[], profile: SafeBinProfile):
 }
 
 export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {
+  const allowedFlags = profile.allowedFlags ?? NO_FLAGS;
   const allowedValueFlags = profile.allowedValueFlags ?? NO_FLAGS;
   const deniedFlags = profile.deniedFlags ?? NO_FLAGS;
   const knownLongFlags =
-    profile.knownLongFlags ?? collectKnownLongFlags(allowedValueFlags, deniedFlags);
+    profile.knownLongFlags ?? collectKnownLongFlags(allowedFlags, allowedValueFlags, deniedFlags);
   const knownLongFlagsSet = profile.knownLongFlagsSet ?? new Set(knownLongFlags);
   const longFlagPrefixMap = profile.longFlagPrefixMap ?? buildLongFlagPrefixMap(knownLongFlags);
 
@@ -176,6 +182,7 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
         index: i,
         flag: token.flag,
         inlineValue: token.inlineValue,
+        allowedFlags,
         allowedValueFlags,
         deniedFlags,
         knownLongFlagsSet,
