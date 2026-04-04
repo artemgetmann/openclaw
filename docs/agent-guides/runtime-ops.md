@@ -37,6 +37,9 @@
   - Worktree mac app lane: `bash scripts/dev-launch-mac.sh`
   - Consumer mac app lane: `bash scripts/open-consumer-mac-app.sh --instance <id>`
   - Shared/main full app rebuild + restart: `bash scripts/restart-mac.sh`
+- Shared `main` restart behavior:
+  - `openclaw gateway restart` keeps the fast `launchctl kickstart` path when the shared LaunchAgent is already healthy and pinned to the canonical `main` runtime.
+  - If the shared LaunchAgent is unhealthy or the fast path fails with a loaded-but-bad service, restart escalates to `scripts/gateway-recover-main.sh` so it can rebuild/reinstall the canonical runtime instead of surfacing a raw `launchctl` bootstrap error.
 - `scripts/restart-mac.sh` still has an explicit broad kill path via `--app-scope all`; do not use it as the default from linked worktrees.
 - Use `scripts/clawlog.sh` for macOS unified logs.
 - Worktrees are valid for development and pre-merge validation. The primary bot must run from `main`, not from a worktree build. Shared `main` is for runtime ownership and orchestration only; tracked code edits still belong in a worktree. Test in the worktree first, then merge to `main`, rebuild, and restart the gateway from `main`.
