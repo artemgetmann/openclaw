@@ -153,7 +153,10 @@ struct OpenClawConfigFileTests {
             let configRoot = try JSONSerialization.jsonObject(with: configData) as? [String: Any]
             let meta = configRoot?["meta"] as? [String: Any]
             #expect(meta != nil)
-            #expect(meta?["lastTouchedBundlePath"] as? String == Bundle.main.bundlePath)
+            #expect(meta?["lastTouchedBundlePath"] == nil)
+            #expect(meta?["lastTouchedBundleIdentifier"] == nil)
+            #expect(meta?["lastTouchedVersion"] as? String != nil)
+            #expect(meta?["lastTouchedAt"] as? String != nil)
 
             let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
             let lines = rawAudit
@@ -170,17 +173,15 @@ struct OpenClawConfigFileTests {
             #expect(auditRoot?["result"] as? String == "success")
             #expect(auditRoot?["configPath"] as? String == configPath.path)
             #expect(auditRoot?["bundlePath"] as? String == Bundle.main.bundlePath)
-            #expect(auditRoot?["bundlePathAfter"] as? String == Bundle.main.bundlePath)
         }
     }
 
     @MainActor
     @Test
-    func `save dict flags bundle path changes in config audit`() async throws {
+    func `save dict scrubs legacy bundle metadata keys`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
-        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
 
         defer { try? FileManager().removeItem(at: stateDir) }
 
@@ -193,6 +194,7 @@ struct OpenClawConfigFileTests {
                 "meta": [
                     "lastTouchedAt": "2026-04-03T00:00:00Z",
                     "lastTouchedBundlePath": "/Users/test/Downloads/OpenClaw Consumer.app",
+                    "lastTouchedBundleIdentifier": "ai.openclaw.consumer.mac.debug",
                     "lastTouchedVersion": "2026.3.14",
                 ],
             ]
@@ -204,17 +206,13 @@ struct OpenClawConfigFileTests {
                 "gateway": ["mode": "local"],
             ])
 
-            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
-            let lines = rawAudit.split(whereSeparator: \.isNewline).map(String.init)
-            guard let last = lines.last else {
-                Issue.record("Missing config audit line")
-                return
-            }
-            let auditRoot = try JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any]
-            let suspicious = auditRoot?["suspicious"] as? [String] ?? []
-            #expect(suspicious.contains("bundle-path-changed"))
-            #expect(auditRoot?["bundlePathBefore"] as? String == "/Users/test/Downloads/OpenClaw Consumer.app")
-            #expect(auditRoot?["bundlePathAfter"] as? String == Bundle.main.bundlePath)
+            let configData = try Data(contentsOf: configPath)
+            let configRoot = try JSONSerialization.jsonObject(with: configData) as? [String: Any]
+            let meta = configRoot?["meta"] as? [String: Any]
+            #expect(meta?["lastTouchedBundlePath"] == nil)
+            #expect(meta?["lastTouchedBundleIdentifier"] == nil)
+            #expect(meta?["lastTouchedVersion"] as? String != nil)
+            #expect(meta?["lastTouchedAt"] as? String != nil)
         }
     }
 }
