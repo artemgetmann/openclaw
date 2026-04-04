@@ -1,5 +1,11 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadSessionStore, updateSessionStore } from "../../../src/config/sessions.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+
+const tempDirs: string[] = [];
 
 // Mock recordInboundSession to capture updateLastRoute parameter
 const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
@@ -21,13 +27,39 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
   }
 
   function getUpdateLastRoute(): unknown {
-    const callArgs = recordInboundSessionMock.mock.calls[0]?.[0] as { updateLastRoute?: unknown };
+    const callArgs = recordInboundSessionMock.mock.calls.at(-1)?.[0] as {
+      updateLastRoute?: unknown;
+    };
     return callArgs?.updateLastRoute;
+  }
+
+  function getLastRecordInboundSessionCall(): {
+    createIfMissing?: boolean;
+    updateLastRoute?: unknown;
+  } {
+    return (
+      (recordInboundSessionMock.mock.calls.at(-1)?.[0] as {
+        createIfMissing?: boolean;
+        updateLastRoute?: unknown;
+      }) ?? {}
+    );
   }
 
   beforeEach(() => {
     recordInboundSessionMock.mockClear();
   });
+
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
+  async function makeStorePath() {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-dm-topic-seed-"));
+    tempDirs.push(dir);
+    return path.join(dir, "sessions.json");
+  }
 
   it("passes threadId to updateLastRoute for DM topics", async () => {
     const ctx = await buildCtx({
@@ -97,5 +129,47 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
 
     // Check that updateLastRoute is undefined for groups
     expect(getUpdateLastRoute()).toBeUndefined();
+  });
+
+  it("seeds first plain DM-topic messages from parent future-thread defaults", async () => {
+    const storePath = await makeStorePath();
+    await updateSessionStore(storePath, (store) => {
+      store["agent:main:telegram:default:direct:1234"] = {
+        sessionId: "parent-direct",
+        updatedAt: Date.now(),
+        futureThreadProviderOverride: "anthropic",
+        futureThreadModelOverride: "claude-sonnet-4-6",
+        futureThreadThinkingLevelOverride: "adaptive",
+      };
+      return null;
+    });
+
+    const cfg = {
+      agents: { defaults: { model: "openai-codex/gpt-5.4", workspace: "/tmp/openclaw" } },
+      channels: { telegram: {} },
+      messages: { groupChat: { mentionPatterns: [] } },
+      session: { store: storePath, dmScope: "per-account-channel-peer" },
+    };
+
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg,
+      message: {
+        chat: { id: 1234, type: "private" },
+        from: { id: 1234, first_name: "Artem" },
+        text: "test",
+        message_thread_id: 55,
+        is_topic_message: true,
+      },
+    });
+
+    expect(ctx).not.toBeNull();
+
+    const store = loadSessionStore(storePath);
+    expect(store["agent:main:telegram:default:direct:1234:thread:1234:55"]).toMatchObject({
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      thinkingLevel: "adaptive",
+    });
+    expect(getLastRecordInboundSessionCall().createIfMissing).toBe(false);
   });
 });
