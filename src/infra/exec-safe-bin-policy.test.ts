@@ -84,6 +84,32 @@ describe("exec safe bin policy wc", () => {
   });
 });
 
+describe("exec safe bin policy product-owned cli defaults", () => {
+  it("allows bounded gog and himalaya positional usage", () => {
+    const gogProfile = SAFE_BIN_PROFILES.gog;
+    const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
+    expect(validateSafeBinArgv(["drive", "search", "test"], gogProfile)).toBe(true);
+    expect(validateSafeBinArgv(["message", "list", "inbox"], himalayaProfile)).toBe(true);
+  });
+
+  it("still blocks gog and himalaya command lines that blow past bounded positionals", () => {
+    const gogProfile = SAFE_BIN_PROFILES.gog;
+    const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
+    expect(
+      validateSafeBinArgv(
+        ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"],
+        gogProfile,
+      ),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(
+        ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"],
+        himalayaProfile,
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("exec safe bin policy token hygiene", () => {
   it("rejects path-like and glob positional tokens after the terminator", () => {
     const grepProfile = SAFE_BIN_PROFILES.grep;

@@ -102,8 +102,16 @@ function supportsSystemRun(commands?: string[]): boolean {
   return Array.isArray(commands) && commands.includes("system.run");
 }
 
+function supportsSystemRunPrepare(commands?: string[]): boolean {
+  return Array.isArray(commands) && commands.includes("system.run.prepare");
+}
+
 function supportsSystemWhich(commands?: string[]): boolean {
   return Array.isArray(commands) && commands.includes("system.which");
+}
+
+function supportsRemoteSkillExecution(commands?: string[]): boolean {
+  return supportsSystemRun(commands) && supportsSystemRunPrepare(commands);
 }
 
 function upsertNode(record: {
@@ -146,7 +154,10 @@ export async function primeRemoteSkillsCache() {
         remoteIp: node.remoteIp,
         bins: node.bins,
       });
-      if (isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands)) {
+      if (
+        isMacPlatform(node.platform, node.deviceFamily) &&
+        supportsRemoteSkillExecution(node.commands)
+      ) {
         sawMac = true;
       }
     }
@@ -258,7 +269,7 @@ export async function refreshRemoteNodeBins(params: {
     return;
   }
   const canWhich = supportsSystemWhich(params.commands);
-  const canRun = supportsSystemRun(params.commands);
+  const canRun = supportsRemoteSkillExecution(params.commands);
   if (!canWhich && !canRun) {
     return;
   }
@@ -315,7 +326,9 @@ export async function refreshRemoteNodeBins(params: {
 
 export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] | undefined {
   const macNodes = [...remoteNodes.values()].filter(
-    (node) => isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands),
+    (node) =>
+      isMacPlatform(node.platform, node.deviceFamily) &&
+      supportsRemoteSkillExecution(node.commands),
   );
   if (macNodes.length === 0) {
     return undefined;

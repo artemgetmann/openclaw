@@ -15,7 +15,7 @@ describe("skills-remote", () => {
       nodeId,
       displayName: "Remote Mac",
       platform: "darwin",
-      commands: ["system.run"],
+      commands: ["system.run", "system.run.prepare"],
     });
     recordRemoteNodeBins(nodeId, [bin]);
 
@@ -62,6 +62,26 @@ describe("skills-remote", () => {
     }
   });
 
+  it("requires system.run.prepare before advertising remote Mac skill execution", () => {
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    try {
+      // A node that cannot prepare approvals is not actually usable for
+      // shell-backed skills, even if it advertises bare system.run.
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Half-capable Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+      recordRemoteNodeBins(nodeId, [bin]);
+
+      expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+    }
+  });
+
   it("aggregates bins and note labels across eligible mac nodes", () => {
     const nodeA = `node-${randomUUID()}`;
     const nodeB = `node-${randomUUID()}`;
@@ -72,14 +92,14 @@ describe("skills-remote", () => {
         nodeId: nodeA,
         displayName: "Mac Studio",
         platform: "darwin",
-        commands: ["system.run"],
+        commands: ["system.run", "system.run.prepare"],
       });
       recordRemoteNodeBins(nodeA, [binA]);
 
       recordRemoteNodeInfo({
         nodeId: nodeB,
         platform: "macOS",
-        commands: ["system.run"],
+        commands: ["system.run", "system.run.prepare"],
       });
       recordRemoteNodeBins(nodeB, [binB]);
 
