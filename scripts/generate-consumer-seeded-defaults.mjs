@@ -108,14 +108,10 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
     ]);
   if (firecrawlApiKey) {
     setNestedValue(seeded, ["env", "vars", "FIRECRAWL_API_KEY"], firecrawlApiKey);
-    // `web_fetch` works without Firecrawl, but when a key is available we want
-    // the consumer bundle to advertise the richer fallback path immediately.
-    // Consumer setup is simpler when the same provider handles both search and
-    // fetch, so prefer Firecrawl for search whenever we seed its key.
+    // Keep Firecrawl ready for richer fetch fallback, but do not override the
+    // default search provider away from Brave when both keys are present.
     setNestedValue(seeded, ["tools", "web", "fetch", "enabled"], true);
     setNestedValue(seeded, ["tools", "web", "fetch", "firecrawl", "enabled"], true);
-    setNestedValue(seeded, ["tools", "web", "search", "enabled"], true);
-    setNestedValue(seeded, ["tools", "web", "search", "provider"], "firecrawl");
     setNestedValue(seeded, ["tools", "web", "search", "firecrawl", "apiKey"], firecrawlApiKey);
   }
 
@@ -128,14 +124,11 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
       ["tools", "web", "search", "brave", "apiKey"],
     ]);
   if (braveApiKey) {
-    // Keep the Brave key available for manual/provider-level overrides, but do
-    // not let it steal the default search path away from Firecrawl when both
-    // keys are seeded into the consumer bundle.
+    // Brave remains the default search path for consumer. Firecrawl stays
+    // available as an optional fetch/search provider when explicitly selected.
     setNestedValue(seeded, ["env", "vars", "BRAVE_API_KEY"], braveApiKey);
-    if (!firecrawlApiKey) {
-      setNestedValue(seeded, ["tools", "web", "search", "enabled"], true);
-      setNestedValue(seeded, ["tools", "web", "search", "provider"], "brave");
-    }
+    setNestedValue(seeded, ["tools", "web", "search", "enabled"], true);
+    setNestedValue(seeded, ["tools", "web", "search", "provider"], "brave");
     // Brave keys now live at the shared search-level path. Seeding the old
     // provider-nested location breaks config validation during consumer setup.
     setNestedValue(seeded, ["tools", "web", "search", "apiKey"], braveApiKey);
