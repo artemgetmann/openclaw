@@ -103,10 +103,9 @@ function compileSafeBinProfiles(
 }
 
 export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = {
-  // Product-owned CLIs: treat them as explicit trusted tool surfaces once the
-  // user/runtime opted them into tools.exec.safeBins. These binaries are the
-  // point of the workflow, so forcing a second per-bin profile definition just
-  // makes them look "blocked" even when the runtime is configured correctly.
+  // Product-owned CLIs: once the runtime opted them into safeBins, they should
+  // behave like explicit trusted tool surfaces instead of requiring redundant
+  // per-bin profile config just to stop looking blocked.
   gog: {
     maxPositional: 8,
   },
