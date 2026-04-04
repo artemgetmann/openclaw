@@ -45,13 +45,12 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
     placeholder: "fc-...",
     signupUrl: "https://www.firecrawl.dev/",
     docsUrl: "https://docs.openclaw.ai/tools/firecrawl",
-    // Keep Firecrawl first so fork main defaults to it across auto-detect and setup flows.
-    autoDetectOrder: 5,
+    autoDetectOrder: 60,
     getCredentialValue: getScopedCredentialValue,
     setCredentialValue: setScopedCredentialValue,
     createTool: (ctx) => ({
       description:
-        "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. When you answer with these results, cite the source URLs inline or include a short Sources list. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
+        "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
       parameters: GenericFirecrawlSearchSchema,
       execute: async (args) =>
         await runFirecrawlSearch({
