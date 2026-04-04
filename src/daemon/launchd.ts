@@ -326,6 +326,23 @@ function writeLaunchAgentActionLine(
   }
 }
 
+function writeLaunchAgentCommandOutput(
+  stdout: NodeJS.WritableStream,
+  output: string | null | undefined,
+): void {
+  const text = output?.trim();
+  if (!text) {
+    return;
+  }
+  try {
+    stdout.write(`${text}\n`);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+      throw err;
+    }
+  }
+}
+
 async function bootstrapLaunchAgentOrThrow(params: {
   domain: string;
   serviceTarget: string;
@@ -595,14 +612,87 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   );
 }
 
-export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
-  assertCanonicalSharedLaunchAgentContext({
-    env,
-    action: "LaunchAgent stop",
-  });
-  await bootoutSharedGatewayWatchdogLaunchAgent(env);
+function isSharedMainLaunchAgent(env: GatewayServiceEnv): boolean {
+  return isDefaultSharedLaunchAgentTarget(env) && Boolean(resolveCanonicalMainRepoRoot(env));
+}
+
+function resolveSharedMainExpectedRuntime(env: GatewayServiceEnv): string | null {
+  const canonicalMainRepo = resolveCanonicalMainRepoRoot(env);
+  if (!canonicalMainRepo) {
+    return null;
+  }
+  return path.join(canonicalMainRepo, "dist", "index.js");
+}
+
+async function sharedMainLaunchAgentLooksHealthy(env: GatewayServiceEnv): Promise<boolean> {
+  // Shared-main restart is only safe on the raw launchctl fast path when the
+  // running service still looks like the canonical runtime. Otherwise we drop
+  // into the stronger rebuild/reinstall recovery flow instead of surfacing a
+  // useless launchctl error from a broken-build window.
+  if (!isSharedMainLaunchAgent(env)) {
+    return true;
+  }
+
+  const expectedRuntime = resolveSharedMainExpectedRuntime(env);
+  if (!expectedRuntime || !fssync.existsSync(expectedRuntime)) {
+    return false;
+  }
+
+  const runtime = await readLaunchAgentRuntime(env).catch(() => ({ status: "unknown" as const }));
+  if (runtime.status !== "running") {
+    return false;
+  }
+
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
+  const printed = await execLaunchctl(["print", `${domain}/${label}`]).catch(() => null);
+  if (!printed || printed.code !== 0) {
+    return false;
+  }
+
+  return (printed.stdout || printed.stderr).includes(expectedRuntime);
+}
+
+async function runSharedMainLaunchAgentRecovery(args: {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  const canonicalMainRepo = resolveCanonicalMainRepoRoot(args.env);
+  if (!canonicalMainRepo) {
+    throw new Error(
+      "shared LaunchAgent recovery failed: canonical main checkout could not be resolved",
+    );
+  }
+
+  const scriptPath = path.join(canonicalMainRepo, "scripts", "gateway-recover-main.sh");
+  if (!fssync.existsSync(scriptPath)) {
+    throw new Error(`shared LaunchAgent recovery failed: missing recovery script at ${scriptPath}`);
+  }
+
+  // Run the existing deterministic recovery script from the canonical main
+  // checkout so restart can rebuild/reinstall the shared service instead of
+  // relying on launchctl to resurrect a broken runtime in place.
+  const recovery = await execFileUtf8("/bin/bash", [scriptPath], {
+    cwd: canonicalMainRepo,
+    env: { ...process.env, ...args.env, OPENCLAW_MAIN_REPO: canonicalMainRepo },
+  });
+  writeLaunchAgentCommandOutput(args.stdout, recovery.stdout);
+  writeLaunchAgentCommandOutput(args.stdout, recovery.stderr);
+  if (recovery.code !== 0) {
+    const detail = [recovery.stderr, recovery.stdout].filter(Boolean).join("\n").trim();
+    throw new Error(`shared LaunchAgent recovery failed: ${detail || "unknown error"}`);
+  }
+}
+
+export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
+  assertCanonicalSharedLaunchAgentContext({
+    env: serviceEnv,
+    action: "LaunchAgent stop",
+  });
+  await bootoutSharedGatewayWatchdogLaunchAgent(serviceEnv);
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
@@ -715,6 +805,13 @@ export async function restartLaunchAgent({
     return { outcome: "scheduled" };
   }
 
+  if (!(await sharedMainLaunchAgentLooksHealthy(serviceEnv))) {
+    await runSharedMainLaunchAgentRecovery({ env: serviceEnv, stdout });
+    writeLaunchAgentActionLine(stdout, "Recovered LaunchAgent", serviceTarget);
+    await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
+    return { outcome: "completed" };
+  }
+
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
   if (cleanupPort !== null) {
     cleanStaleGatewayProcessesSync(cleanupPort);
@@ -728,6 +825,12 @@ export async function restartLaunchAgent({
   }
 
   if (!isLaunchctlNotLoaded(start)) {
+    if (isSharedMainLaunchAgent(serviceEnv)) {
+      await runSharedMainLaunchAgentRecovery({ env: serviceEnv, stdout });
+      writeLaunchAgentActionLine(stdout, "Recovered LaunchAgent", serviceTarget);
+      await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
+      return { outcome: "completed" };
+    }
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
 

@@ -21,11 +21,15 @@ import {
 
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
+  bashCalls: [] as string[][],
   listOutput: "",
   printOutput: "",
   bootstrapError: "",
   kickstartError: "",
   kickstartFailuresRemaining: 0,
+  recoveryStdout: "",
+  recoveryStderr: "",
+  recoveryCode: 0,
   dirs: new Set<string>(),
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
@@ -80,6 +84,14 @@ function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
 
 vi.mock("./exec-file.js", () => ({
   execFileUtf8: vi.fn(async (file: string, args: string[]) => {
+    if (file !== "launchctl" && file !== "cmd.exe") {
+      state.bashCalls.push(args);
+      return {
+        stdout: state.recoveryStdout,
+        stderr: state.recoveryStderr,
+        code: state.recoveryCode,
+      };
+    }
     const call = normalizeLaunchctlArgs(file, args);
     state.launchctlCalls.push(call);
     if (call[0] === "list") {
@@ -176,11 +188,15 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 beforeEach(() => {
   state.launchctlCalls.length = 0;
+  state.bashCalls.length = 0;
   state.listOutput = "";
   state.printOutput = "";
   state.bootstrapError = "";
   state.kickstartError = "";
   state.kickstartFailuresRemaining = 0;
+  state.recoveryStdout = "";
+  state.recoveryStderr = "";
+  state.recoveryCode = 0;
   state.dirs.clear();
   state.dirModes.clear();
   state.files.clear();
@@ -300,6 +316,18 @@ describe("launchd install", () => {
       HOME: "/Users/test",
       OPENCLAW_PROFILE: "default",
     };
+  }
+
+  function writeCanonicalMainFixture(root: string): void {
+    fs.mkdirSync(path.join(root, "dist"), { recursive: true });
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    fs.writeFileSync(path.join(root, "dist", "index.js"), "console.log('ok');\n", "utf8");
+    fs.writeFileSync(
+      path.join(root, "scripts", "gateway-recover-main.sh"),
+      "#!/usr/bin/env bash\n",
+      "utf8",
+    );
   }
 
   function resolveWatchdogPlistPath(env: Record<string, string | undefined>): string {
@@ -446,6 +474,7 @@ describe("launchd install", () => {
     expect(result).toEqual({ outcome: "completed" });
     expect(kickstartCalls).toHaveLength(2);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
+    expect(state.bashCalls).toEqual([]);
   });
 
   it("surfaces the original kickstart failure when the service is still loaded", async () => {
@@ -462,6 +491,86 @@ describe("launchd install", () => {
 
     expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
+    expect(state.bashCalls).toEqual([]);
+  });
+
+  it("uses shared recovery when canonical main is already unhealthy before restart", async () => {
+    const canonicalMain = makeTempDir();
+    writeCanonicalMainFixture(canonicalMain);
+    const resolvedCanonicalMain = fs.realpathSync.native(canonicalMain);
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_MAIN_REPO: canonicalMain,
+    };
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(canonicalMain);
+    state.printOutput = "state = waiting\npid = 0\n";
+    state.recoveryStdout = "recovered shared main\n";
+
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+
+    const result = await restartLaunchAgent({
+      env,
+      stdout,
+    });
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(
+      state.launchctlCalls.some(
+        (call) => call[0] === "kickstart" && call.includes("gui/501/ai.openclaw.gateway"),
+      ),
+    ).toBe(false);
+    expect(state.bashCalls).toHaveLength(1);
+    expect(state.bashCalls[0]?.[0]).toBe(
+      path.join(resolvedCanonicalMain, "scripts", "gateway-recover-main.sh"),
+    );
+    expect(output).toContain("recovered shared main");
+    expect(output).toContain("Recovered LaunchAgent");
+  });
+
+  it("uses shared recovery when shared main kickstart fails while service is still loaded", async () => {
+    const canonicalMain = makeTempDir();
+    writeCanonicalMainFixture(canonicalMain);
+    const resolvedCanonicalMain = fs.realpathSync.native(canonicalMain);
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_MAIN_REPO: canonicalMain,
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(canonicalMain);
+    state.printOutput = [
+      "state = running",
+      "pid = 4242",
+      `program = ${path.join(resolvedCanonicalMain, "dist", "index.js")}`,
+    ].join("\n");
+    state.kickstartError = "Input/output error";
+    state.kickstartFailuresRemaining = 1;
+    state.recoveryStdout = "recovered after failed kickstart\n";
+
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+
+    const result = await restartLaunchAgent({
+      env,
+      stdout,
+    });
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789);
+    expect(state.launchctlCalls).toContainEqual([
+      "kickstart",
+      "-k",
+      `gui/${typeof process.getuid === "function" ? process.getuid() : 501}/ai.openclaw.gateway`,
+    ]);
+    expect(state.bashCalls).toHaveLength(1);
+    expect(output).toContain("recovered after failed kickstart");
+    expect(output).toContain("Recovered LaunchAgent");
   });
 
   it("hands restart off to a detached helper when invoked from the current LaunchAgent", async () => {
