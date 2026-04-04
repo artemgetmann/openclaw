@@ -103,6 +103,15 @@ function compileSafeBinProfiles(
 }
 
 export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = {
+  // Product-owned CLIs: once the runtime opted them into safeBins, they should
+  // behave like explicit trusted tool surfaces instead of requiring redundant
+  // per-bin profile config just to stop looking blocked.
+  gog: {
+    maxPositional: 8,
+  },
+  himalaya: {
+    maxPositional: 8,
+  },
   jq: {
     maxPositional: 1,
     allowedValueFlags: ["--arg", "--argjson", "--argstr"],
