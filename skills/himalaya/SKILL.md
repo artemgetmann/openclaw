@@ -42,6 +42,8 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 
 - Prefer direct safe-bin invocation first: `himalaya account list`,
   `himalaya folder list`, then `himalaya envelope list`.
+- If you wrap `himalaya` through `openclaw nodes run`, insert `--` before the
+  child argv so Himalaya keeps its own flags.
 - Ban dumb shell chaining, pipes, and redirection around `himalaya`.
 - Allow node execution when the runtime supports it. Missing
   `system.run.prepare` alone does not make Himalaya execution invalid.

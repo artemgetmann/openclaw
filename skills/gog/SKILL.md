@@ -30,6 +30,8 @@ Automation Rule
 
 - Prefer direct safe-bin invocation first: `gog auth list`, then a read-only
   probe like `gog gmail search`, `gog drive search`, or `gog calendar events`.
+- If you wrap `gog` through `openclaw nodes run`, insert `--` before the child
+  argv so `gog` keeps its own flags.
 - Ban dumb shell chaining, pipes, and redirection around `gog`.
 - Allow node execution when the runtime supports it. Missing
   `system.run.prepare` alone is not a valid reason to mark `gog` execution as
