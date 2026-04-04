@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import {
   isInterpreterLikeSafeBin,
   listInterpreterLikeSafeBins,
@@ -163,10 +164,76 @@ describe("exec safe-bin runtime policy", () => {
     });
 
     expect(onWarning).toHaveBeenCalledWith(
-      expect.stringContaining("consumer runtime cleanroom directory"),
+      expect.stringContaining("ignoring stale consumer runtime cleanroom directory"),
     );
     expect(onWarning).toHaveBeenCalledWith(
-      expect.stringContaining("worktree-scoped runtime directory"),
+      expect.stringContaining("ignoring stale worktree-scoped runtime directory"),
     );
+  });
+
+  it("drops suspicious trusted dirs that do not belong to the active runtime roots", () => {
+    const onWarning = vi.fn();
+    const policy = withEnv(
+      {
+        OPENCLAW_STATE_DIR: "/Users/founder/.openclaw",
+        OPENCLAW_CONFIG_PATH: "/Users/founder/.openclaw/openclaw.json",
+      },
+      () =>
+        resolveExecSafeBinRuntimePolicy({
+          global: {
+            safeBinTrustedDirs: [
+              "/Users/founder/.openclaw/bin",
+              "/Users/founder/Library/Application Support/OpenClaw Consumer/.openclaw/bin",
+              "/Users/founder/Programming_Projects/openclaw/.worktrees/smoke/.openclaw/bin",
+            ],
+          },
+          onWarning,
+        }),
+    );
+
+    expect(policy.trustedSafeBinDirs.has(path.resolve("/Users/founder/.openclaw/bin"))).toBe(true);
+    expect(
+      policy.trustedSafeBinDirs.has(
+        path.resolve("/Users/founder/Library/Application Support/OpenClaw Consumer/.openclaw/bin"),
+      ),
+    ).toBe(false);
+    expect(
+      policy.trustedSafeBinDirs.has(
+        path.resolve("/Users/founder/Programming_Projects/openclaw/.worktrees/smoke/.openclaw/bin"),
+      ),
+    ).toBe(false);
+    expect(onWarning).toHaveBeenCalledWith(
+      expect.stringContaining("does not belong to the active runtime roots"),
+    );
+  });
+
+  it("keeps suspicious trusted dirs when they belong to the active isolated runtime", () => {
+    const onWarning = vi.fn();
+    const policy = withEnv(
+      {
+        OPENCLAW_STATE_DIR:
+          "/Users/founder/Programming_Projects/openclaw/.worktrees/founder-fix/.openclaw",
+        OPENCLAW_CONFIG_PATH:
+          "/Users/founder/Programming_Projects/openclaw/.worktrees/founder-fix/.openclaw/openclaw.json",
+      },
+      () =>
+        resolveExecSafeBinRuntimePolicy({
+          global: {
+            safeBinTrustedDirs: [
+              "/Users/founder/Programming_Projects/openclaw/.worktrees/founder-fix/.openclaw/bin",
+            ],
+          },
+          onWarning,
+        }),
+    );
+
+    expect(
+      policy.trustedSafeBinDirs.has(
+        path.resolve(
+          "/Users/founder/Programming_Projects/openclaw/.worktrees/founder-fix/.openclaw/bin",
+        ),
+      ),
+    ).toBe(true);
+    expect(onWarning).not.toHaveBeenCalled();
   });
 });

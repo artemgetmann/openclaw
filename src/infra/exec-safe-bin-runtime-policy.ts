@@ -1,3 +1,5 @@
+import path from "node:path";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSafeBins } from "./exec-approvals-allowlist.js";
 import {
   normalizeSafeBinProfileFixtures,
@@ -104,6 +106,7 @@ export function resolveMergedSafeBinProfileFixtures(params: {
 }
 
 export function resolveExecSafeBinRuntimePolicy(params: {
+  env?: NodeJS.ProcessEnv;
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;
   onWarning?: (message: string) => void;
@@ -129,21 +132,38 @@ export function resolveExecSafeBinRuntimePolicy(params: {
     ...normalizeTrustedSafeBinDirs(params.global?.safeBinTrustedDirs),
     ...normalizeTrustedSafeBinDirs(params.local?.safeBinTrustedDirs),
   ];
+  const runtimeRoots = resolveExecSafeBinRuntimeRoots(params.env);
+  const retainedExplicitTrustedSafeBinDirs: string[] = [];
+  const ignoredTrustedSafeBinDirWarnings: string[] = [];
+  for (const entry of explicitTrustedSafeBinDirs) {
+    const suspicious = classifySuspiciousTrustedSafeBinDir(entry);
+    if (!suspicious) {
+      retainedExplicitTrustedSafeBinDirs.push(entry);
+      continue;
+    }
+
+    // Founder/main runtimes should not continue trusting consumer/worktree
+    // wrapper bins forever just because an old config carried them over. Keep
+    // suspicious dirs only when they live inside the active runtime's own
+    // state/config roots; otherwise treat them as stale cross-runtime poison.
+    if (isDirWithinAnyRuntimeRoot(suspicious.dir, runtimeRoots)) {
+      retainedExplicitTrustedSafeBinDirs.push(entry);
+      continue;
+    }
+
+    ignoredTrustedSafeBinDirWarnings.push(
+      `exec: ignoring stale ${suspicious.reason} '${suspicious.dir}' because it does not belong to the active runtime roots (${runtimeRoots.join(", ")}).`,
+    );
+  }
   const trustedSafeBinDirs = getTrustedSafeBinDirs({
-    extraDirs: explicitTrustedSafeBinDirs,
+    extraDirs: retainedExplicitTrustedSafeBinDirs,
   });
   const writableTrustedSafeBinDirs = listWritableExplicitTrustedSafeBinDirs(
-    explicitTrustedSafeBinDirs,
+    retainedExplicitTrustedSafeBinDirs,
   );
   if (params.onWarning) {
-    for (const entry of explicitTrustedSafeBinDirs) {
-      const suspicious = classifySuspiciousTrustedSafeBinDir(entry);
-      if (!suspicious) {
-        continue;
-      }
-      params.onWarning(
-        `exec: safeBinTrustedDirs includes ${suspicious.reason} '${suspicious.dir}'; remove stale cross-runtime trust and point the active runtime at its own wrapper/bin directory.`,
-      );
+    for (const message of ignoredTrustedSafeBinDirWarnings) {
+      params.onWarning(message);
     }
     for (const hit of writableTrustedSafeBinDirs) {
       const scope =
@@ -165,4 +185,20 @@ export function resolveExecSafeBinRuntimePolicy(params: {
     unprofiledInterpreterSafeBins: listInterpreterLikeSafeBins(unprofiledSafeBins),
     writableTrustedSafeBinDirs,
   };
+}
+
+function resolveExecSafeBinRuntimeRoots(env: NodeJS.ProcessEnv = process.env): string[] {
+  const stateDir = path.resolve(resolveStateDir(env));
+  const configPath = path.resolve(resolveConfigPath(env, stateDir));
+  return Array.from(new Set([stateDir, path.dirname(configPath)])).toSorted();
+}
+
+function isDirWithinAnyRuntimeRoot(dir: string, runtimeRoots: readonly string[]): boolean {
+  const resolvedDir = path.resolve(dir);
+  return runtimeRoots.some((root) => isSameOrChildPath(resolvedDir, root));
+}
+
+function isSameOrChildPath(candidate: string, root: string): boolean {
+  const resolvedRoot = path.resolve(root);
+  return candidate === resolvedRoot || candidate.startsWith(`${resolvedRoot}${path.sep}`);
 }
