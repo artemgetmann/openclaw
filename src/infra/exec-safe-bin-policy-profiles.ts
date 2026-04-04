@@ -108,9 +108,97 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
   // per-bin profile config just to stop looking blocked.
   gog: {
     maxPositional: 8,
+    // gog is a first-party product CLI in this fork. Keep the profile broad
+    // enough for auth/list/search flows and common writes, but still reject
+    // path-like/glob values via the shared validator so filesystem handoffs do
+    // not silently slip through safe-bin mode.
+    allowedFlags: [
+      "--json",
+      "--plain",
+      "--results-only",
+      "--no-input",
+      "--verbose",
+      "--manual",
+      "--remote",
+      "--readonly",
+      "--force-consent",
+      "--help",
+      "--version",
+    ],
+    allowedValueFlags: [
+      "--account",
+      "--client",
+      "--access-token",
+      "--enable-commands",
+      "--select",
+      "--services",
+      "--step",
+      "--listen-addr",
+      "--redirect-host",
+      "--redirect-uri",
+      "--auth-url",
+      "--timeout",
+      "--drive-scope",
+      "--gmail-scope",
+      "--extra-scopes",
+      "--max",
+      "--from",
+      "--to",
+      "--summary",
+      "--event-color",
+      "--subject",
+      "--body",
+      "--body-file",
+      "--body-html",
+      "--email",
+      "--out",
+      "--reply-to-message-id",
+      "--session",
+      "--values-json",
+      "--input",
+      "--insert",
+      "--format",
+    ],
   },
   himalaya: {
+    // Himalaya is a first-class mail tool for this product. The normal-mode
+    // profile needs to cover real account/folder/read flows from the skill, but
+    // still reject path/glob operands so config-file and download-directory
+    // handoffs keep requiring explicit full-permissions approval.
     maxPositional: 8,
+    allowedFlags: ["--all", "--full", "--help", "--version"],
+    allowedValueFlags: [
+      "--account",
+      "--folder",
+      "--page",
+      "--page-size",
+      "--output",
+      "--dir",
+      "-H",
+      "-a",
+    ],
+  },
+  wacli: {
+    // wacli powers search/sync/send flows directly from chat. Keep direct CLI
+    // usage broad enough for auth/list/search/send-text, while the shared
+    // validator continues to block shell wrappers plus path-like file handoffs.
+    maxPositional: 8,
+    allowedFlags: ["--follow", "--json"],
+    allowedValueFlags: [
+      "--after",
+      "--before",
+      "--caption",
+      "--chat",
+      "--count",
+      "--file",
+      "--limit",
+      "--message",
+      "--query",
+      "--requests",
+      "--session",
+      "--target",
+      "--to",
+    ],
   },
   jq: {
     maxPositional: 1,

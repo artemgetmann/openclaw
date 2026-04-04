@@ -380,6 +380,33 @@ describe("exec approvals safe bins", () => {
     expect(deny).toBe(false);
   });
 
+  it("allows direct product-owned CLIs when the runtime opts them into safeBins", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const evaluate = (argv: string[]) =>
+      isSafeBinUsage({
+        argv,
+        resolution: {
+          rawExecutable: argv[0],
+          resolvedPath: `/usr/bin/${argv[0]}`,
+          executableName: argv[0],
+        },
+        safeBins: normalizeSafeBins(["gog", "himalaya", "wacli"]),
+      });
+
+    expect(evaluate(["gog", "gmail", "search", "newer_than:7d", "--max", "10", "--json"])).toBe(
+      true,
+    );
+    expect(evaluate(["himalaya", "envelope", "list", "-a", "work", "--folder", "INBOX"])).toBe(
+      true,
+    );
+    expect(evaluate(["wacli", "messages", "search", "invoice", "--limit", "20", "--json"])).toBe(
+      true,
+    );
+    expect(evaluate(["bash", "-lc", "gog auth add test@example.com"])).toBe(false);
+  });
+
   it("blocks sort output flags independent of file existence", () => {
     if (process.platform === "win32") {
       return;
