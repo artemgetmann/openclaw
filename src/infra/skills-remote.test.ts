@@ -66,8 +66,8 @@ describe("skills-remote", () => {
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     try {
-      // A node that cannot prepare approvals is not actually usable for
-      // shell-backed skills, even if it advertises bare system.run.
+      // A node without approval preparation cannot safely execute shell-backed
+      // skills, even if it advertises bare system.run.
       recordRemoteNodeInfo({
         nodeId,
         displayName: "Half-capable Mac",
