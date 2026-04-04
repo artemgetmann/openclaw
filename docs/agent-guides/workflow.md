@@ -13,12 +13,12 @@
 - `scripts/new-worktree.sh` now bootstraps fresh lanes by default with a per-worktree dependency install/build. It must not symlink `node_modules` or `ui/node_modules` from another checkout because that leaks cross-worktree package state into clean-room validation.
 - `scripts/new-worktree.sh` supports explicit lane modes:
   - `--mode clean` is the default and keeps the current clean-room behavior for consumer E2E, runtime-sensitive work, or anything that must prove isolation honestly.
-  - `--mode warm` creates the worktree and dev launch env, but skips expensive runtime/bootstrap steps so coding/debugging lanes come up faster.
+  - `--mode warm` creates the worktree and dev launch env, installs JS dependencies in-place, and skips the slower build step so coding/debugging lanes come up faster.
 - Warm mode is intentionally conservative:
   - it does not reuse runtime/auth/session/browser state
   - it does not symlink or copy `node_modules`
   - it does not share Swift `.build` artifacts
-  - if you need a faster first compile, use `bash scripts/prewarm-worktree.sh --root <worktree> --macos` after creation instead of leaking state between lanes
+  - if you need the heavier macOS/Swift warm-up, use `bash scripts/prewarm-worktree.sh --root <worktree> --macos` after creation instead of leaking state between lanes
 - Worktree/bootstrap/consumer runtime scripts pin to the repo-validated Node version from `.node-version` / `.nvmrc` instead of trusting the shell-default `node`. If that exact version is missing, install it first or point `OPENCLAW_NODE_BIN` at a binary with the same version.
 - Use upstream `https://github.com/openclaw/openclaw` only when the user explicitly asks for upstream review, triage, or PR flow.
 - `consumer` is legacy. Do not target new PRs there unless the user explicitly asks.
@@ -37,7 +37,7 @@
 - Practical rule:
   - important multi-hour, multi-turn, or PR-bound work belongs under `.worktrees/`
   - use `--mode clean` for runtime/E2E lanes where state honesty matters
-  - use `--mode warm` for faster coding/debugging lanes when you want a fresh branch without paying the full bootstrap tax up front
+  - use `--mode warm` for faster coding/debugging lanes when you want a fresh branch without paying the full build tax up front
   - do not create new durable lanes under `.codex/worktrees/` unless the user explicitly asks for that path
   - if you inherit a non-trivial lane under `.codex/worktrees/`, checkpoint aggressively and print proof lines before surgery
 - When state matters, print:

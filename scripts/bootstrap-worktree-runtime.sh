@@ -76,6 +76,7 @@ openclaw_use_validated_node "$ROOT" >/dev/null || exit 1
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 
 did_work=0
+build_skipped=0
 
 if [[ ! -d "$ROOT/node_modules" ]]; then
   if [[ "$SKIP_INSTALL" == "1" ]]; then
@@ -89,15 +90,20 @@ fi
 
 if [[ ! -f "$ROOT/dist/index.js" ]]; then
   if [[ "$SKIP_BUILD" == "1" ]]; then
-    warn "dist/index.js missing in $ROOT but build step was skipped."
-    exit 2
+    log "Skipping build step in $ROOT because --skip-build was requested"
+    build_skipped=1
+  else
+    log "Bootstrapping worktree build artifacts in $ROOT"
+    openclaw_run_repo_pnpm "$ROOT" build
+    did_work=1
   fi
-  log "Bootstrapping worktree build artifacts in $ROOT"
-  openclaw_run_repo_pnpm "$ROOT" build
-  did_work=1
 fi
 
 if [[ "$did_work" == "0" ]]; then
-  log "Worktree runtime bootstrap already satisfied for $ROOT"
+  if [[ "$build_skipped" == "1" ]]; then
+    log "Worktree runtime bootstrap dependency state already satisfied for $ROOT (build skipped)"
+  else
+    log "Worktree runtime bootstrap already satisfied for $ROOT"
+  fi
   log "Validated node: $VALIDATED_NODE_BIN"
 fi
