@@ -42,6 +42,9 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 
 - Prefer direct safe-bin invocation first: `himalaya account list`,
   `himalaya folder list`, then `himalaya envelope list`.
+- In Normal permissions mode, direct `himalaya ...` commands are allowed. The
+  default restriction is on shell wrappers (`bash -lc`, `sh -c`), pipes,
+  chaining, and redirection.
 - If you wrap `himalaya` through `openclaw nodes run`, insert `--` before the
   child argv so Himalaya keeps its own flags.
 - Ban dumb shell chaining, pipes, and redirection around `himalaya`.

@@ -6,6 +6,11 @@ import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
+  applyPermissionModeToSessionEntry,
+  resolvePermissionMode,
+  type PermissionMode,
+} from "../../infra/permissions-mode.js";
+import {
   isLocalRestartScriptAvailable,
   scheduleGatewaySigusr1Restart,
   triggerOpenClawRestart,
@@ -343,6 +348,81 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
   return {
     shouldContinue: false,
     reply: { text: `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.` },
+  };
+};
+
+export const handlePermissionsCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== "/permissions" && !normalized.startsWith("/permissions ")) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /permissions from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  const rawArgs =
+    normalized === "/permissions"
+      ? ""
+      : normalized.slice("/permissions".length).trim().toLowerCase();
+  const surfaceChannel = resolveCommandSurfaceChannel({
+    ctx: params.ctx,
+    command: params.command,
+  });
+  const current = resolvePermissionMode({
+    channel: params.sessionEntry?.channel ?? params.sessionEntry?.lastChannel ?? surfaceChannel,
+    execSecurity: params.sessionEntry?.execSecurity,
+    execAsk: params.sessionEntry?.execAsk,
+  });
+
+  if (!rawArgs || rawArgs === "status") {
+    const currentDetails =
+      current.kind === "custom"
+        ? ` security=${current.execSecurity ?? "unset"} ask=${current.execAsk ?? "unset"}`
+        : "";
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `🔐 Permissions: ${current.label}.${currentDetails ? currentDetails : ""} ${current.summary}`,
+      },
+    };
+  }
+
+  let nextMode: PermissionMode | null = null;
+  if (rawArgs === "normal") {
+    nextMode = "normal";
+  } else if (rawArgs === "full" || rawArgs === "full-permissions" || rawArgs === "yolo") {
+    nextMode = "full";
+  }
+  if (!nextMode) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Usage: /permissions status|normal|full",
+      },
+    };
+  }
+
+  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+    applyPermissionModeToSessionEntry(params.sessionEntry, nextMode);
+    await persistSessionEntry(params);
+  }
+
+  const next = resolvePermissionMode({
+    channel: params.sessionEntry?.channel ?? params.sessionEntry?.lastChannel ?? surfaceChannel,
+    execSecurity: params.sessionEntry?.execSecurity,
+    execAsk: params.sessionEntry?.execAsk,
+  });
+  return {
+    shouldContinue: false,
+    reply: {
+      text: `🔐 Permissions set to ${next.label}. ${next.summary}`,
+    },
   };
 };
 

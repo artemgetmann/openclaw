@@ -210,6 +210,17 @@ describe("commands registry", () => {
     expect(modeArg?.choices).toEqual(["status", "on", "off"]);
   });
 
+  it("keeps permissions mode available as a text-only options command", () => {
+    const permissions = listChatCommands().find((command) => command.key === "permissions");
+    expect(permissions).toMatchObject({
+      scope: "text",
+      textAliases: ["/permissions"],
+      category: "options",
+    });
+    const modeArg = permissions?.args?.find((arg) => arg.name === "mode");
+    expect(modeArg?.choices).toEqual(["status", "normal", "full"]);
+  });
+
   it("detects known text commands", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/commands")).toBe(true);
