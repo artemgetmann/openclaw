@@ -47,6 +47,55 @@ Setup routing
   plain product language instead of burning turns on unrelated command retries.
 - Keep the CLI setup path opt-in. If the user explicitly wants the terminal
   flow, you can execute the normal `gog auth ...` commands yourself.
+- Prefer direct safe-bin invocation first: `gog auth list`, then a read-only
+  probe like `gog gmail search`, `gog drive search`, or `gog calendar events`.
+- In Normal permissions mode, direct `gog ...` commands are allowed. The
+  default restriction is on shell wrappers (`bash -lc`, `sh -c`), pipes,
+  chaining, and redirection.
+- If the current runtime already has `gog`, stay local first. Do not bounce to
+  a paired node unless local `gog` is actually unavailable.
+- If you wrap `gog` through `openclaw nodes run`, insert `--` before the child
+  argv so `gog` keeps its own flags.
+- Ban dumb shell chaining, pipes, and redirection around `gog`.
+- Allow node execution when the runtime supports it. Missing
+  `system.run.prepare` alone is not a valid reason to mark `gog` execution as
+  blocked.
+- If setup is missing, do not dump raw CLI setup commands back to a consumer.
+  Treat it as a setup-needed state and use the shared `consumer-setup` skill.
+
+Setup Routing
+
+- If `gog` is missing OAuth credentials, has no authorized account, or the
+  requested account/surfaces are not ready, route setup through
+  `consumer-setup`.
+- Use the raw CLI steps below only when you are the one performing setup or the
+  user explicitly asks for the terminal path.
+- For local browser OAuth, prefer a direct safe-bin invocation first:
+  `gog auth add <email> --services <csv>`.
+  `gog` can open the browser itself on this Mac, and that path avoids repo-local
+  helper allowlist problems.
+- If repo-local helper execution is denied, fall back to direct `gog auth add`
+  instead of telling the user to use Terminal or detouring to a node.
+- For local consumer OAuth setup, prefer
+  `skills/gog/scripts/gog-auth-local.sh start --email <email> --services <csv>`
+  when the runtime allows repo-local helper scripts and you need resumable
+  polling across turns. It launches `gog auth add` on this Mac in the
+  background so the Google consent screen can open in the local browser while
+  you keep chatting.
+- After starting that helper, tell the user plainly that you opened the Google
+  consent flow in the browser and that they may need to finish the Google
+  approval click there.
+- Poll completion with
+  `skills/gog/scripts/gog-auth-local.sh wait --session <id>` before claiming
+  Google is connected.
+- Once auth completes, verify with `gog auth list` before moving into Gmail,
+  Calendar, Drive, Docs, Sheets, or Contacts actions.
+
+Setup (once)
+
+- `gog auth credentials /path/to/client_secret.json`
+- `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
+- `gog auth list`
 
 Common commands
 

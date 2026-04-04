@@ -629,6 +629,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "permissions",
+      description: "Show or switch chat permissions mode.",
+      textAlias: "/permissions",
+      scope: "text",
+      category: "options",
+      args: [
+        {
+          name: "mode",
+          description: "status, normal, or full",
+          type: "string",
+          choices: ["status", "normal", "full"],
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "reasoning",
       nativeName: "reasoning",
       description: "Toggle reasoning visibility.",

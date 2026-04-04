@@ -128,6 +128,20 @@ explicitly ask for the CLI path.
 - If OAuth/test-user/client setup is the blocker, say that early in plain
   product language. Do not spend several turns debugging around it before
   telling the user what is actually missing.
+- On runtimes where `gog` safe-bin execution is available, prefer a direct
+  `gog auth add <email> --services <csv>` launch first. That path can open the
+  browser itself without telling the user to use Terminal.
+- If Normal permissions block a shell wrapper or helper script, retry the
+  direct command form first. Do not translate that into "go use Terminal"
+  unless the user explicitly asks for the CLI path.
+- If the local runtime can launch the flow itself, say that explicitly:
+  "I opened the Google consent flow in the browser on this Mac. Finish the
+  Google approval there."
+- If the local runtime cannot complete the consent click itself, say what the
+  user must do in the browser. Do not translate that limitation into "go run
+  this in Terminal."
+- Use `skills/gog/scripts/gog-auth-local.sh` only when repo-local helper
+  scripts are allowed and you need resumable polling across turns.
 - Verify with a read-only command such as `gog auth list`, `gog gmail search`,
   or a calendar/list call before creating drafts or events.
 

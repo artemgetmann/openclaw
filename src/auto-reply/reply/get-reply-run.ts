@@ -17,6 +17,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { buildPermissionModePromptHint } from "../../infra/permissions-mode.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -265,11 +266,18 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
+  const permissionModePrompt = buildPermissionModePromptHint({
+    channel:
+      sessionEntry?.channel ?? sessionEntry?.lastChannel ?? ctx.OriginatingChannel ?? ctx.Surface,
+    execSecurity: sessionEntry?.execSecurity,
+    execAsk: sessionEntry?.execAsk,
+  });
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
   const extraSystemPromptParts = [
     inboundMetaPrompt,
+    permissionModePrompt,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
