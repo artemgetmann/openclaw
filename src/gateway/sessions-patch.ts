@@ -19,15 +19,21 @@ import {
 } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import {
+  applyFutureThreadModelDefault,
+  applyFutureThreadThinkingDefault,
+} from "../sessions/future-thread-defaults.js";
 import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
+import { resolveFutureThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
   ErrorCodes,
@@ -82,6 +88,58 @@ function normalizeSubagentControlScope(raw: string): "children" | "none" | undef
     return normalized;
   }
   return undefined;
+}
+
+function syncFutureThreadDefaultsFromPatch(params: {
+  store: Record<string, SessionEntry>;
+  storeKey: string;
+  entry: SessionEntry;
+  patch: SessionsPatchParams;
+  resolvedDefault: { provider: string; model: string };
+}): void {
+  const channelHint = params.entry.channel ?? params.entry.lastChannel;
+  const parentSessionKey = resolveFutureThreadParentSessionKey({
+    sessionKey: params.storeKey,
+    channelHint,
+  });
+  if (!parentSessionKey) {
+    return;
+  }
+
+  // Picker-driven Telegram model/thinking changes must update the same
+  // future-thread defaults as inline /model and /think directives. Without
+  // this, the current thread changes but newly created topics/threads fall
+  // back to defaults, which is exactly the regression the user hit.
+  const { threadId } = parseSessionThreadInfo(params.storeKey);
+  const afterThreadId = params.entry.lastThreadId ?? threadId;
+
+  if ("thinkingLevel" in params.patch) {
+    const nextThinkingLevel = params.entry.thinkingLevel?.trim();
+    if (nextThinkingLevel) {
+      applyFutureThreadThinkingDefault({
+        store: params.store,
+        parentSessionKey,
+        level: nextThinkingLevel,
+        afterThreadId,
+      });
+    }
+  }
+
+  if ("model" in params.patch) {
+    const provider = params.entry.providerOverride ?? params.resolvedDefault.provider;
+    const model = params.entry.modelOverride ?? params.resolvedDefault.model;
+    applyFutureThreadModelDefault({
+      store: params.store,
+      parentSessionKey,
+      selection: {
+        provider,
+        model,
+        isDefault:
+          provider === params.resolvedDefault.provider && model === params.resolvedDefault.model,
+      },
+      afterThreadId,
+    });
+  }
 }
 
 export async function applySessionsPatchToStore(params: {
@@ -458,5 +516,12 @@ export async function applySessionsPatchToStore(params: {
   }
 
   store[storeKey] = next;
+  syncFutureThreadDefaultsFromPatch({
+    store,
+    storeKey,
+    entry: next,
+    patch,
+    resolvedDefault,
+  });
   return { ok: true, entry: next };
 }

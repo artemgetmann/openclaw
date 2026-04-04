@@ -408,4 +408,78 @@ describe("gateway sessions patch", () => {
     expect(entry.providerOverride).toBe("synthetic");
     expect(entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
   });
+
+  test("picker model changes update Telegram future-thread defaults for later topics", async () => {
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const topicSessionKey = "agent:main:telegram:group:-100123:topic:42";
+    const store: Record<string, SessionEntry> = {
+      [parentSessionKey]: {
+        sessionId: "parent-topic",
+        updatedAt: 1,
+      } as SessionEntry,
+      [topicSessionKey]: {
+        sessionId: "topic-42",
+        updatedAt: 2,
+        lastChannel: "telegram",
+        lastThreadId: "42",
+      } as SessionEntry,
+    };
+
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        storeKey: topicSessionKey,
+        patch: { key: topicSessionKey, model: "anthropic/claude-sonnet-4-6" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+        ],
+      }),
+    );
+
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(store[parentSessionKey]?.futureThreadProviderOverride).toBe("anthropic");
+    expect(store[parentSessionKey]?.futureThreadModelOverride).toBe("claude-sonnet-4-6");
+    expect(store[parentSessionKey]?.futureThreadDefaultsHistory).toEqual([
+      expect.objectContaining({
+        afterThreadId: 42,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      }),
+    ]);
+  });
+
+  test("picker thinking changes update Telegram future-thread defaults for later topics", async () => {
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const topicSessionKey = "agent:main:telegram:group:-100123:topic:84";
+    const store: Record<string, SessionEntry> = {
+      [parentSessionKey]: {
+        sessionId: "parent-topic-thinking",
+        updatedAt: 1,
+      } as SessionEntry,
+      [topicSessionKey]: {
+        sessionId: "topic-84",
+        updatedAt: 2,
+        lastChannel: "telegram",
+        lastThreadId: "84",
+      } as SessionEntry,
+    };
+
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        storeKey: topicSessionKey,
+        patch: { key: topicSessionKey, thinkingLevel: "adaptive" },
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("adaptive");
+    expect(store[parentSessionKey]?.futureThreadThinkingLevelOverride).toBe("adaptive");
+    expect(store[parentSessionKey]?.futureThreadDefaultsHistory).toEqual([
+      expect.objectContaining({
+        afterThreadId: 84,
+        thinkingLevelOverride: "adaptive",
+      }),
+    ]);
+  });
 });
