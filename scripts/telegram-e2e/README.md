@@ -124,7 +124,8 @@ Use one source of truth in your main checkout, then copy into each worktree.
    - `pnpm openclaw:local telegram-user send --chat "<chat-id-or-username>" --message "handoff smoke"`
 5. First runtime claim happens on first canonical ensure run:
    - `scripts/telegram-live-runtime.sh ensure`
-   - This auto-claims a tester bot token for the worktree (or hard-fails if none are available).
+   - This auto-claims a tester bot token for the worktree when one is available.
+   - If the pool is exhausted, `ensure` now fails with token-claim diagnostics (`token_claim_reason`, pool counts, reserved counts) instead of pretending runtime startup failed.
    - Pool tokens that are already present in the stable/main Telegram config are treated as reserved and are never claimed by worktree live tests.
 6. For forum-topic probes, prefer the lane-injected `TELEGRAM_BOT_TOKEN` over any stale `TG_BOT_TOKEN` left in `scripts/telegram-e2e/.env.local`.
    - Reason: `scripts/telegram-e2e/.env.local` can lag behind the currently claimed tester bot.
@@ -151,6 +152,7 @@ What it does:
 3. Creates `.worktrees/my-feature` on `codex/my-feature` from that base.
 4. Runs `bash scripts/bootstrap-worktree-telegram.sh`.
 5. Attempts a bounded `scripts/telegram-live-runtime.sh ensure` so worktree creation does not hang for minutes waiting on runtime health.
+   - If no tester token is claimable, bootstrap leaves the worktree usable and tells you to free a lane with `scripts/telegram-live-runtime.sh release`.
 6. Writes `.dev-launch.env` with a deterministic `OPENCLAW_STATE_DIR` and `OPENCLAW_GATEWAY_PORT`.
 
 The script prints proof lines including:
@@ -335,11 +337,13 @@ If your test case depends on plugin behavior, do not use the isolated Telegram l
 
 - current branch
 - current worktree path
+- derived isolated runtime port/path
 - assigned bot username/id
 - token claim count across git worktrees
 
-It fails fast if the same Telegram bot token is claimed by more than one
-worktree.
+It is read-only. It no longer kills/restarts the shared `18789` runtime from a
+feature worktree. It fails fast if the Telegram tester lane is missing a token,
+missing its isolated runtime, or double-claims a tester bot.
 
 ## DM probe helper
 
