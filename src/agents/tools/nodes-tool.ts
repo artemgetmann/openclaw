@@ -17,7 +17,10 @@ import {
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
+import {
+  buildLocalPreparedSystemRunPayload,
+  parsePreparedSystemRunPayload,
+} from "../../infra/system-run-approval-context.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -618,6 +621,9 @@ export function createNodesTool(options?: {
             const supportsSystemRun = Array.isArray(nodeInfo?.commands)
               ? nodeInfo?.commands?.includes("system.run")
               : false;
+            const supportsSystemRunPrepare = Array.isArray(nodeInfo?.commands)
+              ? nodeInfo.commands.includes("system.run.prepare")
+              : true;
             if (!supportsSystemRun) {
               throw new Error(
                 "system.run requires a companion app or node host; the selected node does not support system.run.",
@@ -643,25 +649,35 @@ export function createNodesTool(options?: {
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
                 : undefined;
-            const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
-              "node.invoke",
-              gatewayOpts,
-              {
-                nodeId,
-                command: "system.run.prepare",
-                params: {
+            const prepared = supportsSystemRunPrepare
+              ? parsePreparedSystemRunPayload(
+                  (
+                    await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
+                      nodeId,
+                      command: "system.run.prepare",
+                      params: {
+                        command,
+                        cwd,
+                        agentId,
+                        sessionKey,
+                      },
+                      timeoutMs: invokeTimeoutMs,
+                      idempotencyKey: crypto.randomUUID(),
+                    })
+                  )?.payload,
+                )
+              : buildLocalPreparedSystemRunPayload({
                   command,
                   cwd,
                   agentId,
                   sessionKey,
-                },
-                timeoutMs: invokeTimeoutMs,
-                idempotencyKey: crypto.randomUUID(),
-              },
-            );
-            const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+                });
             if (!prepared) {
-              throw new Error("invalid system.run.prepare response");
+              throw new Error(
+                supportsSystemRunPrepare
+                  ? "invalid system.run.prepare response"
+                  : "invalid local system.run plan",
+              );
             }
             const runParams = {
               command: prepared.plan.argv,

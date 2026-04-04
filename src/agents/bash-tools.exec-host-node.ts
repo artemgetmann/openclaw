@@ -10,7 +10,10 @@ import {
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
-import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
+import {
+  buildLocalPreparedSystemRunPayload,
+  parsePreparedSystemRunPayload,
+} from "../infra/system-run-approval-context.js";
 import { logInfo } from "../logger.js";
 import {
   buildExecApprovalRequesterContext,
@@ -85,31 +88,49 @@ export async function executeNodeHostCommand(
   const supportsSystemRun = Array.isArray(nodeInfo?.commands)
     ? nodeInfo?.commands?.includes("system.run")
     : false;
+  const supportsSystemRunPrepare = Array.isArray(nodeInfo?.commands)
+    ? nodeInfo.commands.includes("system.run.prepare")
+    : true;
   if (!supportsSystemRun) {
     throw new Error(
       "exec host=node requires a node that supports system.run (companion app or node host).",
     );
   }
   const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
-  const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
-    "node.invoke",
-    { timeoutMs: 15_000 },
-    {
-      nodeId,
-      command: "system.run.prepare",
-      params: {
+  const prepared = supportsSystemRunPrepare
+    ? parsePreparedSystemRunPayload(
+        (
+          await callGatewayTool<{ payload?: unknown }>(
+            "node.invoke",
+            { timeoutMs: 15_000 },
+            {
+              nodeId,
+              command: "system.run.prepare",
+              params: {
+                command: argv,
+                rawCommand: params.command,
+                cwd: params.workdir,
+                agentId: params.agentId,
+                sessionKey: params.sessionKey,
+              },
+              idempotencyKey: crypto.randomUUID(),
+            },
+          )
+        )?.payload,
+      )
+    : buildLocalPreparedSystemRunPayload({
         command: argv,
         rawCommand: params.command,
         cwd: params.workdir,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
-      },
-      idempotencyKey: crypto.randomUUID(),
-    },
-  );
-  const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+      });
   if (!prepared) {
-    throw new Error("invalid system.run.prepare response");
+    throw new Error(
+      supportsSystemRunPrepare
+        ? "invalid system.run.prepare response"
+        : "invalid local system.run plan",
+    );
   }
   const runArgv = prepared.plan.argv;
   const runRawCommand = prepared.plan.commandText;

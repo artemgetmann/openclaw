@@ -38,6 +38,10 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 - In consumer lanes, run those as separate direct `himalaya` invocations. Do
   not prepend `which`, `--version`, `set -o pipefail`, or other shell-chain
   noise before the real check.
+- If `himalaya` is wrapped through `openclaw nodes run`, insert `--` before the
+  child argv so Himalaya keeps its own flags.
+- Allow node execution when the runtime supports it. Missing
+  `system.run.prepare` alone does not make Himalaya execution invalid.
 - If configuration is missing, do not dump raw CLI noise back to the user.
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
 - Treat send/reply/forward as higher-risk actions; prove read-only access first.

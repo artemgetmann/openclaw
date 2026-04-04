@@ -44,11 +44,13 @@ Automation Rule
   `wacli doctor`, then `wacli chats list --limit 5`.
 - In consumer chat flows, prefer the plain human-readable `wacli doctor` shape.
   Do not add `--json` unless the user explicitly asked for raw machine output.
-- In consumer lanes, run those as separate direct tool invocations. One command
-  per call. Do not chain them with shell operators like `&&`, pipes, or
-  redirection.
-- Do not route these checks through `nodes.invoke system.run` or other node-run
-  wrappers. Use the direct `exec` surface with the safe bin itself.
+- Prefer direct safe-bin invocation first. Run one command per call.
+- If you wrap `wacli` through `openclaw nodes run`, insert `--` before the
+  child argv so flags like `--json` or `--limit` reach `wacli` instead of the
+  wrapper.
+- Ban dumb shell chaining, pipes, and redirection around `wacli`.
+- Allow node execution only when the runtime actually supports it; do not claim
+  node exec is invalid just because `system.run.prepare` is absent.
 - Do not claim WhatsApp is paired, readable, or ready unless those probes ran in
   the current turn and the results support that claim.
 - If you did not run `wacli doctor`, do not infer status from prior chat context,

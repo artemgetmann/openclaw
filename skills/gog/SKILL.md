@@ -33,9 +33,14 @@ Setup routing
   the user.
 - In consumer lanes, run `gog` as a direct lane-local exec call. Do not wrap it
   in shell chains, pipes, or `nodes/system.run`.
+- If `gog` is wrapped through `openclaw nodes run`, insert `--` before the
+  child argv so `gog` keeps its own flags.
 - Start with the cheapest truthful checks: `gog auth list`, then a read-only
   surface probe such as `gog gmail search`, `gog drive search`, or
   `gog calendar events`.
+- Allow node execution when the runtime supports it. Missing
+  `system.run.prepare` alone is not a valid reason to mark `gog` execution as
+  blocked.
 - If a direct `gog auth list` succeeds but returns no accounts, say the Google
   connection is missing. Do not tell the user `gog` itself is unavailable.
 - If the real blocker is OAuth client/test-user setup, say that immediately in
