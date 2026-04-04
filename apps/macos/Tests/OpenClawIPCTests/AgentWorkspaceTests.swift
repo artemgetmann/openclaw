@@ -67,6 +67,8 @@ struct AgentWorkspaceTests {
         #expect(template.contains("Jarvis preset"))
         #expect(template.contains("trusted-advisor energy"))
         #expect(template.contains("🧿"))
+        #expect(template.contains("custom setup"))
+        #expect(template.contains("Skip straight to what to call the human"))
         #expect(template.contains("Do not stop after the naming step."))
         #expect(template.contains("use those exact options first"))
         #expect(template.contains("lead with"))
