@@ -3,8 +3,27 @@ import { normalizeSystemRunApprovalPlan } from "./system-run-approval-binding.js
 import { formatExecCommand, resolveSystemRunCommandRequest } from "./system-run-command.js";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
-type PreparedRunPayload = {
+export type PreparedRunPayload = {
   plan: SystemRunApprovalPlan;
+};
+
+type LocalSystemRunApprovalPlanResult =
+  | {
+      ok: true;
+      plan: SystemRunApprovalPlan;
+    }
+  | {
+      ok: false;
+      message: string;
+      details?: Record<string, unknown>;
+    };
+
+type LocalPreparedRunPlanParams = {
+  command?: unknown;
+  rawCommand?: unknown;
+  cwd?: unknown;
+  agentId?: unknown;
+  sessionKey?: unknown;
 };
 
 type SystemRunApprovalRequestContext = {
@@ -78,6 +97,57 @@ export function parsePreparedSystemRunPayload(payload: unknown): PreparedRunPayl
       agentId: normalizeNonEmptyString(legacyPlan.agentId),
       sessionKey: normalizeNonEmptyString(legacyPlan.sessionKey),
     },
+  };
+}
+
+export function buildLocalSystemRunApprovalPlan(params: {
+  command?: unknown;
+  rawCommand?: unknown;
+  cwd?: unknown;
+  agentId?: unknown;
+  sessionKey?: unknown;
+}): LocalSystemRunApprovalPlanResult {
+  const command = resolveSystemRunCommandRequest({
+    command: params.command,
+    rawCommand: params.rawCommand,
+  });
+  if (!command.ok) {
+    return {
+      ok: false,
+      message: command.message,
+      details: command.details,
+    };
+  }
+  if (command.argv.length === 0) {
+    return {
+      ok: false,
+      message: "command required",
+      details: { code: "MISSING_COMMAND" },
+    };
+  }
+  const commandText = command.commandText || formatExecCommand(command.argv);
+  return {
+    ok: true,
+    plan: {
+      argv: command.argv,
+      cwd: normalizeNonEmptyString(params.cwd),
+      commandText,
+      commandPreview: normalizeCommandPreview(command.previewText, commandText),
+      agentId: normalizeNonEmptyString(params.agentId),
+      sessionKey: normalizeNonEmptyString(params.sessionKey),
+    },
+  };
+}
+
+export function buildLocalPreparedSystemRunPayload(
+  params: LocalPreparedRunPlanParams,
+): PreparedRunPayload | null {
+  const localPlan = buildLocalSystemRunApprovalPlan(params);
+  if (!localPlan.ok) {
+    return null;
+  }
+  return {
+    plan: localPlan.plan,
   };
 }
 

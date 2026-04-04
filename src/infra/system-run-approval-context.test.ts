@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  buildLocalSystemRunApprovalPlan,
   parsePreparedSystemRunPayload,
   resolveSystemRunApprovalRequestContext,
   resolveSystemRunApprovalRuntimeContext,
@@ -99,6 +100,42 @@ describe("parsePreparedSystemRunPayload", () => {
         plan: { argv: ["jq", "--version"] },
       }),
     ).toBeNull();
+  });
+});
+
+describe("buildLocalSystemRunApprovalPlan", () => {
+  test("builds a local plan for wrapped shell argv when prepare is unavailable", () => {
+    expect(
+      buildLocalSystemRunApprovalPlan({
+        command: ["bash", "-lc", "jq --version"],
+        rawCommand: 'bash -lc "jq --version"',
+        cwd: "/tmp",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    ).toEqual({
+      ok: true,
+      plan: {
+        argv: ["bash", "-lc", "jq --version"],
+        cwd: "/tmp",
+        commandText: 'bash -lc "jq --version"',
+        commandPreview: "jq --version",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      },
+    });
+  });
+
+  test("surfaces request validation errors when a local plan cannot be built", () => {
+    expect(
+      buildLocalSystemRunApprovalPlan({
+        rawCommand: "jq --version",
+      }),
+    ).toEqual({
+      ok: false,
+      message: "rawCommand requires params.command",
+      details: { code: "MISSING_COMMAND" },
+    });
   });
 });
 

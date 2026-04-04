@@ -26,6 +26,15 @@ metadata:
 
 Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
 
+Automation Rule
+
+- Prefer direct safe-bin invocation first: `gog auth list`, then a read-only
+  probe like `gog gmail search`, `gog drive search`, or `gog calendar events`.
+- Ban dumb shell chaining, pipes, and redirection around `gog`.
+- Allow node execution when the runtime supports it. Missing
+  `system.run.prepare` alone is not a valid reason to mark `gog` execution as
+  blocked.
+
 Setup (once)
 
 - `gog auth credentials /path/to/client_secret.json`

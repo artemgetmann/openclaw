@@ -38,6 +38,14 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 3. IMAP/SMTP credentials configured (password stored securely)
 4. For the stock Homebrew build, prefer password or app-password auth. The local `himalaya v1.1.0` build here does not include OAuth2 support.
 
+## Automation Rule
+
+- Prefer direct safe-bin invocation first: `himalaya account list`,
+  `himalaya folder list`, then `himalaya envelope list`.
+- Ban dumb shell chaining, pipes, and redirection around `himalaya`.
+- Allow node execution when the runtime supports it. Missing
+  `system.run.prepare` alone does not make Himalaya execution invalid.
+
 ## Configuration Setup
 
 Run the interactive wizard to set up an account:

@@ -38,7 +38,14 @@ If the user is chatting with you on WhatsApp, you should not reach for this tool
 Automation Rule
 
 - For consumer checks, start with the cheapest read-only probes:
-  `wacli doctor`, then `wacli chats list --limit 5 --json`.
+  `wacli doctor`, then `wacli chats list --limit 5`.
+- Prefer direct safe-bin invocation first. Run one command per call.
+- If you wrap `wacli` through `openclaw nodes run`, insert `--` before the
+  child argv so flags like `--json` or `--limit` reach `wacli` instead of the
+  wrapper.
+- Ban dumb shell chaining, pipes, and redirection around `wacli`.
+- Allow node execution only when the runtime actually supports it; do not claim
+  node exec is invalid just because `system.run.prepare` is absent.
 - If setup is missing or unhealthy, do not dump raw CLI noise back to the user.
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
 - Treat send/sync actions as higher-risk than read/list actions. Prove read access
