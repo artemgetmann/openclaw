@@ -44,6 +44,8 @@ VALIDATED_NPM_BIN="$(dirname "$VALIDATED_NODE_BIN")/npm"
 if [[ ! -x "$VALIDATED_NPM_BIN" ]]; then
   VALIDATED_NPM_BIN="$(command -v npm || true)"
 fi
+CLI_ARCHIVE_STAGED=""
+CLI_ARCHIVE_STAGE_DIR=""
 
 default_sparkle_feed_url_for_bundle() {
   local bundle_id="$1"
@@ -155,7 +157,6 @@ merge_framework_machos() {
 }
 
 bundle_consumer_cli_archive() {
-  local resources_dir="$1"
   if [[ "$APP_VARIANT" != "consumer" ]]; then
     return 0
   fi
@@ -164,19 +165,27 @@ bundle_consumer_cli_archive() {
     exit 1
   fi
 
-  local archive_src="$resources_dir/openclaw-${PKG_VERSION}.tgz"
-  local archive_dest="$resources_dir/$BUNDLED_CLI_ARCHIVE_NAME"
-  rm -f "$archive_src" "$archive_dest"
+  # Stage the CLI archive outside repo `dist/` before we create the `.app`.
+  # Otherwise `npm pack` sees the partially-built app bundle under `dist/` and
+  # packs that into the CLI tarball, which bloats the archive and can leave the
+  # packaging flow in a stale half-finished state.
+  local pack_dir
+  pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-cli-pack.XXXXXX")"
+  local archive_src=""
+  rm -f "$pack_dir"/*.tgz 2>/dev/null || true
   echo "📦 Bundling consumer CLI archive"
   (
     cd "$ROOT_DIR"
-    "$VALIDATED_NPM_BIN" pack --ignore-scripts --pack-destination "$resources_dir" >/dev/null
+    "$VALIDATED_NPM_BIN" pack --ignore-scripts --pack-destination "$pack_dir" >/dev/null
   )
-  if [[ ! -f "$archive_src" ]]; then
-    echo "ERROR: expected bundled CLI archive missing: $archive_src" >&2
+  archive_src="$(find "$pack_dir" -maxdepth 1 -type f -name 'openclaw-*.tgz' -print -quit)"
+  if [[ -z "$archive_src" || ! -f "$archive_src" ]]; then
+    echo "ERROR: expected bundled CLI archive missing in staging dir: $pack_dir" >&2
     exit 1
   fi
-  mv "$archive_src" "$archive_dest"
+  CLI_ARCHIVE_STAGED="$pack_dir/$BUNDLED_CLI_ARCHIVE_NAME"
+  CLI_ARCHIVE_STAGE_DIR="$pack_dir"
+  mv "$archive_src" "$CLI_ARCHIVE_STAGED"
 }
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
@@ -230,6 +239,7 @@ BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
 echo "pkg: binary $BIN_PRIMARY" >&2
 echo "🧹 Cleaning old app bundle"
 rm -rf "$APP_ROOT"
+bundle_consumer_cli_archive
 mkdir -p "$APP_ROOT/Contents/MacOS"
 mkdir -p "$APP_ROOT/Contents/Resources"
 mkdir -p "$APP_ROOT/Contents/Frameworks"
@@ -277,7 +287,10 @@ chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
 
-bundle_consumer_cli_archive "$APP_ROOT/Contents/Resources"
+if [[ -n "$CLI_ARCHIVE_STAGED" && -f "$CLI_ARCHIVE_STAGED" ]]; then
+  cp "$CLI_ARCHIVE_STAGED" "$APP_ROOT/Contents/Resources/$BUNDLED_CLI_ARCHIVE_NAME"
+  rm -rf "$CLI_ARCHIVE_STAGE_DIR"
+fi
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
