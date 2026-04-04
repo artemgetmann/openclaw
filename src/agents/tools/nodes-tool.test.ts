@@ -91,7 +91,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     );
   });
 
-  it("omits rawCommand when preparing wrapped argv execution", async () => {
+  it("falls back to a local plan when the node only supports system.run", async () => {
     nodeUtilsMocks.listNodes.mockResolvedValue([
       {
         nodeId: "node-1",
@@ -99,20 +99,6 @@ describe("createNodesTool screen_record duration guardrails", () => {
       },
     ]);
     gatewayMocks.callGatewayTool.mockImplementation(async (_method, _opts, payload) => {
-      if (payload?.command === "system.run.prepare") {
-        return {
-          payload: {
-            plan: {
-              argv: ["bash", "-lc", "echo hi"],
-              cwd: null,
-              commandText: 'bash -lc "echo hi"',
-              commandPreview: "echo hi",
-              agentId: null,
-              sessionKey: null,
-            },
-          },
-        };
-      }
       if (payload?.command === "system.run") {
         return { payload: { ok: true } };
       }
@@ -126,14 +112,18 @@ describe("createNodesTool screen_record duration guardrails", () => {
       command: ["bash", "-lc", "echo hi"],
     });
 
-    const prepareCall = gatewayMocks.callGatewayTool.mock.calls.find(
-      (call) => call[2]?.command === "system.run.prepare",
+    expect(
+      gatewayMocks.callGatewayTool.mock.calls.some(
+        (call) => call[2]?.command === "system.run.prepare",
+      ),
+    ).toBe(false);
+    const runCall = gatewayMocks.callGatewayTool.mock.calls.find(
+      (call) => call[2]?.command === "system.run",
     )?.[2];
-    expect(prepareCall).toBeTruthy();
-    expect(prepareCall?.params).toMatchObject({
+    expect(runCall?.params).toMatchObject({
       command: ["bash", "-lc", "echo hi"],
+      rawCommand: 'bash -lc "echo hi"',
       agentId: "main",
     });
-    expect(prepareCall?.params).not.toHaveProperty("rawCommand");
   });
 });
