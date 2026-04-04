@@ -90,6 +90,28 @@ describe("doctor config flow safe bins", () => {
     );
   });
 
+  it("does not warn for built-in product safe-bin fixtures like gog and himalaya", async () => {
+    await runDoctorConfigWithInput({
+      config: {
+        tools: {
+          exec: {
+            safeBins: ["gog", "himalaya"],
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(noteSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("safeBinProfiles.gog"),
+      "Doctor warnings",
+    );
+    expect(noteSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("safeBinProfiles.himalaya"),
+      "Doctor warnings",
+    );
+  });
+
   it("hints safeBinTrustedDirs when safeBins resolve outside default trusted dirs", async () => {
     if (process.platform === "win32") {
       return;

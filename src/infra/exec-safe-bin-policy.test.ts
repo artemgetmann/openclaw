@@ -7,6 +7,7 @@ import {
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
   renderSafeBinDeniedFlagsDocBullets,
+  resolveSafeBinProfiles,
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 
@@ -84,6 +85,42 @@ describe("exec safe bin policy wc", () => {
   });
 });
 
+describe("exec safe bin policy product-owned cli defaults", () => {
+  it("allows bounded gog and himalaya positional usage", () => {
+    const gogProfile = SAFE_BIN_PROFILES.gog;
+    const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
+    expect(validateSafeBinArgv(["drive", "search", "test"], gogProfile)).toBe(true);
+    expect(validateSafeBinArgv(["message", "list", "inbox"], himalayaProfile)).toBe(true);
+  });
+
+  it("still blocks gog and himalaya command lines that blow past bounded positionals", () => {
+    const gogProfile = SAFE_BIN_PROFILES.gog;
+    const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
+    expect(
+      validateSafeBinArgv(
+        ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"],
+        gogProfile,
+      ),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(
+        ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"],
+        himalayaProfile,
+      ),
+    ).toBe(false);
+  });
+
+  it("supports legacy boolean flags like --json without treating them as value-taking", () => {
+    const profile = resolveSafeBinProfiles({
+      wacli: {
+        maxPositional: 3,
+        allowedValueFlags: ["--limit", "--json"],
+      },
+    }).wacli;
+    expect(validateSafeBinArgv(["chats", "list", "--limit", "1", "--json"], profile)).toBe(true);
+    expect(validateSafeBinArgv(["chats", "list", "--json=1"], profile)).toBe(false);
+  });
+});
 describe("exec safe bin policy token hygiene", () => {
   it("rejects path-like and glob positional tokens after the terminator", () => {
     const grepProfile = SAFE_BIN_PROFILES.grep;
@@ -120,6 +157,7 @@ describe("exec safe bin policy long-option metadata", () => {
   it("builds prefix maps from collected long flags", () => {
     const sortProfile = SAFE_BIN_PROFILES.sort;
     const flags = collectKnownLongFlags(
+      sortProfile.allowedFlags ?? new Set(),
       sortProfile.allowedValueFlags ?? new Set(),
       sortProfile.deniedFlags ?? new Set(),
     );
