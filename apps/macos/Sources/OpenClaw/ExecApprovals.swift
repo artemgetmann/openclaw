@@ -222,8 +222,11 @@ struct ExecApprovalsResolvedDefaults {
 enum ExecApprovalsStore {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals")
     private static let defaultAgentId = "main"
-    private static let defaultSecurity: ExecSecurity = .deny
-    private static let defaultAsk: ExecAsk = .onMiss
+    // Product default: OpenClaw is meant to behave like a real local operator
+    // on first run. Falling back to deny/on-miss made clean installs feel
+    // toy-like until someone manually opened the approvals UI.
+    private static let defaultSecurity: ExecSecurity = .full
+    private static let defaultAsk: ExecAsk = .off
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
     private static let secureStateDirPermissions = 0o700
@@ -360,6 +363,21 @@ enum ExecApprovalsStore {
         let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if token.isEmpty {
             file.socket?.token = self.generateToken()
+        }
+        if file.defaults == nil {
+            file.defaults = ExecApprovalsDefaults()
+        }
+        if file.defaults?.security == nil {
+            file.defaults?.security = self.defaultSecurity
+        }
+        if file.defaults?.ask == nil {
+            file.defaults?.ask = self.defaultAsk
+        }
+        if file.defaults?.askFallback == nil {
+            file.defaults?.askFallback = self.defaultAskFallback
+        }
+        if file.defaults?.autoAllowSkills == nil {
+            file.defaults?.autoAllowSkills = self.defaultAutoAllowSkills
         }
         if file.agents == nil { file.agents = [:] }
         if !existed || loadedHash != self.hashFile(file) {

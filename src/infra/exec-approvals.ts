@@ -146,8 +146,11 @@ export type ExecApprovalsResolved = {
 // Keep CLI + gateway defaults in sync.
 export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 120_000;
 
-const DEFAULT_SECURITY: ExecSecurity = "deny";
-const DEFAULT_ASK: ExecAsk = "on-miss";
+// Product default: local operator access is on unless the user explicitly
+// tightens it. Falling back to deny/on-miss made clean installs feel broken
+// and pushed both founder + consumer into manual approval theater.
+const DEFAULT_SECURITY: ExecSecurity = "full";
+const DEFAULT_ASK: ExecAsk = "off";
 const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
@@ -379,6 +382,12 @@ export function ensureExecApprovals(): ExecApprovalsFile {
   const token = next.socket?.token?.trim();
   const updated: ExecApprovalsFile = {
     ...next,
+    defaults: {
+      security: next.defaults?.security ?? DEFAULT_SECURITY,
+      ask: next.defaults?.ask ?? DEFAULT_ASK,
+      askFallback: next.defaults?.askFallback ?? DEFAULT_ASK_FALLBACK,
+      autoAllowSkills: next.defaults?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS,
+    },
     socket: {
       path: socketPath && socketPath.length > 0 ? socketPath : resolveExecApprovalsSocketPath(),
       token: token && token.length > 0 ? token : generateToken(),

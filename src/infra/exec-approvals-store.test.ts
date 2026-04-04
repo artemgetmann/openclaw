@@ -129,10 +129,17 @@ describe("exec approvals store helpers", () => {
     const ensured = ensureExecApprovals();
     const raw = fs.readFileSync(approvalsFilePath(dir), "utf8");
 
+    expect(ensured.defaults).toEqual({
+      security: "full",
+      ask: "off",
+      askFallback: "deny",
+      autoAllowSkills: false,
+    });
     expect(ensured.socket?.path).toBe(resolveExecApprovalsSocketPath());
     expect(ensured.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
     expect(raw.endsWith("\n")).toBe(true);
     expect(readApprovalsFile(dir).socket).toEqual(ensured.socket);
+    expect(readApprovalsFile(dir).defaults).toEqual(ensured.defaults);
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {
