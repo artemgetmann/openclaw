@@ -77,7 +77,6 @@ import {
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
   migrateTelegramDmThreadStoreEntry,
-  resolveTelegramDmThreadSessionReference,
   resolveTelegramDmThreadSessionRouting,
   resolveTelegramDmThreadStoreEntry,
 } from "./dm-thread-session.js";
@@ -378,11 +377,11 @@ export const registerTelegramHandlers = ({
 
     const explicitSessionKey = params.sessionKey?.trim();
     if (explicitSessionKey) {
-      // Telegram DM-topic callback payloads can point back at a previously sent
-      // bot message whose cached metadata still carries a legacy thread alias
-      // (`...:thread:<topic>` or `...:thread:<chat>:<topic>`). Normalize those
-      // aliases onto the canonical sender-derived DM thread key here so model
-      // callbacks, /status, and the next inbound DM all share one session.
+      // Telegram DM-topic callback payloads can point at a previously sent bot
+      // message whose cached metadata still carries an older thread alias.
+      // Normalize those callbacks onto the canonical sender-derived thread
+      // session so button writes, /status, and future-thread defaults all hit
+      // the same store entry instead of drifting apart.
       if (!params.isGroup && params.messageThreadId != null) {
         const resolvedThreadId =
           params.resolvedThreadId ??
@@ -411,31 +410,28 @@ export const registerTelegramHandlers = ({
             isGroup: params.isGroup,
             senderId: params.senderId,
           });
-          const dmThreadSession = resolveTelegramDmThreadSessionReference({
+          const dmThreadSession = resolveTelegramDmThreadSessionRouting({
             baseSessionKey,
             chatId: params.chatId,
             senderId: params.senderId,
             threadId: dmThreadId,
-            sessionKey: explicitSessionKey,
           });
-          if (dmThreadSession) {
-            const storePath = resolveStorePath(cfg.session?.store, {
-              agentId: route.agentId,
-            });
-            const store = loadSessionStore(storePath);
-            const resolvedEntry = resolveTelegramDmThreadStoreEntry({
-              store,
-              sessionKey: dmThreadSession.sessionKey,
-              legacySessionKeys: dmThreadSession.legacySessionKeys,
-            });
-            return resolveSessionModel({
-              agentId: route.agentId,
-              sessionKey: resolvedEntry.normalizedKey,
-              sessionEntry: resolvedEntry.existing,
-              sessionStore: store,
-              legacySessionKeys: resolvedEntry.legacyKeys,
-            });
-          }
+          const storePath = resolveStorePath(cfg.session?.store, {
+            agentId: route.agentId,
+          });
+          const store = loadSessionStore(storePath);
+          const resolvedEntry = resolveTelegramDmThreadStoreEntry({
+            store,
+            sessionKey: dmThreadSession.sessionKey,
+            legacySessionKeys: dmThreadSession.legacySessionKeys,
+          });
+          return resolveSessionModel({
+            agentId: route.agentId,
+            sessionKey: resolvedEntry.normalizedKey,
+            sessionEntry: resolvedEntry.existing,
+            sessionStore: store,
+            legacySessionKeys: resolvedEntry.legacyKeys,
+          });
         }
       }
       const agentId =
