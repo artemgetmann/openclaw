@@ -1,6 +1,7 @@
 export type SafeBinProfile = {
   minPositional?: number;
   maxPositional?: number;
+  allowedFlags?: ReadonlySet<string>;
   allowedValueFlags?: ReadonlySet<string>;
   deniedFlags?: ReadonlySet<string>;
   // Precomputed long-option metadata for GNU abbreviation resolution.
@@ -12,6 +13,7 @@ export type SafeBinProfile = {
 export type SafeBinProfileFixture = {
   minPositional?: number;
   maxPositional?: number;
+  allowedFlags?: readonly string[];
   allowedValueFlags?: readonly string[];
   deniedFlags?: readonly string[];
 };
@@ -19,6 +21,7 @@ export type SafeBinProfileFixture = {
 export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixture>>;
 
 const NO_FLAGS: ReadonlySet<string> = new Set();
+const LEGACY_BOOLEAN_COMPAT_FLAGS = new Set(["--json"]);
 
 const toFlagSet = (flags?: readonly string[]): ReadonlySet<string> => {
   if (!flags || flags.length === 0) {
@@ -28,10 +31,16 @@ const toFlagSet = (flags?: readonly string[]): ReadonlySet<string> => {
 };
 
 export function collectKnownLongFlags(
+  allowedFlags: ReadonlySet<string>,
   allowedValueFlags: ReadonlySet<string>,
   deniedFlags: ReadonlySet<string>,
 ): string[] {
   const known = new Set<string>();
+  for (const flag of allowedFlags) {
+    if (flag.startsWith("--")) {
+      known.add(flag);
+    }
+  }
   for (const flag of allowedValueFlags) {
     if (flag.startsWith("--")) {
       known.add(flag);
@@ -69,12 +78,14 @@ export function buildLongFlagPrefixMap(
 }
 
 function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
+  const allowedFlags = toFlagSet(fixture.allowedFlags);
   const allowedValueFlags = toFlagSet(fixture.allowedValueFlags);
   const deniedFlags = toFlagSet(fixture.deniedFlags);
-  const knownLongFlags = collectKnownLongFlags(allowedValueFlags, deniedFlags);
+  const knownLongFlags = collectKnownLongFlags(allowedFlags, allowedValueFlags, deniedFlags);
   return {
     minPositional: fixture.minPositional,
     maxPositional: fixture.maxPositional,
+    allowedFlags,
     allowedValueFlags,
     deniedFlags,
     knownLongFlags,
@@ -263,10 +274,23 @@ function normalizeSafeBinProfileFixture(fixture: SafeBinProfileFixture): SafeBin
     maxPositionalRaw < minPositional
       ? minPositional
       : maxPositionalRaw;
+  const normalizedAllowedFlags = normalizeFixtureFlags(fixture.allowedFlags);
+  const normalizedAllowedValueFlags = normalizeFixtureFlags(fixture.allowedValueFlags);
+  const compatAllowedFlags = (normalizedAllowedValueFlags ?? []).filter((flag) =>
+    LEGACY_BOOLEAN_COMPAT_FLAGS.has(flag),
+  );
+  const allowedFlags = normalizeFixtureFlags([
+    ...(normalizedAllowedFlags ?? []),
+    ...compatAllowedFlags,
+  ]);
+  const allowedValueFlags = normalizeFixtureFlags(
+    (normalizedAllowedValueFlags ?? []).filter((flag) => !LEGACY_BOOLEAN_COMPAT_FLAGS.has(flag)),
+  );
   return {
     minPositional,
     maxPositional,
-    allowedValueFlags: normalizeFixtureFlags(fixture.allowedValueFlags),
+    allowedFlags,
+    allowedValueFlags,
     deniedFlags: normalizeFixtureFlags(fixture.deniedFlags),
   };
 }
