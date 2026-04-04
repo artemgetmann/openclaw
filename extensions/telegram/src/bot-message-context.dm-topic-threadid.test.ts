@@ -27,8 +27,22 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
   }
 
   function getUpdateLastRoute(): unknown {
-    const callArgs = recordInboundSessionMock.mock.calls[0]?.[0] as { updateLastRoute?: unknown };
+    const callArgs = recordInboundSessionMock.mock.calls.at(-1)?.[0] as {
+      updateLastRoute?: unknown;
+    };
     return callArgs?.updateLastRoute;
+  }
+
+  function getLastRecordInboundSessionCall(): {
+    createIfMissing?: boolean;
+    updateLastRoute?: unknown;
+  } {
+    return (
+      (recordInboundSessionMock.mock.calls.at(-1)?.[0] as {
+        createIfMissing?: boolean;
+        updateLastRoute?: unknown;
+      }) ?? {}
+    );
   }
 
   beforeEach(() => {
@@ -156,5 +170,6 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
       modelOverride: "claude-sonnet-4-6",
       thinkingLevel: "adaptive",
     });
+    expect(getLastRecordInboundSessionCall().createIfMissing).toBe(false);
   });
 });
