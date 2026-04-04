@@ -16,6 +16,7 @@ type NodeInvokeCall = {
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
 let lastApprovalRequestCall: { params?: Record<string, unknown> } | null = null;
+let nodeCommands: string[] = ["system.run", "system.run.prepare"];
 let localExecApprovalsFile: ExecApprovalsFile = { version: 1, agents: {} };
 let nodeExecApprovalsFile: ExecApprovalsFile = {
   version: 1,
@@ -35,6 +36,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
           nodeId: "mac-1",
           displayName: "Mac",
           platform: "macos",
+          commands: nodeCommands,
           caps: ["canvas"],
           connected: true,
           permissions: { screenRecording: true },
@@ -81,7 +83,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { defaultRuntime, resetRuntimeCapture, runtimeErrors } = createCliRuntimeCapture();
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
@@ -121,7 +123,25 @@ describe("nodes-cli coverage", () => {
   const getApprovalRequestCall = () => lastApprovalRequestCall;
 
   const runNodesCommand = async (args: string[]) => {
-    await sharedProgram.parseAsync(args, { from: "user" });
+    try {
+      await sharedProgram.parseAsync(args, { from: "user" });
+    } catch (err) {
+      if (String(err).includes("__exit__:")) {
+        const debug = [
+          runtimeErrors.join("\n"),
+          lastNodeInvokeCall ? `lastNodeInvokeCall=${JSON.stringify(lastNodeInvokeCall)}` : "",
+          lastApprovalRequestCall
+            ? `lastApprovalRequestCall=${JSON.stringify(lastApprovalRequestCall)}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+        if (debug) {
+          throw new Error(debug, { cause: err });
+        }
+      }
+      throw err;
+    }
     return getNodeInvokeCall();
   };
 
@@ -138,6 +158,7 @@ describe("nodes-cli coverage", () => {
     randomIdempotencyKey.mockClear();
     lastNodeInvokeCall = null;
     lastApprovalRequestCall = null;
+    nodeCommands = ["system.run", "system.run.prepare"];
     localExecApprovalsFile = { version: 1, agents: {} };
     nodeExecApprovalsFile = {
       version: 1,
@@ -259,6 +280,27 @@ describe("nodes-cli coverage", () => {
     });
     expect(invoke?.params?.params).not.toHaveProperty("approvalDecision");
     expect(getApprovalRequestCall()).toBeNull();
+  });
+
+  it("falls back to a local plan when the node only advertises system.run", async () => {
+    nodeCommands = ["system.run"];
+
+    const invoke = await runNodesCommand(["nodes", "run", "--node", "mac-1", "echo", "hi"]);
+
+    expect(invoke?.params?.command).toBe("system.run");
+    expect(invoke?.params?.params).toMatchObject({
+      command: ["echo", "hi"],
+      rawCommand: "echo hi",
+      agentId: "main",
+      approved: true,
+      approvalDecision: "allow-once",
+      runId: expect.any(String),
+    });
+    expect(
+      callGateway.mock.calls.some(
+        ([opts]) => opts.method === "node.invoke" && opts.params?.command === "system.run.prepare",
+      ),
+    ).toBe(false);
   });
 
   it("invokes system.notify with provided fields", async () => {

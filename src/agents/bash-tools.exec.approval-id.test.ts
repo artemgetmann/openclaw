@@ -60,6 +60,22 @@ async function writeExecApprovalsConfig(config: Record<string, unknown>) {
   await fs.writeFile(approvalsPath, JSON.stringify(config, null, 2));
 }
 
+async function writePromptingExecApprovalsConfig(params?: {
+  security?: "allowlist" | "full";
+  ask?: "on-miss" | "always";
+  askFallback?: "allowlist" | "deny" | "full";
+}) {
+  await writeExecApprovalsConfig({
+    version: 1,
+    defaults: {
+      security: params?.security ?? "full",
+      ask: params?.ask ?? "always",
+      askFallback: params?.askFallback ?? "deny",
+    },
+    agents: {},
+  });
+}
+
 function acceptedApprovalResponse(params: unknown) {
   return { status: "accepted", id: (params as { id?: string })?.id };
 }
@@ -236,6 +252,7 @@ describe("exec approvals", () => {
   });
 
   it("reuses approval id as the node runId", async () => {
+    await writePromptingExecApprovalsConfig();
     let invokeParams: unknown;
     let agentParams: unknown;
 
@@ -286,6 +303,7 @@ describe("exec approvals", () => {
   });
 
   it("skips approval when node allowlist is satisfied", async () => {
+    await writePromptingExecApprovalsConfig({ security: "allowlist", ask: "on-miss" });
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-bin-"));
     const binDir = path.join(tempDir, "bin");
     await fs.mkdir(binDir, { recursive: true });
@@ -337,19 +355,45 @@ describe("exec approvals", () => {
     expect(calls).not.toContain("exec.approval.request");
   });
 
-  it("fails fast when node fallback lacks system.run.prepare support", async () => {
+  it("falls back to a local plan when the node lacks system.run.prepare support", async () => {
     vi.mocked(listNodesMock).mockResolvedValueOnce([
       { nodeId: "node-1", commands: ["system.run"], platform: "darwin" },
     ]);
+    const calls: string[] = [];
+    const nodeInvokeCommands: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "exec.approvals.node.get") {
+        return {
+          file: {
+            version: 1,
+            defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+            agents: {},
+          },
+        };
+      }
+      if (method === "node.invoke") {
+        const command = (params as { command?: string })?.command;
+        if (command) {
+          nodeInvokeCommands.push(command);
+        }
+        return { payload: { success: true, stdout: "ok" } };
+      }
+      return { ok: true };
+    });
 
     const tool = createExecTool({
       host: "node",
+      ask: "off",
       approvalRunningNoticeMs: 0,
     });
 
-    await expect(tool.execute("call2b", { command: "echo ok" })).rejects.toThrow(
-      "system.run.prepare",
-    );
+    const result = await tool.execute("call2b", { command: "echo ok" });
+    expect(result.details.status).toBe("completed");
+    expect(calls).not.toContain("exec.approval.request");
+    expect(calls).not.toContain("exec.approval.waitDecision");
+    expect(nodeInvokeCommands).toContain("system.run");
+    expect(nodeInvokeCommands).not.toContain("system.run.prepare");
   });
 
   it("honors ask=off for elevated gateway exec without prompting", async () => {
@@ -397,6 +441,7 @@ describe("exec approvals", () => {
   });
 
   it("requires approval for elevated ask when allowlist misses", async () => {
+    await writePromptingExecApprovalsConfig({ security: "allowlist", ask: "on-miss" });
     const calls: string[] = [];
     let resolveApproval: (() => void) | undefined;
     const approvalSeen = new Promise<void>((resolve) => {
@@ -426,6 +471,7 @@ describe("exec approvals", () => {
   });
 
   it("starts a direct agent follow-up after approved gateway exec completes", async () => {
+    await writePromptingExecApprovalsConfig();
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
@@ -465,6 +511,7 @@ describe("exec approvals", () => {
   });
 
   it("requires a separate approval for each elevated command after allow-once", async () => {
+    await writePromptingExecApprovalsConfig({ security: "allowlist", ask: "on-miss" });
     const requestCommands: string[] = [];
     const requestIds: string[] = [];
     const waitIds: string[] = [];
@@ -510,6 +557,7 @@ describe("exec approvals", () => {
   });
 
   it("shows full chained gateway commands in approval-pending message", async () => {
+    await writePromptingExecApprovalsConfig({ security: "allowlist", ask: "on-miss" });
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
@@ -538,6 +586,7 @@ describe("exec approvals", () => {
   });
 
   it("shows full chained node commands in approval-pending message", async () => {
+    await writePromptingExecApprovalsConfig();
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
@@ -566,6 +615,7 @@ describe("exec approvals", () => {
   });
 
   it("waits for approval registration before returning approval-pending", async () => {
+    await writePromptingExecApprovalsConfig({ security: "allowlist", ask: "on-miss" });
     const calls: string[] = [];
     let resolveRegistration: ((value: unknown) => void) | undefined;
     const registrationPromise = new Promise<unknown>((resolve) => {
@@ -608,6 +658,7 @@ describe("exec approvals", () => {
   });
 
   it("fails fast when approval registration fails", async () => {
+    await writePromptingExecApprovalsConfig({ security: "allowlist", ask: "on-miss" });
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
       if (method === "exec.approval.request") {
         throw new Error("gateway offline");
@@ -628,6 +679,7 @@ describe("exec approvals", () => {
   });
 
   it("returns an unavailable approval message instead of a local /approve prompt when discord exec approvals are disabled", async () => {
+    await writePromptingExecApprovalsConfig();
     await writeOpenClawConfig({
       channels: {
         discord: {
@@ -653,11 +705,12 @@ describe("exec approvals", () => {
     });
 
     const text = expectApprovalUnavailableText(result);
-    expect(text).toContain("chat exec approvals are not enabled on Discord");
+    expect(text).toContain("Discord does not support chat exec approvals");
     expect(text).toContain("Web UI or terminal UI");
   });
 
   it("tells Telegram users that allowed approvers were DMed when Telegram approvals are disabled but Discord DM approvals are enabled", async () => {
+    await writePromptingExecApprovalsConfig();
     await writeOpenClawConfig(
       {
         channels: {
@@ -690,7 +743,8 @@ describe("exec approvals", () => {
     });
 
     const text = expectApprovalUnavailableText(result);
-    expect(text).toContain("Approval required. I sent the allowed approvers DMs.");
+    expect(text).toContain("Telegram does not support chat exec approvals");
+    expect(text).toContain("Discord or Telegram if those approval clients are enabled");
   });
 
   it("denies node obfuscated command when approval request times out", async () => {

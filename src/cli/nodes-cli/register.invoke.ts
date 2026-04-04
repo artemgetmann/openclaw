@@ -16,7 +16,10 @@ import {
 } from "../../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
 import { applyPathPrepend } from "../../infra/path-prepend.js";
-import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
+import {
+  buildLocalSystemRunApprovalPlan,
+  parsePreparedSystemRunPayload,
+} from "../../infra/system-run-approval-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
@@ -83,6 +86,30 @@ async function resolveNodePlatform(opts: NodesRpcOpts, nodeId: string): Promise<
   }
 }
 
+async function resolveNodeRunCapabilities(
+  opts: NodesRpcOpts,
+  nodeId: string,
+): Promise<{ platform: string | null; supportsRun: boolean; supportsPrepare: boolean }> {
+  try {
+    const res = await callGatewayCli("node.list", opts, {});
+    const nodes = parseNodeList(res);
+    const match = nodes.find((node) => node.nodeId === nodeId);
+    const commands = Array.isArray(match?.commands) ? match.commands : null;
+    return {
+      platform: typeof match?.platform === "string" ? match.platform : null,
+      supportsRun: commands ? commands.includes("system.run") : true,
+      // If command metadata is missing, preserve the legacy prepare-first path.
+      supportsPrepare: commands ? commands.includes("system.run.prepare") : true,
+    };
+  } catch {
+    return {
+      platform: await resolveNodePlatform(opts, nodeId),
+      supportsRun: true,
+      supportsPrepare: true,
+    };
+  }
+}
+
 function requirePreparedRunPayload(payload: unknown) {
   const prepared = parsePreparedSystemRunPayload(payload);
   if (!prepared) {
@@ -121,13 +148,18 @@ async function prepareNodesRunContext(params: {
   const env = parseEnvPairs(params.opts.env);
   const timeoutMs = parseTimeoutMs(params.opts.commandTimeout);
   const invokeTimeout = parseTimeoutMs(params.opts.invokeTimeout);
+  const capabilities = await resolveNodeRunCapabilities(params.opts, params.nodeId);
+  if (!capabilities.supportsRun) {
+    throw new Error(
+      "system.run requires a companion app or node host; the selected node does not support system.run.",
+    );
+  }
 
   let argv = Array.isArray(params.command) ? params.command : [];
   let rawCommand: string | undefined;
   if (params.raw) {
     rawCommand = params.raw;
-    const platform = await resolveNodePlatform(params.opts, params.nodeId);
-    argv = buildNodeShellCommand(rawCommand, platform ?? undefined);
+    argv = buildNodeShellCommand(rawCommand, capabilities.platform ?? undefined);
   }
 
   const nodeEnv = env ? { ...env } : undefined;
@@ -135,20 +167,39 @@ async function prepareNodesRunContext(params: {
     applyPathPrepend(nodeEnv, params.execDefaults?.pathPrepend, { requireExisting: true });
   }
 
-  const prepareResponse = (await callGatewayCli("node.invoke", params.opts, {
-    nodeId: params.nodeId,
-    command: "system.run.prepare",
-    params: {
-      command: argv,
-      rawCommand,
-      cwd: params.opts.cwd,
-      agentId: params.agentId,
-    },
-    idempotencyKey: `prepare-${randomIdempotencyKey()}`,
-  })) as { payload?: unknown } | null;
+  const prepared = capabilities.supportsPrepare
+    ? requirePreparedRunPayload(
+        (
+          (await callGatewayCli("node.invoke", params.opts, {
+            nodeId: params.nodeId,
+            command: "system.run.prepare",
+            params: {
+              command: argv,
+              rawCommand,
+              cwd: params.opts.cwd,
+              agentId: params.agentId,
+            },
+            idempotencyKey: `prepare-${randomIdempotencyKey()}`,
+          })) as { payload?: unknown } | null
+        )?.payload,
+      )
+    : (() => {
+        // The runtime can still execute safely with system.run alone; synthesize
+        // the same approval/run plan locally instead of treating it as unsupported.
+        const localPrepared = buildLocalSystemRunApprovalPlan({
+          command: argv,
+          rawCommand,
+          cwd: params.opts.cwd,
+          agentId: params.agentId,
+        });
+        if (!localPrepared.ok) {
+          throw new Error(localPrepared.message);
+        }
+        return { plan: localPrepared.plan };
+      })();
 
   return {
-    prepared: requirePreparedRunPayload(prepareResponse?.payload),
+    prepared,
     nodeEnv,
     timeoutMs,
     invokeTimeout,
