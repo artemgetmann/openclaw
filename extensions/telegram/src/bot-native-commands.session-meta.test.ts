@@ -413,6 +413,35 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:main:main:thread:200:42");
   });
 
+  it("seeds DM topic slash commands from parent future-thread defaults before dispatch", async () => {
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:main": {
+        sessionId: "parent-session",
+        updatedAt: Date.now(),
+        futureThreadProviderOverride: "anthropic",
+        futureThreadModelOverride: "claude-sonnet-4-6",
+        futureThreadThinkingLevelOverride: "adaptive",
+      },
+    };
+    sessionMocks.updateSessionStore.mockImplementation(async (_storePath, update) => update(store));
+
+    const cfg: OpenClawConfig = {};
+    const { handler } = registerAndResolveStatusHandler({ cfg, allowFrom: ["200"] });
+    await handler(buildStatusDmTopicCommandContext());
+
+    expect(store["agent:main:main:thread:200:42"]).toMatchObject({
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      thinkingLevel: "adaptive",
+    });
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string } }]
+      >
+    ).at(-1)?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:main:main:thread:200:42");
+  });
+
   it("delivers native DM topic model replies with the target thread session key", async () => {
     replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
       async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {

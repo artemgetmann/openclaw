@@ -83,6 +83,7 @@ import {
 } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
+import { seedTelegramThreadSessionOnTopicCreate } from "./thread-session-seeding.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const execFileAsync = promisify(execFile);
@@ -746,6 +747,22 @@ export const registerTelegramNativeCommands = ({
             isGroup,
             senderId,
           });
+          // Native commands can be the very first thing a user does inside a
+          // brand-new Telegram topic. Seed the topic session up front so
+          // status/model reads inherit the parent chat defaults immediately
+          // instead of falling back to the global default until a full turn runs.
+          if (threadSpec.scope !== "none") {
+            await seedTelegramThreadSessionOnTopicCreate({
+              cfg,
+              accountId: route.accountId,
+              chatId,
+              isGroup,
+              senderId,
+              resolvedThreadId: threadSpec.scope === "topic" ? threadSpec.id : undefined,
+              dmThreadId: threadSpec.scope === "dm" ? threadSpec.id : undefined,
+              topicAgentId: topicConfig?.agentId,
+            });
+          }
           // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
           const dmThreadSession =
