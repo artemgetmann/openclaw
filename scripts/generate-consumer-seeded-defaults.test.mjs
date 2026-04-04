@@ -55,7 +55,7 @@ void test("seeds only the supported consumer defaults from env", () => {
         },
         search: {
           enabled: true,
-          provider: "firecrawl",
+          provider: "brave",
           firecrawl: {
             apiKey: "firecrawl-key",
           },
@@ -131,7 +131,7 @@ void test("falls back to founder config when shell env is empty", () => {
         },
         search: {
           enabled: true,
-          provider: "firecrawl",
+          provider: "brave",
           firecrawl: {
             apiKey: "founder-firecrawl",
           },
