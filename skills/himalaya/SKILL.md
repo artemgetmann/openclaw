@@ -38,9 +38,31 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 3. IMAP/SMTP credentials configured (password stored securely)
 4. For the stock Homebrew build, prefer password or app-password auth. The local `himalaya v1.1.0` build here does not include OAuth2 support.
 
-## Configuration Setup
+## Automation Rule
 
-Run the interactive wizard to set up an account:
+- For local macOS/email checks, prefer read-only commands first:
+  `himalaya account list`, `himalaya folder list`, `himalaya envelope list`.
+- In consumer lanes, run those as separate direct `himalaya` invocations. Do
+  not prepend `which`, `--version`, `set -o pipefail`, or other shell-chain
+  noise before the real check.
+- If configuration is missing, do not dump raw CLI noise back to the user.
+  Treat it as a setup-needed state and use the shared `consumer-setup` skill.
+- Treat send/reply/forward as higher-risk actions; prove read-only access first.
+- For the stock Homebrew build, prefer password or app-password auth. The local
+  `himalaya v1.1.0` build here does not include OAuth2 support.
+
+## Setup Routing
+
+- If `himalaya` cannot find configuration, account setup, or working auth, use
+  the shared `consumer-setup` skill instead of walking the user through a large
+  inline setup blob here.
+- If a direct `himalaya account list` succeeds but returns no accounts, say
+  email is not connected yet. Do not tell the user the CLI itself is blocked or
+  unavailable unless the direct `himalaya` call actually failed.
+- `references/configuration.md` still holds the raw config details for the
+  opt-in CLI/manual path when you are the one executing setup.
+- If you need the manual CLI path, the account wizard requires an explicit
+  account name in v1.1.x:
 
 ```bash
 himalaya account configure personal
@@ -85,6 +107,11 @@ Use the provider-specific Gmail and iCloud templates in `references/configuratio
 ```bash
 himalaya folder list
 ```
+
+If `himalaya` says it cannot find configuration, treat that as a setup-needed
+state, not as a hard product failure. Route setup through `consumer-setup` and
+do not echo the raw "Cannot find configuration" error unless the user
+explicitly asked for CLI details.
 
 ### List Emails
 

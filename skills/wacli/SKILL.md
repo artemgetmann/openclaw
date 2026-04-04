@@ -34,11 +34,26 @@ metadata:
 Use `wacli` only when the user explicitly asks you to message someone else on WhatsApp or when they ask to sync/search WhatsApp history.
 Do NOT use `wacli` for normal user chats; OpenClaw routes WhatsApp conversations automatically.
 If the user is chatting with you on WhatsApp, you should not reach for this tool unless they ask you to contact a third party.
+If the user is trying to connect or debug the live WhatsApp bot/channel, stop:
+`wacli` is the wrong setup surface. Route that conversation to the WhatsApp
+channel setup, not the CLI utility.
 
 Automation Rule
 
 - For consumer checks, start with the cheapest read-only probes:
-  `wacli doctor`, then `wacli chats list --limit 5 --json`.
+  `wacli doctor`, then `wacli chats list --limit 5`.
+- In consumer chat flows, prefer the plain human-readable `wacli doctor` shape.
+  Do not add `--json` unless the user explicitly asked for raw machine output.
+- In consumer lanes, run those as separate direct tool invocations. One command
+  per call. Do not chain them with shell operators like `&&`, pipes, or
+  redirection.
+- Do not route these checks through `nodes.invoke system.run` or other node-run
+  wrappers. Use the direct `exec` surface with the safe bin itself.
+- Do not claim WhatsApp is paired, readable, or ready unless those probes ran in
+  the current turn and the results support that claim.
+- If you did not run `wacli doctor`, do not infer status from prior chat context,
+  old screenshots, or generic expectations. Present it as unverified and offer
+  to check now.
 - If setup is missing or unhealthy, do not dump raw CLI noise back to the user.
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
 - Treat send/sync actions as higher-risk than read/list actions. Prove read access
@@ -48,22 +63,40 @@ Setup Routing
 
 - If `wacli` is missing, not authenticated, or has no usable chat history yet,
   route setup through `consumer-setup`.
+- If a policy denial came from your own command shape, describe that truthfully.
+  Say the attempted command format was blocked and retry with a direct safe-bin
+  call. Do not tell the user that `wacli` itself is unavailable unless a direct
+  `wacli` invocation actually failed.
+- If `wacli doctor` shows `AUTHENTICATED false`, explicitly say `wacli` is not
+  connected yet. Do not soften that into "paired" or "history is readable".
 - If `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, do not
   present that as a total failure. Explain that WhatsApp is paired, history may
   still be readable, but live sync/send reliability may be degraded until the
-  phone reconnects and sync catches up.
+  phone reconnects and sync catches up. Tell the user exactly what to do next:
+  keep WhatsApp open on the phone, make sure the phone stays online, and leave
+  the linked session active long enough for a bounded sync refresh to finish.
 - Use the raw CLI steps below only when you are the one performing setup or the
   user explicitly asks for the terminal path.
 - For local pairing work, prefer
-  `skills/wacli/scripts/wacli-auth-local.sh start`.
-  It runs `wacli auth` in an isolated temp store, captures the terminal QR,
+  `wacli-auth-local.sh start`.
+  In consumer lanes this resolves to the lane-local cleanroom wrapper, which
+  runs `wacli auth` in an isolated temp store, captures the login QR,
   renders a real PNG, and returns a session id plus `qrPath`.
-- When returning that QR to the user, send the image itself, not the raw block
-  characters. In CLI-agent flows, include `MEDIA:<qrPath>` in the final reply so
-  the QR remains scannable.
+- Run pairing helpers directly too. Do not wrap `wacli-auth-local.sh` inside a
+  shell string or node/system-run command.
+- Deliver the QR as a real image attachment first. Do not paste the raw QR
+  blocks into chat and do not use a browser-tab screenshot as the normal path.
+- In CLI-agent flows, include `MEDIA:<qrPath>` only as the transport hint the
+  platform needs for the attachment. Keep the surrounding text short and clean.
+- If the image cannot be delivered, say so explicitly and stop. Do not retry
+  with text QR noise unless the user explicitly asks for the terminal path.
 - After the user scans, confirm completion with
-  `skills/wacli/scripts/wacli-auth-local.sh wait --session <id>` before claiming
+  `wacli-auth-local.sh wait --session <id>` before claiming
   WhatsApp is ready.
+- In consumer lanes, if the account is paired but the latest messages are still
+  stale, use a bounded refresh only:
+  `wacli sync --once --idle-exit 30s`.
+  Do not use `wacli sync --follow` as the default product path.
 
 Safety
 
@@ -74,7 +107,7 @@ Safety
 Auth + sync
 
 - `wacli auth` (QR login + initial sync)
-- `wacli sync --follow` (continuous sync)
+- `wacli sync --once --idle-exit 30s` (bounded refresh for consumer lanes)
 - `wacli doctor`
 
 Find chats + messages
@@ -117,5 +150,9 @@ Notes
   - `AUTHENTICATED false` usually means QR pairing has not been completed yet.
   - `AUTHENTICATED true` + `CONNECTED false` usually means the account is paired
     but the phone/session is offline or not actively syncing.
-- `wacli chats list --json` is the cheapest proof that history/search access is
+- For consumer product flows, `CONNECTED false` should trigger clear guidance:
+  keep WhatsApp open on the phone, keep the phone online, and wait for the
+  linked session to catch up. Use a bounded sync refresh if the current turn
+  actually needs fresher data.
+- `wacli chats list` is the cheapest proof that history/search access is
   actually working before you attempt send or backfill actions.
