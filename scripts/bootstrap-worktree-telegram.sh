@@ -51,7 +51,8 @@ copy_if_exists "$MAIN_REPO/.env.bots" "./.env.bots"
 if [[ -f "./.env.bots" ]]; then
   assign_output="$({ bash scripts/assign-bot.sh; } 2>&1)" || {
     if [[ "$OPTIONAL" -eq 1 ]] && [[ "$assign_output" == *"no eligible tester bot tokens available"* ]]; then
-      echo "warning: telegram bot pool exhausted; skipping optional claim"
+      echo "warning: telegram tester claim deferred; pool exhausted after copying .env.bots" >&2
+      echo "warning: run 'bash scripts/telegram-live-runtime.sh ensure' after releasing an unused tester lane" >&2
     else
       printf '%s\n' "$assign_output" >&2
       exit 1

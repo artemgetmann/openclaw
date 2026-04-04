@@ -31,6 +31,12 @@ STOPPED_RUNTIME_PID=""
 TOKEN_PRESENT="no"
 TOKEN_POOL_GUARD="fail"
 TOKEN_FINGERPRINT="none"
+TOKEN_CLAIM_STATUS="unknown"
+TOKEN_CLAIM_REASON="unknown"
+TOKEN_POOL_SIZE=0
+TOKEN_POOL_CLAIMED_COUNT=0
+TOKEN_POOL_RESERVED_COUNT=0
+TOKEN_POOL_CLAIMABLE_COUNT=0
 ASSIGNED_BOT_TOKEN=""
 ASSIGNED_BOT_ID="unknown"
 ASSIGNED_BOT_USERNAME="unknown"
@@ -40,6 +46,9 @@ RUNTIME_TOKEN_SOURCE="unknown"
 TOKEN_ORIGIN_HINT="unknown"
 TOKEN_CLAIM_COUNT=0
 TOKEN_CLAIM_PATHS=()
+RUNTIME_CONFIG_PRESENT="no"
+RUNTIME_CONFIG_TOKEN_PRESENT="no"
+RUNTIME_CONFIG_TOKEN_FINGERPRINT="none"
 FAIL=0
 FAIL_REASONS=()
 
@@ -114,6 +123,45 @@ add_failure() {
   local reason="$1"
   FAIL=1
   FAIL_REASONS+=("$reason")
+}
+
+parse_assign_bot_output() {
+  local output="$1"
+  local line=""
+  local reason=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      Reason:\ *) reason="${line#Reason: }" ;;
+      Selection\ reason:\ *) reason="${line#Selection reason: }" ;;
+      Claimed:\ *)
+        if [[ "$line" =~ Claimed:\ ([0-9]+)\ /\ Pool:\ ([0-9]+)\ /\ Reserved\ by\ main\ runtime:\ ([0-9]+) ]]; then
+          TOKEN_POOL_CLAIMED_COUNT="${BASH_REMATCH[1]}"
+          TOKEN_POOL_SIZE="${BASH_REMATCH[2]}"
+          TOKEN_POOL_RESERVED_COUNT="${BASH_REMATCH[3]}"
+        fi
+        ;;
+      Claimable\ now:\ *)
+        if [[ "$line" =~ Claimable\ now:\ ([0-9]+) ]]; then
+          TOKEN_POOL_CLAIMABLE_COUNT="${BASH_REMATCH[1]}"
+        fi
+        ;;
+    esac
+  done <<< "$output"
+
+  if [[ -n "$reason" ]]; then
+    TOKEN_CLAIM_REASON="$reason"
+  fi
+}
+
+hydrate_current_lane_bot() {
+  resolve_token_claims "$ASSIGNED_BOT_TOKEN"
+  resolve_bot_identity
+  if [[ "${ASSIGNED_BOT_USERNAME}" != "unknown" ]]; then
+    CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
+  elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
+    CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
+  fi
 }
 
 resolve_token_claims() {
@@ -264,10 +312,59 @@ NODE
   PROFILE_ID="$(printf '%s\n' "$profile_lines" | sed -n '1p')"
   RUNTIME_PORT="$(printf '%s\n' "$profile_lines" | sed -n '2p')"
   RUNTIME_STATE_DIR="$(printf '%s\n' "$profile_lines" | sed -n '3p')"
+  RUNTIME_CONFIG_PATH="${RUNTIME_STATE_DIR}/openclaw.telegram-live.json"
   RUNTIME_LOG_PATH="/tmp/openclaw-telegram-live-${PROFILE_ID}.log"
 
   if [[ -z "$PROFILE_ID" || -z "$RUNTIME_PORT" || -z "$RUNTIME_STATE_DIR" ]]; then
     add_failure "profile_resolution_failed"
+  fi
+}
+
+inspect_runtime_config() {
+  RUNTIME_CONFIG_PRESENT="no"
+  RUNTIME_CONFIG_TOKEN_PRESENT="no"
+  RUNTIME_CONFIG_TOKEN_FINGERPRINT="none"
+
+  if [[ -z "$RUNTIME_CONFIG_PATH" || ! -f "$RUNTIME_CONFIG_PATH" ]]; then
+    return
+  fi
+
+  RUNTIME_CONFIG_PRESENT="yes"
+
+  local token=""
+  token="$(
+    RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" node --input-type=module - <<'NODE'
+import fs from "node:fs";
+
+const configPath = process.env.RUNTIME_CONFIG_PATH;
+if (!configPath || !fs.existsSync(configPath)) {
+  process.exit(0);
+}
+
+try {
+  const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const token =
+    parsed &&
+    typeof parsed === "object" &&
+    parsed.channels &&
+    typeof parsed.channels === "object" &&
+    parsed.channels.telegram &&
+    typeof parsed.channels.telegram === "object" &&
+    typeof parsed.channels.telegram.botToken === "string"
+      ? parsed.channels.telegram.botToken.trim()
+      : "";
+  if (token) {
+    process.stdout.write(token);
+  }
+} catch {
+  process.exit(0);
+}
+NODE
+  )"
+
+  if [[ -n "$token" ]]; then
+    RUNTIME_CONFIG_TOKEN_PRESENT="yes"
+    RUNTIME_CONFIG_TOKEN_FINGERPRINT="$(mask_token "$token")"
   fi
 }
 
@@ -381,6 +478,14 @@ ensure_tester_bot_claim() {
   local env_local="${REPO_ROOT}/.env.local"
   local env_bots="${REPO_ROOT}/.env.bots"
   local token=""
+  local assign_output=""
+
+  TOKEN_CLAIM_STATUS="unknown"
+  TOKEN_CLAIM_REASON="unknown"
+  TOKEN_POOL_SIZE=0
+  TOKEN_POOL_CLAIMED_COUNT=0
+  TOKEN_POOL_RESERVED_COUNT=0
+  TOKEN_POOL_CLAIMABLE_COUNT=0
 
   # If this worktree already owns a tester token, reuse it. Re-running `ensure`
   # should be idempotent even when the shared pool is full.
@@ -389,60 +494,69 @@ ensure_tester_bot_claim() {
   fi
 
   if [[ -n "$token" ]]; then
+    TOKEN_CLAIM_STATUS="ok"
+    TOKEN_CLAIM_REASON="existing_claim"
     TOKEN_PRESENT="yes"
     ASSIGNED_BOT_TOKEN="$token"
     TOKEN_FINGERPRINT="$(mask_token "$token")"
     RUNTIME_TOKEN_SOURCE="repo_env_local"
     TOKEN_ORIGIN_HINT="repo_env_local"
-    resolve_token_claims "$token"
-    resolve_bot_identity
-    if [[ "${ASSIGNED_BOT_USERNAME}" != "unknown" ]]; then
-      CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
-    elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
-      CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
-    fi
+    hydrate_current_lane_bot
   else
-  if [[ ! -x "$ASSIGN_BOT_SCRIPT" ]]; then
-    add_failure "assign_bot_script_missing:${ASSIGN_BOT_SCRIPT}"
-    return
+    if [[ ! -x "$ASSIGN_BOT_SCRIPT" ]]; then
+      TOKEN_CLAIM_STATUS="fail"
+      TOKEN_CLAIM_REASON="assign_script_missing"
+      add_failure "assign_bot_script_missing:${ASSIGN_BOT_SCRIPT}"
+      return
+    fi
+
+    if ! assign_output="$(cd "$REPO_ROOT" && bash "$ASSIGN_BOT_SCRIPT" 2>&1)"; then
+      TOKEN_CLAIM_STATUS="fail"
+      TOKEN_CLAIM_REASON="assign_failed"
+      parse_assign_bot_output "$assign_output"
+      if [[ "$TOKEN_CLAIM_REASON" == "pool_exhausted" ]]; then
+        TOKEN_POOL_GUARD="blocked"
+        RUNTIME_START_ACTION="blocked_no_token"
+      fi
+      add_failure "token_claim_failed:${TOKEN_CLAIM_REASON}"
+      return
+    fi
+
+    if [[ ! -f "$env_local" ]]; then
+      TOKEN_CLAIM_STATUS="fail"
+      TOKEN_CLAIM_REASON="env_local_missing_after_assign"
+      add_failure "env_local_missing_after_assign"
+      return
+    fi
+    if [[ ! -f "$env_bots" ]]; then
+      TOKEN_CLAIM_STATUS="fail"
+      TOKEN_CLAIM_REASON="env_bots_missing_after_assign"
+      add_failure "env_bots_missing_after_assign"
+      return
+    fi
+
+    token="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
+    if [[ -z "$token" ]]; then
+      TOKEN_CLAIM_STATUS="fail"
+      TOKEN_CLAIM_REASON="telegram_token_missing_in_env_local"
+      add_failure "telegram_token_missing_in_env_local"
+      return
+    fi
+
+    TOKEN_CLAIM_STATUS="ok"
+    TOKEN_CLAIM_REASON="assigned"
+    parse_assign_bot_output "$assign_output"
+    TOKEN_PRESENT="yes"
+    ASSIGNED_BOT_TOKEN="$token"
+    TOKEN_FINGERPRINT="$(mask_token "$token")"
+    RUNTIME_TOKEN_SOURCE="repo_env_local"
+    TOKEN_ORIGIN_HINT="repo_env_local"
+    hydrate_current_lane_bot
   fi
 
-  if ! (cd "$REPO_ROOT" && bash "$ASSIGN_BOT_SCRIPT"); then
-    add_failure "assign_bot_failed"
-    return
-  fi
-
-  if [[ ! -f "$env_local" ]]; then
-    add_failure "env_local_missing_after_assign"
-    return
-  fi
   if [[ ! -f "$env_bots" ]]; then
-    add_failure "env_bots_missing_after_assign"
-    return
-  fi
-
-  local token
-  token="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
-  if [[ -z "$token" ]]; then
-    add_failure "telegram_token_missing_in_env_local"
-    return
-  fi
-
-  TOKEN_PRESENT="yes"
-  ASSIGNED_BOT_TOKEN="$token"
-  TOKEN_FINGERPRINT="$(mask_token "$token")"
-  RUNTIME_TOKEN_SOURCE="repo_env_local"
-  TOKEN_ORIGIN_HINT="repo_env_local"
-  resolve_token_claims "$token"
-  resolve_bot_identity
-  if [[ "${ASSIGNED_BOT_USERNAME}" != "unknown" ]]; then
-    CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
-  elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
-    CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
-  fi
-  fi
-
-  if [[ ! -f "$env_bots" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="env_bots_missing_after_assign"
     add_failure "env_bots_missing_after_assign"
     return
   fi
@@ -467,6 +581,8 @@ ensure_tester_bot_claim() {
     TOKEN_POOL_GUARD="ok"
   else
     TOKEN_POOL_GUARD="fail"
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="token_not_in_pool"
     add_failure "token_not_in_pool"
   fi
 }
@@ -718,13 +834,23 @@ emit_ensure_proof_lines() {
   echo "runtime_worktree=${RUNTIME_WORKTREE:-}"
   echo "runtime_port=${RUNTIME_PORT:-}"
   echo "runtime_state_dir=${RUNTIME_STATE_DIR:-}"
+  echo "runtime_config_path=${RUNTIME_CONFIG_PATH:-}"
+  echo "runtime_config_present=${RUNTIME_CONFIG_PRESENT}"
+  echo "runtime_config_token_present=${RUNTIME_CONFIG_TOKEN_PRESENT}"
+  echo "runtime_config_token_fingerprint=${RUNTIME_CONFIG_TOKEN_FINGERPRINT}"
   echo "runtime_ownership=${RUNTIME_OWNERSHIP}"
   echo "runtime_health=${RUNTIME_HEALTH}"
   echo "runtime_start_action=${RUNTIME_START_ACTION}"
   echo "runtime_start_timeout_secs=${RUNTIME_START_TIMEOUT_SECS}"
   echo "runtime_plugin_mode=${RUNTIME_PLUGIN_MODE}"
   echo "token_present=${TOKEN_PRESENT}"
+  echo "token_claim_status=${TOKEN_CLAIM_STATUS}"
+  echo "token_claim_reason=${TOKEN_CLAIM_REASON}"
   echo "token_pool_guard=${TOKEN_POOL_GUARD}"
+  echo "token_pool_claimed=${TOKEN_POOL_CLAIMED_COUNT}"
+  echo "token_pool_size=${TOKEN_POOL_SIZE}"
+  echo "token_pool_reserved=${TOKEN_POOL_RESERVED_COUNT}"
+  echo "token_pool_claimable=${TOKEN_POOL_CLAIMABLE_COUNT}"
   echo "token_fingerprint=${TOKEN_FINGERPRINT}"
   echo "current_lane_bot=${CURRENT_LANE_BOT}"
   echo "runtime_token_source=${RUNTIME_TOKEN_SOURCE}"
@@ -740,55 +866,66 @@ emit_ensure_proof_lines() {
 
 ensure_command() {
   resolve_profile
+  inspect_runtime_config
+  resolve_runtime_owner
 
   if [[ -z "${BRANCH}" || "${BRANCH}" == "HEAD" ]]; then
     add_failure "branch_detached_head"
   fi
 
   ensure_tester_bot_claim
-  prepare_isolated_runtime_config
-  sync_runtime_auth_profiles
 
-  resolve_runtime_owner
+  # Token claim is the gate. If we cannot claim or reuse a tester bot, report
+  # that state directly instead of pretending startup/readiness failed.
+  if [[ "$TOKEN_CLAIM_STATUS" == "ok" ]]; then
+    prepare_isolated_runtime_config
+    sync_runtime_auth_profiles
 
-  if [[ -n "$RUNTIME_PID" && "$RUNTIME_OWNERSHIP" != "ok" ]]; then
-    add_failure "runtime_owned_by_other_worktree_or_process"
-  fi
+    resolve_runtime_owner
 
-  if [[ -z "$RUNTIME_PID" && "$FAIL" -eq 0 ]]; then
-    start_isolated_runtime
-  fi
-
-  if [[ "$FAIL" -eq 0 ]]; then
-    local waited=0
-    # Cold isolated boots can take a couple of minutes on this repo because the
-    # runtime still initializes bundled services before Telegram is ready.
-    local startup_timeout="${OPENCLAW_TELEGRAM_LIVE_START_TIMEOUT_SECS:-240}"
-    if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]]; then
-      startup_timeout=240
+    if [[ -n "$RUNTIME_PID" && "$RUNTIME_OWNERSHIP" != "ok" ]]; then
+      add_failure "runtime_owned_by_other_worktree_or_process"
     fi
-    RUNTIME_START_TIMEOUT_SECS="$startup_timeout"
-    while [[ "$waited" -lt "$startup_timeout" ]]; do
-      resolve_runtime_owner
-      if [[ "$RUNTIME_OWNERSHIP" == "ok" ]]; then
-        probe_runtime_health
-        if [[ "$RUNTIME_HEALTH" == "ok" ]]; then
-          break
-        fi
-      fi
-      sleep 1
-      waited=$((waited + 1))
-    done
-  fi
 
-  if [[ "$RUNTIME_OWNERSHIP" != "ok" ]]; then
-    add_failure "runtime_ownership_check_failed"
-  fi
-  if [[ "$RUNTIME_HEALTH" != "ok" ]]; then
-    add_failure "runtime_health_check_failed"
-  fi
-  if [[ "${TOKEN_CLAIM_COUNT}" -gt 1 ]]; then
-    add_failure "token_claim_count:${TOKEN_CLAIM_COUNT}"
+    if [[ -z "$RUNTIME_PID" && "$FAIL" -eq 0 ]]; then
+      start_isolated_runtime
+    fi
+
+    if [[ "$FAIL" -eq 0 ]]; then
+      local waited=0
+      # Cold isolated boots can take a couple of minutes on this repo because the
+      # runtime still initializes bundled services before Telegram is ready.
+      local startup_timeout="${OPENCLAW_TELEGRAM_LIVE_START_TIMEOUT_SECS:-240}"
+      if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]]; then
+        startup_timeout=240
+      fi
+      RUNTIME_START_TIMEOUT_SECS="$startup_timeout"
+      while [[ "$waited" -lt "$startup_timeout" ]]; do
+        resolve_runtime_owner
+        if [[ "$RUNTIME_OWNERSHIP" == "ok" ]]; then
+          probe_runtime_health
+          if [[ "$RUNTIME_HEALTH" == "ok" ]]; then
+            break
+          fi
+        fi
+        sleep 1
+        waited=$((waited + 1))
+      done
+    fi
+
+    if [[ "$RUNTIME_OWNERSHIP" != "ok" ]]; then
+      add_failure "runtime_ownership_check_failed"
+    fi
+    if [[ "$RUNTIME_HEALTH" != "ok" ]]; then
+      add_failure "runtime_health_check_failed"
+    fi
+    if [[ "${TOKEN_CLAIM_COUNT}" -gt 1 ]]; then
+      add_failure "token_claim_count:${TOKEN_CLAIM_COUNT}"
+    fi
+  else
+    if [[ -n "$RUNTIME_PID" || "$RUNTIME_CONFIG_TOKEN_PRESENT" == "yes" ]]; then
+      add_failure "runtime_state_present_without_token_claim"
+    fi
   fi
 
   emit_ensure_proof_lines

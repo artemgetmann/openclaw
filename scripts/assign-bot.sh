@@ -123,7 +123,7 @@ if (!helperPath) {
 
 const {
   extractTelegramBotTokensFromConfig,
-  selectTelegramTesterToken,
+  summarizeTelegramTesterTokenPool,
 } = await import(pathToFileURL(helperPath).href);
 
 const envBotsPath = path.join(currentWorktree, ".env.bots");
@@ -171,7 +171,7 @@ const readLastEnvValue = (filePath, key) => {
 
 const currentToken = fs.existsSync(envLocalPath) ? readLastEnvValue(envLocalPath, "TELEGRAM_BOT_TOKEN") : "";
 
-const claimedTokens = [];
+const claimedEntries = [];
 const worktreeList = execFileSync("git", ["worktree", "list", "--porcelain"], {
   cwd: currentWorktree,
   encoding: "utf8",
@@ -190,7 +190,10 @@ for (const line of worktreeList.split(/\r?\n/g)) {
   }
   const claimed = readLastEnvValue(candidateEnvLocalPath, "TELEGRAM_BOT_TOKEN");
   if (claimed) {
-    claimedTokens.push(claimed);
+    claimedEntries.push({
+      token: claimed,
+      worktreePath,
+    });
   }
 }
 
@@ -204,19 +207,25 @@ if (baseConfigPath && fs.existsSync(baseConfigPath)) {
   }
 }
 
-const selection = selectTelegramTesterToken({
+const summary = summarizeTelegramTesterTokenPool({
   poolTokens,
-  claimedTokens,
+  claimedEntries,
   reservedTokens,
   currentToken,
 });
+const selection = summary.selection;
 
 if (!selection.ok || !selection.selectedToken) {
   console.log("ok=no");
   console.log(`reason=${selection.reason}`);
-  console.log(`claimedCount=${claimedTokens.length}`);
-  console.log(`poolCount=${poolTokens.length}`);
-  console.log(`reservedCount=${reservedTokens.length}`);
+  console.log(`currentTokenStatus=${summary.currentTokenStatus}`);
+  console.log(`claimedCount=${summary.claimedCount}`);
+  console.log(`poolCount=${summary.poolCount}`);
+  console.log(`reservedCount=${summary.reservedCount}`);
+  console.log(`claimableCount=${summary.claimableCount}`);
+  for (const entry of summary.claimedEntries) {
+    console.log(`claimedWorktree=${entry.worktreePath}`);
+  }
   process.exit(0);
 }
 
@@ -224,11 +233,13 @@ const selectedIndex = poolTokens.findIndex((token) => token === selection.select
 console.log("ok=yes");
 console.log(`action=${selection.action}`);
 console.log(`reason=${selection.reason}`);
+console.log(`currentTokenStatus=${summary.currentTokenStatus}`);
 console.log(`selectedToken=${selection.selectedToken}`);
 console.log(`selectedIndex=${selectedIndex >= 0 ? selectedIndex + 1 : 0}`);
-console.log(`claimedCount=${claimedTokens.length}`);
-console.log(`poolCount=${poolTokens.length}`);
-console.log(`reservedCount=${reservedTokens.length}`);
+console.log(`claimedCount=${summary.claimedCount}`);
+console.log(`poolCount=${summary.poolCount}`);
+console.log(`reservedCount=${summary.reservedCount}`);
+console.log(`claimableCount=${summary.claimableCount}`);
 NODE
 )"
 
@@ -240,6 +251,9 @@ selection_reason=""
 claimed_count=0
 pool_count=${#bot_tokens[@]}
 reserved_count=0
+claimable_count=0
+current_token_status="absent"
+claimed_worktrees=()
 while IFS= read -r line || [[ -n "$line" ]]; do
   key="${line%%=*}"
   value="${line#*=}"
@@ -252,6 +266,9 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     claimedCount) claimed_count="$value" ;;
     poolCount) pool_count="$value" ;;
     reservedCount) reserved_count="$value" ;;
+    claimableCount) claimable_count="$value" ;;
+    currentTokenStatus) current_token_status="$value" ;;
+    claimedWorktree) claimed_worktrees+=("$value") ;;
   esac
 done <<< "$selection"
 
@@ -259,7 +276,17 @@ if [[ "$selection_ok" != "yes" || -z "$selected_token" ]]; then
   echo "Error: no eligible tester bot tokens available." >&2
   echo "Reason: ${selection_reason:-unknown}" >&2
   echo "Claimed: ${claimed_count} / Pool: ${pool_count} / Reserved by main runtime: ${reserved_count}" >&2
-  echo "Delete an unused worktree .env.local or add more tester-only bot tokens." >&2
+  echo "Claimable now: ${claimable_count}" >&2
+  if [[ "${current_token_status}" != "absent" ]]; then
+    echo "Current token status: ${current_token_status}" >&2
+  fi
+  if (( ${#claimed_worktrees[@]} > 0 )); then
+    echo "Claimed worktrees:" >&2
+    for claimed_worktree in "${claimed_worktrees[@]}"; do
+      echo "  - ${claimed_worktree}" >&2
+    done
+  fi
+  echo "Release an unused worktree with 'bash scripts/telegram-live-runtime.sh release' or add more tester-only bot tokens." >&2
   exit 1
 fi
 
@@ -271,4 +298,6 @@ else
   echo "Assigned Telegram bot token #$selected_index to worktree: $(pwd -P)"
 fi
 echo "Selection reason: ${selection_reason}"
+echo "Claimed: ${claimed_count} / Pool: ${pool_count} / Reserved by main runtime: ${reserved_count}"
+echo "Claimable now: ${claimable_count}"
 echo "Token fingerprint: $(mask_token "$selected_token")"

@@ -33,6 +33,32 @@ function normalizeStringList(values) {
   return normalizeTokenList(values);
 }
 
+function normalizeClaimEntries(values) {
+  const seen = new Set();
+  const out = [];
+
+  for (const value of values) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+
+    const token = String(value.token ?? "").trim();
+    const worktreePath = String(value.worktreePath ?? "").trim();
+    if (!token || !worktreePath) {
+      continue;
+    }
+
+    const key = `${token}\u0000${worktreePath}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push({ token, worktreePath });
+  }
+
+  return out;
+}
+
 function parseEnvAssignmentLine(line, key) {
   const match = String(line ?? "").match(
     new RegExp(`^[\\t ]*(?:export[\\t ]+)?${key}[\\t ]*=[\\t ]*(.*)$`),
@@ -112,6 +138,56 @@ export function selectTelegramTesterToken(params) {
     action: "fail",
     reason: "pool_exhausted",
     selectedToken: null,
+  };
+}
+
+export function summarizeTelegramTesterTokenPool(params) {
+  const poolTokens = normalizeTokenList(params?.poolTokens ?? []);
+  const claimedEntries = normalizeClaimEntries(params?.claimedEntries ?? []);
+  const claimedTokens = normalizeTokenList(claimedEntries.map((entry) => entry.token));
+  const reservedTokens = normalizeTokenList(params?.reservedTokens ?? []);
+  const currentToken = String(params?.currentToken ?? "").trim();
+  const reservedTokenSet = new Set(reservedTokens);
+  const claimedTokenSet = new Set(claimedTokens);
+
+  // The selection layer needs one shared definition of "available" so
+  // bootstrap, ensure, and diagnostics cannot drift into contradictory stories.
+  const claimableTokens = poolTokens.filter(
+    (token) => !claimedTokenSet.has(token) && !reservedTokenSet.has(token),
+  );
+  const selection = selectTelegramTesterToken({
+    poolTokens,
+    claimedTokens,
+    reservedTokens,
+    currentToken,
+  });
+
+  let currentTokenStatus = "absent";
+  if (currentToken) {
+    if (!poolTokens.includes(currentToken)) {
+      currentTokenStatus = "outside_pool";
+    } else if (claimedTokenSet.has(currentToken)) {
+      currentTokenStatus = "claimed_elsewhere";
+    } else if (reservedTokenSet.has(currentToken)) {
+      currentTokenStatus = "reserved_by_base_config";
+    } else {
+      currentTokenStatus = "claimable";
+    }
+  }
+
+  return {
+    selection,
+    poolTokens,
+    poolCount: poolTokens.length,
+    claimedEntries,
+    claimedTokens,
+    claimedCount: claimedEntries.length,
+    reservedTokens,
+    reservedCount: reservedTokens.length,
+    claimableTokens,
+    claimableCount: claimableTokens.length,
+    currentToken,
+    currentTokenStatus,
   };
 }
 
