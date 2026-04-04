@@ -32,6 +32,17 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `ensure file seeds broad local operator defaults`() async throws {
+        try await self.withTempStateDir { _ in
+            let resolved = ExecApprovalsStore.resolve(agentId: "main")
+            #expect(resolved.defaults.security == .full)
+            #expect(resolved.defaults.ask == .off)
+            #expect(resolved.defaults.askFallback == .deny)
+            #expect(resolved.defaults.autoAllowSkills == false)
+        }
+    }
+
+    @Test
     func `update allowlist reports rejected basename pattern`() async throws {
         try await self.withTempStateDir { _ in
             let rejected = ExecApprovalsStore.updateAllowlist(
