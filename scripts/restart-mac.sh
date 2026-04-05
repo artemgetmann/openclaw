@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${ROOT_DIR}/scripts/lib/validated-node.sh"
 source "${ROOT_DIR}/scripts/lib/worktree-guards.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
 GATEWAY_ENTRY="${ROOT_DIR}/dist/index.js"
@@ -31,6 +32,9 @@ ATTACH_ONLY=0
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+openclaw_use_validated_node "${ROOT_DIR}" >/dev/null
+NODE_BIN="${OPENCLAW_NODE_BIN}"
 
 # Ensure local node binaries (rolldown, pnpm) are discoverable for the steps below.
 export PATH="${ROOT_DIR}/node_modules/.bin:${PATH}"
@@ -273,8 +277,9 @@ log "==> Killing existing OpenClaw instances (scope=${APP_SCOPE})"
 kill_all_openclaw
 stop_launch_agent
 
-# Bundle Gateway-hosted Canvas A2UI assets.
-run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bundle"
+# Bundle Gateway-hosted Canvas A2UI assets with the same validated Node/Corepack
+# pair as the shared runtime build so the relaunch path cannot drift.
+run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && '${ROOT_DIR}/scripts/build-shared-runtime.sh' canvas:a2ui:bundle"
 
 # 2) Rebuild into the same path the packager consumes (.build).
 run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
@@ -339,13 +344,13 @@ if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
   # The unsigned recovery path still owns the shared main LaunchAgent, so it
   # must use the canonical repo entrypoint plus explicit takeover instead of a
   # wrapper/alias install that can drift back to ~/.openclaw.
-  run_step "install gateway launch agent (unsigned)" bash -lc "cd '${ROOT_DIR}' && node '${GATEWAY_ENTRY}' gateway install --force --allow-shared-service-takeover --runtime node"
-  run_step "restart gateway daemon (unsigned)" bash -lc "cd '${ROOT_DIR}' && node '${GATEWAY_ENTRY}' gateway restart"
+  run_step "install gateway launch agent (unsigned)" bash -lc "cd '${ROOT_DIR}' && '${NODE_BIN}' '${GATEWAY_ENTRY}' gateway install --force --allow-shared-service-takeover --runtime node"
+  run_step "restart gateway daemon (unsigned)" bash -lc "cd '${ROOT_DIR}' && '${NODE_BIN}' '${GATEWAY_ENTRY}' gateway restart"
   if [[ "${GATEWAY_WAIT_SECONDS}" -gt 0 ]]; then
     run_step "wait for gateway (unsigned)" sleep "${GATEWAY_WAIT_SECONDS}"
   fi
   GATEWAY_PORT="$(
-    node -e '
+    '"${NODE_BIN}"' -e '
       const fs = require("node:fs");
       const path = require("node:path");
       try {
