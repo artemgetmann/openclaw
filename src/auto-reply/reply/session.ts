@@ -477,16 +477,6 @@ export async function initSessionState(params: {
   if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";
   }
-  // Telegram is the consumer chat surface, so seed new sessions into the
-  // safer named "Normal" permission mode unless the chat already opted into a
-  // specific exec configuration. Other surfaces keep their existing defaults.
-  if (!hasExistingSessionEntry) {
-    ensureDefaultPermissionModeOnSessionEntry({
-      entry: sessionEntry,
-      channel:
-        sessionEntry.channel ?? sessionEntry.lastChannel ?? ctx.OriginatingChannel ?? ctx.Surface,
-    });
-  }
   const threadLabel = ctx.ThreadLabel?.trim();
   if (threadLabel) {
     sessionEntry.displayName = threadLabel;
@@ -505,13 +495,19 @@ export async function initSessionState(params: {
   });
   if (!hasExistingSessionEntry && futureThreadParentSessionKey) {
     const parentEntry = sessionStore[futureThreadParentSessionKey];
-    // Seed brand-new Telegram thread sessions from the parent chat's
-    // future-thread defaults. Existing thread sessions are intentionally left
-    // untouched so model/think history remains stable.
+    // Seed brand-new thread/topic sessions from the parent chat before falling
+    // back to agent-wide defaults so parent-specific overrides can propagate.
     seedSessionEntryFromFutureThreadDefaults({
       entry: sessionEntry,
       parentEntry,
       childThreadId: ctx.MessageThreadId ?? lastThreadId,
+    });
+  }
+  if (!hasExistingSessionEntry) {
+    ensureDefaultPermissionModeOnSessionEntry({
+      entry: sessionEntry,
+      config: cfg,
+      agentId,
     });
   }
   const alreadyForked = sessionEntry.forkedFromParent === true;

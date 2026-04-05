@@ -1,28 +1,42 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   applyPermissionModeToSessionEntry,
   buildPermissionModePromptHint,
   ensureDefaultPermissionModeOnSessionEntry,
+  resolvePermissionDefaults,
   resolveDefaultPermissionMode,
   resolvePermissionMode,
 } from "./permissions-mode.js";
 
 describe("permissions mode", () => {
-  it("defaults Telegram chats to normal mode", () => {
-    expect(resolveDefaultPermissionMode({ channel: "telegram" })).toBe("normal");
-    expect(resolvePermissionMode({ channel: "telegram" })).toMatchObject({
-      kind: "normal",
-      execSecurity: "allowlist",
+  it("defaults to full/off when config does not narrow exec", () => {
+    expect(resolvePermissionDefaults()).toEqual({
+      execSecurity: "full",
+      execAsk: "off",
+    });
+    expect(resolveDefaultPermissionMode()).toBe("full");
+    expect(resolvePermissionMode({})).toMatchObject({
+      kind: "full",
+      execSecurity: "full",
       execAsk: "off",
     });
   });
 
-  it("keeps non-Telegram chats on the broader existing default", () => {
-    expect(resolveDefaultPermissionMode({ channel: "discord" })).toBe("full");
-    expect(resolvePermissionMode({ channel: "discord" })).toMatchObject({
-      kind: "full",
-      execSecurity: "full",
+  it("maps allowlist config to normal mode", () => {
+    const config = {
+      tools: {
+        exec: {
+          security: "allowlist",
+          ask: "off",
+        },
+      },
+    } satisfies OpenClawConfig;
+    expect(resolveDefaultPermissionMode({ config })).toBe("normal");
+    expect(resolvePermissionMode({ config })).toMatchObject({
+      kind: "normal",
+      execSecurity: "allowlist",
       execAsk: "off",
     });
   });
@@ -38,15 +52,23 @@ describe("permissions mode", () => {
     expect(entry.execAsk).toBe("off");
   });
 
-  it("seeds Telegram session entries with normal mode only when unset", () => {
+  it("seeds session entries from effective config defaults only when unset", () => {
+    const config = {
+      tools: {
+        exec: {
+          security: "allowlist",
+          ask: "always",
+        },
+      },
+    } satisfies OpenClawConfig;
     const entry = { sessionId: "s1", updatedAt: 1 } satisfies SessionEntry;
-    expect(ensureDefaultPermissionModeOnSessionEntry({ entry, channel: "telegram" })).toEqual({
+    expect(ensureDefaultPermissionModeOnSessionEntry({ entry, config })).toEqual({
       updated: true,
     });
     expect(entry.execSecurity).toBe("allowlist");
-    expect(entry.execAsk).toBe("off");
+    expect(entry.execAsk).toBe("always");
 
-    expect(ensureDefaultPermissionModeOnSessionEntry({ entry, channel: "telegram" })).toEqual({
+    expect(ensureDefaultPermissionModeOnSessionEntry({ entry, config })).toEqual({
       updated: false,
     });
   });
@@ -54,7 +76,6 @@ describe("permissions mode", () => {
   it("reports custom mode for legacy non-named exec combinations", () => {
     expect(
       resolvePermissionMode({
-        channel: "telegram",
         execSecurity: "allowlist",
         execAsk: "always",
       }),
@@ -66,11 +87,11 @@ describe("permissions mode", () => {
   });
 
   it("builds prompt guidance that explicitly steers away from Terminal detours", () => {
-    expect(buildPermissionModePromptHint({ channel: "telegram" })).toContain(
+    expect(buildPermissionModePromptHint({ execSecurity: "allowlist", execAsk: "off" })).toContain(
       "If a shell wrapper is blocked, try the direct command form instead of telling the user to use Terminal.",
     );
-    expect(
-      buildPermissionModePromptHint({ channel: "telegram", execSecurity: "full", execAsk: "off" }),
-    ).toContain("Full Permissions");
+    expect(buildPermissionModePromptHint({ execSecurity: "full", execAsk: "off" })).toContain(
+      "Full Permissions",
+    );
   });
 });
