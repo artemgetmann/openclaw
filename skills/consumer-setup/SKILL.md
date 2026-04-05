@@ -68,20 +68,23 @@ explicitly ask for the CLI path.
   tool.
 - Be blunt when the user mixes them up: "That is the wrong setup surface."
 - Missing states usually look like: `wacli` not installed, QR pairing not
-  completed, or `wacli doctor` showing `AUTHENTICATED false`.
+  completed, or
+  `skills/wacli/scripts/wacli-health.sh --json --ensure-owner` reporting
+  `not_authenticated`.
 - Never say WhatsApp is paired, readable, or partially ready unless you have a
-  fresh `wacli doctor` result from this turn. No guessing from prior context.
+  fresh normalized health result from this turn. No guessing from prior
+  context.
 - Tell the user exactly which thing is not connected yet:
   - "The WhatsApp channel is not connected yet." for live chat transport.
   - "`wacli` is not connected yet." for the local Mac utility.
 - Offer to help pair it now, usually by showing the QR login flow and waiting
   for the phone to approve it.
-- If `wacli doctor` shows `AUTHENTICATED false`, stop there and route to setup.
-  Do not imply existing history/search access.
-- If `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, explain
-  the nuance clearly: WhatsApp is paired, history/search may still work, but
-  live sync or sending may be unreliable until the phone is online and the
-  session reconnects. Tell the user what to do next in plain language:
+- If the normalized health check reports `not_authenticated`, stop there and
+  route to setup. Do not imply existing history/search access.
+- If the normalized health check reports `paired_not_connected_readable`,
+  explain the nuance clearly: WhatsApp is paired, history/search may still
+  work, but live sync or sending may be unreliable until the phone is online
+  and the session reconnects. Tell the user what to do next in plain language:
   keep WhatsApp open on the phone, make sure the phone stays online, and leave
   the linked session active long enough for a short sync refresh to complete.
 - When pairing via QR, the normal path is to deliver a real image attachment
@@ -101,11 +104,11 @@ explicitly ask for the CLI path.
 - For consumer product flows, do not suggest `wacli sync --follow` as the
   default next step. If a refresh is actually needed after pairing, prefer the
   bounded path `wacli sync --once --idle-exit 30s`.
-- Verify with the cheapest read-only checks first: `wacli doctor`, then
-  `wacli chats list --limit 5`, or use
-  `skills/wacli/scripts/wacli-health.sh --json`.
-- In consumer chat flows, use the plain `wacli doctor` shape unless the user
-  explicitly asks for JSON output. Do not invent `--json` on your own here.
+- Verify with the normalized check first:
+  `skills/wacli/scripts/wacli-health.sh --json --ensure-owner`.
+- Use raw `wacli doctor` only for fallback debugging, not as the primary user
+  status, because it can misreport `CONNECTED false` while a healthy sync owner
+  holds the lock.
 - Run those checks as separate direct invocations. Never combine them into one
   shell command with `&&` or similar operators in consumer chat flows.
 - If an attempted command is blocked because you used the wrong execution

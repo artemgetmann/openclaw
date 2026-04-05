@@ -7,7 +7,17 @@ metadata:
     "openclaw":
       {
         "emoji": "📱",
-        "requires": { "bins": ["wacli"] },
+        "requires":
+          {
+            "bins":
+              [
+                "wacli",
+                "./scripts/wacli-live.sh",
+                "./scripts/wacli-health.sh",
+                "./scripts/wacli-auth-local.sh",
+                "./scripts/wacli-recent-reply.sh",
+              ],
+          },
         "install":
           [
             {
@@ -41,10 +51,14 @@ channel setup, not the CLI utility.
 Automation Rule
 
 - For consumer checks, start with the cheapest read-only probes:
-  `skills/wacli/scripts/wacli-health.sh --json` or, if you need the raw steps,
-  `wacli doctor`, then `wacli chats list --limit 5`.
-- In consumer chat flows, prefer the plain human-readable `wacli doctor` shape.
-  Do not add `--json` unless the user explicitly asked for raw machine output.
+  `skills/wacli/scripts/wacli-health.sh --json --ensure-owner`.
+- Treat raw `wacli doctor` as fallback/debug-only.
+  Under a live OpenClaw-owned lock it can report `CONNECTED false` even when
+  `wacli sync --follow` is healthy, so do not use it as the primary readiness
+  source for agents.
+- When live connectivity matters, prefer
+  `skills/wacli/scripts/wacli-live.sh ensure --json`
+  to make sure one long-lived `wacli sync --follow` owner exists for the store.
 - Prefer direct safe-bin invocation first. Run one command per call.
 - In Normal permissions mode, direct `wacli ...` commands are allowed. What
   stays restricted by default is shell wrapping, pipes, chaining, and
@@ -78,12 +92,20 @@ Setup Routing
   `wacli` invocation actually failed.
 - If `wacli doctor` shows `AUTHENTICATED false`, explicitly say `wacli` is not
   connected yet. Do not soften that into "paired" or "history is readable".
-- If `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, do not
-  present that as a total failure. Explain that WhatsApp is paired, history may
-  still be readable, but live sync/send reliability may be degraded until the
-  phone reconnects and sync catches up. Tell the user exactly what to do next:
-  keep WhatsApp open on the phone, make sure the phone stays online, and leave
-  the linked session active long enough for a bounded sync refresh to finish.
+- If raw `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, first
+  check `skills/wacli/scripts/wacli-health.sh --json --ensure-owner` before you
+  tell the user anything. Under lock, the wrapper is the source of truth and
+  raw `doctor` can be wrong.
+- If the normalized health check still reports the session as paired but not
+  connected, do not present that as a total failure. Explain that WhatsApp is
+  paired, history may still be readable, but live sync/send reliability may be
+  degraded until the phone reconnects and sync catches up. Tell the user
+  exactly what to do next: keep WhatsApp open on the phone, make sure the phone
+  stays online, and leave the linked session active long enough for a bounded
+  sync refresh to finish.
+- If the user is debugging the live OpenClaw WhatsApp bot/channel, `wacli` is
+  the wrong surface. The built-in WhatsApp channel is separate from the
+  external `wacli` CLI.
 - Use the raw CLI steps below only when you are the one performing setup or the
   user explicitly asks for the terminal path.
 - For local pairing work, prefer
@@ -117,7 +139,9 @@ Auth + sync
 
 - `wacli auth` (QR login + initial sync)
 - `wacli sync --once --idle-exit 30s` (bounded refresh for consumer lanes)
-- `wacli doctor`
+- `wacli sync --follow` (continuous sync when you intentionally need a live owner)
+- `wacli sync --once --idle-exit 30s` (bounded refresh for consumer lanes)
+- Raw debug only: `wacli doctor`
 
 Find chats + messages
 
@@ -155,15 +179,28 @@ Notes
   A valid inbound row may have `media_type=image` (or another media type) with a
   caption/body, or a media row with empty text where `display_text` is the only
   visible clue.
-- `wacli doctor` is the health probe:
+- `skills/wacli/scripts/wacli-health.sh --json --ensure-owner` is the primary
+  health probe for agents:
+  - `not_authenticated` usually means QR pairing has not been completed yet.
+  - `paired_not_connected_readable` means the account is paired and history is
+    readable, but no live owner is confirmed yet.
+  - `healthy` means OpenClaw has a live owner and chat history is readable.
+- Raw `wacli doctor` is fallback/debug-only:
   - `AUTHENTICATED false` usually means QR pairing has not been completed yet.
-  - `AUTHENTICATED true` + `CONNECTED false` usually means the account is paired
-    but the phone/session is offline or not actively syncing.
+  - `AUTHENTICATED true` + `CONNECTED false` may mean the account is paired but
+    offline, or just that another healthy sync owner already holds the store
+    lock.
 - For consumer product flows, `CONNECTED false` should trigger clear guidance:
   keep WhatsApp open on the phone, keep the phone online, and wait for the
   linked session to catch up. Use a bounded sync refresh if the current turn
   actually needs fresher data.
-- `wacli chats list` is the cheapest proof that history/search access is
+  - `AUTHENTICATED true` + `CONNECTED false` may mean the account is paired but
+    offline, or just that another healthy sync owner already holds the store
+    lock.
+- `wacli chats list --json` is the cheapest proof that history/search access is
   actually working before you attempt send or backfill actions.
-- `skills/wacli/scripts/wacli-health.sh --json` is the preferred normalized
-  readiness check for agents. It intentionally avoids bare `wacli sync`.
+- `skills/wacli/scripts/wacli-live.sh ensure --json` is the preferred minimal
+  live-connection recovery path for agents when WhatsApp is paired but not
+  staying connected.
+- `skills/wacli/scripts/wacli-health.sh --json --ensure-owner` is the preferred
+  normalized readiness check for agents. It intentionally avoids bare `wacli sync`.
