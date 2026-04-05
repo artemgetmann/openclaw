@@ -18,6 +18,17 @@ vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKey: () => "agent:main:main",
 }));
 
+vi.mock("./session-utils.js", () => ({
+  loadSessionEntry: (key: string) => ({
+    cfg,
+    storePath: "/tmp/sessions.json",
+    store: {},
+    entry: undefined,
+    canonicalKey: key === "main" ? "agent:main:main" : key,
+    legacyKey: key === "main" ? "main" : undefined,
+  }),
+}));
+
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: alwaysAuthorized,
 }));
