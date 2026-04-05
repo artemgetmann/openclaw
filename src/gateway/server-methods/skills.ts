@@ -6,7 +6,11 @@ import {
 } from "../../agents/agent-scope.js";
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
-import { resolveBundledAllowlist, type SkillEntry } from "../../agents/skills.js";
+import {
+  loadWorkspaceSkillEntries,
+  resolveBundledAllowlist,
+  type SkillEntry,
+} from "../../agents/skills.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
