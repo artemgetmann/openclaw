@@ -18,6 +18,7 @@ WATCHDOG_AUTO_DISABLE_ON_DUPLICATE="${OPENCLAW_GATEWAY_WATCHDOG_AUTO_DISABLE_ON_
 MANAGE_WATCHDOG="${OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG:-1}"
 OPENCLAW_ENTRYPOINT="${MAIN_REPO}/openclaw.mjs"
 VALIDATED_NODE_HELPER="${MAIN_REPO}/scripts/lib/validated-node.sh"
+SHARED_RUNTIME_BUILD_SCRIPT="${MAIN_REPO}/scripts/build-shared-runtime.sh"
 
 if [[ -f "${VALIDATED_NODE_HELPER}" ]]; then
   # shellcheck disable=SC1090
@@ -93,6 +94,18 @@ run_repo_pnpm() {
     pnpm "$@"
   )
   return $?
+}
+
+run_shared_runtime_build() {
+  if [[ -x "${SHARED_RUNTIME_BUILD_SCRIPT}" ]]; then
+    (
+      cd "${MAIN_REPO}"
+      "${SHARED_RUNTIME_BUILD_SCRIPT}"
+    )
+    return $?
+  fi
+
+  run_repo_pnpm build
 }
 
 log() {
@@ -364,7 +377,7 @@ main() {
   run_strict bash -lc "lsof -nP -iTCP:${PORT} -sTCP:LISTEN || true"
 
   log_block "Rebuild and reinstall from main runtime"
-  run_strict run_repo_pnpm build
+  run_strict run_shared_runtime_build
   # Recovery is specifically about reclaiming the default shared service for
   # the canonical main runtime, so install from the built repo entrypoint with
   # explicit takeover instead of going through a wrapper that can drift.
