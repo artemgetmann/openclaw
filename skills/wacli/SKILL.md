@@ -38,12 +38,16 @@ If the user is chatting with you on WhatsApp, you should not reach for this tool
 Automation Rule
 
 - For consumer checks, start with the cheapest read-only probes:
-  `wacli doctor`, then `wacli chats list --limit 5`.
+  `skills/wacli/scripts/wacli-health.sh --json` or, if you need the raw steps,
+  `wacli doctor`, then `wacli chats list --limit 5 --json`.
 - Prefer direct safe-bin invocation first. Run one command per call.
 - If you wrap `wacli` through `openclaw nodes run`, insert `--` before the
   child argv so flags like `--json` or `--limit` reach `wacli` instead of the
   wrapper.
 - Ban dumb shell chaining, pipes, and redirection around `wacli`.
+- Do NOT use bare `wacli sync --json` as a health or status probe.
+  `wacli sync` defaults to `--follow=true`, so it is a long-running command and
+  a bad fit for quick readiness checks.
 - Allow node execution only when the runtime actually supports it; do not claim
   node exec is invalid just because `system.run.prepare` is absent.
 - If setup is missing or unhealthy, do not dump raw CLI noise back to the user.
@@ -59,6 +63,9 @@ Setup Routing
   present that as a total failure. Explain that WhatsApp is paired, history may
   still be readable, but live sync/send reliability may be degraded until the
   phone reconnects and sync catches up.
+- If the user is debugging the live OpenClaw WhatsApp bot/channel, `wacli` is
+  the wrong surface. The built-in WhatsApp channel is separate from the
+  external `wacli` CLI.
 - Use the raw CLI steps below only when you are the one performing setup or the
   user explicitly asks for the terminal path.
 - For local pairing work, prefer
@@ -82,6 +89,8 @@ Auth + sync
 
 - `wacli auth` (QR login + initial sync)
 - `wacli sync --follow` (continuous sync)
+- Bounded refresh only when you truly need a live catch-up:
+  `wacli sync --once --idle-exit 5s --json`
 - `wacli doctor`
 
 Find chats + messages
@@ -126,3 +135,5 @@ Notes
     but the phone/session is offline or not actively syncing.
 - `wacli chats list --json` is the cheapest proof that history/search access is
   actually working before you attempt send or backfill actions.
+- `skills/wacli/scripts/wacli-health.sh --json` is the preferred normalized
+  readiness check for agents. It intentionally avoids bare `wacli sync`.

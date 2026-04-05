@@ -63,11 +63,18 @@ explicitly ask for the CLI path.
   the nuance clearly: WhatsApp is paired, history/search may still work, but
   live sync or sending may be unreliable until the phone is online and the
   session reconnects.
+- For that state, prefer wording like:
+  "WhatsApp is already paired on this Mac. I can still read recent synced
+  history, but live updates may be delayed until the connection comes back."
 - Prefer product-language guidance such as "open WhatsApp on your phone and
   finish pairing" over dumping `wacli auth` / `wacli sync --follow` into chat
   unless the user explicitly wants the CLI path.
+- Do not tell a consumer user to run `/opt/homebrew/bin/wacli auth` or
+  `/opt/homebrew/bin/wacli sync --follow` verbatim unless they explicitly ask
+  for the terminal path.
 - Verify with the cheapest read-only checks first: `wacli doctor`, then
-  `wacli chats list --limit 5 --json`.
+  `wacli chats list --limit 5 --json`, or use
+  `skills/wacli/scripts/wacli-health.sh --json`.
 
 ### gog
 
