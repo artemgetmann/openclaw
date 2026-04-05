@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -23,6 +24,22 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function resolveSkillBinEntry(entry: SkillEntry, rawBin: string): string | null {
+  const trimmed = rawBin.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("~")) {
+    return trimmed;
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    // Helper scripts live inside skill directories, so relative metadata paths
+    // must resolve from that skill root instead of the gateway cwd.
+    return path.resolve(entry.skill.baseDir, trimmed);
+  }
+  return trimmed;
+}
+
 function collectSkillBins(entries: SkillEntry[]): string[] {
   const bins = new Set<string>();
   for (const entry of entries) {
@@ -30,13 +47,13 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
     const anyBins = entry.metadata?.requires?.anyBins ?? [];
     const install = entry.metadata?.install ?? [];
     for (const bin of required) {
-      const trimmed = bin.trim();
+      const trimmed = resolveSkillBinEntry(entry, bin);
       if (trimmed) {
         bins.add(trimmed);
       }
     }
     for (const bin of anyBins) {
-      const trimmed = bin.trim();
+      const trimmed = resolveSkillBinEntry(entry, bin);
       if (trimmed) {
         bins.add(trimmed);
       }
@@ -44,7 +61,7 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
     for (const spec of install) {
       const specBins = spec?.bins ?? [];
       for (const bin of specBins) {
-        const trimmed = String(bin).trim();
+        const trimmed = resolveSkillBinEntry(entry, String(bin));
         if (trimmed) {
           bins.add(trimmed);
         }
