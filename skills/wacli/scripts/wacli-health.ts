@@ -4,6 +4,7 @@ import path from "node:path";
 type Flags = {
   json: boolean;
   refresh: boolean;
+  ensureOwner: boolean;
   store?: string;
   timeoutMs: number;
   idleExit: string;
@@ -50,6 +51,17 @@ type RefreshJson = {
   error?: string | null;
 };
 
+type LiveOwnerStatus = {
+  ok?: boolean;
+  ownerRunning?: boolean;
+  ownerPid?: number;
+  ownerCommandMatches?: boolean;
+  lockHeldByOwner?: boolean;
+  lastLifecycleEvent?: "connected" | "disconnected" | "reconnecting" | "stopping" | "unknown";
+  connected?: boolean;
+  message?: string;
+};
+
 type HealthStatus =
   | "healthy"
   | "healthy_after_refresh"
@@ -73,6 +85,7 @@ type HealthReport = {
   refreshAttempted: boolean;
   refreshSucceeded: boolean;
   refreshTimedOut: boolean;
+  owner?: LiveOwnerStatus;
   doctor?: DoctorJson;
   chats?: ChatsJson;
   refresh?: RefreshJson;
@@ -80,10 +93,11 @@ type HealthReport = {
 
 function usage() {
   console.error(`Usage:
-  wacli-health.sh [--json] [--refresh] [--store <dir>] [--timeout-ms <ms>] [--idle-exit <duration>]
+  wacli-health.sh [--json] [--refresh] [--ensure-owner] [--store <dir>] [--timeout-ms <ms>] [--idle-exit <duration>]
 
 Notes:
   - Runs bounded health checks for wacli without using bare 'wacli sync --json'.
+  - --ensure-owner starts or reuses an OpenClaw-owned 'wacli sync --follow' process.
   - --refresh adds a one-shot sync using 'wacli sync --once --idle-exit <duration> --json'.`);
 }
 
@@ -91,6 +105,7 @@ function parseArgs(argv: string[]): Flags {
   const flags: Flags = {
     json: false,
     refresh: false,
+    ensureOwner: false,
     timeoutMs: 15_000,
     idleExit: "5s",
   };
@@ -103,6 +118,9 @@ function parseArgs(argv: string[]): Flags {
         break;
       case "--refresh":
         flags.refresh = true;
+        break;
+      case "--ensure-owner":
+        flags.ensureOwner = true;
         break;
       case "--store": {
         const next = argv[index + 1];
@@ -205,6 +223,24 @@ function containsLockError(raw: string) {
   return raw.toLowerCase().includes("store is locked");
 }
 
+async function readLiveOwnerStatus(
+  flags: Flags,
+  action: "status" | "ensure",
+): Promise<LiveOwnerStatus | undefined> {
+  const helperPath = path.join(path.dirname(process.argv[1] ?? "."), "wacli-live.sh");
+  const args = [action, "--json"];
+  if (flags.store) {
+    args.push("--store", flags.store);
+  }
+  args.push("--timeout-ms", String(Math.min(flags.timeoutMs, 2_000)));
+
+  const result = await runCommand(helperPath, args, Math.max(flags.timeoutMs, 5_000));
+  if (!result.stdout.trim()) {
+    return undefined;
+  }
+  return parseJson<LiveOwnerStatus>(result.stdout);
+}
+
 function buildMessage(report: HealthReport) {
   switch (report.status) {
     case "healthy":
@@ -250,6 +286,7 @@ function emit(report: HealthReport, asJson: boolean) {
 async function main() {
   const flags = parseArgs(process.argv.slice(2));
   const baseArgs = buildBaseArgs(flags);
+  let owner = await readLiveOwnerStatus(flags, "status");
 
   const doctorRun = await runCommand("wacli", [...baseArgs, "doctor", "--json"], flags.timeoutMs);
   const doctor =
@@ -287,6 +324,7 @@ async function main() {
         refreshAttempted: false,
         refreshSucceeded: false,
         refreshTimedOut: false,
+        owner,
         doctor,
       },
       flags.json,
@@ -295,7 +333,10 @@ async function main() {
   }
 
   const authenticated = doctor?.data?.authenticated === true;
-  const connected = doctor?.data?.connected === true;
+  if (authenticated && flags.ensureOwner) {
+    owner = await readLiveOwnerStatus(flags, "ensure");
+  }
+  const connected = owner?.connected === true || doctor?.data?.connected === true;
 
   if (!authenticated) {
     emit(
@@ -312,6 +353,7 @@ async function main() {
         refreshAttempted: false,
         refreshSucceeded: false,
         refreshTimedOut: false,
+        owner,
         doctor,
       },
       flags.json,
@@ -343,6 +385,7 @@ async function main() {
         refreshAttempted: false,
         refreshSucceeded: false,
         refreshTimedOut: false,
+        owner,
         doctor,
         chats,
       },
@@ -369,6 +412,7 @@ async function main() {
         refreshAttempted: false,
         refreshSucceeded: false,
         refreshTimedOut: false,
+        owner,
         doctor,
         chats,
       },
@@ -392,6 +436,7 @@ async function main() {
         refreshAttempted: false,
         refreshSucceeded: false,
         refreshTimedOut: false,
+        owner,
         doctor,
         chats,
       },
@@ -419,7 +464,7 @@ async function main() {
     const refreshRaw = `${refreshRun.stdout}\n${refreshRun.stderr}`;
 
     if (containsLockError(refreshRaw)) {
-      status = "locked";
+      status = owner?.connected === true ? "healthy" : "locked";
     } else if (refreshRun.ok && refresh?.success === true) {
       status = connected ? "healthy_after_refresh" : "paired_not_connected_refresh_failed";
     } else if (!connected && (refreshRun.timedOut || refresh?.success === false)) {
@@ -440,6 +485,7 @@ async function main() {
     refreshAttempted: flags.refresh,
     refreshSucceeded: Boolean(refreshRun?.ok && refresh?.success === true),
     refreshTimedOut: refreshRun?.timedOut === true,
+    owner,
     doctor,
     chats,
     refresh,

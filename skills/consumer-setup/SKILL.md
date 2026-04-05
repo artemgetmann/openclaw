@@ -55,14 +55,16 @@ explicitly ask for the CLI path.
 ### WhatsApp CLI
 
 - Missing states usually look like: `wacli` not installed, QR pairing not
-  completed, or `wacli doctor` showing `AUTHENTICATED false`.
+  completed, or
+  `skills/wacli/scripts/wacli-health.sh --json --ensure-owner` reporting
+  `not_authenticated`.
 - Tell the user WhatsApp is not connected yet.
 - Offer to help pair it now, usually by showing the QR login flow and waiting
   for the phone to approve it.
-- If `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, explain
-  the nuance clearly: WhatsApp is paired, history/search may still work, but
-  live sync or sending may be unreliable until the phone is online and the
-  session reconnects.
+- If the normalized health check reports `paired_not_connected_readable`,
+  explain the nuance clearly: WhatsApp is paired, history/search may still
+  work, but live sync or sending may be unreliable until the phone is online
+  and the session reconnects.
 - For that state, prefer wording like:
   "WhatsApp is already paired on this Mac. I can still read recent synced
   history, but live updates may be delayed until the connection comes back."
@@ -72,9 +74,11 @@ explicitly ask for the CLI path.
 - Do not tell a consumer user to run `/opt/homebrew/bin/wacli auth` or
   `/opt/homebrew/bin/wacli sync --follow` verbatim unless they explicitly ask
   for the terminal path.
-- Verify with the cheapest read-only checks first: `wacli doctor`, then
-  `wacli chats list --limit 5 --json`, or use
-  `skills/wacli/scripts/wacli-health.sh --json`.
+- Verify with the normalized check first:
+  `skills/wacli/scripts/wacli-health.sh --json --ensure-owner`.
+- Use raw `wacli doctor` only for fallback debugging, not as the primary user
+  status, because it can misreport `CONNECTED false` while a healthy sync owner
+  holds the lock.
 
 ### gog
 
