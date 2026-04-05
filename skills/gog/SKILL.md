@@ -63,14 +63,23 @@ Setup Routing
   polling across turns. It launches `gog auth add` on this Mac in the
   background so the Google consent screen can open in the local browser while
   you keep chatting.
-- After starting that helper, tell the user plainly that you opened the Google
-  consent flow in the browser and that they may need to finish the Google
-  approval click there.
+- Prefer opening the real Google consent tab in Google Chrome when available.
+  If Chrome handoff is not available, fall back to the default browser instead
+  of stalling on auth errors.
+- After starting the helper, tell the user plainly that you opened the Google
+  consent flow in the browser and that Google may require them to finish the
+  sign-in, Touch ID, passkey, or 2FA step there themselves.
+- Do not pretend the agent can bypass biometrics or Google account protections.
+  Say explicitly that this is a secure Google step and that manual completion
+  may be required even when the rest of the workflow is automated.
 - Poll completion with
   `skills/gog/scripts/gog-auth-local.sh wait --session <id>` before claiming
   Google is connected.
 - Once auth completes, verify with `gog auth list` before moving into Gmail,
   Calendar, Drive, Docs, Sheets, or Contacts actions.
+- Treat successful auth as a resume point. After `gog auth list` or another
+  read-only probe succeeds, continue the user’s original Gmail/Calendar/Drive
+  task automatically instead of asking them to restate it.
 
 Setup (once)
 
