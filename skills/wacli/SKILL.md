@@ -41,6 +41,9 @@ Automation Rule
   `skills/wacli/scripts/wacli-health.sh --json` or, if you need the raw steps,
   `wacli doctor`, then `wacli chats list --limit 5 --json`.
 - Prefer direct safe-bin invocation first. Run one command per call.
+- In Normal permissions mode, direct `wacli ...` commands are allowed. What
+  stays restricted by default is shell wrapping, pipes, chaining, and
+  redirection.
 - If you wrap `wacli` through `openclaw nodes run`, insert `--` before the
   child argv so flags like `--json` or `--limit` reach `wacli` instead of the
   wrapper.

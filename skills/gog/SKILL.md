@@ -30,12 +30,56 @@ Automation Rule
 
 - Prefer direct safe-bin invocation first: `gog auth list`, then a read-only
   probe like `gog gmail search`, `gog drive search`, or `gog calendar events`.
+- In Normal permissions mode, direct `gog ...` commands are allowed. The
+  default restriction is on shell wrappers (`bash -lc`, `sh -c`), pipes,
+  chaining, and redirection.
+- If the current runtime already has `gog`, stay local first. Do not bounce to
+  a paired node unless local `gog` is actually unavailable.
 - If you wrap `gog` through `openclaw nodes run`, insert `--` before the child
   argv so `gog` keeps its own flags.
 - Ban dumb shell chaining, pipes, and redirection around `gog`.
 - Allow node execution when the runtime supports it. Missing
   `system.run.prepare` alone is not a valid reason to mark `gog` execution as
   blocked.
+- If setup is missing, do not dump raw CLI setup commands back to a consumer.
+  Treat it as a setup-needed state and use the shared `consumer-setup` skill.
+
+Setup Routing
+
+- If `gog` is missing OAuth credentials, has no authorized account, or the
+  requested account/surfaces are not ready, route setup through
+  `consumer-setup`.
+- Use the raw CLI steps below only when you are the one performing setup or the
+  user explicitly asks for the terminal path.
+- For local browser OAuth, prefer a direct safe-bin invocation first:
+  `gog auth add <email> --services <csv>`.
+  `gog` can open the browser itself on this Mac, and that path avoids repo-local
+  helper allowlist problems.
+- If repo-local helper execution is denied, fall back to direct `gog auth add`
+  instead of telling the user to use Terminal or detouring to a node.
+- For local consumer OAuth setup, prefer
+  `skills/gog/scripts/gog-auth-local.sh start --email <email> --services <csv>`
+  when the runtime allows repo-local helper scripts and you need resumable
+  polling across turns. It launches `gog auth add` on this Mac in the
+  background so the Google consent screen can open in the local browser while
+  you keep chatting.
+- Prefer opening the real Google consent tab in Google Chrome when available.
+  If Chrome handoff is not available, fall back to the default browser instead
+  of stalling on auth errors.
+- After starting the helper, tell the user plainly that you opened the Google
+  consent flow in the browser and that Google may require them to finish the
+  sign-in, Touch ID, passkey, or 2FA step there themselves.
+- Do not pretend the agent can bypass biometrics or Google account protections.
+  Say explicitly that this is a secure Google step and that manual completion
+  may be required even when the rest of the workflow is automated.
+- Poll completion with
+  `skills/gog/scripts/gog-auth-local.sh wait --session <id>` before claiming
+  Google is connected.
+- Once auth completes, verify with `gog auth list` before moving into Gmail,
+  Calendar, Drive, Docs, Sheets, or Contacts actions.
+- Treat successful auth as a resume point. After `gog auth list` or another
+  read-only probe succeeds, continue the user’s original Gmail/Calendar/Drive
+  task automatically instead of asking them to restate it.
 
 Setup (once)
 

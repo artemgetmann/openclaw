@@ -32,6 +32,7 @@ import {
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
+import { ensureDefaultPermissionModeOnSessionEntry } from "../../infra/permissions-mode.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -475,6 +476,16 @@ export async function initSessionState(params: {
   }
   if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";
+  }
+  // Telegram is the consumer chat surface, so seed new sessions into the
+  // safer named "Normal" permission mode unless the chat already opted into a
+  // specific exec configuration. Other surfaces keep their existing defaults.
+  if (!hasExistingSessionEntry) {
+    ensureDefaultPermissionModeOnSessionEntry({
+      entry: sessionEntry,
+      channel:
+        sessionEntry.channel ?? sessionEntry.lastChannel ?? ctx.OriginatingChannel ?? ctx.Surface,
+    });
   }
   const threadLabel = ctx.ThreadLabel?.trim();
   if (threadLabel) {
