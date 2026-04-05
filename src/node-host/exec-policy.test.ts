@@ -132,6 +132,19 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.errorMessage).toContain("Windows shell wrappers like cmd.exe /c");
   });
 
+  it("denies dangerous commands even in full mode", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          dangerousCommandMessage: "Dangerous command blocked",
+        }),
+      ),
+    );
+    expect(denied.eventReason).toBe("dangerous-command");
+    expect(denied.errorMessage).toBe("Dangerous command blocked");
+  });
+
   it("allows execution when policy checks pass", () => {
     const allowed = expectAllowedDecision(
       evaluateSystemRunPolicy(buildPolicyParams({ ask: "on-miss" })),

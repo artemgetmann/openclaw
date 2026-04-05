@@ -370,12 +370,9 @@ export const handlePermissionsCommand: CommandHandler = async (params, allowText
     normalized === "/permissions"
       ? ""
       : normalized.slice("/permissions".length).trim().toLowerCase();
-  const surfaceChannel = resolveCommandSurfaceChannel({
-    ctx: params.ctx,
-    command: params.command,
-  });
   const current = resolvePermissionMode({
-    channel: params.sessionEntry?.channel ?? params.sessionEntry?.lastChannel ?? surfaceChannel,
+    config: params.cfg,
+    agentId: params.agentId,
     execSecurity: params.sessionEntry?.execSecurity,
     execAsk: params.sessionEntry?.execAsk,
   });
@@ -414,7 +411,8 @@ export const handlePermissionsCommand: CommandHandler = async (params, allowText
   }
 
   const next = resolvePermissionMode({
-    channel: params.sessionEntry?.channel ?? params.sessionEntry?.lastChannel ?? surfaceChannel,
+    config: params.cfg,
+    agentId: params.agentId,
     execSecurity: params.sessionEntry?.execSecurity,
     execAsk: params.sessionEntry?.execAsk,
   });

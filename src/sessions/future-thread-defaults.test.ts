@@ -63,6 +63,8 @@ describe("future-thread default history", () => {
     expect(olderTopicEntry.providerOverride).toBe("openai-codex");
     expect(olderTopicEntry.modelOverride).toBe("gpt-5.3-codex");
     expect(olderTopicEntry.thinkingLevel).toBe("medium");
+    expect(olderTopicEntry.execSecurity).toBeUndefined();
+    expect(olderTopicEntry.execAsk).toBeUndefined();
 
     const newerTopicEntry: SessionEntry = {
       sessionId: "newer-topic",
@@ -77,6 +79,8 @@ describe("future-thread default history", () => {
     expect(newerTopicEntry.providerOverride).toBe("anthropic");
     expect(newerTopicEntry.modelOverride).toBe("claude-sonnet-4-6");
     expect(newerTopicEntry.thinkingLevel).toBe("adaptive");
+    expect(newerTopicEntry.execSecurity).toBeUndefined();
+    expect(newerTopicEntry.execAsk).toBeUndefined();
   });
 
   it("does not retroactively seed topics that predate every recorded boundary", () => {
@@ -110,5 +114,35 @@ describe("future-thread default history", () => {
     expect(entry.providerOverride).toBeUndefined();
     expect(entry.modelOverride).toBeUndefined();
     expect(entry.thinkingLevel).toBeUndefined();
+  });
+
+  it("copies exec overrides into future thread snapshots", () => {
+    const parentEntry: SessionEntry = {
+      sessionId: "parent-session",
+      updatedAt: Date.now(),
+      execSecurity: "full",
+      execAsk: "off",
+      futureThreadDefaultsHistory: [
+        {
+          afterThreadId: 84,
+          execSecurity: "full",
+          execAsk: "off",
+          updatedAt: Date.now(),
+        },
+      ],
+    };
+    const entry: SessionEntry = {
+      sessionId: "child-topic",
+      updatedAt: Date.now(),
+    };
+
+    seedSessionEntryFromFutureThreadDefaults({
+      entry,
+      parentEntry,
+      childThreadId: 97,
+    });
+
+    expect(entry.execSecurity).toBe("full");
+    expect(entry.execAsk).toBe("off");
   });
 });

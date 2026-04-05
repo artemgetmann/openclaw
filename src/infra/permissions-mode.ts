@@ -1,3 +1,5 @@
+import { resolveAgentConfig } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   normalizeExecAsk,
@@ -24,12 +26,33 @@ export type ResolvedPermissionMode =
       execAsk: ExecAsk | null;
     };
 
-export function resolveDefaultPermissionMode(params?: { channel?: string | null }): PermissionMode {
-  const channel = params?.channel?.trim().toLowerCase();
-  // Telegram is the consumer product surface, so default to the safer normal
-  // mode there. Other runtimes keep the existing broader local-operator default
-  // unless a chat/session explicitly overrides it.
-  return channel === "telegram" ? "normal" : "full";
+export type ResolvedPermissionDefaults = {
+  execSecurity: ExecSecurity;
+  execAsk: ExecAsk;
+};
+
+export function resolvePermissionDefaults(params?: {
+  config?: OpenClawConfig;
+  agentId?: string | null;
+}): ResolvedPermissionDefaults {
+  const cfg = params?.config;
+  const agentExec =
+    cfg && params?.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec : undefined;
+  const globalExec = cfg?.tools?.exec;
+  // Product default is broad local-operator execution unless the deployment
+  // explicitly narrows it via global or per-agent exec settings.
+  return {
+    execSecurity: normalizeExecSecurity(agentExec?.security ?? globalExec?.security) ?? "full",
+    execAsk: normalizeExecAsk(agentExec?.ask ?? globalExec?.ask) ?? "off",
+  };
+}
+
+export function resolveDefaultPermissionMode(params?: {
+  config?: OpenClawConfig;
+  agentId?: string | null;
+}): PermissionMode {
+  const defaults = resolvePermissionDefaults(params);
+  return defaults.execSecurity === "allowlist" ? "normal" : "full";
 }
 
 export function applyPermissionModeToSessionEntry(
@@ -56,32 +79,50 @@ export function applyPermissionModeToSessionEntry(
 
 export function ensureDefaultPermissionModeOnSessionEntry(params: {
   entry: SessionEntry;
-  channel?: string | null;
+  config?: OpenClawConfig;
+  agentId?: string | null;
 }): { updated: boolean } {
   const security = normalizeExecSecurity(params.entry.execSecurity);
   const ask = normalizeExecAsk(params.entry.execAsk);
   if (security || ask) {
     return { updated: false };
   }
-  return applyPermissionModeToSessionEntry(params.entry, resolveDefaultPermissionMode(params));
+  const defaults = resolvePermissionDefaults({
+    config: params.config,
+    agentId: params.agentId,
+  });
+  let updated = false;
+  if (params.entry.execSecurity !== defaults.execSecurity) {
+    params.entry.execSecurity = defaults.execSecurity;
+    updated = true;
+  }
+  if (params.entry.execAsk !== defaults.execAsk) {
+    params.entry.execAsk = defaults.execAsk;
+    updated = true;
+  }
+  if (updated) {
+    params.entry.updatedAt = Date.now();
+  }
+  return { updated };
 }
 
 export function resolvePermissionMode(params: {
-  channel?: string | null;
+  config?: OpenClawConfig;
+  agentId?: string | null;
   execSecurity?: string | null;
   execAsk?: string | null;
 }): ResolvedPermissionMode {
-  const security = normalizeExecSecurity(params.execSecurity);
-  const ask = normalizeExecAsk(params.execAsk);
-  const defaultMode = resolveDefaultPermissionMode({ channel: params.channel });
+  const defaults = resolvePermissionDefaults({
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const security = normalizeExecSecurity(params.execSecurity) ?? defaults.execSecurity;
+  const ask = normalizeExecAsk(params.execAsk) ?? defaults.execAsk;
 
-  if (!security && !ask) {
-    return modeToResolved(defaultMode);
-  }
-  if (security === "allowlist" && (ask === "off" || ask === null)) {
+  if (security === "allowlist" && ask === "off") {
     return modeToResolved("normal");
   }
-  if (security === "full" && (ask === "off" || ask === null)) {
+  if (security === "full" && ask === "off") {
     return modeToResolved("full");
   }
   return {
@@ -95,7 +136,8 @@ export function resolvePermissionMode(params: {
 }
 
 export function buildPermissionModePromptHint(params: {
-  channel?: string | null;
+  config?: OpenClawConfig;
+  agentId?: string | null;
   execSecurity?: string | null;
   execAsk?: string | null;
 }): string {

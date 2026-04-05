@@ -16,7 +16,7 @@ export type SystemRunPolicyDecision = {
     }
   | {
       allowed: false;
-      eventReason: "security=deny" | "approval-required" | "allowlist-miss";
+      eventReason: "security=deny" | "approval-required" | "allowlist-miss" | "dangerous-command";
       errorMessage: string;
     }
 );
@@ -59,6 +59,7 @@ export function evaluateSystemRunPolicy(params: {
   isWindows: boolean;
   cmdInvocation: boolean;
   shellWrapperInvocation: boolean;
+  dangerousCommandMessage?: string | null;
 }): SystemRunPolicyDecision {
   const shellWrapperBlocked = params.security === "allowlist" && params.shellWrapperInvocation;
   const windowsShellWrapperBlocked =
@@ -72,6 +73,21 @@ export function evaluateSystemRunPolicy(params: {
       allowed: false,
       eventReason: "security=deny",
       errorMessage: "SYSTEM_RUN_DISABLED: security=deny",
+      analysisOk,
+      allowlistSatisfied,
+      shellWrapperBlocked,
+      windowsShellWrapperBlocked,
+      requiresAsk: false,
+      approvalDecision: params.approvalDecision,
+      approvedByAsk,
+    };
+  }
+
+  if (params.dangerousCommandMessage) {
+    return {
+      allowed: false,
+      eventReason: "dangerous-command",
+      errorMessage: params.dangerousCommandMessage,
       analysisOk,
       allowlistSatisfied,
       shellWrapperBlocked,

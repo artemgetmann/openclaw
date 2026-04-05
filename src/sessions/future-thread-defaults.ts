@@ -36,10 +36,14 @@ function snapshotFutureThreadDefaults(parentEntry: SessionEntry) {
   const providerOverride = parentEntry.futureThreadProviderOverride?.trim() || undefined;
   const modelOverride = parentEntry.futureThreadModelOverride?.trim() || undefined;
   const thinkingLevelOverride = parentEntry.futureThreadThinkingLevelOverride?.trim() || undefined;
+  const execSecurity = parentEntry.execSecurity?.trim() || undefined;
+  const execAsk = parentEntry.execAsk?.trim() || undefined;
   return {
     providerOverride,
     modelOverride,
     thinkingLevelOverride,
+    execSecurity,
+    execAsk,
   };
 }
 
@@ -65,7 +69,9 @@ function upsertFutureThreadDefaultsHistory(params: {
     if (
       existing.providerOverride === nextEntry.providerOverride &&
       existing.modelOverride === nextEntry.modelOverride &&
-      existing.thinkingLevelOverride === nextEntry.thinkingLevelOverride
+      existing.thinkingLevelOverride === nextEntry.thinkingLevelOverride &&
+      existing.execSecurity === nextEntry.execSecurity &&
+      existing.execAsk === nextEntry.execAsk
     ) {
       return false;
     }
@@ -108,6 +114,8 @@ function resolveHistoricalFutureThreadDefaults(params: {
       providerOverride: undefined,
       modelOverride: undefined,
       thinkingLevelOverride: undefined,
+      execSecurity: undefined,
+      execAsk: undefined,
     };
   }
 
@@ -115,6 +123,8 @@ function resolveHistoricalFutureThreadDefaults(params: {
     providerOverride: match.providerOverride?.trim() || undefined,
     modelOverride: match.modelOverride?.trim() || undefined,
     thinkingLevelOverride: match.thinkingLevelOverride?.trim() || undefined,
+    execSecurity: match.execSecurity?.trim() || undefined,
+    execAsk: match.execAsk?.trim() || undefined,
   };
 }
 
@@ -138,6 +148,8 @@ export function seedSessionEntryFromFutureThreadDefaults(params: {
   const parentProvider = snapshot.providerOverride;
   const parentModel = snapshot.modelOverride;
   const parentThinkingLevel = snapshot.thinkingLevelOverride;
+  const parentExecSecurity = snapshot.execSecurity;
+  const parentExecAsk = snapshot.execAsk;
 
   if (parentProvider && parentModel && !entry.providerOverride && !entry.modelOverride) {
     updated =
@@ -152,6 +164,18 @@ export function seedSessionEntryFromFutureThreadDefaults(params: {
 
   if (parentThinkingLevel && !entry.thinkingLevel) {
     entry.thinkingLevel = parentThinkingLevel;
+    entry.updatedAt = Date.now();
+    updated = true;
+  }
+
+  if (parentExecSecurity && !entry.execSecurity) {
+    entry.execSecurity = parentExecSecurity;
+    entry.updatedAt = Date.now();
+    updated = true;
+  }
+
+  if (parentExecAsk && !entry.execAsk) {
+    entry.execAsk = parentExecAsk;
     entry.updatedAt = Date.now();
     updated = true;
   }
