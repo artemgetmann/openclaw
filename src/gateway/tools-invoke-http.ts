@@ -19,6 +19,7 @@ import {
   sendMethodNotAllowed,
 } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -193,6 +194,7 @@ export async function handleToolsInvokeHttpRequest(
   const rawSessionKey = resolveSessionKeyFromBody(body);
   const sessionKey =
     !rawSessionKey || rawSessionKey === "main" ? resolveMainSessionKey(cfg) : rawSessionKey;
+  const { entry: sessionEntry, canonicalKey: canonicalSessionKey } = loadSessionEntry(sessionKey);
 
   // Resolve message channel/account hints (optional headers) for policy inheritance.
   const messageChannel = normalizeMessageChannel(
@@ -206,7 +208,20 @@ export async function handleToolsInvokeHttpRequest(
   // HTTP invoke should expose the same coding-tool catalog the live agent uses.
   // Using the reduced OpenClaw-only catalog drops exec/read/write before policy runs.
   const allTools = createOpenClawCodingTools({
-    sessionKey,
+    sessionKey: canonicalSessionKey,
+    exec:
+      sessionEntry &&
+      (sessionEntry.execHost ||
+        sessionEntry.execSecurity ||
+        sessionEntry.execAsk ||
+        sessionEntry.execNode)
+        ? {
+            host: sessionEntry.execHost,
+            security: sessionEntry.execSecurity,
+            ask: sessionEntry.execAsk,
+            node: sessionEntry.execNode,
+          }
+        : undefined,
     messageProvider: messageChannel ?? undefined,
     agentAccountId: accountId,
     messageTo: agentTo,
@@ -252,7 +267,7 @@ export async function handleToolsInvokeHttpRequest(
       toolCallId,
       ctx: {
         agentId,
-        sessionKey,
+        sessionKey: canonicalSessionKey,
         loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
       },
     });

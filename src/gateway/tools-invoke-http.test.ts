@@ -21,6 +21,7 @@ const hookMocks = vi.hoisted(() => ({
 
 let cfg: Record<string, unknown> = {};
 let lastCreateOpenClawCodingToolsContext: Record<string, unknown> | undefined;
+let sessionEntryForTest: Record<string, unknown> | undefined;
 
 // Perf: keep this suite pure unit. Mock heavyweight config/session modules.
 vi.mock("../config/config.js", () => ({
@@ -47,6 +48,17 @@ vi.mock("../config/sessions.js", () => ({
     const mainKey = mainKeyRaw || "main";
     return `agent:${agentId}:${mainKey}`;
   },
+}));
+
+vi.mock("./session-utils.js", () => ({
+  loadSessionEntry: (key: string) => ({
+    cfg,
+    storePath: "/tmp/sessions.json",
+    store: {},
+    entry: sessionEntryForTest,
+    canonicalKey: key === "main" ? "agent:main:main" : key,
+    legacyKey: key === "main" ? "main" : undefined,
+  }),
 }));
 
 vi.mock("./auth.js", () => ({
@@ -280,6 +292,7 @@ beforeEach(() => {
   pluginHttpHandlers = [];
   cfg = {};
   lastCreateOpenClawCodingToolsContext = undefined;
+  sessionEntryForTest = undefined;
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
@@ -443,6 +456,40 @@ describe("POST /tools/invoke", () => {
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toMatchObject({ ok: true, command: "pwd" });
+  });
+
+  it("passes session exec overrides into the HTTP coding tool catalog", async () => {
+    setMainAllowedTools({ allow: ["exec"] });
+    sessionEntryForTest = {
+      execHost: "gateway",
+      execSecurity: "full",
+      execAsk: "off",
+      execNode: "node-1",
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "exec",
+      args: { command: "pwd" },
+      sessionKey: "main",
+    });
+
+    await expectOkInvokeResponse(res);
+    expect(lastCreateOpenClawCodingToolsContext).toMatchObject({
+      sessionKey: "agent:main:main",
+      exec: {
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        node: "node-1",
+      },
+    });
+    expect(hookMocks.runBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          sessionKey: "agent:main:main",
+        }),
+      }),
+    );
   });
 
   it("blocks tool execution when before_tool_call rejects the invoke", async () => {
