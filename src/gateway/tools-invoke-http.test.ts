@@ -20,7 +20,7 @@ const hookMocks = vi.hoisted(() => ({
 }));
 
 let cfg: Record<string, unknown> = {};
-let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
+let lastCreateOpenClawCodingToolsContext: Record<string, unknown> | undefined;
 
 // Perf: keep this suite pure unit. Mock heavyweight config/session modules.
 vi.mock("../config/config.js", () => ({
@@ -67,7 +67,7 @@ vi.mock("../plugins/tools.js", () => ({
 
 // Perf: the real tool factory instantiates many tools per request; for these HTTP
 // routing/policy tests we only need a small set of tool names.
-vi.mock("../agents/openclaw-tools.js", () => {
+vi.mock("../agents/pi-tools.js", () => {
   const toolInputError = (message: string) => {
     const err = new Error(message);
     err.name = "ToolInputError";
@@ -81,6 +81,21 @@ vi.mock("../agents/openclaw-tools.js", () => {
   };
 
   const tools = [
+    {
+      name: "exec",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+        },
+        required: ["command"],
+        additionalProperties: false,
+      },
+      execute: async (_toolCallId: string, args: unknown) => ({
+        ok: true,
+        command: (args as { command?: unknown })?.command,
+      }),
+    },
     {
       name: "session_status",
       parameters: { type: "object", properties: {} },
@@ -97,8 +112,8 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({
         ok: true,
         route: {
-          agentTo: lastCreateOpenClawToolsContext?.agentTo,
-          agentThreadId: lastCreateOpenClawToolsContext?.agentThreadId,
+          agentTo: lastCreateOpenClawCodingToolsContext?.messageTo,
+          agentThreadId: lastCreateOpenClawCodingToolsContext?.messageThreadId,
         },
       }),
     },
@@ -159,17 +174,53 @@ vi.mock("../agents/openclaw-tools.js", () => {
     },
   ];
 
+  const filterToolsForTestConfig = (
+    input: typeof tools,
+    ctx: Record<string, unknown>,
+  ): typeof tools => {
+    const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey : "";
+    const sessionMatch = /^agent:([^:]+):/i.exec(sessionKey);
+    const defaultAgent =
+      (cfg.agents as { list?: Array<{ id?: string; default?: boolean }> } | undefined)?.list?.find(
+        (entry) => entry?.default,
+      ) ??
+      (cfg.agents as { list?: Array<{ id?: string; default?: boolean }> } | undefined)?.list?.[0];
+    const agentId = (sessionMatch?.[1] ?? defaultAgent?.id ?? "main").toLowerCase();
+    const agentConfig = (
+      cfg.agents as { list?: Array<{ id?: string; tools?: { allow?: string[]; deny?: string[] } }> }
+    )?.list?.find((entry) => String(entry?.id ?? "").toLowerCase() === agentId);
+    const allow = agentConfig?.tools?.allow;
+    const deny = new Set(agentConfig?.tools?.deny ?? []);
+    const globalTools = (cfg.tools as { profile?: string; alsoAllow?: string[] } | undefined) ?? {};
+    const globalProfile = globalTools.profile;
+    const alsoAllow = new Set(globalTools.alsoAllow ?? []);
+
+    return input.filter((tool) => {
+      if (
+        globalProfile === "minimal" &&
+        tool.name !== "session_status" &&
+        !alsoAllow.has(tool.name)
+      ) {
+        return false;
+      }
+      if (allow && allow.length > 0 && !allow.includes(tool.name)) {
+        return false;
+      }
+      if (deny.has(tool.name)) {
+        return false;
+      }
+      return true;
+    });
+  };
+
   return {
-    createOpenClawTools: (ctx: Record<string, unknown>) => {
-      lastCreateOpenClawToolsContext = ctx;
-      return tools;
+    createOpenClawCodingTools: (ctx: Record<string, unknown>) => {
+      lastCreateOpenClawCodingToolsContext = ctx;
+      return filterToolsForTestConfig(tools, ctx);
     },
+    resolveToolLoopDetectionConfig: hookMocks.resolveToolLoopDetectionConfig,
   };
 });
-
-vi.mock("../agents/pi-tools.js", () => ({
-  resolveToolLoopDetectionConfig: hookMocks.resolveToolLoopDetectionConfig,
-}));
 
 vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
@@ -228,7 +279,7 @@ beforeEach(() => {
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   pluginHttpHandlers = [];
   cfg = {};
-  lastCreateOpenClawToolsContext = undefined;
+  lastCreateOpenClawCodingToolsContext = undefined;
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
@@ -367,7 +418,8 @@ describe("POST /tools/invoke", () => {
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body).toHaveProperty("result");
-    expect(lastCreateOpenClawToolsContext?.allowMediaInvokeCommands).toBe(true);
+    expect(lastCreateOpenClawCodingToolsContext?.allowMediaInvokeCommands).toBe(true);
+    expect(lastCreateOpenClawCodingToolsContext?.wrapBeforeToolCallHook).toBe(false);
     expect(hookMocks.runBeforeToolCallHook).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "agents_list",
@@ -378,6 +430,19 @@ describe("POST /tools/invoke", () => {
         }),
       }),
     );
+  });
+
+  it("allows exec via HTTP when session policy allows it", async () => {
+    setMainAllowedTools({ allow: ["exec"] });
+
+    const res = await invokeToolAuthed({
+      tool: "exec",
+      args: { command: "pwd" },
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result).toMatchObject({ ok: true, command: "pwd" });
   });
 
   it("blocks tool execution when before_tool_call rejects the invoke", async () => {

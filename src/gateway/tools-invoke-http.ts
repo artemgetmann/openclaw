@@ -1,28 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createOpenClawTools } from "../agents/openclaw-tools.js";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
-import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveSubagentToolPolicy,
-} from "../agents/pi-tools.policy.js";
-import {
-  applyToolPolicyPipeline,
-  buildDefaultToolPolicyPipelineSteps,
-} from "../agents/tool-policy-pipeline.js";
-import {
-  collectExplicitAllowlist,
-  mergeAlsoAllowPolicy,
-  resolveToolProfilePolicy,
-} from "../agents/tool-policy.js";
+import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
 import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -218,78 +202,20 @@ export async function handleToolsInvokeHttpRequest(
   const agentTo = getHeader(req, "x-openclaw-message-to")?.trim() || undefined;
   const agentThreadId = getHeader(req, "x-openclaw-thread-id")?.trim() || undefined;
 
-  const {
-    agentId,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    profile,
-    providerProfile,
-    profileAlsoAllow,
-    providerProfileAlsoAllow,
-  } = resolveEffectiveToolPolicy({ config: cfg, sessionKey });
-  const profilePolicy = resolveToolProfilePolicy(profile);
-  const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
-
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
-    providerProfilePolicy,
-    providerProfileAlsoAllow,
-  );
-  const groupPolicy = resolveGroupToolPolicy({
-    config: cfg,
+  const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  // HTTP invoke should expose the same coding-tool catalog the live agent uses.
+  // Using the reduced OpenClaw-only catalog drops exec/read/write before policy runs.
+  const allTools = createOpenClawCodingTools({
     sessionKey,
     messageProvider: messageChannel ?? undefined,
-    accountId: accountId ?? null,
-  });
-  const subagentPolicy = isSubagentSessionKey(sessionKey)
-    ? resolveSubagentToolPolicy(cfg)
-    : undefined;
-
-  // Build tool list (core + plugin tools).
-  const allTools = createOpenClawTools({
-    agentSessionKey: sessionKey,
-    agentChannel: messageChannel ?? undefined,
     agentAccountId: accountId,
-    agentTo,
-    agentThreadId,
+    messageTo: agentTo,
+    messageThreadId: agentThreadId,
     // HTTP callers consume tool output directly; preserve raw media invoke payloads.
     allowMediaInvokeCommands: true,
     config: cfg,
-    pluginToolAllowlist: collectExplicitAllowlist([
-      profilePolicy,
-      providerProfilePolicy,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      subagentPolicy,
-    ]),
-  });
-
-  const subagentFiltered = applyToolPolicyPipeline({
-    // oxlint-disable-next-line typescript/no-explicit-any
-    tools: allTools as any,
-    // oxlint-disable-next-line typescript/no-explicit-any
-    toolMeta: (tool) => getPluginToolMeta(tool as any),
-    warn: logWarn,
-    steps: [
-      ...buildDefaultToolPolicyPipelineSteps({
-        profilePolicy: profilePolicyWithAlsoAllow,
-        profile,
-        providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-        providerProfile,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
-        groupPolicy,
-        agentId,
-      }),
-      { policy: subagentPolicy, label: "subagent tools.allow" },
-    ],
+    // tools/invoke runs the hook manually so blocked calls map to a clean 403 response.
+    wrapBeforeToolCallHook: false,
   });
 
   // Gateway HTTP-specific deny list — applies to ALL sessions via HTTP.
@@ -301,7 +227,7 @@ export async function handleToolsInvokeHttpRequest(
     Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [],
   );
   const gatewayDenySet = new Set(gatewayDenyNames);
-  const gatewayFiltered = subagentFiltered.filter((t) => !gatewayDenySet.has(t.name));
+  const gatewayFiltered = allTools.filter((t) => !gatewayDenySet.has(t.name));
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {
