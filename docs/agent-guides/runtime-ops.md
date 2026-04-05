@@ -12,6 +12,14 @@
 
 - Main bot rule: validate fixes from a feature worktree first when possible, using a tester bot or other isolated runtime. The long-lived LaunchAgent gateway for the primary bot must still run from the `main` checkout, not a feature worktree. If a fix lives in a worktree, test it there first, then merge it, update `main`, and only then restart the primary gateway from `main`.
 - Runtime surgery may happen from the canonical shared `main` checkout because that checkout owns the shared LaunchAgent. That does not make shared `main` a valid implementation lane. If runtime debugging reveals a code fix, switch to a worktree, patch there, validate there, then merge and restart from `main`.
+- Canonical shared-runtime rule:
+  - Do not run raw `pnpm build`, raw `node dist/index.js ...`, or any shell-default Node command from `/Users/user/Programming_Projects/openclaw`.
+  - The shell may be on Node 25 while the shared runtime is pinned to Node `22.22.1`.
+  - Use the guarded entrypoints instead:
+    - `bash scripts/build-shared-runtime.sh`
+    - `openclaw gateway restart`
+    - `bash scripts/gateway-recover-main.sh`
+    - `bash scripts/restart-mac.sh`
 - Restart:
   - `pkill -9 -f openclaw-gateway || true`
   - `nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
@@ -37,6 +45,9 @@
   - Worktree mac app lane: `bash scripts/dev-launch-mac.sh`
   - Consumer mac app lane: `bash scripts/open-consumer-mac-app.sh --instance <id>`
   - Shared/main full app rebuild + restart: `bash scripts/restart-mac.sh`
+- Shared `main` restart behavior:
+  - `openclaw gateway restart` keeps the fast `launchctl kickstart` path when the shared LaunchAgent is already healthy and pinned to the canonical `main` runtime.
+  - If the shared LaunchAgent is unhealthy or the fast path fails with a loaded-but-bad service, restart escalates to `scripts/gateway-recover-main.sh`, which now rebuilds via `scripts/build-shared-runtime.sh` so the canonical runtime always uses validated Node `22.22.1`.
 - `scripts/restart-mac.sh` still has an explicit broad kill path via `--app-scope all`; do not use it as the default from linked worktrees.
 - Use `scripts/clawlog.sh` for macOS unified logs.
 - Worktrees are valid for development and pre-merge validation. The primary bot must run from `main`, not from a worktree build. Shared `main` is for runtime ownership and orchestration only; tracked code edits still belong in a worktree. Test in the worktree first, then merge to `main`, rebuild, and restart the gateway from `main`.

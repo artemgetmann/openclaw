@@ -214,8 +214,8 @@ if [[ "$AUTO_CHECKS" == "true" && ! "$APP_BUILD" =~ ^[0-9]+$ ]]; then
 fi
 
 if [[ "${SKIP_TSC:-0}" != "1" ]]; then
-  echo "📦 Building JS (pnpm build)"
-  openclaw_run_repo_pnpm "$ROOT_DIR" build
+  echo "📦 Building JS (scripts/build-shared-runtime.sh)"
+  (cd "$ROOT_DIR" && "${ROOT_DIR}/scripts/build-shared-runtime.sh")
 else
   echo "📦 Skipping JS build (SKIP_TSC=1)"
 fi
