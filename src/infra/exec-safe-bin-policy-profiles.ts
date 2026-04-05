@@ -4,11 +4,16 @@ export type SafeBinProfile = {
   allowedFlags?: ReadonlySet<string>;
   allowedValueFlags?: ReadonlySet<string>;
   deniedFlags?: ReadonlySet<string>;
+  commandFamilies?: readonly (readonly string[])[];
+  allowUnknownOptions?: boolean;
+  guardedValueFlags?: ReadonlyMap<string, SafeBinValueGuard>;
   // Precomputed long-option metadata for GNU abbreviation resolution.
   knownLongFlags?: readonly string[];
   knownLongFlagsSet?: ReadonlySet<string>;
   longFlagPrefixMap?: ReadonlyMap<string, string | null>;
 };
+
+export type SafeBinValueGuard = "forbid" | "safeLiteral" | "stdinOnly";
 
 export type SafeBinProfileFixture = {
   minPositional?: number;
@@ -16,12 +21,26 @@ export type SafeBinProfileFixture = {
   allowedFlags?: readonly string[];
   allowedValueFlags?: readonly string[];
   deniedFlags?: readonly string[];
+  commandFamilies?: readonly (readonly string[])[];
+  allowUnknownOptions?: boolean;
+  guardedValueFlags?: Readonly<Record<string, SafeBinValueGuard>>;
 };
 
 export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixture>>;
 
 const NO_FLAGS: ReadonlySet<string> = new Set();
 const LEGACY_BOOLEAN_COMPAT_FLAGS = new Set(["--json"]);
+const PRODUCT_CLI_FORBID_VALUE_GUARDS = {
+  "--db": "forbid",
+  "--dir": "forbid",
+  "--file": "forbid",
+  "--out": "forbid",
+  "--store": "forbid",
+} satisfies Readonly<Record<string, SafeBinValueGuard>>;
+
+const PRODUCT_CLI_STDIN_ONLY_VALUE_GUARDS = {
+  "--body-file": "stdinOnly",
+} satisfies Readonly<Record<string, SafeBinValueGuard>>;
 
 const toFlagSet = (flags?: readonly string[]): ReadonlySet<string> => {
   if (!flags || flags.length === 0) {
@@ -34,6 +53,7 @@ export function collectKnownLongFlags(
   allowedFlags: ReadonlySet<string>,
   allowedValueFlags: ReadonlySet<string>,
   deniedFlags: ReadonlySet<string>,
+  guardedValueFlags: ReadonlyMap<string, SafeBinValueGuard> = new Map(),
 ): string[] {
   const known = new Set<string>();
   for (const flag of allowedFlags) {
@@ -47,6 +67,11 @@ export function collectKnownLongFlags(
     }
   }
   for (const flag of deniedFlags) {
+    if (flag.startsWith("--")) {
+      known.add(flag);
+    }
+  }
+  for (const flag of guardedValueFlags.keys()) {
     if (flag.startsWith("--")) {
       known.add(flag);
     }
@@ -81,13 +106,22 @@ function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
   const allowedFlags = toFlagSet(fixture.allowedFlags);
   const allowedValueFlags = toFlagSet(fixture.allowedValueFlags);
   const deniedFlags = toFlagSet(fixture.deniedFlags);
-  const knownLongFlags = collectKnownLongFlags(allowedFlags, allowedValueFlags, deniedFlags);
+  const guardedValueFlags = new Map(Object.entries(fixture.guardedValueFlags ?? {}));
+  const knownLongFlags = collectKnownLongFlags(
+    allowedFlags,
+    allowedValueFlags,
+    deniedFlags,
+    guardedValueFlags,
+  );
   return {
     minPositional: fixture.minPositional,
     maxPositional: fixture.maxPositional,
     allowedFlags,
     allowedValueFlags,
     deniedFlags,
+    commandFamilies: fixture.commandFamilies,
+    allowUnknownOptions: fixture.allowUnknownOptions === true,
+    guardedValueFlags,
     knownLongFlags,
     knownLongFlagsSet: new Set(knownLongFlags),
     longFlagPrefixMap: buildLongFlagPrefixMap(knownLongFlags),
@@ -107,11 +141,32 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
   // behave like explicit trusted tool surfaces instead of requiring redundant
   // per-bin profile config just to stop looking blocked.
   gog: {
-    maxPositional: 8,
-    // gog is a first-party product CLI in this fork. Keep the profile broad
-    // enough for auth/list/search flows and common writes, but still reject
-    // path-like/glob values via the shared validator so filesystem handoffs do
-    // not silently slip through safe-bin mode.
+    maxPositional: 16,
+    // gog is a trusted product CLI. Normal mode should allow direct command
+    // families without turning every product feature into a new flag allowlist
+    // patch, while still blocking explicit file handoffs that belong in Full.
+    commandFamilies: [
+      ["auth", "add"],
+      ["auth", "list"],
+      ["calendar", "colors"],
+      ["calendar", "create"],
+      ["calendar", "events"],
+      ["calendar", "update"],
+      ["contacts", "list"],
+      ["docs", "cat"],
+      ["drive", "search"],
+      ["gmail", "drafts", "create"],
+      ["gmail", "drafts", "send"],
+      ["gmail", "messages", "search"],
+      ["gmail", "search"],
+      ["gmail", "send"],
+      ["sheets", "append"],
+      ["sheets", "clear"],
+      ["sheets", "get"],
+      ["sheets", "metadata"],
+      ["sheets", "update"],
+    ],
+    allowUnknownOptions: true,
     allowedFlags: [
       "--json",
       "--plain",
@@ -155,17 +210,34 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--reply-to-message-id",
       "--session",
       "--values-json",
-      "--input",
-      "--insert",
       "--format",
     ],
+    guardedValueFlags: {
+      ...PRODUCT_CLI_FORBID_VALUE_GUARDS,
+      ...PRODUCT_CLI_STDIN_ONLY_VALUE_GUARDS,
+    },
   },
   himalaya: {
-    // Himalaya is a first-class mail tool for this product. The normal-mode
-    // profile needs to cover real account/folder/read flows from the skill, but
-    // still reject path/glob operands so config-file and download-directory
-    // handoffs keep requiring explicit full-permissions approval.
-    maxPositional: 8,
+    // Himalaya is a first-class mail tool for this product. Trust the core
+    // account/folder/message command families directly, but keep download-dir
+    // style handoffs out of Normal mode.
+    maxPositional: 16,
+    commandFamilies: [
+      ["account", "list"],
+      ["envelope", "list"],
+      ["flag", "add"],
+      ["flag", "remove"],
+      ["folder", "list"],
+      ["message", "copy"],
+      ["message", "delete"],
+      ["message", "export"],
+      ["message", "forward"],
+      ["message", "move"],
+      ["message", "read"],
+      ["message", "reply"],
+      ["message", "write"],
+    ],
+    allowUnknownOptions: true,
     allowedFlags: ["--all", "--full", "--help", "--version"],
     allowedValueFlags: [
       "--account",
@@ -178,12 +250,25 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "-H",
       "-a",
     ],
+    guardedValueFlags: {
+      ...PRODUCT_CLI_FORBID_VALUE_GUARDS,
+    },
   },
   wacli: {
-    // wacli powers search/sync/send flows directly from chat. Keep direct CLI
-    // usage broad enough for auth/list/search/send-text, while the shared
-    // validator continues to block shell wrappers plus path-like file handoffs.
-    maxPositional: 8,
+    // wacli powers search/sync/send flows directly from chat. Trust the real
+    // command families and only single out path/file handoff flags that would
+    // otherwise turn Normal mode into an implicit filesystem escape hatch.
+    maxPositional: 16,
+    commandFamilies: [
+      ["auth"],
+      ["chats", "list"],
+      ["doctor"],
+      ["history", "backfill"],
+      ["messages", "search"],
+      ["send", "text"],
+      ["sync"],
+    ],
+    allowUnknownOptions: true,
     allowedFlags: ["--follow", "--json"],
     allowedValueFlags: [
       "--after",
@@ -205,6 +290,9 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--to",
       "--wait-ms",
     ],
+    guardedValueFlags: {
+      ...PRODUCT_CLI_FORBID_VALUE_GUARDS,
+    },
   },
   jq: {
     maxPositional: 1,
@@ -358,6 +446,45 @@ function normalizeFixtureFlags(
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeCommandFamilies(
+  families: readonly (readonly string[])[] | undefined,
+): readonly (readonly string[])[] | undefined {
+  if (!Array.isArray(families) || families.length === 0) {
+    return undefined;
+  }
+  const normalized = Array.from(
+    new Set(
+      families
+        .map((family) =>
+          family
+            .map((token: string) => token.trim().toLowerCase())
+            .filter((token: string) => token.length > 0)
+            .join("\0"),
+        )
+        .filter((family) => family.length > 0),
+    ),
+  )
+    .map((family) => family.split("\0"))
+    .toSorted((a, b) => a.join(" ").localeCompare(b.join(" ")));
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeGuardedValueFlags(
+  guards: Readonly<Record<string, SafeBinValueGuard>> | undefined,
+): Readonly<Record<string, SafeBinValueGuard>> | undefined {
+  if (!guards) {
+    return undefined;
+  }
+  const normalizedEntries = Object.entries(guards)
+    .map(([rawFlag, rawGuard]) => [rawFlag.trim(), rawGuard] as const)
+    .filter(
+      ([flag, guard]) =>
+        flag.length > 0 && (guard === "forbid" || guard === "safeLiteral" || guard === "stdinOnly"),
+    )
+    .toSorted(([a], [b]) => a.localeCompare(b));
+  return normalizedEntries.length > 0 ? Object.fromEntries(normalizedEntries) : undefined;
+}
+
 function normalizeSafeBinProfileFixture(fixture: SafeBinProfileFixture): SafeBinProfileFixture {
   const minPositional = normalizeFixtureLimit(fixture.minPositional);
   const maxPositionalRaw = normalizeFixtureLimit(fixture.maxPositional);
@@ -385,6 +512,9 @@ function normalizeSafeBinProfileFixture(fixture: SafeBinProfileFixture): SafeBin
     allowedFlags,
     allowedValueFlags,
     deniedFlags: normalizeFixtureFlags(fixture.deniedFlags),
+    commandFamilies: normalizeCommandFamilies(fixture.commandFamilies),
+    allowUnknownOptions: fixture.allowUnknownOptions === true || undefined,
+    guardedValueFlags: normalizeGuardedValueFlags(fixture.guardedValueFlags),
   };
 }
 
