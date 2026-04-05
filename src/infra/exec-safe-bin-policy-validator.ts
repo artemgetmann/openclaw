@@ -2,6 +2,7 @@ import { parseExecArgvToken } from "./exec-approvals-analysis.js";
 import {
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
+  type SafeBinValueGuard,
   type SafeBinProfile,
 } from "./exec-safe-bin-policy-profiles.js";
 
@@ -29,6 +30,7 @@ function hasGlobToken(value: string): boolean {
 }
 
 const NO_FLAGS: ReadonlySet<string> = new Set();
+const NO_GUARDED_VALUE_FLAGS: ReadonlyMap<string, SafeBinValueGuard> = new Map();
 
 function isSafeLiteralToken(value: string): boolean {
   if (!value || value === "-") {
@@ -39,6 +41,35 @@ function isSafeLiteralToken(value: string): boolean {
 
 function isInvalidValueToken(value: string | undefined): boolean {
   return !value || !isSafeLiteralToken(value);
+}
+
+function validateGuardedValue(value: string | undefined, guard: SafeBinValueGuard): boolean {
+  if (guard === "forbid") {
+    return false;
+  }
+  if (guard === "stdinOnly") {
+    return value === "-";
+  }
+  return !isInvalidValueToken(value);
+}
+
+function matchesCommandFamily(
+  positional: readonly string[],
+  commandFamilies: readonly (readonly string[])[],
+): boolean {
+  return commandFamilies.some(
+    (family) =>
+      family.length <= positional.length &&
+      family.every((token, index) => positional[index]?.toLowerCase() === token),
+  );
+}
+
+function isPotentialOptionValueToken(value: string | undefined): value is string {
+  if (!value || value === "--") {
+    return false;
+  }
+  const token = parseExecArgvToken(value);
+  return token.kind === "positional" || token.kind === "stdin";
 }
 
 function resolveCanonicalLongFlag(params: {
@@ -63,8 +94,10 @@ function consumeLongOptionToken(params: {
   allowedFlags: ReadonlySet<string>;
   allowedValueFlags: ReadonlySet<string>;
   deniedFlags: ReadonlySet<string>;
+  guardedValueFlags: ReadonlyMap<string, SafeBinValueGuard>;
   knownLongFlagsSet: ReadonlySet<string>;
   longFlagPrefixMap: ReadonlyMap<string, string | null>;
+  allowUnknownOptions: boolean;
 }): number {
   const canonicalFlag = resolveCanonicalLongFlag({
     flag: params.flag,
@@ -72,14 +105,28 @@ function consumeLongOptionToken(params: {
     longFlagPrefixMap: params.longFlagPrefixMap,
   });
   if (!canonicalFlag) {
-    return -1;
+    if (!params.allowUnknownOptions) {
+      return -1;
+    }
+    if (params.inlineValue !== undefined) {
+      return isSafeLiteralToken(params.inlineValue) ? params.index + 1 : -1;
+    }
+    const nextRaw = params.args[params.index + 1];
+    if (!isPotentialOptionValueToken(nextRaw)) {
+      return params.index + 1;
+    }
+    return isSafeLiteralToken(nextRaw) ? params.index + 2 : -1;
   }
   if (params.deniedFlags.has(canonicalFlag)) {
     return -1;
   }
+  const valueGuard = params.guardedValueFlags.get(canonicalFlag);
   const allowsBareFlag = params.allowedFlags.has(canonicalFlag);
   const expectsValue = params.allowedValueFlags.has(canonicalFlag);
   if (params.inlineValue !== undefined) {
+    if (valueGuard) {
+      return validateGuardedValue(params.inlineValue, valueGuard) ? params.index + 1 : -1;
+    }
     if (!expectsValue) {
       return -1;
     }
@@ -88,8 +135,11 @@ function consumeLongOptionToken(params: {
   if (allowsBareFlag) {
     return params.index + 1;
   }
+  if (valueGuard) {
+    return validateGuardedValue(params.args[params.index + 1], valueGuard) ? params.index + 2 : -1;
+  }
   if (!expectsValue) {
-    return params.index + 1;
+    return params.allowUnknownOptions ? params.index + 1 : -1;
   }
   return isInvalidValueToken(params.args[params.index + 1]) ? -1 : params.index + 2;
 }
@@ -139,8 +189,12 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
   const allowedFlags = profile.allowedFlags ?? NO_FLAGS;
   const allowedValueFlags = profile.allowedValueFlags ?? NO_FLAGS;
   const deniedFlags = profile.deniedFlags ?? NO_FLAGS;
+  const guardedValueFlags = profile.guardedValueFlags ?? NO_GUARDED_VALUE_FLAGS;
+  const commandFamilies = profile.commandFamilies ?? [];
+  const allowUnknownOptions = profile.allowUnknownOptions === true && commandFamilies.length > 0;
   const knownLongFlags =
-    profile.knownLongFlags ?? collectKnownLongFlags(allowedFlags, allowedValueFlags, deniedFlags);
+    profile.knownLongFlags ??
+    collectKnownLongFlags(allowedFlags, allowedValueFlags, deniedFlags, guardedValueFlags);
   const knownLongFlagsSet = profile.knownLongFlagsSet ?? new Set(knownLongFlags);
   const longFlagPrefixMap = profile.longFlagPrefixMap ?? buildLongFlagPrefixMap(knownLongFlags);
 
@@ -185,8 +239,10 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
         allowedFlags,
         allowedValueFlags,
         deniedFlags,
+        guardedValueFlags,
         knownLongFlagsSet,
         longFlagPrefixMap,
+        allowUnknownOptions,
       });
       if (nextIndex < 0) {
         return false;
@@ -209,5 +265,11 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
     i = nextIndex;
   }
 
-  return validatePositionalCount(positional, profile);
+  if (!validatePositionalCount(positional, profile)) {
+    return false;
+  }
+  if (commandFamilies.length === 0) {
+    return true;
+  }
+  return matchesCommandFamily(positional, commandFamilies);
 }

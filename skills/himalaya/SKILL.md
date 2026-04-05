@@ -39,6 +39,11 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
   not prepend `which`, `--version`, `set -o pipefail`, or other shell-chain
   noise before the real check.
 - If `himalaya` is wrapped through `openclaw nodes run`, insert `--` before the
+- Prefer direct safe-bin invocation first: `himalaya account list`,
+  `himalaya folder list`, then `himalaya envelope list`.
+- In Normal permissions mode, direct `himalaya ...` commands are allowed. The
+  default restriction is on shell wrappers (`bash -lc`, `sh -c`), pipes,
+  chaining, and redirection.
   child argv so Himalaya keeps its own flags.
 - Allow node execution when the runtime supports it. Missing
   `system.run.prepare` alone does not make Himalaya execution invalid.

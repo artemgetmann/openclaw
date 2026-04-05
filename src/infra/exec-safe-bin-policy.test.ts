@@ -86,16 +86,124 @@ describe("exec safe bin policy wc", () => {
 });
 
 describe("exec safe bin policy product-owned cli defaults", () => {
-  it("allows bounded gog and himalaya positional usage", () => {
+  it("allows trusted product CLI command families instead of arbitrary positionals", () => {
     const gogProfile = SAFE_BIN_PROFILES.gog;
     const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
     expect(validateSafeBinArgv(["drive", "search", "test"], gogProfile)).toBe(true);
-    expect(validateSafeBinArgv(["message", "list", "inbox"], himalayaProfile)).toBe(true);
+    expect(validateSafeBinArgv(["folder", "list"], himalayaProfile)).toBe(true);
+    expect(validateSafeBinArgv(["totally", "made", "up"], gogProfile)).toBe(false);
+    expect(validateSafeBinArgv(["message", "list", "inbox"], himalayaProfile)).toBe(false);
   });
 
-  it("still blocks gog and himalaya command lines that blow past bounded positionals", () => {
+  it("allows real himalaya direct commands with documented flags", () => {
+    const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
+    expect(
+      validateSafeBinArgv(
+        ["envelope", "list", "-a", "work", "--folder", "INBOX", "--page", "1", "--page-size", "20"],
+        himalayaProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(["message", "write", "-H", "To:recipient@example.com"], himalayaProfile),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(["message", "read", "42", "--preview", "trimmed"], himalayaProfile),
+    ).toBe(true);
+  });
+
+  it("allows gog auth and read probes without flag-by-flag updates", () => {
+    const gogProfile = SAFE_BIN_PROFILES.gog;
+    expect(
+      validateSafeBinArgv(
+        [
+          "auth",
+          "add",
+          "artemnaumenko1@gmail.com",
+          "--services",
+          "gmail,calendar",
+          "--timeout",
+          "5m",
+        ],
+        gogProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["gmail", "search", "newer_than:7d", "--max", "10", "--json"],
+        gogProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["gmail", "search", "newer_than:7d", "--label", "support", "--json"],
+        gogProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["gmail", "send", "--to", "a@b.com", "--subject", "Hi", "--body-file", "-"],
+        gogProfile,
+      ),
+    ).toBe(true);
+  });
+
+  it("allows real wacli direct commands with family-scoped unknown flags", () => {
+    const wacliProfile = SAFE_BIN_PROFILES.wacli;
+    expect(validateSafeBinArgv(["doctor"], wacliProfile)).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        [
+          "messages",
+          "search",
+          "invoice",
+          "--chat",
+          "628123@s.whatsapp.net",
+          "--limit",
+          "20",
+          "--json",
+        ],
+        wacliProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["messages", "search", "invoice", "--transport", "history", "--json"],
+        wacliProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["send", "text", "--to", "+14155551212", "--message", "hello there"],
+        wacliProfile,
+      ),
+    ).toBe(true);
+  });
+
+  it("still blocks path handoffs for product-owned CLIs even when the flag itself is allowed", () => {
     const gogProfile = SAFE_BIN_PROFILES.gog;
     const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
+    const wacliProfile = SAFE_BIN_PROFILES.wacli;
+    expect(
+      validateSafeBinArgv(["auth", "credentials", "--client", "./secret.json"], gogProfile),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(["gmail", "send", "--body-file", "/tmp/message.txt"], gogProfile),
+    ).toBe(false);
+    expect(validateSafeBinArgv(["gmail", "send", "--body-file", "message.txt"], gogProfile)).toBe(
+      false,
+    );
+    expect(
+      validateSafeBinArgv(["attachment", "download", "42", "--dir", "/tmp"], himalayaProfile),
+    ).toBe(false);
+    expect(validateSafeBinArgv(["send", "file", "--file", "/tmp/doc.pdf"], wacliProfile)).toBe(
+      false,
+    );
+  });
+
+  it("still blocks product-owned CLI command lines that blow past bounded positionals", () => {
+    const gogProfile = SAFE_BIN_PROFILES.gog;
+    const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
+    const wacliProfile = SAFE_BIN_PROFILES.wacli;
     expect(
       validateSafeBinArgv(
         ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"],
@@ -106,6 +214,33 @@ describe("exec safe bin policy product-owned cli defaults", () => {
       validateSafeBinArgv(
         ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"],
         himalayaProfile,
+      ),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(
+        ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"],
+        wacliProfile,
+      ),
+    ).toBe(false);
+  });
+
+  it("still blocks path-like values on unknown options inside trusted command families", () => {
+    const gogProfile = SAFE_BIN_PROFILES.gog;
+    const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
+    const wacliProfile = SAFE_BIN_PROFILES.wacli;
+    expect(
+      validateSafeBinArgv(
+        ["gmail", "search", "newer_than:7d", "--config", "./secret.json"],
+        gogProfile,
+      ),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(["message", "read", "42", "--cache-dir", "/tmp/cache"], himalayaProfile),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(
+        ["messages", "search", "invoice", "--db-path", "../wa.sqlite"],
+        wacliProfile,
       ),
     ).toBe(false);
   });

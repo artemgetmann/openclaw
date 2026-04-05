@@ -46,6 +46,9 @@ Automation Rule
 - In consumer chat flows, prefer the plain human-readable `wacli doctor` shape.
   Do not add `--json` unless the user explicitly asked for raw machine output.
 - Prefer direct safe-bin invocation first. Run one command per call.
+- In Normal permissions mode, direct `wacli ...` commands are allowed. What
+  stays restricted by default is shell wrapping, pipes, chaining, and
+  redirection.
 - If you wrap `wacli` through `openclaw nodes run`, insert `--` before the
   child argv so flags like `--json` or `--limit` reach `wacli` instead of the
   wrapper.
