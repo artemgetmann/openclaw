@@ -95,11 +95,15 @@ explicitly ask for the CLI path.
 - Prefer product-language guidance such as "open WhatsApp on your phone and
   finish pairing" over dumping `wacli auth` / `wacli sync --follow` into chat
   unless the user explicitly wants the CLI path.
+- Do not tell a consumer user to run `/opt/homebrew/bin/wacli auth` or
+  `/opt/homebrew/bin/wacli sync --follow` verbatim unless they explicitly ask
+  for the terminal path.
 - For consumer product flows, do not suggest `wacli sync --follow` as the
   default next step. If a refresh is actually needed after pairing, prefer the
   bounded path `wacli sync --once --idle-exit 30s`.
 - Verify with the cheapest read-only checks first: `wacli doctor`, then
-  `wacli chats list --limit 5`.
+  `wacli chats list --limit 5`, or use
+  `skills/wacli/scripts/wacli-health.sh --json`.
 - In consumer chat flows, use the plain `wacli doctor` shape unless the user
   explicitly asks for JSON output. Do not invent `--json` on your own here.
 - Run those checks as separate direct invocations. Never combine them into one

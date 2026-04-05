@@ -41,6 +41,7 @@ channel setup, not the CLI utility.
 Automation Rule
 
 - For consumer checks, start with the cheapest read-only probes:
+  `skills/wacli/scripts/wacli-health.sh --json` or, if you need the raw steps,
   `wacli doctor`, then `wacli chats list --limit 5`.
 - In consumer chat flows, prefer the plain human-readable `wacli doctor` shape.
   Do not add `--json` unless the user explicitly asked for raw machine output.
@@ -49,6 +50,9 @@ Automation Rule
   child argv so flags like `--json` or `--limit` reach `wacli` instead of the
   wrapper.
 - Ban dumb shell chaining, pipes, and redirection around `wacli`.
+- Do NOT use bare `wacli sync --json` as a health or status probe.
+  `wacli sync` defaults to `--follow=true`, so it is a long-running command and
+  a bad fit for quick readiness checks.
 - Allow node execution only when the runtime actually supports it; do not claim
   node exec is invalid just because `system.run.prepare` is absent.
 - Do not claim WhatsApp is paired, readable, or ready unless those probes ran in
@@ -158,3 +162,5 @@ Notes
   actually needs fresher data.
 - `wacli chats list` is the cheapest proof that history/search access is
   actually working before you attempt send or backfill actions.
+- `skills/wacli/scripts/wacli-health.sh --json` is the preferred normalized
+  readiness check for agents. It intentionally avoids bare `wacli sync`.
