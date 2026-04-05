@@ -103,6 +103,9 @@ Setup Routing
   exactly what to do next: keep WhatsApp open on the phone, make sure the phone
   stays online, and leave the linked session active long enough for a bounded
   sync refresh to finish.
+- If the user is debugging the live OpenClaw WhatsApp bot/channel, `wacli` is
+  the wrong surface. The built-in WhatsApp channel is separate from the
+  external `wacli` CLI.
 - Use the raw CLI steps below only when you are the one performing setup or the
   user explicitly asks for the terminal path.
 - For local pairing work, prefer
@@ -135,6 +138,8 @@ Safety
 Auth + sync
 
 - `wacli auth` (QR login + initial sync)
+- `wacli sync --once --idle-exit 30s` (bounded refresh for consumer lanes)
+- `wacli sync --follow` (continuous sync when you intentionally need a live owner)
 - `wacli sync --once --idle-exit 30s` (bounded refresh for consumer lanes)
 - Raw debug only: `wacli doctor`
 
@@ -189,7 +194,10 @@ Notes
   keep WhatsApp open on the phone, keep the phone online, and wait for the
   linked session to catch up. Use a bounded sync refresh if the current turn
   actually needs fresher data.
-- `wacli chats list` is the cheapest proof that history/search access is
+  - `AUTHENTICATED true` + `CONNECTED false` may mean the account is paired but
+    offline, or just that another healthy sync owner already holds the store
+    lock.
+- `wacli chats list --json` is the cheapest proof that history/search access is
   actually working before you attempt send or backfill actions.
 - `skills/wacli/scripts/wacli-live.sh ensure --json` is the preferred minimal
   live-connection recovery path for agents when WhatsApp is paired but not
