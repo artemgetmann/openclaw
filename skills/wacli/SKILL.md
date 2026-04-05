@@ -7,7 +7,17 @@ metadata:
     "openclaw":
       {
         "emoji": "📱",
-        "requires": { "bins": ["wacli"] },
+        "requires":
+          {
+            "bins":
+              [
+                "wacli",
+                "./scripts/wacli-live.sh",
+                "./scripts/wacli-health.sh",
+                "./scripts/wacli-auth-local.sh",
+                "./scripts/wacli-recent-reply.sh",
+              ],
+          },
         "install":
           [
             {
@@ -38,8 +48,11 @@ If the user is chatting with you on WhatsApp, you should not reach for this tool
 Automation Rule
 
 - For consumer checks, start with the cheapest read-only probes:
-  `skills/wacli/scripts/wacli-health.sh --json` or, if you need the raw steps,
+  `skills/wacli/scripts/wacli-health.sh --json --ensure-owner` or, if you need the raw steps,
   `wacli doctor`, then `wacli chats list --limit 5 --json`.
+- When live connectivity matters, prefer
+  `skills/wacli/scripts/wacli-live.sh ensure --json`
+  to make sure one long-lived `wacli sync --follow` owner exists for the store.
 - Prefer direct safe-bin invocation first. Run one command per call.
 - If you wrap `wacli` through `openclaw nodes run`, insert `--` before the
   child argv so flags like `--json` or `--limit` reach `wacli` instead of the
@@ -135,5 +148,8 @@ Notes
     but the phone/session is offline or not actively syncing.
 - `wacli chats list --json` is the cheapest proof that history/search access is
   actually working before you attempt send or backfill actions.
-- `skills/wacli/scripts/wacli-health.sh --json` is the preferred normalized
-  readiness check for agents. It intentionally avoids bare `wacli sync`.
+- `skills/wacli/scripts/wacli-live.sh ensure --json` is the preferred minimal
+  live-connection recovery path for agents when WhatsApp is paired but not
+  staying connected.
+- `skills/wacli/scripts/wacli-health.sh --json --ensure-owner` is the preferred
+  normalized readiness check for agents. It intentionally avoids bare `wacli sync`.

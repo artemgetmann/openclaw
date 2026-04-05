@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
+import { skillsHandlers } from "./server-methods/skills.js";
 import { connectOk, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
 import { withServer } from "./test-with-server.js";
 
@@ -43,6 +44,36 @@ describe("gateway skills.status", () => {
           expect(check?.satisfied).toBe(true);
           expect(check && "value" in check).toBe(false);
         });
+      },
+    );
+  });
+
+  it("resolves path-like skill bins relative to the skill directory", async () => {
+    await withEnvAsync(
+      { OPENCLAW_BUNDLED_SKILLS_DIR: path.join(process.cwd(), "skills") },
+      async () => {
+        const { writeConfigFile } = await import("../config/config.js");
+        await writeConfigFile({
+          session: { mainKey: "main-test" },
+        });
+
+        let ok = false;
+        let payload: { bins?: string[] } | undefined;
+        void skillsHandlers["skills.bins"]({
+          params: {},
+          respond: (nextOk, nextPayload) => {
+            ok = nextOk;
+            payload = nextPayload as { bins?: string[] } | undefined;
+          },
+        });
+
+        expect(ok).toBe(true);
+        expect(payload?.bins).toContain(
+          path.resolve(process.cwd(), "skills/wacli/scripts/wacli-health.sh"),
+        );
+        expect(payload?.bins).toContain(
+          path.resolve(process.cwd(), "skills/wacli/scripts/wacli-auth-local.sh"),
+        );
       },
     );
   });
