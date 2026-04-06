@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import { detectDangerousExecCommand } from "../infra/exec-dangerous-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getShellPathFromLoginShell,
@@ -532,6 +533,11 @@ export function createExecTool(
           gatewayExecCommandPrefix = trimCommandPrefix(gatewayPathPrelude.commandPrefix);
           execCommandOverride = `${gatewayPathPrelude.commandPrefix}${execCommandOverride ?? params.command}`;
         }
+      }
+
+      const dangerousCommandMessage = detectDangerousExecCommand(params.command);
+      if (dangerousCommandMessage) {
+        throw new Error(dangerousCommandMessage);
       }
 
       if (host === "node") {

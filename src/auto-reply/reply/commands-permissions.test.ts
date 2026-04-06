@@ -10,7 +10,7 @@ const baseCfg = {
 } satisfies OpenClawConfig;
 
 describe("/permissions", () => {
-  it("shows the default Telegram chat mode as Normal", async () => {
+  it("shows the effective default chat mode when no local override exists", async () => {
     const sessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
@@ -30,8 +30,8 @@ describe("/permissions", () => {
       true,
     );
 
-    expect(result?.reply?.text).toContain("Permissions: Normal");
-    expect(result?.reply?.text).toContain("Direct commands are allowed");
+    expect(result?.reply?.text).toContain("Permissions: Full Permissions");
+    expect(result?.reply?.text).toContain("Shell wrappers");
   });
 
   it("switches the current chat to Full Permissions", async () => {

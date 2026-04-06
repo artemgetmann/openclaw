@@ -12,6 +12,7 @@ import {
   type ExecCommandSegment,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { detectDangerousExecCommand } from "../infra/exec-dangerous-command-guard.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
@@ -51,6 +52,7 @@ type SystemRunDeniedReason =
   | "security=deny"
   | "approval-required"
   | "allowlist-miss"
+  | "dangerous-command"
   | "execution-plan-miss"
   | "companion-unavailable"
   | "permission:screenRecording";
@@ -118,6 +120,7 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
     case "security=deny":
     case "approval-required":
     case "allowlist-miss":
+    case "dangerous-command":
     case "execution-plan-miss":
     case "companion-unavailable":
     case "permission:screenRecording":
@@ -322,6 +325,7 @@ async function evaluateSystemRunPolicyPhase(
     isWindows,
     cmdInvocation,
     shellWrapperInvocation: parsed.shellPayload !== null,
+    dangerousCommandMessage: detectDangerousExecCommand(parsed.commandText),
   });
   analysisOk = policy.analysisOk;
   allowlistSatisfied = policy.allowlistSatisfied;

@@ -267,8 +267,8 @@ export async function runPreparedReply(
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
   const permissionModePrompt = buildPermissionModePromptHint({
-    channel:
-      sessionEntry?.channel ?? sessionEntry?.lastChannel ?? ctx.OriginatingChannel ?? ctx.Surface,
+    config: cfg,
+    agentId,
     execSecurity: sessionEntry?.execSecurity,
     execAsk: sessionEntry?.execAsk,
   });
