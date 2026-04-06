@@ -50,7 +50,7 @@ function normalizePathForComparison(filePath: string | null | undefined): string
 
 function resolveCanonicalSharedGatewayEntrypoint(env: GatewayServiceEnv): string | null {
   const home = env.HOME?.trim() || process.env.HOME?.trim() || "";
-  const explicitRoot = env.OPENCLAW_MAIN_REPO?.trim();
+  const explicitRoot = env.OPENCLAW_MAIN_REPO?.trim() ?? "";
   const candidates: string[] = [
     explicitRoot,
     home ? path.join(home, "Programming_Projects", "openclaw") : "",

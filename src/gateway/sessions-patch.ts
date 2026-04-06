@@ -119,7 +119,7 @@ function syncFutureThreadDefaultsFromPatch(params: {
       applyFutureThreadThinkingDefault({
         store: params.store,
         parentSessionKey,
-        level: nextThinkingLevel,
+        level: nextThinkingLevel as Parameters<typeof applyFutureThreadThinkingDefault>[0]["level"],
         afterThreadId,
       });
     }
