@@ -22,6 +22,7 @@ describe("git-hooks/pre-commit (integration)", () => {
   it("does not treat staged filenames as git-add flags (e.g. --all)", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-"));
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+    run(dir, "git", ["checkout", "-qb", "codex/test-pre-commit"]);
 
     // Use the real hook script and lightweight helper stubs.
     mkdirSync(path.join(dir, "git-hooks"), { recursive: true });
@@ -71,49 +72,57 @@ describe("git-hooks/pre-commit (integration)", () => {
     expect(staged).toEqual(["--all"]);
   });
 
-  it("blocks the canonical shared main checkout when it owns ai.openclaw.gateway", () => {
+  it("blocks direct commits on protected base branches", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-main-guard-"));
-    const home = path.join(dir, "home");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+    run(dir, "git", ["config", "user.name", "Test User"]);
+    run(dir, "git", ["config", "user.email", "test@example.com"]);
 
     mkdirSync(path.join(dir, "scripts", "lib"), { recursive: true });
-    mkdirSync(path.join(dir, "dist"), { recursive: true });
-    mkdirSync(path.join(home, "Library", "LaunchAgents"), { recursive: true });
     symlinkSync(
       path.join(process.cwd(), "scripts", "lib", "worktree-guards.sh"),
       path.join(dir, "scripts", "lib", "worktree-guards.sh"),
     );
-    writeFileSync(path.join(dir, "dist", "index.js"), "console.log('gateway');\n", "utf8");
-    writeFileSync(
-      path.join(home, "Library", "LaunchAgents", "ai.openclaw.gateway.plist"),
-      `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/node</string>
-    <string>${path.join(dir, "dist", "index.js")}</string>
-    <string>gateway</string>
-  </array>
-</dict>
-</plist>
-`,
-      "utf8",
-    );
     expect(() =>
+      run(dir, "/bin/bash", [
+        "-c",
+        'source "$PWD/scripts/lib/worktree-guards.sh"; worktree_guard_forbid_protected_base_branch_commit "$PWD"',
+      ]),
+    ).toThrow(/protected base branch 'main'/);
+
+    run(dir, "git", ["checkout", "-qb", "codex/consumer-openclaw-project"]);
+
+    expect(() =>
+      run(dir, "/bin/bash", [
+        "-c",
+        'source "$PWD/scripts/lib/worktree-guards.sh"; worktree_guard_forbid_protected_base_branch_commit "$PWD"',
+      ]),
+    ).toThrow(/protected base branch 'codex\/consumer-openclaw-project'/);
+  });
+
+  it("allows protected base branch commits only with an explicit override", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-protected-branch-override-"));
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    mkdirSync(path.join(dir, "scripts", "lib"), { recursive: true });
+    symlinkSync(
+      path.join(process.cwd(), "scripts", "lib", "worktree-guards.sh"),
+      path.join(dir, "scripts", "lib", "worktree-guards.sh"),
+    );
+
+    expect(
       run(
         dir,
         "/bin/bash",
         [
           "-c",
-          'source "$PWD/scripts/lib/worktree-guards.sh"; worktree_guard_forbid_shared_root_main_commits "$PWD"',
+          'source "$PWD/scripts/lib/worktree-guards.sh"; worktree_guard_forbid_protected_base_branch_commit "$PWD"',
         ],
         {
-          HOME: home,
+          OPENCLAW_ALLOW_PROTECTED_BRANCH_COMMITS: "1",
         },
       ),
-    ).toThrow(/canonical shared main checkout/);
+    ).toBe("");
   });
 
   it("blocks stale durable consumer lanes that are behind origin", () => {

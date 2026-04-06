@@ -10,8 +10,8 @@
 
 ## Gateway restart and checks
 
-- Main bot rule: validate fixes from a feature worktree first when possible, using a tester bot or other isolated runtime. The long-lived LaunchAgent gateway for the primary bot must still run from the `main` checkout, not a feature worktree. If a fix lives in a worktree, test it there first, then merge it, update `main`, and only then restart the primary gateway from `main`.
-- Runtime surgery may happen from the canonical shared `main` checkout because that checkout owns the shared LaunchAgent. That does not make shared `main` a valid implementation lane. If runtime debugging reveals a code fix, switch to a worktree, patch there, validate there, then merge and restart from `main`.
+- Main bot rule: validate fixes from a short-lived feature branch first when possible, using a tester bot or other isolated runtime. The long-lived LaunchAgent gateway for the primary bot must still be rebuilt and restarted from the `main` home clone with `main` checked out.
+- Runtime surgery may happen from `~/Programming_Projects/openclaw` because that home clone owns the shared LaunchAgent. That does not mean you should restart the shared runtime from a feature branch. If runtime debugging reveals a code fix, patch it on the feature branch, validate it there, then switch the home clone back to `main`, fast-forward, rebuild, and restart.
 - Canonical shared-runtime rule:
   - Do not run raw `pnpm build`, raw `node dist/index.js ...`, or any shell-default Node command from `/Users/user/Programming_Projects/openclaw`.
   - The shell may be on Node 25 while the shared runtime is pinned to Node `22.22.1`.
@@ -50,4 +50,4 @@
   - If the shared LaunchAgent is unhealthy or the fast path fails with a loaded-but-bad service, restart escalates to `scripts/gateway-recover-main.sh`, which now rebuilds via `scripts/build-shared-runtime.sh` so the canonical runtime always uses validated Node `22.22.1`.
 - `scripts/restart-mac.sh` still has an explicit broad kill path via `--app-scope all`; do not use it as the default from linked worktrees.
 - Use `scripts/clawlog.sh` for macOS unified logs.
-- Worktrees are valid for development and pre-merge validation. The primary bot must run from `main`, not from a worktree build. Shared `main` is for runtime ownership and orchestration only; tracked code edits still belong in a worktree. Test in the worktree first, then merge to `main`, rebuild, and restart the gateway from `main`.
+- Temporary worktrees are valid for development and pre-merge validation when 2 or more agents need isolated parallel editing in the same clone. The primary bot still must run from `main`, not from a worktree build. The `main` home clone can host short-lived feature branches during development, but shared-runtime restarts still happen only after that clone is back on `main`.
