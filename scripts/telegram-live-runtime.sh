@@ -31,12 +31,6 @@ STOPPED_RUNTIME_PID=""
 TOKEN_PRESENT="no"
 TOKEN_POOL_GUARD="fail"
 TOKEN_FINGERPRINT="none"
-TOKEN_CLAIM_STATUS="unknown"
-TOKEN_CLAIM_REASON="unknown"
-TOKEN_POOL_SIZE=0
-TOKEN_POOL_CLAIMED_COUNT=0
-TOKEN_POOL_RESERVED_COUNT=0
-TOKEN_POOL_CLAIMABLE_COUNT=0
 ASSIGNED_BOT_TOKEN=""
 ASSIGNED_BOT_ID="unknown"
 ASSIGNED_BOT_USERNAME="unknown"
@@ -46,9 +40,6 @@ RUNTIME_TOKEN_SOURCE="unknown"
 TOKEN_ORIGIN_HINT="unknown"
 TOKEN_CLAIM_COUNT=0
 TOKEN_CLAIM_PATHS=()
-RUNTIME_CONFIG_PRESENT="no"
-RUNTIME_CONFIG_TOKEN_PRESENT="no"
-RUNTIME_CONFIG_TOKEN_FINGERPRINT="none"
 FAIL=0
 FAIL_REASONS=()
 
@@ -123,45 +114,6 @@ add_failure() {
   local reason="$1"
   FAIL=1
   FAIL_REASONS+=("$reason")
-}
-
-parse_assign_bot_output() {
-  local output="$1"
-  local line=""
-  local reason=""
-
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    case "$line" in
-      Reason:\ *) reason="${line#Reason: }" ;;
-      Selection\ reason:\ *) reason="${line#Selection reason: }" ;;
-      Claimed:\ *)
-        if [[ "$line" =~ Claimed:\ ([0-9]+)\ /\ Pool:\ ([0-9]+)\ /\ Reserved\ by\ main\ runtime:\ ([0-9]+) ]]; then
-          TOKEN_POOL_CLAIMED_COUNT="${BASH_REMATCH[1]}"
-          TOKEN_POOL_SIZE="${BASH_REMATCH[2]}"
-          TOKEN_POOL_RESERVED_COUNT="${BASH_REMATCH[3]}"
-        fi
-        ;;
-      Claimable\ now:\ *)
-        if [[ "$line" =~ Claimable\ now:\ ([0-9]+) ]]; then
-          TOKEN_POOL_CLAIMABLE_COUNT="${BASH_REMATCH[1]}"
-        fi
-        ;;
-    esac
-  done <<< "$output"
-
-  if [[ -n "$reason" ]]; then
-    TOKEN_CLAIM_REASON="$reason"
-  fi
-}
-
-hydrate_current_lane_bot() {
-  resolve_token_claims "$ASSIGNED_BOT_TOKEN"
-  resolve_bot_identity
-  if [[ "${ASSIGNED_BOT_USERNAME}" != "unknown" ]]; then
-    CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
-  elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
-    CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
-  fi
 }
 
 resolve_token_claims() {
@@ -312,59 +264,10 @@ NODE
   PROFILE_ID="$(printf '%s\n' "$profile_lines" | sed -n '1p')"
   RUNTIME_PORT="$(printf '%s\n' "$profile_lines" | sed -n '2p')"
   RUNTIME_STATE_DIR="$(printf '%s\n' "$profile_lines" | sed -n '3p')"
-  RUNTIME_CONFIG_PATH="${RUNTIME_STATE_DIR}/openclaw.telegram-live.json"
   RUNTIME_LOG_PATH="/tmp/openclaw-telegram-live-${PROFILE_ID}.log"
 
   if [[ -z "$PROFILE_ID" || -z "$RUNTIME_PORT" || -z "$RUNTIME_STATE_DIR" ]]; then
     add_failure "profile_resolution_failed"
-  fi
-}
-
-inspect_runtime_config() {
-  RUNTIME_CONFIG_PRESENT="no"
-  RUNTIME_CONFIG_TOKEN_PRESENT="no"
-  RUNTIME_CONFIG_TOKEN_FINGERPRINT="none"
-
-  if [[ -z "$RUNTIME_CONFIG_PATH" || ! -f "$RUNTIME_CONFIG_PATH" ]]; then
-    return
-  fi
-
-  RUNTIME_CONFIG_PRESENT="yes"
-
-  local token=""
-  token="$(
-    RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" node --input-type=module - <<'NODE'
-import fs from "node:fs";
-
-const configPath = process.env.RUNTIME_CONFIG_PATH;
-if (!configPath || !fs.existsSync(configPath)) {
-  process.exit(0);
-}
-
-try {
-  const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  const token =
-    parsed &&
-    typeof parsed === "object" &&
-    parsed.channels &&
-    typeof parsed.channels === "object" &&
-    parsed.channels.telegram &&
-    typeof parsed.channels.telegram === "object" &&
-    typeof parsed.channels.telegram.botToken === "string"
-      ? parsed.channels.telegram.botToken.trim()
-      : "";
-  if (token) {
-    process.stdout.write(token);
-  }
-} catch {
-  process.exit(0);
-}
-NODE
-  )"
-
-  if [[ -n "$token" ]]; then
-    RUNTIME_CONFIG_TOKEN_PRESENT="yes"
-    RUNTIME_CONFIG_TOKEN_FINGERPRINT="$(mask_token "$token")"
   fi
 }
 
@@ -474,89 +377,84 @@ NODE
   fi
 }
 
+probe_runtime_stability() {
+  local hold_secs="${OPENCLAW_TELEGRAM_LIVE_STABILITY_HOLD_SECS:-2}"
+  if [[ ! "$hold_secs" =~ ^[0-9]+$ ]]; then
+    hold_secs=2
+  fi
+  if [[ "$hold_secs" -gt 0 ]]; then
+    sleep "$hold_secs"
+  fi
+  resolve_runtime_owner
+  if [[ "$RUNTIME_OWNERSHIP" != "ok" || -z "$RUNTIME_PID" ]]; then
+    RUNTIME_HEALTH="fail"
+    return
+  fi
+  if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
+    RUNTIME_HEALTH="fail"
+    return
+  fi
+  probe_runtime_health
+}
+
 ensure_tester_bot_claim() {
   local env_local="${REPO_ROOT}/.env.local"
   local env_bots="${REPO_ROOT}/.env.bots"
   local token=""
   local assign_output=""
 
-  TOKEN_CLAIM_STATUS="unknown"
-  TOKEN_CLAIM_REASON="unknown"
-  TOKEN_POOL_SIZE=0
-  TOKEN_POOL_CLAIMED_COUNT=0
-  TOKEN_POOL_RESERVED_COUNT=0
-  TOKEN_POOL_CLAIMABLE_COUNT=0
-
-  # If this worktree already owns a tester token, reuse it. Re-running `ensure`
-  # should be idempotent even when the shared pool is full.
-  if [[ -f "$env_local" ]]; then
-    token="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
+  if [[ ! -x "$ASSIGN_BOT_SCRIPT" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="assign_script_missing"
+    add_failure "assign_bot_script_missing:${ASSIGN_BOT_SCRIPT}"
+    return
   fi
 
-  if [[ -n "$token" ]]; then
-    TOKEN_CLAIM_STATUS="ok"
-    TOKEN_CLAIM_REASON="existing_claim"
-    TOKEN_PRESENT="yes"
-    ASSIGNED_BOT_TOKEN="$token"
-    TOKEN_FINGERPRINT="$(mask_token "$token")"
-    RUNTIME_TOKEN_SOURCE="repo_env_local"
-    TOKEN_ORIGIN_HINT="repo_env_local"
-    hydrate_current_lane_bot
-  else
-    if [[ ! -x "$ASSIGN_BOT_SCRIPT" ]]; then
-      TOKEN_CLAIM_STATUS="fail"
-      TOKEN_CLAIM_REASON="assign_script_missing"
-      add_failure "assign_bot_script_missing:${ASSIGN_BOT_SCRIPT}"
-      return
-    fi
-
-    if ! assign_output="$(cd "$REPO_ROOT" && bash "$ASSIGN_BOT_SCRIPT" 2>&1)"; then
-      TOKEN_CLAIM_STATUS="fail"
-      TOKEN_CLAIM_REASON="assign_failed"
-      parse_assign_bot_output "$assign_output"
-      if [[ "$TOKEN_CLAIM_REASON" == "pool_exhausted" ]]; then
-        TOKEN_POOL_GUARD="blocked"
-        RUNTIME_START_ACTION="blocked_no_token"
-      fi
-      add_failure "token_claim_failed:${TOKEN_CLAIM_REASON}"
-      return
-    fi
-
-    if [[ ! -f "$env_local" ]]; then
-      TOKEN_CLAIM_STATUS="fail"
-      TOKEN_CLAIM_REASON="env_local_missing_after_assign"
-      add_failure "env_local_missing_after_assign"
-      return
-    fi
-    if [[ ! -f "$env_bots" ]]; then
-      TOKEN_CLAIM_STATUS="fail"
-      TOKEN_CLAIM_REASON="env_bots_missing_after_assign"
-      add_failure "env_bots_missing_after_assign"
-      return
-    fi
-
-    token="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
-    if [[ -z "$token" ]]; then
-      TOKEN_CLAIM_STATUS="fail"
-      TOKEN_CLAIM_REASON="telegram_token_missing_in_env_local"
-      add_failure "telegram_token_missing_in_env_local"
-      return
-    fi
-
-    TOKEN_CLAIM_STATUS="ok"
-    TOKEN_CLAIM_REASON="assigned"
+  # Always resolve the claim via assign-bot so a stale .env.local token can be
+  # rotated away when another runtime actively holds the lease.
+  if ! assign_output="$(cd "$REPO_ROOT" && bash "$ASSIGN_BOT_SCRIPT" 2>&1)"; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="assign_failed"
     parse_assign_bot_output "$assign_output"
-    TOKEN_PRESENT="yes"
-    ASSIGNED_BOT_TOKEN="$token"
-    TOKEN_FINGERPRINT="$(mask_token "$token")"
-    RUNTIME_TOKEN_SOURCE="repo_env_local"
-    TOKEN_ORIGIN_HINT="repo_env_local"
-    hydrate_current_lane_bot
+    if [[ "$TOKEN_CLAIM_REASON" == "pool_exhausted" ]]; then
+      TOKEN_POOL_GUARD="blocked"
+      RUNTIME_START_ACTION="blocked_no_token"
+    fi
+    add_failure "token_claim_failed:${TOKEN_CLAIM_REASON}"
+    return
   fi
 
+  if [[ ! -f "$env_local" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="env_local_missing_after_assign"
+    add_failure "env_local_missing_after_assign"
+    return
+  fi
   if [[ ! -f "$env_bots" ]]; then
     TOKEN_CLAIM_STATUS="fail"
     TOKEN_CLAIM_REASON="env_bots_missing_after_assign"
+    add_failure "env_bots_missing_after_assign"
+    return
+  fi
+
+  token="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
+  if [[ -z "$token" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="telegram_token_missing_in_env_local"
+    add_failure "telegram_token_missing_in_env_local"
+    return
+  fi
+
+  TOKEN_CLAIM_STATUS="ok"
+  parse_assign_bot_output "$assign_output"
+  TOKEN_PRESENT="yes"
+  ASSIGNED_BOT_TOKEN="$token"
+  TOKEN_FINGERPRINT="$(mask_token "$token")"
+  RUNTIME_TOKEN_SOURCE="repo_env_local"
+  TOKEN_ORIGIN_HINT="repo_env_local"
+  hydrate_current_lane_bot
+
+  if [[ ! -f "$env_bots" ]]; then
     add_failure "env_bots_missing_after_assign"
     return
   fi
@@ -581,8 +479,6 @@ ensure_tester_bot_claim() {
     TOKEN_POOL_GUARD="ok"
   else
     TOKEN_POOL_GUARD="fail"
-    TOKEN_CLAIM_STATUS="fail"
-    TOKEN_CLAIM_REASON="token_not_in_pool"
     add_failure "token_not_in_pool"
   fi
 }
@@ -608,6 +504,9 @@ prepare_isolated_runtime_config() {
     RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
     ASSIGNED_BOT_TOKEN="$ASSIGNED_BOT_TOKEN" \
     RUNTIME_PORT="$RUNTIME_PORT" \
+    OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR="${OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR:-}" \
+    OPENCLAW_TELEGRAM_LIVE_DM_POLICY="${OPENCLAW_TELEGRAM_LIVE_DM_POLICY:-}" \
+    OPENCLAW_TELEGRAM_LIVE_MODEL="${OPENCLAW_TELEGRAM_LIVE_MODEL:-}" \
     HELPER_MODULE="$HELPER_MODULE" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
@@ -618,6 +517,9 @@ const basePath = process.env.BASE_CONFIG_PATH;
 const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
 const assignedToken = process.env.ASSIGNED_BOT_TOKEN;
 const runtimePort = Number.parseInt(process.env.RUNTIME_PORT ?? "", 10);
+const workspaceDir = process.env.OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR;
+const dmPolicy = process.env.OPENCLAW_TELEGRAM_LIVE_DM_POLICY;
+const preferredModel = process.env.OPENCLAW_TELEGRAM_LIVE_MODEL ?? "";
 const helperPath = process.env.HELPER_MODULE;
 
 if (!runtimeConfigPath || !assignedToken || !Number.isFinite(runtimePort) || runtimePort <= 0 || !helperPath) {
@@ -640,7 +542,10 @@ if (basePath && fs.existsSync(basePath)) {
 config = buildTelegramLiveRuntimeConfig({
   baseConfig: config,
   assignedToken,
+  preferredModel,
   runtimePort,
+  workspaceDir,
+  dmPolicy,
 });
 
 fs.mkdirSync(path.dirname(runtimeConfigPath), { recursive: true });
@@ -657,32 +562,10 @@ sync_runtime_auth_profiles() {
     return
   fi
 
-  purge_runtime_auth_profiles() {
-    local auth_path=""
-    while IFS= read -r auth_path || [[ -n "$auth_path" ]]; do
-      [[ -z "$auth_path" ]] && continue
-      rm -f "$auth_path"
-    done < <(
-      find "$RUNTIME_STATE_DIR/agents" \
-        \( -path "*/agent/auth-profiles.json" -o -path "*/agent/auth.json" \) \
-        -type f 2>/dev/null
-    )
-  }
-
-  # Telegram live tester lanes should be able to run with fully isolated auth.
-  # When this flag is set we intentionally do not inherit any auth-profiles
-  # from the shared ~/.openclaw agent state, which avoids OAuth refresh-token
-  # races between the tester runtime and the user's main runtime.
-  if [[ "${OPENCLAW_TELEGRAM_LIVE_SKIP_AUTH_SYNC:-0}" == "1" ]]; then
-    # Scrub any stale inherited auth that might already be sitting in the
-    # runtime state from an earlier non-isolated run.
-    purge_runtime_auth_profiles
-    return
-  fi
-
-  # Worktree runtimes keep isolated state, but they still need the operator's
-  # existing auth profiles copied in so inbound Telegram messages can actually
-  # execute the same agent models as the stable runtime.
+  # Telegram live runtimes must never reuse shared OAuth refresh state. Instead
+  # of copying auth forward, scrub any target OAuth profiles that are identical
+  # to the source shared store. That cleans up legacy inherited refresh tokens
+  # without destroying lane-local auth that was minted separately.
   if ! BASE_CONFIG_PATH="$BASE_CONFIG_PATH" \
     RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
     node --input-type=module - <<'NODE'
@@ -728,20 +611,65 @@ for (const [agentId, entry] of agentEntries) {
       ? entry.agentDir.trim()
       : path.join(os.homedir(), ".openclaw", "agents", agentId, "agent");
   const sourceAuthPath = path.join(sourceAgentDir, "auth-profiles.json");
-  if (!fs.existsSync(sourceAuthPath)) {
-    continue;
-  }
-
   const targetAuthPath = path.join(runtimeStateDir, "agents", agentId, "agent", "auth-profiles.json");
-  fs.mkdirSync(path.dirname(targetAuthPath), { recursive: true });
-
-  const sourceContent = fs.readFileSync(sourceAuthPath);
-  const targetContent = fs.existsSync(targetAuthPath) ? fs.readFileSync(targetAuthPath) : null;
-  if (targetContent && Buffer.compare(sourceContent, targetContent) === 0) {
+  if (!fs.existsSync(sourceAuthPath) || !fs.existsSync(targetAuthPath)) {
     continue;
   }
 
-  fs.writeFileSync(targetAuthPath, sourceContent);
+  let sourceStore;
+  let targetStore;
+  try {
+    sourceStore = JSON.parse(fs.readFileSync(sourceAuthPath, "utf8"));
+    targetStore = JSON.parse(fs.readFileSync(targetAuthPath, "utf8"));
+  } catch {
+    continue;
+  }
+
+  if (
+    !sourceStore ||
+    typeof sourceStore !== "object" ||
+    !targetStore ||
+    typeof targetStore !== "object" ||
+    !sourceStore.profiles ||
+    typeof sourceStore.profiles !== "object" ||
+    !targetStore.profiles ||
+    typeof targetStore.profiles !== "object"
+  ) {
+    continue;
+  }
+
+  let mutated = false;
+  for (const [profileId, targetProfile] of Object.entries(targetStore.profiles)) {
+    const sourceProfile = sourceStore.profiles[profileId];
+    if (!targetProfile || typeof targetProfile !== "object" || targetProfile.type !== "oauth") {
+      continue;
+    }
+    if (!sourceProfile || typeof sourceProfile !== "object" || sourceProfile.type !== "oauth") {
+      continue;
+    }
+    if (JSON.stringify(sourceProfile) !== JSON.stringify(targetProfile)) {
+      continue;
+    }
+
+    delete targetStore.profiles[profileId];
+    if (targetStore.lastGood && typeof targetStore.lastGood === "object") {
+      for (const [provider, lastGoodProfileId] of Object.entries(targetStore.lastGood)) {
+        if (lastGoodProfileId === profileId) {
+          delete targetStore.lastGood[provider];
+        }
+      }
+    }
+    if (targetStore.usageStats && typeof targetStore.usageStats === "object") {
+      delete targetStore.usageStats[profileId];
+    }
+    mutated = true;
+  }
+
+  if (!mutated) {
+    continue;
+  }
+
+  fs.writeFileSync(targetAuthPath, `${JSON.stringify(targetStore, null, 2)}\n`);
   fs.chmodSync(targetAuthPath, 0o600);
 }
 NODE
@@ -757,31 +685,34 @@ start_isolated_runtime() {
     add_failure "runtime_config_path_missing"
     return
   fi
-  # Launch from a one-shot Node parent that uses `detached: true` + `unref()`.
-  # Plain `nohup ... &` looks detached, but the exec harness can still reap the
-  # child process after `ensure` exits, which creates fake-passing Telegram E2E.
+  # Shell-level `nohup ... &` is flaky in this environment: the helper shell can
+  # report success while the gateway child dies immediately after detach. Launch
+  # a real detached process from Node instead so the runtime survives the helper
+  # shell exiting and keeps its own stdio on the runtime log file.
   if REPO_ROOT="$REPO_ROOT" \
-    RUNTIME_LOG_PATH="$RUNTIME_LOG_PATH" \
     RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
     RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
     RUNTIME_PORT="$RUNTIME_PORT" \
+    RUNTIME_LOG_PATH="$RUNTIME_LOG_PATH" \
     OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-1}" \
     node --input-type=module - <<'NODE'
-import { openSync } from "node:fs";
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 
 const repoRoot = process.env.REPO_ROOT;
-const runtimeLogPath = process.env.RUNTIME_LOG_PATH;
 const runtimeStateDir = process.env.RUNTIME_STATE_DIR;
 const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
 const runtimePort = process.env.RUNTIME_PORT;
+const runtimeLogPath = process.env.RUNTIME_LOG_PATH;
+const disableExternalCliAuthSync =
+  process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "1";
 
-if (!repoRoot || !runtimeLogPath || !runtimeStateDir || !runtimeConfigPath || !runtimePort) {
-  console.error("missing required runtime launch env");
-  process.exit(1);
+if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath) {
+  throw new Error("Missing detached runtime launch parameters.");
 }
 
-const logFd = openSync(runtimeLogPath, "a");
+fs.mkdirSync(runtimeStateDir, { recursive: true });
+const logFd = fs.openSync(runtimeLogPath, "a");
 const child = spawn(
   process.execPath,
   [
@@ -810,14 +741,12 @@ const child = spawn(
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
       OPENCLAW_DISABLE_BONJOUR: "1",
       OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE: "1",
-      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC:
-        process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "1",
+      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC: disableExternalCliAuthSync,
     },
   },
 );
-
 child.unref();
-console.log(child.pid);
+fs.closeSync(logFd);
 NODE
   then
     RUNTIME_START_ACTION="started"
@@ -834,23 +763,13 @@ emit_ensure_proof_lines() {
   echo "runtime_worktree=${RUNTIME_WORKTREE:-}"
   echo "runtime_port=${RUNTIME_PORT:-}"
   echo "runtime_state_dir=${RUNTIME_STATE_DIR:-}"
-  echo "runtime_config_path=${RUNTIME_CONFIG_PATH:-}"
-  echo "runtime_config_present=${RUNTIME_CONFIG_PRESENT}"
-  echo "runtime_config_token_present=${RUNTIME_CONFIG_TOKEN_PRESENT}"
-  echo "runtime_config_token_fingerprint=${RUNTIME_CONFIG_TOKEN_FINGERPRINT}"
   echo "runtime_ownership=${RUNTIME_OWNERSHIP}"
   echo "runtime_health=${RUNTIME_HEALTH}"
   echo "runtime_start_action=${RUNTIME_START_ACTION}"
   echo "runtime_start_timeout_secs=${RUNTIME_START_TIMEOUT_SECS}"
   echo "runtime_plugin_mode=${RUNTIME_PLUGIN_MODE}"
   echo "token_present=${TOKEN_PRESENT}"
-  echo "token_claim_status=${TOKEN_CLAIM_STATUS}"
-  echo "token_claim_reason=${TOKEN_CLAIM_REASON}"
   echo "token_pool_guard=${TOKEN_POOL_GUARD}"
-  echo "token_pool_claimed=${TOKEN_POOL_CLAIMED_COUNT}"
-  echo "token_pool_size=${TOKEN_POOL_SIZE}"
-  echo "token_pool_reserved=${TOKEN_POOL_RESERVED_COUNT}"
-  echo "token_pool_claimable=${TOKEN_POOL_CLAIMABLE_COUNT}"
   echo "token_fingerprint=${TOKEN_FINGERPRINT}"
   echo "current_lane_bot=${CURRENT_LANE_BOT}"
   echo "runtime_token_source=${RUNTIME_TOKEN_SOURCE}"
@@ -866,66 +785,58 @@ emit_ensure_proof_lines() {
 
 ensure_command() {
   resolve_profile
-  inspect_runtime_config
-  resolve_runtime_owner
 
   if [[ -z "${BRANCH}" || "${BRANCH}" == "HEAD" ]]; then
     add_failure "branch_detached_head"
   fi
 
   ensure_tester_bot_claim
+  prepare_isolated_runtime_config
+  sync_runtime_auth_profiles
 
-  # Token claim is the gate. If we cannot claim or reuse a tester bot, report
-  # that state directly instead of pretending startup/readiness failed.
-  if [[ "$TOKEN_CLAIM_STATUS" == "ok" ]]; then
-    prepare_isolated_runtime_config
-    sync_runtime_auth_profiles
+  resolve_runtime_owner
 
-    resolve_runtime_owner
+  if [[ -n "$RUNTIME_PID" && "$RUNTIME_OWNERSHIP" != "ok" ]]; then
+    add_failure "runtime_owned_by_other_worktree_or_process"
+  fi
 
-    if [[ -n "$RUNTIME_PID" && "$RUNTIME_OWNERSHIP" != "ok" ]]; then
-      add_failure "runtime_owned_by_other_worktree_or_process"
+  if [[ -z "$RUNTIME_PID" && "$FAIL" -eq 0 ]]; then
+    start_isolated_runtime
+  fi
+
+  if [[ "$FAIL" -eq 0 ]]; then
+    local waited=0
+    # Cold isolated boots can take a couple of minutes on this repo because the
+    # runtime still initializes bundled services before Telegram is ready.
+    local startup_timeout="${OPENCLAW_TELEGRAM_LIVE_START_TIMEOUT_SECS:-240}"
+    if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]]; then
+      startup_timeout=240
     fi
-
-    if [[ -z "$RUNTIME_PID" && "$FAIL" -eq 0 ]]; then
-      start_isolated_runtime
-    fi
-
-    if [[ "$FAIL" -eq 0 ]]; then
-      local waited=0
-      # Cold isolated boots can take a couple of minutes on this repo because the
-      # runtime still initializes bundled services before Telegram is ready.
-      local startup_timeout="${OPENCLAW_TELEGRAM_LIVE_START_TIMEOUT_SECS:-240}"
-      if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]]; then
-        startup_timeout=240
-      fi
-      RUNTIME_START_TIMEOUT_SECS="$startup_timeout"
-      while [[ "$waited" -lt "$startup_timeout" ]]; do
-        resolve_runtime_owner
-        if [[ "$RUNTIME_OWNERSHIP" == "ok" ]]; then
-          probe_runtime_health
+    RUNTIME_START_TIMEOUT_SECS="$startup_timeout"
+    while [[ "$waited" -lt "$startup_timeout" ]]; do
+      resolve_runtime_owner
+      if [[ "$RUNTIME_OWNERSHIP" == "ok" ]]; then
+        probe_runtime_health
+        if [[ "$RUNTIME_HEALTH" == "ok" ]]; then
+          probe_runtime_stability
           if [[ "$RUNTIME_HEALTH" == "ok" ]]; then
             break
           fi
         fi
-        sleep 1
-        waited=$((waited + 1))
-      done
-    fi
+      fi
+      sleep 1
+      waited=$((waited + 1))
+    done
+  fi
 
-    if [[ "$RUNTIME_OWNERSHIP" != "ok" ]]; then
-      add_failure "runtime_ownership_check_failed"
-    fi
-    if [[ "$RUNTIME_HEALTH" != "ok" ]]; then
-      add_failure "runtime_health_check_failed"
-    fi
-    if [[ "${TOKEN_CLAIM_COUNT}" -gt 1 ]]; then
-      add_failure "token_claim_count:${TOKEN_CLAIM_COUNT}"
-    fi
-  else
-    if [[ -n "$RUNTIME_PID" || "$RUNTIME_CONFIG_TOKEN_PRESENT" == "yes" ]]; then
-      add_failure "runtime_state_present_without_token_claim"
-    fi
+  if [[ "$RUNTIME_OWNERSHIP" != "ok" ]]; then
+    add_failure "runtime_ownership_check_failed"
+  fi
+  if [[ "$RUNTIME_HEALTH" != "ok" ]]; then
+    add_failure "runtime_health_check_failed"
+  fi
+  if [[ "${TOKEN_CLAIM_COUNT}" -gt 1 ]]; then
+    add_failure "token_claim_count:${TOKEN_CLAIM_COUNT}"
   fi
 
   emit_ensure_proof_lines

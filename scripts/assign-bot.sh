@@ -122,6 +122,7 @@ if (!helperPath) {
 }
 
 const {
+  collectActiveTelegramTokenLeaseEntries,
   extractTelegramBotTokensFromConfig,
   summarizeTelegramTesterTokenPool,
 } = await import(pathToFileURL(helperPath).href);
@@ -207,9 +208,15 @@ if (baseConfigPath && fs.existsSync(baseConfigPath)) {
   }
 }
 
+const leasedEntries = collectActiveTelegramTokenLeaseEntries({
+  tokens: poolTokens,
+  currentWorktreePath: currentWorktree,
+});
+
 const summary = summarizeTelegramTesterTokenPool({
   poolTokens,
   claimedEntries,
+  leasedEntries,
   reservedTokens,
   currentToken,
 });
@@ -233,7 +240,6 @@ const selectedIndex = poolTokens.findIndex((token) => token === selection.select
 console.log("ok=yes");
 console.log(`action=${selection.action}`);
 console.log(`reason=${selection.reason}`);
-console.log(`currentTokenStatus=${summary.currentTokenStatus}`);
 console.log(`selectedToken=${selection.selectedToken}`);
 console.log(`selectedIndex=${selectedIndex >= 0 ? selectedIndex + 1 : 0}`);
 console.log(`claimedCount=${summary.claimedCount}`);
@@ -298,6 +304,4 @@ else
   echo "Assigned Telegram bot token #$selected_index to worktree: $(pwd -P)"
 fi
 echo "Selection reason: ${selection_reason}"
-echo "Claimed: ${claimed_count} / Pool: ${pool_count} / Reserved by main runtime: ${reserved_count}"
-echo "Claimable now: ${claimable_count}"
 echo "Token fingerprint: $(mask_token "$selected_token")"
