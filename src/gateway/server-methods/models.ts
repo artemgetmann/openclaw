@@ -35,7 +35,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      respond(true, { options: await listConsumerAuthOptions() }, undefined);
+      respond(true, await listConsumerAuthOptions(), undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }

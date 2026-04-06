@@ -13,12 +13,14 @@ import {
   resolveAuthProfileOrder,
   upsertAuthProfile,
 } from "../../agents/auth-profiles.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import {
   readClaudeCliCredentialsCached,
   type ClaudeCliCredential,
 } from "../../agents/cli-credentials.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveProviderPluginChoice } from "../../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js";
@@ -76,6 +78,11 @@ export type ConsumerAuthOption = {
   inputHelp?: string;
   inputPlaceholder?: string;
   methodKind: ConsumerAuthChoiceDefinition["kind"];
+};
+
+export type ConsumerAuthListResult = {
+  options: ConsumerAuthOption[];
+  activeOptionId?: string;
 };
 
 export type ApplyConsumerAuthParams = {
@@ -378,6 +385,74 @@ function buildFlatOptions(
   }));
 }
 
+function resolveConsumerModelProviderId(cfg: OpenClawConfig): string | undefined {
+  const modelRef = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)?.trim();
+  if (!modelRef) {
+    return undefined;
+  }
+  const providerId = modelRef.split("/", 1)[0]?.trim();
+  return providerId ? providerId : undefined;
+}
+
+function resolveActiveChoiceId(params: {
+  providerId?: string;
+  profileId?: string;
+  credential?: AuthProfileCredential;
+}): string | undefined {
+  switch (params.providerId) {
+    case "openai-codex":
+      return "openai-codex-oauth";
+    case "openai":
+      return params.credential?.type === "api_key" ? "openai-api-key" : undefined;
+    case "anthropic":
+      if (params.profileId === CLAUDE_CLI_PROFILE_ID || params.credential?.type === "oauth") {
+        return "anthropic-claude-cli";
+      }
+      if (params.credential?.type === "token") {
+        return "anthropic-setup-token";
+      }
+      if (params.credential?.type === "api_key") {
+        return "anthropic-api-key";
+      }
+      return undefined;
+    case "google":
+      return params.credential?.type === "api_key" ? "google-gemini-api-key" : undefined;
+    case "minimax":
+      return params.credential?.type === "api_key" ? "minimax-global-api" : undefined;
+    case "moonshot":
+      return params.credential?.type === "api_key" ? "moonshot-api-key" : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function resolveCurrentConsumerAuthOptionId(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  availableOptionIds: Set<string>;
+}): string | undefined {
+  const providerId = resolveConsumerModelProviderId(params.cfg);
+  if (!providerId) {
+    return undefined;
+  }
+  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const orderedProfileIds = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store,
+    provider: providerId,
+  });
+  const profileId = orderedProfileIds[0];
+  const credential = profileId ? store.profiles[profileId] : undefined;
+  const activeOptionId = resolveActiveChoiceId({
+    providerId,
+    profileId,
+    credential,
+  });
+  return activeOptionId && params.availableOptionIds.has(activeOptionId)
+    ? activeOptionId
+    : undefined;
+}
+
 async function clearStaleProfileLockouts(provider: string, agentDir: string): Promise<void> {
   try {
     const store = loadAuthProfileStoreForRuntime(agentDir);
@@ -487,13 +562,15 @@ function applyProviderAuthResult(
 export async function listConsumerAuthOptions(
   params: {
     config?: OpenClawConfig;
+    agentDir?: string;
     workspaceDir?: string;
     providers?: ProviderPlugin[];
     readClaudeCliCredential?: ClaudeCliCredentialReader;
   } = {},
-): Promise<ConsumerAuthOption[]> {
+): Promise<ConsumerAuthListResult> {
   const cfg = params.config ?? (await loadValidConfigOrThrow());
   const agentId = resolveDefaultAgentId(cfg);
+  const agentDir = params.agentDir ?? resolveAgentDir(cfg, agentId);
   const workspaceDir =
     params.workspaceDir ??
     resolveAgentWorkspaceDir(cfg, agentId) ??
@@ -518,7 +595,17 @@ export async function listConsumerAuthOptions(
     return resolved?.provider.id === choice.providerId && resolved.method.id === choice.methodId;
   });
 
-  return buildFlatOptions(available);
+  const options = buildFlatOptions(available);
+  const activeOptionId = resolveCurrentConsumerAuthOptionId({
+    cfg,
+    agentDir,
+    availableOptionIds: new Set(options.map((option) => option.id)),
+  });
+
+  return {
+    options,
+    ...(activeOptionId ? { activeOptionId } : {}),
+  };
 }
 
 export async function applyConsumerAuth(
