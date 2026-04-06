@@ -12,6 +12,9 @@ if [ -f "$WORKTREE_GUARDS" ]; then
   # shellcheck source=scripts/lib/worktree-guards.sh
   . "$WORKTREE_GUARDS"
   worktree_guard_forbid_shared_root_main_commits "$ROOT_DIR"
+  # Durable base lanes must be fast-forwarded first so checkpoint commits do not
+  # silently stack on top of stale shared branches.
+  worktree_guard_forbid_stale_durable_lane_commit "$ROOT_DIR"
 fi
 
 usage() {

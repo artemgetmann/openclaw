@@ -23,6 +23,10 @@ if [[ -f "$WORKTREE_GUARDS" ]]; then
   # shellcheck source=scripts/lib/worktree-guards.sh
   source "$WORKTREE_GUARDS"
   worktree_guard_forbid_shared_root_main_commits "$ROOT_DIR"
+  # Durable main/consumer lanes must not commit from stale branch truth. The
+  # wrappers fetch+fast-forward these lanes; this hook stops direct commits from
+  # sneaking in after the branch falls behind origin.
+  worktree_guard_forbid_stale_durable_lane_commit "$ROOT_DIR"
 fi
 
 # Security: avoid option-injection from malicious file names (e.g. "--all", "--force").
