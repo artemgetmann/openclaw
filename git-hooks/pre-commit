@@ -18,14 +18,15 @@ if [[ ! -f "$FILTER_FILES" ]]; then
 fi
 
 if [[ -f "$WORKTREE_GUARDS" ]]; then
-  # Block commits from the canonical shared main checkout that owns the live
-  # ai.openclaw.gateway runtime. Worktree branches remain allowed.
+  # Base branches are pull-only in both home clones. Feature work must happen
+  # on short-lived branches so we do not accumulate direct history on main or
+  # codex/consumer-openclaw-project.
   # shellcheck source=scripts/lib/worktree-guards.sh
   source "$WORKTREE_GUARDS"
-  worktree_guard_forbid_shared_root_main_commits "$ROOT_DIR"
+  worktree_guard_forbid_protected_base_branch_commit "$ROOT_DIR"
   # Durable main/consumer lanes must not commit from stale branch truth. The
-  # wrappers fetch+fast-forward these lanes; this hook stops direct commits from
-  # sneaking in after the branch falls behind origin.
+  # legacy wrappers fetch+fast-forward these lanes; this hook still stops old
+  # durable-lane commits from sneaking in after the branch falls behind origin.
   worktree_guard_forbid_stale_durable_lane_commit "$ROOT_DIR"
 fi
 

@@ -17,6 +17,48 @@ worktree_guard_current_branch() {
   git -C "$root_dir" branch --show-current 2>/dev/null || true
 }
 
+worktree_guard_protected_base_branch() {
+  local branch_name="$1"
+
+  case "$branch_name" in
+    main | codex/consumer-openclaw-project)
+      printf '%s\n' "$branch_name"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+worktree_guard_forbid_protected_base_branch_commit() {
+  local root_dir="$1"
+  local branch_name=""
+
+  if [[ "${OPENCLAW_ALLOW_PROTECTED_BRANCH_COMMITS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  branch_name="$(worktree_guard_current_branch "$root_dir")"
+  worktree_guard_protected_base_branch "$branch_name" >/dev/null 2>&1 || return 0
+
+  cat >&2 <<EOF
+ERROR: refusing commit on protected base branch '${branch_name}'.
+
+Checkout: ${root_dir}
+Branch:   ${branch_name}
+
+Base branches are pull-only. Create a short-lived feature branch, open a draft
+PR early, validate there, then mark the PR ready once validation is complete.
+
+Example:
+  git checkout -b codex/<task-name>
+
+If you intentionally need to bypass this once, set:
+  OPENCLAW_ALLOW_PROTECTED_BRANCH_COMMITS=1
+EOF
+  return 1
+}
+
 worktree_guard_durable_lane_upstream() {
   local branch_name="$1"
 
@@ -249,9 +291,12 @@ worktree_guard_require_shared_root_main_branch() {
 ERROR: shared root checkout is on '${branch_name}', but ai.openclaw.gateway is pinned to:
   ${root_dir}/dist/index.js
 
-This checkout owns the shared local Jarvis runtime. Keep it on 'main'.
-For consumer or feature work, create a worktree instead:
-  bash scripts/new-worktree.sh <feature-name> --base codex/consumer-openclaw-project
+This checkout owns the shared local Jarvis runtime. Runtime operations still
+require this home clone to be on 'main'. Feature work can happen here on a
+short-lived branch, but switch back to 'main' before restarting the shared runtime.
+
+If you need isolated parallel editing, create a temporary worktree instead:
+  bash scripts/new-worktree.sh <feature-name> --base main
 
 If you intentionally need to bypass this guard, set:
   OPENCLAW_ALLOW_SHARED_ROOT_BRANCH_DRIFT=1
@@ -345,7 +390,10 @@ ${context_label:+Context:  ${context_label}
 Detected paths:
 $(printf '  %s\n' "${paths[@]}")
 
-Move this work into a worktree before continuing:
+Base branches stay clean. Either create a short-lived feature branch here:
+  git checkout -b codex/<task-name>
+
+Or, if you need isolated parallel editing, create a temporary worktree:
   bash scripts/new-worktree.sh <feature-name> --base main
 
 If you absolutely must bypass this guard, set:
