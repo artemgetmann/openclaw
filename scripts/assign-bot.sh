@@ -122,6 +122,7 @@ if (!helperPath) {
 }
 
 const {
+  collectActiveTelegramTokenLeaseEntries,
   extractTelegramBotTokensFromConfig,
   summarizeTelegramTesterTokenPool,
 } = await import(pathToFileURL(helperPath).href);
@@ -207,9 +208,15 @@ if (baseConfigPath && fs.existsSync(baseConfigPath)) {
   }
 }
 
+const leasedEntries = collectActiveTelegramTokenLeaseEntries({
+  tokens: poolTokens,
+  currentWorktreePath: currentWorktree,
+});
+
 const summary = summarizeTelegramTesterTokenPool({
   poolTokens,
   claimedEntries,
+  leasedEntries,
   reservedTokens,
   currentToken,
 });

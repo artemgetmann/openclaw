@@ -6,7 +6,7 @@ describe("buildPairingReply", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_PROFILE"]);
+    envSnapshot = captureEnv(["OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
     process.env.OPENCLAW_PROFILE = "isolated";
   });
 
@@ -61,4 +61,25 @@ describe("buildPairingReply", () => {
       expect(text).toContain("\n```\n");
     });
   }
+
+  it("prefers the isolated runtime state/config context when available", () => {
+    process.env.OPENCLAW_PROFILE = "consumer-main-durable-lane-20260405";
+    process.env.OPENCLAW_STATE_DIR =
+      "/Users/user/.openclaw/telegram-live-worktrees/tg-live-4e6457c4be";
+    process.env.OPENCLAW_CONFIG_PATH =
+      "/Users/user/.openclaw/telegram-live-worktrees/tg-live-4e6457c4be/openclaw.telegram-live.json";
+
+    const text = buildPairingReply({
+      channel: "telegram",
+      idLine: "Your Telegram user id: 42",
+      code: "QRS678",
+    });
+
+    expect(text).toContain(
+      "OPENCLAW_STATE_DIR=/Users/user/.openclaw/telegram-live-worktrees/tg-live-4e6457c4be OPENCLAW_CONFIG_PATH=/Users/user/.openclaw/telegram-live-worktrees/tg-live-4e6457c4be/openclaw.telegram-live.json openclaw pairing approve telegram QRS678",
+    );
+    expect(text).not.toContain(
+      "consumer-main-durable-lane-20260405 pairing approve telegram QRS678",
+    );
+  });
 });

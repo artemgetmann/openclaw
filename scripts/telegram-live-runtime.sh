@@ -487,72 +487,56 @@ ensure_tester_bot_claim() {
   TOKEN_POOL_RESERVED_COUNT=0
   TOKEN_POOL_CLAIMABLE_COUNT=0
 
-  # If this worktree already owns a tester token, reuse it. Re-running `ensure`
-  # should be idempotent even when the shared pool is full.
-  if [[ -f "$env_local" ]]; then
-    token="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
+  if [[ ! -x "$ASSIGN_BOT_SCRIPT" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="assign_script_missing"
+    add_failure "assign_bot_script_missing:${ASSIGN_BOT_SCRIPT}"
+    return
   fi
 
-  if [[ -n "$token" ]]; then
-    TOKEN_CLAIM_STATUS="ok"
-    TOKEN_CLAIM_REASON="existing_claim"
-    TOKEN_PRESENT="yes"
-    ASSIGNED_BOT_TOKEN="$token"
-    TOKEN_FINGERPRINT="$(mask_token "$token")"
-    RUNTIME_TOKEN_SOURCE="repo_env_local"
-    TOKEN_ORIGIN_HINT="repo_env_local"
-    hydrate_current_lane_bot
-  else
-    if [[ ! -x "$ASSIGN_BOT_SCRIPT" ]]; then
-      TOKEN_CLAIM_STATUS="fail"
-      TOKEN_CLAIM_REASON="assign_script_missing"
-      add_failure "assign_bot_script_missing:${ASSIGN_BOT_SCRIPT}"
-      return
-    fi
-
-    if ! assign_output="$(cd "$REPO_ROOT" && bash "$ASSIGN_BOT_SCRIPT" 2>&1)"; then
-      TOKEN_CLAIM_STATUS="fail"
-      TOKEN_CLAIM_REASON="assign_failed"
-      parse_assign_bot_output "$assign_output"
-      if [[ "$TOKEN_CLAIM_REASON" == "pool_exhausted" ]]; then
-        TOKEN_POOL_GUARD="blocked"
-        RUNTIME_START_ACTION="blocked_no_token"
-      fi
-      add_failure "token_claim_failed:${TOKEN_CLAIM_REASON}"
-      return
-    fi
-
-    if [[ ! -f "$env_local" ]]; then
-      TOKEN_CLAIM_STATUS="fail"
-      TOKEN_CLAIM_REASON="env_local_missing_after_assign"
-      add_failure "env_local_missing_after_assign"
-      return
-    fi
-    if [[ ! -f "$env_bots" ]]; then
-      TOKEN_CLAIM_STATUS="fail"
-      TOKEN_CLAIM_REASON="env_bots_missing_after_assign"
-      add_failure "env_bots_missing_after_assign"
-      return
-    fi
-
-    token="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
-    if [[ -z "$token" ]]; then
-      TOKEN_CLAIM_STATUS="fail"
-      TOKEN_CLAIM_REASON="telegram_token_missing_in_env_local"
-      add_failure "telegram_token_missing_in_env_local"
-      return
-    fi
-
-    TOKEN_CLAIM_STATUS="ok"
-    TOKEN_CLAIM_REASON="assigned"
+  # Always resolve the claim via assign-bot so a stale .env.local token can be
+  # rotated away when another runtime actively holds the lease.
+  if ! assign_output="$(cd "$REPO_ROOT" && bash "$ASSIGN_BOT_SCRIPT" 2>&1)"; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="assign_failed"
     parse_assign_bot_output "$assign_output"
-    TOKEN_PRESENT="yes"
-    ASSIGNED_BOT_TOKEN="$token"
-    TOKEN_FINGERPRINT="$(mask_token "$token")"
-    RUNTIME_TOKEN_SOURCE="repo_env_local"
-    TOKEN_ORIGIN_HINT="repo_env_local"
-    hydrate_current_lane_bot
+    if [[ "$TOKEN_CLAIM_REASON" == "pool_exhausted" ]]; then
+      TOKEN_POOL_GUARD="blocked"
+      RUNTIME_START_ACTION="blocked_no_token"
+    fi
+    add_failure "token_claim_failed:${TOKEN_CLAIM_REASON}"
+    return
   fi
+
+  if [[ ! -f "$env_local" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="env_local_missing_after_assign"
+    add_failure "env_local_missing_after_assign"
+    return
+  fi
+  if [[ ! -f "$env_bots" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="env_bots_missing_after_assign"
+    add_failure "env_bots_missing_after_assign"
+    return
+  fi
+
+  token="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
+  if [[ -z "$token" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="telegram_token_missing_in_env_local"
+    add_failure "telegram_token_missing_in_env_local"
+    return
+  fi
+
+  TOKEN_CLAIM_STATUS="ok"
+  parse_assign_bot_output "$assign_output"
+  TOKEN_PRESENT="yes"
+  ASSIGNED_BOT_TOKEN="$token"
+  TOKEN_FINGERPRINT="$(mask_token "$token")"
+  RUNTIME_TOKEN_SOURCE="repo_env_local"
+  TOKEN_ORIGIN_HINT="repo_env_local"
+  hydrate_current_lane_bot
 
   if [[ ! -f "$env_bots" ]]; then
     TOKEN_CLAIM_STATUS="fail"
@@ -608,6 +592,7 @@ prepare_isolated_runtime_config() {
     RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
     ASSIGNED_BOT_TOKEN="$ASSIGNED_BOT_TOKEN" \
     RUNTIME_PORT="$RUNTIME_PORT" \
+    OPENCLAW_TELEGRAM_LIVE_MODEL="${OPENCLAW_TELEGRAM_LIVE_MODEL:-}" \
     HELPER_MODULE="$HELPER_MODULE" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
@@ -618,6 +603,7 @@ const basePath = process.env.BASE_CONFIG_PATH;
 const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
 const assignedToken = process.env.ASSIGNED_BOT_TOKEN;
 const runtimePort = Number.parseInt(process.env.RUNTIME_PORT ?? "", 10);
+const preferredModel = process.env.OPENCLAW_TELEGRAM_LIVE_MODEL ?? "";
 const helperPath = process.env.HELPER_MODULE;
 
 if (!runtimeConfigPath || !assignedToken || !Number.isFinite(runtimePort) || runtimePort <= 0 || !helperPath) {
@@ -640,6 +626,7 @@ if (basePath && fs.existsSync(basePath)) {
 config = buildTelegramLiveRuntimeConfig({
   baseConfig: config,
   assignedToken,
+  preferredModel,
   runtimePort,
 });
 

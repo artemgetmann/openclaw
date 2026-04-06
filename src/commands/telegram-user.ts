@@ -1,18 +1,9 @@
 import type { RuntimeEnv } from "../runtime.js";
 import {
-  getTelegramUserDefaultPollIntervalMs,
-  getTelegramUserDefaultWaitTimeoutMs,
   runTelegramUserPrecheck,
   runTelegramUserRead,
   runTelegramUserSend,
-  sleep,
 } from "../telegram-user/backend.js";
-import {
-  appendIgnoredTelegramUserCandidate,
-  buildTelegramUserWaitResult,
-  buildTelegramUserWaitTimeoutError,
-  matchTelegramUserMessage,
-} from "../telegram-user/match.js";
 import type {
   TelegramUserBackendMeta,
   TelegramUserBackendOptions,
@@ -23,6 +14,7 @@ import type {
   TelegramUserWaitParams,
   TelegramUserWaitResult,
 } from "../telegram-user/types.js";
+import { runTelegramUserWait } from "../telegram-user/wait.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
 
@@ -218,54 +210,15 @@ export async function telegramUserWaitCommand(opts: Record<string, unknown>, run
     afterId: readNumberOpt(opts, "afterId") ?? 0,
     contains: readStringOpt(opts, "contains") ?? "",
     limit: readNumberOpt(opts, "limit") ?? 80,
-    pollIntervalMs: readNumberOpt(opts, "pollIntervalMs") ?? getTelegramUserDefaultPollIntervalMs(),
+    pollIntervalMs: readNumberOpt(opts, "pollIntervalMs"),
     senderId: readNumberOpt(opts, "senderId") ?? 0,
     threadAnchor: readNumberOpt(opts, "threadAnchor") ?? 0,
-    timeoutMs: readNumberOpt(opts, "timeoutMs") ?? getTelegramUserDefaultWaitTimeoutMs(),
+    timeoutMs: readNumberOpt(opts, "timeoutMs"),
   };
-
-  const startedAt = Date.now();
-  let attempts = 0;
-  let ignoredRecent: ReturnType<typeof appendIgnoredTelegramUserCandidate> = [];
-  const seenMessageIds = new Set<number>();
-
-  while (Date.now() - startedAt < (params.timeoutMs ?? getTelegramUserDefaultWaitTimeoutMs())) {
-    attempts += 1;
-    const readResult = await runTelegramUserRead({
-      ...resolveBackendOptions(opts),
-      chat: params.chat,
-      limit: params.limit,
-      afterId: params.afterId,
-    });
-
-    for (const message of readResult.messages) {
-      if (seenMessageIds.has(message.message_id)) {
-        continue;
-      }
-      seenMessageIds.add(message.message_id);
-      const match = matchTelegramUserMessage(message, params);
-      if (!match.matched) {
-        ignoredRecent = appendIgnoredTelegramUserCandidate(ignoredRecent, message, match.reason);
-        continue;
-      }
-      const result = buildTelegramUserWaitResult({
-        attempts,
-        elapsedMs: Date.now() - startedAt,
-        ignoredRecent,
-        backendMeta: readResult.backend_meta,
-        matched: message,
-        matchedBy: match.matchedBy,
-      });
-      if (readBooleanOpt(opts, "json")) {
-        logJson(runtime, result);
-        return;
-      }
-      logWaitText(runtime, result);
-      return;
-    }
-
-    await sleep(params.pollIntervalMs ?? getTelegramUserDefaultPollIntervalMs());
+  const result = await runTelegramUserWait(params);
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
   }
-
-  throw buildTelegramUserWaitTimeoutError(params, attempts, Date.now() - startedAt, ignoredRecent);
+  logWaitText(runtime, result);
 }

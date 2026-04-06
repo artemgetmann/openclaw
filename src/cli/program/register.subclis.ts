@@ -276,6 +276,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "telegram",
+    description: "Telegram live workflow tooling for doctor/runtime/smoke operations",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../telegram-cli.js");
+      mod.registerTelegramCli(program);
+    },
+  },
+  {
     name: "security",
     description: "Security tools and local config audits",
     hasSubcommands: true,
