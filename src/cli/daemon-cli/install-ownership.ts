@@ -50,12 +50,12 @@ function normalizePathForComparison(filePath: string | null | undefined): string
 
 function resolveCanonicalSharedGatewayEntrypoint(env: GatewayServiceEnv): string | null {
   const home = env.HOME?.trim() || process.env.HOME?.trim() || "";
-  const explicitRoot = env.OPENCLAW_MAIN_REPO?.trim();
-  const candidates = [
+  const explicitRoot = env.OPENCLAW_MAIN_REPO?.trim() ?? "";
+  const candidates: string[] = [
     explicitRoot,
     home ? path.join(home, "Programming_Projects", "openclaw") : "",
     home ? path.join(home, "Projects", "openclaw") : "",
-  ].filter(Boolean);
+  ].filter((candidate): candidate is string => Boolean(candidate));
 
   for (const candidate of candidates) {
     const entrypoint = normalizePathForComparison(path.join(candidate, "dist", "index.js"));

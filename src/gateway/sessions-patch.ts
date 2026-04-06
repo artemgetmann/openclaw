@@ -114,12 +114,12 @@ function syncFutureThreadDefaultsFromPatch(params: {
   const afterThreadId = params.entry.lastThreadId ?? threadId;
 
   if ("thinkingLevel" in params.patch) {
-    const nextThinkingLevel = params.entry.thinkingLevel?.trim();
+    const nextThinkingLevel = normalizeThinkLevel(params.entry.thinkingLevel);
     if (nextThinkingLevel) {
       applyFutureThreadThinkingDefault({
         store: params.store,
         parentSessionKey,
-        level: nextThinkingLevel,
+        level: nextThinkingLevel as Parameters<typeof applyFutureThreadThinkingDefault>[0]["level"],
         afterThreadId,
       });
     }

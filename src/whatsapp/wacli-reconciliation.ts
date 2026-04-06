@@ -177,7 +177,7 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
   target: string;
 }): WacliReplyLookupResult {
   const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(params.dbPath, { readonly: true });
+  const db = new DatabaseSync(params.dbPath, { readOnly: true });
 
   try {
     const chats = db
@@ -337,7 +337,7 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
              AND chat_jid IN (${candidateJids.map(() => "?").join(",")})
            ORDER BY ts DESC`,
         )
-        .all(...candidateJids) as WacliReplyRecord[];
+        .all(...candidateJids) as unknown as WacliReplyRecord[];
 
       const latest = inbound.find((row) => hasRenderableInboundContent(row)) ?? null;
       if (latest) {

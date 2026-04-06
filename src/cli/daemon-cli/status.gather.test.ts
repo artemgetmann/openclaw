@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PortUsage } from "../../infra/ports-types.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 
@@ -15,12 +16,14 @@ const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   fingerprintSha256: "sha256:11:22:33:44",
 }));
 const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
-const inspectPortUsage = vi.fn(async (port: number) => ({
-  port,
-  status: "free" as const,
-  listeners: [],
-  hints: [],
-}));
+const inspectPortUsage = vi.fn(
+  async (port: number): Promise<PortUsage> => ({
+    port,
+    status: "free" as const,
+    listeners: [],
+    hints: [],
+  }),
+);
 const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null);
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
@@ -49,7 +52,9 @@ const resolveGatewayBindHost = vi.fn(
   async (_bindMode?: string, _customBindHost?: string) => "0.0.0.0",
 );
 const pickPrimaryTailnetIPv4 = vi.fn(() => "100.64.0.9");
-const resolveGatewayPort = vi.fn((_cfg?: unknown, _env?: unknown) => 18789);
+const resolveGatewayPort = vi.fn<(cfg?: unknown, env?: unknown) => number>(
+  (_cfg?: unknown, _env?: unknown) => 18789,
+);
 const resolveStateDir = vi.fn(
   (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-cli",
 );
@@ -503,8 +508,9 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("reports a lane-local port mismatch when the service and CLI resolve different ports", async () => {
-    resolveGatewayPort.mockImplementation((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
-      return env?.OPENCLAW_GATEWAY_PORT === "19001" ? 19001 : 35624;
+    resolveGatewayPort.mockImplementation((_cfg?: unknown, env?: unknown) => {
+      const runtimeEnv = env as NodeJS.ProcessEnv | undefined;
+      return runtimeEnv?.OPENCLAW_GATEWAY_PORT === "19001" ? 19001 : 35624;
     });
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
@@ -514,12 +520,15 @@ describe("gatherDaemonStatus", () => {
         OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
       },
     });
-    inspectPortUsage.mockImplementation(async (port: number) => ({
-      port,
-      status: port === 19001 ? ("busy" as const) : ("free" as const),
-      listeners: [],
-      hints: [],
-    }));
+    inspectPortUsage.mockImplementation(
+      async (port: number) =>
+        ({
+          port,
+          status: port === 19001 ? ("busy" as const) : ("free" as const),
+          listeners: [],
+          hints: [],
+        }) satisfies PortUsage,
+    );
 
     const status = await gatherDaemonStatus({
       rpc: {},
@@ -553,7 +562,7 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("reports runtime drift when the service keeps the same port but a different state dir", async () => {
-    resolveGatewayPort.mockImplementation((_cfg?: unknown, _env?: NodeJS.ProcessEnv) => 19001);
+    resolveGatewayPort.mockImplementation((_cfg?: unknown, _env?: unknown) => 19001);
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
       environment: {
