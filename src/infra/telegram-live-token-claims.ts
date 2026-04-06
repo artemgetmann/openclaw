@@ -84,7 +84,9 @@ export function resolveCanonicalSharedGatewayConfigPath(
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
   const home = env.HOME?.trim() || process.env.HOME?.trim() || os.homedir();
-  const explicit = env.OPENCLAW_CONFIG_PATH?.trim();
+  const explicit =
+    env.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH?.trim() ||
+    env.OPENCLAW_SHARED_GATEWAY_CONFIG_PATH?.trim();
   const candidates = [explicit, home ? path.join(home, ".openclaw", "openclaw.json") : ""]
     .filter(Boolean)
     .map((candidate) => normalizePathForComparison(candidate))
