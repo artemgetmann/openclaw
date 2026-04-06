@@ -31,6 +31,12 @@ STOPPED_RUNTIME_PID=""
 TOKEN_PRESENT="no"
 TOKEN_POOL_GUARD="fail"
 TOKEN_FINGERPRINT="none"
+TOKEN_CLAIM_STATUS="unknown"
+TOKEN_CLAIM_REASON="unknown"
+TOKEN_POOL_SIZE=0
+TOKEN_POOL_CLAIMED_COUNT=0
+TOKEN_POOL_RESERVED_COUNT=0
+TOKEN_POOL_CLAIMABLE_COUNT=0
 ASSIGNED_BOT_TOKEN=""
 ASSIGNED_BOT_ID="unknown"
 ASSIGNED_BOT_USERNAME="unknown"
@@ -40,6 +46,9 @@ RUNTIME_TOKEN_SOURCE="unknown"
 TOKEN_ORIGIN_HINT="unknown"
 TOKEN_CLAIM_COUNT=0
 TOKEN_CLAIM_PATHS=()
+RUNTIME_CONFIG_PRESENT="no"
+RUNTIME_CONFIG_TOKEN_PRESENT="no"
+RUNTIME_CONFIG_TOKEN_FINGERPRINT="none"
 FAIL=0
 FAIL_REASONS=()
 
@@ -114,6 +123,45 @@ add_failure() {
   local reason="$1"
   FAIL=1
   FAIL_REASONS+=("$reason")
+}
+
+parse_assign_bot_output() {
+  local output="$1"
+  local line=""
+  local reason=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      Reason:\ *) reason="${line#Reason: }" ;;
+      Selection\ reason:\ *) reason="${line#Selection reason: }" ;;
+      Claimed:\ *)
+        if [[ "$line" =~ Claimed:\ ([0-9]+)\ /\ Pool:\ ([0-9]+)\ /\ Reserved\ by\ main\ runtime:\ ([0-9]+) ]]; then
+          TOKEN_POOL_CLAIMED_COUNT="${BASH_REMATCH[1]}"
+          TOKEN_POOL_SIZE="${BASH_REMATCH[2]}"
+          TOKEN_POOL_RESERVED_COUNT="${BASH_REMATCH[3]}"
+        fi
+        ;;
+      Claimable\ now:\ *)
+        if [[ "$line" =~ Claimable\ now:\ ([0-9]+) ]]; then
+          TOKEN_POOL_CLAIMABLE_COUNT="${BASH_REMATCH[1]}"
+        fi
+        ;;
+    esac
+  done <<< "$output"
+
+  if [[ -n "$reason" ]]; then
+    TOKEN_CLAIM_REASON="$reason"
+  fi
+}
+
+hydrate_current_lane_bot() {
+  resolve_token_claims "$ASSIGNED_BOT_TOKEN"
+  resolve_bot_identity
+  if [[ "${ASSIGNED_BOT_USERNAME}" != "unknown" ]]; then
+    CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
+  elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
+    CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
+  fi
 }
 
 resolve_token_claims() {
