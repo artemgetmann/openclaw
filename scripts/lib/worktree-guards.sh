@@ -12,6 +12,161 @@ worktree_guard_is_linked_checkout() {
   [[ "$absolute_git_dir" == *"/worktrees/"* ]]
 }
 
+worktree_guard_current_branch() {
+  local root_dir="$1"
+  git -C "$root_dir" branch --show-current 2>/dev/null || true
+}
+
+worktree_guard_durable_lane_upstream() {
+  local branch_name="$1"
+
+  case "$branch_name" in
+    main)
+      printf 'origin/main'
+      ;;
+    codex/consumer-openclaw-project)
+      printf 'origin/codex/consumer-openclaw-project'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+worktree_guard_is_durable_lane_checkout() {
+  local root_dir="$1"
+  local branch_name=""
+
+  if ! worktree_guard_is_linked_checkout "$root_dir"; then
+    return 1
+  fi
+
+  branch_name="$(worktree_guard_current_branch "$root_dir")"
+  [[ -n "$branch_name" ]] || return 1
+  worktree_guard_durable_lane_upstream "$branch_name" >/dev/null
+}
+
+worktree_guard_fetch_durable_lane_upstream() {
+  local root_dir="$1"
+  local branch_name=""
+
+  branch_name="$(worktree_guard_current_branch "$root_dir")"
+  [[ -n "$branch_name" ]] || return 1
+
+  if ! worktree_guard_durable_lane_upstream "$branch_name" >/dev/null; then
+    return 1
+  fi
+
+  git -C "$root_dir" fetch --quiet origin "$branch_name"
+}
+
+worktree_guard_durable_lane_counts() {
+  local root_dir="$1"
+  local branch_name=""
+  local upstream_ref=""
+  local ahead=0
+  local behind=0
+
+  branch_name="$(worktree_guard_current_branch "$root_dir")"
+  [[ -n "$branch_name" ]] || return 1
+  upstream_ref="$(worktree_guard_durable_lane_upstream "$branch_name")" || return 1
+
+  if ! git -C "$root_dir" show-ref --verify --quiet "refs/remotes/${upstream_ref}"; then
+    return 1
+  fi
+
+  read -r ahead behind < <(git -C "$root_dir" rev-list --left-right --count "${branch_name}...${upstream_ref}")
+  printf '%s %s\n' "$ahead" "$behind"
+}
+
+worktree_guard_print_durable_lane_warning() {
+  local root_dir="$1"
+  local branch_name="$2"
+  local ahead="$3"
+  local behind="$4"
+
+  cat >&2 <<EOF
+WARN: durable lane is stale or drifted.
+
+Checkout: ${root_dir}
+Branch:   ${branch_name}
+Ahead:    ${ahead}
+Behind:   ${behind}
+
+Use the lane wrapper so origin is fetched and the lane is fast-forwarded safely:
+  $(if [[ "$branch_name" == "main" ]]; then printf 'wt-main'; else printf 'wt-consumer'; fi)
+
+Manual entry into durable lanes is allowed, but stale branch truth here is how old code sneaks back in.
+EOF
+}
+
+worktree_guard_warn_if_durable_lane_stale() {
+  local root_dir="$1"
+  local branch_name=""
+  local counts=""
+  local ahead=0
+  local behind=0
+
+  if ! worktree_guard_is_durable_lane_checkout "$root_dir"; then
+    return 1
+  fi
+
+  branch_name="$(worktree_guard_current_branch "$root_dir")"
+  if ! worktree_guard_fetch_durable_lane_upstream "$root_dir"; then
+    return 1
+  fi
+
+  counts="$(worktree_guard_durable_lane_counts "$root_dir")" || return 1
+  read -r ahead behind <<<"$counts"
+  if [[ "$ahead" == "0" && "$behind" == "0" ]]; then
+    return 0
+  fi
+
+  worktree_guard_print_durable_lane_warning "$root_dir" "$branch_name" "$ahead" "$behind"
+  return 0
+}
+
+worktree_guard_forbid_stale_durable_lane_commit() {
+  local root_dir="$1"
+  local override="${OPENCLAW_ALLOW_STALE_DURABLE_LANE_COMMITS:-0}"
+  local branch_name=""
+  local counts=""
+  local ahead=0
+  local behind=0
+
+  if [[ "$override" == "1" ]]; then
+    return 0
+  fi
+
+  if ! worktree_guard_is_durable_lane_checkout "$root_dir"; then
+    return 0
+  fi
+
+  branch_name="$(worktree_guard_current_branch "$root_dir")"
+  counts="$(worktree_guard_durable_lane_counts "$root_dir")" || return 0
+  read -r ahead behind <<<"$counts"
+
+  if [[ "$behind" == "0" ]]; then
+    return 0
+  fi
+
+  cat >&2 <<EOF
+ERROR: refusing commit from a stale durable lane.
+
+Checkout: ${root_dir}
+Branch:   ${branch_name}
+Ahead:    ${ahead}
+Behind:   ${behind}
+
+Fast-forward this lane before committing:
+  $(if [[ "$branch_name" == "main" ]]; then printf 'wt-main'; else printf 'wt-consumer'; fi)
+
+If you intentionally need to bypass this once, set:
+  OPENCLAW_ALLOW_STALE_DURABLE_LANE_COMMITS=1
+EOF
+  return 1
+}
+
 worktree_guard_run_doctor() {
   local root_dir="$1"
   shift

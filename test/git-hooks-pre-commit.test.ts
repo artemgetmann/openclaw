@@ -115,4 +115,58 @@ describe("git-hooks/pre-commit (integration)", () => {
       ),
     ).toThrow(/canonical shared main checkout/);
   });
+
+  it("blocks stale durable consumer lanes that are behind origin", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-consumer-guard-"));
+    const remoteDir = path.join(dir, "remote.git");
+    const seedDir = path.join(dir, "seed");
+    const cloneDir = path.join(dir, "clone");
+    const advanceDir = path.join(dir, "advance");
+    const worktreeDir = path.join(cloneDir, ".worktrees", "consumer-durable");
+
+    run(dir, "git", ["init", "--bare", remoteDir]);
+
+    mkdirSync(seedDir, { recursive: true });
+    run(seedDir, "git", ["init", "-q", "--initial-branch=main"]);
+    run(seedDir, "git", ["config", "user.name", "Test User"]);
+    run(seedDir, "git", ["config", "user.email", "test@example.com"]);
+    writeFileSync(path.join(seedDir, "README.md"), "seed\n", "utf8");
+    run(seedDir, "git", ["add", "README.md"]);
+    run(seedDir, "git", ["commit", "-qm", "seed main"]);
+    run(seedDir, "git", ["remote", "add", "origin", remoteDir]);
+    run(seedDir, "git", ["push", "-u", "origin", "main"]);
+    run(seedDir, "git", ["checkout", "-qb", "codex/consumer-openclaw-project"]);
+    writeFileSync(path.join(seedDir, "consumer.txt"), "v1\n", "utf8");
+    run(seedDir, "git", ["add", "consumer.txt"]);
+    run(seedDir, "git", ["commit", "-qm", "seed consumer"]);
+    run(seedDir, "git", ["push", "-u", "origin", "codex/consumer-openclaw-project"]);
+
+    run(dir, "git", ["clone", "-q", remoteDir, cloneDir]);
+    run(cloneDir, "git", ["config", "user.name", "Test User"]);
+    run(cloneDir, "git", ["config", "user.email", "test@example.com"]);
+    run(cloneDir, "git", [
+      "branch",
+      "--track",
+      "codex/consumer-openclaw-project",
+      "origin/codex/consumer-openclaw-project",
+    ]);
+    run(cloneDir, "git", ["worktree", "add", worktreeDir, "codex/consumer-openclaw-project"]);
+
+    run(dir, "git", ["clone", "-q", remoteDir, advanceDir]);
+    run(advanceDir, "git", ["config", "user.name", "Test User"]);
+    run(advanceDir, "git", ["config", "user.email", "test@example.com"]);
+    run(advanceDir, "git", ["checkout", "-q", "codex/consumer-openclaw-project"]);
+    writeFileSync(path.join(advanceDir, "consumer.txt"), "v2\n", "utf8");
+    run(advanceDir, "git", ["commit", "-am", "advance consumer", "-q"]);
+    run(advanceDir, "git", ["push", "-q", "origin", "codex/consumer-openclaw-project"]);
+
+    run(worktreeDir, "git", ["fetch", "-q", "origin", "codex/consumer-openclaw-project"]);
+
+    expect(() =>
+      run(worktreeDir, "/bin/bash", [
+        "-c",
+        `source "${path.join(process.cwd(), "scripts", "lib", "worktree-guards.sh")}"; worktree_guard_forbid_stale_durable_lane_commit "$PWD"`,
+      ]),
+    ).toThrow(/stale durable lane/);
+  });
 });
