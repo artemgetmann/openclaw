@@ -225,21 +225,22 @@ Then run any command to trigger auto-detect:
 clawdock-start
 ```
 
-## Repo durable lane helpers
+## Repo home-clone helpers
 
-This repo also ships a separate shell helper for the shared durable `main` and
-consumer worktrees:
+This repo also ships a separate shell helper for the two default branch homes:
 
 ```bash
-source /Users/user/Programming_Projects/openclaw/scripts/shell-helpers/durable-lane-helpers.sh
+source /Users/user/Programming_Projects/openclaw/scripts/shell-helpers/home-clone-helpers.sh
 ```
 
 Use:
 
 ```bash
-wt-main
-wt-consumer
+oc-main
+oc-consumer
 ```
 
-Those wrappers fetch and fast-forward the durable lane before entering it, and
-they fail loudly if the lane has drifted out of a safe fast-forward state.
+Those wrappers require the home clone to be clean on its base branch, run
+`git pull --ff-only`, then enter it. Create a short-lived feature branch after
+entry. Temporary worktrees are still available when parallel isolation is needed,
+but they are no longer the default branch homes.

@@ -21,10 +21,10 @@
 
 - In chat replies, use repo-root-relative file references only.
 - Read `SECURITY.md` before any security triage, advisory work, or severity decision.
-- Before creating, moving, or cleaning up worktrees, read `docs/agent-guides/workflow.md` and keep durable lanes under the repo-owned `.worktrees/` directory by default.
+- Before creating, moving, or cleaning up worktrees, read `docs/agent-guides/workflow.md`. Default workflow is now two home clones: `~/Programming_Projects/openclaw` on `main` and `~/Programming_Projects/openclaw-consumer` on `codex/consumer-openclaw-project`, with temporary worktrees only for isolated parallel editing.
 - Before touching gateway runtime ownership, worktree bot validation, or LaunchAgent behavior, read `docs/agent-guides/workflow.md` and `docs/agent-guides/runtime-ops.md`.
 - For consumer macOS packaging/relaunch iteration, prefer `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>` and the notes in `apps/macos/README.md` instead of rediscovering the warm-path flags by hand.
-- Treat the canonical shared checkout at `/Users/user/Programming_Projects/openclaw` on `main` as runtime/orchestration-only. Use it to inspect status, fast-forward branches, create worktrees, and manage the shared gateway. Do not make tracked code edits there; implementation work belongs in a worktree.
+- Use `docs/agent-guides/workflow.md` as the source of truth for the two-clone model, migration path, feature-branch rule, and draft-PR workflow. Do not rely on memory for branch/home-clone conventions.
 - Before opening or updating a PR:
   - For fork PRs targeting `artemgetmann/openclaw` `main` or `codex/consumer-openclaw-project`, read `FORK_CONTRIBUTING.md`
   - For upstream PRs or other targets, read `CONTRIBUTING.md`
