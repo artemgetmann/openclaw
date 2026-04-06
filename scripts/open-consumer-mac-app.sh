@@ -234,7 +234,7 @@ fi
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
 if [[ -z "$NORMALIZED_INSTANCE_ID" && -z "$APP_PATH" ]]; then
   CURRENT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-  CANONICAL_CONSUMER_CHECKOUT="/Users/user/Programming_Projects/openclaw-consumer-openclaw-project"
+  CANONICAL_CONSUMER_CHECKOUT="$(consumer_instance_expected_home_checkout)"
   if [[ "$CURRENT_ROOT" != "$CANONICAL_CONSUMER_CHECKOUT" ]]; then
     echo "ERROR: default consumer app launch is reserved for the main consumer checkout." >&2
     echo "Use --instance <id> from worktrees so you do not collide with the shared consumer runtime." >&2

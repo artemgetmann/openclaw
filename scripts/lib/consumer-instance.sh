@@ -31,6 +31,23 @@ consumer_instance_default_id_for_checkout() {
   printf ''
 }
 
+consumer_instance_expected_home_checkout() {
+  # Keep the "main consumer checkout" guard aligned with the workflow doc and
+  # shell helpers. A stale hard-coded path forces the home clone onto
+  # `--instance`, which in turn changes the debug bundle identifier and can
+  # strand Screen Recording/TCC grants on the wrong app identity.
+  local configured="${OPENCLAW_CONSUMER_HOME_CLONE:-$HOME/Programming_Projects/openclaw-consumer}"
+
+  if [[ -d "$configured" ]]; then
+    (
+      cd "$configured" >/dev/null 2>&1 && pwd -P
+    )
+    return
+  fi
+
+  printf '%s\n' "$configured"
+}
+
 consumer_instance_gateway_port() {
   local normalized="${1:-}"
   if [[ -z "$normalized" ]]; then
