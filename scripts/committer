@@ -7,13 +7,13 @@ set -f
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 WORKTREE_GUARDS="$ROOT_DIR/scripts/lib/worktree-guards.sh"
 if [ -f "$WORKTREE_GUARDS" ]; then
-  # Block the common agent checkpoint flow from landing in the live shared
-  # checkout. Runtime ownership stays on main; user edits do not.
+  # Base branches are pull-only. Checkpoint commits must land on a short-lived
+  # feature branch instead of directly on main or codex/consumer-openclaw-project.
   # shellcheck source=scripts/lib/worktree-guards.sh
   . "$WORKTREE_GUARDS"
-  worktree_guard_forbid_shared_root_main_commits "$ROOT_DIR"
-  # Durable base lanes must be fast-forwarded first so checkpoint commits do not
-  # silently stack on top of stale shared branches.
+  worktree_guard_forbid_protected_base_branch_commit "$ROOT_DIR"
+  # Legacy durable base lanes must still be fast-forwarded first so checkpoint
+  # commits do not silently stack on top of stale shared branches.
   worktree_guard_forbid_stale_durable_lane_commit "$ROOT_DIR"
 fi
 

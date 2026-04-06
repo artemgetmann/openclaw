@@ -104,11 +104,14 @@ The refactor doesn't happen on `main`. It happens as part of building `codex/con
 ### Workflow
 
 ```sh
-# Create or refresh a consumer worktree/branch from the active product branch
-cd ~/Programming_Projects/openclaw
-git fetch origin --prune
+# Refresh the consumer home clone, then branch for the task
+cd ~/Programming_Projects/openclaw-consumer
 git checkout codex/consumer-openclaw-project
 git pull --ff-only origin codex/consumer-openclaw-project
+git checkout -b codex/<task-name>
+
+# Open a draft PR early, then validate on the feature branch
+# Mark the PR ready only after validation is complete
 
 # Test consumer build without touching live bot
 pnpm install && pnpm build
@@ -120,9 +123,11 @@ pnpm openclaw gateway --port 19001 --bind loopback
 # See docs/agent-guides/fork-maintenance.md
 ```
 
+Temporary worktrees are still allowed when 2 or more agents need isolated parallel editing in the same clone, but they are no longer the default consumer branch home.
+
 ### Rule
 
-Your personal bot stays on `main`. `codex/consumer-openclaw-project` is the product branch. Only switch your personal bot when that branch is proven stable.
+Your personal bot stays on `main`. `codex/consumer-openclaw-project` is the product branch. Work on short-lived feature branches, not directly on the base branches, and only switch your personal bot when that branch is proven stable.
 
 ---
 
