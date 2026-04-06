@@ -31,7 +31,7 @@ struct LaunchAgentManagerTests {
         ]) {
             let snapshot = LaunchAgentManager.LaunchAgentSnapshot(
                 programArguments: [
-                    "/tmp/other-worktree/dist/OpenClaw Consumer (user-e2e-20260402).app/Contents/MacOS/OpenClaw",
+                    "/tmp/other-worktree/dist/OpenClaw Consumer.app/Contents/MacOS/OpenClaw",
                 ],
                 environment: [
                     "OPENCLAW_PROFILE": "consumer-user-e2e-20260402",
@@ -41,7 +41,7 @@ struct LaunchAgentManagerTests {
             #expect(
                 LaunchAgentManager.needsRefresh(
                     snapshot: snapshot,
-                    bundlePath: "/tmp/current-worktree/dist/OpenClaw Consumer (user-e2e-20260402).app",
+                    bundlePath: "/tmp/current-worktree/dist/OpenClaw Consumer.app",
                     base: ProcessInfo.processInfo.environment))
         }
     }
