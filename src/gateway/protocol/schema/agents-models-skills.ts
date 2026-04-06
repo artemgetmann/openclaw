@@ -280,6 +280,7 @@ export const ModelsAuthOptionSchema = Type.Object(
 export const ModelsAuthListResultSchema = Type.Object(
   {
     options: Type.Array(ModelsAuthOptionSchema),
+    activeOptionId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

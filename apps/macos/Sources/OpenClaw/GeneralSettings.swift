@@ -207,7 +207,7 @@ struct GeneralSettings: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("AI access")
                 .font(.title3.weight(.semibold))
-            Text("Consumer testers should use their own AI account here. Shared founder auth is not the default path.")
+            Text("OpenAI is the default self-serve path here. Claude login, setup-token, and API-key access stay available when this runtime supports them.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

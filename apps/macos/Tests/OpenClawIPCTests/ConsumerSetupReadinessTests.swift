@@ -102,6 +102,21 @@ private func claudeSetupTokenOptionPayload() -> ConsumerModelsAuthOptionPayload 
         methodKind: "token")
 }
 
+private func claudeApiKeyOptionPayload() -> ConsumerModelsAuthOptionPayload {
+    ConsumerModelsAuthOptionPayload(
+        id: "anthropic-api-key",
+        providerId: "anthropic",
+        providerLabel: "Claude",
+        title: "Bring your Anthropic API key",
+        detail: "Use direct Anthropic API billing.",
+        inputKind: .apiKey,
+        submitLabel: "Save and Check",
+        inputLabel: "Anthropic API key",
+        inputHelp: "Paste an Anthropic API key from console.anthropic.com.",
+        inputPlaceholder: "sk-ant-...",
+        methodKind: "api_key")
+}
+
 private func curatedModelsPayload(
     currentModel: String = "openai-codex/gpt-5.4",
     options: [ConsumerSelectableModel] = [
@@ -126,6 +141,11 @@ struct ConsumerSetupReadinessTests {
             probeReadiness: {
                 readyReadinessPayload()
             },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(
+                    options: [subscriptionOptionPayload(), authOptionPayload()],
+                    activeOptionId: "openai-codex-oauth")
+            },
             listModels: {
                 curatedModelsPayload()
             })
@@ -136,6 +156,9 @@ struct ConsumerSetupReadinessTests {
         #expect(model.phase == .ready("openai-codex/gpt-5.4"))
         #expect(model.statusLine == "AI ready on openai-codex/gpt-5.4.")
         #expect(model.authSectionExpanded == false)
+        #expect(model.authOptionsLoaded)
+        #expect(model.selectedOptionId == "openai-codex-oauth")
+        #expect(model.activeAccessTitle == "ChatGPT / Codex login")
         #expect(model.modelOptions.map(\.id) == ["openai-codex/gpt-5.4", "openai-codex/gpt-5.3-codex"])
         #expect(model.selectedModelId == "openai-codex/gpt-5.4")
     }
@@ -146,7 +169,7 @@ struct ConsumerSetupReadinessTests {
                 blockedReadinessPayload()
             },
             listAuthOptions: {
-                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
             },
             listModels: {
                 curatedModelsPayload()
@@ -168,7 +191,7 @@ struct ConsumerSetupReadinessTests {
                 authMissingReadinessPayload()
             },
             listAuthOptions: {
-                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
             },
             listModels: {
                 curatedModelsPayload()
@@ -187,7 +210,7 @@ struct ConsumerSetupReadinessTests {
                 readinessFailedPayload()
             },
             listAuthOptions: {
-                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
             },
             listModels: {
                 curatedModelsPayload()
@@ -208,7 +231,7 @@ struct ConsumerSetupReadinessTests {
             },
             listAuthOptions: {
                 authLoads.value += 1
-                return ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+                return ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
             },
             listModels: {
                 curatedModelsPayload()
@@ -230,7 +253,7 @@ struct ConsumerSetupReadinessTests {
                 return probeCalls.value == 1 ? blockedReadinessPayload() : readyReadinessPayload()
             },
             listAuthOptions: {
-                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
             },
             listModels: {
                 curatedModelsPayload()
@@ -287,7 +310,7 @@ struct ConsumerSetupReadinessTests {
                         reasonCodes: [])
             },
             listAuthOptions: {
-                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
             },
             applyAuth: { optionId, secret in
                 #expect(optionId == "openai-api-key")
@@ -345,7 +368,7 @@ struct ConsumerSetupReadinessTests {
                 return refreshTokenReusedPayload()
             },
             listAuthOptions: {
-                ConsumerModelsAuthListPayload(options: [subscriptionOptionPayload()])
+                ConsumerModelsAuthListPayload(options: [subscriptionOptionPayload()], activeOptionId: nil)
             },
             applyAuth: { optionId, _ in
                 #expect(optionId == "openai-codex-oauth")
@@ -380,7 +403,7 @@ struct ConsumerSetupReadinessTests {
                 blockedReadinessPayload()
             },
             listAuthOptions: {
-                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
             },
             applyAuth: { _, _ in
                 throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "bad key"])
@@ -409,7 +432,7 @@ struct ConsumerSetupReadinessTests {
                     ])
             },
             listAuthOptions: {
-                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
             })
 
         await model.refresh()
@@ -431,7 +454,9 @@ struct ConsumerSetupReadinessTests {
                 blockedReadinessPayload()
             },
             listAuthOptions: {
-                ConsumerModelsAuthListPayload(options: [subscriptionOptionPayload(), authOptionPayload()])
+                ConsumerModelsAuthListPayload(
+                    options: [subscriptionOptionPayload(), authOptionPayload()],
+                    activeOptionId: nil)
             },
             listModels: {
                 curatedModelsPayload()
@@ -459,7 +484,7 @@ struct ConsumerSetupReadinessTests {
                     subscriptionOptionPayload(),
                     claudeSubscriptionOptionPayload(),
                     claudeSetupTokenOptionPayload(),
-                ])
+                ], activeOptionId: nil)
             },
             listModels: {
                 curatedModelsPayload()
@@ -480,6 +505,49 @@ struct ConsumerSetupReadinessTests {
 
         #expect(model.selectedProviderId == "anthropic")
         #expect(model.selectedAlternateAuthOptions.map(\.id) == ["anthropic-claude-cli"])
+    }
+
+    @Test func `consumer model reflects anthropic api key as active access when readiness says api key`() async {
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                ConsumerModelsReadinessPayload(
+                    status: "ready",
+                    defaultModel: "anthropic/claude-sonnet-4-6",
+                    summary: "AI ready on anthropic/claude-sonnet-4-6.",
+                    reasonCodes: [],
+                    mode: "byok",
+                    authMode: "byok",
+                    sharedProfileId: nil,
+                    probe: ConsumerModelsReadinessProbePayload(
+                        provider: "anthropic",
+                        model: "anthropic/claude-sonnet-4-6",
+                        profileId: "anthropic:api",
+                        label: "anthropic:api",
+                        source: "profile",
+                        mode: "api_key",
+                        status: "ok"))
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [
+                    claudeSubscriptionOptionPayload(),
+                    claudeSetupTokenOptionPayload(),
+                    claudeApiKeyOptionPayload(),
+                ], activeOptionId: "anthropic-api-key")
+            },
+            listModels: {
+                ConsumerModelsModelListPayload(
+                    currentModel: "anthropic/claude-sonnet-4-6",
+                    options: [
+                        .init(id: "anthropic/claude-sonnet-4-6", title: "Claude Sonnet 4.6", detail: "Balanced Claude default for day-to-day use."),
+                    ])
+            })
+
+        await model.refresh()
+
+        #expect(model.selectedOptionId == "anthropic-api-key")
+        #expect(model.authCategory == .apiKey)
+        #expect(model.activeAccessTitle == "Claude API key")
+        #expect(model.activeAccessDetail == "Uses a tester-owned API key for this runtime.")
     }
 
     @Test func `consumer model applies a curated selection and reruns readiness`() async {
@@ -555,7 +623,7 @@ struct ConsumerSetupReadinessTests {
                 return readyReadinessPayload()
             },
             listAuthOptions: {
-                ConsumerModelsAuthListPayload(options: [authOptionPayload()])
+                ConsumerModelsAuthListPayload(options: [authOptionPayload()], activeOptionId: nil)
             },
             listModels: {
                 curatedModelsPayload()

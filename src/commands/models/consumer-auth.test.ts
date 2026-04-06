@@ -145,11 +145,75 @@ describe("consumer auth", () => {
       ],
     });
 
-    expect(options.map((option) => option.id)).toEqual([
+    expect(options.options.map((option) => option.id)).toEqual([
       "openai-codex-oauth",
       "anthropic-claude-cli",
       "openai-api-key",
     ]);
+    expect(options.activeOptionId).toBeUndefined();
+  });
+
+  it("reports the active consumer auth option from the current provider and auth order", async () => {
+    await withConsumerAuthFixture(async ({ agentDir }) => {
+      await writeConfigFile({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+            },
+          },
+        },
+        auth: {
+          order: {
+            anthropic: ["anthropic:default"],
+          },
+        },
+      });
+      clearConfigCache();
+
+      const providers = [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          auth: [
+            {
+              id: "setup-token",
+              label: "setup-token",
+              kind: "token",
+              run: async () => ({ profiles: [] }),
+            },
+            {
+              id: "api-key",
+              label: "api-key",
+              kind: "api_key",
+              run: async () => ({ profiles: [] }),
+            },
+          ],
+        } as ProviderPlugin,
+      ];
+
+      const { upsertAuthProfile } = await import("../../agents/auth-profiles.js");
+      upsertAuthProfile({
+        profileId: "anthropic:default",
+        credential: {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-ant-test",
+        },
+        agentDir,
+      });
+
+      const result = await listConsumerAuthOptions({
+        config: loadConfig(),
+        agentDir,
+        workspaceDir: "/tmp/workspace",
+        readClaudeCliCredential: vi.fn(() => null),
+        providers,
+      });
+
+      expect(result.options.map((option) => option.id)).toContain("anthropic-api-key");
+      expect(result.activeOptionId).toBe("anthropic-api-key");
+    });
   });
 
   it("persists a consumer API key into the tester-local auth store and config", async () => {

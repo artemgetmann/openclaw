@@ -143,6 +143,16 @@ struct ConsumerModelsSetPayload: Decodable {
     let model: String
 }
 
+struct ConsumerModelsReadinessProbePayload: Decodable {
+    let provider: String
+    let model: String?
+    let profileId: String?
+    let label: String
+    let source: String
+    let mode: String?
+    let status: String
+}
+
 @MainActor
 @Observable
 final class ConsumerModelSetupModel {
@@ -184,12 +194,15 @@ final class ConsumerModelSetupModel {
     private(set) var authError: String?
     private(set) var authNotes: [String] = []
     private(set) var applyingOptionId: String?
+    private(set) var activeAuthOptionId: String?
     private(set) var activeModelId: String?
     private(set) var modelOptions: [ConsumerSelectableModel] = []
     private(set) var modelError: String?
     private(set) var applyingModelId: String?
     private(set) var failureKind: ConsumerAIAccessFailureKind?
     private(set) var isRestartingOperator = false
+    private(set) var activeAccessTitle: String?
+    private(set) var activeAccessDetail: String?
     var authCategory: AuthCategory = .subscription
     var authSectionExpanded = true
     var alternateMethodExpanded = false
@@ -203,6 +216,7 @@ final class ConsumerModelSetupModel {
     private let applyModel: ModelApply
     private let runtimeOwnershipBlocker: RuntimeOwnershipBlocker
     private let restartGateway: RestartGateway
+    private var lastReadiness: ConsumerModelsReadinessPayload?
 
     init(
         probeReadiness: ReadinessProbe? = nil,
@@ -214,10 +228,6 @@ final class ConsumerModelSetupModel {
         restartGateway: RestartGateway? = nil)
     {
         self.probeReadiness = probeReadiness ?? Self.gatewayReadinessProbe
-        self.listAuthOptions = listAuthOptions ?? Self.gatewayAuthOptionsLoader
-        self.applyAuth = applyAuth ?? Self.gatewayAuthApply
-        self.listModels = listModels ?? Self.gatewayModelsLoader
-        self.applyModel = applyModel ?? Self.gatewayModelApply
         let usesMockedDependencies =
             probeReadiness != nil ||
             listAuthOptions != nil ||
@@ -225,6 +235,15 @@ final class ConsumerModelSetupModel {
             listModels != nil ||
             applyModel != nil ||
             restartGateway != nil
+        self.listAuthOptions = listAuthOptions ?? {
+            if usesMockedDependencies {
+                return ConsumerModelsAuthListPayload(options: [], activeOptionId: nil)
+            }
+            return try await Self.gatewayAuthOptionsLoader()
+        }
+        self.applyAuth = applyAuth ?? Self.gatewayAuthApply
+        self.listModels = listModels ?? Self.gatewayModelsLoader
+        self.applyModel = applyModel ?? Self.gatewayModelApply
         self.runtimeOwnershipBlocker = runtimeOwnershipBlocker ?? {
             if usesMockedDependencies {
                 return nil
@@ -247,7 +266,7 @@ final class ConsumerModelSetupModel {
     }
 
     var selectedOption: ConsumerModelsAuthOptionPayload? {
-        let selectedId = self.selectedOptionId ?? self.authOptions.first?.id
+        let selectedId = self.selectedOptionId ?? self.activeAuthOptionId ?? self.authOptions.first?.id
         return self.authOptions.first { $0.id == selectedId }
     }
 
@@ -397,9 +416,10 @@ final class ConsumerModelSetupModel {
         do {
             let payload = try await self.probeReadiness()
             self.applyReadiness(payload)
-            if payload.status != "ready" {
-                await self.loadAuthOptionsIfNeeded()
-            }
+            // The Settings switcher must stay available even when AI is already
+            // healthy. Otherwise the card turns into a static status badge and
+            // users cannot change provider/method without first breaking auth.
+            await self.loadAuthOptionsIfNeeded()
             await self.syncModelOptions(readiness: payload)
         } catch {
             let detail = Self.consumerFriendlyReadinessError(error)
@@ -428,8 +448,10 @@ final class ConsumerModelSetupModel {
         do {
             let payload = try await self.listAuthOptions()
             self.authOptions = payload.options
+            self.activeAuthOptionId = payload.activeOptionId
             self.authOptionsLoaded = true
             self.reconcileAuthSelection()
+            self.syncActiveAccessFromReadiness()
         } catch {
             self.authError = error.localizedDescription
         }
@@ -454,6 +476,7 @@ final class ConsumerModelSetupModel {
         do {
             let payload = try await self.applyAuth(option.id, option.inputKind.requiresSecret ? secret : nil)
             self.authNotes = payload.notes
+            self.activeAuthOptionId = payload.optionId
             self.draftSecret = ""
             await self.refreshAfterAuthApply(
                 optimisticReadiness: payload.readiness,
@@ -563,6 +586,7 @@ final class ConsumerModelSetupModel {
     }
 
     private func applyReadiness(_ payload: ConsumerModelsReadinessPayload) {
+        self.lastReadiness = payload
         if payload.status == "ready" {
             let trimmedModel = payload.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines)
             let display = (trimmedModel?.isEmpty == false ? trimmedModel : nil) ?? "the default model"
@@ -571,6 +595,7 @@ final class ConsumerModelSetupModel {
             self.statusLine = "AI ready on \(display)."
             self.failureKind = nil
             self.authSectionExpanded = false
+            self.syncActiveAccessFromReadiness()
             return
         }
 
@@ -580,6 +605,7 @@ final class ConsumerModelSetupModel {
         self.phase = .failed(detail)
         self.statusLine = detail
         self.authSectionExpanded = true
+        self.syncActiveAccessFromReadiness()
     }
 
     private func syncModelOptions(readiness: ConsumerModelsReadinessPayload) async {
@@ -622,6 +648,12 @@ final class ConsumerModelSetupModel {
             self.authCategory = firstCategory
         }
 
+        if let activeOption = self.resolveActiveOption() {
+            self.selectedOptionId = activeOption.id
+            self.authCategory = activeOption.authCategory
+            return
+        }
+
         if let selectedOptionId = self.selectedOptionId,
            self.visibleAuthOptions.contains(where: { $0.id == selectedOptionId })
         {
@@ -639,6 +671,104 @@ final class ConsumerModelSetupModel {
         return options.first(where: { $0.inputKind == .none })
             ?? options.first(where: { !$0.inputKind.requiresSecret })
             ?? options.first
+    }
+
+    private func resolveActiveOption() -> ConsumerModelsAuthOptionPayload? {
+        if let activeAuthOptionId {
+            return self.authOptions.first { $0.id == activeAuthOptionId }
+        }
+        guard let readiness = self.lastReadiness else { return nil }
+        guard let providerId = readiness.probe?.provider ?? Self.providerId(from: readiness.defaultModel) else {
+            return nil
+        }
+        let normalizedMode = readiness.probe?.mode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return self.authOptions.first { option in
+            guard option.providerId == providerId else { return false }
+            guard let normalizedMode else { return false }
+            return option.methodKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedMode
+        }
+    }
+
+    private func syncActiveAccessFromReadiness() {
+        guard let readiness = self.lastReadiness else {
+            self.activeAccessTitle = nil
+            self.activeAccessDetail = nil
+            return
+        }
+
+        if readiness.mode == "managed", readiness.probe?.provider == "openai-codex" {
+            self.activeAccessTitle = "OpenClaw-managed ChatGPT / Codex"
+            self.activeAccessDetail = "Shared founder auth is active for this runtime."
+            return
+        }
+
+        if let activeOption = self.resolveActiveOption() {
+            self.activeAccessTitle = Self.activeAccessTitle(for: activeOption)
+            self.activeAccessDetail = Self.activeAccessDetail(for: activeOption)
+            return
+        }
+
+        guard let providerId = readiness.probe?.provider ?? Self.providerId(from: readiness.defaultModel) else {
+            self.activeAccessTitle = nil
+            self.activeAccessDetail = nil
+            return
+        }
+        self.activeAccessTitle = Self.fallbackActiveAccessTitle(providerId: providerId, probeMode: readiness.probe?.mode)
+        self.activeAccessDetail = readiness.probe?.label
+    }
+
+    private static func providerId(from modelRef: String?) -> String? {
+        guard let modelRef else { return nil }
+        let trimmed = modelRef.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let slash = trimmed.firstIndex(of: "/") else { return nil }
+        let provider = trimmed[..<slash].trimmingCharacters(in: .whitespacesAndNewlines)
+        return provider.isEmpty ? nil : provider
+    }
+
+    private static func activeAccessTitle(for option: ConsumerModelsAuthOptionPayload) -> String {
+        switch option.inputKind {
+        case .none:
+            return "\(option.providerLabel) login"
+        case .apiKey:
+            return "\(option.providerLabel) API key"
+        case .token:
+            return "\(option.providerLabel) setup token"
+        }
+    }
+
+    private static func activeAccessDetail(for option: ConsumerModelsAuthOptionPayload) -> String {
+        switch option.inputKind {
+        case .none:
+            return "Uses the current sign-in already available on this Mac."
+        case .apiKey:
+            return "Uses a tester-owned API key for this runtime."
+        case .token:
+            return "Uses a Claude setup token stored in this runtime."
+        }
+    }
+
+    private static func fallbackActiveAccessTitle(providerId: String, probeMode: String?) -> String {
+        let providerLabel = switch providerId {
+        case "openai-codex":
+            "ChatGPT / Codex"
+        case "openai":
+            "OpenAI"
+        case "anthropic":
+            "Claude"
+        default:
+            providerId
+        }
+
+        switch probeMode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "api_key":
+            return "\(providerLabel) API key"
+        case "token":
+            return "\(providerLabel) setup token"
+        case "oauth":
+            return "\(providerLabel) login"
+        default:
+            return providerLabel
+        }
     }
 
     private static func gatewayReadinessProbe() async throws -> ConsumerModelsReadinessPayload {
@@ -735,6 +865,30 @@ struct ConsumerModelsReadinessPayload: Decodable {
     let defaultModel: String?
     let summary: String
     let reasonCodes: [String]
+    let mode: String?
+    let authMode: String?
+    let sharedProfileId: String?
+    let probe: ConsumerModelsReadinessProbePayload?
+
+    init(
+        status: String,
+        defaultModel: String?,
+        summary: String,
+        reasonCodes: [String],
+        mode: String? = nil,
+        authMode: String? = nil,
+        sharedProfileId: String? = nil,
+        probe: ConsumerModelsReadinessProbePayload? = nil)
+    {
+        self.status = status
+        self.defaultModel = defaultModel
+        self.summary = summary
+        self.reasonCodes = reasonCodes
+        self.mode = mode
+        self.authMode = authMode
+        self.sharedProfileId = sharedProfileId
+        self.probe = probe
+    }
 
     var consumerFailureKind: ConsumerAIAccessFailureKind {
         let lowercasedSummary = self.summary.lowercased()
@@ -774,6 +928,7 @@ struct ConsumerModelsReadinessPayload: Decodable {
 
 struct ConsumerModelsAuthListPayload: Decodable {
     let options: [ConsumerModelsAuthOptionPayload]
+    let activeOptionId: String?
 }
 
 struct ConsumerModelsAuthOptionPayload: Decodable, Equatable, Identifiable {
@@ -963,7 +1118,7 @@ struct ConsumerModelSetupCardContent: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("AI access")
                     .font(.headline)
-                Text("OpenClaw needs a working model before the first real task can succeed.")
+                Text("Choose which AI provider and billing path this Mac should use.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -986,21 +1141,27 @@ struct ConsumerModelSetupCardContent: View {
                 self.failureCallout(message: message)
             }
 
+            if let activeAccessTitle = self.model.activeAccessTitle, !activeAccessTitle.isEmpty {
+                self.activeAccessSummary(
+                    title: activeAccessTitle,
+                    detail: self.model.activeAccessDetail)
+            }
+
+            if self.model.isComplete,
+               (self.model.hasModelOptions || self.model.hasModelError)
+            {
+                Divider()
+                    .padding(.vertical, 2)
+
+                self.modelPickerSection()
+            }
+
             if let option = self.model.selectedOption {
                 Divider()
                     .padding(.vertical, 2)
 
-                if self.model.isComplete,
-                   (self.model.hasModelOptions || self.model.hasModelError)
-                {
-                    self.modelPickerSection()
-
-                    Divider()
-                        .padding(.vertical, 2)
-                }
-
                 if self.model.isComplete {
-                    DisclosureGroup("Use a different AI account", isExpanded: self.$model.authSectionExpanded) {
+                    DisclosureGroup("Switch provider or auth mode", isExpanded: self.$model.authSectionExpanded) {
                         self.authEditor(option: option, isReady: true)
                             .padding(.top, 8)
                     }
@@ -1090,6 +1251,21 @@ struct ConsumerModelSetupCardContent: View {
         }
     }
 
+    private func activeAccessSummary(title: String, detail: String?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Current access")
+                .font(.caption.weight(.semibold))
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            if let detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     @ViewBuilder
     private func failureCallout(message: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1120,12 +1296,12 @@ struct ConsumerModelSetupCardContent: View {
     @ViewBuilder
     private func authEditor(option: ConsumerModelsAuthOptionPayload, isReady: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(isReady ? "Switch account or billing source" : "Use your own AI account")
+            Text(isReady ? "Switch AI provider or billing source" : "Use your own AI account")
                 .font(.subheadline.weight(.semibold))
             Text(
                 isReady
-                    ? "You’re already ready to run tasks. Change this only if you want a different subscription or API key. Credentials stay in this runtime’s local auth state, not in the app bundle."
-                    : "Choose how OpenClaw should use your own subscription or API key. Credentials stay in this runtime’s local auth state, not in the app bundle.")
+                    ? "You’re already ready to run tasks. Change this only if you want a different provider, subscription, setup token, or API key. Credentials stay in this runtime’s local auth state, not in the app bundle."
+                    : "Choose how OpenClaw should use your own subscription, setup token, or API key. Credentials stay in this runtime’s local auth state, not in the app bundle.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
