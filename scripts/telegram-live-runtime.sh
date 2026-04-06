@@ -31,6 +31,12 @@ STOPPED_RUNTIME_PID=""
 TOKEN_PRESENT="no"
 TOKEN_POOL_GUARD="fail"
 TOKEN_FINGERPRINT="none"
+TOKEN_CLAIM_STATUS="unknown"
+TOKEN_CLAIM_REASON="unknown"
+TOKEN_POOL_SIZE=0
+TOKEN_POOL_CLAIMED_COUNT=0
+TOKEN_POOL_RESERVED_COUNT=0
+TOKEN_POOL_CLAIMABLE_COUNT=0
 ASSIGNED_BOT_TOKEN=""
 ASSIGNED_BOT_ID="unknown"
 ASSIGNED_BOT_USERNAME="unknown"
@@ -40,6 +46,9 @@ RUNTIME_TOKEN_SOURCE="unknown"
 TOKEN_ORIGIN_HINT="unknown"
 TOKEN_CLAIM_COUNT=0
 TOKEN_CLAIM_PATHS=()
+RUNTIME_CONFIG_PRESENT="no"
+RUNTIME_CONFIG_TOKEN_PRESENT="no"
+RUNTIME_CONFIG_TOKEN_FINGERPRINT="none"
 FAIL=0
 FAIL_REASONS=()
 
@@ -114,6 +123,45 @@ add_failure() {
   local reason="$1"
   FAIL=1
   FAIL_REASONS+=("$reason")
+}
+
+parse_assign_bot_output() {
+  local output="$1"
+  local line=""
+  local reason=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      Reason:\ *) reason="${line#Reason: }" ;;
+      Selection\ reason:\ *) reason="${line#Selection reason: }" ;;
+      Claimed:\ *)
+        if [[ "$line" =~ Claimed:\ ([0-9]+)\ /\ Pool:\ ([0-9]+)\ /\ Reserved\ by\ main\ runtime:\ ([0-9]+) ]]; then
+          TOKEN_POOL_CLAIMED_COUNT="${BASH_REMATCH[1]}"
+          TOKEN_POOL_SIZE="${BASH_REMATCH[2]}"
+          TOKEN_POOL_RESERVED_COUNT="${BASH_REMATCH[3]}"
+        fi
+        ;;
+      Claimable\ now:\ *)
+        if [[ "$line" =~ Claimable\ now:\ ([0-9]+) ]]; then
+          TOKEN_POOL_CLAIMABLE_COUNT="${BASH_REMATCH[1]}"
+        fi
+        ;;
+    esac
+  done <<< "$output"
+
+  if [[ -n "$reason" ]]; then
+    TOKEN_CLAIM_REASON="$reason"
+  fi
+}
+
+hydrate_current_lane_bot() {
+  resolve_token_claims "$ASSIGNED_BOT_TOKEN"
+  resolve_bot_identity
+  if [[ "${ASSIGNED_BOT_USERNAME}" != "unknown" ]]; then
+    CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
+  elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
+    CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
+  fi
 }
 
 resolve_token_claims() {
@@ -401,66 +449,58 @@ ensure_tester_bot_claim() {
   local env_local="${REPO_ROOT}/.env.local"
   local env_bots="${REPO_ROOT}/.env.bots"
   local token=""
+  local assign_output=""
 
-  # If this worktree already owns a tester token, reuse it. Re-running `ensure`
-  # should be idempotent even when the shared pool is full.
-  if [[ -f "$env_local" ]]; then
-    token="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
-  fi
-
-  if [[ -n "$token" ]]; then
-    TOKEN_PRESENT="yes"
-    ASSIGNED_BOT_TOKEN="$token"
-    TOKEN_FINGERPRINT="$(mask_token "$token")"
-    RUNTIME_TOKEN_SOURCE="repo_env_local"
-    TOKEN_ORIGIN_HINT="repo_env_local"
-    resolve_token_claims "$token"
-    resolve_bot_identity
-    if [[ "${ASSIGNED_BOT_USERNAME}" != "unknown" ]]; then
-      CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
-    elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
-      CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
-    fi
-  else
   if [[ ! -x "$ASSIGN_BOT_SCRIPT" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="assign_script_missing"
     add_failure "assign_bot_script_missing:${ASSIGN_BOT_SCRIPT}"
     return
   fi
 
-  if ! (cd "$REPO_ROOT" && bash "$ASSIGN_BOT_SCRIPT"); then
-    add_failure "assign_bot_failed"
+  # Always resolve the claim via assign-bot so a stale .env.local token can be
+  # rotated away when another runtime actively holds the lease.
+  if ! assign_output="$(cd "$REPO_ROOT" && bash "$ASSIGN_BOT_SCRIPT" 2>&1)"; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="assign_failed"
+    parse_assign_bot_output "$assign_output"
+    if [[ "$TOKEN_CLAIM_REASON" == "pool_exhausted" ]]; then
+      TOKEN_POOL_GUARD="blocked"
+      RUNTIME_START_ACTION="blocked_no_token"
+    fi
+    add_failure "token_claim_failed:${TOKEN_CLAIM_REASON}"
     return
   fi
 
   if [[ ! -f "$env_local" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="env_local_missing_after_assign"
     add_failure "env_local_missing_after_assign"
     return
   fi
   if [[ ! -f "$env_bots" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="env_bots_missing_after_assign"
     add_failure "env_bots_missing_after_assign"
     return
   fi
 
-  local token
   token="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
   if [[ -z "$token" ]]; then
+    TOKEN_CLAIM_STATUS="fail"
+    TOKEN_CLAIM_REASON="telegram_token_missing_in_env_local"
     add_failure "telegram_token_missing_in_env_local"
     return
   fi
 
+  TOKEN_CLAIM_STATUS="ok"
+  parse_assign_bot_output "$assign_output"
   TOKEN_PRESENT="yes"
   ASSIGNED_BOT_TOKEN="$token"
   TOKEN_FINGERPRINT="$(mask_token "$token")"
   RUNTIME_TOKEN_SOURCE="repo_env_local"
   TOKEN_ORIGIN_HINT="repo_env_local"
-  resolve_token_claims "$token"
-  resolve_bot_identity
-  if [[ "${ASSIGNED_BOT_USERNAME}" != "unknown" ]]; then
-    CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
-  elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
-    CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
-  fi
-  fi
+  hydrate_current_lane_bot
 
   if [[ ! -f "$env_bots" ]]; then
     add_failure "env_bots_missing_after_assign"
@@ -514,6 +554,7 @@ prepare_isolated_runtime_config() {
     RUNTIME_PORT="$RUNTIME_PORT" \
     OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR="${OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR:-}" \
     OPENCLAW_TELEGRAM_LIVE_DM_POLICY="${OPENCLAW_TELEGRAM_LIVE_DM_POLICY:-}" \
+    OPENCLAW_TELEGRAM_LIVE_MODEL="${OPENCLAW_TELEGRAM_LIVE_MODEL:-}" \
     HELPER_MODULE="$HELPER_MODULE" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
@@ -526,6 +567,7 @@ const assignedToken = process.env.ASSIGNED_BOT_TOKEN;
 const runtimePort = Number.parseInt(process.env.RUNTIME_PORT ?? "", 10);
 const workspaceDir = process.env.OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR;
 const dmPolicy = process.env.OPENCLAW_TELEGRAM_LIVE_DM_POLICY;
+const preferredModel = process.env.OPENCLAW_TELEGRAM_LIVE_MODEL ?? "";
 const helperPath = process.env.HELPER_MODULE;
 
 if (!runtimeConfigPath || !assignedToken || !Number.isFinite(runtimePort) || runtimePort <= 0 || !helperPath) {
@@ -548,6 +590,7 @@ if (basePath && fs.existsSync(basePath)) {
 config = buildTelegramLiveRuntimeConfig({
   baseConfig: config,
   assignedToken,
+  preferredModel,
   runtimePort,
   workspaceDir,
   dmPolicy,

@@ -57,6 +57,33 @@ describe("telegram shared-token protection", () => {
     expect(isCanonicalSharedGatewayConfigPath(configPath, { HOME: home })).toBe(true);
   });
 
+  it("does not let an isolated OPENCLAW_CONFIG_PATH redefine the canonical shared config", () => {
+    const home = makeTempDir();
+    const canonicalConfigPath = path.join(home, ".openclaw", "openclaw.json");
+    const isolatedConfigPath = path.join(
+      home,
+      ".openclaw",
+      "telegram-live-worktrees",
+      "tg-live-1",
+      "openclaw.telegram-live.json",
+    );
+    writeFile(canonicalConfigPath, "{}\n");
+    writeFile(isolatedConfigPath, "{}\n");
+
+    expect(
+      resolveCanonicalSharedGatewayConfigPath({
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: isolatedConfigPath,
+      }),
+    ).toBe(fs.realpathSync.native(canonicalConfigPath));
+    expect(
+      isCanonicalSharedGatewayConfigPath(isolatedConfigPath, {
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: isolatedConfigPath,
+      }),
+    ).toBe(false);
+  });
+
   it("reads protected Telegram bot tokens from the canonical shared config", () => {
     const home = makeTempDir();
     writeFile(
