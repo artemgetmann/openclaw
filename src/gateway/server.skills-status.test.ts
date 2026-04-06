@@ -65,7 +65,11 @@ describe("gateway skills.status", () => {
             ok = nextOk;
             payload = nextPayload as { bins?: string[] } | undefined;
           },
-        });
+          req: {} as never,
+          client: null,
+          isWebchatConnect: () => false,
+          context: {} as never,
+        } as Parameters<(typeof skillsHandlers)["skills.bins"]>[0]);
 
         expect(ok).toBe(true);
         expect(payload?.bins).toContain(
