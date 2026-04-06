@@ -1900,11 +1900,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
   it("delivers tool-result media without falling back to empty response", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
-      await replyOptions?.onToolResult?.({
-        text: "Scan this QR in WhatsApp → Linked Devices.",
-        mediaUrls: ["/tmp/openclaw-whatsapp-qr-default.png"],
-      });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Scan this QR in WhatsApp → Linked Devices.",
+          mediaUrls: ["/tmp/openclaw-whatsapp-qr-default.png"],
+        },
+        { kind: "tool" },
+      );
       return { queuedFinal: false };
     });
     deliverReplies.mockResolvedValue({ delivered: true });
