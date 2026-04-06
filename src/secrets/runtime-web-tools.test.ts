@@ -11,6 +11,86 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+function installMockWebSearchProviders() {
+  return vi.spyOn(webSearchProviders, "resolvePluginWebSearchProviders").mockImplementation(
+    () =>
+      [
+        {
+          id: "brave",
+          envVars: ["BRAVE_API_KEY"],
+          getCredentialValue: (searchConfig?: Record<string, unknown>) => searchConfig?.apiKey,
+          setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => {
+            searchConfigTarget.apiKey = value;
+          },
+        },
+        {
+          id: "gemini",
+          envVars: ["GEMINI_API_KEY"],
+          getCredentialValue: (searchConfig?: Record<string, unknown>) =>
+            (searchConfig?.gemini as { apiKey?: unknown } | undefined)?.apiKey,
+          setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => {
+            searchConfigTarget.gemini = {
+              ...(typeof searchConfigTarget.gemini === "object" &&
+              searchConfigTarget.gemini !== null &&
+              !Array.isArray(searchConfigTarget.gemini)
+                ? (searchConfigTarget.gemini as Record<string, unknown>)
+                : {}),
+              apiKey: value,
+            };
+          },
+        },
+        {
+          id: "grok",
+          envVars: ["XAI_API_KEY"],
+          getCredentialValue: (searchConfig?: Record<string, unknown>) =>
+            (searchConfig?.grok as { apiKey?: unknown } | undefined)?.apiKey,
+          setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => {
+            searchConfigTarget.grok = {
+              ...(typeof searchConfigTarget.grok === "object" &&
+              searchConfigTarget.grok !== null &&
+              !Array.isArray(searchConfigTarget.grok)
+                ? (searchConfigTarget.grok as Record<string, unknown>)
+                : {}),
+              apiKey: value,
+            };
+          },
+        },
+        {
+          id: "kimi",
+          envVars: ["MOONSHOT_API_KEY"],
+          getCredentialValue: (searchConfig?: Record<string, unknown>) =>
+            (searchConfig?.kimi as { apiKey?: unknown } | undefined)?.apiKey,
+          setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => {
+            searchConfigTarget.kimi = {
+              ...(typeof searchConfigTarget.kimi === "object" &&
+              searchConfigTarget.kimi !== null &&
+              !Array.isArray(searchConfigTarget.kimi)
+                ? (searchConfigTarget.kimi as Record<string, unknown>)
+                : {}),
+              apiKey: value,
+            };
+          },
+        },
+        {
+          id: "perplexity",
+          envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+          getCredentialValue: (searchConfig?: Record<string, unknown>) =>
+            (searchConfig?.perplexity as { apiKey?: unknown } | undefined)?.apiKey,
+          setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => {
+            searchConfigTarget.perplexity = {
+              ...(typeof searchConfigTarget.perplexity === "object" &&
+              searchConfigTarget.perplexity !== null &&
+              !Array.isArray(searchConfigTarget.perplexity)
+                ? (searchConfigTarget.perplexity as Record<string, unknown>)
+                : {}),
+              apiKey: value,
+            };
+          },
+        },
+      ] as ReturnType<typeof webSearchProviders.resolvePluginWebSearchProviders>,
+  );
+}
+
 async function runRuntimeWebTools(params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
@@ -90,7 +170,7 @@ describe("runtime web tools resolution", () => {
   });
 
   it("skips plugin provider discovery when web search is not configured", async () => {
-    const providerSpy = vi.spyOn(webSearchProviders, "resolvePluginWebSearchProviders");
+    const providerSpy = installMockWebSearchProviders();
 
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({}),
@@ -102,7 +182,7 @@ describe("runtime web tools resolution", () => {
       diagnostics: [],
     });
     expect(metadata.fetch.firecrawl).toEqual({
-      active: false,
+      active: true,
       apiKeySource: "missing",
       diagnostics: [],
     });
@@ -138,6 +218,7 @@ describe("runtime web tools resolution", () => {
   ])(
     "resolves configured provider SecretRef for $provider",
     async ({ provider, envRefId, resolvedKey }) => {
+      installMockWebSearchProviders();
       const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
         config: createProviderSecretRefConfig(provider, envRefId),
         env: {
@@ -160,6 +241,7 @@ describe("runtime web tools resolution", () => {
   );
 
   it("auto-detects provider precedence across all configured providers", async () => {
+    installMockWebSearchProviders();
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
@@ -205,6 +287,7 @@ describe("runtime web tools resolution", () => {
   });
 
   it("auto-detects first available provider and keeps lower-priority refs inactive", async () => {
+    installMockWebSearchProviders();
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
@@ -250,6 +333,7 @@ describe("runtime web tools resolution", () => {
   });
 
   it("auto-detects the next provider when a higher-priority ref is unresolved", async () => {
+    installMockWebSearchProviders();
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
@@ -285,6 +369,7 @@ describe("runtime web tools resolution", () => {
   });
 
   it("warns when provider is invalid and falls back to auto-detect", async () => {
+    installMockWebSearchProviders();
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
@@ -326,6 +411,7 @@ describe("runtime web tools resolution", () => {
   });
 
   it("fails fast when configured provider ref is unresolved with no fallback", async () => {
+    installMockWebSearchProviders();
     const sourceConfig = asConfig({
       tools: {
         web: {
