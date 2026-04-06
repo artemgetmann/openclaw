@@ -51,7 +51,8 @@ function readyReadiness(defaultModel: string) {
     authMode: "byok" as const,
     reasonCodes: [],
     summary: "ready",
-    probes: [],
+    actions: [],
+    byokAvailable: true,
   };
 }
 
