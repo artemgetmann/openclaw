@@ -2,6 +2,7 @@ import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-a
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
+import { resolvePermissionDefaults } from "../infra/permissions-mode.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
@@ -135,10 +136,16 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   const globalExec = cfg?.tools?.exec;
   const agentExec =
     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec : undefined;
+  // Keep tool-level exec defaults aligned with /permissions so sessions without
+  // explicit overrides do not silently fall back to legacy allowlist mode.
+  const permissionDefaults = resolvePermissionDefaults({
+    config: cfg,
+    agentId: params.agentId,
+  });
   return {
     host: agentExec?.host ?? globalExec?.host,
-    security: agentExec?.security ?? globalExec?.security,
-    ask: agentExec?.ask ?? globalExec?.ask,
+    security: agentExec?.security ?? globalExec?.security ?? permissionDefaults.execSecurity,
+    ask: agentExec?.ask ?? globalExec?.ask ?? permissionDefaults.execAsk,
     node: agentExec?.node ?? globalExec?.node,
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,

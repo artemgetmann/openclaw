@@ -8,6 +8,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
+import { resolvePermissionDefaults } from "../../infra/permissions-mode.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   applyFutureThreadModelDefault,
@@ -42,6 +43,10 @@ function resolveExecDefaults(params: {
   const agentExec = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.exec
     : undefined;
+  const permissionDefaults = resolvePermissionDefaults({
+    config: params.cfg,
+    agentId: params.agentId,
+  });
   return {
     host:
       (params.sessionEntry?.execHost as ExecHost | undefined) ??
@@ -52,12 +57,12 @@ function resolveExecDefaults(params: {
       (params.sessionEntry?.execSecurity as ExecSecurity | undefined) ??
       (agentExec?.security as ExecSecurity | undefined) ??
       (globalExec?.security as ExecSecurity | undefined) ??
-      "deny",
+      permissionDefaults.execSecurity,
     ask:
       (params.sessionEntry?.execAsk as ExecAsk | undefined) ??
       (agentExec?.ask as ExecAsk | undefined) ??
       (globalExec?.ask as ExecAsk | undefined) ??
-      "on-miss",
+      permissionDefaults.execAsk,
     node: params.sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node,
   };
 }
