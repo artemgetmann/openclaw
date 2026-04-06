@@ -47,6 +47,22 @@
   - `status_dirty=yes|no`
 - For recovery and vanished-worktree triage, use `docs/debug/worktree-branch-survival.md`.
 
+## Durable lane entry
+
+- Shared durable lanes for `main` and `codex/consumer-openclaw-project` should be entered through the shell helper, not by `cd` plus hope.
+- Source the helper once in your shell rc:
+  - `source /Users/user/Programming_Projects/openclaw/scripts/shell-helpers/durable-lane-helpers.sh`
+- Then use:
+  - `wt-main`
+  - `wt-consumer`
+- Those wrappers:
+  - locate the linked durable lane by branch
+  - fetch `origin/<branch>`
+  - fast-forward the lane before entering it
+  - refuse entry if the lane is ahead of origin or otherwise no longer safe to fast-forward
+- If you manually `cd` into a durable lane while the helper is loaded, it fetches and prints a stale warning when that lane is ahead/behind origin so you do not keep editing old branch truth.
+- Commits from a durable lane are refused when the lane is behind origin. Override only intentionally with `OPENCLAW_ALLOW_STALE_DURABLE_LANE_COMMITS=1`.
+
 ## GitHub footguns
 
 - For issue comments, PR comments, and review bodies, use literal multiline strings or a single-quoted heredoc. Do not embed `\n`.

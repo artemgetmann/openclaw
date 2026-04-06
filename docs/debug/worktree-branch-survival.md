@@ -85,6 +85,13 @@ Reason:
 
 Treat uncommitted work as volatile. If the change is non-trivial, create a checkpoint commit before you step away, restart, switch focus, or do branch/worktree surgery.
 
+For the shared durable `main` and consumer lanes, reduce stale-branch footguns further:
+
+- source `scripts/shell-helpers/durable-lane-helpers.sh` in your shell rc
+- use `wt-main` or `wt-consumer` instead of raw `cd`
+- those commands fetch and fast-forward before entry, then fail loudly if the lane is no longer a clean fast-forward from origin
+- if you still `cd` there manually, the helper prints a stale warning when that durable lane is ahead or behind origin
+
 ## Safe Sequence Before Risky Git Operations
 
 Run these before branch surgery:
