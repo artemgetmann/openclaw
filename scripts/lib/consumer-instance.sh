@@ -50,12 +50,11 @@ consumer_instance_gateway_port() {
 }
 
 consumer_instance_app_name() {
-  local normalized="${1:-}"
-  if [[ -z "$normalized" ]]; then
-    printf 'OpenClaw Consumer'
-    return
-  fi
-  printf 'OpenClaw Consumer (%s)' "$normalized"
+  local _normalized="${1:-}"
+  # Keep the visible app bundle name professional and stable across worktrees.
+  # The per-instance id still owns runtime isolation through bundle id, ports,
+  # launchd labels, and state/config roots, so Finder does not need to show it.
+  printf 'OpenClaw Consumer'
 }
 
 consumer_instance_stable_tcc_identity_enabled() {
@@ -80,6 +79,8 @@ consumer_instance_display_name() {
     printf 'OpenClaw Consumer'
     return
   fi
+  # Preserve the clean product name in Finder/App Switcher even when the
+  # underlying runtime lane stays isolated per worktree/tester.
   consumer_instance_app_name "$normalized"
 }
 

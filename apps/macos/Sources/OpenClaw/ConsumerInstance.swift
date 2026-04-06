@@ -114,10 +114,10 @@ struct ConsumerInstance: Equatable {
     }
 
     var debugAppName: String {
-        guard let id = self.id else {
-            return "OpenClaw Consumer"
-        }
-        return "OpenClaw Consumer (\(id))"
+        // Keep per-lane isolation in bundle identifiers and runtime roots.
+        // The visible app name should stay product-clean in Finder and the
+        // app switcher instead of exposing a worktree/test lane slug.
+        return "OpenClaw Consumer"
     }
 
     var debugBundleIdentifier: String {

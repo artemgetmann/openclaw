@@ -33,7 +33,7 @@ struct ConsumerInstanceTests {
         #expect(instance.gatewayLaunchdLabel == "ai.openclaw.consumer.ux-audit.gateway")
         #expect(instance.defaultsPrefix == "openclaw.consumer.instances.ux-audit")
         #expect(instance.stableSuiteName == "ai.openclaw.consumer.mac.ux-audit")
-        #expect(instance.debugAppName == "OpenClaw Consumer (ux-audit)")
+        #expect(instance.debugAppName == "OpenClaw Consumer")
         #expect(instance.debugBundleIdentifier == "ai.openclaw.consumer.mac.debug.ux-audit")
         #expect(instance.runtimeRootURL.path.contains("/OpenClaw Consumer/instances/ux-audit"))
         #expect(instance.stateDirURL.path.hasSuffix("/instances/ux-audit/.openclaw"))
