@@ -596,13 +596,14 @@ function isUnsupportedGuiDomain(detail: string): boolean {
 }
 
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   assertCanonicalSharedLaunchAgentContext({
-    env,
+    env: serviceEnv,
     action: "LaunchAgent stop",
   });
-  await bootoutSharedGatewayWatchdogLaunchAgent(env);
+  await bootoutSharedGatewayWatchdogLaunchAgent(serviceEnv);
   const domain = resolveGuiDomain();
-  const label = resolveLaunchAgentLabel({ env });
+  const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
@@ -618,18 +619,19 @@ export async function installLaunchAgent({
   environment,
   description,
 }: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   assertCanonicalSharedLaunchAgentContext({
-    env,
+    env: serviceEnv,
     action: "LaunchAgent install",
     cwd: workingDirectory,
   });
-  const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
+  const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(serviceEnv);
   await ensureSecureDirectory(logDir);
 
   const domain = resolveGuiDomain();
-  const label = resolveLaunchAgentLabel({ env });
-  for (const legacyLabel of resolveLegacyGatewayLaunchAgentLabels(env.OPENCLAW_PROFILE)) {
-    const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(env, legacyLabel);
+  const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  for (const legacyLabel of resolveLegacyGatewayLaunchAgentLabels(serviceEnv.OPENCLAW_PROFILE)) {
+    const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(serviceEnv, legacyLabel);
     await execLaunchctl(["bootout", domain, legacyPlistPath]);
     await execLaunchctl(["unload", legacyPlistPath]);
     try {
@@ -639,14 +641,18 @@ export async function installLaunchAgent({
     }
   }
 
-  const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  const home = toPosixPath(resolveHomeDir(env));
+  const plistPath = resolveLaunchAgentPlistPathForLabel(serviceEnv, label);
+  const home = toPosixPath(resolveHomeDir(serviceEnv));
   const libraryDir = path.posix.join(home, "Library");
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(libraryDir);
   await ensureSecureDirectory(path.dirname(plistPath));
 
-  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const serviceDescription = resolveGatewayServiceDescription({
+    env: serviceEnv,
+    environment,
+    description,
+  });
   const plist = buildLaunchAgentPlist({
     label,
     comment: serviceDescription,
@@ -681,7 +687,7 @@ export async function installLaunchAgent({
     ],
     { leadingBlankLine: true },
   );
-  await installSharedGatewayWatchdogLaunchAgent({ env, stdout });
+  await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
   return { plistPath };
 }
 

@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
@@ -100,6 +103,9 @@ vi.mock("./progress.js", () => ({
 
 const { registerDaemonCli } = await import("./daemon-cli.js");
 let daemonProgram: Command;
+let tempRoot = "";
+let cliStateDir = "";
+let daemonStateDir = "";
 
 function createDaemonProgram() {
   const program = new Command();
@@ -122,14 +128,19 @@ describe("daemon-cli coverage", () => {
 
   beforeEach(() => {
     daemonProgram = createDaemonProgram();
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-daemon-cli-"));
+    cliStateDir = path.join(tempRoot, "cli-state");
+    daemonStateDir = path.join(tempRoot, "daemon-state");
+    fs.mkdirSync(cliStateDir, { recursive: true });
+    fs.mkdirSync(daemonStateDir, { recursive: true });
     envSnapshot = captureEnv([
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_PORT",
       "OPENCLAW_PROFILE",
     ]);
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-cli-state";
-    process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli-state/openclaw.json";
+    process.env.OPENCLAW_STATE_DIR = cliStateDir;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(cliStateDir, "openclaw.json");
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
@@ -139,6 +150,7 @@ describe("daemon-cli coverage", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
   it("probes gateway status by default", async () => {
@@ -162,14 +174,14 @@ describe("daemon-cli coverage", () => {
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
       environment: {
         OPENCLAW_PROFILE: "dev",
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon-state",
-        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon-state/openclaw.json",
+        OPENCLAW_STATE_DIR: daemonStateDir,
+        OPENCLAW_CONFIG_PATH: path.join(daemonStateDir, "openclaw.json"),
         OPENCLAW_GATEWAY_PORT: "19001",
       },
-      sourcePath: "/tmp/ai.openclaw.gateway.plist",
+      sourcePath: path.join(tempRoot, "ai.openclaw.gateway.plist"),
     });
 
-    await runDaemonCommand(["daemon", "status", "--json"]);
+    await expect(runDaemonCommand(["daemon", "status", "--json"])).rejects.toThrow("__exit__:1");
 
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({

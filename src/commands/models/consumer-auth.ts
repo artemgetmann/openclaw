@@ -732,7 +732,8 @@ export async function applyConsumerAuth(
 
   await updateConfig(() => next.config);
   const readiness = await (params.resolveReadiness ?? resolveModelsReadiness)();
-  const defaultModel = next.config.agents?.defaults?.model?.primary?.trim() || choice.defaultModel;
+  const defaultModel =
+    resolveAgentModelPrimaryValue(next.config.agents?.defaults?.model) || choice.defaultModel;
 
   return {
     optionId: choice.id,

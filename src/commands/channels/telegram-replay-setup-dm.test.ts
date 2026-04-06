@@ -163,7 +163,7 @@ describe("channelsTelegramReplaySetupDmCommand", () => {
     writeTelegramUpdateOffset.mockReset().mockImplementation(
       () =>
         new Promise<void>((resolve) => {
-          releaseWrite = resolve;
+          releaseWrite = () => resolve();
         }),
     );
     handleUpdate.mockReset().mockImplementation(async () => {
@@ -201,7 +201,9 @@ describe("channelsTelegramReplaySetupDmCommand", () => {
     await Promise.resolve();
     expect(finished).toBe(false);
 
-    releaseWrite?.();
+    if (releaseWrite) {
+      (releaseWrite as () => void)();
+    }
     await pending;
 
     expect(finished).toBe(true);

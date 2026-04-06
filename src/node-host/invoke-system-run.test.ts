@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, type Mock, vi } from "vitest";
+import { clearConfigCache } from "../config/config.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
@@ -387,33 +388,87 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       sendExecFinishedEvent.mockImplementation(params.sendExecFinishedEvent);
     }
 
-    await handleSystemRunInvoke({
-      client: {} as never,
-      params: {
-        command: params.command ?? ["echo", "ok"],
-        rawCommand: params.rawCommand,
-        systemRunPlan: params.systemRunPlan,
-        cwd: params.cwd,
-        approved: params.approved ?? false,
-        sessionKey: "agent:main:main",
-      },
-      skillBins: {
-        current: params.skillBinsCurrent ?? (async () => []),
-      },
-      execHostEnforced: false,
-      execHostFallbackAllowed: true,
-      resolveExecSecurity: () => params.security ?? "full",
-      resolveExecAsk: () => params.ask ?? "off",
-      isCmdExeInvocation: () => false,
-      sanitizeEnv: () => undefined,
-      runCommand,
-      runViaMacAppExecHost,
-      sendNodeEvent,
-      buildExecEventPayload: (payload) => payload,
-      sendInvokeResult,
-      sendExecFinishedEvent,
-      preferMacAppExecHost: params.preferMacAppExecHost,
-    });
+    const tempConfigRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-config-"));
+    const configPath = path.join(tempConfigRoot, "openclaw.json");
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const tempApprovalsHome =
+      previousOpenClawHome === undefined
+        ? fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-home-"))
+        : null;
+    // Pin exec security in a temp config so these tests do not accidentally
+    // inherit whatever founder/runtime config happens to be on this machine.
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        tools: {
+          exec: {
+            security: params.security ?? "full",
+            ask: params.ask ?? "off",
+          },
+        },
+      }),
+    );
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    if (tempApprovalsHome) {
+      process.env.OPENCLAW_HOME = tempApprovalsHome;
+      saveExecApprovals({
+        version: 1,
+        defaults: {
+          security: params.security ?? "full",
+          ask: params.ask ?? "off",
+        },
+        agents: {},
+      });
+    }
+    clearConfigCache();
+    try {
+      await handleSystemRunInvoke({
+        client: {} as never,
+        params: {
+          command: params.command ?? ["echo", "ok"],
+          rawCommand: params.rawCommand,
+          systemRunPlan: params.systemRunPlan,
+          cwd: params.cwd,
+          approved: params.approved ?? false,
+          sessionKey: "agent:main:main",
+        },
+        skillBins: {
+          current: params.skillBinsCurrent ?? (async () => []),
+        },
+        execHostEnforced: false,
+        execHostFallbackAllowed: true,
+        resolveExecSecurity: (value) =>
+          value === "deny" || value === "allowlist" || value === "full" ? value : "full",
+        resolveExecAsk: (value) =>
+          value === "off" || value === "on-miss" || value === "always" ? value : "off",
+        isCmdExeInvocation: () => false,
+        sanitizeEnv: () => undefined,
+        runCommand,
+        runViaMacAppExecHost,
+        sendNodeEvent,
+        buildExecEventPayload: (payload) => payload,
+        sendInvokeResult,
+        sendExecFinishedEvent,
+        preferMacAppExecHost: params.preferMacAppExecHost,
+      });
+    } finally {
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      clearConfigCache();
+      fs.rmSync(tempConfigRoot, { recursive: true, force: true });
+      if (tempApprovalsHome) {
+        fs.rmSync(tempApprovalsHome, { recursive: true, force: true });
+      }
+    }
 
     return {
       runCommand,

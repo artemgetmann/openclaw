@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import type { ClaudeCliCredential } from "../../agents/cli-credentials.js";
 import { clearConfigCache, loadConfig, writeConfigFile } from "../../config/config.js";
 import type { ProviderAuthContext, ProviderAuthKind, ProviderPlugin } from "../../plugins/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -341,13 +342,15 @@ describe("consumer auth", () => {
         optionId: "anthropic-claude-cli",
         providers: [],
         runtime,
-        readClaudeCliCredential: vi.fn(() => ({
-          type: "oauth",
-          provider: "anthropic",
-          access: "claude-access",
-          refresh: "claude-refresh",
-          expires: Date.now() + 60_000,
-        })),
+        readClaudeCliCredential: vi.fn(
+          (): ClaudeCliCredential => ({
+            type: "oauth",
+            provider: "anthropic",
+            access: "claude-access",
+            refresh: "claude-refresh",
+            expires: Date.now() + 60_000,
+          }),
+        ),
         resolveReadiness: async () => readyReadiness("anthropic/claude-sonnet-4-6"),
       });
 

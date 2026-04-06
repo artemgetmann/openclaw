@@ -429,14 +429,13 @@ export const channelsHandlers: GatewayRequestHandlers = {
           runtime: defaultRuntime,
         }),
         timeoutMs,
-        "channels.telegram.setup-replay",
       );
       if (!validateChannelsTelegramSetupReplayResult(result)) {
         respond(
           false,
           undefined,
           errorShape(
-            ErrorCodes.INTERNAL_ERROR,
+            ErrorCodes.UNAVAILABLE,
             `invalid channels.telegram.setup-replay result: ${formatValidationErrors(validateChannelsTelegramSetupReplayResult.errors)}`,
           ),
         );
