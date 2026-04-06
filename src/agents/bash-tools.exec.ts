@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import { loadConfig } from "../config/config.js";
+import { type ExecHost, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { detectDangerousExecCommand } from "../infra/exec-dangerous-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { resolvePermissionDefaults } from "../infra/permissions-mode.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -53,6 +55,19 @@ export type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+
+function resolveExecPermissionDefaults(agentId?: string) {
+  try {
+    return resolvePermissionDefaults({
+      config: loadConfig(),
+      agentId,
+    });
+  } catch {
+    // Keep exec usable in stripped-down test/CLI contexts where config loading
+    // is intentionally unavailable. The product default still stays full/off.
+    return resolvePermissionDefaults({ agentId });
+  }
+}
 
 function extractScriptTargetFromCommand(
   command: string,
@@ -321,6 +336,7 @@ export function createExecTool(
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const permissionDefaults = resolveExecPermissionDefaults(agentId);
 
   return {
     name: "exec",
@@ -441,14 +457,15 @@ export function createExecTool(
         host = "gateway";
       }
 
-      const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
+      const configuredSecurity = defaults?.security ?? permissionDefaults.execSecurity;
       const requestedSecurity = normalizeExecSecurity(params.security);
       let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
-      // Keep local exec defaults in sync with exec-approvals.json when tools.exec.ask is unset.
-      const configuredAsk = defaults?.ask ?? loadExecApprovals().defaults?.ask ?? "on-miss";
+      // Match the same full/off default that /permissions exposes unless the
+      // caller or runtime config explicitly narrows execution behavior.
+      const configuredAsk = defaults?.ask ?? permissionDefaults.execAsk;
       const requestedAsk = normalizeExecAsk(params.ask);
       let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
       const bypassApprovals = elevatedRequested && elevatedMode === "full";
