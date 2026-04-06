@@ -86,6 +86,11 @@ type TelegramSmokeProof = {
   reply_to_top_id?: number | null;
 };
 
+type TelegramSmokeReplyClassification = {
+  ok: boolean;
+  failureReason: string | null;
+};
+
 type TelegramRuntimeReport = {
   ok: boolean;
   action: "ensure" | "release";
@@ -767,8 +772,9 @@ function buildTelegramSmokeProof(params: {
     params.waitResult.matched.direct_messages_topic?.topic_id ??
     params.waitResult.matched.direct_messages_topic_id ??
     params.doctor.topic_id;
+  const replyClassification = classifyTelegramSmokeReply(params.waitResult.matched.text);
   return {
-    ok: true,
+    ok: replyClassification.ok,
     scenario: "dm-reply",
     branch: params.branch,
     runtime_worktree: params.runtimeWorktree,
@@ -782,8 +788,8 @@ function buildTelegramSmokeProof(params: {
     reply_message_id: params.waitResult.matched.message_id,
     matched_by: params.waitResult.matched_by,
     elapsed_ms: params.elapsedMs,
-    failure_reason: null,
-    failure_reasons: [],
+    failure_reason: replyClassification.failureReason,
+    failure_reasons: replyClassification.failureReason ? [replyClassification.failureReason] : [],
     artifact_path: null,
     bot_id: params.doctor.resolved_chat?.chat_id ?? null,
     bot_username: params.doctor.resolved_chat?.username ?? null,
@@ -791,6 +797,55 @@ function buildTelegramSmokeProof(params: {
     reply_sender_id: params.waitResult.matched.sender_id,
     reply_to_msg_id: params.waitResult.matched.reply_to_msg_id,
     reply_to_top_id: params.waitResult.matched.reply_to_top_id,
+  };
+}
+
+function classifyTelegramSmokeReply(
+  text: string | null | undefined,
+): TelegramSmokeReplyClassification {
+  const normalized = cleanString(text)?.toLowerCase() ?? "";
+  if (!normalized) {
+    return {
+      ok: true,
+      failureReason: null,
+    };
+  }
+
+  // Smoke replies need semantic classification, not just "some text arrived".
+  // Otherwise quota/pairing/auth blockers masquerade as healthy end-to-end proof.
+  if (
+    normalized.includes("pairing code:") ||
+    normalized.includes("pairing approve telegram") ||
+    normalized.includes("access not configured")
+  ) {
+    return {
+      ok: false,
+      failureReason: "pairing_required",
+    };
+  }
+  if (
+    normalized.includes("ai access is unavailable right now") ||
+    normalized.includes("reconnect the credential")
+  ) {
+    return {
+      ok: false,
+      failureReason: "ai_access_unavailable",
+    };
+  }
+  if (
+    normalized.includes("usage limit reached") ||
+    normalized.includes("out of extra usage") ||
+    normalized.includes("try again in ~")
+  ) {
+    return {
+      ok: false,
+      failureReason: "model_quota_exhausted",
+    };
+  }
+
+  return {
+    ok: true,
+    failureReason: null,
   };
 }
 
@@ -873,6 +928,9 @@ function renderSmokeText(report: TelegramSmokeProof): string {
     `matched_by=${report.matched_by ?? "-"}`,
     `elapsed_ms=${report.elapsed_ms}`,
   ];
+  if (report.reply_text) {
+    lines.push(`reply_text=${report.reply_text}`);
+  }
   return `${lines.join("\n")}\n`;
 }
 

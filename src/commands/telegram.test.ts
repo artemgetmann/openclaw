@@ -243,4 +243,262 @@ describe("telegram commands", () => {
     expect(payload.current_lane_bot).toBe("@jarvis_tester_1_bot");
     expect(payload.artifact_path).toContain("/tmp/repo/.artifacts/telegram-smoke/");
   });
+
+  it("marks pairing-gated replies as failed smoke output", async () => {
+    const writeFile = vi.fn(async () => undefined);
+    const runTelegramUserPrecheck = vi
+      .fn()
+      .mockResolvedValueOnce({
+        session_path: "/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      })
+      .mockResolvedValueOnce({
+        backend_meta: {},
+        chat: { chat_id: 777, peer_type: "User", username: "jarvis_tester_1_bot" },
+        session_path: "/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      });
+
+    Object.assign(telegramCommandDeps, {
+      newRunId: () => "runpair01",
+      now: vi.fn(() => 1_500),
+      probeGateway: vi.fn(async () => ({ ok: true, failureReason: null })),
+      readTelegramBotToken: vi.fn(async () => "123456:token"),
+      resolveBotIdentity: vi.fn(async () => ({
+        id: 123456,
+        username: "jarvis_tester_1_bot",
+        name: "Jarvis",
+      })),
+      resolveHelperProfile: vi.fn(async () => ({
+        profileId: "tg-live-test",
+        runtimePort: 24567,
+        runtimeStateDir: "/tmp/state",
+        worktreePath: "/tmp/repo",
+      })),
+      resolveRepoContext: vi.fn(async () => ({
+        branch: "feature/test",
+        commit: "abc123",
+        repoRoot: "/tmp/repo",
+        worktree: "/tmp/repo",
+      })),
+      resolveRuntimeCommit: vi.fn(async () => "abc123"),
+      resolveRuntimeOwnership: vi.fn(async () => ({
+        pid: 31337,
+        worktree: "/tmp/repo",
+        command: "openclaw gateway run",
+        ownershipOk: true,
+        failureReason: null,
+      })),
+      resolveTokenClaimPaths: vi.fn(async () => ["/tmp/repo"]),
+      runTelegramUserPrecheck,
+      runTelegramUserSend: vi.fn(async () => ({
+        message: {
+          message_id: 101,
+        },
+      })),
+      runTelegramUserWait: vi.fn(async () => ({
+        matched: {
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          message_id: 202,
+          reply_to_msg_id: 101,
+          reply_to_top_id: 101,
+          sender_id: 777,
+          text: "OpenClaw: access not configured.\n\nPairing code:\n\nQZC3VHYA\n\nAsk the bot owner to approve with:\nopenclaw pairing approve telegram QZC3VHYA",
+        },
+        matched_by: "reply_to_msg_id",
+      })),
+      writeFile,
+    });
+
+    await expect(
+      telegramSmokeDmReplyCommand(
+        {
+          chat: "@jarvis_tester_1_bot",
+          json: true,
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("pairing_required");
+
+    const payload = JSON.parse(
+      String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]),
+    );
+    expect(payload.ok).toBe(false);
+    expect(payload.failure_reason).toBe("pairing_required");
+    expect(payload.reply_text).toContain("Pairing code");
+    expect(writeFile).toHaveBeenCalledOnce();
+  });
+
+  it("marks quota replies as failed smoke output", async () => {
+    const writeFile = vi.fn(async () => undefined);
+    const runTelegramUserPrecheck = vi
+      .fn()
+      .mockResolvedValueOnce({
+        session_path: "/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      })
+      .mockResolvedValueOnce({
+        backend_meta: {},
+        chat: { chat_id: 777, peer_type: "User", username: "jarvis_tester_1_bot" },
+        session_path: "/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      });
+
+    Object.assign(telegramCommandDeps, {
+      newRunId: () => "runquota1",
+      now: vi.fn(() => 1_800),
+      probeGateway: vi.fn(async () => ({ ok: true, failureReason: null })),
+      readTelegramBotToken: vi.fn(async () => "123456:token"),
+      resolveBotIdentity: vi.fn(async () => ({
+        id: 123456,
+        username: "jarvis_tester_1_bot",
+        name: "Jarvis",
+      })),
+      resolveHelperProfile: vi.fn(async () => ({
+        profileId: "tg-live-test",
+        runtimePort: 24567,
+        runtimeStateDir: "/tmp/state",
+        worktreePath: "/tmp/repo",
+      })),
+      resolveRepoContext: vi.fn(async () => ({
+        branch: "feature/test",
+        commit: "abc123",
+        repoRoot: "/tmp/repo",
+        worktree: "/tmp/repo",
+      })),
+      resolveRuntimeCommit: vi.fn(async () => "abc123"),
+      resolveRuntimeOwnership: vi.fn(async () => ({
+        pid: 31337,
+        worktree: "/tmp/repo",
+        command: "openclaw gateway run",
+        ownershipOk: true,
+        failureReason: null,
+      })),
+      resolveTokenClaimPaths: vi.fn(async () => ["/tmp/repo"]),
+      runTelegramUserPrecheck,
+      runTelegramUserSend: vi.fn(async () => ({
+        message: {
+          message_id: 101,
+        },
+      })),
+      runTelegramUserWait: vi.fn(async () => ({
+        matched: {
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          message_id: 202,
+          reply_to_msg_id: 101,
+          reply_to_top_id: 101,
+          sender_id: 777,
+          text: "⚠️ ChatGPT usage limit reached. Try again in ~137 min.",
+        },
+        matched_by: "reply_to_msg_id",
+      })),
+      writeFile,
+    });
+
+    await expect(
+      telegramSmokeDmReplyCommand(
+        {
+          chat: "@jarvis_tester_1_bot",
+          json: true,
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("model_quota_exhausted");
+
+    const payload = JSON.parse(
+      String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]),
+    );
+    expect(payload.ok).toBe(false);
+    expect(payload.failure_reason).toBe("model_quota_exhausted");
+    expect(payload.reply_text).toContain("usage limit reached");
+    expect(writeFile).toHaveBeenCalledOnce();
+  });
+
+  it("marks credential-auth replies as failed smoke output", async () => {
+    const writeFile = vi.fn(async () => undefined);
+    const runTelegramUserPrecheck = vi
+      .fn()
+      .mockResolvedValueOnce({
+        session_path: "/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      })
+      .mockResolvedValueOnce({
+        backend_meta: {},
+        chat: { chat_id: 777, peer_type: "User", username: "jarvis_tester_1_bot" },
+        session_path: "/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      });
+
+    Object.assign(telegramCommandDeps, {
+      newRunId: () => "runauth01",
+      now: vi.fn(() => 1_600),
+      probeGateway: vi.fn(async () => ({ ok: true, failureReason: null })),
+      readTelegramBotToken: vi.fn(async () => "123456:token"),
+      resolveBotIdentity: vi.fn(async () => ({
+        id: 123456,
+        username: "jarvis_tester_1_bot",
+        name: "Jarvis",
+      })),
+      resolveHelperProfile: vi.fn(async () => ({
+        profileId: "tg-live-test",
+        runtimePort: 24567,
+        runtimeStateDir: "/tmp/state",
+        worktreePath: "/tmp/repo",
+      })),
+      resolveRepoContext: vi.fn(async () => ({
+        branch: "feature/test",
+        commit: "abc123",
+        repoRoot: "/tmp/repo",
+        worktree: "/tmp/repo",
+      })),
+      resolveRuntimeCommit: vi.fn(async () => "abc123"),
+      resolveRuntimeOwnership: vi.fn(async () => ({
+        pid: 31337,
+        worktree: "/tmp/repo",
+        command: "openclaw gateway run",
+        ownershipOk: true,
+        failureReason: null,
+      })),
+      resolveTokenClaimPaths: vi.fn(async () => ["/tmp/repo"]),
+      runTelegramUserPrecheck,
+      runTelegramUserSend: vi.fn(async () => ({
+        message: {
+          message_id: 101,
+        },
+      })),
+      runTelegramUserWait: vi.fn(async () => ({
+        matched: {
+          direct_messages_topic: null,
+          direct_messages_topic_id: null,
+          message_id: 202,
+          reply_to_msg_id: 101,
+          reply_to_top_id: 101,
+          sender_id: 777,
+          text: "OpenClaw's AI access is unavailable right now. Reconnect the credential and try again.",
+        },
+        matched_by: "reply_to_msg_id",
+      })),
+      writeFile,
+    });
+
+    await expect(
+      telegramSmokeDmReplyCommand(
+        {
+          chat: "@jarvis_tester_1_bot",
+          json: true,
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("ai_access_unavailable");
+
+    const payload = JSON.parse(
+      String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]),
+    );
+    expect(payload.ok).toBe(false);
+    expect(payload.failure_reason).toBe("ai_access_unavailable");
+    expect(payload.reply_text).toContain("Reconnect the credential");
+    expect(writeFile).toHaveBeenCalledOnce();
+  });
 });
