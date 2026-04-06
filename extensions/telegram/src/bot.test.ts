@@ -836,9 +836,9 @@ describe("createTelegramBot", () => {
   it("adds Claude setup guidance when Anthropic auth is missing", () => {
     const ensureAuthProfileStoreSpy = vi
       .spyOn(modelAuthModule, "ensureAuthProfileStore")
-      .mockReturnValue({ profiles: {} } as Parameters<
-        typeof modelAuthModule.resolveModelAuthMode
-      >[2]);
+      .mockReturnValue({ profiles: {} } as ReturnType<
+        typeof modelAuthModule.ensureAuthProfileStore
+      >);
     const resolveModelAuthModeSpy = vi
       .spyOn(modelAuthModule, "resolveModelAuthMode")
       .mockReturnValue("unknown");

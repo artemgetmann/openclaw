@@ -12,6 +12,7 @@ import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
+import type { SafeBinProfileFixtures } from "../infra/exec-safe-bin-policy-profiles.js";
 import { resolveSafeBinProfiles } from "../infra/exec-safe-bin-policy.js";
 import {
   listInterpreterLikeSafeBins,
@@ -1431,7 +1432,7 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
 function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverageHit[] {
   const hits: ExecSafeBinCoverageHit[] = [];
   for (const scope of collectExecSafeBinScopes(cfg)) {
-    const resolvedProfiles = resolveSafeBinProfiles(scope.mergedProfiles);
+    const resolvedProfiles = resolveSafeBinProfiles(scope.mergedProfiles as SafeBinProfileFixtures);
     const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
     for (const bin of scope.safeBins) {
       // Doctor should judge coverage using the same compiled built-in fixtures

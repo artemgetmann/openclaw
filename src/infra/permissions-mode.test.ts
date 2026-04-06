@@ -42,7 +42,7 @@ describe("permissions mode", () => {
   });
 
   it("applies named permission modes onto session exec fields", () => {
-    const entry = { sessionId: "s1", updatedAt: 1 } satisfies SessionEntry;
+    const entry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
     expect(applyPermissionModeToSessionEntry(entry, "normal")).toEqual({ updated: true });
     expect(entry.execSecurity).toBe("allowlist");
     expect(entry.execAsk).toBe("off");
@@ -61,7 +61,7 @@ describe("permissions mode", () => {
         },
       },
     } satisfies OpenClawConfig;
-    const entry = { sessionId: "s1", updatedAt: 1 } satisfies SessionEntry;
+    const entry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
     expect(ensureDefaultPermissionModeOnSessionEntry({ entry, config })).toEqual({
       updated: true,
     });
