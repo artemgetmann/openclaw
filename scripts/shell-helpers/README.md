@@ -224,3 +224,22 @@ Then run any command to trigger auto-detect:
 ```bash
 clawdock-start
 ```
+
+## Repo durable lane helpers
+
+This repo also ships a separate shell helper for the shared durable `main` and
+consumer worktrees:
+
+```bash
+source /Users/user/Programming_Projects/openclaw/scripts/shell-helpers/durable-lane-helpers.sh
+```
+
+Use:
+
+```bash
+wt-main
+wt-consumer
+```
+
+Those wrappers fetch and fast-forward the durable lane before entering it, and
+they fail loudly if the lane has drifted out of a safe fast-forward state.
