@@ -99,8 +99,13 @@ export function resolveProviderWizardOptions(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
 }): ProviderWizardOption[] {
   const providers = resolvePluginProviders(params);
+  return buildProviderWizardOptions(providers);
+}
+
+export function buildProviderWizardOptions(providers: ProviderPlugin[]): ProviderWizardOption[] {
   const options: ProviderWizardOption[] = [];
 
   for (const provider of providers) {
@@ -168,8 +173,15 @@ export function resolveProviderModelPickerEntries(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
 }): ProviderModelPickerEntry[] {
   const providers = resolvePluginProviders(params);
+  return buildProviderModelPickerEntries(providers);
+}
+
+export function buildProviderModelPickerEntries(
+  providers: ProviderPlugin[],
+): ProviderModelPickerEntry[] {
   const entries: ProviderModelPickerEntry[] = [];
 
   for (const provider of providers) {
