@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -33,6 +34,142 @@ function normalizeStringList(values) {
   return normalizeTokenList(values);
 }
 
+function normalizeClaimEntries(values) {
+  const seen = new Set();
+  const out = [];
+
+  for (const value of values) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+
+    const token = String(value.token ?? "").trim();
+    const worktreePath = String(value.worktreePath ?? "").trim();
+    if (!token || !worktreePath) {
+      continue;
+    }
+
+    const key = `${token}\u0000${worktreePath}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push({ token, worktreePath });
+  }
+
+  return out;
+}
+
+function normalizeLeaseEntries(values) {
+  const seen = new Set();
+  const out = [];
+
+  for (const value of values) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+
+    const token = String(value.token ?? "").trim();
+    const worktreePath = String(value.worktreePath ?? "").trim();
+    const pid = Number.parseInt(String(value.pid ?? ""), 10);
+    if (!token || !worktreePath || !Number.isFinite(pid) || pid <= 0) {
+      continue;
+    }
+
+    const key = `${token}\u0000${worktreePath}\u0000${pid}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push({
+      token,
+      worktreePath,
+      pid,
+      accountId: String(value.accountId ?? "").trim() || null,
+    });
+  }
+
+  return out;
+}
+
+function hashTelegramToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function resolveTelegramTokenLeaseRoot(customRoot) {
+  if (customRoot && String(customRoot).trim().length > 0) {
+    return path.resolve(String(customRoot).trim());
+  }
+  return path.join(os.homedir(), ".openclaw", "telegram-token-leases");
+}
+
+function buildTelegramTokenLeasePath(params) {
+  const token = String(params?.token ?? "").trim();
+  const botId = token.includes(":") ? token.split(":", 1)[0] : "bot";
+  return path.join(
+    resolveTelegramTokenLeaseRoot(params?.leaseRoot),
+    `${botId}-${hashTelegramToken(token)}.json`,
+  );
+}
+
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function collectActiveTelegramTokenLeaseEntries(params) {
+  const tokens = normalizeTokenList(params?.tokens ?? []);
+  const currentWorktreePath =
+    params?.currentWorktreePath && String(params.currentWorktreePath).trim().length > 0
+      ? path.resolve(String(params.currentWorktreePath))
+      : null;
+  const out = [];
+
+  for (const token of tokens) {
+    const leasePath = buildTelegramTokenLeasePath({
+      token,
+      leaseRoot: params?.leaseRoot,
+    });
+    if (!fs.existsSync(leasePath)) {
+      continue;
+    }
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(fs.readFileSync(leasePath, "utf8"));
+    } catch {
+      continue;
+    }
+
+    const pid = Number.parseInt(String(parsed?.pid ?? ""), 10);
+    const worktreePath =
+      typeof parsed?.worktree === "string" && parsed.worktree.trim()
+        ? path.resolve(parsed.worktree.trim())
+        : "";
+    if (!Number.isFinite(pid) || pid <= 0 || !worktreePath || !isPidAlive(pid)) {
+      continue;
+    }
+    if (currentWorktreePath && worktreePath === currentWorktreePath) {
+      continue;
+    }
+
+    out.push({
+      token,
+      worktreePath,
+      pid,
+      accountId:
+        typeof parsed?.accountId === "string" && parsed.accountId.trim()
+          ? parsed.accountId.trim()
+          : null,
+    });
+  }
+
+  return normalizeLeaseEntries(out);
+}
 function parseEnvAssignmentLine(line, key) {
   const match = String(line ?? "").match(
     new RegExp(`^[\\t ]*(?:export[\\t ]+)?${key}[\\t ]*=[\\t ]*(.*)$`),
@@ -74,6 +211,9 @@ export function selectTelegramTesterToken(params) {
   const poolTokens = normalizeTokenList(params?.poolTokens ?? []);
   const claimedTokens = new Set(normalizeTokenList(params?.claimedTokens ?? []));
   const reservedTokens = new Set(normalizeTokenList(params?.reservedTokens ?? []));
+  const leasedTokens = new Set(
+    normalizeLeaseEntries(params?.leasedEntries ?? []).map((entry) => entry.token),
+  );
   const currentToken = String(params?.currentToken ?? "").trim();
 
   if (poolTokens.length === 0) {
@@ -85,7 +225,8 @@ export function selectTelegramTesterToken(params) {
     };
   }
 
-  const isUnavailable = (token) => claimedTokens.has(token) || reservedTokens.has(token);
+  const isUnavailable = (token) =>
+    claimedTokens.has(token) || reservedTokens.has(token) || leasedTokens.has(token);
 
   if (currentToken && poolTokens.includes(currentToken) && !isUnavailable(currentToken)) {
     return {
@@ -115,6 +256,63 @@ export function selectTelegramTesterToken(params) {
   };
 }
 
+export function summarizeTelegramTesterTokenPool(params) {
+  const poolTokens = normalizeTokenList(params?.poolTokens ?? []);
+  const claimedEntries = normalizeClaimEntries(params?.claimedEntries ?? []);
+  const leasedEntries = normalizeLeaseEntries(params?.leasedEntries ?? []);
+  const claimedTokens = normalizeTokenList(claimedEntries.map((entry) => entry.token));
+  const reservedTokens = normalizeTokenList(params?.reservedTokens ?? []);
+  const currentToken = String(params?.currentToken ?? "").trim();
+  const reservedTokenSet = new Set(reservedTokens);
+  const claimedTokenSet = new Set(claimedTokens);
+  const leasedTokenSet = new Set(leasedEntries.map((entry) => entry.token));
+
+  // The selection layer needs one shared definition of "available" so
+  // bootstrap, ensure, and diagnostics cannot drift into contradictory stories.
+  const claimableTokens = poolTokens.filter(
+    (token) =>
+      !claimedTokenSet.has(token) && !reservedTokenSet.has(token) && !leasedTokenSet.has(token),
+  );
+  const selection = selectTelegramTesterToken({
+    poolTokens,
+    claimedTokens,
+    leasedEntries,
+    reservedTokens,
+    currentToken,
+  });
+
+  let currentTokenStatus = "absent";
+  if (currentToken) {
+    if (!poolTokens.includes(currentToken)) {
+      currentTokenStatus = "outside_pool";
+    } else if (claimedTokenSet.has(currentToken)) {
+      currentTokenStatus = "claimed_elsewhere";
+    } else if (leasedTokenSet.has(currentToken)) {
+      currentTokenStatus = "leased_elsewhere";
+    } else if (reservedTokenSet.has(currentToken)) {
+      currentTokenStatus = "reserved_by_base_config";
+    } else {
+      currentTokenStatus = "claimable";
+    }
+  }
+
+  return {
+    selection,
+    poolTokens,
+    poolCount: poolTokens.length,
+    claimedEntries,
+    claimedTokens,
+    claimedCount: claimedEntries.length,
+    leasedEntries,
+    leasedCount: leasedEntries.length,
+    reservedTokens,
+    reservedCount: reservedTokens.length,
+    claimableTokens,
+    claimableCount: claimableTokens.length,
+    currentToken,
+    currentTokenStatus,
+  };
+}
 export function extractTelegramBotTokensFromConfig(config) {
   if (!config || typeof config !== "object") {
     return [];
@@ -157,6 +355,7 @@ export function buildTelegramLiveRuntimeConfig(params) {
     typeof params?.dmPolicy === "string" && params.dmPolicy.trim().length > 0
       ? params.dmPolicy.trim()
       : null;
+  const preferredModel = String(params?.preferredModel ?? "").trim();
   const baseConfig =
     params?.baseConfig && typeof params.baseConfig === "object"
       ? structuredClone(params.baseConfig)
@@ -224,10 +423,26 @@ export function buildTelegramLiveRuntimeConfig(params) {
     agentDefaults.workspace = workspaceDir;
   }
 
+  if (preferredModel) {
+    // Tester lanes need an explicit model pin so live validation proves the
+    // provider we intended to test instead of inheriting whatever the base
+    // config happened to prefer that day.
+    agentDefaults.model = {
+      ...defaultModel,
+      primary: preferredModel,
+      fallbacks: Array.isArray(defaultModel.fallbacks) ? defaultModel.fallbacks : [],
+    };
+    config.agents = {
+      ...agents,
+      defaults: agentDefaults,
+    };
+  }
+
   // Isolated Telegram tester lanes should not depend on the shared Codex OAuth
   // session. If an OpenAI API key already exists, prefer the equivalent GPT-5.4
   // API-key path so smoke tests stay isolated from refresh-token churn.
   if (
+    !preferredModel &&
     config.env &&
     typeof config.env === "object" &&
     typeof config.env.OPENAI_API_KEY === "string" &&

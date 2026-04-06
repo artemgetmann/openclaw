@@ -7,6 +7,14 @@ Use this after the isolated browser and agent smoke flow in `docs/agent-guides/b
 - Confirm the current git branch has a real name and is not `HEAD`.
 - Confirm the running gateway process belongs to the current worktree path.
 - If the runtime path does not match, restart the gateway from this worktree before testing.
+- Prefer `bash scripts/telegram-live-runtime.sh ensure` as the canonical fixer/checker for isolated Telegram tester lanes.
+- Preferred operator surface now lives under `openclaw telegram ...`:
+  - `openclaw telegram doctor`
+  - `openclaw telegram runtime ensure`
+  - `openclaw telegram runtime release`
+  - `openclaw telegram smoke dm-reply`
+- `bash scripts/telegram-live-preflight.sh` is read-only now; it inspects the derived isolated runtime profile and tells you when to run `ensure`.
+- Confirm the running isolated gateway process belongs to the current worktree path before trusting Telegram replies.
 - If `.env.local` is missing, run `bash scripts/assign-bot.sh`.
 - Never print raw token values.
 - Emit proof lines in logs or output:
@@ -24,6 +32,10 @@ Use this after the isolated browser and agent smoke flow in `docs/agent-guides/b
 
 ## Common tools
 
+- High-level workflow/operator path:
+  - `pnpm openclaw:local telegram doctor --chat @jarvis_tester_1_bot`
+  - `pnpm openclaw:local telegram runtime ensure`
+  - `pnpm openclaw:local telegram smoke dm-reply --chat @jarvis_tester_1_bot --json`
 - User E2E operator path:
   - `pnpm openclaw:local telegram-user <precheck|send|read|wait> ...`
 - Full repo-local details:

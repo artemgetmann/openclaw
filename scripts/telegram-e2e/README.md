@@ -51,6 +51,16 @@ Manual setup is optional now. `pnpm openclaw:local telegram-user ...` auto-boots
 
 ### Preferred CLI path
 
+Use the high-level workflow surface for runtime ownership, doctor checks, and smoke proofs:
+
+```bash
+pnpm openclaw:local telegram doctor --chat @jarvis_tester_1_bot
+pnpm openclaw:local telegram runtime ensure
+pnpm openclaw:local telegram smoke dm-reply --chat @jarvis_tester_1_bot --json
+```
+
+Use `telegram-user` directly when you need the lower-level MTProto primitives:
+
 Use the repo-local CLI for normal operator work and automation:
 
 ```bash
@@ -80,6 +90,7 @@ Why this is the preferred path:
 2. shared thread matching for `reply_to_top_id`, `reply_to_msg_id`, and DM topic ids
 3. session locking so parallel probes fail loudly instead of corrupting Telethon state
 4. secrets stay in env and env-files, not process arguments
+5. `openclaw telegram smoke dm-reply` writes stable run artifacts into `.artifacts/telegram-smoke/`
 
 ### Compatibility wrapper
 
