@@ -71,10 +71,10 @@ json_expires_for_anthropic_any() {
 
 json_best_anthropic_profile() {
     echo "$STATUS_JSON" | jq -r '
-        [.auth.oauth.profiles[]
-          | select(.provider == "anthropic" and .type == "oauth")
-          | {id: .profileId, exp: (.expiresAt // 0)}]
-        | sort_by(.exp) | reverse | .[0].id // "none"
+        [.auth.providers[]
+          | select(.provider == "anthropic")
+          | .profiles.labels[]?]
+        | .[0] // "none"
     ' 2>/dev/null || echo "none"
 }
 
@@ -237,14 +237,23 @@ else
     best_profile=$(jq -r '
         .profiles | to_entries
         | map(select(.value.provider == "anthropic"))
-        | sort_by(.value.expires) | reverse
-        | .[0].key // "none"
+        | sort_by(
+            if .value.type == "api_key" then 0
+            elif .value.type == "token" then 1
+            elif .value.type == "oauth" then 2
+            else 9 end
+          )
+        | .[0]
+        | if . == null then "none" else "\(.key) (\(.value.type))" end
     ' "$OPENCLAW_AUTH" 2>/dev/null || echo "none")
     expires=$(jq -r '
         [.profiles | to_entries[] | select(.value.provider == "anthropic") | .value.expires]
         | max // 0
     ' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
-    api_keys=0
+    api_keys=$(jq -r '
+        [.profiles | to_entries[] | select(.value.provider == "anthropic" and .value.type == "api_key")]
+        | length
+    ' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
 fi
 
 echo "  Profile: $best_profile"
