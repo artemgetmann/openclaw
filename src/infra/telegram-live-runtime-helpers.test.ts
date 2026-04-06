@@ -186,7 +186,7 @@ describe("telegram live runtime helpers", () => {
       allow: ["telegram"],
       slots: { memory: "none" },
     });
-    expect(config.plugins?.deny).toEqual(["legacy", "acpx"]);
+    expect(config.plugins?.deny).toEqual(["acpx"]);
     expect(config.plugins?.entries?.telegram).toMatchObject({ enabled: true });
     expect(config.plugins?.entries?.acpx).toMatchObject({ enabled: false });
   });
