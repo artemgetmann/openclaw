@@ -783,7 +783,7 @@ export const registerTelegramNativeCommands = ({
               chatId,
               isGroup,
               senderId,
-              resolvedThreadId: threadSpec.scope === "topic" ? threadSpec.id : undefined,
+              resolvedThreadId: threadSpec.scope === "forum" ? threadSpec.id : undefined,
               dmThreadId: threadSpec.scope === "dm" ? threadSpec.id : undefined,
               topicAgentId: topicConfig?.agentId,
             });

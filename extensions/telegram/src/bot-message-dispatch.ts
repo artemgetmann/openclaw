@@ -681,10 +681,6 @@ export const dispatchTelegramMessage = async ({
       replyOptions: {
         skillFilter,
         disableBlockStreaming,
-        onToolResult: (payload) =>
-          enqueueDraftLaneEvent(async () => {
-            await sendToolPayload(payload);
-          }),
         onPartialReply:
           answerLane.stream || reasoningLane.stream
             ? (payload) =>
