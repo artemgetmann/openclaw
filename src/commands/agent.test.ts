@@ -8,6 +8,8 @@ import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
+import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
@@ -40,6 +42,7 @@ vi.mock("../agents/skills.js", () => ({
 }));
 
 vi.mock("../agents/skills/refresh.js", () => ({
+  ensureSkillsWatcher: vi.fn(),
   getSkillsSnapshotVersion: vi.fn(() => 0),
 }));
 
@@ -56,6 +59,8 @@ const readConfigFileSnapshotForWriteSpy = vi.spyOn(configModule, "readConfigFile
 const setRuntimeConfigSnapshotSpy = vi.spyOn(configModule, "setRuntimeConfigSnapshot");
 const runCliAgentSpy = vi.spyOn(cliRunnerModule, "runCliAgent");
 const deliverAgentCommandResultSpy = vi.spyOn(agentDeliveryModule, "deliverAgentCommandResult");
+const buildWorkspaceSkillSnapshotMock = vi.mocked(buildWorkspaceSkillSnapshot);
+const getSkillsSnapshotVersionMock = vi.mocked(getSkillsSnapshotVersion);
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
@@ -259,6 +264,8 @@ beforeEach(() => {
   configModule.clearRuntimeConfigSnapshot();
   runCliAgentSpy.mockResolvedValue(createDefaultAgentResult() as never);
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentResult());
+  buildWorkspaceSkillSnapshotMock.mockReturnValue(undefined as never);
+  getSkillsSnapshotVersionMock.mockReturnValue(0);
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   readConfigFileSnapshotForWriteSpy.mockResolvedValue({
@@ -431,6 +438,109 @@ describe("agentCommand", () => {
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.sessionId).toBe("session-123");
+    });
+  });
+
+  it("refreshes a resumed manual session when the skills snapshot version changes", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        foo: {
+          sessionId: "session-123",
+          updatedAt: Date.now(),
+          systemSent: true,
+          skillsSnapshot: {
+            prompt: "old",
+            skills: [],
+            version: 1,
+          },
+        },
+      });
+      mockConfig(home, store);
+      const refreshedSnapshot = {
+        prompt: "new",
+        skills: [{ name: "wacli" }],
+        version: 2,
+      };
+      buildWorkspaceSkillSnapshotMock.mockReturnValueOnce(refreshedSnapshot as never);
+      getSkillsSnapshotVersionMock.mockReturnValueOnce(2);
+
+      await agentCommand({ message: "resume me", sessionId: "session-123" }, runtime);
+
+      expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+      expect(getLastEmbeddedCall()?.skillsSnapshot).toEqual(refreshedSnapshot);
+      expect(readSessionStore<Record<string, unknown>>(store).foo?.skillsSnapshot).toEqual(
+        refreshedSnapshot,
+      );
+    });
+  });
+
+  it("refreshes a resumed manual session when the cached snapshot is still version zero", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        foo: {
+          sessionId: "session-123",
+          updatedAt: Date.now(),
+          systemSent: true,
+          skillsSnapshot: {
+            prompt: "old",
+            skills: [],
+            version: 0,
+          },
+        },
+      });
+      mockConfig(home, store);
+      const refreshedSnapshot = {
+        prompt: "new",
+        skills: [{ name: "wacli" }],
+        version: 0,
+      };
+      buildWorkspaceSkillSnapshotMock.mockReturnValueOnce(refreshedSnapshot as never);
+      getSkillsSnapshotVersionMock.mockReturnValueOnce(0);
+
+      await agentCommand({ message: "resume me", sessionId: "session-123" }, runtime);
+
+      expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+      expect(getLastEmbeddedCall()?.skillsSnapshot).toEqual(refreshedSnapshot);
+    });
+  });
+
+  it("refreshes a resumed manual session when the agent skill filter changes", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        foo: {
+          sessionId: "session-123",
+          updatedAt: Date.now(),
+          systemSent: true,
+          skillsSnapshot: {
+            prompt: "old",
+            skills: [{ name: "peekaboo" }],
+            skillFilter: ["peekaboo"],
+            version: 2,
+          },
+        },
+      });
+      mockConfig(home, store, undefined, undefined, [
+        { id: "main", default: true, skills: ["wacli"] } as never,
+      ]);
+      const refreshedSnapshot = {
+        prompt: "new",
+        skills: [{ name: "wacli" }],
+        skillFilter: ["wacli"],
+        version: 2,
+      };
+      buildWorkspaceSkillSnapshotMock.mockReturnValueOnce(refreshedSnapshot as never);
+      getSkillsSnapshotVersionMock.mockReturnValueOnce(2);
+
+      await agentCommand({ message: "resume me", sessionId: "session-123" }, runtime);
+
+      expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+      expect(buildWorkspaceSkillSnapshotMock.mock.calls[0]?.[1]).toMatchObject({
+        skillFilter: ["wacli"],
+      });
+      expect(getLastEmbeddedCall()?.skillsSnapshot).toEqual(refreshedSnapshot);
     });
   });
 
