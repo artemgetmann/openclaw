@@ -118,6 +118,11 @@ describe("cron tool", () => {
     expect(tool.description).toContain("watch an inbox, thread, or person until something happens");
     expect(tool.description).toContain("cadence, stop condition, and expiry/TTL");
     expect(tool.description).toContain("use the relevant skill/helper script for detection");
+    expect(tool.description).toContain("pin that exact command");
+    expect(tool.description).toContain("deterministic monitor instructions");
+    expect(tool.description).toContain("resolve the detection command at creation time");
+    expect(tool.description).toContain("Bad monitor payloads say");
+    expect(tool.description).toContain("wacli-recent-reply.sh");
     expect(tool.description).toContain(
       "Prefer heartbeat only for broad, low-frequency ambient awareness",
     );
