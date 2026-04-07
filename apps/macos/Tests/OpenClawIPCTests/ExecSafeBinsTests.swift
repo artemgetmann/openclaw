@@ -231,7 +231,16 @@ struct ExecSafeBinsTests {
                 policy: policy))
         #expect(
             ExecSafeBins._testIsAllowed(
-                command: ["gog", "auth", "add", "artemnaumenko1@gmail.com", "--services", "drive", "--drive-scope", "readonly"],
+                command: [
+                    "gog",
+                    "auth",
+                    "add",
+                    "artemnaumenko1@gmail.com",
+                    "--services",
+                    "gmail,calendar,drive,contacts,docs,sheets",
+                    "--timeout",
+                    "5m",
+                ],
                 resolution: resolution,
                 policy: policy))
     }
