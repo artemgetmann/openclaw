@@ -26,6 +26,7 @@ import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
+import { createWhatsAppMonitorTool } from "./tools/whatsapp-monitor-tool.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function traceOpenClawToolStage(stage: string): void {
@@ -169,6 +170,7 @@ export function createOpenClawTools(
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
     }),
+    createWhatsAppMonitorTool(),
     ...(messageTool ? [messageTool] : []),
     createTtsTool({
       agentChannel: options?.agentChannel,
