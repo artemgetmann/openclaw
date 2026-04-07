@@ -26,8 +26,27 @@ metadata:
 
 Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
 
-Automation Rule
+Setup routing
 
+- If OAuth client credentials, account auth, or `gog auth list` are missing,
+  use the shared `consumer-setup` skill instead of pushing raw setup commands at
+  the user.
+- In consumer lanes, run `gog` as a direct lane-local exec call. Do not wrap it
+  in shell chains, pipes, or `nodes/system.run`.
+- If `gog` is wrapped through `openclaw nodes run`, insert `--` before the
+  child argv so `gog` keeps its own flags.
+- Start with the cheapest truthful checks: `gog auth list`, then a read-only
+  surface probe such as `gog gmail search`, `gog drive search`, or
+  `gog calendar events`.
+- Allow node execution when the runtime supports it. Missing
+  `system.run.prepare` alone is not a valid reason to mark `gog` execution as
+  blocked.
+- If a direct `gog auth list` succeeds but returns no accounts, say the Google
+  connection is missing. Do not tell the user `gog` itself is unavailable.
+- If the real blocker is OAuth client/test-user setup, say that immediately in
+  plain product language instead of burning turns on unrelated command retries.
+- Keep the CLI setup path opt-in. If the user explicitly wants the terminal
+  flow, you can execute the normal `gog auth ...` commands yourself.
 - Prefer direct safe-bin invocation first: `gog auth list`, then a read-only
   probe like `gog gmail search`, `gog drive search`, or `gog calendar events`.
 - In Normal permissions mode, direct `gog ...` commands are allowed. The
@@ -51,8 +70,12 @@ Setup Routing
   `consumer-setup`.
 - Use the raw CLI steps below only when you are the one performing setup or the
   user explicitly asks for the terminal path.
+- For new Google setups, default to the Google Workspace core bundle:
+  `gmail,calendar,drive,contacts,docs,sheets`.
+- Do not default to Drive-only or make the user come back later for Calendar
+  unless they explicitly want a narrower scope.
 - For local browser OAuth, prefer a direct safe-bin invocation first:
-  `gog auth add <email> --services <csv>`.
+  `gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets`.
   `gog` can open the browser itself on this Mac, and that path avoids repo-local
   helper allowlist problems.
 - If repo-local helper execution is denied, fall back to direct `gog auth add`
@@ -75,6 +98,14 @@ Setup Routing
 - Poll completion with
   `skills/gog/scripts/gog-auth-local.sh wait --session <id>` before claiming
   Google is connected.
+- If the Google page opened but the local callback expired or was missed, use
+  `skills/gog/scripts/gog-auth-local.sh reopen --session <id>` and tell the
+  user to complete the approval immediately in that browser window.
+- Translate common Google failures into direct product language instead of
+  generic auth noise:
+  missing OAuth client credentials, OAuth app still in Testing without this
+  account added as a test user, required API not enabled, missed localhost
+  callback handoff, or local Keychain approval still pending.
 - Once auth completes, verify with `gog auth list` before moving into Gmail,
   Calendar, Drive, Docs, Sheets, or Contacts actions.
 - Treat successful auth as a resume point. After `gog auth list` or another
