@@ -218,9 +218,12 @@ async function refreshLegacyBundledWorkspaceSkills(workspaceDir: string): Promis
   }
 
   const workspaceSkillsDir = path.join(workspaceDir, "skills");
-  let entries: Awaited<ReturnType<typeof fs.readdir>>;
+  let entries: Array<{ name: string; isDirectory(): boolean }>;
   try {
-    entries = await fs.readdir(workspaceSkillsDir, { withFileTypes: true });
+    entries = (await fs.readdir(workspaceSkillsDir, {
+      encoding: "utf8",
+      withFileTypes: true,
+    })) as Array<{ name: string; isDirectory(): boolean }>;
   } catch {
     return;
   }
