@@ -41,12 +41,17 @@ metadata:
 
 # wacli
 
-Use `wacli` only when the user explicitly asks you to message someone else on WhatsApp or when they ask to sync/search WhatsApp history.
+Use `wacli` only when the user explicitly asks you to message someone else on WhatsApp, when they ask to sync/search WhatsApp history, or when you are running a scoped WhatsApp monitor/reply-check on their behalf.
 Do NOT use `wacli` for normal user chats; OpenClaw routes WhatsApp conversations automatically.
 If the user is chatting with you on WhatsApp, you should not reach for this tool unless they ask you to contact a third party.
 
 Automation Rule
 
+- For WhatsApp reply detection, scoped monitors, or "did this person reply yet?" checks, use:
+  `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json`
+  This is the default path because it reconciles sibling `@lid` chats from real stored data.
+- Do NOT use `wacli chats list --query <phone>` as the primary discovery path for reply checks or monitors.
+  It can miss the real sibling `@lid` thread even when replies landed there.
 - For consumer checks, start with the cheapest read-only probes:
   `skills/wacli/scripts/wacli-health.sh --json --ensure-owner`.
 - Treat raw `wacli doctor` as fallback/debug-only.
@@ -117,7 +122,7 @@ Find chats + messages
 - `wacli chats list --limit 20 --query "name or number"`
 - `wacli messages search "query" --limit 20 --chat <jid>`
 - `wacli messages search "invoice" --after 2025-01-01 --before 2025-12-31`
-- Recent-reply reconciliation:
+- Recent-reply reconciliation for monitors/reply checks:
   `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json`
   This inspects the local `wacli.db`, resolves real sibling chats from stored
   names/contacts/aliases, and returns the newest inbound `from_me=0` across all

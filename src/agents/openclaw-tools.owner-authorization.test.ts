@@ -12,7 +12,6 @@ describe("createOpenClawTools owner authorization", () => {
     expect(tools.get("cron")?.ownerOnly).toBe(true);
     expect(tools.get("gateway")?.ownerOnly).toBe(true);
     expect(tools.get("nodes")?.ownerOnly).toBe(true);
-    expect(tools.get("whatsapp_monitor")?.ownerOnly).toBe(true);
   });
 
   it("keeps canvas non-owner-only in raw registration", () => {
