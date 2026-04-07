@@ -7,6 +7,44 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
+const providerSnapshotCache = new Map<string, ProviderPlugin[]>();
+
+const PLUGIN_PROVIDER_ENV_CACHE_KEYS = [
+  "HOME",
+  "OPENCLAW_HOME",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "VITEST",
+] as const;
+
+function pickProviderCacheEnv(env: PluginLoadOptions["env"]): Record<string, string | undefined> {
+  const source = env ?? process.env;
+  return Object.fromEntries(
+    PLUGIN_PROVIDER_ENV_CACHE_KEYS.map((key) => [key, source[key]]),
+  ) as Record<string, string | undefined>;
+}
+
+function buildProviderSnapshotCacheKey(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: string[];
+  bundledProviderAllowlistCompat?: boolean;
+  bundledProviderVitestCompat?: boolean;
+}): string {
+  return JSON.stringify({
+    config: params.config ?? {},
+    workspaceDir: params.workspaceDir ?? "",
+    env: pickProviderCacheEnv(params.env),
+    onlyPluginIds: params.onlyPluginIds ?? [],
+    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat === true,
+    bundledProviderVitestCompat: params.bundledProviderVitestCompat === true,
+  });
+}
+
+export function clearPluginProviderSnapshotCache(): void {
+  providerSnapshotCache.clear();
+}
 
 function hasExplicitPluginConfig(config: PluginLoadOptions["config"]): boolean {
   const plugins = config?.plugins;
@@ -112,6 +150,11 @@ export function resolvePluginProviders(params: {
   activate?: boolean;
   cache?: boolean;
 }): ProviderPlugin[] {
+  const cacheKey = buildProviderSnapshotCacheKey(params);
+  const cached = providerSnapshotCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const bundledProviderCompatPluginIds =
     params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
       ? resolveBundledProviderCompatPluginIds({
@@ -144,8 +187,10 @@ export function resolvePluginProviders(params: {
     logger: createPluginLoaderLogger(log),
   });
 
-  return registry.providers.map((entry) => ({
+  const providers = registry.providers.map((entry) => ({
     ...entry.provider,
     pluginId: entry.pluginId,
   }));
+  providerSnapshotCache.set(cacheKey, providers);
+  return providers;
 }

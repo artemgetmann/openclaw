@@ -8,6 +8,41 @@ import { createPluginLoaderLogger } from "./logger.js";
 import type { WebSearchProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
+const webSearchProviderSnapshotCache = new Map<string, WebSearchProviderPlugin[]>();
+const PLUGIN_WEB_SEARCH_ENV_CACHE_KEYS = [
+  "HOME",
+  "OPENCLAW_HOME",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "VITEST",
+] as const;
+
+function pickWebSearchProviderCacheEnv(
+  env: PluginLoadOptions["env"],
+): Record<string, string | undefined> {
+  const source = env ?? process.env;
+  return Object.fromEntries(
+    PLUGIN_WEB_SEARCH_ENV_CACHE_KEYS.map((key) => [key, source[key]]),
+  ) as Record<string, string | undefined>;
+}
+
+function buildWebSearchProviderSnapshotCacheKey(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  bundledAllowlistCompat?: boolean;
+}): string {
+  return JSON.stringify({
+    config: params.config ?? {},
+    workspaceDir: params.workspaceDir ?? "",
+    env: pickWebSearchProviderCacheEnv(params.env),
+    bundledAllowlistCompat: params.bundledAllowlistCompat === true,
+  });
+}
+
+export function clearPluginWebSearchProviderSnapshotCache(): void {
+  webSearchProviderSnapshotCache.clear();
+}
 
 const BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "brave",
@@ -24,6 +59,11 @@ export function resolvePluginWebSearchProviders(params: {
   env?: PluginLoadOptions["env"];
   bundledAllowlistCompat?: boolean;
 }): WebSearchProviderPlugin[] {
+  const cacheKey = buildWebSearchProviderSnapshotCacheKey(params);
+  const cached = webSearchProviderSnapshotCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const allowlistCompat = params.bundledAllowlistCompat
     ? withBundledPluginAllowlistCompat({
         config: params.config,
@@ -44,7 +84,7 @@ export function resolvePluginWebSearchProviders(params: {
     onlyPluginIds: [...BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS],
   });
 
-  return registry.webSearchProviders
+  const providers = registry.webSearchProviders
     .map((entry) => ({
       ...entry.provider,
       pluginId: entry.pluginId,
@@ -57,4 +97,6 @@ export function resolvePluginWebSearchProviders(params: {
       }
       return a.id.localeCompare(b.id);
     });
+  webSearchProviderSnapshotCache.set(cacheKey, providers);
+  return providers;
 }

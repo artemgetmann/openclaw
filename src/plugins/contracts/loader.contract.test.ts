@@ -8,7 +8,9 @@ vi.mock("../loader.js", () => ({
 }));
 
 const { resolvePluginProviders } = await import("../providers.js");
-const { resolvePluginWebSearchProviders } = await import("../web-search-providers.js");
+const { clearPluginProviderSnapshotCache } = await import("../providers.js");
+const { clearPluginWebSearchProviderSnapshotCache, resolvePluginWebSearchProviders } =
+  await import("../web-search-providers.js");
 
 function uniqueSortedPluginIds(values: string[]) {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
@@ -16,6 +18,8 @@ function uniqueSortedPluginIds(values: string[]) {
 
 describe("plugin loader contract", () => {
   beforeEach(() => {
+    clearPluginProviderSnapshotCache();
+    clearPluginWebSearchProviderSnapshotCache();
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock.mockReturnValue({
       providers: [],

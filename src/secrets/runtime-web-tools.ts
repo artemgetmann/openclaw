@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
-import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues } from "./resolve.js";
@@ -49,13 +48,30 @@ type SecretResolutionResult = {
   fallbackUsedAfterRefFailure: boolean;
 };
 
+type RuntimeWebSearchProvider = {
+  id: string;
+  envVars: string[];
+  autoDetectOrder?: number;
+  getCredentialValue: (search: Record<string, unknown>) => unknown;
+  setCredentialValue: (search: Record<string, unknown>, value: string) => void;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+async function resolvePluginWebSearchProvidersLazy(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  bundledAllowlistCompat?: boolean;
+}): Promise<RuntimeWebSearchProvider[]> {
+  const { resolvePluginWebSearchProviders } = await import("../plugins/web-search-providers.js");
+  return resolvePluginWebSearchProviders(params);
+}
+
 function normalizeProvider(
   value: unknown,
-  providers: ReturnType<typeof resolvePluginWebSearchProviders>,
+  providers: RuntimeWebSearchProvider[],
 ): WebSearchProvider | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -262,22 +278,15 @@ function ensureObject(target: Record<string, unknown>, key: string): Record<stri
   return next;
 }
 
-function setResolvedWebSearchApiKey(params: {
+async function setResolvedWebSearchApiKey(params: {
   resolvedConfig: OpenClawConfig;
-  provider: WebSearchProvider;
+  provider: RuntimeWebSearchProvider;
   value: string;
-  sourceConfig: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): void {
+}): Promise<void> {
   const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
   const web = ensureObject(tools, "web");
   const search = ensureObject(web, "search");
-  const provider = resolvePluginWebSearchProviders({
-    config: params.sourceConfig,
-    env: params.env,
-    bundledAllowlistCompat: true,
-  }).find((entry) => entry.id === params.provider);
-  provider?.setCredentialValue(search, params.value);
+  params.provider.setCredentialValue(search, params.value);
 }
 
 function setResolvedFirecrawlApiKey(params: {
@@ -320,7 +329,7 @@ export async function resolveRuntimeWebTools(params: {
   // browser-only gateway smoke) otherwise pay plugin-discovery cost for a tool
   // surface they never expose.
   const providers = search
-    ? resolvePluginWebSearchProviders({
+    ? await resolvePluginWebSearchProvidersLazy({
         config: params.sourceConfig,
         env: params.context.env,
         bundledAllowlistCompat: true,
@@ -411,12 +420,10 @@ export async function resolveRuntimeWebTools(params: {
         selectedProvider = provider.id;
         selectedResolution = resolution;
         if (resolution.value) {
-          setResolvedWebSearchApiKey({
+          await setResolvedWebSearchApiKey({
             resolvedConfig: params.resolvedConfig,
-            provider: provider.id,
+            provider,
             value: resolution.value,
-            sourceConfig: params.sourceConfig,
-            env: params.context.env,
           });
         }
         break;
@@ -425,12 +432,10 @@ export async function resolveRuntimeWebTools(params: {
       if (resolution.value) {
         selectedProvider = provider.id;
         selectedResolution = resolution;
-        setResolvedWebSearchApiKey({
+        await setResolvedWebSearchApiKey({
           resolvedConfig: params.resolvedConfig,
-          provider: provider.id,
+          provider,
           value: resolution.value,
-          sourceConfig: params.sourceConfig,
-          env: params.context.env,
         });
         break;
       }

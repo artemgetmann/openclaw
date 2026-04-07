@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveOwningPluginIdsForProvider, resolvePluginProviders } from "./providers.js";
+import {
+  clearPluginProviderSnapshotCache,
+  resolveOwningPluginIdsForProvider,
+  resolvePluginProviders,
+} from "./providers.js";
 
 const loadOpenClawPluginsMock = vi.fn();
 const loadPluginManifestRegistryMock = vi.fn();
@@ -14,6 +18,7 @@ vi.mock("./manifest-registry.js", () => ({
 
 describe("resolvePluginProviders", () => {
   beforeEach(() => {
+    clearPluginProviderSnapshotCache();
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock.mockReturnValue({
       providers: [{ pluginId: "google", provider: { id: "demo-provider" } }],

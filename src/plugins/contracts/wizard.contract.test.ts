@@ -88,6 +88,7 @@ describe("provider wizard contract", () => {
     const options = resolveProviderWizardOptions({
       config,
       env: process.env,
+      providers,
     });
 
     expect(
@@ -105,7 +106,7 @@ describe("provider wizard contract", () => {
       env: process.env,
     });
 
-    for (const option of resolveProviderWizardOptions({ config, env: process.env })) {
+    for (const option of resolveProviderWizardOptions({ config, env: process.env, providers })) {
       const resolved = resolveProviderPluginChoice({
         providers,
         choice: option.value,
@@ -126,6 +127,7 @@ describe("provider wizard contract", () => {
     const entries = resolveProviderModelPickerEntries({
       config,
       env: process.env,
+      providers,
     });
 
     expect(

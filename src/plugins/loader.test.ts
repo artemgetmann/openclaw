@@ -5,43 +5,47 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-async function importFreshPluginTestModules() {
-  vi.resetModules();
-  vi.doUnmock("node:fs");
-  vi.doUnmock("node:fs/promises");
-  vi.doUnmock("node:module");
-  vi.doUnmock("./hook-runner-global.js");
-  vi.doUnmock("./hooks.js");
-  vi.doUnmock("./loader.js");
-  vi.doUnmock("jiti");
-  const [loader, hookRunnerGlobal, hooks, runtime, registry] = await Promise.all([
-    import("./loader.js"),
-    import("./hook-runner-global.js"),
-    import("./hooks.js"),
-    import("./runtime.js"),
-    import("./registry.js"),
-  ]);
-  return {
-    ...loader,
-    ...hookRunnerGlobal,
-    ...hooks,
-    ...runtime,
-    ...registry,
-  };
-}
 
-const {
-  __testing,
-  clearPluginLoaderCache,
-  createHookRunner,
-  createEmptyPluginRegistry,
-  getActivePluginRegistry,
-  getActivePluginRegistryKey,
-  getGlobalHookRunner,
-  loadOpenClawPlugins,
-  resetGlobalHookRunner,
-  setActivePluginRegistry,
-} = await importFreshPluginTestModules();
+vi.resetModules();
+vi.doUnmock("node:fs");
+vi.doUnmock("node:fs/promises");
+vi.doUnmock("node:module");
+vi.doUnmock("./hook-runner-global.js");
+vi.doUnmock("./hooks.js");
+vi.doUnmock("./loader.js");
+vi.doUnmock("jiti");
+
+const { __testing, clearPluginLoaderCache, loadOpenClawPlugins } = await import("./loader.js");
+
+let runtimeTestModulesPromise: Promise<{
+  createHookRunner: (typeof import("./hooks.js"))["createHookRunner"];
+  createEmptyPluginRegistry: (typeof import("./registry.js"))["createEmptyPluginRegistry"];
+  getActivePluginRegistry: (typeof import("./runtime.js"))["getActivePluginRegistry"];
+  getActivePluginRegistryKey: (typeof import("./runtime.js"))["getActivePluginRegistryKey"];
+  getGlobalHookRunner: (typeof import("./hook-runner-global.js"))["getGlobalHookRunner"];
+  resetGlobalHookRunner: (typeof import("./hook-runner-global.js"))["resetGlobalHookRunner"];
+  setActivePluginRegistry: (typeof import("./runtime.js"))["setActivePluginRegistry"];
+}> | null = null;
+
+async function importRuntimeTestModules() {
+  if (!runtimeTestModulesPromise) {
+    runtimeTestModulesPromise = Promise.all([
+      import("./hook-runner-global.js"),
+      import("./hooks.js"),
+      import("./runtime.js"),
+      import("./registry.js"),
+    ]).then(([hookRunnerGlobal, hooks, runtime, registry]) => ({
+      createHookRunner: hooks.createHookRunner,
+      createEmptyPluginRegistry: registry.createEmptyPluginRegistry,
+      getActivePluginRegistry: runtime.getActivePluginRegistry,
+      getActivePluginRegistryKey: runtime.getActivePluginRegistryKey,
+      getGlobalHookRunner: hookRunnerGlobal.getGlobalHookRunner,
+      resetGlobalHookRunner: hookRunnerGlobal.resetGlobalHookRunner,
+      setActivePluginRegistry: runtime.setActivePluginRegistry,
+    }));
+  }
+  return await runtimeTestModulesPromise;
+}
 
 type TempPlugin = { dir: string; file: string; id: string };
 
@@ -684,7 +688,15 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     expect(scopedAgain).toBe(scoped);
   });
 
-  it("can load a scoped registry without replacing the active global registry", () => {
+  it("can load a scoped registry without replacing the active global registry", async () => {
+    const {
+      createEmptyPluginRegistry,
+      getActivePluginRegistry,
+      getActivePluginRegistryKey,
+      getGlobalHookRunner,
+      resetGlobalHookRunner,
+      setActivePluginRegistry,
+    } = await importRuntimeTestModules();
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "allowed",
@@ -723,7 +735,8 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     );
   });
 
-  it("re-initializes global hook runner when serving registry from cache", () => {
+  it("re-initializes global hook runner when serving registry from cache", async () => {
+    const { getGlobalHookRunner, resetGlobalHookRunner } = await importRuntimeTestModules();
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "cache-hook-runner",
@@ -2151,6 +2164,7 @@ module.exports = {
       "before_agent_start",
       "before_model_resolve",
     ]);
+    const { createHookRunner } = await importRuntimeTestModules();
     const runner = createHookRunner(registry);
     const legacyResult = await runner.runBeforeAgentStart({ prompt: "hello", messages: [] }, {});
     expect(legacyResult).toEqual({
