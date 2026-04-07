@@ -34,9 +34,10 @@ if [[ -z "$RAW_INSTANCE_ID" ]]; then
 fi
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$RAW_INSTANCE_ID")"
-if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
-  consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
-fi
+# The canonical consumer checkout uses the default consumer lane with an empty
+# instance id. Still apply the runtime env there so local proof commands do not
+# silently fall back to the shared founder runtime.
+consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
 
 # Short local CLI commands are an easy place to accidentally mutate the shared
 # runtime from a manually-created worktree. Require the generated dev launch env
