@@ -238,7 +238,7 @@ export function buildAgentSystemPrompt(params: {
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
   const cronToolSummary =
-    "Manage cron jobs and wake events (default to cron for reminders, exact scheduled checks, and explicit scoped monitors such as watching an inbox, thread, or person until something happens; when creating a monitor, prefer a clear cadence, stop condition, and expiry instead of an indefinite forever-job; for channel-specific monitors, use the relevant skill/helper script for detection instead of ad hoc raw CLI discovery; use heartbeat only for optional broad low-frequency awareness)";
+    "Manage cron jobs and wake events (default to cron for reminders, exact scheduled checks, and explicit scoped monitors such as watching an inbox, thread, or person until something happens; when creating a monitor, prefer a clear cadence, stop condition, and expiry instead of an indefinite forever-job; for channel-specific monitors, use the relevant skill/helper script for detection instead of ad hoc raw CLI discovery; if a skill exposes a default helper/check command, pin that exact command or a tiny wrapper script into the cron payload so wake runs are deterministic rather than rediscovering monitor logic each time; if the monitor needs baseline/state comparison, create the tiny check script at authoring time and have wake runs execute that script instead of improvising fresh sync/list/search logic; use heartbeat only for optional broad low-frequency awareness)";
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
     write: "Create or overwrite files",
@@ -450,6 +450,9 @@ export function buildAgentSystemPrompt(params: {
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     "For channel-specific monitoring or reply-detection jobs, read the matching skill and use its helper scripts/check commands instead of inventing raw discovery flows.",
+    "When creating a monitor, encode deterministic wake instructions. If a skill names a default helper/check command, pin that exact command (or a tiny wrapper around it) into the cron job instead of leaving the waking run to improvise sync/list/search steps.",
+    "For any monitor that needs baseline/state comparison, create the tiny check script during monitor setup and have the cron payload run that exact script with pinned args. Do not author wake instructions that rediscover the monitor procedure from scratch.",
+    "Concrete anti-pattern: do not author a WhatsApp reply monitor around raw `wacli sync --once` plus `wacli messages list --chat ...` when the skill already provides `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json` for that check.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     ...(acpHarnessSpawnAllowed

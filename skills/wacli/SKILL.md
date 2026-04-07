@@ -50,8 +50,17 @@ Automation Rule
 - For WhatsApp reply detection, scoped monitors, or "did this person reply yet?" checks, use:
   `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json`
   This is the default path because it reconciles sibling `@lid` chats from real stored data.
+- When authoring a cron monitor, pin that exact helper command (or a tiny wrapper
+  script that runs it) into the job payload.
+  Do not leave the waking run to rediscover the monitor logic from scratch.
+- If the monitor needs baseline or dedupe state, create the tiny check script at
+  monitor-creation time and have cron run that exact script on wake.
+  Do not write a cron payload that plans to rediscover the check procedure later.
 - Do NOT use `wacli chats list --query <phone>` as the primary discovery path for reply checks or monitors.
   It can miss the real sibling `@lid` thread even when replies landed there.
+- Do NOT use raw `wacli sync` + `wacli messages list` as the primary monitor
+  implementation when `wacli-recent-reply.sh` covers the same check.
+  Raw sync/list is debug or fallback material, not the default authored monitor path.
 - For consumer checks, start with the cheapest read-only probes:
   `skills/wacli/scripts/wacli-health.sh --json --ensure-owner`.
 - Treat raw `wacli doctor` as fallback/debug-only.
