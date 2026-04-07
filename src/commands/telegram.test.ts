@@ -244,6 +244,132 @@ describe("telegram commands", () => {
     expect(payload.artifact_path).toContain("/tmp/repo/.artifacts/telegram-smoke/");
   });
 
+  it("accepts the active home-clone runtime from launchd without a worktree token claim file", async () => {
+    const previousEnv = {
+      OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
+      OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+      OPENCLAW_PROFILE: process.env.OPENCLAW_PROFILE,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+    };
+    delete process.env.OPENCLAW_GATEWAY_PORT;
+    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.OPENCLAW_PROFILE;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.TELEGRAM_BOT_TOKEN;
+
+    const runTelegramUserPrecheck = vi
+      .fn()
+      .mockResolvedValueOnce({
+        session_path: "/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      })
+      .mockResolvedValueOnce({
+        backend_meta: {},
+        chat: { chat_id: 777, peer_type: "User", username: "jarvis_tester_1_bot" },
+        session_path: "/tmp/userbot.session",
+        user: { user_id: 99, username: "artem" },
+      });
+
+    const runtimeConfigPath =
+      "/Users/user/Library/Application Support/OpenClaw Consumer/.openclaw/openclaw.json";
+    const launchdOutput = [
+      "gui/501/ai.openclaw.consumer.gateway = {",
+      "  arguments = {",
+      "    /opt/homebrew/opt/node@22/bin/node",
+      "    /Users/user/Programming_Projects/openclaw-consumer/dist/index.js",
+      "    gateway",
+      "    --port",
+      "    19001",
+      "  }",
+      "  environment = {",
+      "    OPENCLAW_PROFILE => consumer",
+      "    OPENCLAW_GATEWAY_PORT => 19001",
+      "    OPENCLAW_STATE_DIR => /Users/user/Library/Application Support/OpenClaw Consumer/.openclaw",
+      `    OPENCLAW_CONFIG_PATH => ${runtimeConfigPath}`,
+      "  }",
+      "}",
+    ].join("\n");
+
+    Object.assign(telegramCommandDeps, {
+      exec: vi.fn(async (args: string[]) => {
+        if (args[0] === "launchctl" && args[1] === "print") {
+          return { stdout: launchdOutput, stderr: "" };
+        }
+        if (args[0] === "lsof" && args.includes("-tiTCP:19001")) {
+          return { stdout: "65735\n", stderr: "" };
+        }
+        if (args[0] === "lsof" && args.includes("-Fn")) {
+          return { stdout: "p65735\nn/\n", stderr: "" };
+        }
+        if (args[0] === "ps" && args[1] === "-o" && args[2] === "command=") {
+          return {
+            stdout:
+              "node /Users/user/Programming_Projects/openclaw-consumer/dist/index.js gateway --port 19001\n",
+            stderr: "",
+          };
+        }
+        if (args[0] === "git" && args[1] === "worktree" && args[2] === "list") {
+          return {
+            stdout: "worktree /Users/user/Programming_Projects/openclaw-consumer\n",
+            stderr: "",
+          };
+        }
+        return { stdout: "", stderr: "" };
+      }),
+      now: () => 1_000,
+      probeGateway: vi.fn(async () => ({ ok: true, failureReason: null })),
+      resolveBotIdentity: vi.fn(async () => ({
+        id: 123456,
+        username: "jarvis_tester_1_bot",
+        name: "Jarvis",
+      })),
+      resolveRepoContext: vi.fn(async () => ({
+        branch: "codex/consumer-openclaw-project",
+        commit: "abc123",
+        repoRoot: "/Users/user/Programming_Projects/openclaw-consumer",
+        worktree: "/Users/user/Programming_Projects/openclaw-consumer",
+      })),
+      resolveRuntimeCommit: vi.fn(async () => "abc123"),
+      fileExists: vi.fn((filePath: string) => filePath === runtimeConfigPath),
+      readFile: vi.fn(async (filePath: string) => {
+        if (filePath === runtimeConfigPath) {
+          return JSON.stringify({
+            channels: {
+              telegram: {
+                botToken: "123456:token",
+              },
+            },
+          });
+        }
+        throw new Error(`unexpected readFile: ${filePath}`);
+      }),
+      runTelegramUserPrecheck,
+    });
+
+    await telegramDoctorCommand(
+      {
+        chat: "@jarvis_tester_1_bot",
+        json: true,
+      },
+      runtime,
+    );
+
+    const payload = JSON.parse(
+      String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]),
+    );
+    expect(payload.ok).toBe(true);
+    expect(payload.runtime_port).toBe(19001);
+    expect(payload.runtime_worktree).toBe("/Users/user/Programming_Projects/openclaw-consumer");
+    expect(payload.current_lane_bot).toBe("@jarvis_tester_1_bot");
+
+    process.env.OPENCLAW_GATEWAY_PORT = previousEnv.OPENCLAW_GATEWAY_PORT;
+    process.env.OPENCLAW_STATE_DIR = previousEnv.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_PROFILE = previousEnv.OPENCLAW_PROFILE;
+    process.env.OPENCLAW_CONFIG_PATH = previousEnv.OPENCLAW_CONFIG_PATH;
+    process.env.TELEGRAM_BOT_TOKEN = previousEnv.TELEGRAM_BOT_TOKEN;
+  });
+
   it("marks pairing-gated replies as failed smoke output", async () => {
     const writeFile = vi.fn(async () => undefined);
     const runTelegramUserPrecheck = vi

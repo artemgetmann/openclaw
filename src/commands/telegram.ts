@@ -128,6 +128,11 @@ type TelegramHelperProfile = {
   worktreePath: string;
 };
 
+type TelegramLaunchdDetails = {
+  env: Record<string, string>;
+  arguments: string[];
+};
+
 type TelegramBotIdentity = {
   id: number | null;
   username: string | null;
@@ -183,6 +188,31 @@ export const telegramCommandDeps = {
     };
   },
   async resolveHelperProfile(worktreePath: string): Promise<TelegramHelperProfile> {
+    const runtimePort = parsePositiveInt(process.env.OPENCLAW_GATEWAY_PORT);
+    const runtimeStateDir = cleanString(process.env.OPENCLAW_STATE_DIR);
+    const runtimeProfile = cleanString(process.env.OPENCLAW_PROFILE);
+    if (runtimePort !== null && runtimeStateDir) {
+      return {
+        profileId: runtimeProfile ?? "local-runtime",
+        runtimePort,
+        runtimeStateDir,
+        worktreePath,
+      };
+    }
+
+    const launchdRuntime = await readConsumerGatewayLaunchdDetails();
+    const launchdRuntimePort = parsePositiveInt(launchdRuntime?.env.OPENCLAW_GATEWAY_PORT);
+    const launchdRuntimeStateDir = cleanString(launchdRuntime?.env.OPENCLAW_STATE_DIR);
+    if (launchdRuntimePort !== null && launchdRuntimeStateDir) {
+      return {
+        profileId:
+          cleanString(launchdRuntime?.env.OPENCLAW_PROFILE) ?? runtimeProfile ?? "consumer",
+        runtimePort: launchdRuntimePort,
+        runtimeStateDir: launchdRuntimeStateDir,
+        worktreePath,
+      };
+    }
+
     const repoRoot = await resolveTelegramRepoRoot();
     const helperPath = path.join(repoRoot, "scripts", "lib", "telegram-live-runtime-helpers.mjs");
     // Reuse the existing runtime-profile derivation so the CLI and bash runtime
@@ -242,22 +272,58 @@ export const telegramCommandDeps = {
       .find(Boolean);
     const cmdOutput = await execCommandAllowFailure(["ps", "-o", "command=", "-p", String(pid)]);
     const command = cmdOutput.stdout.trim() || null;
+    const launchdDetails = await readConsumerGatewayLaunchdDetails();
+    const inferredWorktree = inferWorktreeFromGatewayCommand(
+      command,
+      launchdDetails?.arguments ?? [],
+    );
+    const resolvedRuntimeWorktree =
+      runtimeWorktree && path.resolve(runtimeWorktree) !== path.resolve(path.sep)
+        ? path.resolve(runtimeWorktree)
+        : inferredWorktree;
     const isGatewayProcess = Boolean(
-      command && (command.includes(" gateway run") || command.includes("openclaw-gateway")),
+      (command &&
+        (command.includes(" gateway run") ||
+          command.includes("openclaw-gateway") ||
+          command.includes("/dist/index.js gateway") ||
+          command.includes("/dist/index.mjs gateway") ||
+          command.includes("/OpenClaw Consumer.app/Contents/MacOS/OpenClaw gateway"))) ||
+      (launchdDetails?.arguments ?? []).some(
+        (value) =>
+          value.includes("/dist/index.js") ||
+          value.includes("/dist/index.mjs") ||
+          value.includes("/OpenClaw Consumer.app/Contents/MacOS/OpenClaw"),
+      ),
     );
     if (!isGatewayProcess) {
       return {
         pid,
-        worktree: runtimeWorktree ?? null,
+        worktree: resolvedRuntimeWorktree ?? null,
         command,
         ownershipOk: false,
         failureReason: "runtime_listener_not_gateway",
       };
     }
-    if (!runtimeWorktree || path.resolve(runtimeWorktree) !== path.resolve(worktreePath)) {
+    if (
+      !resolvedRuntimeWorktree ||
+      path.resolve(resolvedRuntimeWorktree) !== path.resolve(worktreePath)
+    ) {
+      const fallbackWorktree =
+        inferredWorktree && path.resolve(inferredWorktree) === path.resolve(worktreePath)
+          ? inferredWorktree
+          : null;
+      if (fallbackWorktree) {
+        return {
+          pid,
+          worktree: fallbackWorktree,
+          command,
+          ownershipOk: true,
+          failureReason: null,
+        };
+      }
       return {
         pid,
-        worktree: runtimeWorktree ?? null,
+        worktree: resolvedRuntimeWorktree ?? null,
         command,
         ownershipOk: false,
         failureReason: "runtime_worktree_mismatch",
@@ -265,7 +331,7 @@ export const telegramCommandDeps = {
     }
     return {
       pid,
-      worktree: runtimeWorktree,
+      worktree: resolvedRuntimeWorktree,
       command,
       ownershipOk: true,
       failureReason: null,
@@ -290,7 +356,23 @@ export const telegramCommandDeps = {
     }
   },
   async readTelegramBotToken(repoRoot: string) {
-    return readLastEnvValue(path.join(repoRoot, ".env.local"), "TELEGRAM_BOT_TOKEN");
+    const envToken = cleanString(process.env.TELEGRAM_BOT_TOKEN);
+    if (envToken) {
+      return envToken;
+    }
+
+    const claimedToken = await readLastEnvValue(
+      path.join(repoRoot, ".env.local"),
+      "TELEGRAM_BOT_TOKEN",
+    );
+    if (claimedToken) {
+      return claimedToken;
+    }
+
+    const launchdEnv = await readConsumerGatewayLaunchdDetails();
+    return readTelegramBotTokenFromConfig(
+      cleanString(process.env.OPENCLAW_CONFIG_PATH) ?? launchdEnv?.env.OPENCLAW_CONFIG_PATH,
+    );
   },
   async resolveTokenClaimPaths(repoRoot: string, token: string) {
     if (!token.trim()) {
@@ -310,6 +392,16 @@ export const telegramCommandDeps = {
       );
       if (claimedToken === token) {
         claimPaths.push(path.resolve(worktreePath));
+      }
+    }
+    if (claimPaths.length === 0) {
+      const envToken = cleanString(process.env.TELEGRAM_BOT_TOKEN);
+      const launchdEnv = await readConsumerGatewayLaunchdDetails();
+      const configToken = await readTelegramBotTokenFromConfig(
+        cleanString(process.env.OPENCLAW_CONFIG_PATH) ?? launchdEnv?.env.OPENCLAW_CONFIG_PATH,
+      );
+      if (envToken === token || configToken === token) {
+        claimPaths.push(path.resolve(repoRoot));
       }
     }
     return claimPaths;
@@ -1058,9 +1150,29 @@ function parseOptionalPositiveInt(value: unknown): number | null {
   return null;
 }
 
-function parsePositiveInt(value: string): number | null {
+function parsePositiveInt(value: string | null | undefined): number | null {
+  if (typeof value !== "string") {
+    return null;
+  }
   const parsed = Number.parseInt(value.trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function inferWorktreeFromGatewayCommand(
+  command: string | null,
+  launchdArguments: string[] = [],
+): string | null {
+  const candidates = [command, launchdArguments[1]].filter(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  for (const candidate of candidates) {
+    const scriptMatch = candidate.match(/(\/.+\/dist\/index\.(?:js|mjs))(?:\s|$)/);
+    if (scriptMatch) {
+      return path.resolve(path.dirname(path.dirname(scriptMatch[1])));
+    }
+  }
+
+  return null;
 }
 
 function getLastField(fields: Record<string, string | string[]>, keys: string[]): string | null {
@@ -1100,6 +1212,25 @@ async function readLastEnvValue(filePath: string, key: string): Promise<string |
     }
   }
   return lastValue;
+}
+
+async function readTelegramBotTokenFromConfig(
+  configPath: string | undefined,
+): Promise<string | null> {
+  const normalizedPath = cleanString(configPath);
+  if (!normalizedPath || !fsSync.existsSync(normalizedPath)) {
+    return null;
+  }
+
+  try {
+    const raw = await fs.readFile(normalizedPath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      channels?: { telegram?: { botToken?: unknown } };
+    };
+    return cleanString(parsed.channels?.telegram?.botToken);
+  } catch {
+    return null;
+  }
 }
 
 function stripOuterQuotes(value: string) {
@@ -1154,6 +1285,72 @@ async function execCommandAllowFailure(args: string[]) {
           : "",
     };
   }
+}
+
+async function readConsumerGatewayLaunchdDetails(): Promise<TelegramLaunchdDetails | null> {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  if (uid === null) {
+    return null;
+  }
+
+  const { stdout } = await execCommandAllowFailure([
+    "launchctl",
+    "print",
+    `gui/${uid}/ai.openclaw.consumer.gateway`,
+  ]);
+  if (!stdout.trim()) {
+    return null;
+  }
+
+  const env: Record<string, string> = {};
+  const args: string[] = [];
+  let insideEnvironment = false;
+  let insideArguments = false;
+  for (const rawLine of stdout.split(/\r?\n/g)) {
+    const line = rawLine.trim();
+    if (insideArguments) {
+      if (line === "}") {
+        insideArguments = false;
+        continue;
+      }
+      if (line) {
+        args.push(line);
+      }
+      continue;
+    }
+    if (insideEnvironment) {
+      if (line === "}") {
+        insideEnvironment = false;
+        continue;
+      }
+      const match = line.match(/^([A-Z0-9_]+)\s*=>\s*(.*)$/);
+      if (match) {
+        env[match[1]] = match[2];
+      }
+      continue;
+    }
+
+    if (line === "arguments = {") {
+      insideArguments = true;
+      continue;
+    }
+    if (line === "environment = {") {
+      insideEnvironment = true;
+    }
+  }
+
+  if (Object.keys(env).length === 0 && args.length === 0) {
+    return null;
+  }
+
+  return {
+    env,
+    arguments: args,
+  };
 }
 
 function defaultTelegramUserSessionPath(repoRoot: string) {
