@@ -120,8 +120,11 @@ explicitly ask for the CLI path.
 - Missing states usually look like: no OAuth client credentials, no authorized
   account, or auth/account list coming back empty.
 - Tell the user Google is not connected yet.
-- Ask which Google account and which surfaces they want enabled first
-  (Gmail, Calendar, Drive, Docs, Sheets, Contacts).
+- Ask which Google account should be connected first.
+- For consumer setup, default to the Google Workspace core bundle up front:
+  Gmail, Calendar, Drive, Docs, Sheets, and Contacts.
+- Do not default to a narrow one-surface setup like Drive-only unless the user
+  explicitly asks for that.
 - Prefer a browser-assisted OAuth flow when available.
 - In consumer lanes, use direct lane-local `gog` invocations for checks and
   setup steps that already map to the product flow. Do not wrap `gog` inside a
@@ -135,9 +138,14 @@ explicitly ask for the CLI path.
 - If OAuth/test-user/client setup is the blocker, say that early in plain
   product language. Do not spend several turns debugging around it before
   telling the user what is actually missing.
+- Treat these Google blockers as first-class diagnoses, not generic auth noise:
+  missing OAuth client credentials, OAuth app still in Testing without this
+  account added as a test user, required Google API not enabled, missed local
+  callback handoff, or macOS Keychain approval still pending.
 - On runtimes where `gog` safe-bin execution is available, prefer a direct
-  `gog auth add <email> --services <csv>` launch first. That path can open the
-  browser itself without telling the user to use Terminal.
+  `gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets`
+  launch first. That path can open the browser itself without telling the user
+  to use Terminal.
 - Prefer opening the real auth tab in Google Chrome when the runtime can do so.
   If Chrome is unavailable, use the default browser rather than dumping raw
   terminal instructions back to the user.
@@ -155,6 +163,9 @@ explicitly ask for the CLI path.
   this in Terminal."
 - Use `skills/gog/scripts/gog-auth-local.sh` only when repo-local helper
   scripts are allowed and you need resumable polling across turns.
+- If the browser handoff expires or the localhost callback is missed, treat that
+  as a recoverable handoff problem. Reopen the stored auth URL and tell the user
+  to finish the Google approval immediately in that browser window.
 - Verify with a read-only command such as `gog auth list`, `gog gmail search`,
   or a calendar/list call before creating drafts or events.
 - After verification succeeds, continue the user’s original Google task
