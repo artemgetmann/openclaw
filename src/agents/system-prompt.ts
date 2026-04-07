@@ -257,6 +257,8 @@ export function buildAgentSystemPrompt(params: {
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: cronToolSummary,
+    whatsapp_monitor:
+      "Resolve WhatsApp reply-watch targets across phone JIDs and opaque @lid sibling chats from local wacli.db evidence; use this for WhatsApp monitors instead of single-chat phone queries",
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: acpSpawnRuntimeEnabled
@@ -290,6 +292,7 @@ export function buildAgentSystemPrompt(params: {
     "canvas",
     "nodes",
     "cron",
+    "whatsapp_monitor",
     "message",
     "gateway",
     "agents_list",
@@ -442,6 +445,7 @@ export function buildAgentSystemPrompt(params: {
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
           `- cron: ${cronToolSummary}`,
+          "- whatsapp_monitor: resolve WhatsApp reply watches across phone-JID and @lid sibling chats",
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",

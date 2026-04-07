@@ -202,6 +202,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "whatsapp_monitor",
+    label: "whatsapp_monitor",
+    description: "Resolve WhatsApp reply-watch targets",
+    sectionId: "messaging",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "gateway",
     label: "gateway",
     description: "Gateway control",
