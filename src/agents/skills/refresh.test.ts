@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const watchMock = vi.fn(() => ({
   on: vi.fn(),
@@ -14,6 +14,20 @@ vi.mock("chokidar", () => {
 });
 
 describe("ensureSkillsWatcher", () => {
+  beforeEach(() => {
+    watchMock.mockClear();
+  });
+
+  it("seeds a non-zero snapshot version the first time a watcher is ensured", async () => {
+    const mod = await import("./refresh.js");
+    const workspaceDir = `/tmp/workspace-${Date.now()}`;
+
+    expect(mod.getSkillsSnapshotVersion(workspaceDir)).toBe(0);
+    mod.ensureSkillsWatcher({ workspaceDir });
+
+    expect(mod.getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(0);
+  });
+
   it("ignores node_modules, dist, .git, and Python venvs by default", async () => {
     const mod = await import("./refresh.js");
     mod.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });

@@ -110,6 +110,27 @@ describe("buildWorkspaceSkillSnapshot", () => {
     ]);
   });
 
+  it("keeps skills whose required helper script exists relative to the skill dir", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const skillDir = path.join(workspaceDir, "skills", "wacli");
+    await writeSkill({
+      dir: skillDir,
+      name: "wacli",
+      description: "WhatsApp helper",
+      metadata: '{"openclaw":{"requires":{"bins":["./scripts/wacli-recent-reply.sh"]}}}',
+    });
+    await fs.mkdir(path.join(skillDir, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "scripts", "wacli-recent-reply.sh"),
+      "#!/usr/bin/env bash\nexit 0\n",
+      { mode: 0o755 },
+    );
+
+    const snapshot = buildSnapshot(workspaceDir);
+
+    expectSnapshotNamesAndPrompt(snapshot, { contains: ["wacli"] });
+  });
+
   it("keeps prompt output aligned with buildWorkspaceSkillsPrompt", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeSkill({

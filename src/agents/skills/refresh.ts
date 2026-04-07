@@ -134,6 +134,12 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   if (!workspaceDir) {
     return;
   }
+  if (!workspaceVersions.has(workspaceDir)) {
+    // Seed a real version the first time this workspace becomes watchable so
+    // legacy persisted snapshots with version=0 refresh once instead of living
+    // forever until some later file edit happens.
+    workspaceVersions.set(workspaceDir, bumpVersion(0));
+  }
   const watchEnabled = params.config?.skills?.load?.watch !== false;
   const debounceMsRaw = params.config?.skills?.load?.watchDebounceMs;
   const debounceMs =
