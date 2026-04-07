@@ -2499,3 +2499,39 @@ describe("initSessionState future-thread model defaults for explicit non-Telegra
     expect(result.sessionEntry.modelOverride).toBe("gpt-5.3-codex");
   });
 });
+
+describe("initSessionState exec permission backfill", () => {
+  it("backfills missing exec defaults on existing sessions", async () => {
+    const storePath = await createStorePath("session-exec-default-backfill-");
+    const sessionKey = "agent:main:telegram:dm:12345";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "existing-session",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+      tools: {
+        exec: {
+          security: "full",
+          ask: "off",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello from an existing dm",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.execSecurity).toBe("full");
+    expect(result.sessionEntry.execAsk).toBe("off");
+  });
+});

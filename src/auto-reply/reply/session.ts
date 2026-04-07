@@ -503,13 +503,15 @@ export async function initSessionState(params: {
       childThreadId: ctx.MessageThreadId ?? lastThreadId,
     });
   }
-  if (!hasExistingSessionEntry) {
-    ensureDefaultPermissionModeOnSessionEntry({
-      entry: sessionEntry,
-      config: cfg,
-      agentId,
-    });
-  }
+  // Backfill missing exec defaults on both brand-new and legacy sessions so
+  // existing Telegram DMs/topics converge on the current product permission
+  // mode without requiring users to recreate the chat or manually run
+  // `/permissions`.
+  ensureDefaultPermissionModeOnSessionEntry({
+    entry: sessionEntry,
+    config: cfg,
+    agentId,
+  });
   const alreadyForked = sessionEntry.forkedFromParent === true;
   if (
     parentSessionKey &&
