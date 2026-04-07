@@ -127,6 +127,7 @@ refresh_gateway_service_env() {
   local profile
   local launchd_label
   local plist_path
+  local expected_entrypoint
 
   state_dir="$(consumer_instance_state_dir "$normalized")"
   config_path="$state_dir/openclaw.json"
@@ -134,6 +135,7 @@ refresh_gateway_service_env() {
   profile="$(consumer_instance_profile "$normalized")"
   launchd_label="$(consumer_instance_gateway_launchd_label "$normalized")"
   plist_path="$HOME/Library/LaunchAgents/${launchd_label}.plist"
+  expected_entrypoint="$ROOT_DIR/dist/index.js"
 
   local passthrough_keys=(
     GOOGLE_PLACES_API_KEY
@@ -153,6 +155,17 @@ refresh_gateway_service_env() {
     fi
   done
   if [[ -n "${OPENCLAW_SERVICE_PATH_PREFIX:-}" ]]; then
+    wants_env_refresh=1
+  fi
+
+  # Default consumer launches must still repair stale launch agents. If the
+  # plist is missing, points at a dead checkout, or is not loaded, the GUI app
+  # will otherwise come up while the dedicated gateway silently keeps failing.
+  if [[ ! -f "$plist_path" ]]; then
+    wants_env_refresh=1
+  elif ! /usr/libexec/PlistBuddy -c "Print :ProgramArguments" "$plist_path" 2>/dev/null | /usr/bin/grep -Fq "$expected_entrypoint"; then
+    wants_env_refresh=1
+  elif ! /bin/launchctl print "gui/$(id -u)/${launchd_label}" >/dev/null 2>&1; then
     wants_env_refresh=1
   fi
 

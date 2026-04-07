@@ -230,9 +230,6 @@ consumer_instance_gateway_launchd_label() {
 
 consumer_instance_apply_runtime_env() {
   local normalized="${1:-}"
-  if [[ -z "$normalized" ]]; then
-    return 0
-  fi
 
   local runtime_root
   local state_dir
@@ -244,7 +241,14 @@ consumer_instance_apply_runtime_env() {
   # inside it owns config/workspace/logs. Pointing HOME at the state dir itself
   # creates poisoned defaults like ".openclaw/.openclaw/workspace-*", which is
   # how browser/skills checks drift onto fake nested state.
-  export OPENCLAW_CONSUMER_INSTANCE_ID="$normalized"
+  # The default consumer lane still owns a dedicated runtime. Leaving these
+  # unset when `normalized` is empty makes consumer proof scripts drift back to
+  # ~/.openclaw, which defeats the whole isolation contract.
+  if [[ -n "$normalized" ]]; then
+    export OPENCLAW_CONSUMER_INSTANCE_ID="$normalized"
+  else
+    unset OPENCLAW_CONSUMER_INSTANCE_ID
+  fi
   export OPENCLAW_PROFILE="$(consumer_instance_profile "$normalized")"
   export OPENCLAW_HOME="$runtime_root"
   export OPENCLAW_STATE_DIR="$state_dir"
