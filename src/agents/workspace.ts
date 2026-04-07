@@ -7,6 +7,8 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveBundledSkillsDir } from "./skills/bundled-dir.js";
+import { parseFrontmatter, resolveOpenClawMetadata } from "./skills/frontmatter.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
 export function resolveDefaultAgentWorkspaceDir(
@@ -209,6 +211,78 @@ function resolveWorkspaceStatePath(dir: string): string {
   return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
 }
 
+async function refreshLegacyBundledWorkspaceSkills(workspaceDir: string): Promise<void> {
+  const bundledSkillsDir = resolveBundledSkillsDir();
+  if (!bundledSkillsDir) {
+    return;
+  }
+
+  const workspaceSkillsDir = path.join(workspaceDir, "skills");
+  let entries: Awaited<ReturnType<typeof fs.readdir>>;
+  try {
+    entries = await fs.readdir(workspaceSkillsDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const skillDir = path.join(workspaceSkillsDir, entry.name);
+    const skillPath = path.join(skillDir, "SKILL.md");
+    const legacyOriginPath = path.join(skillDir, ".clawhub", "origin.json");
+    const bundledSkillDir = path.join(bundledSkillsDir, entry.name);
+    const bundledSkillPath = path.join(bundledSkillDir, "SKILL.md");
+
+    const [hasWorkspaceSkill, hasLegacyOrigin, hasBundledSkill] = await Promise.all([
+      fileExists(skillPath),
+      fileExists(legacyOriginPath),
+      fileExists(bundledSkillPath),
+    ]);
+    if (!hasWorkspaceSkill || !hasLegacyOrigin || !hasBundledSkill) {
+      continue;
+    }
+
+    let workspaceSkillRaw = "";
+    try {
+      workspaceSkillRaw = await fs.readFile(skillPath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    // Preserve modern OpenClaw-aware workspace skills. Only replace legacy
+    // ClawHub/Clawdbot installs that shadow bundled skills but do not expose
+    // current OpenClaw metadata/helper scripts.
+    const workspaceMetadata = resolveOpenClawMetadata(parseFrontmatter(workspaceSkillRaw));
+    const relativeRequiredBins = (workspaceMetadata?.requires?.bins ?? []).filter((bin) =>
+      typeof bin === "string" ? bin.startsWith("./") : false,
+    );
+    const missingRelativeRequiredBins =
+      relativeRequiredBins.length > 0
+        ? (
+            await Promise.all(
+              relativeRequiredBins.map(
+                async (bin) => !(await fileExists(path.join(skillDir, bin))),
+              ),
+            )
+          ).some(Boolean)
+        : false;
+
+    // Preserve modern OpenClaw-aware workspace skills only when their declared
+    // relative helper commands actually exist. If the workspace copy references
+    // helper scripts that are missing on disk, replace it from bundled so
+    // runtime-relative `skills/<name>/...` commands become executable again.
+    if (workspaceMetadata && !missingRelativeRequiredBins) {
+      continue;
+    }
+
+    await fs.rm(skillDir, { recursive: true, force: true });
+    await fs.cp(bundledSkillDir, skillDir, { recursive: true, force: true });
+  }
+}
+
 function parseWorkspaceSetupState(raw: string): WorkspaceSetupState | null {
   try {
     const parsed = JSON.parse(raw) as {
@@ -342,6 +416,7 @@ export async function ensureAgentWorkspace(params?: {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
   await fs.mkdir(dir, { recursive: true });
+  await refreshLegacyBundledWorkspaceSkills(dir);
 
   if (!params?.ensureBootstrapFiles) {
     return { dir };
