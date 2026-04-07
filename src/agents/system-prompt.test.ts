@@ -230,6 +230,11 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "For channel-specific monitoring or reply-detection jobs, read the matching skill and use its helper scripts/check commands instead of inventing raw discovery flows.",
     );
+    expect(prompt).toContain("When creating a monitor, encode deterministic wake instructions.");
+    expect(prompt).toContain("pin that exact command");
+    expect(prompt).toContain("create the tiny check script during monitor setup");
+    expect(prompt).toContain("Concrete anti-pattern");
+    expect(prompt).toContain("wacli-recent-reply.sh");
   });
 
   it("classifies cron as the default for reminders and explicit monitors", () => {
@@ -242,6 +247,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("watching an inbox, thread, or person until something happens");
     expect(prompt).toContain("cadence, stop condition, and expiry");
     expect(prompt).toContain("use the relevant skill/helper script for detection");
+    expect(prompt).toContain("pin that exact command or a tiny wrapper script");
+    expect(prompt).toContain("create the tiny check script at authoring time");
     expect(prompt).toContain("use heartbeat only for optional broad low-frequency awareness");
   });
 

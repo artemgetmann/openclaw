@@ -41,7 +41,7 @@ metadata:
 
 # wacli
 
-Use `wacli` only when the user explicitly asks you to message someone else on WhatsApp, when they ask to sync/search WhatsApp history, or when you are running a scoped WhatsApp monitor/reply-check on their behalf.
+Use `wacli` only when the user explicitly asks you to message someone else on WhatsApp or when they ask to sync/search WhatsApp history.
 Do NOT use `wacli` for normal user chats; OpenClaw routes WhatsApp conversations automatically.
 If the user is chatting with you on WhatsApp, you should not reach for this tool unless they ask you to contact a third party.
 If the user is trying to connect or debug the live WhatsApp bot/channel, stop:
@@ -53,8 +53,16 @@ Automation Rule
 - For WhatsApp reply detection, scoped monitors, or "did this person reply yet?" checks, use:
   `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json`
   This is the default path because it reconciles sibling `@lid` chats from real stored data.
+- When authoring a cron monitor, pin that exact helper command (or a tiny wrapper
+  script that runs it) into the job payload.
+  Do not leave the waking run to rediscover the monitor logic from scratch.
+- If the monitor needs baseline or dedupe state, create the tiny check script at
+  monitor-creation time and have cron run that exact script on wake.
+  Do not write a cron payload that plans to rediscover the check procedure later.
 - Do NOT use `wacli chats list --query <phone>` as the primary discovery path for reply checks or monitors.
   It can miss the real sibling `@lid` thread even when replies landed there.
+- Do NOT use raw `wacli sync` + `wacli messages list` as the primary monitor implementation when `wacli-recent-reply.sh` covers the same check.
+  Raw sync/list is debug or fallback material, not the default authored monitor path.
 - For consumer checks, start with the cheapest read-only probes:
   `skills/wacli/scripts/wacli-health.sh --json --ensure-owner`.
 - Treat raw `wacli doctor` as fallback/debug-only.
@@ -66,15 +74,13 @@ Automation Rule
   to make sure one long-lived `wacli sync --follow` owner exists for the store.
 - Prefer direct safe-bin invocation first. Run one command per call.
 - In Normal permissions mode, direct `wacli ...` commands are allowed. What
-  stays restricted by default is shell wrapping, pipes, chaining, and
-  redirection.
+  stays restricted by default is shell wrapping, pipes, chaining, and redirection.
 - If you wrap `wacli` through `openclaw nodes run`, insert `--` before the
   child argv so flags like `--json` or `--limit` reach `wacli` instead of the
   wrapper.
 - Ban dumb shell chaining, pipes, and redirection around `wacli`.
 - Do NOT use bare `wacli sync --json` as a health or status probe.
-  `wacli sync` defaults to `--follow=true`, so it is a long-running command and
-  a bad fit for quick readiness checks.
+  `wacli sync` defaults to `--follow=true`, so it is a long-running command and a bad fit for quick readiness checks.
 - Allow node execution only when the runtime actually supports it; do not claim
   node exec is invalid just because `system.run.prepare` is absent.
 - Do not claim WhatsApp is paired, readable, or ready unless those probes ran in
@@ -99,8 +105,7 @@ Setup Routing
   connected yet. Do not soften that into "paired" or "history is readable".
 - If raw `wacli doctor` shows `AUTHENTICATED true` but `CONNECTED false`, first
   check `skills/wacli/scripts/wacli-health.sh --json --ensure-owner` before you
-  tell the user anything. Under lock, the wrapper is the source of truth and
-  raw `doctor` can be wrong.
+  tell the user anything. Under lock, the wrapper is the source of truth and raw `doctor` can be wrong.
 - If the normalized health check still reports the session as paired but not
   connected, do not present that as a total failure. Explain that WhatsApp is
   paired, history may still be readable, but live sync/send reliability may be
@@ -109,8 +114,7 @@ Setup Routing
   stays online, and leave the linked session active long enough for a bounded
   sync refresh to finish.
 - If the user is debugging the live OpenClaw WhatsApp bot/channel, `wacli` is
-  the wrong surface. The built-in WhatsApp channel is separate from the
-  external `wacli` CLI.
+  the wrong surface. The built-in WhatsApp channel is separate from the external `wacli` CLI.
 - Use the raw CLI steps below only when you are the one performing setup or the
   user explicitly asks for the terminal path.
 - For local pairing work, prefer
@@ -130,8 +134,7 @@ Setup Routing
   `wacli-auth-local.sh wait --session <id>` before claiming
   WhatsApp is ready.
 - In consumer lanes, if the account is paired but the latest messages are still
-  stale, use a bounded refresh only:
-  `wacli sync --once --idle-exit 30s`.
+  stale, use a bounded refresh only: `wacli sync --once --idle-exit 30s`.
   Do not use `wacli sync --follow` as the default product path.
 
 Safety
@@ -145,7 +148,6 @@ Auth + sync
 - `wacli auth` (QR login + initial sync)
 - `wacli sync --once --idle-exit 30s` (bounded refresh for consumer lanes)
 - `wacli sync --follow` (continuous sync when you intentionally need a live owner)
-- `wacli sync --once --idle-exit 30s` (bounded refresh for consumer lanes)
 - Raw debug only: `wacli doctor`
 
 Find chats + messages
@@ -153,7 +155,7 @@ Find chats + messages
 - `wacli chats list --limit 20 --query "name or number"`
 - `wacli messages search "query" --limit 20 --chat <jid>`
 - `wacli messages search "invoice" --after 2025-01-01 --before 2025-12-31`
-- Recent-reply reconciliation for monitors/reply checks:
+- Recent-reply reconciliation:
   `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json`
   This inspects the local `wacli.db`, resolves real sibling chats from stored
   names/contacts/aliases, and returns the newest inbound `from_me=0` across all
@@ -199,9 +201,6 @@ Notes
   keep WhatsApp open on the phone, keep the phone online, and wait for the
   linked session to catch up. Use a bounded sync refresh if the current turn
   actually needs fresher data.
-  - `AUTHENTICATED true` + `CONNECTED false` may mean the account is paired but
-    offline, or just that another healthy sync owner already holds the store
-    lock.
 - `wacli chats list --json` is the cheapest proof that history/search access is
   actually working before you attempt send or backfill actions.
 - `skills/wacli/scripts/wacli-live.sh ensure --json` is the preferred minimal
