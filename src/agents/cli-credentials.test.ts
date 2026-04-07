@@ -318,4 +318,35 @@ describe("cli credentials", () => {
       accountId: "acct_123",
     });
   });
+
+  it("prefers JWT exp from Codex auth.json over file mtime", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
+    process.env.CODEX_HOME = tempHome;
+    execSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    const authPath = path.join(tempHome, "auth.json");
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    const jwtPayload = Buffer.from(
+      JSON.stringify({
+        exp: Math.floor(new Date("2026-01-03T10:15:00Z").getTime() / 1000),
+      }),
+      "utf8",
+    ).toString("base64url");
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          access_token: `header.${jwtPayload}.sig`,
+          refresh_token: "file-refresh",
+        },
+      }),
+      "utf8",
+    );
+
+    const creds = readCodexCliCredentials({ execSync: execSyncMock });
+
+    expect(creds?.expires).toBe(new Date("2026-01-03T10:15:00Z").getTime());
+  });
 });
