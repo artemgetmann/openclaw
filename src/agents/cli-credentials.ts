@@ -75,6 +75,25 @@ export type MiniMaxCliCredential = {
   expires: number;
 };
 
+function decodeJwtExpiryMs(token: string): number | null {
+  const parts = token.split(".");
+  if (parts.length < 2 || !parts[1]) {
+    return null;
+  }
+  try {
+    // Codex access tokens are JWTs; prefer their embedded expiry over file mtime guesses.
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as {
+      exp?: unknown;
+    };
+    if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= 0) {
+      return null;
+    }
+    return payload.exp * 1000;
+  } catch {
+    return null;
+  }
+}
+
 type ClaudeCliFileOptions = {
   homeDir?: string;
 };
@@ -483,12 +502,15 @@ export function readCodexCliCredentials(options?: {
     return null;
   }
 
-  let expires: number;
-  try {
-    const stat = fs.statSync(authPath);
-    expires = stat.mtimeMs + 60 * 60 * 1000;
-  } catch {
-    expires = Date.now() + 60 * 60 * 1000;
+  // Fallback to mtime only when the token is not a parseable JWT.
+  let expires = decodeJwtExpiryMs(accessToken);
+  if (expires === null) {
+    try {
+      const stat = fs.statSync(authPath);
+      expires = stat.mtimeMs + 60 * 60 * 1000;
+    } catch {
+      expires = Date.now() + 60 * 60 * 1000;
+    }
   }
 
   return {

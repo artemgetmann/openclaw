@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { writeSkill } from "./skills.e2e-test-helpers.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -171,6 +173,148 @@ describe("ensureAgentWorkspace", () => {
       "utf-8",
     );
     expect(persisted).toContain('"setupCompletedAt": "2026-03-15T02:30:00.000Z"');
+  });
+
+  it("replaces legacy clawhub workspace skills with bundled OpenClaw skills", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
+    const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+    const workspaceSkillDir = path.join(workspaceDir, "skills", "wacli");
+    const bundledSkillDir = path.join(bundledSkillsDir, "wacli");
+
+    await writeSkill({
+      dir: bundledSkillDir,
+      name: "wacli",
+      description: "Bundled wacli",
+      metadata: '{"openclaw":{"requires":{"bins":["./scripts/wacli-recent-reply.sh"]}}}',
+      body: "# Bundled wacli\nAutomation Rule\n",
+    });
+    await fs.mkdir(path.join(bundledSkillDir, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(bundledSkillDir, "scripts", "wacli-recent-reply.sh"),
+      "#!/usr/bin/env bash\n",
+      "utf-8",
+    );
+
+    await writeSkill({
+      dir: workspaceSkillDir,
+      name: "wacli",
+      description: "Legacy wacli",
+      metadata: '{"clawdbot":{"requires":{"bins":["wacli"]}}}',
+      body: "# Legacy wacli\n",
+    });
+    await fs.mkdir(path.join(workspaceSkillDir, ".clawhub"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceSkillDir, ".clawhub", "origin.json"),
+      JSON.stringify({ slug: "wacli", version: 1 }),
+      "utf-8",
+    );
+
+    await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir }, async () => {
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
+    });
+
+    await expect(
+      fs.readFile(path.join(workspaceSkillDir, "scripts", "wacli-recent-reply.sh"), "utf-8"),
+    ).resolves.toContain("#!/usr/bin/env bash");
+    await expect(fs.readFile(path.join(workspaceSkillDir, "SKILL.md"), "utf-8")).resolves.toContain(
+      "Automation Rule",
+    );
+    await expect(
+      fs.access(path.join(workspaceSkillDir, ".clawhub", "origin.json")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("preserves modern workspace skills even when a bundled skill with the same name exists", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
+    const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+    const workspaceSkillDir = path.join(workspaceDir, "skills", "wacli");
+    const bundledSkillDir = path.join(bundledSkillsDir, "wacli");
+
+    await writeSkill({
+      dir: bundledSkillDir,
+      name: "wacli",
+      description: "Bundled wacli",
+      metadata: '{"openclaw":{"requires":{"bins":["./scripts/wacli-recent-reply.sh"]}}}',
+      body: "# Bundled wacli\n",
+    });
+    await fs.mkdir(path.join(bundledSkillDir, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(bundledSkillDir, "scripts", "wacli-recent-reply.sh"),
+      "#!/usr/bin/env bash\n",
+      "utf-8",
+    );
+
+    await writeSkill({
+      dir: workspaceSkillDir,
+      name: "wacli",
+      description: "Workspace wacli",
+      metadata: '{"openclaw":{"requires":{"bins":["./scripts/custom.sh"]}}}',
+      body: "# Workspace custom wacli\n",
+    });
+    await fs.mkdir(path.join(workspaceSkillDir, ".clawhub"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceSkillDir, ".clawhub", "origin.json"),
+      JSON.stringify({ slug: "wacli", version: 1 }),
+      "utf-8",
+    );
+    await fs.mkdir(path.join(workspaceSkillDir, "scripts"), { recursive: true });
+    await fs.writeFile(path.join(workspaceSkillDir, "scripts", "custom.sh"), "# custom\n", "utf-8");
+
+    await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir }, async () => {
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
+    });
+
+    await expect(fs.readFile(path.join(workspaceSkillDir, "SKILL.md"), "utf-8")).resolves.toContain(
+      "Workspace custom wacli",
+    );
+    await expect(
+      fs.readFile(path.join(workspaceSkillDir, "scripts", "custom.sh"), "utf-8"),
+    ).resolves.toContain("# custom");
+  });
+
+  it("repairs half-updated workspace skills when declared helper scripts are missing", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
+    const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+    const workspaceSkillDir = path.join(workspaceDir, "skills", "wacli");
+    const bundledSkillDir = path.join(bundledSkillsDir, "wacli");
+
+    await writeSkill({
+      dir: bundledSkillDir,
+      name: "wacli",
+      description: "Bundled wacli",
+      metadata: '{"openclaw":{"requires":{"bins":["./scripts/wacli-recent-reply.sh"]}}}',
+      body: "# Bundled wacli\n",
+    });
+    await fs.mkdir(path.join(bundledSkillDir, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(bundledSkillDir, "scripts", "wacli-recent-reply.sh"),
+      "#!/usr/bin/env bash\n",
+      "utf-8",
+    );
+
+    await writeSkill({
+      dir: workspaceSkillDir,
+      name: "wacli",
+      description: "Broken workspace wacli",
+      metadata: '{"openclaw":{"requires":{"bins":["./scripts/wacli-recent-reply.sh"]}}}',
+      body: "# Broken workspace wacli\n",
+    });
+    await fs.mkdir(path.join(workspaceSkillDir, ".clawhub"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceSkillDir, ".clawhub", "origin.json"),
+      JSON.stringify({ slug: "wacli", version: 1 }),
+      "utf-8",
+    );
+
+    await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir }, async () => {
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
+    });
+
+    await expect(
+      fs.readFile(path.join(workspaceSkillDir, "scripts", "wacli-recent-reply.sh"), "utf-8"),
+    ).resolves.toContain("#!/usr/bin/env bash");
   });
 });
 
