@@ -303,7 +303,6 @@ describe("createOpenClawCodingTools", () => {
       "canvas",
       "nodes",
       "cron",
-      "whatsapp_monitor",
       "message",
       "gateway",
       "agents_list",

@@ -238,7 +238,7 @@ export function buildAgentSystemPrompt(params: {
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
   const cronToolSummary =
-    "Manage cron jobs and wake events (default to cron for reminders, exact scheduled checks, and explicit scoped monitors such as watching an inbox, thread, or person until something happens; when creating a monitor, prefer a clear cadence, stop condition, and expiry instead of an indefinite forever-job; use heartbeat only for optional broad low-frequency awareness)";
+    "Manage cron jobs and wake events (default to cron for reminders, exact scheduled checks, and explicit scoped monitors such as watching an inbox, thread, or person until something happens; when creating a monitor, prefer a clear cadence, stop condition, and expiry instead of an indefinite forever-job; for channel-specific monitors, use the relevant skill/helper script for detection instead of ad hoc raw CLI discovery; use heartbeat only for optional broad low-frequency awareness)";
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
     write: "Create or overwrite files",
@@ -257,8 +257,6 @@ export function buildAgentSystemPrompt(params: {
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: cronToolSummary,
-    whatsapp_monitor:
-      "Resolve WhatsApp reply-watch targets across phone JIDs and opaque @lid sibling chats from local wacli.db evidence; use this for WhatsApp monitors instead of single-chat phone queries",
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: acpSpawnRuntimeEnabled
@@ -292,7 +290,6 @@ export function buildAgentSystemPrompt(params: {
     "canvas",
     "nodes",
     "cron",
-    "whatsapp_monitor",
     "message",
     "gateway",
     "agents_list",
@@ -445,7 +442,6 @@ export function buildAgentSystemPrompt(params: {
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
           `- cron: ${cronToolSummary}`,
-          "- whatsapp_monitor: resolve WhatsApp reply watches across phone-JID and @lid sibling chats",
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
@@ -453,6 +449,7 @@ export function buildAgentSystemPrompt(params: {
           '- session_status: show usage/time/model state and answer "what model are we using?"',
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
+    "For channel-specific monitoring or reply-detection jobs, read the matching skill and use its helper scripts/check commands instead of inventing raw discovery flows.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     ...(acpHarnessSpawnAllowed

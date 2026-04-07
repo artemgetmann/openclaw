@@ -219,6 +219,7 @@ CHOOSING CRON VS HEARTBEAT:
 - Prefer cron for reminders, exact scheduled tasks, and explicit scoped monitors (for example: watch an inbox, thread, or person until something happens).
 - Prefer heartbeat only for broad, low-frequency ambient awareness that is already configured in HEARTBEAT.md.
 - For monitors, include a clear cadence, stop condition, and expiry/TTL in the job instructions when possible instead of creating an indefinite forever-job.
+- For channel-specific monitors, tell the agent to use the relevant skill/helper script for detection instead of improvising raw CLI discovery.
 
 ACTIONS:
 - status: Check cron scheduler status
