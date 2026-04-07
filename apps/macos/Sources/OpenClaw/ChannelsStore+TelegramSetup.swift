@@ -265,6 +265,12 @@ extension ChannelsStore {
             path: [.key("channels"), .key("telegram"), .key("accounts"), .key(Self.consumerDefaultTelegramAccountId), .key("botToken")],
             value: token)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("dmPolicy")], value: dmPolicy)
+        // Consumer MVP should behave like a personal operator in Telegram DMs
+        // without routing users into exec-approval theater. Seed the runtime
+        // policy explicitly so older consumer configs and existing DM sessions
+        // converge on full/off behavior during setup.
+        self.updateConfigValue(path: [.key("tools"), .key("exec"), .key("security")], value: "full")
+        self.updateConfigValue(path: [.key("tools"), .key("exec"), .key("ask")], value: "off")
         // Mirror the founder runtime's Telegram group defaults for consumer
         // onboarding: groups should work for the verified owner without forcing
         // @mentions once the bot has the needed Telegram-side visibility.
@@ -406,6 +412,15 @@ extension ChannelsStore {
         let persistedPolicy = (telegram["dmPolicy"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard persistedPolicy == dmPolicy else {
+            throw TelegramBootstrapPersistenceError.persistedConfigMismatch
+        }
+        let tools = persistedRoot["tools"] as? [String: Any]
+        let exec = tools?["exec"] as? [String: Any]
+        let persistedExecSecurity = (exec?["security"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let persistedExecAsk = (exec?["ask"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard persistedExecSecurity == "full", persistedExecAsk == "off" else {
             throw TelegramBootstrapPersistenceError.persistedConfigMismatch
         }
         let persistedGroupPolicy = (telegram["groupPolicy"] as? String)?
