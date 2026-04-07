@@ -37,6 +37,10 @@ apps/android/.kotlin/
 # Bun build artifacts
 *.bun-build
 apps/macos/.build/
+# Some local SwiftPM invocations can accidentally nest a second macOS build
+# root under apps/macos/apps/macos/.build. Ignore that residue instead of
+# letting it pollute git status on packaging lanes.
+apps/macos/apps/
 apps/shared/MoltbotKit/.build/
 apps/shared/OpenClawKit/.build/
 apps/shared/OpenClawKit/Package.resolved

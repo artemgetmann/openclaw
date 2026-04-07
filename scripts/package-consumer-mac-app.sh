@@ -6,6 +6,11 @@ source "$ROOT_DIR/scripts/lib/validated-node.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 
+# Consumer QA and handoff builds need to work on both Intel and Apple Silicon
+# Macs by default. Keep the same override escape hatch as the generic packager,
+# but stop making callers remember BUILD_ARCHS=all for the normal consumer path.
+export BUILD_ARCHS="${BUILD_ARCHS:-all}"
+
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 
 usage() {
