@@ -245,6 +245,48 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("Does demo things");
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
   });
+
+  it("keeps workspace skills with relative helper bins when the helper exists", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "wacli");
+
+    await writeSkill({
+      dir: skillDir,
+      name: "wacli",
+      description: "WhatsApp helper",
+      metadata: '{"openclaw":{"requires":{"bins":["./scripts/wacli-recent-reply.sh"]}}}',
+      body: "# wacli\n",
+    });
+    await fs.mkdir(path.join(skillDir, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "scripts", "wacli-recent-reply.sh"),
+      "#!/usr/bin/env bash\n",
+      "utf-8",
+    );
+
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    expect(snapshot.skills.map((skill) => skill.name)).toContain("wacli");
+    expect(snapshot.prompt).toContain("wacli");
+  });
+
+  it("drops workspace skills when a declared relative helper bin is missing", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "broken-helper");
+
+    await writeSkill({
+      dir: skillDir,
+      name: "broken-helper",
+      description: "Missing helper",
+      metadata: '{"openclaw":{"requires":{"bins":["./scripts/missing.sh"]}}}',
+      body: "# broken-helper\n",
+    });
+
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    expect(snapshot.skills.map((skill) => skill.name)).not.toContain("broken-helper");
+    expect(snapshot.prompt).not.toContain("broken-helper");
+  });
 });
 
 describe("applySkillEnvOverrides", () => {

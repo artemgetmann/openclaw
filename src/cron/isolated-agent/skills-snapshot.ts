@@ -22,6 +22,8 @@ export function resolveCronSkillsSnapshot(params: {
   const existingSnapshot = params.existingSnapshot;
   const shouldRefresh =
     !existingSnapshot ||
+    existingSnapshot.version === 0 ||
+    snapshotVersion === 0 ||
     existingSnapshot.version !== snapshotVersion ||
     !matchesSkillFilter(existingSnapshot.skillFilter, skillFilter);
   if (!shouldRefresh) {

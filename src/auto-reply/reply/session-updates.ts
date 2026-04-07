@@ -179,10 +179,13 @@ export async function ensureSkillSnapshot(params: {
   let nextEntry = sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
   const remoteEligibility = getRemoteSkillEligibility();
-  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
+  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+    !nextEntry?.skillsSnapshot ||
+    nextEntry.skillsSnapshot.version === 0 ||
+    snapshotVersion === 0 ||
+    (nextEntry.skillsSnapshot.version ?? 0) < snapshotVersion;
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??

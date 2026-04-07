@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig, SkillConfig } from "../../config/config.js";
 import {
   evaluateRuntimeEligibility,
@@ -68,6 +70,29 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): 
   return allowlist.includes(key) || allowlist.includes(entry.skill.name);
 }
 
+function isRelativeSkillBin(bin: string): boolean {
+  return bin.startsWith("./") || bin.startsWith("../");
+}
+
+function hasRelativeSkillBin(entry: SkillEntry, bin: string): boolean {
+  if (!isRelativeSkillBin(bin)) {
+    return false;
+  }
+
+  const candidate = path.resolve(entry.skill.baseDir, bin);
+  const relative = path.relative(entry.skill.baseDir, candidate);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+
+  try {
+    fs.accessSync(candidate, fs.constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: OpenClawConfig;
@@ -89,7 +114,9 @@ export function shouldIncludeSkill(params: {
     remotePlatforms: eligibility?.remote?.platforms,
     always: entry.metadata?.always,
     requires: entry.metadata?.requires,
-    hasBin: hasBinary,
+    // Workspace skills often declare helper scripts like "./scripts/foo.sh" in
+    // requires.bins. Those are local artifacts, not PATH binaries.
+    hasBin: (bin) => hasRelativeSkillBin(entry, bin) || hasBinary(bin),
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
     hasEnv: (envName) =>
