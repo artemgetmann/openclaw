@@ -227,6 +227,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     );
+    expect(prompt).toContain(
+      "For channel-specific monitoring or reply-detection jobs, read the matching skill and use its helper scripts/check commands instead of inventing raw discovery flows.",
+    );
   });
 
   it("classifies cron as the default for reminders and explicit monitors", () => {
@@ -238,6 +241,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("default to cron for reminders, exact scheduled checks");
     expect(prompt).toContain("watching an inbox, thread, or person until something happens");
     expect(prompt).toContain("cadence, stop condition, and expiry");
+    expect(prompt).toContain("use the relevant skill/helper script for detection");
     expect(prompt).toContain("use heartbeat only for optional broad low-frequency awareness");
   });
 

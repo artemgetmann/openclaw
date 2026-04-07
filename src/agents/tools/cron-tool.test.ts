@@ -117,6 +117,7 @@ describe("cron tool", () => {
     expect(tool.description).toContain("Prefer cron for reminders, exact scheduled tasks");
     expect(tool.description).toContain("watch an inbox, thread, or person until something happens");
     expect(tool.description).toContain("cadence, stop condition, and expiry/TTL");
+    expect(tool.description).toContain("use the relevant skill/helper script for detection");
     expect(tool.description).toContain(
       "Prefer heartbeat only for broad, low-frequency ambient awareness",
     );
