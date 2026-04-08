@@ -180,11 +180,13 @@ export function resolvePrimaryAuthProfileId(params: {
         .map(([profileId]) => profileId)
     : [];
   const defaultProfileId = `${providerAuthKey}:default`;
+  const preferDefaultAliasFirst = providerAuthKey === "openai-codex";
   const candidates = dedupeProfileIds([
     ...(preferredProfile ? [preferredProfile] : []),
+    ...(preferDefaultAliasFirst ? [defaultProfileId] : []),
     ...storedOrder,
     ...configuredOrder,
-    defaultProfileId,
+    ...(!preferDefaultAliasFirst ? [defaultProfileId] : []),
     ...explicitProfiles,
     ...listProfilesForProvider(store, provider),
   ]);

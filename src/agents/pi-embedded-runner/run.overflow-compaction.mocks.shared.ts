@@ -90,11 +90,16 @@ vi.mock("../runtime-plugins.js", () => ({
   ensureRuntimePluginsLoaded: mockedEnsureRuntimePluginsLoaded,
 }));
 
+export const mockedMarkAuthProfileFailure = vi.fn(async () => {});
+export const mockedMarkAuthProfileGood = vi.fn(async () => {});
+export const mockedMarkAuthProfileUsed = vi.fn(async () => {});
+export const mockedIsProfileInCooldown = vi.fn(() => false);
+
 vi.mock("../auth-profiles.js", () => ({
-  isProfileInCooldown: vi.fn(() => false),
-  markAuthProfileFailure: vi.fn(async () => {}),
-  markAuthProfileGood: vi.fn(async () => {}),
-  markAuthProfileUsed: vi.fn(async () => {}),
+  isProfileInCooldown: mockedIsProfileInCooldown,
+  markAuthProfileFailure: mockedMarkAuthProfileFailure,
+  markAuthProfileGood: mockedMarkAuthProfileGood,
+  markAuthProfileUsed: mockedMarkAuthProfileUsed,
 }));
 
 vi.mock("../usage.js", () => ({
@@ -187,14 +192,18 @@ vi.mock("./model.js", () => ({
   })),
 }));
 
+export const mockedEnsureAuthProfileStore = vi.fn(() => ({}));
+export const mockedGetApiKeyForModel = vi.fn(async () => ({
+  apiKey: "test-key",
+  profileId: "test-profile",
+  source: "test",
+}));
+export const mockedResolveAuthProfileOrder = vi.fn(() => []);
+
 vi.mock("../model-auth.js", () => ({
-  ensureAuthProfileStore: vi.fn(() => ({})),
-  getApiKeyForModel: vi.fn(async () => ({
-    apiKey: "test-key",
-    profileId: "test-profile",
-    source: "test",
-  })),
-  resolveAuthProfileOrder: vi.fn(() => []),
+  ensureAuthProfileStore: mockedEnsureAuthProfileStore,
+  getApiKeyForModel: mockedGetApiKeyForModel,
+  resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
 }));
 
 vi.mock("../models-config.js", () => ({

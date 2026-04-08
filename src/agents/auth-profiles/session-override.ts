@@ -3,6 +3,7 @@ import { updateSessionStore, type SessionEntry } from "../../config/sessions.js"
 import {
   ensureAuthProfileStore,
   isProfileInCooldown,
+  resolvePrimaryAuthProfileId,
   resolveAuthProfileOrder,
 } from "../auth-profiles.js";
 import { normalizeProviderId } from "../model-selection.js";
@@ -87,6 +88,12 @@ export async function resolveSessionAuthProfileOverride(params: {
 
   const pickFirstAvailable = () =>
     order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
+  const pickSingleActiveProfile = () =>
+    resolvePrimaryAuthProfileId({
+      cfg,
+      store,
+      provider,
+    });
   const pickNextAvailable = (active: string) => {
     const startIndex = order.indexOf(active);
     if (startIndex < 0) {
@@ -118,8 +125,11 @@ export async function resolveSessionAuthProfileOverride(params: {
     return current;
   }
 
+  const useSingleActiveProfile = normalizeProviderId(provider) === "openai-codex";
   let next = current;
-  if (isNewSession) {
+  if (useSingleActiveProfile) {
+    next = pickSingleActiveProfile() ?? current;
+  } else if (isNewSession) {
     next = current ? pickNextAvailable(current) : pickFirstAvailable();
   } else if (current && compactionCount > storedCompaction) {
     next = pickNextAvailable(current);
