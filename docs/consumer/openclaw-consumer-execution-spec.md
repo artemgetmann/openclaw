@@ -107,13 +107,12 @@ The refactor doesn't happen on `main`. It happens as part of building `codex/con
 ### Workflow
 
 ```sh
-# Refresh the consumer home clone, then branch for the task
-cd ~/Programming_Projects/openclaw-consumer
-git checkout codex/consumer-openclaw-project
-git pull --ff-only origin codex/consumer-openclaw-project
-git checkout -b codex/<task-name>
+# Refresh the consumer sacred home clone, then spawn a temp worktree for the task.
+# The blessed path fails closed unless the lane proves local tool readiness.
+source ~/Programming_Projects/openclaw/scripts/shell-helpers/home-clone-helpers.sh
+oc-consumer-task <task-name>
 
-# Open a draft PR early, then validate on the feature branch
+# Open a draft PR early, then validate in that temp worktree
 # Mark the PR ready only after validation is complete
 
 # Test consumer build without touching live bot
@@ -126,7 +125,7 @@ pnpm openclaw gateway --port 19001 --bind loopback
 # See docs/agent-guides/fork-maintenance.md
 ```
 
-Temporary worktrees are still allowed when 2 or more agents need isolated parallel editing in the same clone, but they are no longer the default consumer branch home.
+Temporary worktrees are still allowed when 2 or more agents need isolated parallel editing in the same clone. The default consumer task-spawn path is now `oc-consumer-task`.
 
 ### Rule
 

@@ -238,9 +238,13 @@ Use:
 ```bash
 oc-main
 oc-consumer
+oc-main-task my-feature
+oc-consumer-task my-feature
 ```
 
 Those wrappers require the home clone to be clean on its base branch, run
-`git pull --ff-only`, then enter it. Create a short-lived feature branch after
-entry. Temporary worktrees are still available when parallel isolation is needed,
-but they are no longer the default branch homes.
+`git pull --ff-only`, then enter it. The `*-task` wrappers immediately create
+and enter a temp worktree from the correct home clone. They refuse
+handoff unless the new lane proves local readiness inside that worktree
+(`pnpm exec vitest --version` today). Do not create feature branches directly
+in the home clones.

@@ -33,11 +33,15 @@
 - Then use:
   - `oc-main`
   - `oc-consumer`
+  - `oc-main-task <feature-name>`
+  - `oc-consumer-task <feature-name>`
 - Those wrappers:
   - enter the correct home clone
   - require the clone to already be on its base branch
   - require a clean worktree so `git pull --ff-only` is honest
   - fast-forward from `origin/<base>` before you start work
+  - let the `*-task` wrapper create a temp worktree from the correct home clone automatically
+  - refuse handoff unless the new lane proves local readiness inside that worktree
 - If a helper refuses entry, fix the clone first instead of forcing around it. The point is to keep base-branch truth boring.
 
 ## Daily agent sequence
@@ -59,6 +63,8 @@
 - Keep repo-owned temporary worktrees under `.worktrees/` when practical so they do not scatter across multiple ad-hoc locations.
 - Before creating a temporary worktree, fast-forward the chosen base branch locally so it exactly matches `origin/<base>`. `scripts/new-worktree.sh` fails if the named base branch is ahead of or behind its remote tracking branch.
 - `scripts/new-worktree.sh` bootstraps fresh lanes by default with a per-worktree dependency install/build. It must not symlink `node_modules` or `ui/node_modules` from another checkout because that leaks cross-worktree package state into clean-room validation.
+- A ready lane is not "directory exists". The blessed spawn path must prove local tool resolution from inside the new worktree before handoff. Today that proof is `pnpm exec vitest --version`.
+- If runtime bootstrap or the ready-lane proof fails, `scripts/new-worktree.sh` exits non-zero and the shell helper wrappers must refuse to drop the caller into that lane.
 - `scripts/new-worktree.sh` supports explicit lane modes:
   - `--mode clean` is the default and keeps the current clean-room behavior for consumer E2E, runtime-sensitive work, or anything that must prove isolation honestly.
   - `--mode warm` creates the worktree and dev launch env, installs JS dependencies in-place, and skips the slower build step so coding/debugging lanes come up faster.
@@ -66,6 +72,7 @@
   - it does not reuse runtime/auth/session/browser state
   - it does not symlink or copy `node_modules`
   - it does not share Swift `.build` artifacts
+  - it still must pass the ready-lane proof for local JS tooling before handoff
   - if you need the heavier macOS/Swift warm-up, use `bash scripts/prewarm-worktree.sh --root <worktree> --macos` after creation instead of leaking state between lanes
 - Worktree/bootstrap/consumer runtime scripts pin to the repo-validated Node version from `.node-version` / `.nvmrc` instead of trusting the shell-default `node`. If that exact version is missing, install it first or point `OPENCLAW_NODE_BIN` at a binary with the same version.
 - Legacy durable worktrees may still exist during migration. Do not retire them in-place during this change. Cleanup belongs to a later explicit pass.
