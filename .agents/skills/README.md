@@ -8,6 +8,8 @@ Keep the detailed procedures in the docs. Use skills to force the right docs and
 
 - Worktrees and branch policy:
   - `docs/agent-guides/workflow.md`
+- Default local/browser/agent validation:
+  - `docs/agent-guides/browser-agent-e2e.md`
 - Telegram live validation:
   - `docs/agent-guides/telegram-live.md`
   - `scripts/telegram-e2e/README.md`
@@ -22,7 +24,8 @@ Keep the detailed procedures in the docs. Use skills to force the right docs and
   - If tmux handoff is also needed, combine with the global `tmux-worktree-handoff` skill.
 
 - `telegram-live-e2e`
-  - Use when the user wants live Telegram verification or Telegram runtime debugging in this repo.
+  - Use only when the user wants live Telegram verification or Telegram runtime debugging in this repo.
+  - Do not use it as the default E2E path for non-Telegram bugs; use local OpenClaw CLI / browser-agent validation first.
   - Wraps tester-bot/runtime ownership proof and forces separation of text-command vs callback-button validation.
 
 - `parallels-discord-roundtrip`

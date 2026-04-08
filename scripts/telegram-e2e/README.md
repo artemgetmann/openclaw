@@ -2,9 +2,13 @@
 
 Goal: run live Telegram end-to-end checks for thread model inheritance without re-discovering setup every time.
 
-Manual Telegram verification is the release gate. The probe/runner is support
-tooling and should not block closure if Telegram behavior is correct but the
-probe is flaky.
+For Telegram thread model inheritance, manual Telegram verification is the
+release gate. The probe/runner is support tooling and should not block closure
+if Telegram behavior is correct but the probe is flaky.
+
+This is not the default E2E path for non-Telegram bugs. Use local OpenClaw CLI
+or browser/agent validation first unless Telegram behavior itself is the thing
+you are trying to prove.
 
 Before you trust any live result, prove the lane is clean:
 
