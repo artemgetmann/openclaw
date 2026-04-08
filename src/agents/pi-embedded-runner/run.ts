@@ -690,6 +690,11 @@ export async function runEmbeddedPiAgent(
       };
 
       const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
+        // Remember the candidate before credential resolution so auth failures
+        // during getApiKeyForModel can still be attributed to the profile that
+        // just failed. Without this, stale OAuth profiles can remain first in
+        // order forever because they never get marked unusable.
+        lastProfileId = candidate;
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
         const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
         if (!apiKeyInfo.apiKey) {
@@ -821,6 +826,16 @@ export async function runEmbeddedPiAgent(
         if (err instanceof FailoverError) {
           throw err;
         }
+        const failedProfileId = profileCandidates[profileIndex] ?? lastProfileId;
+        const failedReason = resolveAuthProfileFailoverReason({
+          allInCooldown: false,
+          message: describeUnknownError(err).trim(),
+          profileIds: failedProfileId ? [failedProfileId] : [],
+        });
+        await maybeMarkAuthProfileFailure({
+          profileId: failedProfileId,
+          reason: resolveAuthProfileFailureReason(failedReason),
+        });
         if (profileCandidates[profileIndex] === lockedProfileId) {
           throwAuthProfileFailover({ allInCooldown: false, error: err });
         }
@@ -864,12 +879,12 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
-      const maybeMarkAuthProfileFailure = async (failure: {
+      async function maybeMarkAuthProfileFailure(failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
         config?: RunEmbeddedPiAgentParams["config"];
         agentDir?: RunEmbeddedPiAgentParams["agentDir"];
-      }) => {
+      }) {
         const { profileId, reason } = failure;
         if (!profileId || !reason || reason === "timeout") {
           return;
@@ -882,17 +897,17 @@ export async function runEmbeddedPiAgent(
           agentDir,
           runId: params.runId,
         });
-      };
-      const resolveAuthProfileFailureReason = (
+      }
+      function resolveAuthProfileFailureReason(
         failoverReason: FailoverReason | null,
-      ): AuthProfileFailureReason | null => {
+      ): AuthProfileFailureReason | null {
         // Timeouts are transport/model-path failures, not auth health signals,
         // so they should not persist auth-profile failure state.
         if (!failoverReason || failoverReason === "timeout") {
           return null;
         }
         return failoverReason;
-      };
+      }
       const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
         if (reason !== "overloaded") {
           return;
