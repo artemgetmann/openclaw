@@ -22,10 +22,7 @@ async function loadConfigForHome(config: unknown) {
   });
 }
 
-function expectAnthropicPruningDefaults(
-  cfg: ReturnType<typeof loadConfig>,
-  heartbeatEvery = "30m",
-) {
+function expectAnthropicPruningDefaults(cfg: ReturnType<typeof loadConfig>, heartbeatEvery = "1d") {
   expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
   expect(cfg.agents?.defaults?.contextPruning?.ttl).toBe("1h");
   expect(cfg.agents?.defaults?.heartbeat?.every).toBe(heartbeatEvery);
@@ -44,7 +41,7 @@ describe("config pruning defaults", () => {
     });
   });
 
-  it("enables cache-ttl pruning + 1h heartbeat for Anthropic OAuth", async () => {
+  it("enables cache-ttl pruning + daily heartbeat for Anthropic OAuth", async () => {
     const cfg = await loadConfigForHome({
       auth: {
         profiles: {
@@ -54,7 +51,7 @@ describe("config pruning defaults", () => {
       agents: { defaults: {} },
     });
 
-    expectAnthropicPruningDefaults(cfg, "1h");
+    expectAnthropicPruningDefaults(cfg, "1d");
   });
 
   it("enables cache-ttl pruning + 1h cache TTL for Anthropic API keys", async () => {
