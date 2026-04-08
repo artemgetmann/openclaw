@@ -122,6 +122,10 @@ export async function buildRecentReplyCliResult(args: Args): Promise<{
   latestInboundReply: Awaited<
     ReturnType<typeof findLatestInboundReplyAcrossResolvedChats>
   >["latestInboundReply"];
+  recentConversation: Awaited<
+    ReturnType<typeof findLatestInboundReplyAcrossResolvedChats>
+  >["recentConversation"];
+  continuity: Awaited<ReturnType<typeof findLatestInboundReplyAcrossResolvedChats>>["continuity"];
   preferredMonitorChatJid: string;
   monitorBootstrapDecision: ReturnType<typeof decideWacliMonitorBootstrapAction>;
   monitorStatus?: "new_message" | "no_change";
@@ -193,6 +197,15 @@ function printHumanResult(result: RecentReplyCliResult): void {
   console.log(`- ts: ${result.latestInboundReply.ts}`);
   console.log(`- media: ${result.latestInboundReply.mediaType ?? "(none)"}`);
   console.log(`- effective text: ${result.latestInboundReply.effectiveText ?? "(empty)"}`);
+  console.log(`Recent conversation turns: ${result.recentConversation.length}`);
+  if (result.continuity.lastOutboundReply) {
+    console.log(
+      `Last outbound reply: ${result.continuity.lastOutboundReply.effectiveText ?? "(empty)"}`,
+    );
+  }
+  if (result.continuity.lastOutboundIsRepeatOfPrevious) {
+    console.log("Repeat risk: last outbound duplicates the previous outbound");
+  }
 }
 
 async function main(): Promise<void> {

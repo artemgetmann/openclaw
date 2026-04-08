@@ -101,6 +101,8 @@ export async function buildMonitorCheckCliResult(args: Args): Promise<{
   stateFile: string;
   preferredMonitorChatJid: string;
   latestInboundReply: Awaited<ReturnType<typeof buildRecentReplyCliResult>>["latestInboundReply"];
+  recentConversation: Awaited<ReturnType<typeof buildRecentReplyCliResult>>["recentConversation"];
+  continuity: Awaited<ReturnType<typeof buildRecentReplyCliResult>>["continuity"];
   monitorBootstrapDecision: Awaited<
     ReturnType<typeof buildRecentReplyCliResult>
   >["monitorBootstrapDecision"];
@@ -143,6 +145,15 @@ function printHumanResult(result: MonitorCheckResult) {
   console.log(`- chat: ${result.latestInboundReply.chatJid}`);
   console.log(`- ts: ${result.latestInboundReply.ts}`);
   console.log(`- effective text: ${result.latestInboundReply.effectiveText ?? "(empty)"}`);
+  console.log(`- recent turns: ${result.recentConversation.length}`);
+  if (result.continuity.lastOutboundReply) {
+    console.log(
+      `- last outbound: ${result.continuity.lastOutboundReply.effectiveText ?? "(empty)"}`,
+    );
+  }
+  if (result.continuity.lastOutboundIsRepeatOfPrevious) {
+    console.log("- repeat risk: last outbound duplicates the previous outbound");
+  }
 }
 
 async function main(): Promise<void> {

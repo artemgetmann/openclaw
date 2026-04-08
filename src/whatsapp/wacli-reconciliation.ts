@@ -35,6 +35,24 @@ export type WacliLatestInboundReply = WacliReplyRecord & {
   hasRenderableContent: boolean;
 };
 
+export type WacliConversationTurn = WacliReplyRecord & {
+  direction: "inbound" | "outbound";
+  effectiveText: string | null;
+  hasRenderableContent: boolean;
+};
+
+export type WacliReplyContinuity = {
+  contextChatJid: string | null;
+  recentTurnCount: number;
+  hasPriorInbound: boolean;
+  hasPriorOutbound: boolean;
+  lastOutboundReply: WacliConversationTurn | null;
+  previousOutboundReply: WacliConversationTurn | null;
+  lastOutboundNormalizedText: string | null;
+  previousOutboundNormalizedText: string | null;
+  lastOutboundIsRepeatOfPrevious: boolean;
+};
+
 export type WacliReplyLookupResult = {
   target: string;
   seedJids: string[];
@@ -42,6 +60,8 @@ export type WacliReplyLookupResult = {
   identityNames: string[];
   candidates: WacliCandidateChat[];
   latestInboundReply: WacliLatestInboundReply | null;
+  recentConversation: WacliConversationTurn[];
+  continuity: WacliReplyContinuity;
   preferredMonitorChatJid: string | null;
 };
 
@@ -166,6 +186,63 @@ function hasRenderableInboundContent(row: WacliReplyRecord): boolean {
     row.mediaType?.trim() ||
     row.displayText?.trim(),
   );
+}
+
+function toConversationTurn(row: WacliReplyRecord): WacliConversationTurn {
+  return {
+    ...row,
+    fromMe: Boolean(row.fromMe),
+    direction: row.fromMe ? "outbound" : "inbound",
+    effectiveText: computeEffectiveText(row),
+    hasRenderableContent: hasRenderableInboundContent(row),
+  };
+}
+
+function normalizeComparableReplyText(text: string | null): string | null {
+  if (!text) {
+    return null;
+  }
+  const normalized = text
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function buildReplyContinuity(params: {
+  contextChatJid: string | null;
+  recentConversation: WacliConversationTurn[];
+}): WacliReplyContinuity {
+  const outboundTurns = params.recentConversation.filter((turn) => turn.direction === "outbound");
+  const lastOutboundReply = outboundTurns.at(-1) ?? null;
+  const previousOutboundReply =
+    outboundTurns.length >= 2 ? outboundTurns[outboundTurns.length - 2] : null;
+  const lastOutboundNormalizedText = normalizeComparableReplyText(
+    lastOutboundReply?.effectiveText ?? null,
+  );
+  const previousOutboundNormalizedText = normalizeComparableReplyText(
+    previousOutboundReply?.effectiveText ?? null,
+  );
+
+  return {
+    contextChatJid: params.contextChatJid,
+    recentTurnCount: params.recentConversation.length,
+    hasPriorInbound: params.recentConversation.some((turn) => turn.direction === "inbound"),
+    hasPriorOutbound: outboundTurns.length > 0,
+    lastOutboundReply,
+    previousOutboundReply,
+    lastOutboundNormalizedText,
+    previousOutboundNormalizedText,
+    // This catches the exact spam shape from the live trace: a fresh inbound
+    // arrived, but the monitor had already sent the same negotiation line on
+    // consecutive turns. Wrappers can treat this as a hard "do not send the
+    // same thing again" signal.
+    lastOutboundIsRepeatOfPrevious:
+      Boolean(lastOutboundNormalizedText) &&
+      lastOutboundNormalizedText === previousOutboundNormalizedText,
+  };
 }
 
 /**
@@ -344,11 +421,11 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
 
       const latest = inbound.find((row) => hasRenderableInboundContent(row)) ?? null;
       if (latest) {
+        const latestTurn = toConversationTurn(latest);
         latestInboundReply = {
-          ...latest,
-          fromMe: Boolean(latest.fromMe),
-          effectiveText: computeEffectiveText(latest),
-          hasRenderableContent: hasRenderableInboundContent(latest),
+          ...latestTurn,
+          effectiveText: latestTurn.effectiveText,
+          hasRenderableContent: latestTurn.hasRenderableContent,
         };
 
         // Root cause: monitor setup was pinning whichever candidate sorted first,
@@ -379,6 +456,36 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
     }
 
     const preferredMonitorChatJid = latestInboundReply?.chatJid ?? candidates[0]?.jid ?? null;
+    const recentConversation =
+      preferredMonitorChatJid === null
+        ? []
+        : (
+            db
+              .prepare(
+                `SELECT chat_jid AS chatJid,
+                      msg_id AS msgId,
+                      sender_jid AS senderJid,
+                      ts,
+                      from_me AS fromMe,
+                      text,
+                      media_type AS mediaType,
+                      media_caption AS mediaCaption,
+                      display_text AS displayText,
+                      chat_name AS chatName,
+                      sender_name AS senderName
+               FROM messages
+               WHERE chat_jid = ?
+               ORDER BY ts DESC, rowid DESC
+               LIMIT 6`,
+              )
+              .all(preferredMonitorChatJid) as unknown as WacliReplyRecord[]
+          )
+            .map((row) => toConversationTurn(row))
+            .toReversed();
+    const continuity = buildReplyContinuity({
+      contextChatJid: preferredMonitorChatJid,
+      recentConversation,
+    });
 
     return {
       target: rawTarget,
@@ -387,6 +494,8 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
       identityNames: [...identityNames].toSorted(),
       candidates,
       latestInboundReply,
+      recentConversation,
+      continuity,
       preferredMonitorChatJid,
     };
   } finally {

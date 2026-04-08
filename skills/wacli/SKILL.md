@@ -141,11 +141,17 @@ Find chats + messages
   `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json`
   This inspects the local `wacli.db`, resolves real sibling chats from stored
   names/contacts/aliases, and returns the newest inbound `from_me=0` across all
-  candidate chats.
+  candidate chats, plus `recentConversation` and `continuity` fields for the
+  active chat.
 - Monitor job helper (stateful baseline + reconciliation in one command):
   `skills/wacli/scripts/wacli-monitor-check.sh --target <phone-or-jid> --json`
   This stores baseline state under `~/.openclaw/wacli-monitor-state/` by default
   so cron jobs can use the same command on every wake.
+  For negotiation/follow-up monitors, do not compose a reply from only
+  `latestInboundReply.effectiveText`; use `recentConversation` so the wake run
+  sees prior outbound turns, and suppress sends when
+  `continuity.lastOutboundIsRepeatOfPrevious` is true unless the user explicitly
+  wants to resend the same line.
 
 History backfill
 
