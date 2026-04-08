@@ -22,10 +22,9 @@ if [[ -z "$RAW_INSTANCE_ID" ]]; then
 fi
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$RAW_INSTANCE_ID")"
-# Restart the default consumer lane with the same dedicated env as named
-# instances. Otherwise the home checkout restarts ~/.openclaw instead of the
-# consumer runtime we are trying to validate.
-consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
+if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
+  consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
+fi
 
 LAUNCHD_DOMAIN="gui/${UID}"
 LAUNCHD_LABEL="${OPENCLAW_LAUNCHD_LABEL:-ai.openclaw.gateway}"
@@ -36,13 +35,11 @@ if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
 
-# The shared gateway LaunchAgent points at the canonical checkout. Do not let a
-# branch switch in that checkout silently restart Jarvis onto feature code.
-worktree_guard_require_shared_root_main_branch "$ROOT"
-worktree_guard_reject_shared_root_main_edits \
-  "$ROOT" \
-  worktree \
-  --context "scripts/restart-local-gateway.sh"
+# Sacred home clones are runtime anchors. They must stay on their base branch
+# and free of tracked implementation edits unless the operator has explicitly
+# entered the break-glass hotfix path on that same base branch.
+worktree_guard_require_sacred_home_clone_base_branch "$ROOT" "scripts/restart-local-gateway.sh"
+worktree_guard_reject_sacred_home_edits "$ROOT" worktree --context "scripts/restart-local-gateway.sh"
 
 is_self_restart_context() {
   # OPENCLAW_RESTART_DETACHED is set when the gateway asks us to restart from

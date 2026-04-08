@@ -17,6 +17,158 @@ worktree_guard_current_branch() {
   git -C "$root_dir" branch --show-current 2>/dev/null || true
 }
 
+worktree_guard_sacred_home_clone_path() {
+  local lane_name="$1"
+
+  case "$lane_name" in
+    main)
+      printf '%s\n' "${OPENCLAW_MAIN_HOME_CLONE:-$HOME/Programming_Projects/openclaw}"
+      ;;
+    consumer)
+      printf '%s\n' "${OPENCLAW_CONSUMER_HOME_CLONE:-$HOME/Programming_Projects/openclaw-consumer}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+worktree_guard_sacred_home_clone_branch() {
+  local lane_name="$1"
+
+  case "$lane_name" in
+    main)
+      printf 'main'
+      ;;
+    consumer)
+      printf 'codex/consumer-openclaw-project'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+worktree_guard_sacred_home_clone_path_for_branch() {
+  local branch_name="$1"
+  local lane_name=""
+
+  case "$branch_name" in
+    main)
+      lane_name="main"
+      ;;
+    codex/consumer-openclaw-project)
+      lane_name="consumer"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  worktree_guard_sacred_home_clone_path "$lane_name"
+}
+
+worktree_guard_sacred_home_clone_label() {
+  local lane_name="$1"
+
+  case "$lane_name" in
+    main)
+      printf 'main sacred home clone'
+      ;;
+    consumer)
+      printf 'consumer sacred home clone'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+worktree_guard_sacred_home_clone_role() {
+  local root_dir="$1"
+  local absolute_root=""
+  local candidate=""
+  local candidate_path=""
+
+  absolute_root="$(cd "$root_dir" && pwd -P)"
+  for candidate in main consumer; do
+    candidate_path="$(worktree_guard_sacred_home_clone_path "$candidate" 2>/dev/null || true)"
+    [[ -n "$candidate_path" ]] || continue
+    if [[ -d "$candidate_path" ]] && [[ "$absolute_root" == "$(cd "$candidate_path" && pwd -P)" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+worktree_guard_is_sacred_home_clone() {
+  local root_dir="$1"
+  worktree_guard_sacred_home_clone_role "$root_dir" >/dev/null 2>&1
+}
+
+worktree_guard_allow_sacred_home_hotfix() {
+  [[ "${OPENCLAW_ALLOW_SACRED_HOME_HOTFIX:-0}" == "1" ]] || \
+    [[ "${OPENCLAW_ALLOW_SACRED_HOME_EDITS:-0}" == "1" ]] || \
+    [[ "${OPENCLAW_ALLOW_SHARED_ROOT_MAIN_EDITS:-0}" == "1" ]]
+}
+
+worktree_guard_forbid_sacred_home_checkout_drift() {
+  local root_dir="$1"
+  local context_label="${2:-}"
+  local lane_name=""
+  local branch_name=""
+  local base_branch=""
+
+  lane_name="$(worktree_guard_sacred_home_clone_role "$root_dir" 2>/dev/null || true)"
+  [[ -n "$lane_name" ]] || return 0
+
+  branch_name="$(worktree_guard_current_branch "$root_dir")"
+  base_branch="$(worktree_guard_sacred_home_clone_branch "$lane_name")" || return 0
+
+  if [[ "$branch_name" == "$base_branch" ]]; then
+    return 0
+  fi
+
+  if worktree_guard_allow_sacred_home_hotfix; then
+    cat >&2 <<EOF
+ERROR: break-glass sacred-home hotfixes must run from '${base_branch}', not '${branch_name:-<detached>}'.
+
+Checkout: ${root_dir}
+${context_label:+Context:  ${context_label}
+}
+Restore the sacred home clone first:
+  git checkout ${base_branch}
+  git pull --ff-only origin ${base_branch}
+
+Then, if this is a real runtime hotfix, rerun with:
+  OPENCLAW_ALLOW_SACRED_HOME_HOTFIX=1
+EOF
+    return 1
+  fi
+
+  cat >&2 <<EOF
+ERROR: sacred home clone drifted off its base branch.
+
+Checkout: ${root_dir}
+Branch:   ${branch_name:-<detached>}
+Expected: ${base_branch}
+${context_label:+Context:  ${context_label}
+}
+Sacred home clones are pull-only runtime anchors. They do not host feature
+branches anymore. Restore the base branch, fast-forward it, then spawn a temp
+worktree for implementation:
+  git checkout ${base_branch}
+  git pull --ff-only origin ${base_branch}
+  $(if [[ "$lane_name" == "main" ]]; then printf 'oc-main-task'; else printf 'oc-consumer-task'; fi) <feature-name>
+
+Only a true runtime hotfix may bypass this, and only from '${base_branch}':
+  OPENCLAW_ALLOW_SACRED_HOME_HOTFIX=1
+EOF
+  return 1
+}
+
 worktree_guard_protected_base_branch() {
   local branch_name="$1"
 
@@ -35,6 +187,11 @@ worktree_guard_forbid_protected_base_branch_commit() {
   local branch_name=""
 
   if [[ "${OPENCLAW_ALLOW_PROTECTED_BRANCH_COMMITS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  if [[ "${OPENCLAW_ALLOW_SACRED_HOME_HOTFIX:-0}" == "1" ]]; then
+    worktree_guard_forbid_sacred_home_checkout_drift "$root_dir" "protected-base-commit" || return 1
     return 0
   fi
 
@@ -57,6 +214,127 @@ If you intentionally need to bypass this once, set:
   OPENCLAW_ALLOW_PROTECTED_BRANCH_COMMITS=1
 EOF
   return 1
+}
+
+worktree_guard_reject_sacred_home_edits() {
+  local root_dir="$1"
+  local mode="${2:-worktree}"
+  shift 2 || true
+
+  local lane_name=""
+  local base_branch=""
+  local branch_name=""
+  local label=""
+  local -a paths=()
+  local path=""
+  local context_label=""
+
+  lane_name="$(worktree_guard_sacred_home_clone_role "$root_dir" 2>/dev/null || true)"
+  [[ -n "$lane_name" ]] || return 0
+
+  label="$(worktree_guard_sacred_home_clone_label "$lane_name" 2>/dev/null || printf 'sacred home clone')"
+  base_branch="$(worktree_guard_sacred_home_clone_branch "$lane_name" 2>/dev/null || true)"
+  branch_name="$(worktree_guard_current_branch "$root_dir")"
+
+  if [[ "$#" -gt 0 && "$1" == --context ]]; then
+    context_label="${2:-}"
+    shift 2 || true
+  fi
+
+  if worktree_guard_allow_sacred_home_hotfix; then
+    if [[ -n "$base_branch" && "$branch_name" == "$base_branch" ]]; then
+      return 0
+    fi
+    worktree_guard_forbid_sacred_home_checkout_drift "$root_dir" "$context_label"
+    return 1
+  fi
+
+  if [[ "$#" -gt 0 ]]; then
+    for path in "$@"; do
+      [[ -n "$path" ]] || continue
+      paths+=("$path")
+    done
+  else
+    while IFS= read -r path; do
+      [[ -n "$path" ]] || continue
+      paths+=("$path")
+    done < <(worktree_guard_list_tracked_changes "$root_dir" "$mode")
+  fi
+
+  if [[ "${#paths[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  cat >&2 <<EOF
+ERROR: tracked edits are blocked in the ${label}.
+
+Checkout: ${root_dir}
+Branch:   ${branch_name:-<detached>}
+Base:     ${base_branch:-unknown}
+${context_label:+Context:  ${context_label}
+}
+Detected paths:
+$(printf '  %s\n' "${paths[@]}")
+
+Sacred home clones are pull-only runtime anchors. Implementation work must
+happen in a temporary worktree created from the correct sacred home clone:
+  $(if [[ "$lane_name" == "main" ]]; then printf 'oc-main-task'; else printf 'oc-consumer-task'; fi) <feature-name>
+
+Only a true runtime hotfix may bypass this, and only from '${base_branch}':
+  OPENCLAW_ALLOW_SACRED_HOME_HOTFIX=1
+EOF
+  return 1
+}
+
+worktree_guard_forbid_sacred_home_commit() {
+  local root_dir="$1"
+  local lane_name=""
+  local branch_name=""
+  local base_branch=""
+  local label=""
+
+  lane_name="$(worktree_guard_sacred_home_clone_role "$root_dir" 2>/dev/null || true)"
+  [[ -n "$lane_name" ]] || return 0
+
+  branch_name="$(worktree_guard_current_branch "$root_dir")"
+  base_branch="$(worktree_guard_sacred_home_clone_branch "$lane_name")" || return 0
+  label="$(worktree_guard_sacred_home_clone_label "$lane_name" 2>/dev/null || printf 'sacred home clone')"
+
+  if worktree_guard_allow_sacred_home_hotfix; then
+    if [[ "$branch_name" == "$base_branch" ]]; then
+      return 0
+    fi
+    worktree_guard_forbid_sacred_home_checkout_drift "$root_dir" "commit"
+    return 1
+  fi
+
+  cat >&2 <<EOF
+ERROR: refusing commit from the ${label}.
+
+Checkout: ${root_dir}
+Branch:   ${branch_name:-<detached>}
+Base:     ${base_branch}
+
+Sacred home clones are pull-only runtime anchors. Agents do not land feature
+commits here, even on short-lived branches. Restore the home clone to its base
+branch, fast-forward it, and create a temporary worktree for the task:
+  $(if [[ "$lane_name" == "main" ]]; then printf 'oc-main-task'; else printf 'oc-consumer-task'; fi) <feature-name>
+
+Only a true runtime hotfix may bypass this, and only from '${base_branch}':
+  OPENCLAW_ALLOW_SACRED_HOME_HOTFIX=1
+EOF
+  return 1
+}
+
+worktree_guard_require_sacred_home_clone_base_branch() {
+  local root_dir="$1"
+  local context_label="${2:-}"
+
+  if worktree_guard_is_linked_checkout "$root_dir"; then
+    return 0
+  fi
+
+  worktree_guard_forbid_sacred_home_checkout_drift "$root_dir" "$context_label"
 }
 
 worktree_guard_durable_lane_upstream() {
@@ -136,7 +414,7 @@ Ahead:    ${ahead}
 Behind:   ${behind}
 
 Use the lane wrapper so origin is fetched and the lane is fast-forwarded safely:
-  $(if [[ "$branch_name" == "main" ]]; then printf 'wt-main'; else printf 'wt-consumer'; fi)
+  $(if [[ "$branch_name" == "main" ]]; then printf 'oc-main'; else printf 'oc-consumer'; fi)
 
 Manual entry into durable lanes is allowed, but stale branch truth here is how old code sneaks back in.
 EOF
@@ -201,7 +479,7 @@ Ahead:    ${ahead}
 Behind:   ${behind}
 
 Fast-forward this lane before committing:
-  $(if [[ "$branch_name" == "main" ]]; then printf 'wt-main'; else printf 'wt-consumer'; fi)
+  $(if [[ "$branch_name" == "main" ]]; then printf 'oc-main'; else printf 'oc-consumer'; fi)
 
 If you intentionally need to bypass this once, set:
   OPENCLAW_ALLOW_STALE_DURABLE_LANE_COMMITS=1
@@ -248,17 +526,12 @@ worktree_guard_shared_gateway_targets_root() {
 
 worktree_guard_is_canonical_shared_root() {
   local root_dir="$1"
-  local absolute_root=""
-  local candidate=""
+  local lane_name=""
 
-  absolute_root="$(cd "$root_dir" && pwd -P)"
-  for candidate in \
-    "$HOME/Programming_Projects/openclaw" \
-    "$HOME/Projects/openclaw"; do
-    if [[ -d "$candidate" ]] && [[ "$absolute_root" == "$(cd "$candidate" && pwd -P)" ]]; then
-      return 0
-    fi
-  done
+  lane_name="$(worktree_guard_sacred_home_clone_role "$root_dir" 2>/dev/null || true)"
+  if [[ "$lane_name" == "main" ]]; then
+    return 0
+  fi
 
   worktree_guard_shared_gateway_targets_root "$root_dir"
 }
@@ -274,11 +547,16 @@ worktree_guard_require_shared_root_main_branch() {
     return 0
   fi
 
+  if ! worktree_guard_shared_gateway_targets_root "$root_dir"; then
+    return 0
+  fi
+
   if [[ "${OPENCLAW_ALLOW_SHARED_ROOT_BRANCH_DRIFT:-0}" == "1" ]]; then
     return 0
   fi
 
-  if ! worktree_guard_shared_gateway_targets_root "$root_dir"; then
+  if [[ "${OPENCLAW_ALLOW_SACRED_HOME_HOTFIX:-0}" == "1" ]]; then
+    worktree_guard_forbid_sacred_home_checkout_drift "$root_dir" "shared-runtime" || return 1
     return 0
   fi
 
@@ -292,14 +570,15 @@ ERROR: shared root checkout is on '${branch_name}', but ai.openclaw.gateway is p
   ${root_dir}/dist/index.js
 
 This checkout owns the shared local Jarvis runtime. Runtime operations still
-require this home clone to be on 'main'. Feature work can happen here on a
-short-lived branch, but switch back to 'main' before restarting the shared runtime.
+require this sacred home clone to be on 'main'. Do not park feature branches
+here. Restore 'main', fast-forward it, then do implementation work in a temp
+worktree instead.
 
-If you need isolated parallel editing, create a temporary worktree instead:
-  bash scripts/new-worktree.sh <feature-name> --base main
+Create a temporary worktree instead:
+  oc-main-task <feature-name>
 
-If you intentionally need to bypass this guard, set:
-  OPENCLAW_ALLOW_SHARED_ROOT_BRANCH_DRIFT=1
+Only a true runtime hotfix may bypass this, and only from 'main':
+  OPENCLAW_ALLOW_SACRED_HOME_HOTFIX=1
 EOF
   return 1
 }
@@ -342,90 +621,21 @@ worktree_guard_list_tracked_changes() {
 }
 
 worktree_guard_reject_shared_root_main_edits() {
-  local root_dir="$1"
-  local mode="${2:-worktree}"
-  shift 2 || true
-
-  local override="${OPENCLAW_ALLOW_SHARED_ROOT_MAIN_EDITS:-0}"
-  local -a paths=()
-  local path=""
-  local context_label=""
-
-  if [[ "$override" == "1" ]]; then
-    return 0
-  fi
-
-  if ! worktree_guard_is_shared_root_main_checkout "$root_dir"; then
-    return 0
-  fi
-
-  if [[ "$#" -gt 0 && "$1" == --context ]]; then
-    context_label="${2:-}"
-    shift 2 || true
-  fi
-
-  if [[ "$#" -gt 0 ]]; then
-    for path in "$@"; do
-      [[ -n "$path" ]] || continue
-      paths+=("$path")
-    done
-  else
-    while IFS= read -r path; do
-      [[ -n "$path" ]] || continue
-      paths+=("$path")
-    done < <(worktree_guard_list_tracked_changes "$root_dir" "$mode")
-  fi
-
-  if [[ "${#paths[@]}" -eq 0 ]]; then
-    return 0
-  fi
-
-  cat >&2 <<EOF
-ERROR: tracked edits are blocked in the canonical shared main checkout.
-
-Checkout: ${root_dir}
-Branch:   main
-${context_label:+Context:  ${context_label}
-}
-Detected paths:
-$(printf '  %s\n' "${paths[@]}")
-
-Base branches stay clean. Either create a short-lived feature branch here:
-  git checkout -b codex/<task-name>
-
-Or, if you need isolated parallel editing, create a temporary worktree:
-  bash scripts/new-worktree.sh <feature-name> --base main
-
-If you absolutely must bypass this guard, set:
-  OPENCLAW_ALLOW_SHARED_ROOT_MAIN_EDITS=1
-EOF
-  return 1
+  worktree_guard_reject_sacred_home_edits "$@"
 }
 
 worktree_guard_forbid_shared_root_main_commits() {
   local root_dir="$1"
 
-  if [[ "${OPENCLAW_ALLOW_SHARED_ROOT_COMMITS:-0}" == "1" ]] || \
-    [[ "${OPENCLAW_ALLOW_SHARED_ROOT_MAIN_EDITS:-0}" == "1" ]]; then
-    return 0
-  fi
-
   if ! worktree_guard_is_shared_root_main_checkout "$root_dir"; then
     return 0
   fi
 
-  cat >&2 <<EOF
-ERROR: refusing commit from the canonical shared main checkout:
-  ${root_dir}
+  worktree_guard_forbid_sacred_home_commit "$root_dir"
+}
 
-This checkout owns ai.openclaw.gateway. Code work must happen in a worktree so
-we do not dirty the live runtime while other agents are running.
-
-Create one instead:
-  bash scripts/new-worktree.sh <feature-name> --base main
-
-If you intentionally need to bypass this once, set:
-  OPENCLAW_ALLOW_SHARED_ROOT_COMMITS=1
-EOF
-  return 1
+# Backward-compatible alias: some local lanes may still call the pluralized
+# name while the repo standardizes on the singular helper.
+worktree_guard_forbid_sacred_home_commits() {
+  worktree_guard_forbid_sacred_home_commit "$@"
 }

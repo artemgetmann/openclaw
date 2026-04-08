@@ -89,9 +89,10 @@ Default branch homes now live in the two full clones, not in durable worktrees:
 
 - source `scripts/shell-helpers/home-clone-helpers.sh` in your shell rc
 - use `oc-main` or `oc-consumer` instead of raw `cd`
+- use `oc-main-task <feature-name>` or `oc-consumer-task <feature-name>` to spawn the temp worktree immediately
 - those commands require the home clone to be clean on its base branch, then run `git pull --ff-only`
-- create a short-lived feature branch after entry
-- use temporary worktrees only when 2 or more agents need isolated parallel editing in the same clone
+- do not create feature branches directly inside the sacred home clones
+- do implementation work only inside temp worktrees created from the correct sacred home clone
 
 Legacy durable worktrees may still exist during migration. Keep them only as transitional state, not as the default branch homes.
 
