@@ -3,7 +3,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
-import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import {
+  discoverOpenClawPlugins,
+  type CandidateManifestLoadResult,
+  type PluginCandidate,
+} from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import { resolvePluginCacheInputs } from "./roots.js";
@@ -66,6 +70,35 @@ const registryCache = new Map<string, { expiresAt: number; registry: PluginManif
 
 // Keep a short cache window to collapse bursty reloads during startup flows.
 const DEFAULT_MANIFEST_CACHE_MS = 1000;
+
+function traceManifestRegistryStage(env: NodeJS.ProcessEnv, stage: string): void {
+  const stageLogPath = env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    fs.appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only. Never let debug logging change runtime behavior.
+  }
+}
+
+function nowMs(): number {
+  return performance.now();
+}
+
+function traceManifestRegistryDuration(
+  env: NodeJS.ProcessEnv,
+  stage: string,
+  startedAtMs: number,
+  details?: string,
+): void {
+  const elapsedMs = Math.round((nowMs() - startedAtMs) * 100) / 100;
+  traceManifestRegistryStage(
+    env,
+    `${stage} durationMs=${elapsedMs}${details ? ` ${details}` : ""}`,
+  );
+}
 
 export function clearPluginManifestRegistryCache(): void {
   registryCache.clear();
@@ -270,6 +303,27 @@ function resolveDuplicatePrecedenceRank(params: {
   return 4;
 }
 
+function resolveManifestLoadForCandidate(candidate: PluginCandidate): CandidateManifestLoadResult {
+  if (candidate.manifestLoad) {
+    return candidate.manifestLoad;
+  }
+  const rejectHardlinks = candidate.origin !== "bundled";
+  if ((candidate.format ?? "openclaw") === "bundle" && candidate.bundleFormat) {
+    return {
+      kind: "bundle",
+      result: loadBundleManifest({
+        rootDir: candidate.rootDir,
+        bundleFormat: candidate.bundleFormat,
+        rejectHardlinks,
+      }),
+    };
+  }
+  return {
+    kind: "openclaw",
+    result: loadPluginManifest(candidate.rootDir, rejectHardlinks),
+  };
+}
+
 export function loadPluginManifestRegistry(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -280,6 +334,7 @@ export function loadPluginManifestRegistry(params: {
   diagnostics?: PluginDiagnostic[];
   onlyPluginIds?: string[];
 }): PluginManifestRegistry {
+  const startedAtMs = nowMs();
   const config = params.config ?? {};
   const normalized = normalizePluginsConfig(config.plugins);
   const env = params.env ?? process.env;
@@ -295,6 +350,12 @@ export function loadPluginManifestRegistry(params: {
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
+      traceManifestRegistryDuration(
+        env,
+        "plugin-manifest-registry-cache-hit",
+        startedAtMs,
+        `plugins=${cached.registry.plugins.length} diagnostics=${cached.registry.diagnostics.length}`,
+      );
       return cached.registry;
     }
   }
@@ -318,16 +379,17 @@ export function loadPluginManifestRegistry(params: {
   const realpathCache = new Map<string, string>();
 
   for (const candidate of candidates) {
-    const rejectHardlinks = candidate.origin !== "bundled";
-    const isBundleRecord = (candidate.format ?? "openclaw") === "bundle";
-    const manifestRes =
-      isBundleRecord && candidate.bundleFormat
-        ? loadBundleManifest({
-            rootDir: candidate.rootDir,
-            bundleFormat: candidate.bundleFormat,
-            rejectHardlinks,
-          })
-        : loadPluginManifest(candidate.rootDir, rejectHardlinks);
+    // Per-candidate manifest timing is the key checkpoint signal: it tells us
+    // whether registry time is dominated by repeated manifest IO after discovery.
+    const candidateStartedAtMs = nowMs();
+    const manifestLoad = resolveManifestLoadForCandidate(candidate);
+    const manifestRes = manifestLoad.result;
+    traceManifestRegistryDuration(
+      env,
+      "plugin-manifest-registry-candidate",
+      candidateStartedAtMs,
+      `origin=${candidate.origin} root=${candidate.rootDir}`,
+    );
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",
@@ -337,6 +399,7 @@ export function loadPluginManifestRegistry(params: {
       continue;
     }
     const manifest = manifestRes.manifest;
+    const isBundleRecord = manifestLoad.kind === "bundle";
 
     if (!isCompatiblePluginIdHint(candidate.idHint, manifest.id)) {
       diagnostics.push({
@@ -441,5 +504,11 @@ export function loadPluginManifestRegistry(params: {
       registryCache.set(cacheKey, { expiresAt: Date.now() + ttl, registry });
     }
   }
+  traceManifestRegistryDuration(
+    env,
+    "plugin-manifest-registry-complete",
+    startedAtMs,
+    `plugins=${records.length} diagnostics=${diagnostics.length}`,
+  );
   return registry;
 }
