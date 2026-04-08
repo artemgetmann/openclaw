@@ -17,11 +17,14 @@ This skill is repo-specific. It does not replace the global tmux/worktree skills
 
 ## Hard rules for this repo
 
-- The shared checkout at `/Users/user/Programming_Projects/openclaw` on `main` is runtime/orchestration only.
-- Do not make tracked implementation edits in the shared checkout.
+- The sacred home clone at `/Users/user/Programming_Projects/openclaw` on `main` is a runtime/base-truth anchor.
+- The sacred home clone at `/Users/user/Programming_Projects/openclaw-consumer` on `codex/consumer-openclaw-project` is the consumer runtime/base-truth anchor.
+- Do not make tracked implementation edits in either sacred home clone.
 - Durable worktrees belong under `.worktrees/`, not `.codex/worktrees/`, unless the user explicitly asks otherwise.
 - Before creating a worktree, fast-forward the chosen base branch so it matches `origin/<base>`.
-- Use `bash scripts/new-worktree.sh <feature-name> --base <branch>` instead of ad-hoc `git worktree add`.
+- Use `oc-main-task <feature-name>` or `oc-consumer-task <feature-name>` as the default task-spawn path.
+- Use `bash scripts/new-worktree.sh <feature-name> --base <branch>` only when you are already inside the correct sacred home clone and need the lower-level helper.
+- `scripts/new-worktree.sh` auto-reexecs into the other sacred home clone when the requested base branch belongs there.
 
 ## Branch rules
 
