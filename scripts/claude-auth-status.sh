@@ -5,7 +5,49 @@
 set -euo pipefail
 
 CLAUDE_CREDS="$HOME/.claude/.credentials.json"
-OPENCLAW_AUTH="$HOME/.openclaw/agents/main/agent/auth-profiles.json"
+OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+
+resolve_openclaw_agent_dir() {
+    if [ -n "${OPENCLAW_AGENT_DIR:-}" ]; then
+        printf '%s' "${OPENCLAW_AGENT_DIR%/}"
+        return
+    fi
+    if [ -n "${PI_CODING_AGENT_DIR:-}" ]; then
+        printf '%s' "${PI_CODING_AGENT_DIR%/}"
+        return
+    fi
+    printf '%s/agents/main/agent' "$OPENCLAW_STATE_DIR"
+}
+
+resolve_openclaw_agent_id() {
+    if [ -n "${OPENCLAW_AGENT_ID:-}" ]; then
+        printf '%s' "$OPENCLAW_AGENT_ID"
+        return
+    fi
+    if [ -n "${PI_CODING_AGENT_ID:-}" ]; then
+        printf '%s' "$PI_CODING_AGENT_ID"
+        return
+    fi
+
+    local agent_dir parent_dir parent_base
+    agent_dir="$(resolve_openclaw_agent_dir)"
+    case "$(basename "$agent_dir")" in
+        agent)
+            parent_dir="$(dirname "$agent_dir")"
+            parent_base="$(basename "$parent_dir")"
+            if [ -n "$parent_base" ] && [ "$parent_base" != ".openclaw" ]; then
+                printf '%s' "$parent_base"
+                return
+            fi
+            ;;
+    esac
+
+    printf 'main'
+}
+
+OPENCLAW_AGENT_DIR_RESOLVED="$(resolve_openclaw_agent_dir)"
+OPENCLAW_AGENT_ID_RESOLVED="$(resolve_openclaw_agent_id)"
+OPENCLAW_AUTH="$OPENCLAW_AGENT_DIR_RESOLVED/auth-profiles.json"
 
 # Colors for terminal output
 RED='\033[0;31m'
@@ -17,6 +59,11 @@ NC='\033[0m' # No Color
 OUTPUT_MODE="${1:-full}"
 
 fetch_models_status_json() {
+    if [ -n "$OPENCLAW_AGENT_ID_RESOLVED" ]; then
+        openclaw models status --json --agent "$OPENCLAW_AGENT_ID_RESOLVED" 2>/dev/null || true
+        return
+    fi
+
     openclaw models status --json 2>/dev/null || true
 }
 
@@ -228,7 +275,7 @@ else
 fi
 
 echo ""
-echo "OpenClaw Auth (~/.openclaw/agents/main/agent/auth-profiles.json):"
+echo "OpenClaw Auth ($OPENCLAW_AUTH):"
 if [ "$USE_JSON" -eq 1 ]; then
     best_profile=$(json_best_anthropic_profile)
     expires=$(json_expires_for_anthropic_any)
