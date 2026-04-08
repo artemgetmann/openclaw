@@ -199,9 +199,11 @@ EOF
 
 For agent-run or scripted CLI sends, prefer this wrapper over raw `himalaya
 template send`. It behaves like normal Himalaya for no-attachment and
-small-attachment sends, so those still save a Sent copy. Only larger iCloud
-attachment payloads flip `message.send.save-copy = false` to avoid Himalaya's
-post-send IMAP append timeout.
+small-attachment sends, so those still save a Sent copy. For larger iCloud
+attachment payloads, it preemptively disables `message.send.save-copy` to
+avoid Himalaya's post-send IMAP append timeout without retrying the send or
+risking duplicate delivery. The message still goes out, but no Sent copy is
+appended for those larger payloads.
 
 Or with headers flag:
 

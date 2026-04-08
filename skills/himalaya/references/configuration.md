@@ -143,8 +143,8 @@ Notes:
 - Generate an app-specific password in Apple ID settings and use it for both IMAP and SMTP auth.
 - If folder operations miss, verify aliases against `himalaya folder list -a icloud`.
 - If larger attachment sends fail with `cannot add IMAP message: request timed out`, the broken step is usually the IMAP Sent-copy append, not SMTP delivery.
-- Use `python3 skills/himalaya/scripts/send_template.py --account icloud` for agent-run or scripted CLI sends. The wrapper keeps normal Himalaya behavior for no-attachment and small-attachment sends, which still save a Sent copy.
-- Only larger iCloud attachment payloads switch to `message.send.save-copy = false` to avoid the post-send IMAP append timeout, so those payloads intentionally skip the Sent copy.
+- Use `python3 skills/himalaya/scripts/send_template.py --account icloud` for automated sends. The wrapper behaves like normal Himalaya for no-attachment and small-attachment sends, and only larger iCloud attachment payloads switch to `message.send.save-copy = false` to avoid the post-send IMAP append timeout without duplicate delivery.
+- Those larger payloads intentionally skip the Sent copy.
 
 ## Folder Aliases
 
