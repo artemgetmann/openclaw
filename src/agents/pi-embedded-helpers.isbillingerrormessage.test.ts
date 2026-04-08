@@ -852,6 +852,7 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
     expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
     expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
+    expect(classifyFailoverReason("refresh_token_reused")).toBe("auth_permanent");
   });
   it("classifies JSON api_error internal server failures as timeout", () => {
     expect(
