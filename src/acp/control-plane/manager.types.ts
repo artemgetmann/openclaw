@@ -43,6 +43,7 @@ export type AcpInitializeSessionInput = {
   sessionKey: string;
   agent: string;
   mode: AcpRuntimeSessionMode;
+  contextFingerprint?: string;
   resumeSessionId?: string;
   cwd?: string;
   backendId?: string;
