@@ -35,13 +35,16 @@ const skillCommandDebugOnce = new Set<string>();
 
 /**
  * Replace the user's home directory prefix with `~` in skill file paths
- * to reduce system prompt token usage. Models understand `~` expansion,
- * and the read tool resolves `~` to the home directory.
+ * to reduce system prompt token usage.
  *
- * Example: `/Users/alice/.bun/.../skills/github/SKILL.md`
- *       → `~/.bun/.../skills/github/SKILL.md`
+ * Keep workspace skills absolute. They are frequently read immediately on live
+ * turns, and we have seen model-side `~` expansion produce malformed paths for
+ * `~/.openclaw/workspace/...` helper skills. Using the absolute path removes
+ * that ambiguity without changing which skill is selected.
  *
- * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
+ * Example compacted path:
+ * `/Users/alice/.bun/.../skills/github/SKILL.md`
+ *   → `~/.bun/.../skills/github/SKILL.md`
  */
 function compactSkillPaths(skills: Skill[]): Skill[] {
   const home = os.homedir();
@@ -49,7 +52,12 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   const prefix = home.endsWith(path.sep) ? home : home + path.sep;
   return skills.map((s) => ({
     ...s,
-    filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath,
+    filePath:
+      s.source === "workspace"
+        ? s.filePath
+        : s.filePath.startsWith(prefix)
+          ? "~/" + s.filePath.slice(prefix.length)
+          : s.filePath,
   }));
 }
 
