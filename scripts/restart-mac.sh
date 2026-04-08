@@ -196,10 +196,8 @@ log "==> App scope: ${APP_SCOPE}"
 
 acquire_lock
 
-worktree_guard_reject_shared_root_main_edits \
-  "${ROOT_DIR}" \
-  worktree \
-  --context "scripts/restart-mac.sh"
+worktree_guard_require_sacred_home_clone_base_branch "${ROOT_DIR}" "scripts/restart-mac.sh"
+worktree_guard_reject_sacred_home_edits "${ROOT_DIR}" worktree --context "scripts/restart-mac.sh"
 
 resolve_restart_app_bundle() {
   if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then
