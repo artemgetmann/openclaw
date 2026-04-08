@@ -5,6 +5,7 @@ ROOT=""
 QUIET=0
 SKIP_INSTALL=0
 SKIP_BUILD=0
+READY_MODE="clean"
 
 usage() {
   cat <<'EOF'
@@ -74,9 +75,12 @@ source "$ROOT/scripts/lib/validated-node.sh"
 # shell-default Node that differs from the consumer runtime we validate.
 openclaw_use_validated_node "$ROOT" >/dev/null || exit 1
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
+READY_CHECK_SCRIPT="$ROOT/scripts/worktree-ready-check.sh"
 
 did_work=0
 build_skipped=0
+install_attempted=0
+build_attempted=0
 
 if [[ ! -d "$ROOT/node_modules" ]]; then
   if [[ "$SKIP_INSTALL" == "1" ]]; then
@@ -86,17 +90,52 @@ if [[ ! -d "$ROOT/node_modules" ]]; then
   log "Bootstrapping worktree dependencies in $ROOT"
   openclaw_run_repo_pnpm "$ROOT" install --frozen-lockfile
   did_work=1
+  install_attempted=1
 fi
 
 if [[ ! -f "$ROOT/dist/index.js" ]]; then
   if [[ "$SKIP_BUILD" == "1" ]]; then
     log "Skipping build step in $ROOT because --skip-build was requested"
     build_skipped=1
+    READY_MODE="warm"
   else
     log "Bootstrapping worktree build artifacts in $ROOT"
     openclaw_run_repo_pnpm "$ROOT" build
     did_work=1
+    build_attempted=1
   fi
+fi
+
+if [[ "$SKIP_BUILD" == "1" ]]; then
+  READY_MODE="warm"
+fi
+
+run_ready_check() {
+  local -a args=(--root "$ROOT" --mode "$READY_MODE")
+  if [[ "$QUIET" == "1" ]]; then
+    args+=(--quiet)
+  fi
+  bash "$READY_CHECK_SCRIPT" "${args[@]}"
+}
+
+if ! run_ready_check >/dev/null; then
+  # Artifact presence is not enough. If the lane cannot resolve local tools
+  # like Vitest, repair it before we tell the caller bootstrap is done.
+  if [[ "$SKIP_INSTALL" != "1" && "$install_attempted" == "0" ]]; then
+    log "Worktree readiness failed; reinstalling dependencies in $ROOT"
+    openclaw_run_repo_pnpm "$ROOT" install --frozen-lockfile
+    did_work=1
+    install_attempted=1
+  fi
+
+  if [[ "$READY_MODE" == "clean" && "$SKIP_BUILD" != "1" && "$build_attempted" == "0" ]]; then
+    log "Worktree readiness failed; rebuilding artifacts in $ROOT"
+    openclaw_run_repo_pnpm "$ROOT" build
+    did_work=1
+    build_attempted=1
+  fi
+
+  run_ready_check >/dev/null
 fi
 
 if [[ "$did_work" == "0" ]]; then

@@ -104,7 +104,8 @@ The refactor doesn't happen on `main`. It happens as part of building `codex/con
 ### Workflow
 
 ```sh
-# Refresh the consumer sacred home clone, then spawn a temp worktree for the task
+# Refresh the consumer sacred home clone, then spawn a temp worktree for the task.
+# The blessed path fails closed unless the lane proves local tool readiness.
 source ~/Programming_Projects/openclaw/scripts/shell-helpers/home-clone-helpers.sh
 oc-consumer-task <task-name>
 
@@ -121,7 +122,8 @@ pnpm openclaw gateway --port 19001 --bind loopback
 # See docs/agent-guides/fork-maintenance.md
 ```
 
-The consumer sacred home clone stays on `codex/consumer-openclaw-project`. It does not host feature work directly. Every consumer implementation task starts in a temp worktree created from that sacred home clone.
+Temporary worktrees are still allowed when 2 or more agents need isolated parallel editing in the same clone. The default consumer task-spawn path is now `oc-consumer-task`.
+The consumer sacred home clone stays on `codex/consumer-openclaw-project`. It does not host feature work directly. Every consumer implementation task starts in a temp worktree created from that sacred home clone. Temporary worktrees are still allowed when 2 or more agents need isolated parallel editing in the same clone, and the default consumer task-spawn path is `oc-consumer-task`.
 
 ### Rule
 
