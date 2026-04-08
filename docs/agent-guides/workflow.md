@@ -26,7 +26,7 @@
   - `codex/consumer-openclaw-project`
 - Checkout-level enforcement is also in place:
   - `git-hooks/pre-commit` and `scripts/committer` reject commits from either sacred home clone regardless of branch name
-  - `scripts/new-worktree.sh` only runs from a sacred home clone, and it requires that sacred home clone to be clean and on its base branch
+  - `scripts/new-worktree.sh` auto-reexecs to the correct sacred home clone, then requires that sacred home clone to be clean and on its base branch
 - The only bypass is an explicit break-glass runtime hotfix from the sacred home clone's base branch:
   - `OPENCLAW_ALLOW_SACRED_HOME_HOTFIX=1`
   - use this only when the runtime is broken badly enough that creating a temp worktree first would slow recovery
@@ -70,7 +70,7 @@
 - Every non-hotfix task should start in a temp worktree created from the correct sacred home clone.
 - Keep repo-owned temporary worktrees under `.worktrees/` when practical so they do not scatter across multiple ad-hoc locations.
 - Before creating a temporary worktree, fast-forward the chosen base branch locally so it exactly matches `origin/<base>`. `scripts/new-worktree.sh` fails if the named base branch is ahead of or behind its remote tracking branch.
-- `scripts/new-worktree.sh` only runs from a sacred home clone. The shell helper wrappers are the default task-spawn path because they refresh the right sacred home clone first, then call `scripts/new-worktree.sh` with the correct base.
+- `scripts/new-worktree.sh` auto-reexecs to the correct sacred home clone for the requested base branch. The shell helper wrappers are still the default task-spawn path because they refresh the right sacred home clone first, then call `scripts/new-worktree.sh` with the correct base.
 - `scripts/new-worktree.sh` bootstraps fresh lanes by default with a per-worktree dependency install/build. It must not symlink `node_modules` or `ui/node_modules` from another checkout because that leaks cross-worktree package state into clean-room validation.
 - `scripts/new-worktree.sh` supports explicit lane modes:
   - `--mode clean` is the default and keeps the current clean-room behavior for consumer E2E, runtime-sensitive work, or anything that must prove isolation honestly.

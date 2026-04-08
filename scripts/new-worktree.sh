@@ -100,6 +100,62 @@ resolve_default_base_branch() {
   printf 'main'
 }
 
+maybe_reexec_from_sacred_home_clone() {
+  local base_branch="$1"
+  local target_root=""
+  local -a rerun_args=()
+
+  target_root="$(worktree_guard_sacred_home_clone_path_for_branch "$base_branch" 2>/dev/null || true)"
+  [[ -n "$target_root" ]] || return 0
+  target_root="$(cd "$target_root" 2>/dev/null && pwd -P)" || {
+    cat >&2 <<EOF
+Error: could not resolve the sacred home clone for '${base_branch}'.
+
+Expected clone:
+  ${target_root}
+EOF
+    exit 1
+  }
+
+  if [[ "$REPO_ROOT" == "$target_root" ]]; then
+    return 0
+  fi
+
+  if [[ "${OPENCLAW_NEW_WORKTREE_REEXECED:-0}" == "1" ]]; then
+    cat >&2 <<EOF
+Error: scripts/new-worktree.sh already re-execed once but is still not in the
+correct sacred home clone.
+
+Current checkout: ${REPO_ROOT}
+Expected clone:   ${target_root}
+Base branch:      ${base_branch}
+EOF
+    exit 1
+  fi
+
+  if [[ ! -d "${target_root}/.git" ]]; then
+    cat >&2 <<EOF
+Error: sacred home clone missing for '${base_branch}'.
+
+Expected clone:
+  ${target_root}
+
+Create or restore that sacred home clone first, then rerun this command.
+EOF
+    exit 1
+  fi
+
+  # Default task spawn should branch from the correct sacred home clone even
+  # when the caller launches the helper from another checkout. Otherwise the
+  # task accidentally inherits the wrong clone's branch truth and metadata.
+  rerun_args=("$FEATURE_NAME" "--base" "$base_branch" "--mode" "$LANE_MODE")
+  if [[ "$NO_BOOTSTRAP" == "1" ]]; then
+    rerun_args+=("--no-bootstrap")
+  fi
+
+  exec env OPENCLAW_NEW_WORKTREE_REEXECED=1 bash "${target_root}/scripts/new-worktree.sh" "${rerun_args[@]}"
+}
+
 assert_base_branch_synced_with_remote() {
   local base_branch="$1"
   local override="${OPENCLAW_NEW_WORKTREE_ALLOW_UNSYNCED_BASE:-0}"
@@ -281,6 +337,8 @@ fi
 if [[ -z "$BASE_BRANCH" ]]; then
   BASE_BRANCH="$(resolve_default_base_branch)"
 fi
+
+maybe_reexec_from_sacred_home_clone "$BASE_BRANCH"
 
 if ! worktree_guard_is_sacred_home_clone "$REPO_ROOT"; then
   cat >&2 <<EOF
