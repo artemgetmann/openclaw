@@ -7,7 +7,8 @@ import { HEARTBEAT_TOKEN } from "./tokens.js";
 // open loops.
 export const HEARTBEAT_PROMPT =
   "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.";
-export const DEFAULT_HEARTBEAT_EVERY = "30m";
+// Daily is the safe default cadence; faster intervals remain explicit config.
+export const DEFAULT_HEARTBEAT_EVERY = "1d";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
 /**
