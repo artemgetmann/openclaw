@@ -16,6 +16,22 @@ function installMockWebSearchProviders() {
     () =>
       [
         {
+          id: "firecrawl",
+          envVars: ["FIRECRAWL_API_KEY"],
+          getCredentialValue: (searchConfig?: Record<string, unknown>) =>
+            (searchConfig?.firecrawl as { apiKey?: unknown } | undefined)?.apiKey,
+          setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => {
+            searchConfigTarget.firecrawl = {
+              ...(typeof searchConfigTarget.firecrawl === "object" &&
+              searchConfigTarget.firecrawl !== null &&
+              !Array.isArray(searchConfigTarget.firecrawl)
+                ? (searchConfigTarget.firecrawl as Record<string, unknown>)
+                : {}),
+              apiKey: value,
+            };
+          },
+        },
+        {
           id: "brave",
           envVars: ["BRAVE_API_KEY"],
           getCredentialValue: (searchConfig?: Record<string, unknown>) => searchConfig?.apiKey,
