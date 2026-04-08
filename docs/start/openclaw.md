@@ -22,7 +22,7 @@ Start conservative:
 
 - Always set `channels.whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
-- Heartbeats now default to every 30 minutes. Disable until you trust the setup by setting `agents.defaults.heartbeat.every: "0m"`.
+- Heartbeats now default to every day. Disable until you trust the setup by setting `agents.defaults.heartbeat.every: "0m"`.
 
 ## Prerequisites
 
@@ -155,7 +155,7 @@ Example:
 
 ## Heartbeats (proactive mode)
 
-By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
+By default, OpenClaw runs a heartbeat every day with the prompt:
 `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.`
 Set `agents.defaults.heartbeat.every: "0m"` to disable.
 
@@ -169,7 +169,7 @@ Set `agents.defaults.heartbeat.every: "0m"` to disable.
 ```json5
 {
   agent: {
-    heartbeat: { every: "30m" },
+    heartbeat: { every: "1d" },
   },
 }
 ```
