@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../memory/sqlite.js";
+import { resolvePreferredMonitorChatJid } from "./wacli-monitor.js";
 import { findLatestInboundReplyAcrossResolvedChats } from "./wacli-reconciliation.js";
 
 async function withTempDb(run: (dbPath: string) => Promise<void>): Promise<void> {
@@ -108,13 +109,16 @@ describe("findLatestInboundReplyAcrossResolvedChats", () => {
 
       expect(result.seedJids).toContain("6281238581815@s.whatsapp.net");
       expect(result.candidates.map((candidate) => candidate.jid)).toEqual([
-        "6281238581815@s.whatsapp.net",
         "235317080666280@lid",
+        "6281238581815@s.whatsapp.net",
       ]);
-      expect(result.candidates[1]?.reasons).toContain("matching-name");
+      expect(result.candidates[0]?.reasons).toContain("active-inbound-thread");
+      expect(result.candidates[0]?.reasons).toContain("matching-name");
       expect(result.candidates.map((candidate) => candidate.jid)).not.toContain(
         "6281238581815@lid",
       );
+      expect(result.preferredMonitorChatJid).toBe("235317080666280@lid");
+      expect(resolvePreferredMonitorChatJid(result)).toBe("235317080666280@lid");
     });
   });
 
