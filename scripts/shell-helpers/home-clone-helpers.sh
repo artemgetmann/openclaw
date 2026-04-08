@@ -161,18 +161,20 @@ oc-consumer() {
   _openclaw_enter_home_clone consumer
 }
 
-oc-main-lane() {
-  _openclaw_spawn_task_lane main "$@"
-}
-
-oc-consumer-lane() {
-  _openclaw_spawn_task_lane consumer "$@"
-}
-
 oc-main-task() {
   _openclaw_spawn_task_lane main "$@"
 }
 
 oc-consumer-task() {
   _openclaw_spawn_task_lane consumer "$@"
+}
+
+# Backward-compatible aliases for older shell setups that still use the lane
+# naming. Keep the task names as the primary workflow surface.
+oc-main-lane() {
+  oc-main-task "$@"
+}
+
+oc-consumer-lane() {
+  oc-consumer-task "$@"
 }

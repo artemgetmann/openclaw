@@ -100,63 +100,6 @@ resolve_default_base_branch() {
   printf 'main'
 }
 
-maybe_reexec_from_sacred_home_clone() {
-  local base_branch="$1"
-  local target_root=""
-  local -a rerun_args=()
-
-  target_root="$(worktree_guard_sacred_home_clone_path_for_branch "$base_branch" 2>/dev/null || true)"
-  [[ -n "$target_root" ]] || return 0
-  target_root="$(cd "$target_root" 2>/dev/null && pwd -P)" || {
-    cat >&2 <<EOF
-Error: could not resolve the sacred home clone for '${base_branch}'.
-
-Expected clone:
-  ${target_root}
-EOF
-    exit 1
-  }
-
-  if [[ "$REPO_ROOT" == "$target_root" ]]; then
-    return 0
-  fi
-
-  if [[ "${OPENCLAW_NEW_WORKTREE_REEXECED:-0}" == "1" ]]; then
-    cat >&2 <<EOF
-Error: scripts/new-worktree.sh already re-execed once but is still not in the
-correct sacred home clone.
-
-Current checkout: ${REPO_ROOT}
-Expected clone:   ${target_root}
-Base branch:      ${base_branch}
-EOF
-    exit 1
-  fi
-
-  if [[ ! -d "${target_root}/.git" ]]; then
-    cat >&2 <<EOF
-Error: sacred home clone missing for '${base_branch}'.
-
-Expected clone:
-  ${target_root}
-
-Create or restore that sacred home clone first, then rerun this command.
-EOF
-    exit 1
-  fi
-
-  # Default task spawn should create a temp worktree from the correct sacred
-  # home clone even when the operator launches it from another checkout. This
-  # keeps base-branch truth anchored to the right clone instead of silently
-  # mixing `main` and consumer worktree metadata.
-  rerun_args=("$FEATURE_NAME" "--base" "$base_branch" "--mode" "$LANE_MODE")
-  if [[ "$NO_BOOTSTRAP" == "1" ]]; then
-    rerun_args+=("--no-bootstrap")
-  fi
-
-  exec env OPENCLAW_NEW_WORKTREE_REEXECED=1 bash "${target_root}/scripts/new-worktree.sh" "${rerun_args[@]}"
-}
-
 assert_base_branch_synced_with_remote() {
   local base_branch="$1"
   local override="${OPENCLAW_NEW_WORKTREE_ALLOW_UNSYNCED_BASE:-0}"
@@ -331,11 +274,20 @@ REPO_ROOT="$(cd "$REPO_ROOT" && pwd -P)"
 source "${REPO_ROOT}/scripts/lib/worktree-guards.sh"
 source "${REPO_ROOT}/scripts/lib/validated-node.sh"
 
+if ! git fetch origin; then
+  echo "Warning: git fetch origin failed; continuing with local refs." >&2
+fi
+
+if [[ -z "$BASE_BRANCH" ]]; then
+  BASE_BRANCH="$(resolve_default_base_branch)"
+fi
+
 if ! worktree_guard_is_sacred_home_clone "$REPO_ROOT"; then
   cat >&2 <<EOF
 Error: scripts/new-worktree.sh must run from a sacred home clone.
 
 Checkout: ${REPO_ROOT}
+Base:     ${BASE_BRANCH}
 
 Create temp worktrees from the correct pull-only home clone so branch truth
 comes from the right base branch:
@@ -349,9 +301,9 @@ worktree_guard_require_sacred_home_clone_base_branch \
   "$REPO_ROOT" \
   "scripts/new-worktree.sh"
 
-# Resolve the repo-validated runtime before we shell out to any Node-backed
-# helper. Fresh worktree creation is where drift begins, so this path cannot
-# depend on whichever Node version the interactive shell happened to load.
+# Resolve the repo-validated runtime only after we know we are in the correct
+# sacred home clone. That keeps Node/pnpm/tooling resolution tied to the branch
+# truth we are actually going to branch from.
 openclaw_use_validated_node "$REPO_ROOT" >/dev/null
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 
@@ -379,35 +331,6 @@ if git show-ref --verify --quiet "refs/heads/${BRANCH_NAME}"; then
   echo "Error: branch already exists locally: ${BRANCH_NAME}" >&2
   exit 1
 fi
-
-if ! git fetch origin; then
-  echo "Warning: git fetch origin failed; continuing with local refs." >&2
-fi
-
-if [[ -z "$BASE_BRANCH" ]]; then
-  BASE_BRANCH="$(resolve_default_base_branch)"
-fi
-
-maybe_reexec_from_sacred_home_clone "$BASE_BRANCH"
-
-if ! worktree_guard_is_sacred_home_clone "$REPO_ROOT"; then
-  cat >&2 <<EOF
-Error: scripts/new-worktree.sh must run from a sacred home clone.
-
-Checkout: ${REPO_ROOT}
-Base:     ${BASE_BRANCH}
-
-Create temp worktrees from the correct pull-only home clone so branch truth
-comes from the right base branch:
-  /Users/user/Programming_Projects/openclaw            -> main
-  /Users/user/Programming_Projects/openclaw-consumer   -> codex/consumer-openclaw-project
-EOF
-  exit 1
-fi
-
-worktree_guard_forbid_sacred_home_checkout_drift \
-  "$REPO_ROOT" \
-  "scripts/new-worktree.sh"
 
 if ! git show-ref --verify --quiet "refs/remotes/origin/${BASE_BRANCH}"; then
   echo "Error: origin/${BASE_BRANCH} does not exist locally. Fetch it or choose a different --base." >&2

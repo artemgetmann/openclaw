@@ -22,8 +22,9 @@ This skill is repo-specific. It does not replace the global tmux/worktree skills
 - Do not make tracked implementation edits in either sacred home clone.
 - Durable worktrees belong under `.worktrees/`, not `.codex/worktrees/`, unless the user explicitly asks otherwise.
 - Before creating a worktree, fast-forward the chosen base branch so it matches `origin/<base>`.
-- Use `bash scripts/new-worktree.sh <feature-name> --base <branch>` instead of ad-hoc `git worktree add`.
-- `scripts/new-worktree.sh` auto-reexecs from the correct sacred home clone when the requested base branch belongs to the other home clone.
+- Use `oc-main-task <feature-name>` or `oc-consumer-task <feature-name>` as the default task-spawn path.
+- Use `bash scripts/new-worktree.sh <feature-name> --base <branch>` only when you are already inside the correct sacred home clone and need the lower-level helper.
+- `scripts/new-worktree.sh` does not auto-reexec into the other sacred home clone. If you are on the wrong home clone, stop and switch first.
 
 ## Branch rules
 

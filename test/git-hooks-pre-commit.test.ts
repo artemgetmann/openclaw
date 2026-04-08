@@ -211,6 +211,46 @@ describe("git-hooks/pre-commit (integration)", () => {
     ).toThrow(/must run from 'main'/);
   });
 
+  it("blocks consumer sacred-home commits even from a feature branch", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-consumer-sacred-home-"));
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+    run(dir, "git", ["checkout", "-qb", "codex/task-from-consumer-home"]);
+
+    mkdirSync(path.join(dir, "scripts", "lib"), { recursive: true });
+    symlinkSync(
+      path.join(process.cwd(), "scripts", "lib", "worktree-guards.sh"),
+      path.join(dir, "scripts", "lib", "worktree-guards.sh"),
+    );
+
+    expect(
+      run(
+        dir,
+        "/bin/bash",
+        [
+          "-c",
+          'source "$PWD/scripts/lib/worktree-guards.sh"; worktree_guard_forbid_protected_base_branch_commit "$PWD"',
+        ],
+        {
+          OPENCLAW_CONSUMER_HOME_CLONE: dir,
+        },
+      ),
+    ).toBe("");
+
+    expect(() =>
+      run(
+        dir,
+        "/bin/bash",
+        [
+          "-c",
+          'source "$PWD/scripts/lib/worktree-guards.sh"; worktree_guard_forbid_sacred_home_commit "$PWD"',
+        ],
+        {
+          OPENCLAW_CONSUMER_HOME_CLONE: dir,
+        },
+      ),
+    ).toThrow(/consumer sacred home clone/);
+  });
+
   it("blocks stale durable consumer lanes that are behind origin", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-consumer-guard-"));
     const remoteDir = path.join(dir, "remote.git");
