@@ -41,6 +41,7 @@ import {
   ensureAuthProfileStore,
   getApiKeyForModel,
   resolveAuthProfileOrder,
+  resolvePrimaryAuthProfileId,
   type ResolvedProviderAuth,
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
@@ -456,6 +457,7 @@ export async function runEmbeddedPiAgent(
           lockedProfileId = undefined;
         }
       }
+      const useSingleActiveProfile = normalizeProviderId(provider) === "openai-codex";
       const profileOrder = resolveAuthProfileOrder({
         cfg: params.config,
         store: authStore,
@@ -465,11 +467,22 @@ export async function runEmbeddedPiAgent(
       if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
         throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
       }
+      const singleActiveProfileId =
+        !lockedProfileId && useSingleActiveProfile
+          ? resolvePrimaryAuthProfileId({
+              cfg: params.config,
+              store: authStore,
+              provider,
+              preferredProfile: preferredProfileId,
+            })
+          : undefined;
       const profileCandidates = lockedProfileId
         ? [lockedProfileId]
-        : profileOrder.length > 0
-          ? profileOrder
-          : [undefined];
+        : singleActiveProfileId
+          ? [singleActiveProfileId]
+          : profileOrder.length > 0
+            ? profileOrder
+            : [undefined];
       let profileIndex = 0;
 
       const initialThinkLevel = params.thinkLevel ?? "off";
@@ -734,7 +747,7 @@ export async function runEmbeddedPiAgent(
       };
 
       const advanceAuthProfile = async (): Promise<boolean> => {
-        if (lockedProfileId) {
+        if (lockedProfileId || useSingleActiveProfile) {
           return false;
         }
         let nextIndex = profileIndex + 1;

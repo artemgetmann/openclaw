@@ -159,6 +159,53 @@ export function resolveAuthProfileOrder(params: {
   return sorted;
 }
 
+export function resolvePrimaryAuthProfileId(params: {
+  cfg?: OpenClawConfig;
+  store: AuthProfileStore;
+  provider: string;
+  preferredProfile?: string;
+}): string | undefined {
+  const { cfg, store, provider, preferredProfile } = params;
+  const providerKey = normalizeProviderId(provider);
+  const providerAuthKey = normalizeProviderIdForAuth(provider);
+  const now = Date.now();
+
+  clearExpiredCooldowns(store, now);
+
+  const storedOrder = findNormalizedProviderValue(store.order, providerKey) ?? [];
+  const configuredOrder = findNormalizedProviderValue(cfg?.auth?.order, providerKey) ?? [];
+  const explicitProfiles = cfg?.auth?.profiles
+    ? Object.entries(cfg.auth.profiles)
+        .filter(([, profile]) => normalizeProviderIdForAuth(profile.provider) === providerAuthKey)
+        .map(([profileId]) => profileId)
+    : [];
+  const defaultProfileId = `${providerAuthKey}:default`;
+  const candidates = dedupeProfileIds([
+    ...(preferredProfile ? [preferredProfile] : []),
+    ...storedOrder,
+    ...configuredOrder,
+    defaultProfileId,
+    ...explicitProfiles,
+    ...listProfilesForProvider(store, provider),
+  ]);
+
+  for (const profileId of candidates) {
+    if (
+      resolveAuthProfileEligibility({
+        cfg,
+        store,
+        provider: providerAuthKey,
+        profileId,
+        now,
+      }).eligible
+    ) {
+      return profileId;
+    }
+  }
+
+  return undefined;
+}
+
 function orderProfilesByMode(order: string[], store: AuthProfileStore): string[] {
   const now = Date.now();
 

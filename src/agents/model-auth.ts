@@ -16,6 +16,7 @@ import {
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
+  resolvePrimaryAuthProfileId,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
@@ -27,7 +28,11 @@ import {
 } from "./model-auth-markers.js";
 import { normalizeProviderId, normalizeProviderIdForAuth } from "./model-selection.js";
 
-export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+export {
+  ensureAuthProfileStore,
+  resolveAuthProfileOrder,
+  resolvePrimaryAuthProfileId,
+} from "./auth-profiles.js";
 
 const log = createSubsystemLogger("model-auth");
 
@@ -312,6 +317,40 @@ export async function resolveApiKeyForProvider(params: {
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return resolveAwsSdkAuthInfo();
+  }
+
+  const useSingleActiveProfile = normalizeProviderId(provider) === "openai-codex";
+
+  if (useSingleActiveProfile) {
+    // Codex ChatGPT OAuth should behave like one selected account, not hidden
+    // account roulette. Pick a single sticky profile and fail loudly if it
+    // cannot resolve, so stale sibling profiles never become silent fallbacks.
+    const activeProfileId = resolvePrimaryAuthProfileId({
+      cfg,
+      store,
+      provider,
+      preferredProfile,
+    });
+    if (activeProfileId) {
+      const resolved = await resolveApiKeyForProfile({
+        cfg,
+        store,
+        profileId: activeProfileId,
+        agentDir: params.agentDir,
+      });
+      if (!resolved) {
+        throw new Error(
+          `Active auth profile "${activeProfileId}" has no usable credentials for provider "${provider}".`,
+        );
+      }
+      const mode = store.profiles[activeProfileId]?.type;
+      return {
+        apiKey: resolved.apiKey,
+        profileId: activeProfileId,
+        source: `profile:${activeProfileId}`,
+        mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
+      };
+    }
   }
 
   const order = resolveAuthProfileOrder({
