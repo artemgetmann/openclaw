@@ -125,6 +125,92 @@ describe("git-hooks/pre-commit (integration)", () => {
     ).toBe("");
   });
 
+  it("shows the gap between branch protection and sacred-home checkout protection", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-sacred-home-gap-"));
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+    run(dir, "git", ["checkout", "-qb", "codex/task-from-home"]);
+
+    mkdirSync(path.join(dir, "scripts", "lib"), { recursive: true });
+    symlinkSync(
+      path.join(process.cwd(), "scripts", "lib", "worktree-guards.sh"),
+      path.join(dir, "scripts", "lib", "worktree-guards.sh"),
+    );
+
+    // Branch-only protection does not fire here because the branch is not a
+    // protected base branch. This is the old gap: a sacred home clone on a
+    // feature branch still looked commitable.
+    expect(
+      run(
+        dir,
+        "/bin/bash",
+        [
+          "-c",
+          'source "$PWD/scripts/lib/worktree-guards.sh"; worktree_guard_forbid_protected_base_branch_commit "$PWD"',
+        ],
+        {
+          OPENCLAW_MAIN_HOME_CLONE: dir,
+        },
+      ),
+    ).toBe("");
+
+    expect(() =>
+      run(
+        dir,
+        "/bin/bash",
+        [
+          "-c",
+          'source "$PWD/scripts/lib/worktree-guards.sh"; worktree_guard_forbid_sacred_home_commit "$PWD"',
+        ],
+        {
+          OPENCLAW_MAIN_HOME_CLONE: dir,
+        },
+      ),
+    ).toThrow(/sacred home clone/);
+  });
+
+  it("allows break-glass sacred-home hotfixes only on the base branch", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-sacred-home-hotfix-"));
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    mkdirSync(path.join(dir, "scripts", "lib"), { recursive: true });
+    symlinkSync(
+      path.join(process.cwd(), "scripts", "lib", "worktree-guards.sh"),
+      path.join(dir, "scripts", "lib", "worktree-guards.sh"),
+    );
+
+    expect(
+      run(
+        dir,
+        "/bin/bash",
+        [
+          "-c",
+          'source "$PWD/scripts/lib/worktree-guards.sh"; worktree_guard_forbid_sacred_home_commit "$PWD"',
+        ],
+        {
+          OPENCLAW_MAIN_HOME_CLONE: dir,
+          OPENCLAW_ALLOW_SACRED_HOME_HOTFIX: "1",
+        },
+      ),
+    ).toBe("");
+
+    run(dir, "git", ["checkout", "-qb", "codex/not-allowed-here"]);
+
+    expect(() =>
+      run(
+        dir,
+        "/bin/bash",
+        [
+          "-c",
+          'source "$PWD/scripts/lib/worktree-guards.sh"; worktree_guard_forbid_sacred_home_commit "$PWD"',
+        ],
+        {
+          OPENCLAW_MAIN_HOME_CLONE: dir,
+          OPENCLAW_ALLOW_SACRED_HOME_HOTFIX: "1",
+        },
+      ),
+    ).toThrow(/must run from 'main'/);
+  });
+
   it("blocks stale durable consumer lanes that are behind origin", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-consumer-guard-"));
     const remoteDir = path.join(dir, "remote.git");
