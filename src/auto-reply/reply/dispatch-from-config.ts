@@ -41,6 +41,7 @@ import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
@@ -190,6 +191,11 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  const nativeTelegramVerboseLevel =
+    normalizeMessageChannel(ctx.Provider) === "telegram" && ctx.CommandSource === "native"
+      ? (normalizeVerboseLevel(sessionStoreEntry.entry?.verboseLevel) ??
+        normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault))
+      : undefined;
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
@@ -536,11 +542,17 @@ export async function dispatchReplyFromConfig(params: {
       if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
         return payload;
       }
-      // Group/native flows intentionally suppress tool summary text, but media-only
-      // tool results (for example TTS audio) must still be delivered.
+      // Native Telegram slash sessions normally suppress tool summary text, but
+      // verbose mode needs to surface safe tool traces. Media-only tool results
+      // (for example TTS audio) must still be delivered.
       const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-      if (!hasMedia) {
+      const shouldShowNativeToolText =
+        nativeTelegramVerboseLevel !== undefined && nativeTelegramVerboseLevel !== "off";
+      if (!hasMedia && !shouldShowNativeToolText) {
         return null;
+      }
+      if (shouldShowNativeToolText) {
+        return payload;
       }
       return { ...payload, text: undefined };
     };
