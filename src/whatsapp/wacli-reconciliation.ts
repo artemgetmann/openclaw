@@ -9,6 +9,7 @@ export type WacliChatRecord = {
 
 export type WacliReplyRecord = {
   chatJid: string;
+  msgId: string;
   senderJid: string | null;
   ts: number;
   fromMe: boolean;
@@ -41,6 +42,7 @@ export type WacliReplyLookupResult = {
   identityNames: string[];
   candidates: WacliCandidateChat[];
   latestInboundReply: WacliLatestInboundReply | null;
+  preferredMonitorChatJid: string | null;
 };
 
 type ContactRecord = {
@@ -296,7 +298,7 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
       }
     }
 
-    const candidates = [...candidateReasons.entries()]
+    let candidates = [...candidateReasons.entries()]
       .filter(([jid]) => chatJids.has(jid))
       .map(([jid, reasons]) => {
         const chat = chatMap.get(jid);
@@ -323,6 +325,7 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
       const inbound = db
         .prepare(
           `SELECT chat_jid AS chatJid,
+                  msg_id AS msgId,
                   sender_jid AS senderJid,
                   ts,
                   from_me AS fromMe,
@@ -347,8 +350,35 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
           effectiveText: computeEffectiveText(latest),
           hasRenderableContent: hasRenderableInboundContent(latest),
         };
+
+        // Root cause: monitor setup was pinning whichever candidate sorted first,
+        // which biased exact phone JIDs over the real active sibling @lid thread.
+        // Once we know which candidate owns the newest actionable inbound
+        // message, that chat must become the preferred monitor target.
+        candidates = candidates
+          .map((candidate) => {
+            if (candidate.jid !== latest.chatJid) {
+              return candidate;
+            }
+            const reasons = new Set(candidate.reasons);
+            reasons.add("active-inbound-thread");
+            return {
+              ...candidate,
+              reasons: [...reasons].toSorted(),
+              score: candidate.score + 200,
+            } satisfies WacliCandidateChat;
+          })
+          .toSorted((left, right) => {
+            return (
+              right.score - left.score ||
+              (right.lastMessageTs ?? 0) - (left.lastMessageTs ?? 0) ||
+              left.jid.localeCompare(right.jid)
+            );
+          });
       }
     }
+
+    const preferredMonitorChatJid = latestInboundReply?.chatJid ?? candidates[0]?.jid ?? null;
 
     return {
       target: rawTarget,
@@ -357,6 +387,7 @@ export function findLatestInboundReplyAcrossResolvedChats(params: {
       identityNames: [...identityNames].toSorted(),
       candidates,
       latestInboundReply,
+      preferredMonitorChatJid,
     };
   } finally {
     db.close();
