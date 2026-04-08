@@ -268,6 +268,7 @@ export class AcpSessionManager {
         backend: handle.backend || backend.id,
         agent,
         runtimeSessionName: handle.runtimeSessionName,
+        contextFingerprint: input.contextFingerprint,
         identity: initializedIdentity,
         mode: input.mode,
         ...(Object.keys(effectiveRuntimeOptions).length > 0

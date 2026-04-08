@@ -1,6 +1,8 @@
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
+import { computeAcpContextFingerprint } from "./context-fingerprint.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
 import { resolveAcpAgentFromSessionKey } from "./control-plane/manager.utils.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindings.resolve.js";
@@ -15,6 +17,7 @@ function sessionMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
   meta: SessionAcpMeta;
+  currentContextFingerprint?: string;
 }): boolean {
   const desiredAgent = (params.spec.acpAgentId ?? params.spec.agentId).trim().toLowerCase();
   const currentAgent = (params.meta.agent ?? "").trim().toLowerCase();
@@ -41,6 +44,12 @@ function sessionMatchesConfiguredBinding(params: {
       return false;
     }
   }
+  if (
+    params.currentContextFingerprint &&
+    params.meta.contextFingerprint !== params.currentContextFingerprint
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -51,6 +60,14 @@ export async function ensureConfiguredAcpBindingSession(params: {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
   const acpManager = getAcpSessionManager();
   try {
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.spec.agentId);
+    const contextFingerprint = await computeAcpContextFingerprint({
+      config: params.cfg,
+      workspaceDir,
+      sessionKey,
+      sessionId: sessionKey,
+      agentId: params.spec.agentId,
+    });
     const resolution = acpManager.resolveSession({
       cfg: params.cfg,
       sessionKey,
@@ -61,6 +78,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
         cfg: params.cfg,
         spec: params.spec,
         meta: resolution.meta,
+        currentContextFingerprint: contextFingerprint,
       })
     ) {
       return {
@@ -85,6 +103,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
       sessionKey,
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       mode: params.spec.mode,
+      contextFingerprint,
       cwd: params.spec.cwd,
       backendId: params.spec.backend,
     });
@@ -110,6 +129,7 @@ export async function resetAcpSessionInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   reason: "new" | "reset";
+  contextFingerprint?: string;
 }): Promise<{ ok: true } | { ok: false; skipped?: boolean; error?: string }> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -172,6 +192,7 @@ export async function resetAcpSessionInPlace(params: {
       sessionKey,
       agent,
       mode,
+      contextFingerprint: params.contextFingerprint,
       cwd,
       backendId: normalizeText(meta.backend) ?? normalizeText(params.cfg.acp?.backend),
     });
