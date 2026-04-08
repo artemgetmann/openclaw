@@ -373,6 +373,7 @@ worktree_guard_reject_sacred_home_edits \
 
 BOOTSTRAP_SCRIPT="${REPO_ROOT}/scripts/bootstrap-worktree-telegram.sh"
 RUNTIME_BOOTSTRAP_SCRIPT="${REPO_ROOT}/scripts/bootstrap-worktree-runtime.sh"
+READY_CHECK_SCRIPT="${REPO_ROOT}/scripts/worktree-ready-check.sh"
 DOCTOR_SCRIPT="${REPO_ROOT}/scripts/worktree-doctor.sh"
 
 # Keep helper-generated worktrees under the repo-owned durable lane area so
@@ -439,6 +440,7 @@ if [[ -x "$DOCTOR_SCRIPT" ]]; then
 fi
 
 BOOTSTRAP_RUNTIME_STATUS="disabled"
+READY_MODE="$LANE_MODE"
 if [[ "$NO_BOOTSTRAP" != "1" ]] && [[ -f "$RUNTIME_BOOTSTRAP_SCRIPT" ]]; then
   # Fresh git worktrees bootstrap their own dependency tree in-place. We do
   # not symlink node_modules from the source checkout because that lets one
@@ -457,7 +459,37 @@ if [[ "$NO_BOOTSTRAP" != "1" ]] && [[ -f "$RUNTIME_BOOTSTRAP_SCRIPT" ]]; then
     fi
   else
     BOOTSTRAP_RUNTIME_STATUS="failed"
-    echo "warning: worktree runtime bootstrap failed; the lane may still need pnpm install/build" >&2
+    cat >&2 <<EOF
+Error: worktree runtime bootstrap failed the readiness gate.
+
+Worktree: ${WORKTREE_PATH}
+Branch:   ${BRANCH_NAME}
+
+This lane was created, but it is not safe to hand off to an agent because
+local dependencies/tools were not proven ready inside the worktree.
+EOF
+    exit 1
+  fi
+fi
+
+if [[ "$NO_BOOTSTRAP" == "1" ]]; then
+  BOOTSTRAP_RUNTIME_STATUS="disabled"
+else
+  if [[ ! -x "$READY_CHECK_SCRIPT" && ! -f "$READY_CHECK_SCRIPT" ]]; then
+    echo "Error: missing readiness check helper: $READY_CHECK_SCRIPT" >&2
+    exit 1
+  fi
+  if ! READY_CHECK_OUTPUT="$(bash "$READY_CHECK_SCRIPT" --root "$WORKTREE_PATH" --mode "$READY_MODE")"; then
+    cat >&2 <<EOF
+Error: lane readiness proof failed after bootstrap.
+
+Worktree: ${WORKTREE_PATH}
+Branch:   ${BRANCH_NAME}
+
+Expected proof command:
+  pnpm exec vitest --version
+EOF
+    exit 1
   fi
 fi
 
@@ -486,6 +518,9 @@ echo "bot_fingerprint=${BOT_FINGERPRINT}"
 echo "dev_port=${DEV_PORT}"
 echo "telegram_bootstrap=${TELEGRAM_BOOTSTRAP_STATUS}"
 echo "bootstrap_runtime=${BOOTSTRAP_RUNTIME_STATUS}"
+if [[ "$NO_BOOTSTRAP" != "1" ]]; then
+  printf '%s\n' "$READY_CHECK_OUTPUT"
+fi
 if [[ "$LANE_MODE" == "warm" ]]; then
   echo "prewarm_hint=cd ${WORKTREE_PATH} && bash scripts/prewarm-worktree.sh --root ${WORKTREE_PATH} --macos"
 fi
