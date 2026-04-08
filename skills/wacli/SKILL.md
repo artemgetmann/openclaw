@@ -15,6 +15,7 @@ metadata:
                 "./scripts/wacli-live.sh",
                 "./scripts/wacli-health.sh",
                 "./scripts/wacli-auth-local.sh",
+                "./scripts/wacli-send-safe.sh",
                 "./scripts/wacli-recent-reply.sh",
               ],
           },
@@ -92,6 +93,7 @@ Automation Rule
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
 - Treat send/sync actions as higher-risk than read/list actions. Prove read access
   first before sending to third parties.
+- For send actions, prefer `skills/wacli/scripts/wacli-send-safe.sh` so the helper can pause a live owner-owned `wacli sync --follow`, send, and restore the owner without a second manual loop.
 
 Setup Routing
 
@@ -167,9 +169,10 @@ History backfill
 
 Send
 
-- Text: `wacli send text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
-- Group: `wacli send text --to "1234567890-123456789@g.us" --message "Running 5 min late."`
-- File: `wacli send file --to "+14155551212" --file /path/agenda.pdf --caption "Agenda"`
+- Text: `skills/wacli/scripts/wacli-send-safe.sh text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
+- Group: `skills/wacli/scripts/wacli-send-safe.sh text --to "1234567890-123456789@g.us" --message "Running 5 min late."`
+- File: `skills/wacli/scripts/wacli-send-safe.sh file --to "+14155551212" --file /path/agenda.pdf --caption "Agenda"`
+- Low-level fallback: `wacli send text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
 
 Notes
 
