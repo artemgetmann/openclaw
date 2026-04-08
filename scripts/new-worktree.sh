@@ -153,7 +153,8 @@ EOF
     rerun_args+=("--no-bootstrap")
   fi
 
-  exec env OPENCLAW_NEW_WORKTREE_REEXECED=1 bash "${target_root}/scripts/new-worktree.sh" "${rerun_args[@]}"
+  cd "$target_root"
+  exec env OPENCLAW_NEW_WORKTREE_REEXECED=1 bash scripts/new-worktree.sh "${rerun_args[@]}"
 }
 
 assert_base_branch_synced_with_remote() {
