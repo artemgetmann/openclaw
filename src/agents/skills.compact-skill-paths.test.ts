@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildWorkspaceSkillsPrompt } from "./skills.js";
 import { writeSkill } from "./skills.test-helpers.js";
+import type { SkillEntry } from "./skills/types.js";
 
 async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
@@ -15,33 +16,51 @@ async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
 }
 
 describe("compactSkillPaths", () => {
-  it("replaces home directory prefix with ~ in skill locations", async () => {
-    await withTempWorkspace(async (workspaceDir) => {
-      const skillDir = path.join(workspaceDir, "skills", "test-skill");
+  it("replaces home directory prefix with ~ for non-workspace skill locations", () => {
+    const home = os.homedir();
+    const entry: SkillEntry = {
+      skill: {
+        name: "managed-skill",
+        description: "A managed skill for path compaction",
+        filePath: path.join(home, ".openclaw", "skills", "managed-skill", "SKILL.md"),
+        baseDir: path.join(home, ".openclaw", "skills", "managed-skill"),
+        source: "managed",
+        disableModelInvocation: false,
+      },
+      frontmatter: {},
+    };
 
-      await writeSkill({
-        dir: skillDir,
-        name: "test-skill",
-        description: "A test skill for path compaction",
-      });
-
-      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-        bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
-        managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
-      });
-
-      const home = os.homedir();
-      // The prompt should NOT contain the absolute home directory path
-      // when the skill is under the home directory (which tmpdir usually is on macOS)
-      if (workspaceDir.startsWith(home)) {
-        expect(prompt).not.toContain(home + path.sep);
-        expect(prompt).toContain("~/");
-      }
-
-      // The skill name and description should still be present
-      expect(prompt).toContain("test-skill");
-      expect(prompt).toContain("A test skill for path compaction");
+    const prompt = buildWorkspaceSkillsPrompt("/tmp/openclaw-workspace", {
+      entries: [entry],
     });
+
+    expect(prompt).toContain("~/");
+    expect(prompt).not.toContain(home + path.sep);
+    expect(prompt).toContain("managed-skill");
+    expect(prompt).toContain("A managed skill for path compaction");
+  });
+
+  it("keeps workspace skill locations absolute under the home directory", () => {
+    const home = os.homedir();
+    const filePath = path.join(home, ".openclaw", "workspace", "skills", "wacli", "SKILL.md");
+    const entry: SkillEntry = {
+      skill: {
+        name: "wacli",
+        description: "WhatsApp helper",
+        filePath,
+        baseDir: path.dirname(filePath),
+        source: "workspace",
+        disableModelInvocation: false,
+      },
+      frontmatter: {},
+    };
+
+    const prompt = buildWorkspaceSkillsPrompt(path.join(home, ".openclaw", "workspace"), {
+      entries: [entry],
+    });
+
+    expect(prompt).toContain(filePath);
+    expect(prompt).not.toContain("<location>~/");
   });
 
   it("preserves paths outside home directory", async () => {

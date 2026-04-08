@@ -130,6 +130,14 @@ describe("createOpenClawCodingTools", () => {
         undefined,
       );
 
+      await wrapped.execute("tool-1b", { file_path: "  ~ /foo.txt  ", content: "x" });
+      expect(execute).toHaveBeenCalledWith(
+        "tool-1b",
+        { path: "~/foo.txt", content: "x" },
+        undefined,
+        undefined,
+      );
+
       await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
         /Missing required parameter/,
       );

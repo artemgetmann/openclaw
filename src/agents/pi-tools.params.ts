@@ -82,6 +82,19 @@ function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
   }
 }
 
+function normalizePathLikeParam(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  const normalizePath = (raw: string) => raw.trim().replace(/^~\s+(?=[\\/])/, "~");
+  if (typeof value === "string") {
+    record[key] = normalizePath(value);
+    return;
+  }
+  const extracted = extractStructuredText(value);
+  if (typeof extracted === "string") {
+    record[key] = normalizePath(extracted);
+  }
+}
+
 // Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
 // This prevents models trained on Claude Code from getting stuck in tool-call loops.
@@ -106,6 +119,10 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
     normalized.newText = normalized.new_string;
     delete normalized.new_string;
   }
+  // Path parameters are read by filesystem tools immediately. Normalize common
+  // model formatting drift up front so skill reads do not fail on stray spaces.
+  normalizePathLikeParam(normalized, "path");
+  normalizePathLikeParam(normalized, "file_path");
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.
   normalizeTextLikeParam(normalized, "content");
