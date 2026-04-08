@@ -48,14 +48,11 @@ main() {
   local expected_version=""
   local shell_node_bin=""
 
-  # The long-lived shared gateway must only be rebuilt from the canonical main
-  # checkout. Let worktrees keep their own build habits; this wrapper exists to
-  # remove ambiguity from shared-runtime operations.
-  worktree_guard_require_shared_root_main_branch "${ROOT}"
-  worktree_guard_reject_shared_root_main_edits \
-    "${ROOT}" \
-    worktree \
-    --context "scripts/build-shared-runtime.sh"
+  # Sacred home clones are runtime anchors. They must stay on their base branch
+  # and free of tracked implementation edits unless the operator has explicitly
+  # entered the break-glass hotfix path on that same base branch.
+  worktree_guard_require_sacred_home_clone_base_branch "${ROOT}" "scripts/build-shared-runtime.sh"
+  worktree_guard_reject_sacred_home_edits "${ROOT}" worktree --context "scripts/build-shared-runtime.sh"
 
   expected_version="$(openclaw_validated_node_version "${ROOT}")"
   shell_node_bin="$(command -v node 2>/dev/null || true)"

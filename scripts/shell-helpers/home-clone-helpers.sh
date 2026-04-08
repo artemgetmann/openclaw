@@ -161,6 +161,14 @@ oc-consumer() {
   _openclaw_enter_home_clone consumer
 }
 
+oc-main-lane() {
+  _openclaw_spawn_task_lane main "$@"
+}
+
+oc-consumer-lane() {
+  _openclaw_spawn_task_lane consumer "$@"
+}
+
 oc-main-task() {
   _openclaw_spawn_task_lane main "$@"
 }

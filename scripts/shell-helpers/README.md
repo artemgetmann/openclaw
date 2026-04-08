@@ -238,11 +238,11 @@ Use:
 ```bash
 oc-main
 oc-consumer
-oc-main-lane my-feature
-oc-consumer-lane my-feature
+oc-main-task my-feature
+oc-consumer-task my-feature
 ```
 
 Those wrappers require the home clone to be clean on its base branch, run
-`git pull --ff-only`, then enter it. The `*-lane` wrappers immediately create
+`git pull --ff-only`, then enter it. The `*-task` wrappers immediately create
 and enter a temp worktree from the correct sacred home clone. Do not create
 feature branches directly in the sacred home clones.

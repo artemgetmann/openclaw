@@ -41,20 +41,20 @@
 - Then use:
   - `oc-main`
   - `oc-consumer`
-  - `oc-main-lane <feature-name>`
-  - `oc-consumer-lane <feature-name>`
+  - `oc-main-task <feature-name>`
+  - `oc-consumer-task <feature-name>`
 - Those wrappers:
   - enter the correct sacred home clone
   - require the clone to already be on its base branch
   - require a clean worktree so `git pull --ff-only` is honest
   - fast-forward from `origin/<base>` before you start work
-  - let the `*-lane` wrapper create a temp worktree from the correct sacred home clone automatically
+  - let the `*-task` wrapper create a temp worktree from the correct sacred home clone automatically
 - If a helper refuses entry, fix the clone first instead of forcing around it. The point is to keep base-branch truth boring.
 
 ## Daily agent sequence
 
-1. Enter the right sacred home clone with `oc-main` or `oc-consumer`.
-2. Spawn a temp worktree immediately with `oc-main-lane <feature-name>` or `oc-consumer-lane <feature-name>`.
+1. Start the task with `oc-main-task <feature-name>` or `oc-consumer-task <feature-name>`.
+2. Let that wrapper fast-forward the correct sacred home clone, create the temp worktree, and drop you into it.
 3. Code inside that temp worktree only.
 4. Open or update a draft PR early.
 5. Validate in the temp worktree.
@@ -70,7 +70,7 @@
 - Every non-hotfix task should start in a temp worktree created from the correct sacred home clone.
 - Keep repo-owned temporary worktrees under `.worktrees/` when practical so they do not scatter across multiple ad-hoc locations.
 - Before creating a temporary worktree, fast-forward the chosen base branch locally so it exactly matches `origin/<base>`. `scripts/new-worktree.sh` fails if the named base branch is ahead of or behind its remote tracking branch.
-- `scripts/new-worktree.sh` auto-reexecs from the correct sacred home clone for `main` vs `codex/consumer-openclaw-project`, then refuses to continue if that sacred home clone drifted onto the wrong branch.
+- `scripts/new-worktree.sh` now refuses to run anywhere except a sacred home clone. The shell helper wrappers are the default task-spawn path because they enter the right sacred home clone first, then call `scripts/new-worktree.sh` with the correct base.
 - `scripts/new-worktree.sh` bootstraps fresh lanes by default with a per-worktree dependency install/build. It must not symlink `node_modules` or `ui/node_modules` from another checkout because that leaks cross-worktree package state into clean-room validation.
 - `scripts/new-worktree.sh` supports explicit lane modes:
   - `--mode clean` is the default and keeps the current clean-room behavior for consumer E2E, runtime-sensitive work, or anything that must prove isolation honestly.

@@ -16,14 +16,11 @@ if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
 
-# The canonical shared checkout powers the long-lived local Jarvis gateway.
-# Refuse to run it from a feature/consumer branch so checkout drift cannot
-# silently repoint the shared bot at the wrong code.
-worktree_guard_require_shared_root_main_branch "$ROOT"
-worktree_guard_reject_shared_root_main_edits \
-  "$ROOT" \
-  worktree \
-  --context "scripts/openclaw-local.sh"
+# Sacred home clones are runtime anchors. They must stay on their base branch
+# and free of tracked implementation edits unless the operator has explicitly
+# entered the break-glass hotfix path on that same base branch.
+worktree_guard_require_sacred_home_clone_base_branch "$ROOT" "scripts/openclaw-local.sh"
+worktree_guard_reject_sacred_home_edits "$ROOT" worktree --context "scripts/openclaw-local.sh"
 
 RAW_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 if [[ -z "$RAW_INSTANCE_ID" ]]; then

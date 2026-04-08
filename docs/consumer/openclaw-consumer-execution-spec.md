@@ -106,7 +106,7 @@ The refactor doesn't happen on `main`. It happens as part of building `codex/con
 ```sh
 # Refresh the consumer sacred home clone, then spawn a temp worktree for the task
 source ~/Programming_Projects/openclaw/scripts/shell-helpers/home-clone-helpers.sh
-oc-consumer-lane <task-name>
+oc-consumer-task <task-name>
 
 # Open a draft PR early, then validate in that temp worktree
 # Mark the PR ready only after validation is complete
