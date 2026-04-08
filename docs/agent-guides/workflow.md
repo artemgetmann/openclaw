@@ -34,6 +34,19 @@
 - Mark the PR ready only after validation is complete.
 - Merge only when the task and repo policy allow it.
 
+## Shared main runtime rule
+
+- The default shared main bot runtime is sacred. It must run from the sacred home clone at `~/Programming_Projects/openclaw` with `main` checked out.
+- Feature worktrees must not own or boot the default shared runtime, even temporarily.
+- If you need to test unmerged code against Telegram/WhatsApp, use one of these paths:
+  - isolated tester bot/runtime with explicit profile or config isolation
+  - merge to `main`, fast-forward the sacred home clone, then restart the shared runtime from there
+- Do not treat "the gateway happens to be pointing at my worktree right now" as acceptable state. That is runtime ownership drift, not a testing strategy.
+- Verify who owns the running gateway before any live test:
+  - `pnpm openclaw gateway status`
+  - check the `Runtime ID:` line for `branch=...` and `worktree=...`
+  - if the shared runtime points at a feature worktree, stop and move it back to the sacred home clone on `main`
+
 ## Home clone entry
 
 - Source the helper once in your shell rc:
