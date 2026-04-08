@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -5,6 +6,23 @@ import { resolvePluginProviders } from "./providers.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
+
+function traceProviderDiscoveryStage(env: NodeJS.ProcessEnv | undefined, stage: string): void {
+  const stageLogPath = env?.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only. Provider discovery must never change behavior
+    // because debug instrumentation could not write to disk.
+  }
+}
+
+function nowMs(): number {
+  return performance.now();
+}
 
 function resolveProviderCatalogHook(provider: ProviderPlugin) {
   return provider.catalog ?? provider.discovery;
@@ -16,10 +34,18 @@ export function resolvePluginDiscoveryProviders(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
 }): ProviderPlugin[] {
-  return resolvePluginProviders({
+  const startedAtMs = nowMs();
+  traceProviderDiscoveryStage(params.env, "provider-discovery-pre-resolve-plugin-providers");
+  const providers = resolvePluginProviders({
     ...params,
     bundledProviderAllowlistCompat: true,
   }).filter((provider) => resolveProviderCatalogHook(provider));
+  const elapsedMs = Math.round((nowMs() - startedAtMs) * 100) / 100;
+  traceProviderDiscoveryStage(
+    params.env,
+    `provider-discovery-post-resolve-plugin-providers durationMs=${elapsedMs} count=${providers.length}`,
+  );
+  return providers;
 }
 
 export function groupPluginDiscoveryProvidersByOrder(

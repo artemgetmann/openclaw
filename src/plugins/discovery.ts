@@ -2,10 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveUserPath } from "../utils.js";
-import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
+import {
+  detectBundleManifestFormat,
+  loadBundleManifest,
+  type BundleManifestLoadResult,
+} from "./bundle-manifest.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
+  loadPluginManifest,
+  type PluginManifestLoadResult,
   resolvePackageSetupEntry,
   resolvePackageExtensionEntries,
   type OpenClawPackageManifest,
@@ -31,7 +37,18 @@ export type PluginCandidate = {
   packageDescription?: string;
   packageDir?: string;
   packageManifest?: OpenClawPackageManifest;
+  manifestLoad?: CandidateManifestLoadResult;
 };
+
+export type CandidateManifestLoadResult =
+  | {
+      kind: "openclaw";
+      result: PluginManifestLoadResult;
+    }
+  | {
+      kind: "bundle";
+      result: BundleManifestLoadResult;
+    };
 
 export type PluginDiscoveryResult = {
   candidates: PluginCandidate[];
@@ -53,6 +70,23 @@ function tracePluginDiscoveryStage(env: NodeJS.ProcessEnv, stage: string): void 
   } catch {
     // Best-effort tracing only. Never let debug logging change runtime behavior.
   }
+}
+
+function nowMs(): number {
+  return performance.now();
+}
+
+function tracePluginDiscoveryDuration(
+  env: NodeJS.ProcessEnv,
+  stage: string,
+  startedAtMs: number,
+  details?: string,
+): void {
+  const elapsedMs = Math.round((nowMs() - startedAtMs) * 100) / 100;
+  tracePluginDiscoveryStage(
+    env,
+    `${stage} durationMs=${elapsedMs}${details ? ` ${details}` : ""}`,
+  );
 }
 
 export function clearPluginDiscoveryCache(): void {
@@ -400,6 +434,8 @@ function addCandidate(params: {
   manifest?: PackageManifest | null;
   packageDir?: string;
   repairBundledPermissions?: boolean;
+  manifestCache?: Map<string, CandidateManifestLoadResult>;
+  manifestLoad?: CandidateManifestLoadResult;
 }) {
   const resolved = path.resolve(params.source);
   if (params.seen.has(resolved)) {
@@ -420,6 +456,18 @@ function addCandidate(params: {
   }
   params.seen.add(resolved);
   const manifest = params.manifest ?? null;
+  // Discovery already paid the cost to identify a candidate root. Snapshot the
+  // manifest result here so manifest-registry can reuse it instead of reopening
+  // and reparsing the same root a second time.
+  const manifestLoad =
+    params.manifestLoad ??
+    resolveCandidateManifestLoad({
+      rootDir: resolvedRoot,
+      origin: params.origin,
+      format: params.format ?? "openclaw",
+      bundleFormat: params.bundleFormat,
+      manifestCache: params.manifestCache,
+    });
   params.candidates.push({
     idHint: params.idHint,
     source: resolved,
@@ -434,7 +482,53 @@ function addCandidate(params: {
     packageDescription: manifest?.description?.trim() || undefined,
     packageDir: params.packageDir,
     packageManifest: getPackageManifestMetadata(manifest ?? undefined),
+    manifestLoad,
   });
+}
+
+function buildManifestCacheKey(params: {
+  rootDir: string;
+  origin: PluginOrigin;
+  format: PluginFormat;
+  bundleFormat?: PluginBundleFormat;
+}): string {
+  return `${params.rootDir}::${params.origin}::${params.format}::${params.bundleFormat ?? "none"}`;
+}
+
+function resolveCandidateManifestLoad(params: {
+  rootDir: string;
+  origin: PluginOrigin;
+  format: PluginFormat;
+  bundleFormat?: PluginBundleFormat;
+  manifestCache?: Map<string, CandidateManifestLoadResult>;
+}): CandidateManifestLoadResult {
+  const cacheKey = buildManifestCacheKey({
+    rootDir: params.rootDir,
+    origin: params.origin,
+    format: params.format,
+    bundleFormat: params.bundleFormat,
+  });
+  const cached = params.manifestCache?.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const rejectHardlinks = params.origin !== "bundled";
+  const manifestLoad: CandidateManifestLoadResult =
+    params.format === "bundle" && params.bundleFormat
+      ? {
+          kind: "bundle",
+          result: loadBundleManifest({
+            rootDir: params.rootDir,
+            bundleFormat: params.bundleFormat,
+            rejectHardlinks,
+          }),
+        }
+      : {
+          kind: "openclaw",
+          result: loadPluginManifest(params.rootDir, rejectHardlinks),
+        };
+  params.manifestCache?.set(cacheKey, manifestLoad);
+  return manifestLoad;
 }
 
 function discoverBundleInRoot(params: {
@@ -446,6 +540,7 @@ function discoverBundleInRoot(params: {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  manifestCache?: Map<string, CandidateManifestLoadResult>;
 }): "added" | "invalid" | "none" {
   const bundleFormat = detectBundleManifestFormat(params.rootDir);
   if (!bundleFormat) {
@@ -474,9 +569,14 @@ function discoverBundleInRoot(params: {
     origin: params.origin,
     format: "bundle",
     bundleFormat,
+    manifestLoad: {
+      kind: "bundle",
+      result: bundleManifest,
+    },
     ownershipUid: params.ownershipUid,
     repairBundledPermissions: params.repairBundledPermissions,
     workspaceDir: params.workspaceDir,
+    manifestCache: params.manifestCache,
   });
   return "added";
 }
@@ -517,6 +617,7 @@ function discoverInDirectory(params: {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  manifestCache?: Map<string, CandidateManifestLoadResult>;
 }) {
   if (!fs.existsSync(params.dir)) {
     return;
@@ -603,11 +704,12 @@ function discoverInDirectory(params: {
           ownershipUid: params.ownershipUid,
           repairBundledPermissions: params.repairBundledPermissions,
           workspaceDir: params.workspaceDir,
-          manifest,
-          packageDir: fullPath,
-        });
-      }
-      continue;
+        manifest,
+        packageDir: fullPath,
+        manifestCache: params.manifestCache,
+      });
+    }
+    continue;
     }
 
     const bundleDiscovery = discoverBundleInRoot({
@@ -619,6 +721,7 @@ function discoverInDirectory(params: {
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
+      manifestCache: params.manifestCache,
     });
     if (bundleDiscovery === "added") {
       continue;
@@ -642,6 +745,7 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: fullPath,
+        manifestCache: params.manifestCache,
       });
     }
   }
@@ -657,6 +761,7 @@ function discoverFromPath(params: {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  manifestCache?: Map<string, CandidateManifestLoadResult>;
 }) {
   const resolved = resolveUserPath(params.rawPath, params.env);
   if (!fs.existsSync(resolved)) {
@@ -689,6 +794,7 @@ function discoverFromPath(params: {
       ownershipUid: params.ownershipUid,
       repairBundledPermissions: params.repairBundledPermissions,
       workspaceDir: params.workspaceDir,
+      manifestCache: params.manifestCache,
     });
     return;
   }
@@ -740,6 +846,7 @@ function discoverFromPath(params: {
           workspaceDir: params.workspaceDir,
           manifest,
           packageDir: resolved,
+          manifestCache: params.manifestCache,
         });
       }
       return;
@@ -754,6 +861,7 @@ function discoverFromPath(params: {
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
+      manifestCache: params.manifestCache,
     });
     if (bundleDiscovery === "added") {
       return;
@@ -778,6 +886,7 @@ function discoverFromPath(params: {
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: resolved,
+        manifestCache: params.manifestCache,
       });
       return;
     }
@@ -791,6 +900,7 @@ function discoverFromPath(params: {
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
+      manifestCache: params.manifestCache,
     });
     return;
   }
@@ -809,6 +919,7 @@ function discoverScopedPluginCandidates(params: {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  manifestCache?: Map<string, CandidateManifestLoadResult>;
 }): string[] {
   const unresolved = new Set(params.onlyPluginIds);
   tracePluginDiscoveryStage(
@@ -836,6 +947,7 @@ function discoverScopedPluginCandidates(params: {
         candidates: params.candidates,
         diagnostics: params.diagnostics,
         seen: params.seen,
+        manifestCache: params.manifestCache,
       });
       if (params.candidates.length > beforeCount) {
         unresolved.delete(pluginId);
@@ -859,6 +971,7 @@ export function discoverOpenClawPlugins(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
 }): PluginDiscoveryResult {
+  const startedAtMs = nowMs();
   const env = params.env ?? process.env;
   const repairBundledPermissions = params.repairBundledPermissions !== false;
   const onlyPluginIds = normalizeScopedPluginIds(params.onlyPluginIds);
@@ -874,6 +987,12 @@ export function discoverOpenClawPlugins(params: {
   if (cacheEnabled) {
     const cached = discoveryCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
+      tracePluginDiscoveryDuration(
+        env,
+        "plugin-discovery-cache-hit",
+        startedAtMs,
+        `candidates=${cached.result.candidates.length} diagnostics=${cached.result.diagnostics.length}`,
+      );
       return cached.result;
     }
   }
@@ -881,6 +1000,7 @@ export function discoverOpenClawPlugins(params: {
   const candidates: PluginCandidate[] = [];
   const diagnostics: PluginDiagnostic[] = [];
   const seen = new Set<string>();
+  const manifestCache = new Map<string, CandidateManifestLoadResult>();
   const workspaceDir = params.workspaceDir?.trim();
   const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
   const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
@@ -904,6 +1024,7 @@ export function discoverOpenClawPlugins(params: {
       candidates,
       diagnostics,
       seen,
+      manifestCache,
     });
   }
 
@@ -932,6 +1053,7 @@ export function discoverOpenClawPlugins(params: {
           candidates,
           diagnostics,
           seen,
+          manifestCache,
         })
       : [];
   const shouldFallbackToFullScan = unresolvedScopedPluginIds.length > 0;
@@ -951,6 +1073,7 @@ export function discoverOpenClawPlugins(params: {
       candidates,
       diagnostics,
       seen,
+      manifestCache,
     });
   }
 
@@ -963,6 +1086,7 @@ export function discoverOpenClawPlugins(params: {
       candidates,
       diagnostics,
       seen,
+      manifestCache,
     });
   }
 
@@ -977,6 +1101,7 @@ export function discoverOpenClawPlugins(params: {
       candidates,
       diagnostics,
       seen,
+      manifestCache,
     });
   }
 
@@ -987,5 +1112,11 @@ export function discoverOpenClawPlugins(params: {
       discoveryCache.set(cacheKey, { expiresAt: Date.now() + ttl, result });
     }
   }
+  tracePluginDiscoveryDuration(
+    env,
+    "plugin-discovery-complete",
+    startedAtMs,
+    `candidates=${candidates.length} diagnostics=${diagnostics.length}`,
+  );
   return result;
 }
