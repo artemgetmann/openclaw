@@ -36,13 +36,11 @@ if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
 
-# The shared gateway LaunchAgent points at the canonical checkout. Do not let a
-# branch switch in that checkout silently restart Jarvis onto feature code.
-worktree_guard_require_shared_root_main_branch "$ROOT"
-worktree_guard_reject_shared_root_main_edits \
-  "$ROOT" \
-  worktree \
-  --context "scripts/restart-local-gateway.sh"
+# Sacred home clones are runtime anchors. They must stay on their base branch
+# and free of tracked implementation edits unless the operator has explicitly
+# entered the break-glass hotfix path on that same base branch.
+worktree_guard_require_sacred_home_clone_base_branch "$ROOT" "scripts/restart-local-gateway.sh"
+worktree_guard_reject_sacred_home_edits "$ROOT" worktree --context "scripts/restart-local-gateway.sh"
 
 is_self_restart_context() {
   # OPENCLAW_RESTART_DETACHED is set when the gateway asks us to restart from
