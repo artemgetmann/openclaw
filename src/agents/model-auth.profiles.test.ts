@@ -467,4 +467,47 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
+
+  it("keeps openai-codex pinned to the active default profile instead of falling through", async () => {
+    await withEnvAsync({ MISSING_CODEX_KEY: undefined }, async () => {
+      const error = await resolveApiKeyForProvider({
+        provider: "openai-codex",
+        cfg: {
+          auth: {
+            profiles: {
+              "openai-codex:default": {
+                provider: "openai-codex",
+                mode: "api_key",
+              },
+              "openai-codex:backup": {
+                provider: "openai-codex",
+                mode: "api_key",
+              },
+            },
+            order: {
+              "openai-codex": ["openai-codex:default", "openai-codex:backup"],
+            },
+          },
+        },
+        store: {
+          version: 1,
+          profiles: {
+            "openai-codex:default": {
+              type: "api_key",
+              provider: "openai-codex",
+              keyRef: { source: "env", provider: "default", id: "MISSING_CODEX_KEY" },
+            },
+            "openai-codex:backup": {
+              type: "api_key",
+              provider: "openai-codex",
+              key: "sk-backup", // pragma: allowlist secret
+            },
+          },
+        },
+      }).catch((err: unknown) => err);
+
+      expect(String(error)).toContain('Active auth profile "openai-codex:default"');
+      expect(String(error)).not.toContain("openai-codex:backup");
+    });
+  });
 });
