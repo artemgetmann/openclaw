@@ -12,7 +12,7 @@ It is not a feature branch. It is an index.
 | --- | --- | --- | --- |
 | #381 | `codex/rescue-telegram-live-guidance-2026-04-08` | Close as obsolete/duplicate | The rescue commit `83c9832c1a` was already shipped on `main` in PR #385 (`3a6081ea7b`) and on consumer in PR #386 (`9fe9c0f4a5`). Keeping the rescue PR open only creates a duplicate docs path. |
 | #382 | `codex/rescue-auth-profile-codex-pinning-2026-04-08` | Close as obsolete/duplicate | The rescue commit `f5230de1b7` was already shipped on `main` in PR #375 (`7e03d371c9`) and on consumer in PR #376 (`2fc61d1779`). The rescue PR no longer preserves unshipped value. |
-| #383 | `codex/rescue-plugin-discovery-tracing-2026-04-08` | Cherry-pick specific useful files into a real follow-up branch/PR | This rescue lane mixes already-shipped overlap with one remaining useful slice. `src/plugins/provider-discovery.ts` and `src/secrets/runtime-web-tools.test.ts` already landed via PR #380 (`50fcca0571`). The only unique value left is the manifest/discovery cache work in `src/plugins/discovery.ts`, `src/plugins/loader.ts`, and `src/plugins/manifest-registry.ts`. Do not merge the rescue PR as-is. |
+| #383 | `codex/rescue-plugin-discovery-tracing-2026-04-08` | Keep open only as a preservation artifact; ship the clean follow-up PRs instead | This rescue lane mixes already-shipped overlap with one remaining useful slice. `src/plugins/provider-discovery.ts` and `src/secrets/runtime-web-tools.test.ts` already landed via PR #380 (`50fcca0571`). The only unique value left is the manifest/discovery cache work in `src/plugins/discovery.ts`, `src/plugins/loader.ts`, and `src/plugins/manifest-registry.ts`, now extracted into PR #392 (`main`) and PR #393 (`codex/consumer-openclaw-project`). Do not merge the rescue PR as-is. |
 | #384 | `codex/rescue-himalaya-icloud-wrapper-2026-04-08` | Close as obsolete/superseded | The rescue commit `b9769ab752` is effectively the first half of merged PR #378: the wrapper/files match the shipped fix commit `e52145b003`, and `main` also includes the follow-up docs clarification commit `a257864816`. The rescue PR is now a worse duplicate of the real shipping PR. |
 
 ## Why this exists
@@ -85,20 +85,24 @@ into coherent rescue branches instead.
 - Draft PR: `#383`
 - Decision:
   - Keep open only as a preservation artifact
-  - If shipped, extract the remaining three-file slice into a clean follow-up PR from current `main`
+  - Superseded for shipping by clean follow-up PR #392 on `main`
+  - Superseded for shipping by clean follow-up PR #393 on `codex/consumer-openclaw-project`
 - Audit note:
   - `src/plugins/provider-discovery.ts` and `src/secrets/runtime-web-tools.test.ts` already shipped via PR #380 (`50fcca0571`)
   - The remaining unique value is limited to:
     - `src/plugins/discovery.ts`
     - `src/plugins/loader.ts`
     - `src/plugins/manifest-registry.ts`
+  - The clean extraction now lives in:
+    - PR #392 targeting `main`
+    - PR #393 targeting `codex/consumer-openclaw-project`
   - Do not merge the rescue PR as-is because it still carries already-shipped overlap from the dirty home-clone preservation pass
 - Contains:
   - plugin discovery/loader timing traces
   - manifest-load reuse across discovery and manifest-registry
   - Firecrawl runtime web-tools test coverage
 - Safe to delete later:
-  - only after the remaining three-file slice is either extracted and merged, or intentionally dropped
+  - yes, after PR #392 and PR #393 merge or are intentionally abandoned
 
 ## Non-durable local backup taken before splitting
 
