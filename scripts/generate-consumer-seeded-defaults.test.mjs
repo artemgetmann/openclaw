@@ -20,22 +20,10 @@ void test("seeds only the supported consumer defaults from env", () => {
   assert.deepEqual(seeded, {
     env: {
       vars: {
-        OPENAI_API_KEY: "openai-key",
+        OPENCLAW_CONSUMER_OPENAI_API_KEY: "openai-key",
         GOOGLE_PLACES_API_KEY: "places-key",
         FIRECRAWL_API_KEY: "firecrawl-key",
         BRAVE_API_KEY: "brave-key",
-      },
-    },
-    plugins: {
-      entries: {
-        "memory-lancedb": {
-          config: {
-            embedding: {
-              apiKey: "${OPENAI_API_KEY}",
-              model: "text-embedding-3-small",
-            },
-          },
-        },
       },
     },
     skills: {
@@ -46,6 +34,17 @@ void test("seeds only the supported consumer defaults from env", () => {
       },
     },
     tools: {
+      media: {
+        audio: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+              apiKey: "${OPENCLAW_CONSUMER_OPENAI_API_KEY}",
+            },
+          ],
+        },
+      },
       web: {
         fetch: {
           enabled: true,
@@ -96,22 +95,10 @@ void test("falls back to founder config when shell env is empty", () => {
   assert.deepEqual(seeded, {
     env: {
       vars: {
-        OPENAI_API_KEY: "founder-openai",
+        OPENCLAW_CONSUMER_OPENAI_API_KEY: "founder-openai",
         GOOGLE_PLACES_API_KEY: "founder-places",
         FIRECRAWL_API_KEY: "founder-firecrawl",
         BRAVE_API_KEY: "founder-brave",
-      },
-    },
-    plugins: {
-      entries: {
-        "memory-lancedb": {
-          config: {
-            embedding: {
-              apiKey: "${OPENAI_API_KEY}",
-              model: "text-embedding-3-small",
-            },
-          },
-        },
       },
     },
     skills: {
@@ -122,6 +109,17 @@ void test("falls back to founder config when shell env is empty", () => {
       },
     },
     tools: {
+      media: {
+        audio: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+              apiKey: "${OPENCLAW_CONSUMER_OPENAI_API_KEY}",
+            },
+          ],
+        },
+      },
       web: {
         fetch: {
           enabled: true,
@@ -167,7 +165,7 @@ void test("falls back to Brave search when Firecrawl is not available", () => {
   });
 });
 
-void test("seeds OpenAI provider defaults without forcing memory-lancedb on", () => {
+void test("seeds consumer OpenAI utility defaults for audio transcription only", () => {
   const seeded = buildConsumerSeededDefaults({
     env: {
       OPENAI_API_KEY: " openai-key ",
@@ -177,18 +175,19 @@ void test("seeds OpenAI provider defaults without forcing memory-lancedb on", ()
   assert.deepEqual(seeded, {
     env: {
       vars: {
-        OPENAI_API_KEY: "openai-key",
+        OPENCLAW_CONSUMER_OPENAI_API_KEY: "openai-key",
       },
     },
-    plugins: {
-      entries: {
-        "memory-lancedb": {
-          config: {
-            embedding: {
-              apiKey: "${OPENAI_API_KEY}",
-              model: "text-embedding-3-small",
+    tools: {
+      media: {
+        audio: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+              apiKey: "${OPENCLAW_CONSUMER_OPENAI_API_KEY}",
             },
-          },
+          ],
         },
       },
     },

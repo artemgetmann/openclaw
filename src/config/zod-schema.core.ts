@@ -651,6 +651,7 @@ const MediaUnderstandingRuntimeFields = {
   prompt: z.string().optional(),
   timeoutSeconds: z.number().int().positive().optional(),
   language: z.string().optional(),
+  apiKey: SecretInputSchema.optional().register(sensitive),
   providerOptions: ProviderOptionsSchema,
   deepgram: DeepgramAudioSchema,
   baseUrl: z.string().optional(),

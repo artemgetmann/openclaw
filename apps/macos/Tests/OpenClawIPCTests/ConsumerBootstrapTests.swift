@@ -235,22 +235,13 @@ struct ConsumerBootstrapTests {
         let bundledDefaults: [String: Any] = [
             "env": [
                 "vars": [
-                    "OPENAI_API_KEY": "openai-seeded", // pragma: allowlist secret
+                    "OPENCLAW_CONSUMER_OPENAI_API_KEY": "openai-seeded", // pragma: allowlist secret
                     "FIRECRAWL_API_KEY": "fc-seeded", // pragma: allowlist secret
                     "GOOGLE_PLACES_API_KEY": "places-seeded", // pragma: allowlist secret
                 ],
             ],
             "plugins": [
-                "entries": [
-                    "memory-lancedb": [
-                        "config": [
-                            "embedding": [
-                                "apiKey": "${OPENAI_API_KEY}",
-                                "model": "text-embedding-3-small",
-                            ],
-                        ],
-                    ],
-                ],
+                "entries": [:],
             ],
             "skills": [
                 "entries": [
@@ -260,6 +251,15 @@ struct ConsumerBootstrapTests {
                 ],
             ],
             "tools": [
+                "media": [
+                    "audio": [
+                        "models": [[
+                            "provider": "openai",
+                            "model": "gpt-4o-mini-transcribe",
+                            "apiKey": "${OPENCLAW_CONSUMER_OPENAI_API_KEY}",
+                        ]],
+                    ],
+                ],
                 "web": [
                     "search": [
                         "enabled": false,
@@ -281,27 +281,28 @@ struct ConsumerBootstrapTests {
 
         let env = root["env"] as? [String: Any]
         let vars = env?["vars"] as? [String: Any]
-        let plugins = root["plugins"] as? [String: Any]
-        let entriesPlugin = plugins?["entries"] as? [String: Any]
-        let memoryLancedb = entriesPlugin?["memory-lancedb"] as? [String: Any]
-        let memoryConfig = memoryLancedb?["config"] as? [String: Any]
-        let embedding = memoryConfig?["embedding"] as? [String: Any]
         let skills = root["skills"] as? [String: Any]
         let entries = skills?["entries"] as? [String: Any]
         let goplaces = entries?["goplaces"] as? [String: Any]
         let tools = root["tools"] as? [String: Any]
+        let media = tools?["media"] as? [String: Any]
+        let audio = media?["audio"] as? [String: Any]
+        let audioModels = audio?["models"] as? [[String: Any]]
         let web = tools?["web"] as? [String: Any]
         let search = web?["search"] as? [String: Any]
         let fetch = web?["fetch"] as? [String: Any]
         let firecrawl = fetch?["firecrawl"] as? [String: Any]
 
         #expect(changed)
-        #expect(vars?["OPENAI_API_KEY"] as? String == "openai-seeded")
+        #expect(vars?["OPENCLAW_CONSUMER_OPENAI_API_KEY"] as? String == "openai-seeded")
+        #expect(vars?["OPENAI_API_KEY"] == nil)
         #expect(vars?["FIRECRAWL_API_KEY"] as? String == "fc-seeded")
         #expect(vars?["GOOGLE_PLACES_API_KEY"] as? String == "places-seeded")
-        #expect(embedding?["apiKey"] as? String == "${OPENAI_API_KEY}")
-        #expect(embedding?["model"] as? String == "text-embedding-3-small")
         #expect(goplaces?["apiKey"] as? String == "places-seeded")
+        #expect(audioModels?.count == 1)
+        #expect(audioModels?.first?["provider"] as? String == "openai")
+        #expect(audioModels?.first?["model"] as? String == "gpt-4o-mini-transcribe")
+        #expect(audioModels?.first?["apiKey"] as? String == "${OPENCLAW_CONSUMER_OPENAI_API_KEY}")
         #expect(search?["enabled"] as? Bool == true)
         #expect(search?["provider"] as? String == "firecrawl")
         #expect(fetch?["enabled"] as? Bool == true)

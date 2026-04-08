@@ -16,6 +16,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
@@ -285,6 +286,24 @@ function resolveProviderQuery(params: {
   return Object.keys(query).length > 0 ? query : undefined;
 }
 
+function resolveExplicitMediaApiKeyValue(value: unknown): {
+  configured: boolean;
+  apiKey?: string;
+} {
+  const direct = normalizeOptionalSecretInput(value);
+  if (!direct) {
+    return { configured: false };
+  }
+  const envRefMatch = /^\$\{([A-Z][A-Z0-9_]*)\}$/.exec(direct);
+  if (!envRefMatch) {
+    return { configured: true, apiKey: direct };
+  }
+  return {
+    configured: true,
+    apiKey: normalizeOptionalSecretInput(process.env[envRefMatch[1]]),
+  };
+}
+
 export function buildModelDecision(params: {
   entry: MediaUnderstandingModelConfig;
   entryType: "provider" | "cli";
@@ -339,8 +358,39 @@ async function resolveProviderExecutionAuth(params: {
   providerId: string;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
+  config?: MediaUnderstandingConfig;
   agentDir?: string;
 }) {
+  // Media config can carry an explicit provider key that is scoped to this
+  // media path only. Consumer uses that to ship STT auth without populating the
+  // generic OpenAI provider env lane that normal chat/model auth resolves from.
+  const entryApiKey = resolveExplicitMediaApiKeyValue(params.entry.apiKey);
+  if (entryApiKey.configured) {
+    if (!entryApiKey.apiKey) {
+      throw new Error(`Explicit media apiKey for provider "${params.providerId}" is missing.`);
+    }
+    return {
+      apiKeys: collectProviderApiKeysForExecution({
+        provider: params.providerId,
+        primaryApiKey: entryApiKey.apiKey,
+      }),
+      providerConfig: params.cfg.models?.providers?.[params.providerId],
+    };
+  }
+  const configApiKey = resolveExplicitMediaApiKeyValue(params.config?.apiKey);
+  if (configApiKey.configured) {
+    if (!configApiKey.apiKey) {
+      throw new Error(`Explicit media apiKey for provider "${params.providerId}" is missing.`);
+    }
+    return {
+      apiKeys: collectProviderApiKeysForExecution({
+        provider: params.providerId,
+        primaryApiKey: configApiKey.apiKey,
+      }),
+      providerConfig: params.cfg.models?.providers?.[params.providerId],
+    };
+  }
+
   const auth = await resolveApiKeyForProvider({
     provider: params.providerId,
     cfg: params.cfg,
@@ -368,6 +418,7 @@ async function resolveProviderExecutionContext(params: {
     providerId: params.providerId,
     cfg: params.cfg,
     entry: params.entry,
+    config: params.config,
     agentDir: params.agentDir,
   });
   const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;

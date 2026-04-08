@@ -285,6 +285,41 @@ describe("applyMediaUnderstanding", () => {
     expect((ctx as unknown as { BodyForAgent?: string }).BodyForAgent).toBe(ctx.Body);
   });
 
+  it("uses an explicit audio model apiKey without touching generic provider auth", async () => {
+    const ctx = await createAudioCtx();
+    mockedResolveApiKey.mockClear();
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg: {
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [
+                {
+                  provider: "openai",
+                  model: "gpt-4o-mini-transcribe",
+                  apiKey: "consumer-scoped-key", // pragma: allowlist secret
+                },
+              ],
+            },
+          },
+        },
+      },
+      providers: {
+        openai: {
+          id: "openai",
+          transcribeAudio: async () => ({ text: "scoped transcript" }),
+        },
+      },
+    });
+
+    expect(result.appliedAudio).toBe(true);
+    expect(ctx.Transcript).toBe("scoped transcript");
+    expect(mockedResolveApiKey).not.toHaveBeenCalled();
+  });
+
   it("skips file blocks for text-like audio when transcription succeeds", async () => {
     const ctx = await createAudioCtx({
       fileName: "data.mp3",
