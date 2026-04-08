@@ -399,6 +399,109 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
     expect(startDiagnosticHeartbeat).not.toHaveBeenCalled();
     expect(result.diagnosticsEnabled).toBe(false);
   });
+
+  it("refuses to boot the canonical shared runtime from a feature worktree", async () => {
+    const home = makeTempDir();
+    const canonicalRepo = path.join(home, "Programming_Projects", "openclaw");
+    const sharedConfigPath = path.join(home, ".openclaw", "openclaw.json");
+    fs.mkdirSync(canonicalRepo, { recursive: true });
+    fs.writeFileSync(path.join(canonicalRepo, "package.json"), '{"name":"openclaw"}\n', "utf8");
+    fs.mkdirSync(path.dirname(sharedConfigPath), { recursive: true });
+    fs.writeFileSync(sharedConfigPath, "{}\n", "utf8");
+
+    await expect(
+      runGatewayStartupRuntimePolicyPhase({
+        context: createGatewayStartupContext(createSnapshot({ path: sharedConfigPath })),
+        isDiagnosticsEnabled: () => false,
+        startDiagnosticHeartbeat: vi.fn(),
+        isRestartEnabled: () => false,
+        setGatewaySigusr1RestartPolicy: vi.fn(),
+        setPreRestartDeferralCheck: vi.fn(),
+        getPendingWorkCount: () => 0,
+        seedControlUiAllowedOrigins: async (config) => config,
+        env: { HOME: home },
+        runtimeFingerprint: {
+          branch: "codex/feature-runtime",
+          worktree: path.join(home, "Programming_Projects", "openclaw", ".worktrees", "lane"),
+          stateDir: path.join(home, ".openclaw"),
+          configPath: sharedConfigPath,
+          serviceLabel: "ai.openclaw.gateway",
+        },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "runtime_policy",
+        message: expect.stringContaining(
+          "Refusing to start the default shared gateway runtime from a non-canonical checkout.",
+        ),
+      }),
+    );
+  });
+
+  it("allows the canonical shared runtime from the sacred main checkout", async () => {
+    const home = makeTempDir();
+    const canonicalRepo = path.join(home, "Programming_Projects", "openclaw");
+    const sharedConfigPath = path.join(home, ".openclaw", "openclaw.json");
+    fs.mkdirSync(canonicalRepo, { recursive: true });
+    fs.writeFileSync(path.join(canonicalRepo, "package.json"), '{"name":"openclaw"}\n', "utf8");
+    fs.mkdirSync(path.dirname(sharedConfigPath), { recursive: true });
+    fs.writeFileSync(sharedConfigPath, "{}\n", "utf8");
+
+    const result = await runGatewayStartupRuntimePolicyPhase({
+      context: createGatewayStartupContext(createSnapshot({ path: sharedConfigPath })),
+      isDiagnosticsEnabled: () => false,
+      startDiagnosticHeartbeat: vi.fn(),
+      isRestartEnabled: () => false,
+      setGatewaySigusr1RestartPolicy: vi.fn(),
+      setPreRestartDeferralCheck: vi.fn(),
+      getPendingWorkCount: () => 0,
+      seedControlUiAllowedOrigins: async (config) => config,
+      env: { HOME: home },
+      runtimeFingerprint: {
+        branch: "main",
+        worktree: canonicalRepo,
+        stateDir: path.join(home, ".openclaw"),
+        configPath: sharedConfigPath,
+        serviceLabel: "ai.openclaw.gateway",
+      },
+    });
+
+    expect(result.diagnosticsEnabled).toBe(false);
+  });
+
+  it("allows explicit break-glass override for the shared runtime", async () => {
+    const home = makeTempDir();
+    const canonicalRepo = path.join(home, "Programming_Projects", "openclaw");
+    const sharedConfigPath = path.join(home, ".openclaw", "openclaw.json");
+    fs.mkdirSync(canonicalRepo, { recursive: true });
+    fs.writeFileSync(path.join(canonicalRepo, "package.json"), '{"name":"openclaw"}\n', "utf8");
+    fs.mkdirSync(path.dirname(sharedConfigPath), { recursive: true });
+    fs.writeFileSync(sharedConfigPath, "{}\n", "utf8");
+
+    const result = await runGatewayStartupRuntimePolicyPhase({
+      context: createGatewayStartupContext(createSnapshot({ path: sharedConfigPath })),
+      isDiagnosticsEnabled: () => false,
+      startDiagnosticHeartbeat: vi.fn(),
+      isRestartEnabled: () => false,
+      setGatewaySigusr1RestartPolicy: vi.fn(),
+      setPreRestartDeferralCheck: vi.fn(),
+      getPendingWorkCount: () => 0,
+      seedControlUiAllowedOrigins: async (config) => config,
+      env: {
+        HOME: home,
+        OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME: "1",
+      },
+      runtimeFingerprint: {
+        branch: "codex/feature-runtime",
+        worktree: path.join(home, "Programming_Projects", "openclaw", ".worktrees", "lane"),
+        stateDir: path.join(home, ".openclaw"),
+        configPath: sharedConfigPath,
+        serviceLabel: "ai.openclaw.gateway",
+      },
+    });
+
+    expect(result.diagnosticsEnabled).toBe(false);
+  });
 });
 
 describe("classifyGatewayStartupPreflightError", () => {

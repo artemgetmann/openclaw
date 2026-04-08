@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   migrateLegacyConfig,
@@ -8,7 +9,15 @@ import {
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { detectProtectedTelegramTokenConflict } from "../infra/telegram-live-token-claims.js";
+import {
+  resolveRuntimeFingerprint,
+  type RuntimeFingerprint,
+} from "../infra/runtime-fingerprint.js";
+import {
+  detectProtectedTelegramTokenConflict,
+  isCanonicalSharedGatewayConfigPath,
+  resolveCanonicalMainRepoRoot,
+} from "../infra/telegram-live-token-claims.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { GatewayRuntimeConfig } from "./server-runtime-config.js";
 
@@ -288,6 +297,8 @@ type GatewayStartupRuntimePolicyDeps = {
   setPreRestartDeferralCheck: (check: () => number) => void;
   getPendingWorkCount: () => number;
   seedControlUiAllowedOrigins: (config: OpenClawConfig) => Promise<OpenClawConfig>;
+  env?: NodeJS.ProcessEnv;
+  runtimeFingerprint?: RuntimeFingerprint;
 };
 
 type GatewayStartupPluginBootstrapPhaseDeps<TBootstrapResult> = {
@@ -422,6 +433,40 @@ export function createGatewayStartupContext(
   };
 }
 
+function normalizePathForComparison(targetPath: string | null | undefined): string | null {
+  const trimmed = targetPath?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const resolved = trimmed;
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function isTruthyEnvFlag(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function buildNoncanonicalSharedRuntimeMessage(params: {
+  canonicalMainRepo: string;
+  runtimeFingerprint: RuntimeFingerprint;
+  configPath: string;
+}): string {
+  return [
+    "Refusing to start the default shared gateway runtime from a non-canonical checkout.",
+    `Current runtime checkout: ${params.runtimeFingerprint.worktree}`,
+    `Canonical main checkout: ${params.canonicalMainRepo}`,
+    `Shared config path: ${params.configPath}`,
+    "Feature worktrees must not own the shared main bot runtime. Merge to main first, or use an isolated tester bot/runtime.",
+    `Verify runtime ownership with \`${formatCliCommand("openclaw gateway status")}\`.`,
+    "Emergency override only: set OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME=1 for this process.",
+  ].join("\n");
+}
+
 /**
  * Startup phase: apply runtime policies derived from resolved startup config.
  */
@@ -429,6 +474,33 @@ export async function runGatewayStartupRuntimePolicyPhase(
   deps: GatewayStartupRuntimePolicyDeps,
 ): Promise<GatewayStartupContext> {
   try {
+    const env = deps.env ?? process.env;
+    const runtimeFingerprint =
+      deps.runtimeFingerprint ?? resolveRuntimeFingerprint({ env, moduleUrl: import.meta.url });
+    const canonicalMainRepo = resolveCanonicalMainRepoRoot(env);
+    const canonicalSharedConfig = isCanonicalSharedGatewayConfigPath(
+      deps.context.preflightSnapshot.path,
+      env,
+    );
+    const noncanonicalSharedRuntime =
+      canonicalSharedConfig &&
+      canonicalMainRepo &&
+      normalizePathForComparison(runtimeFingerprint.worktree) !==
+        normalizePathForComparison(canonicalMainRepo);
+    if (
+      noncanonicalSharedRuntime &&
+      !isTruthyEnvFlag(env.OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME)
+    ) {
+      throw new GatewayStartupPreflightError(
+        "runtime_policy",
+        buildNoncanonicalSharedRuntimeMessage({
+          canonicalMainRepo,
+          runtimeFingerprint,
+          configPath: deps.context.preflightSnapshot.path,
+        }),
+      );
+    }
+
     const diagnosticsEnabled = deps.isDiagnosticsEnabled(deps.context.config);
     if (diagnosticsEnabled) {
       deps.startDiagnosticHeartbeat();
