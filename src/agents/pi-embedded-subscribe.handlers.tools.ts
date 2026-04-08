@@ -1,4 +1,5 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   buildExecApprovalPendingReplyPayload,
@@ -217,6 +218,89 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   };
 }
 
+function countLines(text: string): number {
+  if (!text) {
+    return 0;
+  }
+  return text.split(/\r?\n/).length;
+}
+
+function resolveCompletionStatus(result: unknown, isToolError: boolean): "completed" | "failed" {
+  if (isToolError) {
+    return "failed";
+  }
+  if (!result || typeof result !== "object") {
+    return "completed";
+  }
+  const details =
+    (result as { details?: unknown }).details &&
+    typeof (result as { details?: unknown }).details === "object"
+      ? ((result as { details?: Record<string, unknown> }).details ?? {})
+      : {};
+  const statusRaw =
+    typeof details.status === "string"
+      ? details.status.trim().toLowerCase()
+      : typeof (result as { status?: unknown }).status === "string"
+        ? ((result as { status?: string }).status ?? "").trim().toLowerCase()
+        : "";
+  if (statusRaw === "error" || statusRaw === "failed" || statusRaw === "timeout") {
+    return "failed";
+  }
+  return "completed";
+}
+
+function resolveOutputHint(params: { result: unknown; sanitizedResult: unknown }): string {
+  const mediaCount = extractToolResultMediaPaths(params.result).length;
+  const outputText = extractToolResultText(params.sanitizedResult);
+  const hints: string[] = [];
+  if (outputText) {
+    const lineCount = countLines(outputText);
+    const charCount = outputText.length;
+    hints.push(
+      `text output (${lineCount} ${lineCount === 1 ? "line" : "lines"}, ${charCount} chars)`,
+    );
+  }
+  if (mediaCount > 0) {
+    hints.push(`${mediaCount} media item${mediaCount === 1 ? "" : "s"}`);
+  }
+  if (hints.length === 0) {
+    return "no output";
+  }
+  return hints.join(" · ");
+}
+
+function emitSafeToolCompletionSummary(params: {
+  ctx: ToolHandlerContext;
+  toolName: string;
+  meta?: string;
+  isToolError: boolean;
+  result: unknown;
+  sanitizedResult: unknown;
+}) {
+  if (!params.ctx.params.onToolResult || !params.ctx.shouldEmitToolResult()) {
+    return;
+  }
+  const status = resolveCompletionStatus(params.result, params.isToolError);
+  const statusLabel = status === "failed" ? "failed" : "completed";
+  const statusEmoji = status === "failed" ? "❌" : "✅";
+  const summaryPrefix = formatToolAggregate(
+    params.toolName,
+    params.meta ? [params.meta] : undefined,
+    { markdown: false },
+  );
+  const outputHint = resolveOutputHint({
+    result: params.result,
+    sanitizedResult: params.sanitizedResult,
+  });
+  try {
+    void params.ctx.params.onToolResult({
+      text: `${statusEmoji} ${summaryPrefix} · ${statusLabel} · ${outputHint}`,
+    });
+  } catch {
+    // ignore delivery failures
+  }
+}
+
 async function emitToolResultOutput(params: {
   ctx: ToolHandlerContext;
   toolName: string;
@@ -269,6 +353,8 @@ async function emitToolResultOutput(params: {
     }
     return;
   }
+
+  emitSafeToolCompletionSummary({ ctx, toolName, meta, isToolError, result, sanitizedResult });
 
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
