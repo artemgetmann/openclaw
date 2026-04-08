@@ -1,6 +1,12 @@
 # Telegram live checks
 
-Use this after the isolated browser and agent smoke flow in `docs/agent-guides/browser-agent-e2e.md` unless the bug is clearly Telegram-specific.
+Use this only when Telegram behavior itself is under test, or after the isolated
+browser and agent smoke flow in `docs/agent-guides/browser-agent-e2e.md` has
+already passed and you still need Telegram transport proof.
+
+Do not use Telegram as the default first-pass E2E path for non-Telegram bugs.
+For most agent/tool/browser issues, local OpenClaw CLI validation is the faster
+and more reliable default.
 
 ## Required precheck before any live Telegram validation
 
