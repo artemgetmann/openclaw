@@ -233,6 +233,29 @@ const makeCopilotConfig = (): OpenClawConfig =>
     },
   }) satisfies OpenClawConfig;
 
+const makeCodexConfig = (): OpenClawConfig =>
+  ({
+    models: {
+      providers: {
+        "openai-codex": {
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+          models: [
+            {
+              id: "mock-1",
+              name: "Codex Mock 1",
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128_000,
+              maxTokens: 4096,
+            },
+          ],
+        },
+      },
+    },
+  }) satisfies OpenClawConfig;
+
 const writeAuthStore = async (
   agentDir: string,
   opts?: {
@@ -275,6 +298,30 @@ const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
     version: 1,
     profiles: {
       "github-copilot:github": { type: "token", provider: "github-copilot", token },
+    },
+  };
+  await fs.writeFile(authPath, JSON.stringify(payload));
+};
+
+const writeCodexAuthStore = async (agentDir: string) => {
+  const authPath = path.join(agentDir, "auth-profiles.json");
+  const payload = {
+    version: 1,
+    profiles: {
+      "openai-codex:default": {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "sk-codex-one",
+      },
+      "openai-codex:backup": {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "sk-codex-two",
+      },
+    },
+    usageStats: {
+      "openai-codex:default": { lastUsed: 1 },
+      "openai-codex:backup": { lastUsed: 2 },
     },
   };
   await fs.writeFile(authPath, JSON.stringify(payload));
@@ -347,6 +394,29 @@ async function runAutoPinnedOpenAiTurn(params: {
   });
 }
 
+async function runAutoPinnedCodexTurn(params: {
+  agentDir: string;
+  workspaceDir: string;
+  sessionKey: string;
+  runId: string;
+}) {
+  await runEmbeddedPiAgent({
+    sessionId: "session:test",
+    sessionKey: params.sessionKey,
+    sessionFile: path.join(params.workspaceDir, "session.jsonl"),
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    config: makeCodexConfig(),
+    prompt: "hello",
+    provider: "openai-codex",
+    model: "mock-1",
+    authProfileId: "openai-codex:default",
+    authProfileIdSource: "auto",
+    timeoutMs: 5_000,
+    runId: params.runId,
+  });
+}
+
 async function readUsageStats(agentDir: string) {
   const stored = JSON.parse(
     await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
@@ -367,6 +437,11 @@ async function readUsageStats(agentDir: string) {
 async function expectProfileP2UsageUnchanged(agentDir: string) {
   const usageStats = await readUsageStats(agentDir);
   expect(usageStats["openai:p2"]?.lastUsed).toBe(2);
+}
+
+async function expectCodexBackupUsageUnchanged(agentDir: string) {
+  const usageStats = await readUsageStats(agentDir);
+  expect(usageStats["openai-codex:backup"]?.lastUsed).toBe(2);
 }
 
 async function runAutoPinnedRotationCase(params: {
@@ -917,6 +992,28 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
       await expectProfileP2UsageUnchanged(agentDir);
+    });
+  });
+
+  it("keeps openai-codex on the selected active profile after usage-limit errors", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeCodexAuthStore(agentDir);
+
+      mockSingleErrorAttempt({
+        errorMessage: "Error: Hit your ChatGPT usage limit. Try again in 2h 14m.",
+        provider: "openai-codex",
+        model: "mock-1",
+      });
+
+      await runAutoPinnedCodexTurn({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:codex-single-active",
+        runId: "run:codex-single-active",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      await expectCodexBackupUsageUnchanged(agentDir);
     });
   });
 
