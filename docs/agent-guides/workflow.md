@@ -14,14 +14,22 @@
 ## Two-clone default
 
 - Default model:
-  - `~/Programming_Projects/openclaw` is the home clone for fork `main`
-  - `~/Programming_Projects/openclaw-consumer` is the home clone for `codex/consumer-openclaw-project`
-- Those home clones replace durable worktrees as the default branch homes.
-- Base branches are pull-only:
-  - do not commit directly to `main`
-  - do not commit directly to `codex/consumer-openclaw-project`
-  - local guards in `git-hooks/pre-commit` and `scripts/committer` block direct commits on those branches
-- Agents still create short-lived feature branches for every task.
+  - `~/Programming_Projects/openclaw` is the sacred runtime home clone for fork `main`
+  - `~/Programming_Projects/openclaw-consumer` is the sacred runtime home clone for `codex/consumer-openclaw-project`
+- Those sacred home clones replace durable worktrees as the default branch homes.
+- Sacred home clones are pull-only runtime anchors:
+  - they stay on their base branch
+  - they are the only approved source checkouts for creating new temp worktrees
+  - agents do not do feature work directly in either sacred home clone, even on a feature branch
+- Direct commits stay blocked on the protected base branches:
+  - `main`
+  - `codex/consumer-openclaw-project`
+- Checkout-level enforcement is also in place:
+  - `git-hooks/pre-commit` and `scripts/committer` reject commits from either sacred home clone regardless of branch name
+  - `scripts/new-worktree.sh` only runs from a sacred home clone, and it requires that sacred home clone to be clean and on its base branch
+- The only bypass is an explicit break-glass runtime hotfix from the sacred home clone's base branch:
+  - `OPENCLAW_ALLOW_SACRED_HOME_HOTFIX=1`
+  - use this only when the runtime is broken badly enough that creating a temp worktree first would slow recovery
 - Open a draft PR once the first coherent slice exists. Validation can happen after the draft PR is open.
 - Mark the PR ready only after validation is complete.
 - Merge only when the task and repo policy allow it.
@@ -36,32 +44,34 @@
   - `oc-main-task <feature-name>`
   - `oc-consumer-task <feature-name>`
 - Those wrappers:
-  - enter the correct home clone
+  - enter the correct sacred home clone
   - require the clone to already be on its base branch
   - require a clean worktree so `git pull --ff-only` is honest
   - fast-forward from `origin/<base>` before you start work
-  - let the `*-task` wrapper create a temp worktree from the correct home clone automatically
+  - let the `*-task` wrapper create a temp worktree from the correct sacred home clone automatically
   - refuse handoff unless the new lane proves local readiness inside that worktree
 - If a helper refuses entry, fix the clone first instead of forcing around it. The point is to keep base-branch truth boring.
 
 ## Daily agent sequence
 
-1. Enter the right home clone with `oc-main` or `oc-consumer`.
-2. Create a short-lived feature branch.
-3. Code on that feature branch.
+1. Start the task with `oc-main-task <feature-name>` or `oc-consumer-task <feature-name>`.
+2. Let that wrapper fast-forward the correct sacred home clone, create the temp worktree, and drop you into it.
+3. Code inside that temp worktree only.
 4. Open or update a draft PR early.
-5. Validate on the feature branch.
+5. Validate in the temp worktree.
 6. Mark the PR ready when validation is complete.
 7. Merge if the task and policy allow it.
-8. Return the home clone to its base branch and fast-forward it again.
+8. Remove the merged temp worktree with `bash scripts/gc-worktrees.sh --auto --base-branch <base>` or let the scheduled GC clean it up.
+9. Keep the sacred home clone on its base branch and fast-forward it again before the next task.
 
 ## Temporary worktrees
 
-- Temporary worktrees are still allowed.
-- They are no longer the default branch homes.
-- Use them when 2 or more agents need isolated parallel editing in the same clone.
+- Temporary worktrees are the default implementation surface now.
+- They are no longer optional parallel-only lanes.
+- Every non-hotfix task should start in a temp worktree created from the correct sacred home clone.
 - Keep repo-owned temporary worktrees under `.worktrees/` when practical so they do not scatter across multiple ad-hoc locations.
 - Before creating a temporary worktree, fast-forward the chosen base branch locally so it exactly matches `origin/<base>`. `scripts/new-worktree.sh` fails if the named base branch is ahead of or behind its remote tracking branch.
+- `scripts/new-worktree.sh` only runs from a sacred home clone. The shell helper wrappers are the default task-spawn path because they refresh the right sacred home clone first, then call `scripts/new-worktree.sh` with the correct base.
 - `scripts/new-worktree.sh` bootstraps fresh lanes by default with a per-worktree dependency install/build. It must not symlink `node_modules` or `ui/node_modules` from another checkout because that leaks cross-worktree package state into clean-room validation.
 - A ready lane is not "directory exists". The blessed spawn path must prove local tool resolution from inside the new worktree before handoff. Today that proof is `pnpm exec vitest --version`.
 - If runtime bootstrap or the ready-lane proof fails, `scripts/new-worktree.sh` exits non-zero and the shell helper wrappers must refuse to drop the caller into that lane.
@@ -76,6 +86,10 @@
   - if you need the heavier macOS/Swift warm-up, use `bash scripts/prewarm-worktree.sh --root <worktree> --macos` after creation instead of leaking state between lanes
 - Worktree/bootstrap/consumer runtime scripts pin to the repo-validated Node version from `.node-version` / `.nvmrc` instead of trusting the shell-default `node`. If that exact version is missing, install it first or point `OPENCLAW_NODE_BIN` at a binary with the same version.
 - Legacy durable worktrees may still exist during migration. Do not retire them in-place during this change. Cleanup belongs to a later explicit pass.
+- After merge, clean the finished temp worktree:
+  - manual pass: `bash scripts/gc-worktrees.sh --auto --base-branch main`
+  - consumer pass: `bash scripts/gc-worktrees.sh --auto --base-branch codex/consumer-openclaw-project`
+  - background cleanup: `bash scripts/install-worktree-gc.sh install`
 - For recovery and vanished-worktree triage, use `docs/debug/worktree-branch-survival.md`.
 
 ## Migration path
@@ -84,8 +98,8 @@
 2. Ensure the two home clones exist at `~/Programming_Projects/openclaw` and `~/Programming_Projects/openclaw-consumer`.
 3. Source `scripts/shell-helpers/home-clone-helpers.sh` and start entering clones through `oc-main` / `oc-consumer`.
 4. Stop treating durable worktrees as the default branch homes.
-5. For new work, create a short-lived feature branch inside the correct home clone, then open a draft PR early.
-6. Use temporary worktrees only when parallel isolation or clean-room validation actually requires them.
+5. For new work, create temp worktrees from the correct sacred home clone instead of branching directly inside the home clone.
+6. Treat the sacred home clone as pull-only runtime state, not as a coding surface.
 7. After the team has migrated, do a separate cleanup pass for old durable worktrees.
 
 ## GitHub footguns

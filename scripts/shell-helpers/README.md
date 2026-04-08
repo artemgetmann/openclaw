@@ -244,7 +244,7 @@ oc-consumer-task my-feature
 
 Those wrappers require the home clone to be clean on its base branch, run
 `git pull --ff-only`, then enter it. The `*-task` wrappers immediately create
-and enter a temp worktree from the correct home clone. They refuse
-handoff unless the new lane proves local readiness inside that worktree
-(`pnpm exec vitest --version` today). Do not create feature branches directly
-in the home clones.
+and enter a temp worktree from the correct sacred home clone. Do not create
+feature branches directly in the sacred home clones.
+They refuse handoff unless the new lane proves local readiness inside that
+worktree (`pnpm exec vitest --version` today).

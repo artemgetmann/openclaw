@@ -25,8 +25,8 @@ This means the refactor and the consumer build are the same work — not two sep
 
 ### Bot Identity Strategy
 
-- **Decision:** Guided BYOK (Bring Your Own Bot token) for v1
-- **Note:** BotFather has no programmatic API — bot creation is manual chat-based. Managed/shared bot is a future product seam, not part of the first consumer build.
+- **Decision:** Shared bot for easy onboarding + optional BYOK (Bring Your Own Bot token) for power users
+- **Note:** BotFather has no programmatic API — bot creation is manual chat-based. Shared bot is the pragmatic default. BYOK is a settings toggle, not an onboarding step.
 
 ### Local App UX
 
@@ -82,10 +82,7 @@ This means the refactor and the consumer build are the same work — not two sep
 - **Source clone:** `/Users/user/Programming_Projects/openclaw`
 - **Live bot (personal):** `~/.openclaw/workspace` — DO NOT TOUCH during consumer development
 - **Fork integration:** `main` on `artemgetmann/openclaw`
-- **Consumer runtime root:** `~/Library/Application Support/OpenClaw Consumer`
-- **Consumer state/config:** `~/Library/Application Support/OpenClaw Consumer/.openclaw`
 - **Consumer work:** `codex/consumer-openclaw-project` on `artemgetmann/openclaw`
-- **Boundary:** consumer setup does not read or migrate founder runtime state in week 1.
 
 ### Convergence Plan
 
@@ -126,6 +123,7 @@ pnpm openclaw gateway --port 19001 --bind loopback
 ```
 
 Temporary worktrees are still allowed when 2 or more agents need isolated parallel editing in the same clone. The default consumer task-spawn path is now `oc-consumer-task`.
+The consumer sacred home clone stays on `codex/consumer-openclaw-project`. It does not host feature work directly. Every consumer implementation task starts in a temp worktree created from that sacred home clone. Temporary worktrees are still allowed when 2 or more agents need isolated parallel editing in the same clone, and the default consumer task-spawn path is `oc-consumer-task`.
 
 ### Rule
 
@@ -197,7 +195,7 @@ A markdown doc: `browser-spike-results.md` with:
 
 - [ ] Create `consumer` branch from `main`
 - [ ] Strip/simplify desktop app UI (if touching it this week — may defer)
-- [ ] Set up isolated test profile (port 19001, separate consumer runtime root)
+- [ ] Set up isolated test profile (port 19001, separate OPENCLAW_HOME)
 - [ ] Verify Telegram bot works on consumer build
 - [ ] Verify logging works and is easily viewable (`openclaw logs --follow`)
 - [ ] Integrate winning browser approach from spike
@@ -230,21 +228,21 @@ A markdown doc: `browser-spike-results.md` with:
 
 ## 5) What's Cut from Week 1
 
-| Feature                               | Status             | When                                                     |
-| ------------------------------------- | ------------------ | -------------------------------------------------------- |
-| Safety profiles (Safe/Balanced)       | Cut                | Week 2-3                                                 |
-| Irreversible action confirmation gate | Cut                | Week 2-3                                                 |
-| Activity timeline UI                  | Cut                | Week 3+                                                  |
-| Panic pause button                    | Cut                | Week 2                                                   |
-| Billing / Stripe integration          | Cut                | After product works                                      |
-| Onboarding wizard                     | Cut                | Week 3                                                   |
-| Desktop app simplification            | Cut (or minimal)   | Week 2-3                                                 |
-| Sleep/wake smart handling             | Cut                | Week 2                                                   |
-| Telegram offline notification         | Cut                | Week 2                                                   |
-| WhatsApp channel                      | Cut                | Phase 2                                                  |
-| Managed Mac hosting                   | Cut                | Phase 2                                                  |
-| Legal/ToS                             | Cut                | Before public launch                                     |
-| BYOK (bot token or API keys)          | Partially included | Telegram bot token setup is v1; API-key BYOK stays later |
+| Feature                               | Status           | When                 |
+| ------------------------------------- | ---------------- | -------------------- |
+| Safety profiles (Safe/Balanced)       | Cut              | Week 2-3             |
+| Irreversible action confirmation gate | Cut              | Week 2-3             |
+| Activity timeline UI                  | Cut              | Week 3+              |
+| Panic pause button                    | Cut              | Week 2               |
+| Billing / Stripe integration          | Cut              | After product works  |
+| Onboarding wizard                     | Cut              | Week 3               |
+| Desktop app simplification            | Cut (or minimal) | Week 2-3             |
+| Sleep/wake smart handling             | Cut              | Week 2               |
+| Telegram offline notification         | Cut              | Week 2               |
+| WhatsApp channel                      | Cut              | Phase 2              |
+| Managed Mac hosting                   | Cut              | Phase 2              |
+| Legal/ToS                             | Cut              | Before public launch |
+| BYOK (bot token or API keys)          | Cut              | Week 3+              |
 
 ---
 
@@ -288,7 +286,7 @@ Target: First value in < 10 minutes.
 
 1. **Legal counsel** — liability boundaries for autonomous agent actions
 2. **Billing integration** — Stripe setup, subscription management
-3. **Bot identity** — managed/shared bot infrastructure at scale (rate limits, Telegram ToS)
+3. **Bot identity** — shared bot infrastructure at scale (rate limits, Telegram ToS)
 4. **Hardware guidance** — finalize messaging around Mac Mini vs laptop trade-offs
 5. **Sensitive data policy** — what the agent should/shouldn't access, data retention
 

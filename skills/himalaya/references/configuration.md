@@ -10,6 +10,7 @@ This reference is aligned with the installed CLI here: `himalaya v1.1.0`.
 - Folder aliases use `folder.aliases.*`, not `folder.alias.*`.
 - The stock Homebrew build does not include OAuth2 support, so the reliable local path is IMAP/SMTP with passwords or provider app passwords.
 - Read failures usually come from the wrong IMAP login or the wrong folder aliases, not from the base read/list commands.
+- iCloud has a separate send-copy footgun: larger attachment payloads can time out while appending the Sent copy even when SMTP send succeeds.
 
 ## Minimal IMAP + SMTP Setup
 
@@ -106,7 +107,7 @@ Notes:
 
 ## iCloud Configuration
 
-The easy failure mode here is using the full email address for both logins. Upstream Himalaya documents different login shapes for IMAP vs SMTP on iCloud.
+Upstream Himalaya documents different login shapes for IMAP vs SMTP on iCloud.
 
 ```toml
 [accounts.icloud]
@@ -141,6 +142,9 @@ Notes:
 - SMTP login stays the full email address.
 - Generate an app-specific password in Apple ID settings and use it for both IMAP and SMTP auth.
 - If folder operations miss, verify aliases against `himalaya folder list -a icloud`.
+- If larger attachment sends fail with `cannot add IMAP message: request timed out`, the broken step is usually the IMAP Sent-copy append, not SMTP delivery.
+- Use `python3 skills/himalaya/scripts/send_template.py --account icloud` for agent-run or scripted CLI sends. The wrapper keeps normal Himalaya behavior for no-attachment and small-attachment sends, which still save a Sent copy.
+- Only larger iCloud attachment payloads switch to `message.send.save-copy = false` to avoid the post-send IMAP append timeout, so those payloads intentionally skip the Sent copy.
 
 ## Folder Aliases
 

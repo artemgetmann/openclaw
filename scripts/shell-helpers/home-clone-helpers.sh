@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Home-clone entry helpers for the two default OpenClaw branch homes.
+# Home-clone entry helpers for the two sacred OpenClaw branch homes.
 #
-# Source this from your shell rc so the wrappers can refresh the home clone
-# safely, then either enter it or spawn a temp worktree from it:
+# Source this from your shell rc so the wrappers can refresh the sacred home
+# clone safely, then either enter it or spawn a temp worktree from it:
 #   source /absolute/path/to/openclaw/scripts/shell-helpers/home-clone-helpers.sh
 
 if [[ -n "${OPENCLAW_HOME_CLONE_HELPERS_LOADED:-}" ]]; then
@@ -129,7 +129,7 @@ _openclaw_spawn_task_lane() {
 
   for arg in "$@"; do
     if [[ "$arg" == "--base" ]]; then
-      echo "Error: --base is fixed by the home-clone wrapper. Use oc-main-task or oc-consumer-task without overriding the base branch." >&2
+      echo "Error: --base is fixed by the sacred home clone wrapper. Use oc-main-task or oc-consumer-task without overriding the base branch." >&2
       return 1
     fi
   done

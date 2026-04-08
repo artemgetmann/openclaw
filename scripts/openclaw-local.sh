@@ -16,14 +16,11 @@ if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
 
-# The canonical shared checkout powers the long-lived local Jarvis gateway.
-# Refuse to run it from a feature/consumer branch so checkout drift cannot
-# silently repoint the shared bot at the wrong code.
-worktree_guard_require_shared_root_main_branch "$ROOT"
-worktree_guard_reject_shared_root_main_edits \
-  "$ROOT" \
-  worktree \
-  --context "scripts/openclaw-local.sh"
+# Sacred home clones are runtime anchors. They must stay on their base branch
+# and free of tracked implementation edits unless the operator has explicitly
+# entered the break-glass hotfix path on that same base branch.
+worktree_guard_require_sacred_home_clone_base_branch "$ROOT" "scripts/openclaw-local.sh"
+worktree_guard_reject_sacred_home_edits "$ROOT" worktree --context "scripts/openclaw-local.sh"
 
 RAW_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 if [[ -z "$RAW_INSTANCE_ID" ]]; then
@@ -34,10 +31,9 @@ if [[ -z "$RAW_INSTANCE_ID" ]]; then
 fi
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$RAW_INSTANCE_ID")"
-# The canonical consumer checkout uses the default consumer lane with an empty
-# instance id. Still apply the runtime env there so local proof commands do not
-# silently fall back to the shared founder runtime.
-consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
+if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
+  consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
+fi
 
 # Short local CLI commands are an easy place to accidentally mutate the shared
 # runtime from a manually-created worktree. Require the generated dev launch env

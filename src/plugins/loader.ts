@@ -78,6 +78,15 @@ function tracePluginLoaderStage(stage: string): void {
   }
 }
 
+function nowMs(): number {
+  return performance.now();
+}
+
+function tracePluginLoaderDuration(stage: string, startedAtMs: number, details?: string): void {
+  const elapsedMs = Math.round((nowMs() - startedAtMs) * 100) / 100;
+  tracePluginLoaderStage(`${stage} durationMs=${elapsedMs}${details ? ` ${details}` : ""}`);
+}
+
 export function clearPluginLoaderCache(): void {
   registryCache.clear();
   openAllowlistWarningCache.clear();
@@ -828,6 +837,7 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+  const startedAtMs = nowMs();
   // Snapshot (non-activating) loads must disable the cache to avoid storing a registry
   // whose commands were never globally registered.
   if (options.activate === false && options.cache !== false) {
@@ -863,6 +873,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
+      tracePluginLoaderDuration(
+        "plugin-loader-cache-hit",
+        startedAtMs,
+        `plugins=${cached.plugins.length} diagnostics=${cached.diagnostics.length}`,
+      );
       if (shouldActivate) {
         activatePluginRegistry(cached, cacheKey);
       }
@@ -961,6 +976,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     suppressGlobalCommands: !shouldActivate,
   });
 
+  const discoveryStartedAtMs = nowMs();
   const discovery = discoverOpenClawPlugins({
     workspaceDir: options.workspaceDir,
     extraPaths: normalized.loadPaths,
@@ -968,6 +984,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     env,
     onlyPluginIds,
   });
+  tracePluginLoaderDuration(
+    "plugin-loader-discovery",
+    discoveryStartedAtMs,
+    `candidates=${discovery.candidates.length} diagnostics=${discovery.diagnostics.length}`,
+  );
+  const manifestStartedAtMs = nowMs();
   const manifestRegistry = loadPluginManifestRegistry({
     config: cfg,
     workspaceDir: options.workspaceDir,
@@ -977,6 +999,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     diagnostics: discovery.diagnostics,
     onlyPluginIds,
   });
+  tracePluginLoaderDuration(
+    "plugin-loader-manifest-registry",
+    manifestStartedAtMs,
+    `plugins=${manifestRegistry.plugins.length} diagnostics=${manifestRegistry.diagnostics.length}`,
+  );
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
     logger,
@@ -993,15 +1020,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: plugin.origin,
       })),
   });
+  const provenanceStartedAtMs = nowMs();
   const provenance = buildProvenanceIndex({
     config: cfg,
     normalizedLoadPaths: normalized.loadPaths,
     env,
   });
+  tracePluginLoaderDuration("plugin-loader-provenance", provenanceStartedAtMs);
 
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
   );
+  const orderingStartedAtMs = nowMs();
   const orderedCandidates = [...discovery.candidates].toSorted((left, right) => {
     return compareDuplicateCandidateOrder({
       left,
@@ -1011,6 +1041,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       env,
     });
   });
+  tracePluginLoaderDuration(
+    "plugin-loader-order-candidates",
+    orderingStartedAtMs,
+    `count=${orderedCandidates.length}`,
+  );
 
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = normalized.slots.memory;
@@ -1361,6 +1396,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (shouldActivate) {
     activatePluginRegistry(registry, cacheKey);
   }
+  tracePluginLoaderDuration(
+    "plugin-loader-complete",
+    startedAtMs,
+    `plugins=${registry.plugins.length} diagnostics=${registry.diagnostics.length}`,
+  );
   return registry;
 }
 
