@@ -90,6 +90,63 @@ function seedArtemInbound(db: TempDbContext["db"], msgId: string, ts: number) {
   `);
 }
 
+function seedNegotiationThread(db: TempDbContext["db"]) {
+  db.exec(`
+    INSERT INTO chats (jid, kind, name, last_message_ts) VALUES
+      ('971507664706@s.whatsapp.net', 'dm', 'Artem Getman', 1775635000),
+      ('74333133234289@lid', 'unknown', 'Artem Getman', 1775642400);
+    INSERT INTO contacts (
+      jid, phone, push_name, full_name, first_name, business_name, updated_at
+    ) VALUES
+      ('971507664706@s.whatsapp.net', '971507664706', 'Artem Getman', 'Artem Getman', 'Artem', NULL, 1775566934),
+      ('74333133234289@lid', NULL, 'Artem Getman', 'Artem Getman', 'Artem', NULL, 1775566934);
+    INSERT INTO contact_aliases (jid, alias, notes, updated_at) VALUES
+      ('971507664706@s.whatsapp.net', 'Artem Getman', NULL, 1775566934);
+    INSERT INTO messages (
+      chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, display_text, media_type, media_caption
+    ) VALUES
+      (
+        '74333133234289@lid',
+        'Artem Getman',
+        'inbound-1',
+        '74333133234289:12@lid',
+        'Artem Getman',
+        1775635000,
+        0,
+        'Wanna go to Georgian restaurant today at 7pm?',
+        'Wanna go to Georgian restaurant today at 7pm?',
+        NULL,
+        NULL
+      ),
+      (
+        '74333133234289@lid',
+        'Artem Getman',
+        'outbound-1',
+        NULL,
+        NULL,
+        1775638600,
+        1,
+        'Yeah, dinner works and Georgian is fine. 8pm or a bit later works better for me — can we do 8?',
+        'Yeah, dinner works and Georgian is fine. 8pm or a bit later works better for me — can we do 8?',
+        NULL,
+        NULL
+      ),
+      (
+        '74333133234289@lid',
+        'Artem Getman',
+        'inbound-2',
+        '74333133234289:12@lid',
+        'Artem Getman',
+        1775642400,
+        0,
+        'Hmm maybe 7:30 pm?',
+        'Hmm maybe 7:30 pm?',
+        NULL,
+        NULL
+      );
+  `);
+}
+
 describe("wacli monitor check helper", () => {
   it("derives a stable state file from target and persists first-run baseline", async () => {
     const ctx = await createTempDb();
@@ -174,6 +231,33 @@ describe("wacli monitor check helper", () => {
         lastProcessedMsgId: string;
       };
       expect(persisted.lastProcessedMsgId).toBe("msg-1");
+    } finally {
+      ctx.db.close();
+      await fs.rm(ctx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes recent conversation context through the monitor helper result", async () => {
+    const ctx = await createTempDb();
+    try {
+      seedNegotiationThread(ctx.db);
+      const result = await buildMonitorCheckCliResult({
+        dbPath: ctx.dbPath,
+        json: true,
+        lastProcessedMsgId: null,
+        stateDir: ctx.stateDir,
+        stateFile: null,
+        target: "971507664706@s.whatsapp.net",
+      });
+
+      expect(result.latestInboundReply?.msgId).toBe("inbound-2");
+      expect(result.recentConversation.map((turn) => turn.msgId)).toEqual([
+        "inbound-1",
+        "outbound-1",
+        "inbound-2",
+      ]);
+      expect(result.continuity.lastOutboundReply?.msgId).toBe("outbound-1");
+      expect(result.continuity.hasPriorOutbound).toBe(true);
     } finally {
       ctx.db.close();
       await fs.rm(ctx.root, { recursive: true, force: true });
