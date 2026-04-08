@@ -18,6 +18,7 @@ into coherent rescue branches instead.
 
 - Branch: `codex/rescue-telegram-live-guidance-2026-04-08`
 - Commit: `83c9832c1a`
+- Draft PR: `#381`
 - Contains:
   - Telegram live-validation docs/skill narrowing
   - guidance that local CLI/browser validation should be the default for
@@ -30,6 +31,7 @@ into coherent rescue branches instead.
 
 - Branch: `codex/rescue-himalaya-icloud-wrapper-2026-04-08`
 - Commit: `b9769ab752`
+- Draft PR: `#384`
 - Contains:
   - Himalaya iCloud send wrapper
   - smoke harness
@@ -42,6 +44,7 @@ into coherent rescue branches instead.
 
 - Branch: `codex/rescue-auth-profile-codex-pinning-2026-04-08`
 - Commit: `f5230de1b7`
+- Draft PR: `#382`
 - Contains:
   - `openai-codex` single-active-profile selection
   - stricter permanent-failure handling for `refresh_token_reused`
@@ -53,6 +56,7 @@ into coherent rescue branches instead.
 
 - Branch: `codex/rescue-plugin-discovery-tracing-2026-04-08`
 - Commit: `670e7e53a9`
+- Draft PR: `#383`
 - Contains:
   - plugin discovery/loader timing traces
   - manifest-load reuse across discovery and manifest-registry
