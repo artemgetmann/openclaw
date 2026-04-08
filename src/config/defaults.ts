@@ -1,5 +1,6 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
+import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { resolveAgentModelPrimaryValue } from "./model-input.js";
 import {
@@ -432,7 +433,7 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
   if (defaults.heartbeat?.every === undefined) {
     nextDefaults.heartbeat = {
       ...heartbeat,
-      every: authMode === "oauth" ? "1h" : "30m",
+      every: DEFAULT_HEARTBEAT_EVERY,
     };
     mutated = true;
   }

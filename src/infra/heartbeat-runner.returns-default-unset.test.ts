@@ -136,7 +136,7 @@ afterAll(async () => {
 
 describe("resolveHeartbeatIntervalMs", () => {
   it("returns default when unset", () => {
-    expect(resolveHeartbeatIntervalMs({})).toBe(30 * 60_000);
+    expect(resolveHeartbeatIntervalMs({})).toBe(24 * 60 * 60_000);
   });
 
   it("returns null when invalid or zero", () => {
