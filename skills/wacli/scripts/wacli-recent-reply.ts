@@ -124,6 +124,7 @@ export async function buildRecentReplyCliResult(args: Args): Promise<{
   >["latestInboundReply"];
   preferredMonitorChatJid: string;
   monitorBootstrapDecision: ReturnType<typeof decideWacliMonitorBootstrapAction>;
+  monitorStatus?: "new_message" | "no_change";
   status?: "new_message" | "no_change";
   stateFile?: string | null;
 }> {
@@ -139,7 +140,7 @@ export async function buildRecentReplyCliResult(args: Args): Promise<{
     lastProcessedMsgId: effectiveLastProcessedMsgId,
     lookup: result,
   });
-  const status = args.stateFile
+  const monitorStatus = args.stateFile
     ? bootstrapDecision.action === "process-latest"
       ? "new_message"
       : "no_change"
@@ -159,7 +160,8 @@ export async function buildRecentReplyCliResult(args: Args): Promise<{
     ...result,
     preferredMonitorChatJid,
     monitorBootstrapDecision: bootstrapDecision,
-    status,
+    monitorStatus,
+    status: monitorStatus,
     stateFile: args.stateFile,
   };
 }
@@ -173,7 +175,7 @@ function printHumanResult(result: RecentReplyCliResult): void {
     `Bootstrap decision: ${result.monitorBootstrapDecision.action} (${result.monitorBootstrapDecision.reason})`,
   );
   if (result.stateFile) {
-    console.log(`Monitor status: ${result.status ?? "no_change"}`);
+    console.log(`Monitor status: ${result.monitorStatus ?? result.status ?? "no_change"}`);
     console.log(`State file: ${result.stateFile}`);
   }
   console.log("Candidates:");
@@ -202,7 +204,7 @@ async function main(): Promise<void> {
       JSON.stringify(
         {
           ...result,
-          ...(args.stateFile ? { status: result.status } : {}),
+          ...(args.stateFile ? { monitorStatus: result.monitorStatus, status: result.status } : {}),
         },
         null,
         2,
