@@ -116,6 +116,7 @@ _openclaw_spawn_task_lane() {
   local output=""
   local status=0
   local worktree_path=""
+  local lane_ready=""
   local arg=""
 
   if [[ "$#" -lt 1 ]]; then
@@ -144,8 +145,13 @@ _openclaw_spawn_task_lane() {
   fi
 
   worktree_path="$(printf '%s\n' "$output" | sed -n 's/^worktree=//p' | tail -n 1)"
+  lane_ready="$(printf '%s\n' "$output" | sed -n 's/^lane_ready=//p' | tail -n 1)"
   if [[ -z "$worktree_path" ]]; then
     echo "Error: could not parse worktree path from scripts/new-worktree.sh output." >&2
+    return 1
+  fi
+  if [[ "$lane_ready" != "yes" ]]; then
+    echo "Error: scripts/new-worktree.sh did not prove lane readiness; refusing handoff." >&2
     return 1
   fi
 

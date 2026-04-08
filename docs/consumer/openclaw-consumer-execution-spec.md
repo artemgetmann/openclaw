@@ -104,7 +104,8 @@ The refactor doesn't happen on `main`. It happens as part of building `codex/con
 ### Workflow
 
 ```sh
-# Refresh the consumer sacred home clone, then spawn a temp worktree for the task
+# Refresh the consumer sacred home clone, then spawn a temp worktree for the task.
+# The blessed path fails closed unless the lane proves local tool readiness.
 source ~/Programming_Projects/openclaw/scripts/shell-helpers/home-clone-helpers.sh
 oc-consumer-task <task-name>
 
