@@ -26,6 +26,7 @@ enum ConsumerBootstrap {
         "summarize",
         "weather",
     ]
+    private static let consumerOpenAIEnvKey = "OPENCLAW_CONSUMER_OPENAI_API_KEY"
     // Consumer bootstrap should never inherit the repo-wide Anthropic fallback.
     // This branch ships an app-owned local runtime with Codex auth seeded under
     // the consumer agent directory, so default to the matching provider/model.
@@ -92,6 +93,7 @@ enum ConsumerBootstrap {
         // shared search-level apiKey field, so migrate the legacy shape before
         // browser readiness or gateway startup re-reads the config.
         changed = self.migrateLegacyBraveSearchAPIKey(in: &root) || changed
+        changed = self.seedConsumerAudioTranscriptionDefaults(into: &root) || changed
 
         // Seed only missing values so we keep the consumer runtime opinionated
         // without stomping on settings a user already changed.
@@ -274,6 +276,21 @@ enum ConsumerBootstrap {
 
         web["search"] = search
         return true
+    }
+
+    private static func seedConsumerAudioTranscriptionDefaults(
+        into root: inout [String: Any])
+        -> Bool
+    {
+        let audioModels: [[String: Any]] = [[
+            "provider": "openai",
+            "model": "gpt-4o-mini-transcribe",
+            "apiKey": "${\(Self.consumerOpenAIEnvKey)}",
+        ]]
+        return self.setDefaultValue(
+            in: &root,
+            path: ["tools", "media", "audio", "models"],
+            value: audioModels)
     }
 
     private static func ensureConsumerWorkspace() {

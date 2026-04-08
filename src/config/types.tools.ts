@@ -31,6 +31,8 @@ export type MediaUnderstandingAttachmentsConfig = {
 };
 
 type MediaProviderRequestConfig = {
+  /** Optional provider API key override for this media runtime path only. */
+  apiKey?: SecretInput;
   /** Optional provider-specific query params (merged into requests). */
   providerOptions?: Record<string, Record<string, string | number | boolean>>;
   /** @deprecated Use providerOptions.deepgram instead. */

@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const CONSUMER_OPENAI_ENV_KEY = "OPENCLAW_CONSUMER_OPENAI_API_KEY";
+
 function readSeededEnvValue(envKey, env = process.env) {
   const rawValue = env[envKey];
   if (typeof rawValue !== "string") {
@@ -61,27 +63,30 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
   // Keep bundled defaults intentionally small. Packaging should only embed the
   // keys and config surfaces the consumer bootstrap already tests and relies on.
   const openAiApiKey =
+    readSeededEnvValue(CONSUMER_OPENAI_ENV_KEY, env) ??
     readSeededEnvValue("OPENAI_API_KEY", env) ??
     readNestedString(founderConfig, [
+      ["env", "vars", CONSUMER_OPENAI_ENV_KEY],
+      ["env", CONSUMER_OPENAI_ENV_KEY],
       ["env", "vars", "OPENAI_API_KEY"],
       ["env", "OPENAI_API_KEY"],
       ["models", "providers", "openai", "apiKey"],
     ]);
   if (openAiApiKey) {
-    // Consumer launchd runtimes do not automatically inherit a regular OpenAI
-    // API key, so seed it explicitly when available. Media/STT resolves the
-    // plain `openai` provider first, and memory-lancedb expects an embeddings
-    // key even when the slot is enabled later by product/runtime config.
-    setNestedValue(seeded, ["env", "vars", "OPENAI_API_KEY"], openAiApiKey);
+    // Consumer bundles ship a dedicated OpenAI utility key for speech-to-text.
+    // Keep it out of the generic provider env lane so chat/model auth cannot
+    // silently start using the consumer key.
+    setNestedValue(seeded, ["env", "vars", CONSUMER_OPENAI_ENV_KEY], openAiApiKey);
     setNestedValue(
       seeded,
-      ["plugins", "entries", "memory-lancedb", "config", "embedding", "apiKey"],
-      "${OPENAI_API_KEY}",
-    );
-    setNestedValue(
-      seeded,
-      ["plugins", "entries", "memory-lancedb", "config", "embedding", "model"],
-      "text-embedding-3-small",
+      ["tools", "media", "audio", "models"],
+      [
+        {
+          provider: "openai",
+          model: "gpt-4o-mini-transcribe",
+          apiKey: `\${${CONSUMER_OPENAI_ENV_KEY}}`,
+        },
+      ],
     );
   }
 
