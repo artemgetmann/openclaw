@@ -30,6 +30,8 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 
 - `references/configuration.md` (config file setup + IMAP/SMTP authentication)
 - `references/message-composition.md` (MML syntax for composing emails)
+- `scripts/send_template.py` (shared Himalaya send wrapper with narrow iCloud retry)
+- `scripts/icloud_send_smoke.py` (repeatable iCloud send smoke harness)
 
 ## Prerequisites
 
@@ -170,7 +172,7 @@ himalaya message write
 Send directly using template:
 
 ```bash
-cat << 'EOF' | himalaya template send -a personal
+cat << 'EOF' | python3 skills/himalaya/scripts/send_template.py --account personal
 From: you@example.com
 To: recipient@example.com
 Subject: Test Message
@@ -178,6 +180,11 @@ Subject: Test Message
 Hello from Himalaya!
 EOF
 ```
+
+For iCloud accounts, this wrapper preemptively disables `message.send.save-copy`
+for larger attachment payloads. That avoids Himalaya's post-send IMAP append
+timeout without retrying the send and risking duplicate delivery. The message
+still goes out, but no Sent copy is appended for those larger payloads.
 
 Or with headers flag:
 
@@ -277,3 +284,12 @@ RUST_LOG=trace RUST_BACKTRACE=1 himalaya envelope list
 - Message IDs are relative to the current folder; re-list after folder changes.
 - For composing rich emails with attachments, use MML syntax (see `references/message-composition.md`).
 - Store passwords securely using `pass`, system keyring, or a command that outputs the password.
+- For automated sends, prefer `python3 skills/himalaya/scripts/send_template.py --account <name>` over raw `himalaya template send`.
+- If the wrapper reports that it skipped the Sent copy for a larger iCloud attachment payload, tell the user plainly:
+  - the email was sent through Himalaya
+  - the Sent-folder copy was intentionally skipped to avoid the iCloud IMAP append timeout
+  - not seeing it in Sent does not mean the send failed
+- When a user asks for proof after a Sent-copy skip, prefer concrete evidence:
+  - send a copy to the user's own address and verify it arrived in Inbox
+  - or show that the intended recipient replied / did not bounce
+  - do not claim Sent-folder presence when the wrapper explicitly skipped it
