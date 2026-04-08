@@ -40,6 +40,8 @@ export type SessionAcpMeta = {
   backend: string;
   agent: string;
   runtimeSessionName: string;
+  /** Hash of the OpenClaw-owned bootstrap context used to seed this ACP session. */
+  contextFingerprint?: string;
   identity?: SessionAcpIdentity;
   mode: "persistent" | "oneshot";
   runtimeOptions?: AcpSessionRuntimeOptions;

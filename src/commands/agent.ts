@@ -1,7 +1,9 @@
 import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { computeAcpContextFingerprint } from "../acp/context-fingerprint.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { resetAcpSessionInPlace } from "../acp/persistent-bindings.lifecycle.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
 import { resolveAcpSessionCwd } from "../acp/runtime/session-identifiers.js";
@@ -696,7 +698,7 @@ async function prepareAgentCommandExecution(
   const workspaceDir = workspace.dir;
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
-  const acpResolution = sessionKey
+  let acpResolution = sessionKey
     ? acpManager.resolveSession({
         cfg,
         sessionKey,
@@ -760,9 +762,74 @@ async function agentCommandInternal(
     agentDir,
     runId,
     acpManager,
-    acpResolution,
+    acpResolution: preparedAcpResolution,
   } = prepared;
+  let acpResolution = preparedAcpResolution;
   let sessionEntry = prepared.sessionEntry;
+  const previousSkillsSnapshot = sessionEntry?.skillsSnapshot;
+  ensureSkillsWatcher({ workspaceDir, config: cfg });
+  const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+  const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
+  traceAgentCommandStage(
+    `agent-command-pre-skills-snapshot previous=${previousSkillsSnapshot ? "yes" : "no"}`,
+  );
+  // Skill eligibility can change when runtime env changes (for example API keys injected into
+  // the supervised gateway) without touching any watched SKILL.md files. Rebuild the snapshot
+  // for every run so the agent prompt reflects current runtime truth, then persist only when
+  // the snapshot actually changed.
+  const skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+    config: cfg,
+    eligibility: { remote: getRemoteSkillEligibility() },
+    snapshotVersion: skillsSnapshotVersion,
+    skillFilter,
+  });
+  const needsSkillsSnapshot =
+    isNewSession ||
+    !previousSkillsSnapshot ||
+    previousSkillsSnapshot.version === 0 ||
+    skillsSnapshotVersion === 0 ||
+    previousSkillsSnapshot.version !== skillsSnapshotVersion ||
+    !matchesSkillFilter(previousSkillsSnapshot.skillFilter, skillFilter) ||
+    !areSkillSnapshotsEquivalent(previousSkillsSnapshot, skillsSnapshot);
+  traceAgentCommandStage(
+    `agent-command-post-skills-snapshot present=${skillsSnapshot ? "yes" : "no"}`,
+  );
+
+  if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
+    // Keep manual agent runs aligned with cron/auto-reply refresh behavior so
+    // edited skills and filter changes actually reach resumed sessions.
+    traceAgentCommandStage("agent-command-pre-persist-skills-snapshot");
+    const current = sessionEntry ?? {
+      sessionId,
+      updatedAt: Date.now(),
+    };
+    const next: SessionEntry = {
+      ...current,
+      sessionId,
+      updatedAt: Date.now(),
+      skillsSnapshot,
+    };
+    await persistSessionEntry({
+      sessionStore,
+      sessionKey,
+      storePath,
+      entry: next,
+    });
+    sessionEntry = next;
+    traceAgentCommandStage("agent-command-post-persist-skills-snapshot");
+  }
+
+  const acpContextFingerprint =
+    sessionKey && skillsSnapshot
+      ? await computeAcpContextFingerprint({
+          config: cfg,
+          workspaceDir,
+          sessionKey,
+          sessionId,
+          agentId: sessionAgentId,
+          skillsSnapshot,
+        })
+      : undefined;
 
   try {
     if (opts.deliver === true) {
@@ -783,6 +850,32 @@ async function agentCommandInternal(
     }
 
     if (acpResolution?.kind === "ready" && sessionKey) {
+      if (
+        acpContextFingerprint &&
+        acpResolution.meta.contextFingerprint !== acpContextFingerprint
+      ) {
+        // ACP owns a long-lived backend conversation, so prompt/skills drift
+        // requires a hard session reset instead of updating local metadata only.
+        const resetResult = await resetAcpSessionInPlace({
+          cfg,
+          sessionKey,
+          reason: "reset",
+          contextFingerprint: acpContextFingerprint,
+        });
+        if (!resetResult.ok) {
+          throw new Error(
+            resetResult.error ?? `Could not refresh stale ACP session for ${sessionKey}.`,
+          );
+        }
+        acpResolution = acpManager.resolveSession({
+          cfg,
+          sessionKey,
+        });
+        if (acpResolution.kind !== "ready") {
+          throw new Error(`ACP session ${sessionKey} did not recover after context reset.`);
+        }
+      }
+
       const startedAt = Date.now();
       registerAgentRunContext(runId, {
         sessionKey,
@@ -928,59 +1021,6 @@ async function agentCommandInternal(
         sessionKey,
         verboseLevel: resolvedVerboseLevel,
       });
-    }
-
-    const previousSkillsSnapshot = sessionEntry?.skillsSnapshot;
-    ensureSkillsWatcher({ workspaceDir, config: cfg });
-    const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-    const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
-    traceAgentCommandStage(
-      `agent-command-pre-skills-snapshot previous=${previousSkillsSnapshot ? "yes" : "no"}`,
-    );
-    // Skill eligibility can change when runtime env changes (for example API keys injected into
-    // the supervised gateway) without touching any watched SKILL.md files. Rebuild the snapshot
-    // for every run so the agent prompt reflects current runtime truth, then persist only when
-    // the snapshot actually changed.
-    const skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
-      config: cfg,
-      eligibility: { remote: getRemoteSkillEligibility() },
-      snapshotVersion: skillsSnapshotVersion,
-      skillFilter,
-    });
-    const needsSkillsSnapshot =
-      isNewSession ||
-      !previousSkillsSnapshot ||
-      previousSkillsSnapshot.version === 0 ||
-      skillsSnapshotVersion === 0 ||
-      previousSkillsSnapshot.version !== skillsSnapshotVersion ||
-      !matchesSkillFilter(previousSkillsSnapshot.skillFilter, skillFilter) ||
-      !areSkillSnapshotsEquivalent(previousSkillsSnapshot, skillsSnapshot);
-    traceAgentCommandStage(
-      `agent-command-post-skills-snapshot present=${skillsSnapshot ? "yes" : "no"}`,
-    );
-
-    if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
-      // Keep manual agent runs aligned with cron/auto-reply refresh behavior so
-      // edited skills and filter changes actually reach resumed sessions.
-      traceAgentCommandStage("agent-command-pre-persist-skills-snapshot");
-      const current = sessionEntry ?? {
-        sessionId,
-        updatedAt: Date.now(),
-      };
-      const next: SessionEntry = {
-        ...current,
-        sessionId,
-        updatedAt: Date.now(),
-        skillsSnapshot,
-      };
-      await persistSessionEntry({
-        sessionStore,
-        sessionKey,
-        storePath,
-        entry: next,
-      });
-      sessionEntry = next;
-      traceAgentCommandStage("agent-command-post-persist-skills-snapshot");
     }
 
     // Persist explicit /command overrides to the session store when we have a key.

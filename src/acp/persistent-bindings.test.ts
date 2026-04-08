@@ -14,6 +14,9 @@ const managerMocks = vi.hoisted(() => ({
 const sessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionEntry: vi.fn(),
 }));
+const contextFingerprintMocks = vi.hoisted(() => ({
+  computeAcpContextFingerprint: vi.fn(),
+}));
 
 vi.mock("./control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
@@ -25,6 +28,9 @@ vi.mock("./control-plane/manager.js", () => ({
 }));
 vi.mock("./runtime/session-meta.js", () => ({
   readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
+}));
+vi.mock("./context-fingerprint.js", () => ({
+  computeAcpContextFingerprint: contextFingerprintMocks.computeAcpContextFingerprint,
 }));
 
 import {
@@ -148,7 +154,7 @@ function createDiscordPersistentSpec(overrides: Partial<BindingSpec> = {}): Bind
   } as BindingSpec;
 }
 
-function mockReadySession(params: { spec: BindingSpec; cwd: string }) {
+function mockReadySession(params: { spec: BindingSpec; cwd: string; contextFingerprint?: string }) {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
   managerMocks.resolveSession.mockReturnValue({
     kind: "ready",
@@ -157,6 +163,7 @@ function mockReadySession(params: { spec: BindingSpec; cwd: string }) {
       backend: "acpx",
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       runtimeSessionName: "existing",
+      contextFingerprint: params.contextFingerprint,
       mode: params.spec.mode,
       runtimeOptions: { cwd: params.cwd },
       state: "idle",
@@ -182,6 +189,7 @@ beforeEach(() => {
   managerMocks.initializeSession.mockReset().mockResolvedValue(undefined);
   managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
   sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
+  contextFingerprintMocks.computeAcpContextFingerprint.mockReset().mockResolvedValue("fp-1");
 });
 
 describe("resolveConfiguredAcpBindingRecord", () => {
@@ -601,6 +609,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
     const sessionKey = mockReadySession({
       spec,
       cwd: "/workspace/openclaw",
+      contextFingerprint: "fp-1",
     });
 
     const ensured = await ensureConfiguredAcpBindingSession({
@@ -636,6 +645,30 @@ describe("ensureConfiguredAcpBindingSession", () => {
       }),
     );
     expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("reinitializes a ready session when context fingerprint drifts", async () => {
+    const spec = createDiscordPersistentSpec();
+    const sessionKey = mockReadySession({
+      spec,
+      cwd: "/workspace/openclaw",
+      contextFingerprint: "fp-old",
+    });
+    contextFingerprintMocks.computeAcpContextFingerprint.mockResolvedValueOnce("fp-new");
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: baseCfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+    expect(managerMocks.initializeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        contextFingerprint: "fp-new",
+      }),
+    );
   });
 
   it("initializes ACP session with runtime agent override when provided", async () => {
