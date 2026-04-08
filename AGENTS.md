@@ -21,7 +21,7 @@
 
 - In chat replies, use repo-root-relative file references only.
 - Read `SECURITY.md` before any security triage, advisory work, or severity decision.
-- Before creating, moving, or cleaning up worktrees, read `docs/agent-guides/workflow.md`. Default workflow is now two home clones: `~/Programming_Projects/openclaw` on `main` and `~/Programming_Projects/openclaw-consumer` on `codex/consumer-openclaw-project`, with temporary worktrees only for isolated parallel editing.
+- Before creating, moving, or cleaning up worktrees, read `docs/agent-guides/workflow.md`. Default workflow is now two sacred home clones: `~/Programming_Projects/openclaw` on `main` and `~/Programming_Projects/openclaw-consumer` on `codex/consumer-openclaw-project`. Those homes are pull-only runtime anchors. All implementation work happens in temporary worktrees created from the correct sacred home clone, and default task spawn should create that temp worktree immediately.
 - Before touching gateway runtime ownership, worktree bot validation, or LaunchAgent behavior, read `docs/agent-guides/workflow.md` and `docs/agent-guides/runtime-ops.md`.
 - For consumer macOS packaging/relaunch iteration, prefer `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>` and the notes in `apps/macos/README.md` instead of rediscovering the warm-path flags by hand.
 - Use `docs/agent-guides/workflow.md` as the source of truth for the two-clone model, migration path, feature-branch rule, and draft-PR workflow. Do not rely on memory for branch/home-clone conventions.
@@ -51,9 +51,9 @@
   - `docs/agent-guides/dev-and-test.md`
 - Docs authoring, Mintlify rules, and i18n:
   - `docs/agent-guides/docs-and-content.md`
-- Default local/browser/agent validation:
+- Browser/tool end-to-end checks before Telegram:
   - `docs/agent-guides/browser-agent-e2e.md`
-- Telegram-specific live checks and worktree bot setup:
+- Telegram live checks and worktree bot setup:
   - `docs/agent-guides/telegram-live.md`
 - Runtime ops, logs, timeout triage, and mac app behavior:
   - `docs/agent-guides/runtime-ops.md`

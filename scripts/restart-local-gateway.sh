@@ -22,10 +22,9 @@ if [[ -z "$RAW_INSTANCE_ID" ]]; then
 fi
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$RAW_INSTANCE_ID")"
-# Restart the default consumer lane with the same dedicated env as named
-# instances. Otherwise the home checkout restarts ~/.openclaw instead of the
-# consumer runtime we are trying to validate.
-consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
+if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
+  consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
+fi
 
 LAUNCHD_DOMAIN="gui/${UID}"
 LAUNCHD_LABEL="${OPENCLAW_LAUNCHD_LABEL:-ai.openclaw.gateway}"
