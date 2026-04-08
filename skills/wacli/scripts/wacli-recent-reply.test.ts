@@ -103,6 +103,99 @@ function seedArtemDinnerThread(db: TempDbContext["db"], params: { ts: number; ms
   `);
 }
 
+function seedNegotiationThread(
+  db: TempDbContext["db"],
+  params?: { includeRepeatedOutbound?: boolean },
+) {
+  const includeRepeatedOutbound = params?.includeRepeatedOutbound ?? false;
+  db.exec(`
+    INSERT INTO chats (jid, kind, name, last_message_ts) VALUES
+      ('971507664706@s.whatsapp.net', 'dm', 'Artem Getman', 1775635000),
+      ('74333133234289@lid', 'unknown', 'Artem Getman', ${includeRepeatedOutbound ? 1775649600 : 1775642400});
+    INSERT INTO contacts (
+      jid, phone, push_name, full_name, first_name, business_name, updated_at
+    ) VALUES
+      ('971507664706@s.whatsapp.net', '971507664706', 'Artem Getman', 'Artem Getman', 'Artem', NULL, 1775566934),
+      ('74333133234289@lid', NULL, 'Artem Getman', 'Artem Getman', 'Artem', NULL, 1775566934);
+    INSERT INTO contact_aliases (jid, alias, notes, updated_at) VALUES
+      ('971507664706@s.whatsapp.net', 'Artem Getman', NULL, 1775566934);
+    INSERT INTO messages (
+      chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, display_text, media_type, media_caption
+    ) VALUES
+      (
+        '74333133234289@lid',
+        'Artem Getman',
+        'inbound-1',
+        '74333133234289:12@lid',
+        'Artem Getman',
+        1775635000,
+        0,
+        'Wanna go to Georgian restaurant today at 7pm?',
+        'Wanna go to Georgian restaurant today at 7pm?',
+        NULL,
+        NULL
+      ),
+      (
+        '74333133234289@lid',
+        'Artem Getman',
+        'outbound-1',
+        NULL,
+        NULL,
+        1775638600,
+        1,
+        'Yeah, dinner works and Georgian is fine. 8pm or a bit later works better for me — can we do 8?',
+        'Yeah, dinner works and Georgian is fine. 8pm or a bit later works better for me — can we do 8?',
+        NULL,
+        NULL
+      ),
+      (
+        '74333133234289@lid',
+        'Artem Getman',
+        'inbound-2',
+        '74333133234289:12@lid',
+        'Artem Getman',
+        1775642400,
+        0,
+        'Hmm maybe 7:30 pm?',
+        'Hmm maybe 7:30 pm?',
+        NULL,
+        NULL
+      )
+      ${
+        includeRepeatedOutbound
+          ? `,
+      (
+        '74333133234289@lid',
+        'Artem Getman',
+        'outbound-2',
+        NULL,
+        NULL,
+        1775646000,
+        1,
+        'Yeah, dinner works and Georgian is fine. 8pm or a bit later works better for me — can we do 8?',
+        'Yeah, dinner works and Georgian is fine. 8pm or a bit later works better for me — can we do 8?',
+        NULL,
+        NULL
+      ),
+      (
+        '74333133234289@lid',
+        'Artem Getman',
+        'inbound-3',
+        '74333133234289:12@lid',
+        'Artem Getman',
+        1775649600,
+        0,
+        'What bout 7:45 pm bro please',
+        'What bout 7:45 pm bro please',
+        NULL,
+        NULL
+      )`
+          : ""
+      }
+      ;
+  `);
+}
+
 afterEach(() => {
   // No global state leaks across tests.
 });
@@ -215,6 +308,67 @@ describe("wacli recent reply monitor state", () => {
       };
       expect(state.lastProcessedMsgId).toBe("msg-2");
       expect(state.ts).toBe(1775630000);
+    } finally {
+      ctx.db.close();
+      await fs.rm(ctx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns recent conversation turns so monitors can continue the negotiation", async () => {
+    const ctx = await createTempDb();
+    try {
+      seedNegotiationThread(ctx.db);
+
+      const result = await buildRecentReplyCliResult({
+        dbPath: ctx.dbPath,
+        json: true,
+        lastProcessedMsgId: null,
+        stateFile: null,
+        target: "971507664706@s.whatsapp.net",
+      });
+
+      expect(result.latestInboundReply?.msgId).toBe("inbound-2");
+      expect(result.recentConversation.map((turn) => [turn.direction, turn.effectiveText])).toEqual(
+        [
+          ["inbound", "Wanna go to Georgian restaurant today at 7pm?"],
+          [
+            "outbound",
+            "Yeah, dinner works and Georgian is fine. 8pm or a bit later works better for me — can we do 8?",
+          ],
+          ["inbound", "Hmm maybe 7:30 pm?"],
+        ],
+      );
+      expect(result.continuity.contextChatJid).toBe("74333133234289@lid");
+      expect(result.continuity.hasPriorOutbound).toBe(true);
+      expect(result.continuity.lastOutboundReply?.msgId).toBe("outbound-1");
+      expect(result.continuity.lastOutboundReply?.effectiveText).toContain("8pm");
+      expect(result.continuity.lastOutboundIsRepeatOfPrevious).toBe(false);
+    } finally {
+      ctx.db.close();
+      await fs.rm(ctx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("flags repeated outbound negotiation lines as repeat risk", async () => {
+    const ctx = await createTempDb();
+    try {
+      seedNegotiationThread(ctx.db, { includeRepeatedOutbound: true });
+
+      const result = await buildRecentReplyCliResult({
+        dbPath: ctx.dbPath,
+        json: true,
+        lastProcessedMsgId: null,
+        stateFile: null,
+        target: "971507664706@s.whatsapp.net",
+      });
+
+      expect(result.latestInboundReply?.msgId).toBe("inbound-3");
+      expect(result.continuity.lastOutboundReply?.msgId).toBe("outbound-2");
+      expect(result.continuity.previousOutboundReply?.msgId).toBe("outbound-1");
+      expect(result.continuity.lastOutboundNormalizedText).toBe(
+        result.continuity.previousOutboundNormalizedText,
+      );
+      expect(result.continuity.lastOutboundIsRepeatOfPrevious).toBe(true);
     } finally {
       ctx.db.close();
       await fs.rm(ctx.root, { recursive: true, force: true });
