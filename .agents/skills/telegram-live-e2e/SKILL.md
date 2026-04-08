@@ -5,7 +5,12 @@ description: "OpenClaw-specific checklist for Telegram live verification. Use wh
 
 # Telegram Live E2E
 
-Use this skill for live Telegram verification in this repository.
+Use this skill only for live Telegram verification in this repository.
+
+Do not use it as the default E2E path for non-Telegram bugs. For most browser,
+tool-routing, or local agent issues, use the local OpenClaw/browser validation
+flow first and bring in Telegram only when the Telegram bot/runtime itself is
+part of the feature or the failure.
 
 This skill exists because Telegram validation here has two failure classes:
 
