@@ -235,6 +235,11 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("create the tiny check script during monitor setup");
     expect(prompt).toContain("Concrete anti-pattern");
     expect(prompt).toContain("wacli-recent-reply.sh");
+    expect(prompt).toContain(
+      "For WhatsApp monitor-driven replies or Telegram-approved follow-up sends",
+    );
+    expect(prompt).toContain("wacli-send-safe.sh");
+    expect(prompt).toContain("not a hand-rolled kill/send/restart loop");
   });
 
   it("classifies cron as the default for reminders and explicit monitors", () => {

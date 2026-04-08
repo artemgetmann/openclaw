@@ -17,6 +17,7 @@ metadata:
                 "./scripts/wacli-auth-local.sh",
                 "./scripts/wacli-send-safe.sh",
                 "./scripts/wacli-recent-reply.sh",
+                "./scripts/wacli-monitor-check.sh",
               ],
           },
         "install":
@@ -52,14 +53,14 @@ channel setup, not the CLI utility.
 Automation Rule
 
 - For WhatsApp reply detection, scoped monitors, or "did this person reply yet?" checks, use:
+  `skills/wacli/scripts/wacli-monitor-check.sh --target <phone-or-jid> --json`
+  This is the default path for monitor jobs because it wraps reconciliation and
+  durable baseline state in one command.
+- For one-off/manual "did they reply?" checks where monitor state is not needed, use:
   `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json`
-  This is the default path because it reconciles sibling `@lid` chats from real stored data.
-- When authoring a cron monitor, pin that exact helper command (or a tiny wrapper
-  script that runs it) into the job payload.
-  Do not leave the waking run to rediscover the monitor logic from scratch.
-- If the monitor needs baseline or dedupe state, create the tiny check script at
-  monitor-creation time and have cron run that exact script on wake.
-  Do not write a cron payload that plans to rediscover the check procedure later.
+- When authoring a cron monitor, pin the exact `wacli-monitor-check.sh` command
+  into the job payload.
+  Do not leave the waking run to rediscover the monitor procedure from scratch.
 - Do NOT use `wacli chats list --query <phone>` as the primary discovery path for reply checks or monitors.
   It can miss the real sibling `@lid` thread even when replies landed there.
 - Do NOT use raw `wacli sync` + `wacli messages list` as the primary monitor implementation when `wacli-recent-reply.sh` covers the same check.
@@ -93,7 +94,10 @@ Automation Rule
   Treat it as a setup-needed state and use the shared `consumer-setup` skill.
 - Treat send/sync actions as higher-risk than read/list actions. Prove read access
   first before sending to third parties.
-- For send actions, prefer `skills/wacli/scripts/wacli-send-safe.sh` so the helper can pause a live owner-owned `wacli sync --follow`, send, and restore the owner without a second manual loop.
+- For send actions, use `skills/wacli/scripts/wacli-send-safe.sh` as the default path whenever the main `~/.wacli` store might already have a live sync owner.
+  This is especially important for monitor-driven replies, Telegram-approved follow-up sends, and any wake flow that decides to answer on WhatsApp after first reading from the shared store.
+- Do NOT kill the live sync owner manually, do NOT restart it by hand, and do NOT improvise raw `wacli send ...` if `skills/wacli/scripts/wacli-send-safe.sh` covers the same send.
+  Manual stop/send/restart loops are a fallback-of-last-resort debug path, not the authored agent workflow.
 
 Setup Routing
 
@@ -162,6 +166,10 @@ Find chats + messages
   This inspects the local `wacli.db`, resolves real sibling chats from stored
   names/contacts/aliases, and returns the newest inbound `from_me=0` across all
   candidate chats.
+- Monitor job helper (stateful baseline + reconciliation in one command):
+  `skills/wacli/scripts/wacli-monitor-check.sh --target <phone-or-jid> --json`
+  This stores baseline state under `~/.openclaw/wacli-monitor-state/` by default
+  so cron jobs can use the same command on every wake.
 
 History backfill
 
@@ -173,6 +181,14 @@ Send
 - Group: `skills/wacli/scripts/wacli-send-safe.sh text --to "1234567890-123456789@g.us" --message "Running 5 min late."`
 - File: `skills/wacli/scripts/wacli-send-safe.sh file --to "+14155551212" --file /path/agenda.pdf --caption "Agenda"`
 - Low-level fallback: `wacli send text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
+
+Monitor-driven reply send pattern
+
+- When a scoped WhatsApp monitor decides that a reply should actually be sent, keep the detection and send paths separate:
+  - detection: `skills/wacli/scripts/wacli-recent-reply.sh ... --json`
+  - send: `skills/wacli/scripts/wacli-send-safe.sh text --to <phone-or-jid> --message "<approved reply>"`
+- Do not turn the wake run into a store-lock debugging exercise.
+  The correct authored behavior is: inspect helper output, decide, then call the safe send helper once with pinned args.
 
 Notes
 

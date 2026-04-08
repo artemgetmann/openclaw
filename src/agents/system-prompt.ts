@@ -454,6 +454,8 @@ export function buildAgentSystemPrompt(params: {
     "For any monitor that needs baseline/state comparison, create the tiny check script during monitor setup and have the cron payload run that exact script with pinned args. Do not author wake instructions that rediscover the monitor procedure from scratch.",
     "Concrete anti-pattern: do not author a WhatsApp reply monitor around raw `wacli sync --once` plus `wacli messages list --chat ...` when the skill already provides `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json` for that check.",
     "Concrete anti-pattern: do not retry raw `wacli send ...` against a locked store when the WhatsApp skill already provides `skills/wacli/scripts/wacli-send-safe.sh` to pause the recorded sync owner, send, and restore it automatically.",
+    "For WhatsApp monitor-driven replies or Telegram-approved follow-up sends, the send path should be `skills/wacli/scripts/wacli-send-safe.sh`, not a hand-rolled kill/send/restart loop around `wacli sync --follow`.",
+    "If a shared `~/.wacli` owner is live, do not stop it manually unless the safe helper is unavailable or demonstrably broken.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     ...(acpHarnessSpawnAllowed
