@@ -4,8 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 PREFLIGHT="$ROOT/scripts/local-runtime-preflight.sh"
+# shellcheck source=scripts/lib/consumer-instance.sh
 source "$ROOT/scripts/lib/consumer-instance.sh"
+# shellcheck source=scripts/lib/worktree-guards.sh
 source "$ROOT/scripts/lib/worktree-guards.sh"
+AUTH_SYNC_HELPER="$ROOT/scripts/consumer-auth-sync.sh"
 
 INSTANCE_ARG="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 
@@ -90,6 +93,18 @@ echo "config_path=${CONFIG_PATH}"
 echo "gateway_port=${GATEWAY_PORT}"
 echo "app_launchd_label=${APP_LABEL}"
 echo "gateway_launchd_label=${GATEWAY_LABEL}"
+
+# The consumer tester lane must carry a synced auth snapshot. If the canonical
+# auth store changed or the instance never synced, fail here before any runtime
+# health checks give us misleading noise.
+if [[ ! -x "$AUTH_SYNC_HELPER" ]]; then
+  echo "ERROR: missing auth sync helper: $AUTH_SYNC_HELPER" >&2
+  exit 1
+fi
+
+if ! "$AUTH_SYNC_HELPER" --check --instance "$INSTANCE_ID"; then
+  exit 1
+fi
 
 # Run health checks through the local wrapper so we prove this checkout owns the
 # lane before anyone starts clicking around in the app.

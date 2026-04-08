@@ -36,6 +36,7 @@ gateway host and are tuned for systemd + Termux.
 - `scripts/auth-monitor.sh`: cron/systemd timer target; sends alerts (ntfy or phone).
 - `scripts/systemd/openclaw-auth-monitor.{service,timer}`: systemd user timer.
 - `scripts/claude-auth-status.sh`: Claude Code + OpenClaw auth checker (full/json/simple).
+- `scripts/consumer-auth-sync.sh`: syncs the canonical auth-profiles snapshot into a consumer tester instance and records a non-secret fingerprint; `scripts/consumer-preflight.sh` fails if that sync is missing or stale.
 - `scripts/mobile-reauth.sh`: guided re‑auth flow over SSH.
 - `scripts/termux-quick-auth.sh`: one‑tap widget status + open auth URL.
 - `scripts/termux-auth-widget.sh`: full guided widget flow.
