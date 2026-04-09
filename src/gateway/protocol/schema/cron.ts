@@ -138,6 +138,13 @@ export const CronPayloadSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
+  Type.Object(
+    {
+      kind: Type.Literal("monitorWake"),
+      monitorId: NonEmptyString,
+    },
+    { additionalProperties: false },
+  ),
   cronAgentTurnPayloadSchema({ message: NonEmptyString }),
 ]);
 
@@ -146,6 +153,13 @@ export const CronPayloadPatchSchema = Type.Union([
     {
       kind: Type.Literal("systemEvent"),
       text: Type.Optional(NonEmptyString),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("monitorWake"),
+      monitorId: Type.Optional(NonEmptyString),
     },
     { additionalProperties: false },
   ),
