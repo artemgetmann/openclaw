@@ -72,12 +72,21 @@ Raw provider fields are preserved.
 
 ## User timezone for the system prompt
 
-Set `agents.defaults.userTimezone` to tell the model the user's local time zone. If it is
-unset, OpenClaw resolves the **host timezone at runtime** (no config write).
+Set `agents.defaults.userTimezone` to tell the model the user's local time zone.
+
+- Set an IANA timezone like `"America/Chicago"` to **pin** the prompt timezone.
+- Set `"local"` to **follow the host timezone at runtime** explicitly.
+- If it is unset or invalid, OpenClaw also falls back to the host timezone.
 
 ```json5
 {
   agents: { defaults: { userTimezone: "America/Chicago" } },
+}
+```
+
+```json5
+{
+  agents: { defaults: { userTimezone: "local" } },
 }
 ```
 
