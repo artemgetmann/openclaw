@@ -29,10 +29,6 @@ export function buildMonitorWakeMessage(params: {
       ? [`lastCheckpoint: ${JSON.stringify(monitor.lastCheckpoint)}`]
       : ["lastCheckpoint: none"]),
     "",
-    // The checkpoint is a baseline cursor, not a hidden workflow engine.
-    "Interpret lastCheckpoint as previous state, not final authority over new inbound messages.",
-    "If fresh source inspection finds a new actionable change after an older resolved-looking checkpoint, keep the monitor active and continue the task.",
-    "Do not keep or re-mark the monitor completed solely because older checkpoint data looked settled.",
     "Use normal tools/skills to inspect fresh source state.",
     "Default behavior is notify + draft to the origin chat unless the original task explicitly authorized action on the watched surface.",
     "After a successful check, update the monitor checkpoint/status if needed before finishing.",

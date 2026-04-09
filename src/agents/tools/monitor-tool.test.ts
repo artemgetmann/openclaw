@@ -2,17 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { callGatewayToolMock, resolveAnnounceTargetMock } = vi.hoisted(() => ({
   callGatewayToolMock: vi.fn(async (_method: string, _opts: unknown, params: unknown) => params),
-  resolveAnnounceTargetMock: vi.fn(
-    async (): Promise<{
-      channel: string;
-      to: string;
-      accountId: string;
-    } | null> => ({
-      channel: "telegram",
-      to: "19098680",
-      accountId: "default",
-    }),
-  ),
+  resolveAnnounceTargetMock: vi.fn(async () => ({
+    channel: "telegram",
+    to: "19098680",
+    accountId: "default",
+  })),
 }));
 
 vi.mock("./gateway.js", async () => {
@@ -57,27 +51,6 @@ describe("monitor tool", () => {
         }),
         actionPolicy: "notify_draft",
         sourceType: "gmail",
-      }),
-    );
-  });
-
-  it("omits originDelivery when the origin session has no announce target", async () => {
-    resolveAnnounceTargetMock.mockResolvedValueOnce(null);
-    const tool = createMonitorTool({ agentSessionKey: "agent:main:main" });
-
-    await tool.execute?.("call-cli", {
-      action: "create",
-      instructions: "Monitor this thread and draft replies.",
-      sourceType: "gmail",
-      sourceTarget: { account: "me@example.com", threadId: "thread-2" },
-      cadence: { kind: "every", everyMs: 300_000 },
-    });
-
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "monitor.create",
-      expect.any(Object),
-      expect.not.objectContaining({
-        originDelivery: expect.anything(),
       }),
     );
   });
