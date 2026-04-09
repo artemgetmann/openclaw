@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -170,6 +171,105 @@ export function collectActiveTelegramTokenLeaseEntries(params) {
 
   return normalizeLeaseEntries(out);
 }
+
+function execText(command, args) {
+  try {
+    return execFileSync(command, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function resolveListeningGatewayOwner(runtimePort) {
+  // A stale claim is only safe to reclaim when the expected runtime port is not
+  // actively owned by that worktree's gateway process anymore.
+  const pidOutput = execText("lsof", ["-nP", `-tiTCP:${runtimePort}`, "-sTCP:LISTEN"]);
+  const pids = pidOutput
+    .split(/\r?\n/g)
+    .map((value) => Number.parseInt(value.trim(), 10))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (pids.length !== 1) {
+    return { ok: false, reason: "runtime_not_running" };
+  }
+
+  const pid = pids[0];
+  const cwdOutput = execText("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]);
+  const worktreePath =
+    cwdOutput
+      .split(/\r?\n/g)
+      .map((line) => (line.startsWith("n") ? line.slice(1).trim() : ""))
+      .find(Boolean) ?? null;
+  const command = execText("ps", ["-o", "command=", "-p", String(pid)]);
+  const isGatewayProcess = Boolean(
+    command && (command.includes(" gateway run") || command.includes("openclaw-gateway")),
+  );
+
+  if (!isGatewayProcess) {
+    return { ok: false, reason: "runtime_listener_not_gateway", pid, worktreePath };
+  }
+
+  return {
+    ok: true,
+    pid,
+    worktreePath,
+  };
+}
+
+function canonicalizePath(filePath) {
+  try {
+    return fs.realpathSync.native(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
+export function classifyTelegramTesterClaimEntries(params) {
+  const claimedEntries = normalizeClaimEntries(params?.claimedEntries ?? []);
+  const activeClaimEntries = [];
+  const staleClaimEntries = [];
+
+  for (const entry of claimedEntries) {
+    // Worktree env files are just hints. The live runtime owner decides whether
+    // a claim is still real or can be reclaimed.
+    const profile = deriveTelegramLiveRuntimeProfile({ worktreePath: entry.worktreePath });
+    const owner = resolveListeningGatewayOwner(profile.runtimePort);
+    if (!owner.ok) {
+      staleClaimEntries.push({
+        ...entry,
+        runtimePort: profile.runtimePort,
+        reason: owner.reason,
+      });
+      continue;
+    }
+    if (
+      owner.worktreePath &&
+      canonicalizePath(owner.worktreePath) === canonicalizePath(entry.worktreePath)
+    ) {
+      activeClaimEntries.push({
+        ...entry,
+        runtimePort: profile.runtimePort,
+        pid: owner.pid,
+      });
+      continue;
+    }
+    staleClaimEntries.push({
+      ...entry,
+      runtimePort: profile.runtimePort,
+      pid: owner.pid,
+      activeWorktreePath: owner.worktreePath ?? null,
+      reason: "runtime_owned_elsewhere",
+    });
+  }
+
+  return {
+    activeClaimEntries,
+    staleClaimEntries,
+  };
+}
+
 function parseEnvAssignmentLine(line, key) {
   const match = String(line ?? "").match(
     new RegExp(`^[\\t ]*(?:export[\\t ]+)?${key}[\\t ]*=[\\t ]*(.*)$`),
@@ -258,9 +358,12 @@ export function selectTelegramTesterToken(params) {
 
 export function summarizeTelegramTesterTokenPool(params) {
   const poolTokens = normalizeTokenList(params?.poolTokens ?? []);
-  const claimedEntries = normalizeClaimEntries(params?.claimedEntries ?? []);
+  const classifiedClaimEntries = params?.activeClaimEntries
+    ? normalizeClaimEntries(params.activeClaimEntries)
+    : normalizeClaimEntries(params?.claimedEntries ?? []);
+  const staleClaimEntries = normalizeClaimEntries(params?.staleClaimEntries ?? []);
   const leasedEntries = normalizeLeaseEntries(params?.leasedEntries ?? []);
-  const claimedTokens = normalizeTokenList(claimedEntries.map((entry) => entry.token));
+  const claimedTokens = normalizeTokenList(classifiedClaimEntries.map((entry) => entry.token));
   const reservedTokens = normalizeTokenList(params?.reservedTokens ?? []);
   const currentToken = String(params?.currentToken ?? "").trim();
   const reservedTokenSet = new Set(reservedTokens);
@@ -300,9 +403,11 @@ export function summarizeTelegramTesterTokenPool(params) {
     selection,
     poolTokens,
     poolCount: poolTokens.length,
-    claimedEntries,
+    claimedEntries: classifiedClaimEntries,
     claimedTokens,
-    claimedCount: claimedEntries.length,
+    claimedCount: classifiedClaimEntries.length,
+    staleClaimEntries,
+    staleClaimCount: staleClaimEntries.length,
     leasedEntries,
     leasedCount: leasedEntries.length,
     reservedTokens,
