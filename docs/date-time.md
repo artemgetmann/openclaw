@@ -90,7 +90,7 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 {
   agents: {
     defaults: {
-      userTimezone: "America/Chicago",
+      userTimezone: "local", // "local" follows the host timezone; use an IANA zone to pin it
       timeFormat: "auto", // auto | 12 | 24
     },
   },
@@ -98,6 +98,8 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
 - `userTimezone` sets the **user-local timezone** for prompt context.
+- `userTimezone: "local"` explicitly follows the host timezone at runtime.
+- Use an explicit IANA timezone like `"America/Chicago"` when you want a pinned timezone.
 - `timeFormat` controls **12h/24h display** in the prompt. `auto` follows OS prefs.
 
 ## Time format detection (auto)

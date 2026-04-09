@@ -839,11 +839,15 @@ Higher values preserve more visual detail.
 
 ### `agents.defaults.userTimezone`
 
-Timezone for system prompt context (not message timestamps). Falls back to host timezone.
+Timezone for system prompt context (not message timestamps).
+
+- Use `"local"` to follow the host timezone at runtime.
+- Use an IANA timezone like `"America/Chicago"` to pin the timezone.
+- Unset or invalid values fall back to the host timezone.
 
 ```json5
 {
-  agents: { defaults: { userTimezone: "America/Chicago" } },
+  agents: { defaults: { userTimezone: "local" } },
 }
 ```
 
