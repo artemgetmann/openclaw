@@ -91,6 +91,8 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "monitorwake") {
+    next.kind = "monitorWake";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
@@ -102,10 +104,14 @@ function coercePayload(payload: UnknownRecord) {
       typeof next.thinking === "string" ||
       typeof next.timeoutSeconds === "number" ||
       typeof next.allowUnsafeExternalContent === "boolean";
+    const hasMonitorWakeHint =
+      typeof next.monitorId === "string" && next.monitorId.trim().length > 0;
     if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
       next.kind = "systemEvent";
+    } else if (hasMonitorWakeHint) {
+      next.kind = "monitorWake";
     } else if (hasAgentTurnHint) {
       // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
       next.kind = "agentTurn";
@@ -159,6 +165,13 @@ function coercePayload(payload: UnknownRecord) {
     typeof next.allowUnsafeExternalContent !== "boolean"
   ) {
     delete next.allowUnsafeExternalContent;
+  }
+  if ("monitorId" in next) {
+    if (typeof next.monitorId === "string" && next.monitorId.trim()) {
+      next.monitorId = next.monitorId.trim();
+    } else {
+      delete next.monitorId;
+    }
   }
   return next;
 }

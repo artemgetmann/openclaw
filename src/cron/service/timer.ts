@@ -1123,8 +1123,35 @@ export async function executeJobCore(
     }
   }
 
+  if (job.payload.kind === "monitorWake") {
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
+    }
+    if (!state.deps.runMonitorJob) {
+      return { status: "error", error: "monitor wake runner unavailable" };
+    }
+    const res = await state.deps.runMonitorJob({
+      job,
+      monitorId: job.payload.monitorId,
+      abortSignal,
+    });
+    if (res.stopJob) {
+      job.enabled = false;
+    }
+    return {
+      status: res.status,
+      error: res.error,
+      summary: res.summary,
+      sessionId: res.sessionId,
+      sessionKey: res.sessionKey,
+      model: res.model,
+      provider: res.provider,
+      usage: res.usage,
+    };
+  }
+
   if (job.payload.kind !== "agentTurn") {
-    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
+    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn|monitorWake" };
   }
   if (abortSignal?.aborted) {
     return resolveAbortError();

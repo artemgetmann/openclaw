@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -190,6 +191,75 @@ describe("buildGatewayCronService", () => {
         expect.objectContaining({
           job: expect.objectContaining({ id: job.id }),
           sessionKey: "project-alpha-monitor",
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("routes monitor wakes through the durable monitor session with manual reset semantics", async () => {
+    const cfg = createCronConfig("server-cron-monitor");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    await fs.writeFile(
+      monitorStorePath,
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-1",
+            agentId: "main",
+            originSessionKey: "agent:main:telegram:direct:user-1",
+            originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+            monitorSessionKey: "monitor:monitor-1",
+            sourceType: "whatsapp",
+            sourceTarget: { target: "+123" },
+            cadence: { kind: "every", everyMs: 60_000 },
+            actionPolicy: "notify_draft",
+            status: "active",
+            cronJobId: "cron-monitor-1",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    try {
+      const job = await state.cron.add({
+        name: "monitor wake",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:monitor:monitor-1",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "monitorWake", monitorId: "monitor-1" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "main",
+          sessionKey: "monitor:monitor-1",
+          sessionDefaultResetMode: "manual",
+          job: expect.objectContaining({
+            sessionTarget: "session:monitor:monitor-1",
+            delivery: expect.objectContaining({
+              mode: "announce",
+              channel: "telegram",
+              to: "user-1",
+            }),
+          }),
+          message: expect.stringContaining("sourceType: whatsapp"),
         }),
       );
     } finally {

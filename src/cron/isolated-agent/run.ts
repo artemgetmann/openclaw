@@ -45,6 +45,7 @@ import {
   setSessionRuntimeModel,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { SessionResetMode } from "../../config/sessions/reset.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
@@ -210,6 +211,7 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
   deliveryContract?: IsolatedDeliveryContract;
+  sessionDefaultResetMode?: SessionResetMode;
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
@@ -344,6 +346,7 @@ export async function runCronIsolatedAgentTurn(params: {
     nowMs: now,
     // Isolated cron runs must not carry prior turn context across executions.
     forceNew: params.job.sessionTarget === "isolated",
+    defaultResetMode: params.sessionDefaultResetMode,
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")

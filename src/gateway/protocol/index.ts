@@ -1,4 +1,5 @@
 import AjvPkg, { type ErrorObject } from "ajv";
+import type { MonitorRecord } from "../../monitor/types.js";
 import type { SessionsPatchResult } from "../session-utils.types.js";
 import {
   type AgentEvent,
@@ -136,6 +137,12 @@ import {
   LogsTailResultSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
+  MonitorRecordSchema,
+  MonitorListParamsSchema,
+  MonitorGetParamsSchema,
+  MonitorCreateParamsSchema,
+  MonitorUpdateParamsSchema,
+  MonitorStopParamsSchema,
   type NodeDescribeParams,
   NodeDescribeParamsSchema,
   type NodeEventParams,
@@ -374,6 +381,12 @@ export const validateCronUpdateParams = ajv.compile<CronUpdateParams>(CronUpdate
 export const validateCronRemoveParams = ajv.compile<CronRemoveParams>(CronRemoveParamsSchema);
 export const validateCronRunParams = ajv.compile<CronRunParams>(CronRunParamsSchema);
 export const validateCronRunsParams = ajv.compile<CronRunsParams>(CronRunsParamsSchema);
+export const validateMonitorListParams = ajv.compile(MonitorListParamsSchema);
+export const validateMonitorGetParams = ajv.compile(MonitorGetParamsSchema);
+export const validateMonitorCreateParams = ajv.compile(MonitorCreateParamsSchema);
+export const validateMonitorUpdateParams = ajv.compile(MonitorUpdateParamsSchema);
+export const validateMonitorStopParams = ajv.compile(MonitorStopParamsSchema);
+export const validateMonitorRecord = ajv.compile<MonitorRecord>(MonitorRecordSchema);
 export const validateDevicePairListParams = ajv.compile<DevicePairListParams>(
   DevicePairListParamsSchema,
 );
@@ -542,6 +555,7 @@ export {
   SkillsInstallParamsSchema,
   SkillsUpdateParamsSchema,
   CronJobSchema,
+  MonitorRecordSchema,
   CronListParamsSchema,
   CronStatusParamsSchema,
   CronAddParamsSchema,
@@ -549,6 +563,11 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  MonitorListParamsSchema,
+  MonitorGetParamsSchema,
+  MonitorCreateParamsSchema,
+  MonitorUpdateParamsSchema,
+  MonitorStopParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
   ChatHistoryParamsSchema,

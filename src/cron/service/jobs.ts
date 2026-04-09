@@ -139,8 +139,10 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (isIsolatedLike && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated/current/session cron jobs require payload.kind="agentTurn"');
+  if (isIsolatedLike && job.payload.kind !== "agentTurn" && job.payload.kind !== "monitorWake") {
+    throw new Error(
+      'isolated/current/session cron jobs require payload.kind="agentTurn" or "monitorWake"',
+    );
   }
 }
 
@@ -669,10 +671,17 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return { kind: "systemEvent", text };
   }
 
+  if (patch.kind === "monitorWake") {
+    if (existing.kind !== "monitorWake") {
+      return buildPayloadFromPatch(patch);
+    }
+    const monitorId = typeof patch.monitorId === "string" ? patch.monitorId : existing.monitorId;
+    return { kind: "monitorWake", monitorId };
+  }
+
   if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
-
   const next: Extract<CronPayload, { kind: "agentTurn" }> = { ...existing };
   if (typeof patch.message === "string") {
     next.message = patch.message;
@@ -754,6 +763,13 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       throw new Error('cron.update payload.kind="systemEvent" requires text');
     }
     return { kind: "systemEvent", text: patch.text };
+  }
+
+  if (patch.kind === "monitorWake") {
+    if (typeof patch.monitorId !== "string" || patch.monitorId.length === 0) {
+      throw new Error('cron.update payload.kind="monitorWake" requires monitorId');
+    }
+    return { kind: "monitorWake", monitorId: patch.monitorId };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {
