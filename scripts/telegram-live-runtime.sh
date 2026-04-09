@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HELPER_MODULE="${SCRIPT_DIR}/lib/telegram-live-runtime-helpers.mjs"
+BASELINE_HELPER_MODULE="${SCRIPT_DIR}/lib/worktree-tester-baseline.mjs"
 ASSIGN_BOT_SCRIPT="${SCRIPT_DIR}/assign-bot.sh"
 MAIN_RECOVER_SCRIPT="${SCRIPT_DIR}/gateway-recover-main.sh"
 
@@ -610,23 +611,31 @@ sync_runtime_auth_profiles() {
     return
   fi
 
-  # Telegram live runtimes must never reuse shared OAuth refresh state. Instead
-  # of copying auth forward, scrub any target OAuth profiles that are identical
-  # to the source shared store. That cleans up legacy inherited refresh tokens
-  # without destroying lane-local auth that was minted separately.
+  # Seed the isolated Telegram runtime from the lane's tester baseline snapshot.
+  # That gives fresh worktrees real provider auth without pointing them back at
+  # the shared main auth store during runtime.
   if ! BASE_CONFIG_PATH="$BASE_CONFIG_PATH" \
     RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
+    BASELINE_HELPER_MODULE="$BASELINE_HELPER_MODULE" \
+    WORKTREE_PATH="$WORKTREE" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const basePath = process.env.BASE_CONFIG_PATH;
 const runtimeStateDir = process.env.RUNTIME_STATE_DIR;
+const helperPath = process.env.BASELINE_HELPER_MODULE;
+const worktreePath = process.env.WORKTREE_PATH;
 
-if (!runtimeStateDir) {
-  throw new Error("Missing runtime state dir.");
+if (!runtimeStateDir || !helperPath || !worktreePath) {
+  throw new Error("Missing runtime state dir or baseline helper inputs.");
 }
+
+const { deriveWorktreeTesterBaseline, resolveTesterBaselineAgentIds } = await import(
+  pathToFileURL(helperPath).href
+);
 
 let config = {};
 if (basePath && fs.existsSync(basePath)) {
@@ -640,84 +649,35 @@ if (basePath && fs.existsSync(basePath)) {
   }
 }
 
-const agentEntries = new Map();
-const configuredAgents = Array.isArray(config?.agents?.list) ? config.agents.list : [];
-for (const entry of configuredAgents) {
-  if (!entry || typeof entry !== "object" || typeof entry.id !== "string" || !entry.id.trim()) {
-    continue;
-  }
-  agentEntries.set(entry.id, entry);
-}
+const baseline = deriveWorktreeTesterBaseline({ worktreePath });
+const baselineStateDir = baseline.stateDir;
+const fallbackStateDir = path.join(os.homedir(), ".openclaw");
+const agentIds = resolveTesterBaselineAgentIds(config);
 
-if (!agentEntries.has("main")) {
-  agentEntries.set("main", { id: "main" });
-}
-
-for (const [agentId, entry] of agentEntries) {
-  const sourceAgentDir =
-    typeof entry.agentDir === "string" && entry.agentDir.trim()
-      ? entry.agentDir.trim()
-      : path.join(os.homedir(), ".openclaw", "agents", agentId, "agent");
-  const sourceAuthPath = path.join(sourceAgentDir, "auth-profiles.json");
+for (const agentId of agentIds) {
+  const sourceAuthPath = path.join(
+    baselineStateDir,
+    "agents",
+    agentId,
+    "agent",
+    "auth-profiles.json",
+  );
+  const fallbackAuthPath = path.join(
+    fallbackStateDir,
+    "agents",
+    agentId,
+    "agent",
+    "auth-profiles.json",
+  );
   const targetAuthPath = path.join(runtimeStateDir, "agents", agentId, "agent", "auth-profiles.json");
-  if (!fs.existsSync(sourceAuthPath) || !fs.existsSync(targetAuthPath)) {
+  const resolvedSourcePath = fs.existsSync(sourceAuthPath) ? sourceAuthPath : fallbackAuthPath;
+
+  if (!fs.existsSync(resolvedSourcePath)) {
     continue;
   }
 
-  let sourceStore;
-  let targetStore;
-  try {
-    sourceStore = JSON.parse(fs.readFileSync(sourceAuthPath, "utf8"));
-    targetStore = JSON.parse(fs.readFileSync(targetAuthPath, "utf8"));
-  } catch {
-    continue;
-  }
-
-  if (
-    !sourceStore ||
-    typeof sourceStore !== "object" ||
-    !targetStore ||
-    typeof targetStore !== "object" ||
-    !sourceStore.profiles ||
-    typeof sourceStore.profiles !== "object" ||
-    !targetStore.profiles ||
-    typeof targetStore.profiles !== "object"
-  ) {
-    continue;
-  }
-
-  let mutated = false;
-  for (const [profileId, targetProfile] of Object.entries(targetStore.profiles)) {
-    const sourceProfile = sourceStore.profiles[profileId];
-    if (!targetProfile || typeof targetProfile !== "object" || targetProfile.type !== "oauth") {
-      continue;
-    }
-    if (!sourceProfile || typeof sourceProfile !== "object" || sourceProfile.type !== "oauth") {
-      continue;
-    }
-    if (JSON.stringify(sourceProfile) !== JSON.stringify(targetProfile)) {
-      continue;
-    }
-
-    delete targetStore.profiles[profileId];
-    if (targetStore.lastGood && typeof targetStore.lastGood === "object") {
-      for (const [provider, lastGoodProfileId] of Object.entries(targetStore.lastGood)) {
-        if (lastGoodProfileId === profileId) {
-          delete targetStore.lastGood[provider];
-        }
-      }
-    }
-    if (targetStore.usageStats && typeof targetStore.usageStats === "object") {
-      delete targetStore.usageStats[profileId];
-    }
-    mutated = true;
-  }
-
-  if (!mutated) {
-    continue;
-  }
-
-  fs.writeFileSync(targetAuthPath, `${JSON.stringify(targetStore, null, 2)}\n`);
+  fs.mkdirSync(path.dirname(targetAuthPath), { recursive: true });
+  fs.copyFileSync(resolvedSourcePath, targetAuthPath);
   fs.chmodSync(targetAuthPath, 0o600);
 }
 NODE

@@ -223,4 +223,35 @@ describe("telegram live runtime helpers", () => {
       fallbacks: ["anthropic/claude-sonnet-4-5"],
     });
   });
+
+  it("does not mutate the canonical base config while deriving a tester runtime config", () => {
+    const baseConfig = {
+      channels: {
+        telegram: {
+          enabled: false,
+          botToken: "99999:main-bot",
+          accounts: {
+            main: { botToken: "88888:main-account" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            apiKey: "sk-main-provider",
+          },
+        },
+      },
+    };
+
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig,
+      assignedToken: "tester-token",
+      runtimePort: 24567,
+    });
+
+    expect(baseConfig.channels.telegram.botToken).toBe("99999:main-bot");
+    expect(baseConfig.channels.telegram.accounts.main.botToken).toBe("88888:main-account");
+    expect(config.channels.telegram.botToken).toBe("tester-token");
+  });
 });

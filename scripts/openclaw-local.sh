@@ -12,6 +12,59 @@ LOCAL_RESTART="$ROOT/scripts/restart-local-gateway.sh"
 source "$ROOT/scripts/lib/consumer-instance.sh"
 source "$ROOT/scripts/lib/worktree-guards.sh"
 
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+strip_outer_quotes() {
+  local value="$1"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    printf '%s' "${value:1:${#value}-2}"
+    return
+  fi
+  if [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    printf '%s' "${value:1:${#value}-2}"
+    return
+  fi
+  printf '%s' "$value"
+}
+
+parse_env_assignment() {
+  local key="$1"
+  local line="$2"
+  local parsed=""
+  if [[ "$line" =~ ^(export[[:space:]]+)?${key}[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+    parsed="$(trim "${BASH_REMATCH[2]}")"
+    parsed="$(strip_outer_quotes "$parsed")"
+  fi
+  printf '%s' "$parsed"
+}
+
+read_last_env_value() {
+  local file_path="$1"
+  local key="$2"
+  local line=""
+  local trimmed=""
+  local parsed=""
+  local last_value=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    trimmed="$(trim "$line")"
+    if [[ -z "$trimmed" || "$trimmed" == \#* ]]; then
+      continue
+    fi
+    parsed="$(parse_env_assignment "$key" "$trimmed")"
+    if [[ -n "$parsed" ]]; then
+      last_value="$parsed"
+    fi
+  done < "$file_path"
+
+  printf '%s' "$last_value"
+}
+
 if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
@@ -44,6 +97,25 @@ worktree_guard_run_for_linked_checkout \
   --require-dev-launch-env \
   --require-node-modules \
   --quiet
+
+DEV_ENV_FILE="$ROOT/.dev-launch.env"
+if [[ -f "$DEV_ENV_FILE" ]]; then
+  # Linked worktree operator commands must use the lane's generated baseline,
+  # not silently drift back to ~/.openclaw because the shell lacked explicit env.
+  lane_state_dir="$(read_last_env_value "$DEV_ENV_FILE" "OPENCLAW_STATE_DIR")"
+  lane_config_path="$(read_last_env_value "$DEV_ENV_FILE" "OPENCLAW_CONFIG_PATH")"
+  lane_gateway_port="$(read_last_env_value "$DEV_ENV_FILE" "OPENCLAW_GATEWAY_PORT")"
+
+  if [[ -n "$lane_state_dir" ]]; then
+    export OPENCLAW_STATE_DIR="$lane_state_dir"
+  fi
+  if [[ -n "$lane_config_path" ]]; then
+    export OPENCLAW_CONFIG_PATH="$lane_config_path"
+  fi
+  if [[ -n "$lane_gateway_port" ]]; then
+    export OPENCLAW_GATEWAY_PORT="$lane_gateway_port"
+  fi
+fi
 
 if [[ -x "$LOCAL_RESTART" ]]; then
   export OPENCLAW_LOCAL_RESTART_SCRIPT="${OPENCLAW_LOCAL_RESTART_SCRIPT:-$LOCAL_RESTART}"

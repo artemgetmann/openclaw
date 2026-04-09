@@ -372,6 +372,7 @@ worktree_guard_reject_sacred_home_edits \
   --context "scripts/new-worktree.sh"
 
 BOOTSTRAP_SCRIPT="${REPO_ROOT}/scripts/bootstrap-worktree-telegram.sh"
+BASELINE_BOOTSTRAP_SCRIPT="${REPO_ROOT}/scripts/bootstrap-worktree-tester-baseline.sh"
 RUNTIME_BOOTSTRAP_SCRIPT="${REPO_ROOT}/scripts/bootstrap-worktree-runtime.sh"
 READY_CHECK_SCRIPT="${REPO_ROOT}/scripts/worktree-ready-check.sh"
 DOCTOR_SCRIPT="${REPO_ROOT}/scripts/worktree-doctor.sh"
@@ -426,8 +427,28 @@ process.stdout.write(String(port));
 NODE
 )"
 
+BASELINE_STATE_DIR=""
+BASELINE_CONFIG_PATH=""
+BASELINE_BOOTSTRAP_STATUS="disabled"
+if [[ -f "$BASELINE_BOOTSTRAP_SCRIPT" ]]; then
+  if ! BASELINE_BOOTSTRAP_OUTPUT="$(bash "$BASELINE_BOOTSTRAP_SCRIPT" --root "$WORKTREE_PATH")"; then
+    echo "Error: tester baseline bootstrap failed for ${WORKTREE_PATH}." >&2
+    exit 1
+  fi
+  BASELINE_BOOTSTRAP_STATUS="ok"
+  BASELINE_STATE_DIR="$(printf '%s\n' "$BASELINE_BOOTSTRAP_OUTPUT" | sed -n 's/^baseline_state_dir=//p' | tail -n 1)"
+  BASELINE_CONFIG_PATH="$(printf '%s\n' "$BASELINE_BOOTSTRAP_OUTPUT" | sed -n 's/^baseline_config_path=//p' | tail -n 1)"
+else
+  echo "warning: tester baseline bootstrap helper missing; falling back to legacy lane state path" >&2
+fi
+
+if [[ -z "$BASELINE_STATE_DIR" ]]; then
+  BASELINE_STATE_DIR="/tmp/openclaw-dev-${FEATURE_NAME}"
+fi
+
 cat > "${WORKTREE_PATH}/.dev-launch.env" <<EOF
-OPENCLAW_STATE_DIR=/tmp/openclaw-dev-${FEATURE_NAME}
+OPENCLAW_STATE_DIR=${BASELINE_STATE_DIR}
+OPENCLAW_CONFIG_PATH=${BASELINE_CONFIG_PATH}
 OPENCLAW_GATEWAY_PORT=${DEV_PORT}
 EOF
 
@@ -516,6 +537,9 @@ echo "base_source=${BASE_SOURCE}"
 echo "lane_mode=${LANE_MODE}"
 echo "bot_fingerprint=${BOT_FINGERPRINT}"
 echo "dev_port=${DEV_PORT}"
+echo "baseline_bootstrap=${BASELINE_BOOTSTRAP_STATUS}"
+echo "baseline_state_dir=${BASELINE_STATE_DIR}"
+echo "baseline_config_path=${BASELINE_CONFIG_PATH}"
 echo "telegram_bootstrap=${TELEGRAM_BOOTSTRAP_STATUS}"
 echo "bootstrap_runtime=${BOOTSTRAP_RUNTIME_STATUS}"
 if [[ "$NO_BOOTSTRAP" != "1" ]]; then
