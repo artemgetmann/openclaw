@@ -110,6 +110,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 OPENCLAW_STATE_DIR="$(read_last_env_value "$ENV_FILE" "OPENCLAW_STATE_DIR")"
+OPENCLAW_CONFIG_PATH="$(read_last_env_value "$ENV_FILE" "OPENCLAW_CONFIG_PATH")"
 OPENCLAW_GATEWAY_PORT="$(read_last_env_value "$ENV_FILE" "OPENCLAW_GATEWAY_PORT")"
 
 if [[ -z "$OPENCLAW_STATE_DIR" ]]; then
@@ -119,6 +120,9 @@ fi
 if [[ -z "$OPENCLAW_GATEWAY_PORT" ]]; then
   echo "Error: OPENCLAW_GATEWAY_PORT missing in ${ENV_FILE}." >&2
   exit 1
+fi
+if [[ -z "$OPENCLAW_CONFIG_PATH" ]]; then
+  OPENCLAW_CONFIG_PATH="${OPENCLAW_STATE_DIR}/openclaw.json"
 fi
 
 # A linked worktree without its generated launch env is exactly how runtimes
@@ -149,10 +153,12 @@ env -i \
   PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
   LANG="${LANG:-en_US.UTF-8}" \
   OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR}" \
+  OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH}" \
   OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT}" \
   /usr/bin/open -n "$APP_BUNDLE"
 
 echo "worktree=${ROOT_DIR}"
 echo "app_path=${APP_BUNDLE}"
 echo "state_dir=${OPENCLAW_STATE_DIR}"
+echo "config_path=${OPENCLAW_CONFIG_PATH}"
 echo "gateway_port=${OPENCLAW_GATEWAY_PORT}"
