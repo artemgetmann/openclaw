@@ -488,3 +488,87 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
   });
 });
+
+describe("safe tool completion summaries", () => {
+  it("emits a safe completion summary with non-sensitive output hints when verbose summaries are enabled", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    ctx.shouldEmitToolResult = () => true;
+    ctx.shouldEmitToolOutput = () => false;
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-safe-summary",
+        args: { command: "pwd" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-safe-summary",
+        isError: false,
+        result: {
+          details: { status: "ok" },
+          content: [{ type: "text", text: "/Users/user" }],
+        },
+      } as never,
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("completed"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("text output (1 line, 11 chars)"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("/Users/user"),
+      }),
+    );
+  });
+
+  it("does not emit completion summaries when verbose tool summaries are disabled", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    ctx.shouldEmitToolResult = () => false;
+    ctx.shouldEmitToolOutput = () => false;
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-no-summary",
+        args: { command: "pwd" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-no-summary",
+        isError: false,
+        result: {
+          details: { status: "ok" },
+          content: [{ type: "text", text: "/Users/user" }],
+        },
+      } as never,
+    );
+
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+});
