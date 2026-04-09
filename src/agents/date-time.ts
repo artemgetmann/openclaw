@@ -2,12 +2,17 @@ import { execFileSync } from "node:child_process";
 
 export type TimeFormatPreference = "auto" | "12" | "24";
 export type ResolvedTimeFormat = "12" | "24";
+export const USER_TIMEZONE_LOCAL_SENTINELS = new Set(["local", "host"]);
 
 let cachedTimeFormat: ResolvedTimeFormat | undefined;
 
 export function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
   if (trimmed) {
+    if (USER_TIMEZONE_LOCAL_SENTINELS.has(trimmed.toLowerCase())) {
+      const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return host?.trim() || "UTC";
+    }
     try {
       new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
       return trimmed;
