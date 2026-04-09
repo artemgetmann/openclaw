@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildTelegramLiveRuntimeConfig,
   clearEnvAssignmentText,
   summarizeTelegramTesterTokenPool,
 } from "../../scripts/lib/telegram-live-runtime-helpers.mjs";
@@ -36,6 +37,38 @@ describe("summarizeTelegramTesterTokenPool", () => {
     expect(summary.selection.ok).toBe(true);
     expect(summary.selection.selectedToken).toBe("bot-2");
     expect(summary.selection.reason).toBe("reassign_conflict_or_invalid");
+  });
+
+  it("builds a tester runtime config without mutating the canonical source config", () => {
+    const baseConfig = {
+      channels: {
+        telegram: {
+          enabled: false,
+          botToken: "99999:main-bot",
+          accounts: {
+            main: { botToken: "88888:main-account" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            apiKey: "sk-main-provider",
+          },
+        },
+      },
+    };
+
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig,
+      assignedToken: "tester-token",
+      runtimePort: 24567,
+    });
+
+    expect(baseConfig.channels.telegram.botToken).toBe("99999:main-bot");
+    expect(baseConfig.channels.telegram.accounts.main.botToken).toBe("88888:main-account");
+    expect(config.channels.telegram.botToken).toBe("tester-token");
+    expect(config.channels.telegram.accounts).toBeUndefined();
   });
 });
 

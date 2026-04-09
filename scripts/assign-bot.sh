@@ -122,6 +122,7 @@ if (!helperPath) {
 }
 
 const {
+  classifyTelegramTesterClaimEntries,
   collectActiveTelegramTokenLeaseEntries,
   extractTelegramBotTokensFromConfig,
   summarizeTelegramTesterTokenPool,
@@ -213,9 +214,13 @@ const leasedEntries = collectActiveTelegramTokenLeaseEntries({
   currentWorktreePath: currentWorktree,
 });
 
+const classifiedClaims = classifyTelegramTesterClaimEntries({
+  claimedEntries,
+});
 const summary = summarizeTelegramTesterTokenPool({
   poolTokens,
-  claimedEntries,
+  activeClaimEntries: classifiedClaims.activeClaimEntries,
+  staleClaimEntries: classifiedClaims.staleClaimEntries,
   leasedEntries,
   reservedTokens,
   currentToken,
@@ -233,6 +238,12 @@ if (!selection.ok || !selection.selectedToken) {
   for (const entry of summary.claimedEntries) {
     console.log(`claimedWorktree=${entry.worktreePath}`);
   }
+  for (const entry of classifiedClaims.staleClaimEntries) {
+    console.log(`staleClaimToken=${entry.token}`);
+    console.log(`staleClaimWorktree=${entry.worktreePath}`);
+    console.log(`staleClaimReason=${entry.reason ?? "unknown"}`);
+    console.log(`staleClaimRuntimePort=${entry.runtimePort ?? 0}`);
+  }
   process.exit(0);
 }
 
@@ -246,6 +257,12 @@ console.log(`claimedCount=${summary.claimedCount}`);
 console.log(`poolCount=${summary.poolCount}`);
 console.log(`reservedCount=${summary.reservedCount}`);
 console.log(`claimableCount=${summary.claimableCount}`);
+for (const entry of classifiedClaims.staleClaimEntries) {
+  console.log(`staleClaimToken=${entry.token}`);
+  console.log(`staleClaimWorktree=${entry.worktreePath}`);
+  console.log(`staleClaimReason=${entry.reason ?? "unknown"}`);
+  console.log(`staleClaimRuntimePort=${entry.runtimePort ?? 0}`);
+}
 NODE
 )"
 
@@ -260,6 +277,10 @@ reserved_count=0
 claimable_count=0
 current_token_status="absent"
 claimed_worktrees=()
+stale_claim_tokens=()
+stale_claim_worktrees=()
+stale_claim_reasons=()
+stale_claim_runtime_ports=()
 while IFS= read -r line || [[ -n "$line" ]]; do
   key="${line%%=*}"
   value="${line#*=}"
@@ -275,6 +296,10 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     claimableCount) claimable_count="$value" ;;
     currentTokenStatus) current_token_status="$value" ;;
     claimedWorktree) claimed_worktrees+=("$value") ;;
+    staleClaimToken) stale_claim_tokens+=("$value") ;;
+    staleClaimWorktree) stale_claim_worktrees+=("$value") ;;
+    staleClaimReason) stale_claim_reasons+=("$value") ;;
+    staleClaimRuntimePort) stale_claim_runtime_ports+=("$value") ;;
   esac
 done <<< "$selection"
 
@@ -295,6 +320,50 @@ if [[ "$selection_ok" != "yes" || -z "$selected_token" ]]; then
   echo "Release an unused worktree with 'bash scripts/telegram-live-runtime.sh release' or add more tester-only bot tokens." >&2
   exit 1
 fi
+
+clear_env_assignment_file() {
+  local file_path="$1"
+  local key="$2"
+  local tmp_file=""
+  tmp_file="$(mktemp "${file_path}.tmp.XXXXXX")"
+  # Rewrite the file instead of in-place regex surgery so reclaim stays
+  # predictable even when the stale worktree has odd quoting or export syntax.
+  KEY_TO_CLEAR="$key" SOURCE_FILE="$file_path" TARGET_FILE="$tmp_file" python3 - <<'PY'
+import os
+import re
+
+key = os.environ["KEY_TO_CLEAR"]
+source_file = os.environ["SOURCE_FILE"]
+target_file = os.environ["TARGET_FILE"]
+pattern = re.compile(rf"^[ \t]*(?:export[ \t]+)?{re.escape(key)}[ \t]*=")
+
+with open(source_file, "r", encoding="utf-8") as src:
+    lines = src.readlines()
+
+with open(target_file, "w", encoding="utf-8") as dst:
+    for line in lines:
+        if pattern.match(line):
+            continue
+        dst.write(line)
+PY
+  mv "$tmp_file" "$file_path"
+}
+
+for idx in "${!stale_claim_tokens[@]}"; do
+  if [[ "${stale_claim_tokens[$idx]}" != "$selected_token" ]]; then
+    continue
+  fi
+  stale_worktree="${stale_claim_worktrees[$idx]}"
+  stale_reason="${stale_claim_reasons[$idx]:-unknown}"
+  stale_runtime_port="${stale_claim_runtime_ports[$idx]:-0}"
+  stale_env_local="${stale_worktree}/.env.local"
+  if [[ -f "$stale_env_local" ]]; then
+    clear_env_assignment_file "$stale_env_local" "TELEGRAM_BOT_TOKEN"
+  fi
+  echo "Reclaimed stale tester bot claim from worktree: ${stale_worktree}" >&2
+  echo "Reclaim reason: ${stale_reason}" >&2
+  echo "Reclaim runtime port: ${stale_runtime_port}" >&2
+done
 
 printf 'TELEGRAM_BOT_TOKEN=%s\n' "$selected_token" > ".env.local"
 
