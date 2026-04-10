@@ -75,13 +75,10 @@ struct OnboardingWizardCardContent: View {
 
     private func consumerErrorMessage(for error: String) -> String {
         let lower = error.lowercased()
-        if lower.contains("gateway did not become ready") {
-            return "OpenClaw couldn’t finish setup. Try again."
-        }
         if lower.contains("wizard session lost") {
             return "Setup was interrupted. Try again."
         }
-        return "OpenClaw couldn’t finish setup. Try again."
+        return error
     }
 
     var body: some View {

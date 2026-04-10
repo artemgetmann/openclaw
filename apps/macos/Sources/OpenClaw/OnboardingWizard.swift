@@ -39,7 +39,9 @@ final class OnboardingWizardModel {
     private var lastStartMode: AppState.ConnectionMode?
     private var lastStartWorkspace: String?
     private var restartAttempts = 0
+    private var setupRepairAttempts = 0
     private let maxRestartAttempts = 1
+    private let maxSetupRepairAttempts = 1
 
     var isComplete: Bool {
         self.status == "done"
@@ -57,11 +59,16 @@ final class OnboardingWizardModel {
         self.isStarting = false
         self.isSubmitting = false
         self.restartAttempts = 0
+        self.setupRepairAttempts = 0
         self.lastStartMode = nil
         self.lastStartWorkspace = nil
     }
 
-    func startIfNeeded(mode: AppState.ConnectionMode, workspace: String? = nil) async {
+    func startIfNeeded(
+        mode: AppState.ConnectionMode,
+        workspace: String? = nil,
+        dependencies: OnboardingWizardStartupDependencies = .live) async
+    {
         guard self.sessionId == nil, !self.isStarting else { return }
         guard !self.isComplete else { return }
         guard mode == .local else { return }
@@ -79,23 +86,9 @@ final class OnboardingWizardModel {
         defer { self.isStarting = false }
 
         do {
-            GatewayProcessManager.shared.setActive(true)
-            if await GatewayProcessManager.shared.waitForGatewayReady(
-                timeout: GatewayProcessManager.gatewayReadinessTimeout) == false
-            {
-                throw NSError(
-                    domain: "Gateway",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Gateway did not become ready. Check that it is running."])
-            }
-            var params: [String: AnyCodable] = ["mode": AnyCodable("local")]
-            if let workspace, !workspace.isEmpty {
-                params["workspace"] = AnyCodable(workspace)
-            }
-            let res: WizardStartResult = try await GatewayConnection.shared.requestDecoded(
-                method: .wizardStart,
-                params: params)
-            self.applyStartResult(res)
+            try await self.startLocalWizard(
+                workspace: workspace,
+                dependencies: dependencies)
         } catch {
             self.status = "error"
             self.errorMessage = error.localizedDescription
@@ -144,6 +137,42 @@ final class OnboardingWizardModel {
         }
     }
 
+    private func startLocalWizard(
+        workspace: String?,
+        dependencies: OnboardingWizardStartupDependencies) async throws
+    {
+        dependencies.activateGateway()
+
+        // First-run local setup can fail before the gateway is reachable if the
+        // CLI or runtime prerequisites are missing. Repair those once, then
+        // retry the normal startup path instead of dead-ending into a generic error.
+        if await dependencies.waitForGatewayReady(GatewayProcessManager.gatewayReadinessTimeout) == false {
+            let environmentStatus = dependencies.checkGatewayEnvironment()
+            if await self.tryRepairLocalSetupIfNeeded(
+                environmentStatus: environmentStatus,
+                dependencies: dependencies)
+            {
+                dependencies.activateGateway()
+                if await dependencies.waitForGatewayReady(GatewayProcessManager.gatewayReadinessTimeout) == false {
+                    throw OnboardingWizardStartupError.gatewayDidNotBecomeReady(
+                        environmentStatus: dependencies.checkGatewayEnvironment(),
+                        didRepair: true)
+                }
+            } else {
+                throw OnboardingWizardStartupError.gatewayDidNotBecomeReady(
+                    environmentStatus: environmentStatus,
+                    didRepair: false)
+            }
+        }
+
+        var params: [String: AnyCodable] = ["mode": AnyCodable("local")]
+        if let workspace, !workspace.isEmpty {
+            params["workspace"] = AnyCodable(workspace)
+        }
+        let res: WizardStartResult = try await dependencies.requestWizardStart(params)
+        self.applyStartResult(res)
+    }
+
     private func applyStartResult(_ res: WizardStartResult) {
         self.sessionId = res.sessionid
         self.status = wizardStatusString(res.status) ?? (res.done ? "done" : "running")
@@ -154,6 +183,7 @@ final class OnboardingWizardModel {
         }
         if res.done { self.currentStep = nil }
         self.restartAttempts = 0
+        self.setupRepairAttempts = 0
     }
 
     private func applyNextResult(_ res: WizardNextResult) {
@@ -194,6 +224,24 @@ final class OnboardingWizardModel {
         return true
     }
 
+    private func tryRepairLocalSetupIfNeeded(
+        environmentStatus: GatewayEnvironmentStatus,
+        dependencies: OnboardingWizardStartupDependencies) async -> Bool
+    {
+        guard self.setupRepairAttempts < self.maxSetupRepairAttempts else { return false }
+        guard environmentStatus.isInstallableSetupFailure else { return false }
+        self.setupRepairAttempts += 1
+        onboardingWizardLogger.info(
+            "attempting local setup repair: \(environmentStatus.message, privacy: .public)")
+        let repaired = await dependencies.installCLI()
+        if repaired {
+            onboardingWizardLogger.info("local setup repair completed")
+        } else {
+            onboardingWizardLogger.warning("local setup repair did not install CLI")
+        }
+        return repaired
+    }
+
     private func shouldSkipWizard() -> Bool {
         let root = OpenClawConfigFile.loadDict()
         if let wizard = root["wizard"] as? [String: Any], !wizard.isEmpty {
@@ -219,6 +267,72 @@ final class OnboardingWizardModel {
             }
         }
         return false
+    }
+}
+
+struct OnboardingWizardStartupDependencies {
+    var activateGateway: @MainActor @Sendable () -> Void = {
+        GatewayProcessManager.shared.setActive(true)
+    }
+    var checkGatewayEnvironment: @MainActor @Sendable () -> GatewayEnvironmentStatus = {
+        GatewayEnvironment.check()
+    }
+    var installCLI: @MainActor @Sendable () async -> Bool = {
+        await CLIInstaller.install { _ in }
+        return CLIInstaller.installedLocation() != nil
+    }
+    var waitForGatewayReady: @MainActor @Sendable (TimeInterval) async -> Bool = {
+        await GatewayProcessManager.shared.waitForGatewayReady(timeout: $0)
+    }
+    var requestWizardStart: @MainActor @Sendable ([String: AnyCodable]) async throws -> WizardStartResult = {
+        try await GatewayConnection.shared.requestDecoded(method: .wizardStart, params: $0)
+    }
+
+    static let live = Self()
+}
+
+private enum OnboardingWizardStartupError: LocalizedError {
+    case gatewayDidNotBecomeReady(environmentStatus: GatewayEnvironmentStatus, didRepair: Bool)
+
+    var errorDescription: String? {
+        switch self {
+        case let .gatewayDidNotBecomeReady(environmentStatus, didRepair):
+            return Self.describeGatewayNotReady(
+                environmentStatus: environmentStatus,
+                didRepair: didRepair)
+        }
+    }
+
+    private static func describeGatewayNotReady(
+        environmentStatus: GatewayEnvironmentStatus,
+        didRepair: Bool) -> String
+    {
+        let prefix = didRepair
+            ? "OpenClaw repaired the local CLI, but setup still could not finish."
+            : "OpenClaw couldn't finish setup."
+        switch environmentStatus.kind {
+        case .missingNode:
+            return "\(prefix) Node is missing. \(environmentStatus.message)"
+        case .missingGateway:
+            return "\(prefix) The openclaw CLI is missing. \(environmentStatus.message)"
+        case let .incompatible(found, required):
+            return "\(prefix) Installed gateway \(found) is incompatible with the app requirement \(required). \(environmentStatus.message)"
+        case .error(let message):
+            return "\(prefix) \(message)"
+        case .checking, .ok:
+            return "\(prefix) Gateway did not become ready. \(environmentStatus.message)"
+        }
+    }
+}
+
+private extension GatewayEnvironmentStatus {
+    var isInstallableSetupFailure: Bool {
+        switch self.kind {
+        case .missingNode, .missingGateway, .incompatible:
+            return true
+        case .checking, .ok, .error:
+            return false
+        }
     }
 }
 
