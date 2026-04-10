@@ -2,6 +2,10 @@ import Foundation
 
 @MainActor
 enum CLIInstaller {
+    private static let consumerInstallerSourceInfoKey = "OpenClawConsumerInstallerSourceURL"
+    private static let consumerInstallerSourceEnvironmentKey = "OPENCLAW_CONSUMER_INSTALLER_URL"
+    private static let defaultConsumerInstallerSourceURL = "https://openclaw.bot/install-cli.sh"
+
     struct PrerequisiteReport: Equatable {
         let hasBrew: Bool
         let hasGit: Bool
@@ -110,14 +114,46 @@ enum CLIInstaller {
             .path
     }
 
-    private static func installScriptCommand(version: String, prefix: String) -> [String] {
+    static func consumerInstallerSourceURL(
+        infoDictionary: [String: Any]? = Bundle.main.infoDictionary,
+        environment: [String: String] = ProcessInfo.processInfo.environment) -> URL
+    {
+        let candidate = Self.consumerInstallerSourceString(
+            infoDictionary: infoDictionary,
+            environment: environment)
+        return URL(string: candidate) ?? URL(string: Self.defaultConsumerInstallerSourceURL)!
+    }
+
+    private static func consumerInstallerSourceString(
+        infoDictionary: [String: Any]? = Bundle.main.infoDictionary,
+        environment: [String: String] = ProcessInfo.processInfo.environment) -> String
+    {
+        if let explicit = infoDictionary?[Self.consumerInstallerSourceInfoKey] as? String,
+           !explicit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return explicit
+        }
+        if let explicit = environment[Self.consumerInstallerSourceEnvironmentKey],
+           !explicit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return explicit
+        }
+        return Self.defaultConsumerInstallerSourceURL
+    }
+
+    static func installScriptCommand(
+        version: String,
+        prefix: String,
+        installerSourceURL: URL? = nil) -> [String]
+    {
         let escapedVersion = self.shellEscape(version)
         let escapedPrefix = self.shellEscape(prefix)
+        let sourceURL = installerSourceURL ?? Self.consumerInstallerSourceURL()
         // Consumer guardrail: this app only orchestrates bootstrap.
         // Keep the actual install source fork-controlled; do not swap this to
         // a generic upstream default without an explicit consumer-product decision.
         let script = """
-        curl -fsSL https://openclaw.bot/install-cli.sh | \
+        curl -fsSL \(Self.shellEscape(sourceURL.absoluteString)) | \
         bash -s -- --json --no-onboard --prefix \(escapedPrefix) --version \(escapedVersion)
         """
         return ["/bin/bash", "-lc", script]

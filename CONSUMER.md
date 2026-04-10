@@ -27,6 +27,7 @@ Read this before doing consumer-product work in this repo.
 - Consumer installs and runtime bootstrap must come from the fork-controlled consumer source of truth.
 - Do not treat generic published defaults like `openclaw@latest` or an upstream GitHub checkout as the consumer install target unless the user explicitly asks for an upstream flow.
 - If a consumer path needs bootstrap, wire it to the consumer branch / fork-owned release source, then document that decision here or in `docs/consumer/*`.
+- For consumer mac packaging, the bootstrap endpoint must be injected explicitly via `OpenClawConsumerInstallerSourceURL` or `OPENCLAW_CONSUMER_INSTALLER_URL`; do not leave it implicit.
 
 ## What belongs here vs elsewhere
 

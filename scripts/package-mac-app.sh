@@ -16,6 +16,7 @@ PRODUCT="OpenClaw"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.consumer.mac.debug}"
 APP_VARIANT="${APP_VARIANT:-consumer}"
 URL_SCHEME="${URL_SCHEME:-openclaw-consumer}"
+CONSUMER_INSTALLER_URL="${OPENCLAW_CONSUMER_INSTALLER_URL:-}"
 PKG_VERSION="$(cd "$ROOT_DIR" && "${NODE_BIN}" -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -200,6 +201,10 @@ if [[ "$APP_VARIANT" == "consumer" && -n "${APP_INSTANCE_ID:-}" ]]; then
 fi
 /usr/libexec/PlistBuddy -c "Set :OpenClawBuildTimestamp ${BUILD_TS}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :OpenClawGitCommit ${GIT_COMMIT}" "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Delete :OpenClawConsumerInstallerSourceURL" "$APP_ROOT/Contents/Info.plist" >/dev/null 2>&1 || true
+if [[ -n "$CONSUMER_INSTALLER_URL" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :OpenClawConsumerInstallerSourceURL string ${CONSUMER_INSTALLER_URL}" "$APP_ROOT/Contents/Info.plist" || true
+fi
 /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 ${URL_SCHEME}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :SUFeedURL ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" \
   || /usr/libexec/PlistBuddy -c "Add :SUFeedURL string ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" || true

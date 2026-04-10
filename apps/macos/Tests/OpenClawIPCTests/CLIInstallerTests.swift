@@ -48,4 +48,31 @@ struct CLIInstallerTests {
             fileManager: fm)
         #expect(missing == nil)
     }
+
+    @Test func `installer source prefers explicit consumer override`() {
+        let infoDictionary = ["OpenClawConsumerInstallerSourceURL": "https://consumer.example/install-cli.sh"]
+        let environment = [
+            "OPENCLAW_CONSUMER_INSTALLER_URL": "https://env.example/install-cli.sh"
+        ]
+
+        let sourceURL = CLIInstaller.consumerInstallerSourceURL(
+            infoDictionary: infoDictionary,
+            environment: environment)
+        #expect(sourceURL.absoluteString == "https://consumer.example/install-cli.sh")
+
+        let command = CLIInstaller.installScriptCommand(
+            version: "2026.4.10",
+            prefix: "/tmp/openclaw-prefix",
+            installerSourceURL: sourceURL)
+        #expect(command.count == 3)
+        #expect(command[2].contains("https://consumer.example/install-cli.sh"))
+        #expect(command[2].contains("--prefix '/tmp/openclaw-prefix'"))
+    }
+
+    @Test func `installer source falls back to environment override`() {
+        let sourceURL = CLIInstaller.consumerInstallerSourceURL(
+            infoDictionary: [:],
+            environment: ["OPENCLAW_CONSUMER_INSTALLER_URL": "https://env.example/install-cli.sh"])
+        #expect(sourceURL.absoluteString == "https://env.example/install-cli.sh")
+    }
 }

@@ -88,6 +88,7 @@ This means the refactor and the consumer build are the same work — not two sep
 
 - Consumer installs, runtime bootstrap, and packaging assumptions must come from the fork-controlled consumer source of truth.
 - Do not use generic published defaults like `openclaw@latest` or an upstream GitHub checkout as the consumer install target unless a task explicitly says to work on an upstream flow.
+- For consumer mac packaging, inject `OpenClawConsumerInstallerSourceURL` or `OPENCLAW_CONSUMER_INSTALLER_URL` so the bootstrap endpoint is fork-controlled and explicit.
 - If a consumer bootstrap path changes, that change must be tracked as consumer-product work and documented against the consumer branch, not left implicit in installer assumptions.
 
 ### Convergence Plan

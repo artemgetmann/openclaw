@@ -63,13 +63,21 @@ APP_PATH="${ROOT_DIR}/dist/${APP_BUNDLE_NAME}"
 INFO_PLIST="${APP_PATH}/Contents/Info.plist"
 EXPECTED_BUNDLE_ID="${BUNDLE_ID:-$(consumer_instance_bundle_id "$NORMALIZED_INSTANCE_ID")}"
 EXPECTED_VARIANT="consumer"
+CONSUMER_INSTALLER_URL="${OPENCLAW_CONSUMER_INSTALLER_URL:-}"
 VERIFY_ARGS=()
+
+if [[ -z "$CONSUMER_INSTALLER_URL" ]]; then
+  echo "ERROR: consumer packaging requires OPENCLAW_CONSUMER_INSTALLER_URL." >&2
+  echo "Set it to the fork-controlled consumer installer endpoint before packaging." >&2
+  exit 1
+fi
 
 APP_NAME="$APP_NAME" \
 APP_BUNDLE_NAME="$APP_BUNDLE_NAME" \
 BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
 APP_VARIANT="${APP_VARIANT:-$EXPECTED_VARIANT}" \
 APP_INSTANCE_ID="$NORMALIZED_INSTANCE_ID" \
+OPENCLAW_CONSUMER_INSTALLER_URL="$CONSUMER_INSTALLER_URL" \
 URL_SCHEME="${URL_SCHEME:-openclaw-consumer}" \
   "$ROOT_DIR/scripts/package-mac-app.sh"
 
@@ -82,6 +90,7 @@ actual_name=$(/usr/libexec/PlistBuddy -c "Print :CFBundleDisplayName" "$INFO_PLI
 actual_bundle_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$INFO_PLIST")
 actual_variant=$(/usr/libexec/PlistBuddy -c "Print :OpenClawAppVariant" "$INFO_PLIST")
 actual_instance_id=$(/usr/libexec/PlistBuddy -c "Print :OpenClawConsumerInstanceID" "$INFO_PLIST" 2>/dev/null || true)
+actual_installer_url=$(/usr/libexec/PlistBuddy -c "Print :OpenClawConsumerInstallerSourceURL" "$INFO_PLIST" 2>/dev/null || true)
 
 if [[ "$actual_name" != "$EXPECTED_DISPLAY_NAME" ]]; then
   echo "ERROR: expected consumer display name '$EXPECTED_DISPLAY_NAME', got '$actual_name'" >&2
@@ -100,6 +109,11 @@ fi
 
 if [[ "$actual_instance_id" != "${NORMALIZED_INSTANCE_ID}" ]]; then
   echo "ERROR: expected consumer instance id '${NORMALIZED_INSTANCE_ID}', got '${actual_instance_id}'" >&2
+  exit 1
+fi
+
+if [[ "$actual_installer_url" != "$CONSUMER_INSTALLER_URL" ]]; then
+  echo "ERROR: expected consumer installer URL '$CONSUMER_INSTALLER_URL', got '$actual_installer_url'" >&2
   exit 1
 fi
 
