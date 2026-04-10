@@ -51,6 +51,10 @@ consumer_instance_gateway_port() {
 
 consumer_instance_app_name() {
   local normalized="${1:-}"
+  if consumer_instance_stable_tcc_identity_enabled; then
+    printf 'OpenClaw Consumer'
+    return
+  fi
   if [[ -z "$normalized" ]]; then
     printf 'OpenClaw Consumer'
     return
