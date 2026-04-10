@@ -115,8 +115,15 @@ prepare_bundled_consumer_runtime() {
 
   if printf '%s\n' "${BUILD_ARCHS[@]}" | grep -qx "x86_64"; then
     local arm64_native=""
+    local bundled_runtime_dist_root="${BUNDLED_RUNTIME_RESOURCE_DIR}/openclaw/dist"
+    local matrix_crypto_universal="${bundled_runtime_dist_root}/matrix-sdk-crypto.darwin-universal.node"
     while IFS= read -r arm64_native; do
       [[ -n "$arm64_native" ]] || continue
+      # matrix-sdk-crypto's generated loader prefers a universal binary placed at
+      # dist root, so it does not need a second hashed asset sibling under assets/.
+      if [[ "$(basename "$arm64_native")" == matrix-sdk-crypto.darwin-arm64-* ]] && [[ -f "$matrix_crypto_universal" ]]; then
+        continue
+      fi
       local x64_native="${arm64_native/darwin-arm64/darwin-x64}"
       if [[ ! -f "$x64_native" ]]; then
         echo "ERROR: bundled consumer runtime includes arm64-only native addon with no x64 twin:" >&2
