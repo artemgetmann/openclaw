@@ -1,6 +1,9 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
-import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
+import {
+  DEFAULT_HEARTBEAT_ACTIVE_HOURS,
+  DEFAULT_HEARTBEAT_EVERY,
+} from "../auto-reply/heartbeat.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { resolveAgentModelPrimaryValue } from "./model-input.js";
 import {
@@ -412,28 +415,27 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
   }
 
   const authMode = resolveAnthropicDefaultAuthMode(cfg);
-  if (!authMode) {
-    return cfg;
-  }
-
   let mutated = false;
   const nextDefaults = { ...defaults };
   const contextPruning = defaults.contextPruning ?? {};
   const heartbeat = defaults.heartbeat ?? {};
 
-  if (defaults.contextPruning?.mode === undefined) {
-    nextDefaults.contextPruning = {
-      ...contextPruning,
-      mode: "cache-ttl",
-      ttl: defaults.contextPruning?.ttl ?? "1h",
+  // Heartbeat defaults are product behavior, not Anthropic-specific tuning.
+  // Apply them whenever agent defaults exist so fresh configs do not ping at night.
+  if (defaults.heartbeat?.every === undefined || defaults.heartbeat?.activeHours === undefined) {
+    nextDefaults.heartbeat = {
+      ...heartbeat,
+      every: defaults.heartbeat?.every ?? DEFAULT_HEARTBEAT_EVERY,
+      activeHours: defaults.heartbeat?.activeHours ?? { ...DEFAULT_HEARTBEAT_ACTIVE_HOURS },
     };
     mutated = true;
   }
 
-  if (defaults.heartbeat?.every === undefined) {
-    nextDefaults.heartbeat = {
-      ...heartbeat,
-      every: DEFAULT_HEARTBEAT_EVERY,
+  if (authMode && defaults.contextPruning?.mode === undefined) {
+    nextDefaults.contextPruning = {
+      ...contextPruning,
+      mode: "cache-ttl",
+      ttl: defaults.contextPruning?.ttl ?? "1h",
     };
     mutated = true;
   }
