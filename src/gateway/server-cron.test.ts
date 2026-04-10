@@ -220,8 +220,8 @@ describe("buildGatewayCronService", () => {
             originSessionKey: "agent:main:telegram:direct:user-1",
             originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
             monitorSessionKey: "agent:main:monitor:monitor-1",
-            sourceType: "whatsapp",
-            sourceTarget: { target: "+123" },
+            sourceType: "gmail",
+            sourceTarget: { account: "me@example.com", threadId: "thread-1" },
             cadence: { kind: "every", everyMs: 60_000 },
             actionPolicy: "notify_draft",
             status: "active",
@@ -259,7 +259,7 @@ describe("buildGatewayCronService", () => {
               to: "user-1",
             }),
           }),
-          message: expect.stringContaining("sourceType: whatsapp"),
+          message: expect.stringContaining("sourceType: gmail"),
         }),
       );
     } finally {
@@ -320,6 +320,64 @@ describe("buildGatewayCronService", () => {
           job: expect.not.objectContaining({
             delivery: expect.anything(),
           }),
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("keeps waking monitors marked completed so fresh source changes can reactivate the task", async () => {
+    const cfg = createCronConfig("server-cron-monitor-completed");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    await fs.writeFile(
+      monitorStorePath,
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-completed",
+            agentId: "main",
+            originSessionKey: "agent:main:main",
+            monitorSessionKey: "agent:main:monitor:monitor-completed",
+            sourceType: "gmail",
+            sourceTarget: { account: "me@example.com", threadId: "thread-completed" },
+            cadence: { kind: "every", everyMs: 60_000 },
+            actionPolicy: "notify_draft",
+            status: "completed",
+            cronJobId: "cron-monitor-completed",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    try {
+      const job = await state.cron.add({
+        name: "monitor wake completed",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:agent:main:monitor:monitor-completed",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "monitorWake", monitorId: "monitor-completed" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:monitor:monitor-completed",
+          message: expect.stringContaining("keep the monitor active and continue the task"),
         }),
       );
     } finally {

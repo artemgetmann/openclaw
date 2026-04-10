@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -222,5 +223,59 @@ describe("monitor gateway handlers", () => {
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(call?.[2]?.message).toContain("invalid monitor.create params");
+  });
+
+  it("does not disable cron when the agent marks a monitor completed", async () => {
+    const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
+    const storeDir = path.dirname(cronStorePath);
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(storeDir, "monitors.json"),
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-1",
+            agentId: "main",
+            originSessionKey: "agent:main:main",
+            monitorSessionKey: "agent:main:monitor:monitor-1",
+            sourceType: "gmail",
+            sourceTarget: { account: "me@example.com", threadId: "thread-1" },
+            cadence: { kind: "every", everyMs: 300_000 },
+            actionPolicy: "notify_draft",
+            status: "active",
+            cronJobId: "cron-job-1",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    await monitorHandlers["monitor.update"]({
+      params: {
+        monitorId: "monitor-1",
+        patch: {
+          status: "completed",
+        },
+      },
+      respond: respond as never,
+      context: {
+        cronStorePath,
+        cron: {
+          add: cronAdd,
+          update: cronUpdate,
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-update", method: "monitor.update" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(cronUpdate).not.toHaveBeenCalled();
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect((call?.[1] as { status?: string } | undefined)?.status).toBe("completed");
   });
 });
