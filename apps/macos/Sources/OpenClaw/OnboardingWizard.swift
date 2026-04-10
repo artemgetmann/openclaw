@@ -40,6 +40,7 @@ final class OnboardingWizardModel {
     private var lastStartWorkspace: String?
     private var restartAttempts = 0
     private var setupRepairAttempts = 0
+    private var lastSetupRepairMessage: String?
     private let maxRestartAttempts = 1
     private let maxSetupRepairAttempts = 1
 
@@ -60,6 +61,7 @@ final class OnboardingWizardModel {
         self.isSubmitting = false
         self.restartAttempts = 0
         self.setupRepairAttempts = 0
+        self.lastSetupRepairMessage = nil
         self.lastStartMode = nil
         self.lastStartWorkspace = nil
     }
@@ -81,6 +83,7 @@ final class OnboardingWizardModel {
         }
         self.isStarting = true
         self.errorMessage = nil
+        self.lastSetupRepairMessage = nil
         self.lastStartMode = mode
         self.lastStartWorkspace = workspace
         defer { self.isStarting = false }
@@ -141,27 +144,45 @@ final class OnboardingWizardModel {
         workspace: String?,
         dependencies: OnboardingWizardStartupDependencies) async throws
     {
-        dependencies.activateGateway()
-
-        // First-run local setup can fail before the gateway is reachable if the
-        // CLI or runtime prerequisites are missing. Repair those once, then
-        // retry the normal startup path instead of dead-ending into a generic error.
-        if await dependencies.waitForGatewayReady(GatewayProcessManager.gatewayReadinessTimeout) == false {
-            let environmentStatus = dependencies.checkGatewayEnvironment()
-            if await self.tryRepairLocalSetupIfNeeded(
+        let environmentStatus = dependencies.checkGatewayEnvironment()
+        if environmentStatus.isInstallableSetupFailure {
+            guard await self.tryRepairLocalSetupIfNeeded(
                 environmentStatus: environmentStatus,
                 dependencies: dependencies)
-            {
-                dependencies.activateGateway()
-                if await dependencies.waitForGatewayReady(GatewayProcessManager.gatewayReadinessTimeout) == false {
-                    throw OnboardingWizardStartupError.gatewayDidNotBecomeReady(
-                        environmentStatus: dependencies.checkGatewayEnvironment(),
-                        didRepair: true)
-                }
-            } else {
-                throw OnboardingWizardStartupError.gatewayDidNotBecomeReady(
+            else {
+                throw OnboardingWizardStartupError.localSetupRepairFailed(
                     environmentStatus: environmentStatus,
-                    didRepair: false)
+                    installMessage: self.lastSetupRepairMessage)
+            }
+            dependencies.activateGateway()
+            if await dependencies.waitForGatewayReady(GatewayProcessManager.gatewayReadinessTimeout) == false {
+                throw OnboardingWizardStartupError.gatewayDidNotBecomeReady(
+                    environmentStatus: dependencies.checkGatewayEnvironment(),
+                    didRepair: true)
+            }
+        } else {
+            dependencies.activateGateway()
+
+            // First-run local setup can fail before the gateway is reachable if the
+            // CLI or runtime prerequisites are missing. Repair those once, then
+            // retry the normal startup path instead of dead-ending into a generic error.
+            if await dependencies.waitForGatewayReady(GatewayProcessManager.gatewayReadinessTimeout) == false {
+                let environmentStatus = dependencies.checkGatewayEnvironment()
+                if await self.tryRepairLocalSetupIfNeeded(
+                    environmentStatus: environmentStatus,
+                    dependencies: dependencies)
+                {
+                    dependencies.activateGateway()
+                    if await dependencies.waitForGatewayReady(GatewayProcessManager.gatewayReadinessTimeout) == false {
+                        throw OnboardingWizardStartupError.gatewayDidNotBecomeReady(
+                            environmentStatus: dependencies.checkGatewayEnvironment(),
+                            didRepair: true)
+                    }
+                } else {
+                    throw OnboardingWizardStartupError.gatewayDidNotBecomeReady(
+                        environmentStatus: environmentStatus,
+                        didRepair: false)
+                }
             }
         }
 
@@ -184,6 +205,7 @@ final class OnboardingWizardModel {
         if res.done { self.currentStep = nil }
         self.restartAttempts = 0
         self.setupRepairAttempts = 0
+        self.lastSetupRepairMessage = nil
     }
 
     private func applyNextResult(_ res: WizardNextResult) {
@@ -231,9 +253,12 @@ final class OnboardingWizardModel {
         guard self.setupRepairAttempts < self.maxSetupRepairAttempts else { return false }
         guard environmentStatus.isInstallableSetupFailure else { return false }
         self.setupRepairAttempts += 1
+        self.lastSetupRepairMessage = nil
         onboardingWizardLogger.info(
             "attempting local setup repair: \(environmentStatus.message, privacy: .public)")
-        let repaired = await dependencies.installCLI()
+        let repaired = await dependencies.installCLI { message in
+            self.lastSetupRepairMessage = message
+        }
         if repaired {
             onboardingWizardLogger.info("local setup repair completed")
         } else {
@@ -277,8 +302,8 @@ struct OnboardingWizardStartupDependencies {
     var checkGatewayEnvironment: @MainActor @Sendable () -> GatewayEnvironmentStatus = {
         GatewayEnvironment.check()
     }
-    var installCLI: @MainActor @Sendable () async -> Bool = {
-        await CLIInstaller.install { _ in }
+    var installCLI: @MainActor @Sendable (@escaping @MainActor @Sendable (String) async -> Void) async -> Bool = {
+        await CLIInstaller.install(statusHandler: $0)
         return CLIInstaller.installedLocation() != nil
     }
     var waitForGatewayReady: @MainActor @Sendable (TimeInterval) async -> Bool = {
@@ -293,6 +318,7 @@ struct OnboardingWizardStartupDependencies {
 
 private enum OnboardingWizardStartupError: LocalizedError {
     case gatewayDidNotBecomeReady(environmentStatus: GatewayEnvironmentStatus, didRepair: Bool)
+    case localSetupRepairFailed(environmentStatus: GatewayEnvironmentStatus, installMessage: String?)
 
     var errorDescription: String? {
         switch self {
@@ -300,6 +326,16 @@ private enum OnboardingWizardStartupError: LocalizedError {
             return Self.describeGatewayNotReady(
                 environmentStatus: environmentStatus,
                 didRepair: didRepair)
+        case let .localSetupRepairFailed(environmentStatus, installMessage):
+            let prefix = "OpenClaw couldn't finish setup."
+            if let installMessage = installMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !installMessage.isEmpty
+            {
+                return "\(prefix) \(installMessage)"
+            }
+            return Self.describeGatewayNotReady(
+                environmentStatus: environmentStatus,
+                didRepair: false)
         }
     }
 
