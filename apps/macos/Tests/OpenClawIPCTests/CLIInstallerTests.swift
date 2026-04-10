@@ -5,6 +5,23 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CLIInstallerTests {
+    @Test func `prerequisite report flags missing brew git and node`() throws {
+        let fm = FileManager()
+        let root = fm.temporaryDirectory.appendingPathComponent(
+            "openclaw-cli-prereqs-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let report = CLIInstaller.prerequisiteReport(searchPaths: [root.path])
+        #expect(report.hasBrew == false)
+        #expect(report.hasGit == false)
+        #expect(report.hasNode == false)
+        #expect(report.missingLabels == ["Homebrew", "Git", "Node"])
+        #expect(report.preflightMessage?.contains("Homebrew, Git, Node") == true)
+        #expect(report.failureGuidance?.contains("Administrator account") == true)
+    }
+
     @Test func `installed location finds executable`() throws {
         let fm = FileManager()
         let root = fm.temporaryDirectory.appendingPathComponent(

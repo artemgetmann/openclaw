@@ -718,8 +718,9 @@ extension OnboardingView {
                 } else if !self.cliInstalled, self.cliInstallLocation == nil {
                     Text(
                         """
-                        Installs a user-space Node 22+ runtime and the CLI (no Homebrew).
-                        Rerun anytime to reinstall or update.
+                        Installs a user-space Node 22+ runtime and the CLI.
+                        If this Mac is missing Git or Homebrew, the installer will bootstrap
+                        them when your account can authorize it.
                         """)
                         .font(.footnote)
                         .foregroundStyle(.secondary)

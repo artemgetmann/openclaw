@@ -2,6 +2,37 @@ import Foundation
 
 @MainActor
 enum CLIInstaller {
+    struct PrerequisiteReport: Equatable {
+        let hasBrew: Bool
+        let hasGit: Bool
+        let hasNode: Bool
+
+        var missingLabels: [String] {
+            var labels: [String] = []
+            if !self.hasBrew { labels.append("Homebrew") }
+            if !self.hasGit { labels.append("Git") }
+            if !self.hasNode { labels.append("Node") }
+            return labels
+        }
+
+        var preflightMessage: String? {
+            let missing = self.missingLabels
+            guard !missing.isEmpty else { return nil }
+            return """
+            Missing prerequisites detected: \(missing.joined(separator: ", ")). The installer will \
+            bootstrap them if your account can authorize it.
+            """
+        }
+
+        var failureGuidance: String? {
+            guard !self.hasBrew else { return nil }
+            return """
+            Homebrew is missing on this Mac. If the installer stops at the Homebrew step, you need \
+            a macOS Administrator account to authorize the bootstrap.
+            """
+        }
+    }
+
     static func installedLocation() -> String? {
         self.installedLocation(
             searchPaths: CommandResolver.preferredPaths(),
@@ -34,10 +65,23 @@ enum CLIInstaller {
         self.installedLocation() != nil
     }
 
+    static func prerequisiteReport(searchPaths: [String]? = nil) -> PrerequisiteReport {
+        let paths = searchPaths ?? CommandResolver.preferredPaths()
+        return PrerequisiteReport(
+            hasBrew: CommandResolver.findExecutable(named: "brew", searchPaths: paths) != nil,
+            hasGit: CommandResolver.findExecutable(named: "git", searchPaths: paths) != nil,
+            hasNode: CommandResolver.findExecutable(named: "node", searchPaths: paths) != nil)
+    }
+
     static func install(statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async {
         let expected = GatewayEnvironment.expectedGatewayVersionString() ?? "latest"
         let prefix = Self.installPrefix()
-        await statusHandler("Installing openclaw CLI…")
+        let prerequisites = Self.prerequisiteReport()
+        if let preflight = prerequisites.preflightMessage {
+            await statusHandler(preflight)
+        } else {
+            await statusHandler("Installing openclaw CLI…")
+        }
         let cmd = self.installScriptCommand(version: expected, prefix: prefix)
         let response = await ShellExecutor.runDetailed(command: cmd, cwd: nil, env: nil, timeout: 900)
 
@@ -51,13 +95,13 @@ enum CLIInstaller {
 
         let parsed = self.parseInstallEvents(response.stdout)
         if let error = parsed.last(where: { $0.event == "error" })?.message {
-            await statusHandler("Install failed: \(error)")
+            await statusHandler(Self.failureMessage(error, prerequisites: prerequisites))
             return
         }
 
         let detail = response.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = response.errorMessage ?? "install failed"
-        await statusHandler("Install failed: \(detail.isEmpty ? fallback : detail)")
+        await statusHandler(Self.failureMessage(detail.isEmpty ? fallback : detail, prerequisites: prerequisites))
     }
 
     private static func installPrefix() -> String {
@@ -93,6 +137,13 @@ enum CLIInstaller {
 
     private static func shellEscape(_ raw: String) -> String {
         "'" + raw.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    private static func failureMessage(_ detail: String, prerequisites: PrerequisiteReport) -> String {
+        if let guidance = prerequisites.failureGuidance {
+            return "Install failed: \(detail) \(guidance)"
+        }
+        return "Install failed: \(detail)"
     }
 }
 

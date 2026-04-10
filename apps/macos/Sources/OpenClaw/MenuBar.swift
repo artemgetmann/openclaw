@@ -34,6 +34,9 @@ struct OpenClawApp: App {
     init() {
         OpenClawLogging.bootstrapIfNeeded()
 
+        if AppFlavor.current.isConsumer {
+            ConsumerRuntime.bootstrapProcessEnvironment()
+        }
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
     }
