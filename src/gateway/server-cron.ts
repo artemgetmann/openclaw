@@ -18,6 +18,7 @@ import {
 } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
+import type { CronJob } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -236,6 +237,37 @@ export function buildGatewayCronService(params: {
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
   const monitorStorePath = resolveMonitorStorePath({ cronStorePath: storePath });
   const warnedLegacyWebhookJobs = new Set<string>();
+  const resolveMonitorWakeDelivery = (monitor: {
+    originDelivery?: { mode?: string; channel?: string; to?: string; accountId?: string };
+  }): CronJob["delivery"] | undefined => {
+    const originDelivery = monitor.originDelivery;
+    if (!originDelivery) {
+      return undefined;
+    }
+    if (originDelivery.mode === "webhook") {
+      return {
+        mode: "webhook",
+        to: originDelivery.to,
+      };
+    }
+    if (originDelivery.mode === "none") {
+      return {
+        mode: "none",
+      };
+    }
+    // CLI-origin monitors have no channel/to target. Preserve the durable
+    // origin session and skip channel delivery instead of manufacturing a
+    // broken announce target.
+    if (!originDelivery.channel && !originDelivery.to) {
+      return undefined;
+    }
+    return {
+      mode: "announce" as const,
+      channel: originDelivery.channel,
+      to: originDelivery.to,
+      accountId: originDelivery.accountId,
+    };
+  };
 
   const cron = new CronService({
     storePath,
@@ -359,15 +391,7 @@ export function buildGatewayCronService(params: {
           ...job,
           agentId: monitor.agentId,
           sessionTarget: `session:${monitor.monitorSessionKey}`,
-          delivery:
-            monitor.originDelivery && monitor.originDelivery.mode === "webhook"
-              ? monitor.originDelivery
-              : {
-                  mode: "announce",
-                  channel: monitor.originDelivery?.channel,
-                  to: monitor.originDelivery?.to,
-                  accountId: monitor.originDelivery?.accountId,
-                },
+          delivery: resolveMonitorWakeDelivery(monitor),
           payload: { kind: "agentTurn", message: wakeMessage },
         },
         message: wakeMessage,

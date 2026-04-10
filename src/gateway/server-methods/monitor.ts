@@ -11,6 +11,7 @@ import {
   updateMonitorRecord,
 } from "../../monitor/store.js";
 import type { MonitorActionPolicy, MonitorUpdatePatch } from "../../monitor/types.js";
+import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import {
   ErrorCodes,
   errorShape,
@@ -25,6 +26,29 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 function resolveStorePath(cronStorePath: string) {
   return resolveMonitorStorePath({ cronStorePath });
+}
+
+function resolveMonitorDelivery(
+  originDelivery: CronJobCreate["delivery"] | undefined,
+): CronJobCreate["delivery"] | undefined {
+  if (!originDelivery) {
+    return undefined;
+  }
+  if (originDelivery.mode === "webhook" || originDelivery.mode === "none") {
+    return originDelivery;
+  }
+  // CLI-origin monitors do not have a channel/to target. In that case the
+  // wake should still run and write into the durable origin session instead of
+  // forcing a broken channel-style announce delivery.
+  if (!originDelivery.channel && !originDelivery.to) {
+    return undefined;
+  }
+  return {
+    mode: "announce",
+    channel: originDelivery.channel,
+    to: originDelivery.to,
+    accountId: originDelivery.accountId,
+  };
 }
 
 export const monitorHandlers: GatewayRequestHandlers = {
@@ -97,7 +121,13 @@ export const monitorHandlers: GatewayRequestHandlers = {
     const storePath = resolveStorePath(context.cronStorePath);
     const store = await loadMonitorStore(storePath);
     const monitorId = crypto.randomBytes(12).toString("hex");
-    const monitorSessionKey = `monitor:${monitorId}`;
+    const cfg = loadConfig();
+    const monitorSessionKey = toAgentStoreSessionKey({
+      agentId: p.agentId,
+      requestKey: `monitor:${monitorId}`,
+      mainKey: cfg.session?.mainKey,
+    });
+    const cronDelivery = resolveMonitorDelivery(p.originDelivery);
     const cronJob: CronJobCreate = {
       name: p.name?.trim() || `${p.sourceType.trim()} monitor`,
       enabled: true,
@@ -108,15 +138,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
         kind: "monitorWake",
         monitorId,
       },
-      delivery:
-        p.originDelivery && p.originDelivery.mode === "webhook"
-          ? p.originDelivery
-          : {
-              mode: "announce",
-              channel: p.originDelivery?.channel,
-              to: p.originDelivery?.to,
-              accountId: p.originDelivery?.accountId,
-            },
+      delivery: cronDelivery,
       agentId: p.agentId,
     };
     const createdJob = await context.cron.add(cronJob);
@@ -142,7 +164,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
     store.monitors.push(monitor);
     await saveMonitorStore(storePath, store);
     await seedMonitorSession({
-      cfg: loadConfig(),
+      cfg,
       agentId: p.agentId,
       sessionKey: monitor.monitorSessionKey,
       sessionId: crypto.randomUUID(),

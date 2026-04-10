@@ -236,6 +236,25 @@ export class GatewayClient {
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
       this.pendingConnectErrorDetailCode = null;
       this.ws = null;
+      const retryablePreConnectClose =
+        !this.closed &&
+        !this.connectSent &&
+        code === 1000 &&
+        reasonText.trim().length === 0 &&
+        !connectErrorDetailCode;
+      // Local gateway calls can lose an unauthenticated socket before the
+      // connect challenge is exchanged when the server is briefly saturated.
+      // Treat that as a transient pre-connect transport blip and let the
+      // built-in reconnect path retry instead of surfacing a fake hard failure.
+      if (retryablePreConnectClose) {
+        this.connectNonce = null;
+        if (this.connectTimer) {
+          clearTimeout(this.connectTimer);
+          this.connectTimer = null;
+        }
+        this.scheduleReconnect();
+        return;
+      }
       // Clear persisted device auth state only when device-token auth was active.
       // Shared token/password failures can return the same close reason but should
       // not erase a valid cached device token.

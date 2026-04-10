@@ -11,9 +11,11 @@ describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
+    ["monitor.get", ["operator.read"]],
     ["poll", ["operator.write"]],
     ["models.consumer.apply", ["operator.write"]],
     ["models.set", ["operator.write"]],
+    ["monitor.update", ["operator.write"]],
     ["config.patch", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
@@ -35,6 +37,7 @@ describe("operator scope authorization", () => {
     ["health", ["operator.read"], { allowed: true }],
     ["health", ["operator.write"], { allowed: true }],
     ["config.schema.lookup", ["operator.read"], { allowed: true }],
+    ["monitor.update", ["operator.write"], { allowed: true }],
     ["config.patch", ["operator.admin"], { allowed: true }],
   ])("authorizes %s for scopes %j", (method, scopes, expected) => {
     expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
