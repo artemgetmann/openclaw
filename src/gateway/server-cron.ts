@@ -35,6 +35,7 @@ import {
   saveMonitorStore,
   updateMonitorRecord,
 } from "../monitor/store.js";
+import { isTerminalMonitorStatus } from "../monitor/types.js";
 import { buildMonitorWakeMessage, isMonitorExpired } from "../monitor/wake.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -349,7 +350,7 @@ export function buildGatewayCronService(params: {
       if (!monitor) {
         return { status: "error", error: `monitor not found: ${monitorId}` };
       }
-      if (monitor.status !== "active") {
+      if (isTerminalMonitorStatus(monitor.status)) {
         return {
           status: "skipped",
           error: `monitor not active: ${monitor.status}`,
