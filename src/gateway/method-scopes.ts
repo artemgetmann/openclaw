@@ -75,6 +75,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "cron.list",
     "cron.status",
     "cron.runs",
+    "monitor.list",
+    "monitor.get",
     "gateway.identity.get",
     "system-presence",
     "last-heartbeat",
@@ -105,6 +107,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "browser.request",
     "push.test",
     "node.pending.enqueue",
+    "monitor.create",
+    "monitor.update",
+    "monitor.stop",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",

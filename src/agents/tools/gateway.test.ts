@@ -156,6 +156,17 @@ describe("gateway tool defaults", () => {
     );
   });
 
+  it("uses least-privilege monitor write scope for monitor updates", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool("monitor.update", {}, { monitorId: "monitor-1", patch: {} });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "monitor.update",
+        scopes: ["operator.write"],
+      }),
+    );
+  });
+
   it("uses admin scope only for admin methods", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
     await callGatewayTool("cron.add", {}, { id: "job-1" });

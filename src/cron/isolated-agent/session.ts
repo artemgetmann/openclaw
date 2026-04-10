@@ -9,6 +9,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
+import type { SessionResetMode } from "../../config/sessions/reset.js";
 
 export function resolveCronSession(params: {
   cfg: OpenClawConfig;
@@ -16,6 +17,7 @@ export function resolveCronSession(params: {
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
+  defaultResetMode?: SessionResetMode;
 }) {
   const sessionCfg = params.cfg.session;
   const storePath = resolveStorePath(sessionCfg?.store, {
@@ -37,7 +39,7 @@ export function resolveCronSession(params: {
       resetType: "direct",
       // Keep isolated cron/webhook runs on the legacy time-based default unless
       // operators explicitly choose a different policy in config.
-      defaultMode: DEFAULT_CRON_RESET_MODE,
+      defaultMode: params.defaultResetMode ?? DEFAULT_CRON_RESET_MODE,
     });
     const freshness = evaluateSessionFreshness({
       updatedAt: entry.updatedAt,

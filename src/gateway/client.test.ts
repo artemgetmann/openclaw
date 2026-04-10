@@ -407,6 +407,26 @@ describe("GatewayClient connect auth payload", () => {
     return { ws, connect: connectRequestFrom(ws) };
   }
 
+  it("retries after a transient pre-connect close instead of surfacing a fatal close", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const client = createClientWithIdentity("dev-preconnect", onClose);
+
+    try {
+      client.start();
+      const firstWs = getLatestWs();
+      firstWs.emitOpen();
+      firstWs.emitClose(1000, "");
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(wsInstances).toHaveLength(2);
+      expect(onClose).not.toHaveBeenCalled();
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   function emitConnectFailure(
     ws: MockWebSocket,
     connectId: string | undefined,

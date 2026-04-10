@@ -18,6 +18,7 @@ import {
 } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
+import type { CronJob } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -27,6 +28,15 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import {
+  findMonitor,
+  loadMonitorStore,
+  resolveMonitorStorePath,
+  saveMonitorStore,
+  updateMonitorRecord,
+} from "../monitor/store.js";
+import { isTerminalMonitorStatus } from "../monitor/types.js";
+import { buildMonitorWakeMessage, isMonitorExpired } from "../monitor/wake.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 
@@ -226,7 +236,39 @@ export function buildGatewayCronService(params: {
       agentId: agentId ?? defaultAgentId,
     });
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
+  const monitorStorePath = resolveMonitorStorePath({ cronStorePath: storePath });
   const warnedLegacyWebhookJobs = new Set<string>();
+  const resolveMonitorWakeDelivery = (monitor: {
+    originDelivery?: { mode?: string; channel?: string; to?: string; accountId?: string };
+  }): CronJob["delivery"] | undefined => {
+    const originDelivery = monitor.originDelivery;
+    if (!originDelivery) {
+      return undefined;
+    }
+    if (originDelivery.mode === "webhook") {
+      return {
+        mode: "webhook",
+        to: originDelivery.to,
+      };
+    }
+    if (originDelivery.mode === "none") {
+      return {
+        mode: "none",
+      };
+    }
+    // CLI-origin monitors have no channel/to target. Preserve the durable
+    // origin session and skip channel delivery instead of manufacturing a
+    // broken announce target.
+    if (!originDelivery.channel && !originDelivery.to) {
+      return undefined;
+    }
+    return {
+      mode: "announce" as const,
+      channel: originDelivery.channel,
+      to: originDelivery.to,
+      accountId: originDelivery.accountId,
+    };
+  };
 
   const cron = new CronService({
     storePath,
@@ -301,6 +343,79 @@ export function buildGatewayCronService(params: {
         sessionKey,
         lane: "cron",
       });
+    },
+    runMonitorJob: async ({ job, monitorId, abortSignal }) => {
+      const monitorStore = await loadMonitorStore(monitorStorePath);
+      const monitor = findMonitor(monitorStore, monitorId);
+      if (!monitor) {
+        return { status: "error", error: `monitor not found: ${monitorId}` };
+      }
+      if (isTerminalMonitorStatus(monitor.status)) {
+        return {
+          status: "skipped",
+          error: `monitor not active: ${monitor.status}`,
+          summary: monitor.name ?? monitor.monitorId,
+          stopJob: true,
+        };
+      }
+      const nowMs = Date.now();
+      if (isMonitorExpired(monitor, nowMs)) {
+        const expired = updateMonitorRecord(
+          monitor,
+          { status: "expired", lastWakeAtMs: nowMs, lastWakeStatus: "expired" },
+          nowMs,
+        );
+        const expiredIndex = monitorStore.monitors.findIndex(
+          (entry) => entry.monitorId === monitorId,
+        );
+        if (expiredIndex >= 0) {
+          monitorStore.monitors[expiredIndex] = expired;
+          await saveMonitorStore(monitorStorePath, monitorStore);
+        }
+        return {
+          status: "skipped",
+          error: "monitor expired",
+          summary: expired.name ?? expired.monitorId,
+          stopJob: true,
+        };
+      }
+      const wakeMessage = buildMonitorWakeMessage({
+        monitor,
+        nowIso: new Date(nowMs).toISOString(),
+        wakeReason: `cron:${job.id}`,
+      });
+      const runtimeConfig = loadConfig();
+      const result = await runCronIsolatedAgentTurn({
+        cfg: runtimeConfig,
+        deps: params.deps,
+        job: {
+          ...job,
+          agentId: monitor.agentId,
+          sessionTarget: `session:${monitor.monitorSessionKey}`,
+          delivery: resolveMonitorWakeDelivery(monitor),
+          payload: { kind: "agentTurn", message: wakeMessage },
+        },
+        message: wakeMessage,
+        abortSignal,
+        agentId: monitor.agentId,
+        sessionKey: monitor.monitorSessionKey,
+        lane: "cron",
+        // Monitor wakes are supposed to continue one durable task over time.
+        // Forcing the legacy daily cron reset here would recreate the same
+        // "fresh mini-brain on every wake" bug this redesign is fixing.
+        sessionDefaultResetMode: "manual",
+      });
+      const updated = updateMonitorRecord(
+        monitor,
+        { lastWakeAtMs: nowMs, lastWakeStatus: monitor.status },
+        nowMs,
+      );
+      const index = monitorStore.monitors.findIndex((entry) => entry.monitorId === monitorId);
+      if (index >= 0) {
+        monitorStore.monitors[index] = updated;
+        await saveMonitorStore(monitorStorePath, monitorStore);
+      }
+      return result;
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
