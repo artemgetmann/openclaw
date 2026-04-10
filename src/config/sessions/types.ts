@@ -82,6 +82,19 @@ export type FutureThreadDefaultsHistoryEntry = {
   updatedAt: number;
 };
 
+export type RecentHeartbeatEntry = {
+  /** Delivery timestamp (epoch ms) for a user-facing heartbeat alert. */
+  sentAt: number;
+  /** Final outbound channel used for the alert. */
+  channel: string;
+  /** Final outbound target used for the alert, when present. */
+  to?: string;
+  /** Short normalized preview of what the heartbeat actually delivered. */
+  preview: string;
+  /** Kept explicit so future heartbeat history can grow beyond sent-only without ambiguity. */
+  status: "sent";
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -90,6 +103,8 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /** Small bounded buffer of recent delivered heartbeats for repeat-aware reasoning. */
+  recentHeartbeats?: RecentHeartbeatEntry[];
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
