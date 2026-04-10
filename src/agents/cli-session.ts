@@ -19,6 +19,12 @@ export function getCliSessionId(
       return legacy;
     }
   }
+  if (normalized === "claude-bridge") {
+    const legacy = entry.claudeCliSessionId?.trim();
+    if (legacy) {
+      return legacy;
+    }
+  }
   return undefined;
 }
 
