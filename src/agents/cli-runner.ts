@@ -17,6 +17,7 @@ import {
   buildBootstrapTruncationReportMeta,
 } from "./bootstrap-budget.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
+import { runClaudeBridgeAgent } from "./claude-bridge.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import { prepareCliBundleMcpConfig } from "./cli-runner/bundle-mcp.js";
 import {
@@ -48,6 +49,488 @@ import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
+
+const CLAUDE_BRIDGE_PROMPT_TARGET_CHARS = 17_000;
+const CLAUDE_BRIDGE_TOOLS_DISABLED_LINE = "Tools are disabled in this session. Do not call tools.";
+
+type ClaudeBridgePromptMode =
+  | "neutral_full"
+  | "bridge_pointer_condensed"
+  | "openclaw_full"
+  | "openclaw_no_brand"
+  | "openclaw_exact_old"
+  | "openclaw_exact_old_split";
+type ClaudeBridgeSplitMode = "A" | "B" | "AB";
+
+type ClaudeBridgePromptModule = {
+  id: string;
+  text: string;
+};
+
+function resolveClaudeBridgeUseNormalPromptStack(): boolean {
+  return isTruthyEnvValue(process.env.OPENCLAW_CLAUDE_BRIDGE_USE_NORMAL_PROMPT_STACK);
+}
+
+function resolveClaudeBridgePromptMode(): ClaudeBridgePromptMode {
+  const rawMode = process.env.OPENCLAW_CLAUDE_BRIDGE_PROMPT_MODE?.trim().toLowerCase();
+  if (
+    rawMode === "neutral_full" ||
+    rawMode === "bridge_pointer_condensed" ||
+    rawMode === "openclaw_full" ||
+    rawMode === "openclaw_no_brand" ||
+    rawMode === "openclaw_exact_old" ||
+    rawMode === "openclaw_exact_old_split"
+  ) {
+    return rawMode;
+  }
+  return "bridge_pointer_condensed";
+}
+
+function resolveClaudeBridgeSplitMode(): ClaudeBridgeSplitMode {
+  const rawSplit = process.env.OPENCLAW_CLAUDE_BRIDGE_SPLIT?.trim().toUpperCase();
+  if (rawSplit === "A" || rawSplit === "B") {
+    return rawSplit;
+  }
+  return "AB";
+}
+
+function padClaudeBridgePrompt(prompt: string): string {
+  if (prompt.length >= CLAUDE_BRIDGE_PROMPT_TARGET_CHARS) {
+    return prompt;
+  }
+
+  const remainingChars = CLAUDE_BRIDGE_PROMPT_TARGET_CHARS - prompt.length;
+  const filler = "\n\nOperational note: Maintain stable, explicit, and reproducible behavior.";
+  const repeatedFiller = filler.repeat(Math.ceil(remainingChars / Math.max(1, filler.length)));
+  const paddedPrompt = `${prompt}${repeatedFiller.slice(0, remainingChars)}`;
+  const trimmedShortfall = CLAUDE_BRIDGE_PROMPT_TARGET_CHARS - paddedPrompt.trim().length;
+  if (trimmedShortfall <= 0) {
+    return paddedPrompt;
+  }
+  return `${paddedPrompt}${".".repeat(trimmedShortfall)}`;
+}
+
+function buildClaudeBridgeIdentitySection(mode: ClaudeBridgePromptMode): string {
+  if (mode === "bridge_pointer_condensed") {
+    return [
+      "# Bridge Charter",
+      "You are the OpenClaw runtime assistant running through the Claude bridge.",
+      "Your home is the runtime workspace at ~/.openclaw/workspace.",
+      "Keep the prompt small. Read workspace files on demand instead of assuming giant inline context.",
+      "Use the file pointers below as navigation hints, not as substituted context.",
+    ].join("\n");
+  }
+
+  if (mode === "openclaw_full") {
+    return [
+      "# OpenClaw Assistant Identity",
+      "You are a personal assistant running inside OpenClaw.",
+      "You represent the OpenClaw bridge session and should behave like the OpenClaw assistant for the user.",
+      "Operate as the OpenClaw assistant for software, operations, and practical execution tasks.",
+    ].join("\n");
+  }
+
+  if (mode === "openclaw_no_brand") {
+    return [
+      "# Assistant Identity",
+      "You are Jarvis, a personal assistant running inside a bridge session.",
+      "You represent the active bridge session and should behave like a steady execution assistant for the user.",
+      "Operate as a practical assistant for software, operations, and execution tasks.",
+    ].join("\n");
+  }
+
+  return [
+    "# Assistant Charter",
+    "You are a general-purpose software and operations assistant working in a text-only execution environment.",
+    "Your job is to help the user complete practical tasks with accurate reasoning, concise communication, and careful handling of uncertainty.",
+    "Prefer direct answers, concrete next steps, and explicit acknowledgement of constraints.",
+  ].join("\n");
+}
+
+function buildClaudeBridgeBehaviorSections(mode: ClaudeBridgePromptMode): string[] {
+  const promptStyleLine =
+    mode === "neutral_full" || mode === "bridge_pointer_condensed"
+      ? "Be collaborative, steady, and neutral in tone."
+      : "Be collaborative, steady, and concise while preserving the requested assistant style.";
+
+  const collaborationLead =
+    mode === "openclaw_full"
+      ? "Assume the user values speed, leverage, and clear execution from the OpenClaw assistant."
+      : mode === "openclaw_no_brand"
+        ? "Assume the user values speed, leverage, and clear execution from Jarvis."
+        : "Assume the user values speed, clarity, and leverage.";
+
+  const contextLine =
+    mode === "openclaw_full"
+      ? "Work within the current workspace and session context provided by OpenClaw without assuming hidden inline project context."
+      : mode === "openclaw_no_brand"
+        ? "Work within the current workspace and session context provided by the bridge without assuming hidden inline project context."
+        : "Use the active workspace and session context without assuming hidden inline project context.";
+
+  if (mode === "bridge_pointer_condensed") {
+    return [
+      [
+        "# Core Rules",
+        "State the answer or recommendation first.",
+        "Do not claim to have read files, run commands, or verified behavior unless that happened in this session.",
+        "Start with ~/.openclaw/workspace/AGENTS.md, then follow its workspace contract precisely.",
+        "If more context is needed, read the smallest relevant workspace file instead of asking for a giant project dump.",
+        "Preserve bridge mechanics and isolate runtime-sensitive testing.",
+      ].join("\n"),
+      [
+        "# File Pointers",
+        "Primary workspace reads:",
+        "- ~/.openclaw/workspace/AGENTS.md first",
+        "- ~/.openclaw/workspace/SOUL.md next",
+        "- ~/.openclaw/workspace/USER.md next",
+        "- ~/.openclaw/workspace/TOOLS.md if it exists",
+        "- ~/.openclaw/workspace/memory/YYYY-MM-DD.md for today and yesterday at session start for continuity",
+        "- ~/.openclaw/workspace/MEMORY.md only if it exists and the session is main/private",
+        "- ~/.openclaw/workspace/HEARTBEAT.md only for heartbeat runs",
+      ].join("\n"),
+      [
+        "# Working Style",
+        "Prefer pointer-based navigation over inline context dumps.",
+        "Read files on demand from the runtime workspace and active task context.",
+        "Keep answers concise, practical, and explicit about verification status.",
+      ].join("\n"),
+    ];
+  }
+
+  return [
+    [
+      "# Core Behavior",
+      "State useful conclusions before optional detail.",
+      "Separate observed facts from inferences or assumptions.",
+      "If a request is ambiguous, resolve it with the smallest reasonable assumption or ask for clarification when that assumption could change the outcome.",
+      "Do not role-play hidden capabilities, approvals, permissions, or actions that did not happen.",
+      "Do not claim to have inspected files, run commands, or verified behavior unless that action actually occurred in the current session.",
+      "Keep explanations plain first and technical second.",
+      promptStyleLine,
+    ].join("\n"),
+    [
+      "# Reasoning Rules",
+      "Use first-principles reasoning: break the problem into observable parts, check dependencies, then rebuild the answer from those parts.",
+      "Prefer the simplest explanation that matches the evidence.",
+      "When several options are viable, compare them using concrete tradeoffs such as speed, reliability, reversibility, and maintenance burden.",
+      "Avoid overfitting to one detail if the broader request points elsewhere.",
+      "Point out missing evidence when confidence depends on it.",
+      "If a safer or simpler path exists, say so plainly.",
+    ].join("\n"),
+    [
+      "# Output Expectations",
+      "Use concise, readable language.",
+      "Summaries should preserve essential facts, decisions, risks, and next actions.",
+      "For implementation work, emphasize changed behavior, user-visible impact, and verification status.",
+      "For reviews, focus on bugs, regressions, missing tests, and weak assumptions before giving a broad summary.",
+      "When asked for recommendations, make the recommendation explicit instead of burying it in analysis.",
+    ].join("\n"),
+    [
+      "# Safety and Reliability",
+      "Never invent results, citations, measurements, logs, benchmarks, or approvals.",
+      "If information is missing, say what is missing and why it matters.",
+      "Do not output secrets, credentials, or private data unless the user explicitly provides them and asks for that exact handling.",
+      "If a requested action could be destructive, irreversible, or high-impact, surface that risk clearly.",
+      "Avoid speculative claims about external systems, live deployments, or third-party state unless verified.",
+    ].join("\n"),
+    [
+      "# Collaboration Norms",
+      collaborationLead,
+      "Do not pad answers with praise, filler, or generic encouragement.",
+      "Respect existing work in progress and avoid unnecessary churn.",
+      "If you spot a contradiction, say what conflicts and what would resolve it.",
+      "If you cannot complete part of the task, explain the blocker directly and keep moving on the rest.",
+      contextLine,
+    ].join("\n"),
+  ];
+}
+
+function buildClaudeBridgeFillerParagraphs(mode: ClaudeBridgePromptMode): string[] {
+  const bridgeName =
+    mode === "openclaw_full"
+      ? "OpenClaw"
+      : mode === "openclaw_no_brand"
+        ? "Jarvis"
+        : "the assistant";
+
+  return [
+    `Policy note A: Prefer stable behavior over cleverness. A simple verified result is better than an elegant guess. When evidence is partial, preserve optionality and avoid committing the user to a fragile path while ${bridgeName} stays explicit about uncertainty.`,
+    `Policy note B: Keep the internal standard consistent. Facts should align with outputs, outputs should align with actions, and actions should align with the request actually given. ${bridgeName} should not drift into unrelated context.`,
+    "Policy note C: Maintain wording discipline. Use generic references such as the user, the task, the workspace, the repository, the runtime, the command, the test, or the file when needed. Avoid injecting hidden project context.",
+    "Policy note D: Treat formatting as a delivery mechanism rather than decoration. Structure information only when it makes the answer easier to verify or act on. Remove ornamental repetition.",
+    "Policy note E: When comparing alternatives, include what changes, what stays the same, what could break, and how the user would know. Tradeoffs are only useful when they connect to observable consequences.",
+    "Policy note F: Preserve causal order. If one step depends on another, present them in that order. If the dependency is uncertain, say so. Hidden dependencies create false confidence and wasted time.",
+    "Policy note G: Error handling should be explicit. Describe the failure condition, the likely source, and the narrowest corrective action first. Avoid broad resets when a precise fix is available.",
+    "Policy note H: Testing claims should be exact. Distinguish between unit coverage, targeted verification, integration confirmation, and untested assumptions. Each proves a different thing and should not be blurred together.",
+    "Policy note I: Keep instructions durable. Prefer wording that remains correct when copied into a follow-up task, a commit summary, or a review comment. Avoid placeholders that only make sense in one transient moment.",
+    "Policy note J: Default to reversible moves when exploring. Small changes with clear feedback beat large speculative rewrites. If a larger change is unavoidable, isolate the reason and define the validation path.",
+    "Policy note K: Scope discipline matters. Do the requested work fully, but avoid attaching opportunistic refactors unless they are required for correctness, safety, or testability. Name the boundary plainly.",
+    `Policy note L: This prompt is intentionally long-form so we can compare wording and prompt shape under the same bridge mechanics. ${bridgeName} should treat that as an experiment constraint rather than as hidden project context.`,
+  ];
+}
+
+function shouldPadClaudeBridgePrompt(mode: ClaudeBridgePromptMode): boolean {
+  return mode !== "bridge_pointer_condensed";
+}
+
+function buildNeutralOrBrandModules(mode: ClaudeBridgePromptMode): ClaudeBridgePromptModule[] {
+  return [
+    {
+      id: "identity",
+      text: buildClaudeBridgeIdentitySection(mode),
+    },
+    ...buildClaudeBridgeBehaviorSections(mode).map((text, index) => ({
+      id: `behavior_${index + 1}`,
+      text,
+    })),
+  ];
+}
+
+function buildOpenClawExactOldModules(): ClaudeBridgePromptModule[] {
+  return [
+    {
+      id: "identity",
+      text: [
+        "# OpenClaw Assistant Identity",
+        "You are a personal assistant running inside OpenClaw.",
+        "You are operating inside the Claude bridge path for OpenClaw and should behave like the OpenClaw assistant for the user.",
+        "Stay aligned with OpenClaw's software, gateway, and execution-oriented workflow expectations.",
+      ].join("\n"),
+    },
+    {
+      id: "operating_model",
+      text: [
+        "# Operating Model",
+        "Act like the OpenClaw assistant in a bridge-backed text session.",
+        "Prefer concrete execution steps, direct answers, and explicit status over abstract discussion.",
+        "Treat the current workspace, gateway runtime, and repo state as the active operating context even when detailed file contents are not inlined.",
+        "Use the existing OpenClaw session context rather than pretending you are starting from a blank slate.",
+      ].join("\n"),
+    },
+    {
+      id: "workspace_context",
+      text: [
+        "# Workspace Context",
+        "The user is working inside the OpenClaw repository.",
+        "Assume the workspace contains OpenClaw docs, agent wiring, gateway runtime code, bridge code, channel integrations, and related execution notes.",
+        "Do not demand giant inline project dumps before being useful; work from the active OpenClaw workspace and the current request.",
+        "When repo-specific judgment is needed, reason as an assistant already embedded in the OpenClaw coding and runtime environment.",
+      ].join("\n"),
+    },
+    {
+      id: "execution_rules",
+      text: [
+        "# Execution Rules",
+        "State useful conclusions before optional detail.",
+        "Separate observed facts from inferences or assumptions.",
+        "Do not claim to have inspected files, run commands, or verified behavior unless that happened in the current session.",
+        "Keep explanations plain first and technical second.",
+        "Treat OpenClaw runtime safety, isolated testing, and reproducible validation as first-class concerns.",
+      ].join("\n"),
+    },
+    {
+      id: "repo_conventions",
+      text: [
+        "# Repo Conventions",
+        "Respect existing OpenClaw work in progress and avoid unnecessary churn.",
+        "Do not assume the anthropic route should change when the request is about the Claude bridge path.",
+        "Do not confuse shared runtime ownership with isolated tester runtime validation.",
+        "When the task is about bridge behavior, preserve bridge mechanics unless the change explicitly targets prompt content.",
+      ].join("\n"),
+    },
+    {
+      id: "response_style",
+      text: [
+        "# Response Style",
+        "Be concise, execution-focused, and practical.",
+        "For implementation work, emphasize changed behavior, user-visible impact, and verification status.",
+        "For reviews, focus on regressions, missing tests, and weak assumptions before giving broad summaries.",
+        "When asked for recommendations, make the recommendation explicit instead of burying it in analysis.",
+      ].join("\n"),
+    },
+  ];
+}
+
+function selectExactOldModules(splitMode: ClaudeBridgeSplitMode): ClaudeBridgePromptModule[] {
+  const allModules = buildOpenClawExactOldModules();
+  const midpoint = Math.ceil(allModules.length / 2);
+  if (splitMode === "A") {
+    return allModules.slice(0, midpoint);
+  }
+  if (splitMode === "B") {
+    return allModules.slice(midpoint);
+  }
+  return allModules;
+}
+
+function buildClaudeBridgePromptModules(
+  mode: ClaudeBridgePromptMode,
+  splitMode: ClaudeBridgeSplitMode,
+): ClaudeBridgePromptModule[] {
+  if (mode === "openclaw_exact_old") {
+    return buildOpenClawExactOldModules();
+  }
+  if (mode === "openclaw_exact_old_split") {
+    return selectExactOldModules(splitMode);
+  }
+  return buildNeutralOrBrandModules(mode);
+}
+
+function buildClaudeBridgePrompt(params: {
+  mode: ClaudeBridgePromptMode;
+  splitMode: ClaudeBridgeSplitMode;
+  extraSystemPrompt?: string;
+}): string {
+  const sections = buildClaudeBridgePromptModules(params.mode, params.splitMode).map(
+    (module) => module.text,
+  );
+  const prompt = [...sections, params.extraSystemPrompt?.trim(), CLAUDE_BRIDGE_TOOLS_DISABLED_LINE]
+    .filter(Boolean)
+    .join("\n\n");
+
+  if (!shouldPadClaudeBridgePrompt(params.mode)) {
+    return prompt;
+  }
+
+  const fillerMode = params.mode === "openclaw_exact_old_split" ? "openclaw_full" : params.mode;
+  const fillerSource = `\n\n${buildClaudeBridgeFillerParagraphs(fillerMode).join("\n\n")}`;
+  return padClaudeBridgePrompt(`${prompt}${fillerSource}`);
+}
+
+async function buildCliAgentPromptStack(params: {
+  sessionId: string;
+  sessionKey?: string;
+  agentId?: string;
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  modelDisplay: string;
+  thinkLevel?: ThinkLevel;
+  ownerNumbers?: string[];
+  extraSystemPrompt: string;
+  customSystemPrompt?: string;
+}): Promise<{
+  systemPrompt: string;
+  systemPromptReport: ReturnType<typeof buildSystemPromptReport>;
+}> {
+  const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
+  const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(params.config);
+
+  if (params.customSystemPrompt !== undefined) {
+    const bootstrapAnalysis = analyzeBootstrapBudget({
+      files: [],
+      bootstrapMaxChars,
+      bootstrapTotalMaxChars,
+    });
+    const systemPromptReport = buildSystemPromptReport({
+      source: "run",
+      generatedAt: Date.now(),
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      provider: params.provider,
+      model: params.modelId,
+      workspaceDir: params.workspaceDir,
+      bootstrapMaxChars,
+      bootstrapTotalMaxChars,
+      bootstrapTruncation: buildBootstrapTruncationReportMeta({
+        analysis: bootstrapAnalysis,
+        warningMode: bootstrapPromptWarningMode,
+        warning: {
+          lines: [],
+          signature: undefined,
+          warningShown: false,
+          warningSignaturesSeen: [],
+        },
+      }),
+      sandbox: { mode: "off", sandboxed: false },
+      systemPrompt: params.customSystemPrompt,
+      bootstrapFiles: [],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [],
+    });
+    return {
+      systemPrompt: params.customSystemPrompt,
+      systemPromptReport,
+    };
+  }
+
+  const sessionLabel = params.sessionKey ?? params.sessionId;
+  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+    workspaceDir: params.workspaceDir,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+  });
+  const bootstrapAnalysis = analyzeBootstrapBudget({
+    files: buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles: contextFiles,
+    }),
+    bootstrapMaxChars,
+    bootstrapTotalMaxChars,
+  });
+  const bootstrapPromptWarning = buildBootstrapPromptWarning({
+    analysis: bootstrapAnalysis,
+    mode: bootstrapPromptWarningMode,
+  });
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const heartbeatPrompt =
+    sessionAgentId === defaultAgentId
+      ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+      : undefined;
+  const docsPath = await resolveOpenClawDocsPath({
+    workspaceDir: params.workspaceDir,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+    moduleUrl: import.meta.url,
+  });
+  const systemPrompt = buildSystemPrompt({
+    workspaceDir: params.workspaceDir,
+    config: params.config,
+    defaultThinkLevel: params.thinkLevel,
+    extraSystemPrompt: params.extraSystemPrompt,
+    ownerNumbers: params.ownerNumbers,
+    heartbeatPrompt,
+    docsPath: docsPath ?? undefined,
+    tools: [],
+    contextFiles,
+    bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
+    modelDisplay: params.modelDisplay,
+    agentId: sessionAgentId,
+  });
+  const systemPromptReport = buildSystemPromptReport({
+    source: "run",
+    generatedAt: Date.now(),
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    provider: params.provider,
+    model: params.modelId,
+    workspaceDir: params.workspaceDir,
+    bootstrapMaxChars,
+    bootstrapTotalMaxChars,
+    bootstrapTruncation: buildBootstrapTruncationReportMeta({
+      analysis: bootstrapAnalysis,
+      warningMode: bootstrapPromptWarningMode,
+      warning: bootstrapPromptWarning,
+    }),
+    sandbox: { mode: "off", sandboxed: false },
+    systemPrompt,
+    bootstrapFiles,
+    injectedFiles: contextFiles,
+    skillsPrompt: "",
+    tools: [],
+  });
+  return { systemPrompt, systemPromptReport };
+}
 
 export async function runCliAgent(params: {
   sessionId: string;
@@ -111,6 +594,44 @@ export async function runCliAgent(params: {
   ]
     .filter(Boolean)
     .join("\n");
+
+  if (backendResolved.id === "claude-bridge") {
+    const customSystemPrompt = resolveClaudeBridgeUseNormalPromptStack()
+      ? undefined
+      : buildClaudeBridgePrompt({
+          mode: resolveClaudeBridgePromptMode(),
+          splitMode: resolveClaudeBridgeSplitMode(),
+          extraSystemPrompt: params.extraSystemPrompt,
+        });
+    const { systemPrompt, systemPromptReport } = await buildCliAgentPromptStack({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      workspaceDir,
+      config: params.config,
+      provider: params.provider,
+      modelId,
+      modelDisplay,
+      thinkLevel: params.thinkLevel,
+      ownerNumbers: params.ownerNumbers,
+      extraSystemPrompt,
+      customSystemPrompt,
+    });
+
+    return runClaudeBridgeAgent({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir,
+      configBackend: backendResolved.config,
+      prompt: params.prompt,
+      provider: params.provider,
+      model: modelId,
+      timeoutMs: params.timeoutMs,
+      systemPrompt,
+      systemPromptReport,
+      cliSessionId: params.cliSessionId,
+    });
+  }
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({

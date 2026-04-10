@@ -131,6 +131,9 @@ export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   if (normalized === "claude-cli") {
     return true;
   }
+  if (normalized === "claude-bridge") {
+    return true;
+  }
   if (normalized === "codex-cli") {
     return true;
   }
