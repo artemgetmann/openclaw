@@ -8,6 +8,7 @@
 
 - Treat this checkout as the consumer-product fork unless the user says otherwise.
 - Do not assume upstream `openclaw/openclaw` workflow by default.
+- Consumer install/runtime bootstrap must stay fork-controlled; do not let consumer paths silently drift to generic upstream npm or GitHub defaults unless the user explicitly asks for upstream work.
 - Do not recreate or target a `consumer` branch for new work. Use `codex/consumer-openclaw-project`.
 - If the user says "consumer branch", interpret that as `codex/consumer-openclaw-project` unless they explicitly say they mean the legacy `consumer` branch.
 - Never merge `upstream/main` into fork branches. Upstream intake is selective only.

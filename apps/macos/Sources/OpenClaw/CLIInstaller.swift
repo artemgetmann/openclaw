@@ -113,6 +113,9 @@ enum CLIInstaller {
     private static func installScriptCommand(version: String, prefix: String) -> [String] {
         let escapedVersion = self.shellEscape(version)
         let escapedPrefix = self.shellEscape(prefix)
+        // Consumer guardrail: this app only orchestrates bootstrap.
+        // Keep the actual install source fork-controlled; do not swap this to
+        // a generic upstream default without an explicit consumer-product decision.
         let script = """
         curl -fsSL https://openclaw.bot/install-cli.sh | \
         bash -s -- --json --no-onboard --prefix \(escapedPrefix) --version \(escapedVersion)

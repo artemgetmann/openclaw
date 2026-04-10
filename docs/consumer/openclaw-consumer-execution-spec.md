@@ -84,6 +84,12 @@ This means the refactor and the consumer build are the same work — not two sep
 - **Fork integration:** `main` on `artemgetmann/openclaw`
 - **Consumer work:** `codex/consumer-openclaw-project` on `artemgetmann/openclaw`
 
+### Consumer Source Of Truth
+
+- Consumer installs, runtime bootstrap, and packaging assumptions must come from the fork-controlled consumer source of truth.
+- Do not use generic published defaults like `openclaw@latest` or an upstream GitHub checkout as the consumer install target unless a task explicitly says to work on an upstream flow.
+- If a consumer bootstrap path changes, that change must be tracked as consumer-product work and documented against the consumer branch, not left implicit in installer assumptions.
+
 ### Convergence Plan
 
 - Current `main` = your live personal bot (complicated, works, don't break it)
@@ -100,6 +106,7 @@ The refactor doesn't happen on `main`. It happens as part of building `codex/con
 - Your live bot on `main` stays untouched and working throughout
 - Periodically forward genuinely useful improvements from `main` into `codex/consumer-openclaw-project`
 - For upstream intake rules, use `docs/agent-guides/fork-maintenance.md`
+- Consumer runtime/bootstrap decisions are not upstream intake decisions. Keep them pinned to the consumer branch/fork source of truth first, then decide whether anything should be forwarded elsewhere.
 
 ### Workflow
 

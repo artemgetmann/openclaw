@@ -24,6 +24,9 @@ Read this before doing consumer-product work in this repo.
 - Primary interface: Telegram
 - Product bar: simplify aggressively; remove complexity before adding anything
 - Default mode for current product work: move fast, prove behavior, avoid speculative platform work unless asked
+- Consumer installs and runtime bootstrap must come from the fork-controlled consumer source of truth.
+- Do not treat generic published defaults like `openclaw@latest` or an upstream GitHub checkout as the consumer install target unless the user explicitly asks for an upstream flow.
+- If a consumer path needs bootstrap, wire it to the consumer branch / fork-owned release source, then document that decision here or in `docs/consumer/*`.
 
 ## What belongs here vs elsewhere
 
@@ -49,4 +52,5 @@ Read this before doing consumer-product work in this repo.
 
 - Do not point new consumer-product PRs at `consumer` unless the user explicitly asks
 - Do not assume upstream workflow is relevant just because the fork originated there
+- Do not let consumer runtime or installer code drift to upstream/npm defaults by accident; verify the fork-controlled source of truth before changing bootstrap paths.
 - If a startup doc grows into a wiki again, cut it down and move the bulk into `docs/consumer/*`
