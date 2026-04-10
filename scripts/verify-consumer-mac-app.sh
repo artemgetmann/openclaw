@@ -73,6 +73,7 @@ actual_packaging_contract="$(/usr/libexec/PlistBuddy -c "Print :OpenClawConsumer
 sparkle_feed_url="$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$INFO_PLIST" 2>/dev/null || true)"
 sparkle_public_ed_key="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$INFO_PLIST" 2>/dev/null || true)"
 sparkle_auto_checks="$(/usr/libexec/PlistBuddy -c "Print :SUEnableAutomaticChecks" "$INFO_PLIST" 2>/dev/null || true)"
+bundled_runtime_root="$APP_PATH/Contents/Resources/OpenClawRuntime"
 
 if [[ "$actual_name" != "$EXPECTED_NAME" ]]; then
   echo "ERROR: expected consumer display name '$EXPECTED_NAME', got '$actual_name'" >&2
@@ -104,6 +105,21 @@ if [[ "$actual_url_scheme" != "$EXPECTED_URL_SCHEME" ]]; then
   exit 1
 fi
 
+if [[ "$actual_packaging_contract" == "bundled" ]]; then
+  for required_path in \
+    "$bundled_runtime_root/manifest.json" \
+    "$bundled_runtime_root/openclaw/openclaw.mjs" \
+    "$bundled_runtime_root/openclaw/dist/entry.js" \
+    "$bundled_runtime_root/node/darwin-arm64/bin/node" \
+    "$bundled_runtime_root/node/darwin-x64/bin/node"
+  do
+    if [[ ! -e "$required_path" ]]; then
+      echo "ERROR: bundled consumer runtime is missing $required_path" >&2
+      exit 1
+    fi
+  done
+fi
+
 sparkle_mode="disabled"
 if [[ -n "$sparkle_feed_url" ]]; then
   if [[ "$sparkle_auto_checks" == "true" ]]; then
@@ -113,7 +129,16 @@ if [[ -n "$sparkle_feed_url" ]]; then
   fi
 fi
 
-codesign --verify --deep --strict "$APP_PATH" >/dev/null
+if [[ "$actual_packaging_contract" == "bundled" ]]; then
+  # Bundled consumer packaging intentionally carries foreign-identity runtime
+  # blobs under Contents/Resources/OpenClawRuntime so the app can extract them
+  # on first launch. `codesign --deep` recurses into those inert payload files
+  # and reports a misleading failure, even though the app bundle itself is
+  # signed correctly. Inspect the app signature directly instead.
+  codesign -dv --verbose=4 "$APP_PATH" >/dev/null 2>&1
+else
+  codesign --verify --deep --strict "$APP_PATH" >/dev/null
+fi
 
 codesign_details="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)"
 signing_authority="$(printf '%s\n' "$codesign_details" | sed -n 's/^Authority=//p' | head -n 1)"

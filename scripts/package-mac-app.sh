@@ -40,10 +40,111 @@ PRIMARY_ARCH="${BUILD_ARCHS[0]}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml}"
 AUTO_CHECKS=true
+BUNDLED_RUNTIME_RESOURCE_DIR="$APP_ROOT/Contents/Resources/OpenClawRuntime"
 if [[ "$BUNDLE_ID" == *.debug ]]; then
   SPARKLE_FEED_URL=""
   AUTO_CHECKS=false
 fi
+
+ensure_consumer_node_runtime() {
+  local version="$1"
+  local arch="$2"
+  local cache_root="${ROOT_DIR}/.cache/consumer-runtime/node-v${version}-${arch}"
+  local download_root=""
+  local archive=""
+  local download_url=""
+  local extracted_root=""
+
+  if [[ -x "${cache_root}/bin/node" ]]; then
+    printf '%s\n' "$cache_root"
+    return 0
+  fi
+
+  download_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-node.XXXXXX")"
+  archive="${download_root}/node-v${version}-${arch}.tar.gz"
+  download_url="https://nodejs.org/dist/v${version}/node-v${version}-${arch}.tar.gz"
+
+  echo "📥 Downloading Node ${version} (${arch}) for bundled consumer runtime" >&2
+  curl -fsSL "$download_url" -o "$archive"
+  tar -xzf "$archive" -C "$download_root"
+  extracted_root="${download_root}/node-v${version}-${arch}"
+
+  if [[ ! -x "${extracted_root}/bin/node" ]]; then
+    echo "ERROR: downloaded Node runtime is missing bin/node: ${download_url}" >&2
+    rm -rf "$download_root"
+    exit 1
+  fi
+
+  local actual_version
+  actual_version="$("${extracted_root}/bin/node" -p "process.versions.node" 2>/dev/null | tr -d '\r')"
+  if [[ "$actual_version" != "$version" ]]; then
+    echo "ERROR: downloaded Node runtime version mismatch for ${arch}. expected=${version} actual=${actual_version:-unknown}" >&2
+    rm -rf "$download_root"
+    exit 1
+  fi
+
+  rm -rf "$cache_root"
+  mkdir -p "$(dirname "$cache_root")"
+  mv "$extracted_root" "$cache_root"
+  rm -rf "$download_root"
+  printf '%s\n' "$cache_root"
+}
+
+prepare_bundled_consumer_runtime() {
+  local manifest_path="${BUNDLED_RUNTIME_RESOURCE_DIR}/manifest.json"
+  local node_version=""
+  local node_arm64_root=""
+  local node_x64_root=""
+
+  node_version="$(openclaw_validated_node_version "$ROOT_DIR")"
+
+  echo "📦 Staging bundled consumer runtime"
+  rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
+  mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
+  mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/node"
+
+  # Mirror the runtime shape we already ship through the CLI wrapper: built dist,
+  # top-level launcher, and the repo metadata/extensions the runtime expects.
+  cp "$ROOT_DIR/openclaw.mjs" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/openclaw.mjs"
+  cp "$ROOT_DIR/package.json" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/package.json"
+  rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist"
+  mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist"
+  rsync -a \
+    --exclude '*.app' \
+    "$ROOT_DIR/dist/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist/"
+
+  if printf '%s\n' "${BUILD_ARCHS[@]}" | grep -qx "x86_64"; then
+    local arm64_native=""
+    while IFS= read -r arm64_native; do
+      [[ -n "$arm64_native" ]] || continue
+      local x64_native="${arm64_native/darwin-arm64/darwin-x64}"
+      if [[ ! -f "$x64_native" ]]; then
+        echo "ERROR: bundled consumer runtime includes arm64-only native addon with no x64 twin:" >&2
+        echo "  $arm64_native" >&2
+        echo "Expected sibling path:" >&2
+        echo "  $x64_native" >&2
+        echo "Fix the runtime asset coverage before shipping a universal consumer build." >&2
+        exit 1
+      fi
+    done < <(find "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist" -type f -name '*.node' | grep 'darwin-arm64' || true)
+  fi
+
+  rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
+  cp -R "$ROOT_DIR/extensions" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
+  if [[ -d "$ROOT_DIR/skills" ]]; then
+    rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
+    cp -R "$ROOT_DIR/skills" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
+  fi
+
+  node_arm64_root="$(ensure_consumer_node_runtime "$node_version" "darwin-arm64")"
+  node_x64_root="$(ensure_consumer_node_runtime "$node_version" "darwin-x64")"
+  cp -R "$node_arm64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-arm64"
+  cp -R "$node_x64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-x64"
+
+  cat > "$manifest_path" <<EOF
+{"format":1,"bundleVersion":"${APP_BUILD}","gitCommit":"${GIT_COMMIT}","nodeVersion":"${node_version}"}
+EOF
+}
 
 sparkle_canonical_build_from_version() {
   "${NODE_BIN}" --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
@@ -276,6 +377,10 @@ if [ -f "$MODEL_CATALOG_SRC" ]; then
   cp "$MODEL_CATALOG_SRC" "$MODEL_CATALOG_DEST"
 else
   echo "WARN: model catalog missing at $MODEL_CATALOG_SRC (continuing)" >&2
+fi
+
+if [[ "$APP_VARIANT" == "consumer" && "$CONSUMER_PACKAGING_CONTRACT" == "bundled" ]]; then
+  prepare_bundled_consumer_runtime
 fi
 
 echo "📦 Copying OpenClawKit resources"

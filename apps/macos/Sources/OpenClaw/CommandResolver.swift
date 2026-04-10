@@ -130,9 +130,19 @@ enum CommandResolver {
     }
 
     private static func openclawManagedPaths(home: URL) -> [String] {
-        let bases = [
-            home.appendingPathComponent(".openclaw"),
-        ]
+        var bases: [URL] = []
+
+        if AppFlavor.current.isConsumer {
+            // Prefer the consumer-owned seeded prefix before any shared/global
+            // install so packaged first-run stays pinned to the bundled runtime.
+            if let stateDirOverride = OpenClawEnv.path("OPENCLAW_STATE_DIR") {
+                bases.append(URL(fileURLWithPath: stateDirOverride, isDirectory: true))
+            } else {
+                bases.append(ConsumerInstance.current.installPrefixURL)
+            }
+        }
+
+        bases.append(home.appendingPathComponent(".openclaw"))
         var paths: [String] = []
         for base in bases {
             let bin = base.appendingPathComponent("bin")

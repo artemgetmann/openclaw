@@ -66,9 +66,14 @@ enum ConsumerRuntime {
 
     static func bootstrapProcessEnvironment() {
         let instance = self.instance
+        // Seed the packaged consumer runtime before any PATH-dependent checks run.
+        // Without this, a fresh user reaches gateway startup with no local `openclaw`
+        // or Node runtime and onboarding falls back to slower repair paths.
+        ConsumerBundledRuntime.bootstrapIfNeeded()
         // Keep the app, launch agents, and any child CLI processes pointed at the
         // consumer-owned runtime before any config/state loaders spin up.
         self.setEnv("OPENCLAW_PROFILE", value: instance.profile)
+        self.setEnv("OPENCLAW_APP_VARIANT", value: AppFlavor.consumer.rawValue)
         self.setEnv("OPENCLAW_HOME", value: instance.runtimeRootURL.path)
         self.setEnv("OPENCLAW_STATE_DIR", value: instance.stateDirURL.path)
         self.setEnv("OPENCLAW_CONFIG_PATH", value: instance.configURL.path)

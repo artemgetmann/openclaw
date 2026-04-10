@@ -221,6 +221,12 @@ verify_team_ids() {
 
   local mismatches=()
   while IFS= read -r -d '' f; do
+    # The bundled consumer runtime is inert app data at packaging time. It gets
+    # extracted into the consumer-owned prefix on first launch and does not
+    # participate in the app's own dyld/library validation boundary.
+    if [[ "$f" == "$APP_BUNDLE/Contents/Resources/OpenClawRuntime/"* ]]; then
+      continue
+    fi
     if /usr/bin/file "$f" | /usr/bin/grep -q "Mach-O"; then
       local team
       team="$(team_id_for "$f" || true)"

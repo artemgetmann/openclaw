@@ -342,4 +342,33 @@ import Testing
             #expect(cmd[2] == "daemon")
         }
     }
+
+    @Test func `consumer preferred paths include seeded runtime before shared installs`() async throws {
+        let home = try makeTempDirForTests()
+        let projectRoot = try makeTempDirForTests()
+        let stateDir = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
+        let seededBin = stateDir.appendingPathComponent("bin")
+        let seededNodeBin = stateDir.appendingPathComponent("tools/node/bin")
+        let sharedBin = home.appendingPathComponent(".openclaw/bin")
+        try FileManager.default.createDirectory(at: seededBin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: seededNodeBin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sharedBin, withIntermediateDirectories: true)
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_STATE_DIR": stateDir.path,
+        ]) {
+            let paths = CommandResolver.preferredPaths(home: home, current: [], projectRoot: projectRoot)
+            guard let binIndex = paths.firstIndex(of: seededBin.path),
+                  let nodeIndex = paths.firstIndex(of: seededNodeBin.path),
+                  let sharedIndex = paths.firstIndex(of: sharedBin.path)
+            else {
+                Issue.record("consumer seeded paths missing from preferred PATH")
+                return
+            }
+
+            #expect(binIndex < sharedIndex)
+            #expect(nodeIndex < sharedIndex)
+        }
+    }
 }
