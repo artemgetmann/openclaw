@@ -15,6 +15,7 @@ import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
+import { createMonitorTool } from "./tools/monitor-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
@@ -167,6 +168,9 @@ export function createOpenClawTools(
       allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
     }),
     createCronTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createMonitorTool({
       agentSessionKey: options?.agentSessionKey,
     }),
     ...(messageTool ? [messageTool] : []),

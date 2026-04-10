@@ -37,6 +37,7 @@ function resolveWithStoredEntry(params?: {
   entry?: MockSessionStoreEntry;
   forceNew?: boolean;
   fresh?: boolean;
+  defaultResetMode?: "manual" | "daily" | "idle";
 }) {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
   const store: SessionStore = params?.entry
@@ -51,6 +52,7 @@ function resolveWithStoredEntry(params?: {
     agentId: "main",
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
+    defaultResetMode: params?.defaultResetMode,
   });
 }
 
@@ -118,6 +120,25 @@ describe("resolveCronSession", () => {
         expect.objectContaining({
           resetType: "direct",
           defaultMode: "daily",
+        }),
+      );
+    });
+
+    it("uses a manual reset default when explicitly requested for durable monitor sessions", () => {
+      resolveWithStoredEntry({
+        sessionKey: "monitor:alpha",
+        entry: {
+          sessionId: "existing-session-id-manual",
+          updatedAt: NOW_MS - 1000,
+        },
+        fresh: true,
+        defaultResetMode: "manual",
+      });
+
+      expect(resolveSessionResetPolicy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resetType: "direct",
+          defaultMode: "manual",
         }),
       );
     });
