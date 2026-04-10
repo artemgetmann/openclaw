@@ -306,7 +306,7 @@ elif [ "$SIGN" -eq 1 ]; then
 fi
 
 # 3) Package app (no embedded gateway).
-run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} '${ROOT_DIR}/scripts/package-mac-app.sh'"
+run_step "package app" bash -lc "cd '${ROOT_DIR}' && OPENCLAW_CONSUMER_PACKAGING_CONTRACT=${OPENCLAW_CONSUMER_PACKAGING_CONTRACT:-bundled} OPENCLAW_CONSUMER_BUNDLED_RUNTIME_READY=${OPENCLAW_CONSUMER_BUNDLED_RUNTIME_READY:-1} SKIP_TSC=${SKIP_TSC:-1} '${ROOT_DIR}/scripts/package-mac-app.sh'"
 
 choose_app_bundle() {
   if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then

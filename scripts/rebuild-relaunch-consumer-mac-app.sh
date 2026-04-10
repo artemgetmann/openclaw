@@ -82,6 +82,8 @@ fi
 # artifact still lands in dist/, but we stop pretending every relaunch needs
 # dependency resolution and unrelated frontend rebuilds.
 CI="${CI:-true}" \
+OPENCLAW_CONSUMER_PACKAGING_CONTRACT="${OPENCLAW_CONSUMER_PACKAGING_CONTRACT:-bundled}" \
+OPENCLAW_CONSUMER_BUNDLED_RUNTIME_READY="${OPENCLAW_CONSUMER_BUNDLED_RUNTIME_READY:-1}" \
 SKIP_PNPM_INSTALL="$DEFAULT_SKIP_PNPM_INSTALL" \
 SKIP_TSC="$DEFAULT_SKIP_TSC" \
 SKIP_UI_BUILD="${SKIP_UI_BUILD:-1}" \

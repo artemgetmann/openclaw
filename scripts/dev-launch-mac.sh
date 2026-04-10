@@ -134,7 +134,9 @@ worktree_guard_run_for_linked_checkout \
   --quiet
 
 if [[ "$NO_BUILD" != "1" ]]; then
-  bash "${ROOT_DIR}/scripts/package-mac-app.sh"
+  OPENCLAW_CONSUMER_PACKAGING_CONTRACT="${OPENCLAW_CONSUMER_PACKAGING_CONTRACT:-bundled}" \
+  OPENCLAW_CONSUMER_BUNDLED_RUNTIME_READY="${OPENCLAW_CONSUMER_BUNDLED_RUNTIME_READY:-1}" \
+    bash "${ROOT_DIR}/scripts/package-mac-app.sh"
 fi
 
 if [[ ! -d "$APP_BUNDLE" ]]; then

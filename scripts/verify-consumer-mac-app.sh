@@ -69,6 +69,7 @@ actual_version="$(plist_print CFBundleShortVersionString)"
 actual_build="$(plist_print CFBundleVersion)"
 actual_commit="$(/usr/libexec/PlistBuddy -c "Print :OpenClawGitCommit" "$INFO_PLIST" 2>/dev/null || echo "unknown")"
 actual_build_ts="$(/usr/libexec/PlistBuddy -c "Print :OpenClawBuildTimestamp" "$INFO_PLIST" 2>/dev/null || echo "unknown")"
+actual_packaging_contract="$(/usr/libexec/PlistBuddy -c "Print :OpenClawConsumerPackagingContract" "$INFO_PLIST" 2>/dev/null || echo "unknown")"
 sparkle_feed_url="$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$INFO_PLIST" 2>/dev/null || true)"
 sparkle_public_ed_key="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$INFO_PLIST" 2>/dev/null || true)"
 sparkle_auto_checks="$(/usr/libexec/PlistBuddy -c "Print :SUEnableAutomaticChecks" "$INFO_PLIST" 2>/dev/null || true)"
@@ -85,6 +86,11 @@ fi
 
 if [[ "$actual_variant" != "$EXPECTED_VARIANT" ]]; then
   echo "ERROR: expected consumer variant '$EXPECTED_VARIANT', got '$actual_variant'" >&2
+  exit 1
+fi
+
+if [[ "$actual_packaging_contract" == "unknown" || -z "$actual_packaging_contract" ]]; then
+  echo "ERROR: consumer app bundle is missing OpenClawConsumerPackagingContract." >&2
   exit 1
 fi
 
@@ -149,6 +155,7 @@ echo "  version=$actual_version"
 echo "  build=$actual_build"
 echo "  git_commit=$actual_commit"
 echo "  build_timestamp=$actual_build_ts"
+echo "  packaging_contract=$actual_packaging_contract"
 echo "  sparkle_mode=$sparkle_mode"
 echo "  sparkle_feed_url=${sparkle_feed_url:-<blank>}"
 echo "  sparkle_auto_checks=${sparkle_auto_checks:-<missing>}"

@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/validated-node.sh"
+source "${ROOT_DIR}/scripts/lib/consumer-packaging-contract.sh"
 openclaw_use_validated_node "${ROOT_DIR}" >/dev/null
 NODE_BIN="${OPENCLAW_NODE_BIN}"
 APP_NAME="${APP_NAME:-OpenClaw Consumer}"
@@ -16,7 +17,6 @@ PRODUCT="OpenClaw"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.consumer.mac.debug}"
 APP_VARIANT="${APP_VARIANT:-consumer}"
 URL_SCHEME="${URL_SCHEME:-openclaw-consumer}"
-CONSUMER_INSTALLER_URL="${OPENCLAW_CONSUMER_INSTALLER_URL:-}"
 PKG_VERSION="$(cd "$ROOT_DIR" && "${NODE_BIN}" -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -199,10 +199,17 @@ cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
 if [[ "$APP_VARIANT" == "consumer" && -n "${APP_INSTANCE_ID:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Add :OpenClawConsumerInstanceID string ${APP_INSTANCE_ID}" "$APP_ROOT/Contents/Info.plist" || true
 fi
+/usr/libexec/PlistBuddy -c "Delete :OpenClawConsumerPackagingContract" "$APP_ROOT/Contents/Info.plist" >/dev/null 2>&1 || true
+CONSUMER_PACKAGING_CONTRACT=""
+if [[ "$APP_VARIANT" == "consumer" ]]; then
+  CONSUMER_PACKAGING_CONTRACT="$(openclaw_consumer_packaging_contract_mode)"
+  /usr/libexec/PlistBuddy -c "Add :OpenClawConsumerPackagingContract string ${CONSUMER_PACKAGING_CONTRACT}" "$APP_ROOT/Contents/Info.plist" || true
+fi
 /usr/libexec/PlistBuddy -c "Set :OpenClawBuildTimestamp ${BUILD_TS}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :OpenClawGitCommit ${GIT_COMMIT}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Delete :OpenClawConsumerInstallerSourceURL" "$APP_ROOT/Contents/Info.plist" >/dev/null 2>&1 || true
-if [[ -n "$CONSUMER_INSTALLER_URL" ]]; then
+if [[ "$CONSUMER_PACKAGING_CONTRACT" == "legacy-bootstrap" ]]; then
+  CONSUMER_INSTALLER_URL="${OPENCLAW_CONSUMER_INSTALLER_URL:-}"
   /usr/libexec/PlistBuddy -c "Add :OpenClawConsumerInstallerSourceURL string ${CONSUMER_INSTALLER_URL}" "$APP_ROOT/Contents/Info.plist" || true
 fi
 /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 ${URL_SCHEME}" "$APP_ROOT/Contents/Info.plist" || true
