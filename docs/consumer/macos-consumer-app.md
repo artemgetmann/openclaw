@@ -75,6 +75,19 @@ scripts/package-mac-app.sh
 
 This produces a consumer-flavored app bundle that can be tested alongside the founder app.
 
+## Clean-user smoke
+
+When you test the packaged app from a fresh macOS user, stage the current build
+into the shared harness first so the launch cannot silently use an old copy:
+
+```bash
+bash scripts/stage-consumer-clean-user-app.sh
+```
+
+The shared smoke runner at `/Users/Shared/run-openclaw-clean-test.sh` now
+calls that staging script before launch and refuses stale bundles when the
+packaged app commit does not match the current repo HEAD.
+
 ## Distribution assumption
 
 Consumer v1 targets signed + notarized direct download distribution.
