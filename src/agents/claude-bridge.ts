@@ -299,29 +299,23 @@ export async function runClaudeBridgeAgent(params: {
   );
 
   try {
-    const turn = await (handle.turnQueue = handle.turnQueue
-      .then(() =>
-        runBridgeTurn({
-          handle,
-          backend: params.configBackend,
-          workspaceDir: params.workspaceDir,
-          model: modelId,
-          systemPrompt: params.systemPrompt,
-          prompt: params.prompt,
-          timeoutMs: params.timeoutMs,
-          sessionId: params.cliSessionId,
-        }),
-      )
-      .then(
-        (value) => {
-          handle.turnQueue = Promise.resolve();
-          return value;
-        },
-        (error) => {
-          handle.turnQueue = Promise.resolve();
-          throw error;
-        },
-      ));
+    const turnPromise = handle.turnQueue.then(() =>
+      runBridgeTurn({
+        handle,
+        backend: params.configBackend,
+        workspaceDir: params.workspaceDir,
+        model: modelId,
+        systemPrompt: params.systemPrompt,
+        prompt: params.prompt,
+        timeoutMs: params.timeoutMs,
+        sessionId: params.cliSessionId,
+      }),
+    );
+    handle.turnQueue = turnPromise.then(
+      () => undefined,
+      () => undefined,
+    );
+    const turn = await turnPromise;
 
     const text = turn.text.trim();
     return {
