@@ -26,6 +26,11 @@ function expectAnthropicPruningDefaults(cfg: ReturnType<typeof loadConfig>, hear
   expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
   expect(cfg.agents?.defaults?.contextPruning?.ttl).toBe("1h");
   expect(cfg.agents?.defaults?.heartbeat?.every).toBe(heartbeatEvery);
+  expect(cfg.agents?.defaults?.heartbeat?.activeHours).toEqual({
+    start: "09:00",
+    end: "20:00",
+    timezone: "user",
+  });
 }
 
 describe("config pruning defaults", () => {
@@ -37,6 +42,12 @@ describe("config pruning defaults", () => {
         const cfg = loadConfig();
 
         expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
+        expect(cfg.agents?.defaults?.heartbeat?.every).toBe("1d");
+        expect(cfg.agents?.defaults?.heartbeat?.activeHours).toEqual({
+          start: "09:00",
+          end: "20:00",
+          timezone: "user",
+        });
       });
     });
   });
@@ -140,5 +151,29 @@ describe("config pruning defaults", () => {
     });
 
     expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("off");
+    expect(cfg.agents?.defaults?.heartbeat?.activeHours).toEqual({
+      start: "09:00",
+      end: "20:00",
+      timezone: "user",
+    });
+  });
+
+  it("does not override explicit heartbeat activeHours", async () => {
+    const cfg = await loadConfigForHome({
+      agents: {
+        defaults: {
+          heartbeat: {
+            activeHours: { start: "08:00", end: "22:00", timezone: "local" },
+          },
+        },
+      },
+    });
+
+    expect(cfg.agents?.defaults?.heartbeat?.every).toBe("1d");
+    expect(cfg.agents?.defaults?.heartbeat?.activeHours).toEqual({
+      start: "08:00",
+      end: "22:00",
+      timezone: "local",
+    });
   });
 });
