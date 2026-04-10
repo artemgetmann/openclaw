@@ -13,10 +13,11 @@
 - If the user says "consumer branch", interpret that as `codex/consumer-openclaw-project` unless they explicitly say they mean the legacy `consumer` branch.
 - Never merge `upstream/main` into fork branches. Upstream intake is selective only.
 - PR targets:
-  - Consumer-product work: `codex/consumer-openclaw-project`
-  - General fork work: this repo's `main`
-  - Upstream work: `https://github.com/openclaw/openclaw` only when the user explicitly asks for upstream PR or review flow
+- Consumer-product work: `codex/consumer-openclaw-project`
+- General fork work: this repo's `main`
+- Upstream work: `https://github.com/openclaw/openclaw` only when the user explicitly asks for upstream PR or review flow
 - `consumer` is a legacy branch. Do not target new PRs there unless the user explicitly asks.
+- Before consumer mac packaging, read `docs/consumer/openclaw-consumer-packaging-contract.md`.
 
 ## Always-on rules
 
