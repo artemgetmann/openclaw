@@ -337,11 +337,13 @@ describe("runCliAgent with process supervisor", () => {
       envValue: "bridge_pointer_condensed",
       splitValue: undefined,
       expectedIncludes: [
-        "Keep the prompt small. Read repository files on demand instead of assuming large inline context.",
-        "docs/agent-guides/workflow.md",
-        "src/agents/claude-bridge.ts",
+        "Your home is the runtime workspace at ~/.openclaw/workspace.",
+        "Start with ~/.openclaw/workspace/AGENTS.md, then follow its workspace contract precisely.",
+        "~/.openclaw/workspace/SOUL.md next",
+        "~/.openclaw/workspace/memory/YYYY-MM-DD.md for today and yesterday at session start for continuity",
+        "~/.openclaw/workspace/HEARTBEAT.md only for heartbeat runs",
       ],
-      expectedExcludes: ["Jarvis", "# Project Context"],
+      expectedExcludes: ["Jarvis", "# Project Context", "docs/agent-guides/workflow.md"],
       minLength: 300,
       maxLength: 2_500,
     },
@@ -436,10 +438,10 @@ describe("runCliAgent with process supervisor", () => {
       envValue: "definitely-unknown",
       splitValue: "banana",
       expectedIncludes: [
-        "Keep the prompt small. Read repository files on demand instead of assuming large inline context.",
-        "docs/agent-guides/workflow.md",
+        "Your home is the runtime workspace at ~/.openclaw/workspace.",
+        "~/.openclaw/workspace/AGENTS.md first",
       ],
-      expectedExcludes: ["Jarvis", "# Project Context"],
+      expectedExcludes: ["Jarvis", "# Project Context", "docs/agent-guides/workflow.md"],
       minLength: 300,
       maxLength: 2_500,
     },
@@ -655,9 +657,12 @@ describe("runCliAgent with process supervisor", () => {
       };
     };
     expect(bridgeParams.systemPrompt).toContain(
-      "Keep the prompt small. Read repository files on demand instead of assuming large inline context.",
+      "Your home is the runtime workspace at ~/.openclaw/workspace.",
     );
-    expect(bridgeParams.systemPrompt).toContain("docs/agent-guides/workflow.md");
+    expect(bridgeParams.systemPrompt).toContain("~/.openclaw/workspace/AGENTS.md first");
+    expect(bridgeParams.systemPrompt).toContain(
+      "~/.openclaw/workspace/memory/YYYY-MM-DD.md for today and yesterday at session start for continuity",
+    );
     expect(bridgeParams.systemPromptReport?.systemPrompt?.chars).toBeLessThanOrEqual(2_500);
     expect(bridgeParams.systemPromptReport?.systemPrompt?.projectContextChars).toBe(0);
   });
