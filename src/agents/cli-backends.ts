@@ -69,6 +69,49 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   serialize: true,
 };
 
+const DEFAULT_CLAUDE_BRIDGE_BACKEND: CliBackendConfig = {
+  command: "claude",
+  args: [
+    "-p",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--permission-mode",
+    "bypassPermissions",
+  ],
+  resumeArgs: [
+    "-p",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--permission-mode",
+    "bypassPermissions",
+    "--resume",
+    "{sessionId}",
+  ],
+  output: "json",
+  input: "stdin",
+  modelArg: "--model",
+  modelAliases: CLAUDE_MODEL_ALIASES,
+  sessionMode: "existing",
+  sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
+  systemPromptArg: "--append-system-prompt",
+  systemPromptMode: "append",
+  systemPromptWhen: "first",
+  clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"],
+  reliability: {
+    watchdog: {
+      fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+      resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+    },
+  },
+  serialize: false,
+};
+
 const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   command: "codex",
   args: [
@@ -205,6 +248,7 @@ function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfi
 export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   const ids = new Set<string>([
     normalizeBackendKey("claude-cli"),
+    normalizeBackendKey("claude-bridge"),
     normalizeBackendKey("codex-cli"),
   ]);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
@@ -224,6 +268,15 @@ export function resolveCliBackendConfig(
 
   if (normalized === "claude-cli") {
     const merged = mergeBackendConfig(DEFAULT_CLAUDE_BACKEND, override);
+    const config = normalizeClaudeBackendConfig(merged);
+    const command = config.command?.trim();
+    if (!command) {
+      return null;
+    }
+    return { id: normalized, config: { ...config, command } };
+  }
+  if (normalized === "claude-bridge") {
+    const merged = mergeBackendConfig(DEFAULT_CLAUDE_BRIDGE_BACKEND, override);
     const config = normalizeClaudeBackendConfig(merged);
     const command = config.command?.trim();
     if (!command) {

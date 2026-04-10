@@ -166,3 +166,15 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).not.toContain("bypassPermissions");
   });
 });
+
+describe("resolveCliBackendConfig claude-bridge defaults", () => {
+  it("uses a minimal isolated bridge command and clears Anthropic API keys", () => {
+    const resolved = resolveCliBackendConfig("claude-bridge");
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.command).toBe("claude");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_API_KEY");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_API_KEY_OLD");
+    expect(resolved?.config.modelAliases?.opus).toBe("opus");
+  });
+});
