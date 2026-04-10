@@ -10,7 +10,11 @@ import {
   saveMonitorStore,
   updateMonitorRecord,
 } from "../../monitor/store.js";
-import type { MonitorActionPolicy, MonitorUpdatePatch } from "../../monitor/types.js";
+import {
+  isTerminalMonitorStatus,
+  type MonitorActionPolicy,
+  type MonitorUpdatePatch,
+} from "../../monitor/types.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import {
   ErrorCodes,
@@ -207,7 +211,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
     const updated = updateMonitorRecord(store.monitors[index], p.patch, Date.now());
     store.monitors[index] = updated;
     await saveMonitorStore(storePath, store);
-    if (updated.status !== "active") {
+    if (isTerminalMonitorStatus(updated.status)) {
       await context.cron.update(updated.cronJobId, { enabled: false });
     }
     respond(true, updated, undefined);
