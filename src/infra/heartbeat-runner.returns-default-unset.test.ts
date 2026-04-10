@@ -932,6 +932,144 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("injects recent delivered heartbeat history into normal heartbeat prompts", async () => {
+    const tmpDir = await createCaseDir("hb-history-prompt");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+            recentHeartbeats: [
+              {
+                sentAt: Date.UTC(2026, 3, 9, 12, 0, 0),
+                channel: "telegram",
+                to: "1336356696",
+                preview: "Follow up on Emirates KYC blocker.",
+                status: "sent",
+              },
+            ],
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "New alert" }]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp, 60_000),
+      });
+
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      expect(calledCtx.Body).toContain("Recent delivered heartbeat alerts (most recent first):");
+      expect(calledCtx.Body).toContain("Follow up on Emirates KYC blocker.");
+      expect(calledCtx.Body).toContain("prefer a shorter nudge");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("stores bounded recent heartbeat history newest-first after delivery", async () => {
+    const tmpDir = await createCaseDir("hb-history-store");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      const existingHistory = Array.from({ length: 5 }, (_, idx) => ({
+        sentAt: 5_000 - idx * 1_000,
+        channel: "whatsapp",
+        to: "120363401234567890@g.us",
+        preview: `Older alert ${idx + 1}`,
+        status: "sent" as const,
+      }));
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+            recentHeartbeats: existingHistory,
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Fresh blocker alert" }]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp, 10_000),
+      });
+
+      const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+        string,
+        { recentHeartbeats?: Array<{ preview?: string }> } | undefined
+      >;
+      const nextHistory = store[sessionKey]?.recentHeartbeats;
+      expect(Array.isArray(nextHistory)).toBe(true);
+      expect(nextHistory).toHaveLength(5);
+      expect(nextHistory[0]).toMatchObject({
+        sentAt: 10_000,
+        channel: "whatsapp",
+        to: "120363401234567890@g.us",
+        preview: "Fresh blocker alert",
+        status: "sent",
+      });
+      expect(
+        nextHistory.some((entry: { preview?: string }) => entry.preview === "Older alert 5"),
+      ).toBe(false);
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("handles reasoning payload delivery variants", async () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {

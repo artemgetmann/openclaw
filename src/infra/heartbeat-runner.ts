@@ -32,6 +32,7 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
+import type { RecentHeartbeatEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -474,6 +475,101 @@ type HeartbeatPromptResolution = {
   hasCronEvents: boolean;
 };
 
+const MAX_RECENT_HEARTBEATS = 5;
+const MAX_RECENT_HEARTBEAT_PREVIEW_CHARS = 240;
+
+function normalizeRecentHeartbeatPreview(text?: string): string {
+  const collapsed = typeof text === "string" ? text.replace(/\s+/g, " ").trim() : "";
+  if (!collapsed) {
+    return "";
+  }
+  if (collapsed.length <= MAX_RECENT_HEARTBEAT_PREVIEW_CHARS) {
+    return collapsed;
+  }
+  return `${collapsed.slice(0, MAX_RECENT_HEARTBEAT_PREVIEW_CHARS - 1).trimEnd()}…`;
+}
+
+function sanitizeRecentHeartbeatHistory(
+  entries: RecentHeartbeatEntry[] | undefined,
+): RecentHeartbeatEntry[] {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return [];
+  }
+
+  return entries
+    .filter(
+      (entry) =>
+        entry &&
+        entry.status === "sent" &&
+        typeof entry.sentAt === "number" &&
+        Number.isFinite(entry.sentAt) &&
+        Boolean(normalizeRecentHeartbeatPreview(entry.preview)),
+    )
+    .map((entry) => ({
+      sentAt: entry.sentAt,
+      channel:
+        typeof entry.channel === "string" && entry.channel.trim()
+          ? entry.channel.trim()
+          : "unknown",
+      to: typeof entry.to === "string" && entry.to.trim() ? entry.to.trim() : undefined,
+      preview: normalizeRecentHeartbeatPreview(entry.preview),
+      status: "sent" as const,
+    }))
+    .toSorted((a, b) => b.sentAt - a.sentAt)
+    .slice(0, MAX_RECENT_HEARTBEATS);
+}
+
+function appendRecentHeartbeatHistory(
+  prompt: string,
+  entries: RecentHeartbeatEntry[] | undefined,
+): string {
+  const recent = sanitizeRecentHeartbeatHistory(entries);
+  if (recent.length === 0) {
+    return prompt;
+  }
+
+  const lines = recent.map((entry) => {
+    const destination = entry.to ? `${entry.channel}:${entry.to}` : entry.channel;
+    return `- ${new Date(entry.sentAt).toISOString()} | ${destination} | ${entry.preview}`;
+  });
+  const historyBlock = [
+    "Recent delivered heartbeat alerts (most recent first):",
+    ...lines,
+    "Use this to avoid repeating the same unresolved blocker as a full alert unless something materially changed. If follow-up is still needed with no material change, prefer a shorter nudge.",
+  ].join("\n");
+  if (prompt.includes("Recent delivered heartbeat alerts (most recent first):")) {
+    return prompt;
+  }
+  return `${prompt}\n\n${historyBlock}`;
+}
+
+function recordRecentHeartbeat(params: {
+  previous: RecentHeartbeatEntry[] | undefined;
+  sentAt: number;
+  channel: string;
+  to?: string;
+  preview?: string;
+}): RecentHeartbeatEntry[] {
+  const nextPreview = normalizeRecentHeartbeatPreview(params.preview);
+  if (!nextPreview) {
+    return sanitizeRecentHeartbeatHistory(params.previous);
+  }
+
+  // Keep a tiny newest-first buffer of actual deliveries so heartbeat can
+  // reason about what Artem already saw without introducing a second log system.
+  const nextEntries = [
+    {
+      sentAt: params.sentAt,
+      channel: params.channel,
+      to: params.to,
+      preview: nextPreview,
+      status: "sent" as const,
+    },
+    ...sanitizeRecentHeartbeatHistory(params.previous),
+  ];
+  return sanitizeRecentHeartbeatHistory(nextEntries);
+}
+
 function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string): string {
   if (!/heartbeat\.md/i.test(prompt)) {
     return prompt;
@@ -492,6 +588,7 @@ function resolveHeartbeatRunPrompt(params: {
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
   workspaceDir: string;
+  recentHeartbeats?: RecentHeartbeatEntry[];
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const pendingEvents = params.preflight.shouldInspectPendingEvents
@@ -511,7 +608,11 @@ function resolveHeartbeatRunPrompt(params: {
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
-  const prompt = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
+  const promptWithPath = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
+  const prompt =
+    hasExecCompletion || hasCronEvents
+      ? promptWithPath
+      : appendRecentHeartbeatHistory(promptWithPath, params.recentHeartbeats);
 
   return { prompt, hasExecCompletion, hasCronEvents };
 }
@@ -632,6 +733,7 @@ export async function runHeartbeatOnce(opts: {
     preflight,
     canRelayToUser,
     workspaceDir,
+    recentHeartbeats: entry?.recentHeartbeats,
   });
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
@@ -912,6 +1014,13 @@ export async function runHeartbeatOnce(opts: {
           ...current,
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
+          recentHeartbeats: recordRecentHeartbeat({
+            previous: current.recentHeartbeats,
+            sentAt: startedAt,
+            channel: delivery.channel,
+            to: delivery.to,
+            preview: previewText,
+          }),
         };
         await saveSessionStore(storePath, store);
       }

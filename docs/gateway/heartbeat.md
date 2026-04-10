@@ -23,7 +23,7 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 4. Optional: enable heartbeat reasoning delivery for transparency.
 5. Optional: use lightweight bootstrap context if heartbeat runs only need `HEARTBEAT.md`.
 6. Optional: enable isolated sessions to avoid sending full conversation history each heartbeat.
-7. Optional: restrict heartbeats to active hours (local time).
+7. Optional: override active hours. By default, heartbeat already stays inside `09:00-20:00` using the resolved user/local timezone.
 
 Example config:
 
@@ -37,7 +37,7 @@ Example config:
         directPolicy: "allow", // default: allow direct/DM targets; set "block" to suppress
         lightContext: true, // optional: only inject HEARTBEAT.md from bootstrap files
         isolatedSession: true, // optional: fresh session each run (no conversation history)
-        // activeHours: { start: "08:00", end: "24:00" },
+        // activeHours: { start: "08:00", end: "24:00" }, // optional override; default is 09:00-20:00 user time
         // includeReasoning: true, // optional: send separate `Reasoning:` message too
       },
     },
@@ -48,10 +48,14 @@ Example config:
 ## Defaults
 
 - Interval: `1d` by default. Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
+- Active hours: `09:00-20:00` in `timezone: "user"` by default. Override `agents.defaults.heartbeat.activeHours` (or per-agent `agents.list[].heartbeat.activeHours`) to change it, or explicitly set a 24/7 window if you want overnight heartbeats.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`):
   `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Heartbeat is for broad ambient awareness and periodic sweeps (for example inbox, calendar, notifications, project status, and occasional check-ins), not for inventing or storing ad hoc scoped monitors. For reminders, exact scheduled checks, or explicit watches on a specific inbox, thread, person, or condition until something happens, prefer cron with a cadence, stop condition, and expiry when possible. Ask before creating new monitoring scope or doing deeper follow-up work. If nothing needs attention, reply HEARTBEAT_OK.`
 - The heartbeat prompt is sent **verbatim** as the user message. The system
   prompt includes a “Heartbeat” section and the run is flagged internally.
+- For normal heartbeat sweeps (not cron/exec event runs), OpenClaw also injects a
+  tiny internal summary of the most recent delivered heartbeat alerts so the
+  model can avoid repeating the same unresolved blocker as a full alert.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone.
   Outside the window, heartbeats are skipped until the next tick inside the window.
 
@@ -73,6 +77,9 @@ The default prompt is intentionally conservative:
   inbox/thread/person until something happens” should normally become cron jobs instead.
 - **Approval-oriented follow-up**: if heartbeat suggests deeper work or a new
   recurring monitor, the model should ask before expanding scope.
+- **Repeat-aware nudging**: heartbeat should prefer net-new action-needed items.
+  If a blocker was already surfaced recently and nothing materially changed, it
+  should prefer a shorter nudge instead of resending the same full alert.
 
 If you want a heartbeat to do something specific, keep it broad and stable. A
 daily sweep is the safest starter pattern, but 30-minute heartbeat sweeps are
@@ -103,7 +110,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
   agents: {
     defaults: {
       heartbeat: {
-        every: "30m", // default: 30m (0m disables)
+        every: "30m", // default: 1d (0m disables)
         model: "anthropic/claude-opus-4-6",
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
@@ -188,7 +195,6 @@ Outside this window (before 9am or after 10pm Eastern), heartbeats are skipped. 
 
 If you want heartbeats to run all day, use one of these patterns:
 
-- Omit `activeHours` entirely (no time-window restriction; this is the default behavior).
 - Set a full-day window: `activeHours: { start: "00:00", end: "24:00" }`.
 
 Do not set the same `start` and `end` time (for example `08:00` to `08:00`).
@@ -247,6 +253,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `activeHours`: restricts heartbeat runs to a time window. Object with `start` (HH:MM, inclusive; use `00:00` for start-of-day), `end` (HH:MM exclusive; `24:00` allowed for end-of-day), and optional `timezone`.
+  - Default: `{ start: "09:00", end: "20:00", timezone: "user" }`.
   - Omitted or `"user"`: uses your `agents.defaults.userTimezone` if set, otherwise falls back to the host system timezone.
   - `"local"`: always uses the host system timezone.
   - Any IANA identifier (e.g. `America/New_York`): used directly; if invalid, falls back to the `"user"` behavior above.
@@ -352,6 +359,8 @@ Example `HEARTBEAT.md`:
 # Heartbeat checklist
 
 - Once each morning, do one broad sweep of my world and only alert me if something materially important stands out.
+- Prefer net-new action-needed items. If the same blocker was already surfaced recently and nothing materially changed, send a shorter nudge instead of repeating the full alert.
+- If something is blocked on my approval, decision, or input, say that explicitly and keep the ask short.
 - If a deeper recurring monitor would help, suggest one cron job with a cadence, stop condition, and expiry first. Otherwise reply HEARTBEAT_OK.
 ```
 

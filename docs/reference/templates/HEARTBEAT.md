@@ -21,4 +21,14 @@ read_when:
 
 # - Once each morning, do one broad sweep of my world and only alert me if something looks important.
 
+# - Prefer net-new action-needed items. If you already surfaced the same unresolved blocker recently,
+
+# do not resend the full alert unless something materially changed; use a shorter nudge if needed.
+
+#
+
+# - If something is blocked on my approval/decision/input, say that explicitly and keep the ask short.
+
+#
+
 # - If a deeper recurring monitor would help, suggest one cron job with a cadence, stop condition, and expiry first. Otherwise reply HEARTBEAT_OK.
