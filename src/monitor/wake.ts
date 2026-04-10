@@ -29,6 +29,12 @@ export function buildMonitorWakeMessage(params: {
       ? [`lastCheckpoint: ${JSON.stringify(monitor.lastCheckpoint)}`]
       : ["lastCheckpoint: none"]),
     "",
+    // The last checkpoint is only the previous baseline. A new actionable
+    // inbound after an older completion marker must reopen the task instead of
+    // being dismissed as post-completion noise.
+    "Interpret lastCheckpoint as previous state, not final authority over new inbound messages.",
+    "If fresh source inspection finds a new actionable inbound after an earlier completion marker, treat the monitor as active again and continue the task.",
+    "Do not keep or re-mark the monitor completed solely because lastCheckpoint says an earlier negotiation was complete.",
     "Use normal tools/skills to inspect fresh source state.",
     "Default behavior is notify + draft to the origin chat unless the original task explicitly authorized action on the watched surface.",
     "After a successful check, update the monitor checkpoint/status if needed before finishing.",
