@@ -90,7 +90,7 @@ describe("monitor gateway handlers", () => {
         }
       | undefined;
     expect(monitor).toMatchObject({
-      monitorSessionKey: expect.stringMatching(/^monitor:/),
+      monitorSessionKey: expect.stringMatching(/^agent:main:monitor:/),
       originSessionKey: "agent:main:telegram:direct:user-1",
       actionPolicy: "notify_draft",
       sourceType: "gmail",
@@ -118,6 +118,84 @@ describe("monitor gateway handlers", () => {
       }),
     );
     expect(cronUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not manufacture channel delivery for CLI-origin monitors", async () => {
+    const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
+
+    await monitorHandlers["monitor.create"]({
+      params: {
+        instructions: "Monitor Empower replies and draft the next response.",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        sourceType: "gmail",
+        sourceTarget: { account: "me@example.com", threadId: "thread-cli" },
+        cadence: { kind: "every", everyMs: 300_000 },
+      },
+      respond: respond as never,
+      context: {
+        cronStorePath,
+        cron: {
+          add: cronAdd,
+          update: cronUpdate,
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-cli", method: "monitor.create" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(cronAdd).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        delivery: expect.anything(),
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const monitor = call?.[1] as { originDelivery?: unknown } | undefined;
+    expect(monitor?.originDelivery).toBeUndefined();
+  });
+
+  it("preserves telegram topic routing when creating monitor delivery", async () => {
+    const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
+
+    await monitorHandlers["monitor.create"]({
+      params: {
+        instructions: "Watch this Telegram topic for replies.",
+        agentId: "main",
+        originSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+        originDelivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-1001234567890:topic:99",
+          accountId: "default",
+        },
+        sourceType: "gmail",
+        sourceTarget: { account: "me@example.com", threadId: "thread-topic" },
+        cadence: { kind: "every", everyMs: 300_000 },
+      },
+      respond: respond as never,
+      context: {
+        cronStorePath,
+        cron: {
+          add: cronAdd,
+          update: cronUpdate,
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-topic", method: "monitor.create" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(cronAdd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delivery: expect.objectContaining({
+          mode: "announce",
+          channel: "telegram",
+          to: "-1001234567890:topic:99",
+          accountId: "default",
+        }),
+      }),
+    );
   });
 
   it("rejects invalid monitor.create params", async () => {

@@ -82,12 +82,14 @@ For monitor creation:
             throw new ToolInputError("originSessionKey required");
           }
           const cfg = loadConfig();
+          const resolvedOriginDelivery = await resolveAnnounceTarget({
+            sessionKey: agentSessionKey,
+            displayKey: agentSessionKey,
+          });
           const originDelivery =
             (params.originDelivery as Record<string, unknown> | undefined) ??
-            (await resolveAnnounceTarget({
-              sessionKey: agentSessionKey,
-              displayKey: agentSessionKey,
-            }));
+            resolvedOriginDelivery ??
+            undefined;
           const sourceTarget = params.sourceTarget;
           const cadence = params.cadence;
           if (!sourceTarget || typeof sourceTarget !== "object" || Array.isArray(sourceTarget)) {
