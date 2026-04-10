@@ -629,7 +629,9 @@ export async function runCliAgent(params: {
       timeoutMs: params.timeoutMs,
       systemPrompt,
       systemPromptReport,
-      cliSessionId: params.cliSessionId,
+      // Bridge turns should only reuse the in-process child/session handle.
+      // Never resume a persisted Claude CLI session id from session storage.
+      cliSessionId: undefined,
     });
   }
 

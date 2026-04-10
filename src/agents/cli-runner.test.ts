@@ -490,11 +490,13 @@ describe("runCliAgent with process supervisor", () => {
       model: "sonnet",
       timeoutMs: 1_000,
       runId: "run-bridge",
+      cliSessionId: "persisted-bridge-session",
     });
 
     expect(bridgeRunMock).toHaveBeenCalledTimes(1);
     expect(supervisorSpawnMock).not.toHaveBeenCalled();
     const bridgeParams = bridgeRunMock.mock.calls[0]?.[0] as {
+      cliSessionId?: string;
       systemPrompt?: string;
       systemPromptReport?: {
         injectedWorkspaceFiles?: unknown[];
@@ -507,6 +509,7 @@ describe("runCliAgent with process supervisor", () => {
     expect(bridgeParams.systemPrompt).toContain(
       "Tools are disabled in this session. Do not call tools.",
     );
+    expect(bridgeParams.cliSessionId).toBeUndefined();
     for (const fragment of testCase.expectedIncludes) {
       expect(bridgeParams.systemPrompt).toContain(fragment);
     }
