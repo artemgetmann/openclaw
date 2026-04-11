@@ -143,10 +143,17 @@ enum ConsumerBundledRuntime {
             .appendingPathComponent("lib", isDirectory: true)
             .appendingPathComponent(self.installedPayloadDirectoryName, isDirectory: true)
             .appendingPathComponent("dist/entry.js")
+        let chalkPackageURL = installPrefixURL
+            .appendingPathComponent("lib", isDirectory: true)
+            .appendingPathComponent(self.installedPayloadDirectoryName, isDirectory: true)
+            .appendingPathComponent("node_modules", isDirectory: true)
+            .appendingPathComponent("chalk", isDirectory: true)
+            .appendingPathComponent("package.json")
 
         return fileManager.isExecutableFile(atPath: wrapperURL.path)
             && fileManager.isExecutableFile(atPath: nodeURL.path)
             && fileManager.isReadableFile(atPath: entryURL.path)
+            && fileManager.isReadableFile(atPath: chalkPackageURL.path)
     }
 
     private static func loadManifest(from resourceURL: URL) throws -> Manifest {

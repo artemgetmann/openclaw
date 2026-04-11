@@ -95,6 +95,7 @@ prepare_bundled_consumer_runtime() {
   local node_version=""
   local node_arm64_root=""
   local node_x64_root=""
+  local deploy_root=""
 
   node_version="$(openclaw_validated_node_version "$ROOT_DIR")"
 
@@ -112,6 +113,19 @@ prepare_bundled_consumer_runtime() {
   rsync -a \
     --exclude '*.app' \
     "$ROOT_DIR/dist/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist/"
+
+  # The bundled CLI imports production packages like `chalk` from the runtime
+  # tree. Use pnpm's legacy deploy mode to stage the production dependency graph
+  # once, then copy just the resulting `node_modules` into the app payload.
+  deploy_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-deploy.XXXXXX")"
+  trap 'rm -rf "$deploy_root"' RETURN
+  echo "📦 Staging bundled consumer runtime node_modules"
+  (cd "$ROOT_DIR" && pnpm --filter . deploy --legacy --prod "$deploy_root")
+  rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules"
+  mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
+  rsync -a "$deploy_root/node_modules/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules/"
+  rm -rf "$deploy_root"
+  trap - RETURN
 
   if printf '%s\n' "${BUILD_ARCHS[@]}" | grep -qx "x86_64"; then
     local arm64_native=""
