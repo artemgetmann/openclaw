@@ -200,6 +200,8 @@ consumer bundle identity.
 
 Default consumer packaging and launch are reserved for the main consumer checkout. Feature worktrees should always use `--instance <id>` so they do not fight over the shared runtime or port.
 
+Consumer packaging policy lives in [openclaw-consumer-packaging-contract.md](./openclaw-consumer-packaging-contract.md).
+
 ## Parallel worktree testing
 
 Use named consumer instances when multiple agents or worktrees need to run the

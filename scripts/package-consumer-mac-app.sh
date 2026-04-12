@@ -18,6 +18,8 @@ usage() {
 Usage: scripts/package-consumer-mac-app.sh [--instance <id>]
 Set OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 to package an isolated runtime lane
 with the stable consumer debug app identity for Screen Recording/TCC testing.
+Consumer packages are universal by default. Set ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1
+only for explicit local single-arch smoke/debug builds; do not ship that output.
 EOF
 }
 

@@ -1,0 +1,21 @@
+# OpenClaw Consumer Packaging Contract
+
+Consumer macOS packaging must stay safe for both Intel and Apple Silicon Macs.
+
+## Rules
+
+- Normal consumer app packaging is universal: `arm64` + `x86_64`.
+- If one architecture is broken, packaging must fail instead of silently shipping a single-arch app.
+- Single-arch consumer packaging is allowed only when `ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1` is set explicitly for local smoke/debug validation.
+- That escape hatch is not a shipping mode.
+
+## Expected entrypoints
+
+- `scripts/package-consumer-mac-app.sh` is the normal consumer app packaging entrypoint.
+- `scripts/package-consumer-mac-dist.sh` follows the same universal packaging expectation for release-style consumer artifacts.
+
+## Failure contract
+
+If a consumer package resolves to anything other than universal/all and the smoke escape hatch is not set, the packager fails fast with a blunt error.
+
+That failure is intentional. It prevents agents from thinking a single-arch app is "done" when it would strand half the user base.

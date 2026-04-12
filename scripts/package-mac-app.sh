@@ -37,15 +37,37 @@ if [[ "${BUILD_ARCHS_VALUE}" == "all" ]]; then
 fi
 IFS=' ' read -r -a BUILD_ARCHS <<< "$BUILD_ARCHS_VALUE"
 PRIMARY_ARCH="${BUILD_ARCHS[0]}"
+ALLOW_SINGLE_ARCH_CONSUMER_SMOKE="${ALLOW_SINGLE_ARCH_CONSUMER_SMOKE:-0}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
 DEFAULT_STANDARD_SPARKLE_FEED_URL="https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml"
 BUNDLED_CLI_ARCHIVE_NAME="openclaw-cli-bundle.tgz"
+BUNDLED_RUNTIME_RESOURCE_DIR="$APP_ROOT/Contents/Resources/OpenClawRuntime"
 VALIDATED_NPM_BIN="$(dirname "$VALIDATED_NODE_BIN")/npm"
 if [[ ! -x "$VALIDATED_NPM_BIN" ]]; then
   VALIDATED_NPM_BIN="$(command -v npm || true)"
 fi
 CLI_ARCHIVE_STAGED=""
 CLI_ARCHIVE_STAGE_DIR=""
+
+consumer_build_archs_are_universal() {
+  case "$BUILD_ARCHS_VALUE" in
+    all|"arm64 x86_64"|"x86_64 arm64")
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+if [[ "$APP_VARIANT" == "consumer" && "$ALLOW_SINGLE_ARCH_CONSUMER_SMOKE" != "1" ]]; then
+  if ! consumer_build_archs_are_universal; then
+    echo "ERROR: consumer packaging must cover Intel and Apple Silicon." >&2
+    echo "Use BUILD_ARCHS=all for shipping consumer builds." >&2
+    echo "Set ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1 only for local single-arch smoke/debug packaging." >&2
+    exit 1
+  fi
+fi
 
 default_sparkle_feed_url_for_bundle() {
   local bundle_id="$1"
@@ -186,6 +208,124 @@ bundle_consumer_cli_archive() {
   CLI_ARCHIVE_STAGED="$pack_dir/$BUNDLED_CLI_ARCHIVE_NAME"
   CLI_ARCHIVE_STAGE_DIR="$pack_dir"
   mv "$archive_src" "$CLI_ARCHIVE_STAGED"
+}
+
+ensure_consumer_node_runtime() {
+  local version="$1"
+  local arch="$2"
+  local cache_root="${ROOT_DIR}/.cache/consumer-runtime/node-v${version}-${arch}"
+  local download_root=""
+  local archive=""
+  local download_url=""
+  local extracted_root=""
+
+  if [[ -x "${cache_root}/bin/node" ]]; then
+    printf '%s\n' "$cache_root"
+    return 0
+  fi
+
+  download_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-node.XXXXXX")"
+  archive="${download_root}/node-v${version}-${arch}.tar.gz"
+  download_url="https://nodejs.org/dist/v${version}/node-v${version}-${arch}.tar.gz"
+
+  echo "📥 Downloading Node ${version} (${arch}) for bundled consumer runtime" >&2
+  curl -fsSL "$download_url" -o "$archive"
+  tar -xzf "$archive" -C "$download_root"
+  extracted_root="${download_root}/node-v${version}-${arch}"
+
+  if [[ ! -x "${extracted_root}/bin/node" ]]; then
+    echo "ERROR: downloaded Node runtime is missing bin/node: ${download_url}" >&2
+    rm -rf "$download_root"
+    exit 1
+  fi
+
+  local actual_version
+  actual_version="$("${extracted_root}/bin/node" -p "process.versions.node" 2>/dev/null | tr -d '\r')"
+  if [[ "$actual_version" != "$version" ]]; then
+    echo "ERROR: downloaded Node runtime version mismatch for ${arch}. expected=${version} actual=${actual_version:-unknown}" >&2
+    rm -rf "$download_root"
+    exit 1
+  fi
+
+  rm -rf "$cache_root"
+  mkdir -p "$(dirname "$cache_root")"
+  mv "$extracted_root" "$cache_root"
+  rm -rf "$download_root"
+  printf '%s\n' "$cache_root"
+}
+
+prepare_bundled_consumer_runtime() {
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+
+  local manifest_path="${BUNDLED_RUNTIME_RESOURCE_DIR}/manifest.json"
+  local node_version=""
+  local node_arm64_root=""
+  local node_x64_root=""
+  local deploy_root=""
+
+  node_version="$(openclaw_validated_node_version "$ROOT_DIR")"
+
+  echo "📦 Staging bundled consumer runtime"
+  rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
+  mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
+  mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/node"
+
+  cp "$ROOT_DIR/openclaw.mjs" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/openclaw.mjs"
+  cp "$ROOT_DIR/package.json" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/package.json"
+  rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist"
+  mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist"
+  rsync -a \
+    --exclude '*.app' \
+    "$ROOT_DIR/dist/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist/"
+
+  deploy_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-deploy.XXXXXX")"
+  trap 'rm -rf "$deploy_root"' RETURN
+  echo "📦 Staging bundled consumer runtime node_modules"
+  openclaw_run_repo_pnpm "$ROOT_DIR" --filter . deploy --legacy --prod "$deploy_root"
+  rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules"
+  mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
+  rsync -a "$deploy_root/node_modules/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules/"
+  rm -rf "$deploy_root"
+  trap - RETURN
+
+  if printf '%s\n' "${BUILD_ARCHS[@]}" | grep -qx "x86_64"; then
+    local arm64_native=""
+    local bundled_runtime_dist_root="${BUNDLED_RUNTIME_RESOURCE_DIR}/openclaw/dist"
+    local matrix_crypto_universal="${bundled_runtime_dist_root}/matrix-sdk-crypto.darwin-universal.node"
+    while IFS= read -r arm64_native; do
+      [[ -n "$arm64_native" ]] || continue
+      if [[ "$(basename "$arm64_native")" == matrix-sdk-crypto.darwin-arm64-* ]] && [[ -f "$matrix_crypto_universal" ]]; then
+        continue
+      fi
+      local x64_native="${arm64_native/darwin-arm64/darwin-x64}"
+      if [[ ! -f "$x64_native" ]]; then
+        echo "ERROR: bundled consumer runtime includes arm64-only native addon with no x64 twin:" >&2
+        echo "  $arm64_native" >&2
+        echo "Expected sibling path:" >&2
+        echo "  $x64_native" >&2
+        echo "Fix the runtime asset coverage before shipping a universal consumer build." >&2
+        exit 1
+      fi
+    done < <(find "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist" -type f -name '*.node' | grep 'darwin-arm64' || true)
+  fi
+
+  rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
+  cp -R "$ROOT_DIR/extensions" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
+  if [[ -d "$ROOT_DIR/skills" ]]; then
+    rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
+    cp -R "$ROOT_DIR/skills" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
+  fi
+
+  node_arm64_root="$(ensure_consumer_node_runtime "$node_version" "darwin-arm64")"
+  node_x64_root="$(ensure_consumer_node_runtime "$node_version" "darwin-x64")"
+  cp -R "$node_arm64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-arm64"
+  cp -R "$node_x64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-x64"
+
+  cat > "$manifest_path" <<EOF
+{"format":1,"bundleVersion":"${APP_BUILD}","gitCommit":"${GIT_COMMIT}","nodeVersion":"${node_version}"}
+EOF
 }
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
@@ -339,6 +479,7 @@ if [[ "$APP_VARIANT" == "consumer" ]]; then
   echo "🔐 Seeding bundled consumer defaults"
   "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" \
     "$APP_ROOT/Contents/Resources/consumer-seeded-defaults.json"
+  prepare_bundled_consumer_runtime
 fi
 
 echo "📦 Copying model catalog"
