@@ -21,6 +21,7 @@ export type MonitorRecord = {
   name?: string;
   originSessionKey: string;
   originDelivery?: CronDelivery;
+  watchDelivery?: CronDelivery;
   monitorSessionKey: string;
   sourceType: string;
   sourceTarget: MonitorSourceTarget;
@@ -48,6 +49,7 @@ export type MonitorCreateInput = {
   name?: string;
   originSessionKey: string;
   originDelivery?: CronDelivery;
+  watchDelivery?: CronDelivery;
   monitorSessionKey: string;
   sourceType: string;
   sourceTarget: MonitorSourceTarget;
@@ -64,6 +66,7 @@ export type MonitorUpdatePatch = Partial<
     MonitorRecord,
     | "name"
     | "originDelivery"
+    | "watchDelivery"
     | "sourceTarget"
     | "cadence"
     | "expiryAt"
