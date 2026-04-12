@@ -74,6 +74,9 @@ enum ConsumerRuntime {
 
     static func bootstrapProcessEnvironment() {
         let instance = self.instance
+        // Fresh-user bootstrap needs a minimal config before gateway startup so
+        // the process does not stall on a missing local mode setting.
+        self.ensureConsumerConfigDefaults()
         // Keep the app, launch agents, and any child CLI processes pointed at the
         // consumer-owned runtime before any config/state loaders spin up.
         self.setEnv("OPENCLAW_PROFILE", value: instance.profile)
@@ -119,5 +122,41 @@ enum ConsumerRuntime {
 
     private static func setEnv(_ key: String, value: String) {
         setenv(key, value, 1)
+    }
+
+    private static func ensureConsumerConfigDefaults(
+        fileManager: FileManager = .default)
+    {
+        let configURL = self.configURL
+        let stateDirURL = self.stateDirURL
+
+        do {
+            try fileManager.createDirectory(at: stateDirURL, withIntermediateDirectories: true)
+
+            var root = self.readJSONObject(at: configURL, fileManager: fileManager) ?? [:]
+            var gateway = root["gateway"] as? [String: Any] ?? [:]
+            if (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                gateway["mode"] = "local"
+            }
+            root["gateway"] = gateway
+
+            let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: configURL, options: .atomic)
+        } catch {
+            // Keep bootstrap resilient: a write failure should degrade to the
+            // existing onboarding error path instead of crashing first launch.
+            fputs("warning: failed to ensure consumer config defaults: \(error)\n", stderr)
+        }
+    }
+
+    private static func readJSONObject(
+        at url: URL,
+        fileManager: FileManager)
+    -> [String: Any]?
+    {
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object
     }
 }

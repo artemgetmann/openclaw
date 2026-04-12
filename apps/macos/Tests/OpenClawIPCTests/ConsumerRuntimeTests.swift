@@ -40,4 +40,22 @@ struct ConsumerRuntimeTests {
             #expect(OpenClawEnv.path("OPENCLAW_LAUNCHD_LABEL") == "ai.openclaw.consumer.agent-a.gateway")
         }
     }
+
+    @Test func `bootstrap writes gateway mode local into consumer config`() async throws {
+        let instanceID = "consumer-runtime-hardening"
+        try await TestIsolation.withIsolatedState(
+            env: [
+                ConsumerInstance.envKey: instanceID,
+                "OPENCLAW_APP_VARIANT": "consumer",
+            ],
+            defaults: ["gatewayPort": nil])
+        {
+            ConsumerRuntime.bootstrapProcessEnvironment()
+
+            let data = try Data(contentsOf: ConsumerRuntime.configURL)
+            let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let gateway = object?["gateway"] as? [String: Any]
+            #expect(gateway?["mode"] as? String == "local")
+        }
+    }
 }
