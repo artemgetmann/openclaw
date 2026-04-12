@@ -199,6 +199,43 @@ describe("monitor gateway handlers", () => {
     );
   });
 
+  it("resolves watched-surface delivery for auto_send channel monitors", async () => {
+    const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
+
+    await monitorHandlers["monitor.create"]({
+      params: {
+        instructions: "Watch this WhatsApp thread and reply directly when needed.",
+        agentId: "main",
+        originSessionKey: "agent:main:main",
+        sourceType: "whatsapp",
+        sourceTarget: { target: "74333133234289@lid", accountId: "default" },
+        cadence: { kind: "every", everyMs: 300_000 },
+        actionPolicy: "auto_send",
+      },
+      respond: respond as never,
+      context: {
+        cronStorePath,
+        cron: {
+          add: cronAdd,
+          update: cronUpdate,
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-auto-send", method: "monitor.create" },
+      isWebchatConnect: () => false,
+    });
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    const monitor = call?.[1] as { watchDelivery?: unknown } | undefined;
+    expect(monitor?.watchDelivery).toEqual({
+      mode: "announce",
+      channel: "whatsapp",
+      to: "74333133234289@lid",
+      accountId: "default",
+    });
+  });
+
   it("rejects invalid monitor.create params", async () => {
     const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
 
