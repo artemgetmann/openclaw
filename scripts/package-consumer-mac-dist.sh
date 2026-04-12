@@ -79,22 +79,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+CURRENT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+CANONICAL_CONSUMER_CHECKOUT="$(consumer_instance_expected_home_checkout)"
+if [[ "$CURRENT_ROOT" != "$CANONICAL_CONSUMER_CHECKOUT" ]]; then
+  echo "ERROR: consumer distribution packaging is reserved for the canonical consumer checkout." >&2
+  echo "Do not run the dist packager from a worktree or any non-canonical checkout." >&2
+  echo "Expected checkout: $CANONICAL_CONSUMER_CHECKOUT" >&2
+  echo "Current checkout: ${CURRENT_ROOT:-unknown}" >&2
+  exit 1
+fi
+
 if [[ -z "$INSTANCE_ID" ]]; then
   INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT_DIR")"
 fi
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
-if [[ -z "$NORMALIZED_INSTANCE_ID" ]]; then
-  CURRENT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-  CANONICAL_CONSUMER_CHECKOUT="$(consumer_instance_expected_home_checkout)"
-  if [[ "$CURRENT_ROOT" != "$CANONICAL_CONSUMER_CHECKOUT" ]]; then
-    echo "ERROR: default consumer distribution packaging is reserved for the main consumer checkout." >&2
-    echo "Use --instance <id> from worktrees so you do not collide with the shared consumer runtime." >&2
-    echo "Expected checkout: $CANONICAL_CONSUMER_CHECKOUT" >&2
-    echo "Current checkout: ${CURRENT_ROOT:-unknown}" >&2
-    exit 1
-  fi
-fi
 
 APP_NAME="${APP_NAME:-$(consumer_instance_app_name "$NORMALIZED_INSTANCE_ID")}"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"
