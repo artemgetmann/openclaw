@@ -45,22 +45,43 @@ struct OnboardingViewSmokeTests {
 
     @Test func `consumer local onboarding drops directly into setup`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
-            let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
+            let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false, setupComplete: false)
             #expect(order == [0])
         }
     }
 
     @Test func `consumer first run defaults unconfigured state to same setup page`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
-            let order = OnboardingView.pageOrder(for: .unconfigured, showOnboardingChat: false)
+            let order = OnboardingView.pageOrder(for: .unconfigured, showOnboardingChat: false, setupComplete: false)
             #expect(order == [0])
         }
     }
 
     @Test func `consumer explicit remote mode still exposes connection page`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
-            let order = OnboardingView.pageOrder(for: .remote, showOnboardingChat: false)
+            let order = OnboardingView.pageOrder(for: .remote, showOnboardingChat: false, setupComplete: false)
             #expect(order == [0, 1, 3])
+        }
+    }
+
+    @Test func `consumer setup completion unlocks remaining onboarding flow`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: true, setupComplete: true)
+            #expect(order == [0, 5, 8, 9])
+        }
+    }
+
+    @Test func `consumer setup completion still skips chat when disabled`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false, setupComplete: true)
+            #expect(order == [0, 5, 9])
+        }
+    }
+
+    @Test func `default flavor keeps existing local onboarding order after setup`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "openclaw"]) {
+            let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false, setupComplete: true)
+            #expect(order == [0, 1, 5, 9])
         }
     }
 

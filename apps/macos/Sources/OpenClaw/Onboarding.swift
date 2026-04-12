@@ -165,18 +165,20 @@ struct OnboardingView: View {
     let permissionsPageIndex = 5
     static func pageOrder(
         for mode: AppState.ConnectionMode,
-        showOnboardingChat: Bool) -> [Int]
+        showOnboardingChat: Bool,
+        setupComplete: Bool = false) -> [Int]
     {
         // Consumer onboarding is intentionally opinionated: default to running on
-        // this Mac, skip channel/bootstrap ceremony, and keep first run to at
-        // most two screens. Remote remains reachable for explicit remote setups.
+        // this Mac, skip infra-choice ceremony on first launch, and treat the
+        // embedded setup step as page zero. Once that finishes, continue into the
+        // remaining onboarding pages instead of dropping straight into menu-bar-only mode.
         if AppFlavor.current.isConsumer {
             switch mode {
             case .remote:
                 return [0, 1, 3]
             case .local, .unconfigured:
-                // Consumer local onboarding drops directly into the setup work.
-                return [0]
+                guard setupComplete else { return [0] }
+                return showOnboardingChat ? [0, 5, 8, 9] : [0, 5, 9]
             }
         }
 
@@ -192,11 +194,17 @@ struct OnboardingView: View {
     }
 
     var showOnboardingChat: Bool {
-        self.state.connectionMode == .local && self.needsBootstrap
+        if AppFlavor.current.isConsumer {
+            return self.state.connectionMode == .local && self.onboardingWizard.isComplete
+        }
+        return self.state.connectionMode == .local && self.needsBootstrap
     }
 
     var pageOrder: [Int] {
-        Self.pageOrder(for: self.state.connectionMode, showOnboardingChat: self.showOnboardingChat)
+        Self.pageOrder(
+            for: self.state.connectionMode,
+            showOnboardingChat: self.showOnboardingChat,
+            setupComplete: self.onboardingWizard.isComplete)
     }
 
     var pageCount: Int {
