@@ -147,12 +147,28 @@ function buildCronAgentDefaultsConfig(params: {
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
 
 type IsolatedDeliveryContract = "cron-owned" | "shared";
+type CronMessageToolTarget = {
+  channel: string;
+  to: string;
+  accountId?: string;
+  requireExplicitTarget?: boolean;
+};
 
 function resolveCronToolPolicy(params: {
   deliveryRequested: boolean;
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryContract: IsolatedDeliveryContract;
+  messageToolTarget?: CronMessageToolTarget;
 }) {
+  if (params.messageToolTarget) {
+    // Monitor auto-send uses this override so the wake can act like a normal
+    // turn: the runtime gets a concrete watched-surface target and the cron
+    // delivery pipe becomes fallback-only instead of the primary send path.
+    return {
+      requireExplicitMessageTarget: params.messageToolTarget.requireExplicitTarget === true,
+      disableMessageTool: false,
+    };
+  }
   return {
     // Only enforce an explicit message target when the cron delivery target
     // was successfully resolved. When resolution fails the agent should not
@@ -170,6 +186,7 @@ async function resolveCronDeliveryContext(params: {
   job: CronJob;
   agentId: string;
   deliveryContract: IsolatedDeliveryContract;
+  messageToolTarget?: CronMessageToolTarget;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
@@ -186,6 +203,7 @@ async function resolveCronDeliveryContext(params: {
       deliveryRequested: deliveryPlan.requested,
       resolvedDelivery,
       deliveryContract: params.deliveryContract,
+      messageToolTarget: params.messageToolTarget,
     }),
   };
 }
@@ -193,9 +211,13 @@ async function resolveCronDeliveryContext(params: {
 function appendCronDeliveryInstruction(params: {
   commandBody: string;
   deliveryRequested: boolean;
+  deliveryPromptMode?: "summary" | "reply";
 }) {
   if (!params.deliveryRequested) {
     return params.commandBody;
+  }
+  if (params.deliveryPromptMode === "reply") {
+    return `${params.commandBody}\n\nReturn only the exact reply content to deliver automatically. Do not include monitoring narration, summaries, labels, markdown wrappers, or recipient notes. If no message should be sent, return exactly NO_REPLY.`.trim();
   }
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
@@ -211,6 +233,8 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
   deliveryContract?: IsolatedDeliveryContract;
+  deliveryPromptMode?: "summary" | "reply";
+  messageToolTarget?: CronMessageToolTarget;
   sessionDefaultResetMode?: SessionResetMode;
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
@@ -440,6 +464,7 @@ export async function runCronIsolatedAgentTurn(params: {
     job: params.job,
     agentId,
     deliveryContract,
+    messageToolTarget: params.messageToolTarget,
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
@@ -481,7 +506,11 @@ export async function runCronIsolatedAgentTurn(params: {
     // Internal/trusted source - use original format
     commandBody = `${base}\n${timeLine}`.trim();
   }
-  commandBody = appendCronDeliveryInstruction({ commandBody, deliveryRequested });
+  commandBody = appendCronDeliveryInstruction({
+    commandBody,
+    deliveryRequested,
+    deliveryPromptMode: params.deliveryPromptMode,
+  });
 
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshot = resolveCronSkillsSnapshot({
@@ -543,7 +572,7 @@ export async function runCronIsolatedAgentTurn(params: {
       sessionKey: agentSessionKey,
       verboseLevel: resolvedVerboseLevel,
     });
-    const messageChannel = resolvedDelivery.channel;
+    const messageChannel = params.messageToolTarget?.channel ?? resolvedDelivery.channel;
     // Per-job payload.fallbacks takes priority over agent-level fallbacks.
     const payloadFallbacks =
       params.job.payload.kind === "agentTurn" && Array.isArray(params.job.payload.fallbacks)
@@ -608,7 +637,8 @@ export async function runCronIsolatedAgentTurn(params: {
             // inherit owner-only tooling like local `openclaw agent` runs.
             senderIsOwner: true,
             messageChannel,
-            agentAccountId: resolvedDelivery.accountId,
+            agentAccountId: params.messageToolTarget?.accountId ?? resolvedDelivery.accountId,
+            messageTo: params.messageToolTarget?.to,
             sessionFile,
             agentDir,
             workspaceDir,
@@ -632,6 +662,7 @@ export async function runCronIsolatedAgentTurn(params: {
             bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
             bootstrapContextRunKind: "cron",
             runId: cronSession.sessionEntry.sessionId,
+            currentChannelId: params.messageToolTarget?.to,
             requireExplicitMessageTarget: toolPolicy.requireExplicitMessageTarget,
             disableMessageTool: toolPolicy.disableMessageTool,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,

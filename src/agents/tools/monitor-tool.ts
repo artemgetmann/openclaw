@@ -26,6 +26,7 @@ const MonitorToolSchema = Type.Object(
     expiryAt: Type.Optional(Type.String()),
     stopCondition: Type.Optional(Type.String()),
     actionPolicy: Type.Optional(stringEnum(MONITOR_ACTION_POLICIES)),
+    watchDelivery: Type.Optional(Type.Object({}, { additionalProperties: true })),
     patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
     status: Type.Optional(stringEnum(MONITOR_STATUSES)),
     checkpoint: Type.Optional(Type.Object({}, { additionalProperties: true })),
@@ -113,6 +114,12 @@ For monitor creation:
               actionPolicy:
                 readStringParam(params, "actionPolicy") ??
                 ("notify_draft" as (typeof MONITOR_ACTION_POLICIES)[number]),
+              watchDelivery:
+                params.watchDelivery &&
+                typeof params.watchDelivery === "object" &&
+                !Array.isArray(params.watchDelivery)
+                  ? params.watchDelivery
+                  : undefined,
               lastCheckpoint:
                 params.checkpoint &&
                 typeof params.checkpoint === "object" &&
@@ -131,6 +138,13 @@ For monitor creation:
           const checkpoint = params.checkpoint;
           if (status) {
             patch.status = status;
+          }
+          if (
+            params.watchDelivery &&
+            typeof params.watchDelivery === "object" &&
+            !Array.isArray(params.watchDelivery)
+          ) {
+            patch.watchDelivery = params.watchDelivery;
           }
           if (checkpoint && typeof checkpoint === "object" && !Array.isArray(checkpoint)) {
             patch.lastCheckpoint = checkpoint;

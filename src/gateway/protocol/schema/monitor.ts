@@ -24,6 +24,7 @@ export const MonitorRecordSchema = Type.Object(
     name: Type.Optional(Type.String()),
     originSessionKey: NonEmptyString,
     originDelivery: Type.Optional(CronDeliverySchema),
+    watchDelivery: Type.Optional(CronDeliverySchema),
     monitorSessionKey: NonEmptyString,
     sourceType: NonEmptyString,
     sourceTarget: LooseObjectSchema,
@@ -56,6 +57,7 @@ export const MonitorCreateParamsSchema = Type.Object(
     name: Type.Optional(Type.String()),
     originSessionKey: NonEmptyString,
     originDelivery: Type.Optional(CronDeliverySchema),
+    watchDelivery: Type.Optional(CronDeliverySchema),
     sourceType: NonEmptyString,
     sourceTarget: LooseObjectSchema,
     cadence: CronScheduleSchema,
@@ -74,6 +76,7 @@ export const MonitorUpdateParamsSchema = Type.Object(
       {
         name: Type.Optional(Type.String()),
         originDelivery: Type.Optional(CronDeliverySchema),
+        watchDelivery: Type.Optional(CronDeliverySchema),
         sourceTarget: Type.Optional(LooseObjectSchema),
         cadence: Type.Optional(CronScheduleSchema),
         expiryAt: Type.Optional(Type.String()),
