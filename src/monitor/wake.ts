@@ -12,8 +12,10 @@ export function buildMonitorWakeMessage(params: {
   monitor: MonitorRecord;
   nowIso: string;
   wakeReason: string;
+  watchDeliveryConfigured?: boolean;
 }) {
   const { monitor } = params;
+  const watchDeliveryConfigured = params.watchDeliveryConfigured ?? Boolean(monitor.watchDelivery);
   const lines = [
     `Monitor wake for ${monitor.monitorId}.`,
     "Resume the same monitor session and continue the same task.",
@@ -34,7 +36,23 @@ export function buildMonitorWakeMessage(params: {
     "If fresh source inspection finds a new actionable change after an older resolved-looking checkpoint, keep the monitor active and continue the task.",
     "Do not keep or re-mark the monitor completed solely because older checkpoint data looked settled.",
     "Use normal tools/skills to inspect fresh source state.",
-    "Default behavior is notify + draft to the origin chat unless the original task explicitly authorized action on the watched surface.",
+    ...(monitor.actionPolicy === "auto_send"
+      ? watchDeliveryConfigured
+        ? [
+            "Watched-surface delivery is authorized and configured for this wake.",
+            "When the watched surface should be updated, prefer using the normal message tool against that watched target.",
+            "If you intentionally do not use the message tool, return only the exact reply content to send on the watched surface.",
+            "Do not include monitoring summaries, labels, explanations, or 'Suggested reply'.",
+            "If no watched-surface reply should be sent on this wake, return exactly NO_REPLY.",
+          ]
+        : [
+            "auto_send was requested, but no watched-surface delivery target is configured.",
+            "Do not send on the watched surface until a watched-surface delivery target is configured.",
+            "Report the missing delivery target through the origin chat instead.",
+          ]
+      : [
+          "Default behavior is notify + draft to the origin chat unless the original task explicitly authorized action on the watched surface.",
+        ]),
     "After a successful check, update the monitor checkpoint/status if needed before finishing.",
   ];
   return lines.join("\n");

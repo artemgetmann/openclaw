@@ -92,4 +92,28 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
   });
+
+  it("keeps the message tool enabled when a runtime watched-surface target is provided", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "whatsapp",
+      to: "74333133234289@lid",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      deliveryContract: "shared",
+      messageToolTarget: {
+        channel: "whatsapp",
+        to: "74333133234289@lid",
+      },
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.currentChannelId).toBe("74333133234289@lid");
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.messageTo).toBe("74333133234289@lid");
+  });
 });

@@ -327,6 +327,83 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("routes auto_send monitor wakes through the shared runtime seam with a watched message target", async () => {
+    const cfg = createCronConfig("server-cron-monitor-auto-send");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    const monitorStorePath = path.join(path.dirname(cfg.cron!.store!), "monitors.json");
+    await fs.mkdir(path.dirname(monitorStorePath), { recursive: true });
+    await fs.writeFile(
+      monitorStorePath,
+      JSON.stringify({
+        version: 1,
+        monitors: [
+          {
+            monitorId: "monitor-auto-send",
+            agentId: "main",
+            originSessionKey: "agent:main:telegram:direct:user-1",
+            originDelivery: { mode: "announce", channel: "telegram", to: "user-1" },
+            watchDelivery: { mode: "announce", channel: "whatsapp", to: "74333133234289@lid" },
+            monitorSessionKey: "agent:main:monitor:monitor-auto-send",
+            sourceType: "whatsapp",
+            sourceTarget: { target: "74333133234289@lid" },
+            cadence: { kind: "every", everyMs: 60_000 },
+            actionPolicy: "auto_send",
+            status: "active",
+            cronJobId: "cron-monitor-auto-send",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    try {
+      const job = await state.cron.add({
+        name: "monitor wake auto send",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:agent:main:monitor:monitor-auto-send",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "monitorWake", monitorId: "monitor-auto-send" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:monitor:monitor-auto-send",
+          deliveryContract: "shared",
+          deliveryPromptMode: "reply",
+          messageToolTarget: {
+            channel: "whatsapp",
+            to: "74333133234289@lid",
+            accountId: undefined,
+            requireExplicitTarget: false,
+          },
+          job: expect.objectContaining({
+            delivery: expect.objectContaining({
+              mode: "announce",
+              channel: "whatsapp",
+              to: "74333133234289@lid",
+            }),
+          }),
+          message: expect.stringContaining(
+            "When the watched surface should be updated, prefer using the normal message tool against that watched target.",
+          ),
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("keeps waking monitors marked completed so fresh source changes can reactivate the task", async () => {
     const cfg = createCronConfig("server-cron-monitor-completed");
     loadConfigMock.mockReturnValue(cfg);
