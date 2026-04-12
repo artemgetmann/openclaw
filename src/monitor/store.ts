@@ -97,6 +97,7 @@ export function createMonitorRecord(input: MonitorCreateInput, nowMs: number): M
     ...(input.name?.trim() ? { name: input.name.trim() } : {}),
     originSessionKey: input.originSessionKey,
     ...(input.originDelivery ? { originDelivery: input.originDelivery } : {}),
+    ...(input.watchDelivery ? { watchDelivery: input.watchDelivery } : {}),
     monitorSessionKey: input.monitorSessionKey,
     sourceType: input.sourceType.trim(),
     sourceTarget: input.sourceTarget,

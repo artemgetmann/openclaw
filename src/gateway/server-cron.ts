@@ -18,7 +18,6 @@ import {
 } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
-import type { CronJob } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -28,6 +27,10 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import {
+  resolveMonitorExecutionPlan,
+  resolveMonitorRecordWatchDelivery,
+} from "../monitor/delivery.js";
 import {
   findMonitor,
   loadMonitorStore,
@@ -238,38 +241,6 @@ export function buildGatewayCronService(params: {
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
   const monitorStorePath = resolveMonitorStorePath({ cronStorePath: storePath });
   const warnedLegacyWebhookJobs = new Set<string>();
-  const resolveMonitorWakeDelivery = (monitor: {
-    originDelivery?: { mode?: string; channel?: string; to?: string; accountId?: string };
-  }): CronJob["delivery"] | undefined => {
-    const originDelivery = monitor.originDelivery;
-    if (!originDelivery) {
-      return undefined;
-    }
-    if (originDelivery.mode === "webhook") {
-      return {
-        mode: "webhook",
-        to: originDelivery.to,
-      };
-    }
-    if (originDelivery.mode === "none") {
-      return {
-        mode: "none",
-      };
-    }
-    // CLI-origin monitors have no channel/to target. Preserve the durable
-    // origin session and skip channel delivery instead of manufacturing a
-    // broken announce target.
-    if (!originDelivery.channel && !originDelivery.to) {
-      return undefined;
-    }
-    return {
-      mode: "announce" as const,
-      channel: originDelivery.channel,
-      to: originDelivery.to,
-      accountId: originDelivery.accountId,
-    };
-  };
-
   const cron = new CronService({
     storePath,
     cronEnabled,
@@ -383,6 +354,14 @@ export function buildGatewayCronService(params: {
         monitor,
         nowIso: new Date(nowMs).toISOString(),
         wakeReason: `cron:${job.id}`,
+        watchDeliveryConfigured: Boolean(resolveMonitorRecordWatchDelivery(monitor)),
+      });
+      const monitorExecution = resolveMonitorExecutionPlan({
+        actionPolicy: monitor.actionPolicy,
+        sourceType: monitor.sourceType,
+        sourceTarget: monitor.sourceTarget,
+        originDelivery: monitor.originDelivery,
+        watchDelivery: resolveMonitorRecordWatchDelivery(monitor),
       });
       const runtimeConfig = loadConfig();
       const result = await runCronIsolatedAgentTurn({
@@ -392,7 +371,7 @@ export function buildGatewayCronService(params: {
           ...job,
           agentId: monitor.agentId,
           sessionTarget: `session:${monitor.monitorSessionKey}`,
-          delivery: resolveMonitorWakeDelivery(monitor),
+          delivery: monitorExecution.fallbackDelivery,
           payload: { kind: "agentTurn", message: wakeMessage },
         },
         message: wakeMessage,
@@ -400,6 +379,18 @@ export function buildGatewayCronService(params: {
         agentId: monitor.agentId,
         sessionKey: monitor.monitorSessionKey,
         lane: "cron",
+        deliveryContract: monitorExecution.deliveryContract,
+        deliveryPromptMode: monitorExecution.deliveryPromptMode,
+        ...(monitorExecution.messageToolTarget
+          ? {
+              messageToolTarget: {
+                channel: monitorExecution.messageToolTarget.channel,
+                to: monitorExecution.messageToolTarget.to,
+                accountId: monitorExecution.messageToolTarget.accountId,
+                requireExplicitTarget: monitorExecution.requireExplicitMessageTarget,
+              },
+            }
+          : {}),
         // Monitor wakes are supposed to continue one durable task over time.
         // Forcing the legacy daily cron reset here would recreate the same
         // "fresh mini-brain on every wake" bug this redesign is fixing.

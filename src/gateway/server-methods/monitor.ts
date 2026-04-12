@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { loadConfig } from "../../config/config.js";
 import type { CronJobCreate } from "../../cron/types.js";
+import { resolveMonitorWatchDelivery } from "../../monitor/delivery.js";
 import { seedMonitorSession } from "../../monitor/session.js";
 import {
   createMonitorRecord,
@@ -114,6 +115,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
       name?: string;
       originSessionKey: string;
       originDelivery?: CronJobCreate["delivery"];
+      watchDelivery?: CronJobCreate["delivery"];
       sourceType: string;
       sourceTarget: Record<string, unknown>;
       cadence: CronJobCreate["schedule"];
@@ -126,6 +128,11 @@ export const monitorHandlers: GatewayRequestHandlers = {
     const store = await loadMonitorStore(storePath);
     const monitorId = crypto.randomBytes(12).toString("hex");
     const cfg = loadConfig();
+    const watchDelivery = resolveMonitorWatchDelivery({
+      sourceType: p.sourceType,
+      sourceTarget: p.sourceTarget,
+      explicitWatchDelivery: p.watchDelivery,
+    });
     const monitorSessionKey = toAgentStoreSessionKey({
       agentId: p.agentId,
       requestKey: `monitor:${monitorId}`,
@@ -153,6 +160,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
         name: p.name,
         originSessionKey: p.originSessionKey,
         originDelivery: createdJob.delivery,
+        ...(watchDelivery ? { watchDelivery } : {}),
         monitorSessionKey,
         sourceType: p.sourceType,
         sourceTarget: p.sourceTarget,
@@ -180,6 +188,7 @@ export const monitorHandlers: GatewayRequestHandlers = {
       stopCondition: p.stopCondition,
       expiryAt: p.expiryAt,
       actionPolicy: monitor.actionPolicy,
+      watchDeliveryConfigured: Boolean(watchDelivery),
       originSessionKey: p.originSessionKey,
     });
     respond(true, monitor, undefined);
