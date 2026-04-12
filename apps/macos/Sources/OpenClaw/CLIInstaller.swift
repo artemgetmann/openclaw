@@ -20,16 +20,7 @@ enum CLIInstaller {
     {
         for basePath in searchPaths {
             let candidate = URL(fileURLWithPath: basePath).appendingPathComponent("openclaw").path
-            var isDirectory: ObjCBool = false
-
-            guard fileManager.fileExists(atPath: candidate, isDirectory: &isDirectory),
-                  !isDirectory.boolValue
-            else {
-                continue
-            }
-
-            guard fileManager.isExecutableFile(atPath: candidate) else { continue }
-
+            guard self.isUsableHelper(at: candidate, fileManager: fileManager) else { continue }
             return candidate
         }
 
@@ -85,6 +76,59 @@ enum CLIInstaller {
 
     private static func installPrefix() -> String {
         ConsumerRuntime.installPrefixURL.path
+    }
+
+    private static func isUsableHelper(
+        at path: String,
+        fileManager: FileManager)
+    -> Bool
+    {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory),
+              !isDirectory.boolValue
+        else {
+            return false
+        }
+
+        guard fileManager.isExecutableFile(atPath: path) else { return false }
+        return self.hasHelperPayload(at: URL(fileURLWithPath: path), fileManager: fileManager)
+    }
+
+    private static func hasHelperPayload(
+        at helperURL: URL,
+        fileManager: FileManager)
+    -> Bool
+    {
+        // The consumer helper is only usable when the installed wrapper and the
+        // packaged Node payload both exist. A stray executable without the
+        // runtime payload is the false-positive state we want to reject.
+        //
+        // Packaged consumer builds seed the bundled layout under
+        // `lib/openclaw-bundled`, while the legacy npm install path still uses
+        // `lib/node_modules/openclaw`. We accept either layout here so the
+        // onboarding bootstrap can trust a valid bundled helper instead of
+        // falling back to the remote installer.
+        let candidates = [
+            helperURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("openclaw/lib/node_modules/openclaw/dist/entry.js"),
+            helperURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("lib/node_modules/openclaw/dist/entry.js"),
+            helperURL
+                .appendingPathComponent("lib/node_modules/openclaw/dist/entry.js"),
+            helperURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("lib/openclaw-bundled/dist/entry.js"),
+            helperURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("lib/openclaw-bundled/dist/entry.js"),
+            helperURL
+                .appendingPathComponent("lib/openclaw-bundled/dist/entry.js"),
+        ]
+        return candidates.contains { fileManager.isReadableFile(atPath: $0.path) }
     }
 
     private static func installScriptCommand(version: String, prefix: String) -> [String] {
