@@ -122,7 +122,7 @@ team_identifier="$(printf '%s\n' "$codesign_details" | sed -n 's/^TeamIdentifier
 format_line="$(printf '%s\n' "$codesign_details" | sed -n 's/^Format=//p' | head -n 1)"
 
 while IFS= read -r -d '' runtime_file; do
-  if [[ "$runtime_file" == *.node ]] && ! openclaw_file_is_macho "$runtime_file"; then
+  if openclaw_runtime_node_should_be_macho "$runtime_file" && ! openclaw_file_is_macho "$runtime_file"; then
     echo "ERROR: runtime addon is not Mach-O: $runtime_file" >&2
     exit 1
   fi
