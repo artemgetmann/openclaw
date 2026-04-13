@@ -64,18 +64,16 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
   // keys and config surfaces the consumer bootstrap already tests and relies on.
   const openAiApiKey =
     readSeededEnvValue(CONSUMER_OPENAI_ENV_KEY, env) ??
-    readSeededEnvValue("OPENAI_API_KEY", env) ??
     readNestedString(founderConfig, [
       ["env", "vars", CONSUMER_OPENAI_ENV_KEY],
       ["env", CONSUMER_OPENAI_ENV_KEY],
-      ["env", "vars", "OPENAI_API_KEY"],
-      ["env", "OPENAI_API_KEY"],
-      ["models", "providers", "openai", "apiKey"],
     ]);
   if (openAiApiKey) {
-    // Consumer bundles ship a dedicated OpenAI utility key for speech-to-text.
-    // Keep it out of the generic provider env lane so chat/model auth cannot
-    // silently start using the consumer key.
+    // Consumer bundles ship only the explicitly-designated speech utility key.
+    // Do not silently reuse generic founder OpenAI keys here: a personal chat
+    // key can be missing transcription access, revoked, or outside product
+    // policy, which makes fresh consumer packages look voice-ready while they
+    // still fail on the first inbound voice note.
     setNestedValue(seeded, ["env", "vars", CONSUMER_OPENAI_ENV_KEY], openAiApiKey);
     setNestedValue(
       seeded,
