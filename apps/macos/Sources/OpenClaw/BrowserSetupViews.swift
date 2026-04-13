@@ -86,12 +86,19 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "Open Chrome once first",
-                body: "Open Google Chrome on this Mac so OpenClaw can detect a real profile without asking you for browser internals.")
+                body: "Google Chrome is installed, but OpenClaw needs a signed-in Chrome profile before browser setup can continue. Open Chrome, sign in, then click Check Again.")
 
-            Button("Check Again") {
-                Task { await self.model.refresh() }
+            HStack(spacing: 10) {
+                Button("Open Chrome") {
+                    self.model.openChromeApp()
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Check Again") {
+                    Task { await self.model.refresh() }
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderedProminent)
         }
     }
 
