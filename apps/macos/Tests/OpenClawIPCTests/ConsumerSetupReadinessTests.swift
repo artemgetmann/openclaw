@@ -163,6 +163,37 @@ struct ConsumerSetupReadinessTests {
         #expect(model.selectedModelId == "openai-codex/gpt-5.4")
     }
 
+    @Test func `consumer model readiness appends voice blocker when speech transcription is not ready`() async {
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                ConsumerModelsReadinessPayload(
+                    status: "ready",
+                    defaultModel: "openai-codex/gpt-5.4",
+                    summary: "OpenClaw-managed AI passed a live readiness check for the default model.",
+                    reasonCodes: [],
+                    voiceStatus: "blocked",
+                    voiceSummary: "Voice messages are not ready yet. This consumer runtime needs either the bundled OpenAI speech key or a BYOK OpenAI/Gemini-style API key for transcription.",
+                    voiceActions: [
+                        "Rebuild/package the consumer app with OPENCLAW_CONSUMER_OPENAI_API_KEY when product policy allows it.",
+                    ])
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(
+                    options: [subscriptionOptionPayload(), authOptionPayload()],
+                    activeOptionId: "openai-codex-oauth")
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        await model.refresh()
+
+        #expect(model.phase == .ready("openai-codex/gpt-5.4"))
+        #expect(
+            model.statusLine
+                == "AI ready on openai-codex/gpt-5.4. Voice messages are not ready yet. This consumer runtime needs either the bundled OpenAI speech key or a BYOK OpenAI/Gemini-style API key for transcription.")
+    }
+
     @Test func `consumer model readiness surfaces blocked live probe summary`() async {
         let model = ConsumerModelSetupModel(
             probeReadiness: {

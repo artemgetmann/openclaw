@@ -171,6 +171,15 @@ describe("resolveModelsReadiness", () => {
     expect(probeCfg.auth?.order?.["openai-codex"]).toEqual([CONSUMER_CANONICAL_SHARED_PROFILE_ID]);
   });
 
+  it("reports voice blocked for managed consumer auth when no bundled speech key is present", async () => {
+    const readiness = await resolveModelsReadiness();
+
+    expect(readiness.status).toBe("ready");
+    expect(readiness.voiceStatus).toBe("blocked");
+    expect(readiness.voiceSummary).toContain("Voice messages are not ready yet.");
+    expect(readiness.voiceActions[0]).toContain("OPENCLAW_CONSUMER_OPENAI_API_KEY");
+  });
+
   it("blocks when the canonical managed profile is missing", async () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
@@ -352,5 +361,78 @@ describe("resolveModelsReadiness", () => {
         }),
       }),
     );
+  });
+
+  it("reports voice ready when a bundled consumer speech key is present", async () => {
+    const config = makeManagedConfig() as ReturnType<typeof makeManagedConfig> & {
+      env: { vars: Record<string, string> };
+    };
+    config.env = { vars: { OPENCLAW_CONSUMER_OPENAI_API_KEY: "consumer-speech-key" } };
+    mocks.loadConfig.mockReturnValue(config);
+
+    const readiness = await resolveModelsReadiness();
+
+    expect(readiness.voiceStatus).toBe("ready");
+    expect(readiness.voiceSummary).toContain("bundled consumer speech transcription key");
+  });
+
+  it("reports voice ready for speech-capable byok providers", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+      },
+      auth: {},
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+          },
+        },
+      },
+    });
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:me": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-openai-api-key",
+        },
+      },
+    });
+    mocks.resolveAuthProfileOrder.mockReturnValue(["openai:me"]);
+    mocks.runAuthProbes.mockResolvedValue({
+      startedAt: 200,
+      finishedAt: 260,
+      durationMs: 60,
+      totalTargets: 1,
+      options: {
+        provider: "openai",
+        profileIds: ["openai:me"],
+        timeoutMs: 15_000,
+        concurrency: 1,
+        maxTokens: 8,
+      },
+      results: [
+        {
+          provider: "openai",
+          model: "openai/gpt-5.4",
+          profileId: "openai:me",
+          label: "openai:me",
+          source: "profile",
+          mode: "api_key",
+          status: "ok",
+          latencyMs: 320,
+        },
+      ],
+    });
+
+    const readiness = await resolveModelsReadiness();
+
+    expect(readiness.mode).toBe("byok");
+    expect(readiness.voiceStatus).toBe("ready");
+    expect(readiness.voiceSummary).toContain("BYOK provider");
   });
 });

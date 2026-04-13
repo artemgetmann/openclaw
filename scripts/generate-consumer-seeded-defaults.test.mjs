@@ -9,7 +9,7 @@ void test("returns an empty object when no consumer keys are available", () => {
 void test("seeds only the supported consumer defaults from env", () => {
   const seeded = buildConsumerSeededDefaults({
     env: {
-      OPENAI_API_KEY: " openai-key ",
+      OPENCLAW_CONSUMER_OPENAI_API_KEY: " consumer-openai-key ",
       GOOGLE_PLACES_API_KEY: " places-key ",
       FIRECRAWL_API_KEY: " firecrawl-key ",
       BRAVE_API_KEY: " brave-key ",
@@ -20,7 +20,7 @@ void test("seeds only the supported consumer defaults from env", () => {
   assert.deepEqual(seeded, {
     env: {
       vars: {
-        OPENCLAW_CONSUMER_OPENAI_API_KEY: "openai-key",
+        OPENCLAW_CONSUMER_OPENAI_API_KEY: "consumer-openai-key",
         GOOGLE_PLACES_API_KEY: "places-key",
         FIRECRAWL_API_KEY: "firecrawl-key",
         BRAVE_API_KEY: "brave-key",
@@ -71,16 +71,10 @@ void test("falls back to founder config when shell env is empty", () => {
     founderConfig: {
       env: {
         vars: {
+          OPENCLAW_CONSUMER_OPENAI_API_KEY: "founder-consumer-openai",
           BRAVE_API_KEY: "founder-brave",
         },
         FIRECRAWL_API_KEY: "founder-firecrawl",
-      },
-      models: {
-        providers: {
-          openai: {
-            apiKey: "founder-openai",
-          },
-        },
       },
       skills: {
         entries: {
@@ -95,7 +89,7 @@ void test("falls back to founder config when shell env is empty", () => {
   assert.deepEqual(seeded, {
     env: {
       vars: {
-        OPENCLAW_CONSUMER_OPENAI_API_KEY: "founder-openai",
+        OPENCLAW_CONSUMER_OPENAI_API_KEY: "founder-consumer-openai",
         GOOGLE_PLACES_API_KEY: "founder-places",
         FIRECRAWL_API_KEY: "founder-firecrawl",
         BRAVE_API_KEY: "founder-brave",
@@ -168,14 +162,14 @@ void test("falls back to Brave search when Firecrawl is not available", () => {
 void test("seeds consumer OpenAI utility defaults for audio transcription only", () => {
   const seeded = buildConsumerSeededDefaults({
     env: {
-      OPENAI_API_KEY: " openai-key ",
+      OPENCLAW_CONSUMER_OPENAI_API_KEY: " consumer-openai-key ",
     },
   });
 
   assert.deepEqual(seeded, {
     env: {
       vars: {
-        OPENCLAW_CONSUMER_OPENAI_API_KEY: "openai-key",
+        OPENCLAW_CONSUMER_OPENAI_API_KEY: "consumer-openai-key",
       },
     },
     tools: {
@@ -192,6 +186,30 @@ void test("seeds consumer OpenAI utility defaults for audio transcription only",
       },
     },
   });
+});
+
+void test("does not fall back to generic founder or shell OpenAI keys for consumer speech packaging", () => {
+  const seeded = buildConsumerSeededDefaults({
+    env: {
+      OPENAI_API_KEY: "generic-openai-key",
+    },
+    founderConfig: {
+      env: {
+        vars: {
+          OPENAI_API_KEY: "founder-generic-openai",
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            apiKey: "founder-provider-openai",
+          },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(seeded, {});
 });
 
 void test("reads legacy founder Brave keys from the nested provider path but rewrites them to search.apiKey", () => {

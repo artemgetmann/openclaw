@@ -69,6 +69,30 @@ if [[ "$APP_VARIANT" == "consumer" && "$ALLOW_SINGLE_ARCH_CONSUMER_SMOKE" != "1"
   fi
 fi
 
+consumer_require_bundled_speech_key() {
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+
+  # Fail before the expensive build when the dedicated speech key is missing.
+  # Consumer packaging used to fall back to generic founder OPENAI_API_KEY
+  # values, which could produce a "voice-ready" bundle that still failed on the
+  # first transcription request because the wrong key got embedded.
+  local seeded_tmp
+  seeded_tmp="$(mktemp)"
+  "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" "$seeded_tmp"
+  if ! grep -q '"OPENCLAW_CONSUMER_OPENAI_API_KEY"' "$seeded_tmp"; then
+    rm -f "$seeded_tmp"
+    echo "ERROR: consumer bundle is missing OPENCLAW_CONSUMER_OPENAI_API_KEY." >&2
+    echo "Packaging must use the dedicated consumer speech-transcription key; generic OPENAI_API_KEY fallback is intentionally not accepted." >&2
+    echo "Set OPENCLAW_CONSUMER_OPENAI_API_KEY before packaging, or ship without bundled voice and rely on the blocked readiness/setup path explicitly." >&2
+    exit 1
+  fi
+  rm -f "$seeded_tmp"
+}
+
+consumer_require_bundled_speech_key
+
 default_sparkle_feed_url_for_bundle() {
   local bundle_id="$1"
   case "$bundle_id" in
@@ -523,8 +547,15 @@ fi
 
 if [[ "$APP_VARIANT" == "consumer" ]]; then
   echo "🔐 Seeding bundled consumer defaults"
+  CONSUMER_SEEDED_DEFAULTS_PATH="$APP_ROOT/Contents/Resources/consumer-seeded-defaults.json"
   "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" \
-    "$APP_ROOT/Contents/Resources/consumer-seeded-defaults.json"
+    "$CONSUMER_SEEDED_DEFAULTS_PATH"
+  if ! grep -q '"OPENCLAW_CONSUMER_OPENAI_API_KEY"' "$CONSUMER_SEEDED_DEFAULTS_PATH"; then
+    echo "ERROR: consumer bundle is missing OPENCLAW_CONSUMER_OPENAI_API_KEY." >&2
+    echo "Packaging must use the dedicated consumer speech-transcription key; generic OPENAI_API_KEY fallback is intentionally not accepted." >&2
+    echo "Set OPENCLAW_CONSUMER_OPENAI_API_KEY before packaging, or ship without bundled voice and rely on the blocked readiness/setup path explicitly." >&2
+    exit 1
+  fi
   prepare_bundled_consumer_runtime
 fi
 

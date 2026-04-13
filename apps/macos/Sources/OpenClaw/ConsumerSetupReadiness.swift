@@ -592,7 +592,7 @@ final class ConsumerModelSetupModel {
             let display = (trimmedModel?.isEmpty == false ? trimmedModel : nil) ?? "the default model"
             self.activeModelId = trimmedModel
             self.phase = .ready(display)
-            self.statusLine = "AI ready on \(display)."
+            self.statusLine = payload.consumerReadyStatusLine(modelDisplay: display)
             self.failureKind = nil
             self.authSectionExpanded = false
             self.syncActiveAccessFromReadiness()
@@ -868,6 +868,9 @@ struct ConsumerModelsReadinessPayload: Decodable {
     let mode: String?
     let authMode: String?
     let sharedProfileId: String?
+    let voiceStatus: String?
+    let voiceSummary: String?
+    let voiceActions: [String]?
     let probe: ConsumerModelsReadinessProbePayload?
 
     init(
@@ -878,6 +881,9 @@ struct ConsumerModelsReadinessPayload: Decodable {
         mode: String? = nil,
         authMode: String? = nil,
         sharedProfileId: String? = nil,
+        voiceStatus: String? = nil,
+        voiceSummary: String? = nil,
+        voiceActions: [String]? = nil,
         probe: ConsumerModelsReadinessProbePayload? = nil)
     {
         self.status = status
@@ -887,7 +893,19 @@ struct ConsumerModelsReadinessPayload: Decodable {
         self.mode = mode
         self.authMode = authMode
         self.sharedProfileId = sharedProfileId
+        self.voiceStatus = voiceStatus
+        self.voiceSummary = voiceSummary
+        self.voiceActions = voiceActions
         self.probe = probe
+    }
+
+    func consumerReadyStatusLine(modelDisplay: String) -> String {
+        let base = "AI ready on \(modelDisplay)."
+        let trimmedVoiceSummary = self.voiceSummary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedVoiceSummary.isEmpty else {
+            return base
+        }
+        return "\(base) \(trimmedVoiceSummary)"
     }
 
     var consumerFailureKind: ConsumerAIAccessFailureKind {
