@@ -306,11 +306,15 @@ struct OnboardingView: View {
 
     var devLinkCommand: String {
         let version = GatewayEnvironment.preferredInstallTargetString()
-        if AppFlavor.current.isConsumer {
-            let prefix = ConsumerRuntime.installPrefixURL.path.replacingOccurrences(of: "'", with: "'\"'\"'")
-            return "curl -fsSL https://openclaw.bot/install-cli.sh | bash -s -- --json --no-onboard --prefix '\(prefix)' --version \(version)"
-        }
         return "npm install -g openclaw@\(version)"
+    }
+
+    var consumerRecoveryNote: String {
+        """
+        OpenClaw repairs its local helper from the packaged app bundle.
+        Quit and relaunch the app if it asks you to retry.
+        If it still fails, reinstall the app bundle.
+        """
     }
 
     struct LocalGatewayProbe: Equatable {

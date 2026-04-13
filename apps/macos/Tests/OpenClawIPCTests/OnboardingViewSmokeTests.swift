@@ -64,6 +64,20 @@ struct OnboardingViewSmokeTests {
         }
     }
 
+    @Test func `consumer recovery note avoids the legacy remote installer fallback`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let state = AppState(preview: true)
+            let view = OnboardingView(
+                state: state,
+                permissionMonitor: PermissionMonitor.shared,
+                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
+
+            #expect(view.consumerRecoveryNote.contains("packaged app bundle"))
+            #expect(!view.consumerRecoveryNote.contains("install-cli.sh"))
+            #expect(!view.consumerRecoveryNote.localizedCaseInsensitiveContains("terminal"))
+        }
+    }
+
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {
         let override = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")

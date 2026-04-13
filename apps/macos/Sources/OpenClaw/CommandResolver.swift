@@ -166,6 +166,12 @@ enum CommandResolver {
 
     private static func openclawManagedPaths(home: URL) -> [String] {
         var bases: [URL] = []
+        if AppFlavor.current.isConsumer {
+            // Consumer macOS bundles own a dedicated install prefix under the
+            // app's state dir. Search it explicitly instead of relying on
+            // `OPENCLAW_STATE_DIR` already being present in the process env.
+            bases.append(ConsumerRuntime.installPrefixURL)
+        }
         if let rawStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !rawStateDir.isEmpty
@@ -178,12 +184,13 @@ enum CommandResolver {
         for base in bases {
             let bin = base.appendingPathComponent("bin")
             let nodeBin = base.appendingPathComponent("tools/node/bin")
-            if FileManager().fileExists(atPath: bin.path) {
+            let includeConsumerPrefix = AppFlavor.current.isConsumer && base.path == ConsumerRuntime.installPrefixURL.path
+            if includeConsumerPrefix || FileManager().fileExists(atPath: bin.path) {
                 if seen.insert(bin.path).inserted {
                     paths.append(bin.path)
                 }
             }
-            if FileManager().fileExists(atPath: nodeBin.path) {
+            if includeConsumerPrefix || FileManager().fileExists(atPath: nodeBin.path) {
                 if seen.insert(nodeBin.path).inserted {
                     paths.append(nodeBin.path)
                 }

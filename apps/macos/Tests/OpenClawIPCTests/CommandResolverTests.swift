@@ -394,6 +394,26 @@ import Testing
         #expect(prefixed.contains(tmp.appendingPathComponent("node_modules/.bin").path))
     }
 
+    @Test @MainActor func `consumer preferred paths include bundled install prefix without env`() async throws {
+        let instanceID = "preferred-paths-consumer"
+        let homeURL = try makeTempDirForTests()
+        let tmp = try self.makeRepoRoot()
+
+        try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: instanceID,
+                "HOME": homeURL.path,
+                "OPENCLAW_STATE_DIR": nil,
+            ])
+        {
+            CommandResolver.setProjectRoot(tmp.path)
+            let paths = CommandResolver.preferredPaths()
+            #expect(paths.contains(ConsumerRuntime.installPrefixURL.appendingPathComponent("bin").path))
+            #expect(paths.contains(ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/node/bin").path))
+        }
+    }
+
     @Test func `infers project root from packaged app bundle path`() throws {
         let tmp = try makeTempDirForTests()
         let root = tmp.appendingPathComponent("repo", isDirectory: true)
