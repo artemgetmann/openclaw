@@ -73,18 +73,55 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+const CLAUDE_BRIDGE_EXTRA_SYSTEM_PROMPT_MAX_CHARS = 1_500;
+
 function resolveCliExtraSystemPromptForReplyRun(params: {
   provider: string;
   extraSystemPrompt?: string;
 }): string | undefined {
-  const normalizedProvider = params.provider.trim().toLowerCase();
-  if (normalizedProvider === "claude-bridge") {
-    // Telegram reply runs attach channel/session guidance here. Claude Bridge already
-    // has its own minimal runtime-workspace system prompt, so forwarding this baggage
-    // bloats the bridge envelope and trips the subscription lane.
+  const trimmedPrompt = params.extraSystemPrompt?.trim();
+  if (!trimmedPrompt) {
     return undefined;
   }
-  return params.extraSystemPrompt;
+  const normalizedProvider = params.provider.trim().toLowerCase();
+  if (normalizedProvider === "claude-bridge") {
+    // Claude Bridge still needs the per-turn session/channel framing that reply
+    // runs add here, otherwise Telegram turns lose continuity-specific context
+    // even while the in-process bridge handle is reused correctly.
+    //
+    // Keep the forwarded slice intentionally small so we restore continuity
+    // without reintroducing the larger prompt envelope that previously hurt the
+    // subscription-auth lane.
+    if (trimmedPrompt.length <= CLAUDE_BRIDGE_EXTRA_SYSTEM_PROMPT_MAX_CHARS) {
+      return trimmedPrompt;
+    }
+
+    const blocks = trimmedPrompt
+      .split(/\n{2,}/)
+      .map((block) => block.trim())
+      .filter(Boolean);
+    const keptBlocks: string[] = [];
+    let usedChars = 0;
+    for (const block of blocks) {
+      const nextCost = block.length + (keptBlocks.length > 0 ? 2 : 0);
+      if (
+        keptBlocks.length > 0 &&
+        usedChars + nextCost > CLAUDE_BRIDGE_EXTRA_SYSTEM_PROMPT_MAX_CHARS
+      ) {
+        break;
+      }
+      if (keptBlocks.length === 0 && block.length > CLAUDE_BRIDGE_EXTRA_SYSTEM_PROMPT_MAX_CHARS) {
+        return block.slice(0, CLAUDE_BRIDGE_EXTRA_SYSTEM_PROMPT_MAX_CHARS).trimEnd();
+      }
+      keptBlocks.push(block);
+      usedChars += nextCost;
+    }
+    return (
+      keptBlocks.join("\n\n").trim() ||
+      trimmedPrompt.slice(0, CLAUDE_BRIDGE_EXTRA_SYSTEM_PROMPT_MAX_CHARS).trimEnd()
+    );
+  }
+  return trimmedPrompt;
 }
 
 export async function runAgentTurnWithFallback(params: {
