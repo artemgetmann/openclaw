@@ -181,6 +181,23 @@ describe("buildProviderKeyboard", () => {
 });
 
 describe("buildModelsKeyboard", () => {
+  it("renders Anthropic-style display names for claude-bridge models", () => {
+    const result = buildModelsKeyboard({
+      provider: "claude-bridge",
+      models: ["haiku", "opus", "sonnet"],
+      currentModel: "claude-bridge/sonnet",
+      currentPage: 1,
+      totalPages: 1,
+    });
+
+    expect(result[0]?.[0]?.text).toBe("claude-haiku-4-5");
+    expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_claude-bridge/haiku");
+    expect(result[1]?.[0]?.text).toBe("claude-opus-4-6");
+    expect(result[1]?.[0]?.callback_data).toBe("mdl_sel_claude-bridge/opus");
+    expect(result[2]?.[0]?.text).toBe("claude-sonnet-4-6 ✓");
+    expect(result[2]?.[0]?.callback_data).toBe("mdl_sel_claude-bridge/sonnet");
+  });
+
   it("shows back button for empty models", () => {
     const result = buildModelsKeyboard({
       provider: "anthropic",
