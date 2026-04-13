@@ -1119,6 +1119,120 @@ describe("runReplyAgent claude-cli routing", () => {
   });
 });
 
+describe("runReplyAgent claude-bridge Telegram prompt envelope", () => {
+  function createCliRun(params: { provider: string; model?: string; extraSystemPrompt?: string }) {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "group:123",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      originatingChannel: "telegram",
+      originatingTo: "group:123",
+      originatingThreadId: 5853,
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: params.provider,
+        model: params.model ?? "sonnet",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+        extraSystemPrompt: params.extraSystemPrompt,
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "claude-bridge/sonnet",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("drops Telegram extra system prompt baggage for claude-bridge", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-bridge",
+          model: "sonnet",
+        },
+      },
+    });
+
+    const result = await createCliRun({
+      provider: "claude-bridge",
+      extraSystemPrompt: "telegram ingress baggage",
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    const call = runCliAgentMock.mock.calls[0]?.[0] as
+      | { provider?: string; extraSystemPrompt?: string }
+      | undefined;
+    expect(call?.provider).toBe("claude-bridge");
+    expect(call?.extraSystemPrompt).toBeUndefined();
+    expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("keeps extra system prompt forwarding for other CLI providers", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "sonnet",
+        },
+      },
+    });
+
+    const result = await createCliRun({
+      provider: "claude-cli",
+      extraSystemPrompt: "keep this extra system prompt",
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    const call = runCliAgentMock.mock.calls[0]?.[0] as
+      | { provider?: string; extraSystemPrompt?: string }
+      | undefined;
+    expect(call?.provider).toBe("claude-cli");
+    expect(call?.extraSystemPrompt).toBe("keep this extra system prompt");
+    expect(result).toMatchObject({ text: "ok" });
+  });
+});
+
 describe("runReplyAgent messaging tool suppression", () => {
   function createRun(
     messageProvider = "slack",
