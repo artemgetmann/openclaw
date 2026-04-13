@@ -78,6 +78,7 @@ final class BrowserSetupModel {
     private let loadProfiles: () -> [ChromeProfileCandidate]
     private let persistSelectionToConfig: (ChromeProfileCandidate) -> Void
     private let clearSelectionFromConfig: () -> Void
+    private let launchChromeApplication: () -> Bool
     private let verifySelectionReadiness: (ChromeProfileCandidate) async -> String?
     private let allowConfigOnlyRestore: Bool
     private let restoredSelectionRequiresConfirmation: Bool
@@ -91,6 +92,7 @@ final class BrowserSetupModel {
         loadProfiles: (() -> [ChromeProfileCandidate])? = nil,
         persistSelectionToConfig: ((ChromeProfileCandidate) -> Void)? = nil,
         clearSelectionFromConfig: (() -> Void)? = nil,
+        launchChromeApplication: (() -> Bool)? = nil,
         verifySelectionReadiness: ((ChromeProfileCandidate) async -> String?)? = nil)
     {
         self.defaults = defaults
@@ -103,6 +105,9 @@ final class BrowserSetupModel {
         }
         self.clearSelectionFromConfig = clearSelectionFromConfig ?? {
             BrowserSetupModel.clearConsumerBrowserSelectionFromConfig()
+        }
+        self.launchChromeApplication = launchChromeApplication ?? {
+            BrowserSetupModel.launchChromeApplication()
         }
         self.verifySelectionReadiness = verifySelectionReadiness ?? { profile in
             await BrowserSetupModel.verifyConsumerBrowserSelection(expectedProfile: profile)
@@ -162,7 +167,7 @@ final class BrowserSetupModel {
             self.clearSelection()
             self.clearSelectionFromConfig()
             self.phase = .chromeMissing
-            self.statusLine = "Google Chrome is required for browser setup."
+            self.statusLine = "Google Chrome must be installed on this Mac before browser setup can continue."
             self.lastAutoRecoveryFailureMessage = nil
             return
         }
@@ -174,7 +179,7 @@ final class BrowserSetupModel {
             self.clearSelection()
             self.clearSelectionFromConfig()
             self.phase = .noProfiles
-            self.statusLine = "Open Chrome once on this Mac so OpenClaw can find your profile."
+            self.statusLine = "Google Chrome is installed, but no signed-in profile was found. Open Chrome once, sign in, then click Check Again."
             self.lastAutoRecoveryFailureMessage = nil
             return
         }
@@ -261,6 +266,10 @@ final class BrowserSetupModel {
     func openChromeDownloadPage() {
         guard let url = URL(string: "https://www.google.com/chrome/") else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    func openChromeApp() {
+        _ = self.launchChromeApplication()
     }
 
     // Non-trivial: we read Chrome's Local State file directly so the user never
@@ -450,5 +459,16 @@ final class BrowserSetupModel {
                 .appendingPathComponent("Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
         ]
         return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) })
+    }
+
+    private static func launchChromeApplication() -> Bool {
+        guard let executableURL = Self.detectChromeExecutable() else {
+            return false
+        }
+        let appBundleURL = executableURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return NSWorkspace.shared.open(appBundleURL)
     }
 }

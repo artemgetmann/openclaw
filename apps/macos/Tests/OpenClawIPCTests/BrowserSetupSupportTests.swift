@@ -78,6 +78,26 @@ struct BrowserSetupSupportTests {
         #expect(clearedRuntimeConfig)
     }
 
+    @Test func `open chrome app uses the injected launcher`() async {
+        let defaults = self.makeDefaults()
+        var launched = false
+        let model = BrowserSetupModel(
+            defaults: defaults,
+            detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+            loadProfiles: { [] },
+            persistSelectionToConfig: { _ in },
+            clearSelectionFromConfig: {},
+            launchChromeApplication: {
+                launched = true
+                return true
+            },
+            verifySelectionReadiness: { _ in nil })
+
+        model.openChromeApp()
+
+        #expect(launched)
+    }
+
     @Test func `refresh restores persisted profile selection`() async {
         let defaults = self.makeDefaults()
         let selected = ChromeProfileCandidate(
