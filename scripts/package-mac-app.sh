@@ -254,6 +254,50 @@ ensure_consumer_node_runtime() {
   printf '%s\n' "$cache_root"
 }
 
+stage_consumer_matrix_crypto_x64_twin() {
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+  if ! printf '%s\n' "${BUILD_ARCHS[@]}" | grep -qx "x86_64"; then
+    return 0
+  fi
+
+  local matrix_package_root="${ROOT_DIR}/node_modules/@matrix-org/matrix-sdk-crypto-nodejs"
+  local bundled_runtime_root="${BUNDLED_RUNTIME_RESOURCE_DIR}/openclaw"
+  local bundled_runtime_dist_root="${bundled_runtime_root}/dist"
+  local matrix_crypto_x64_source=""
+  local arm64_native=""
+  local x64_target=""
+
+  matrix_crypto_x64_source="${matrix_package_root}/matrix-sdk-crypto.darwin-x64.node"
+  if [[ ! -f "$matrix_crypto_x64_source" ]]; then
+    local downloader_script="${matrix_package_root}/download-lib.js"
+    if [[ ! -f "$downloader_script" ]]; then
+      echo "ERROR: Matrix crypto x64 source missing and downloader helper not found." >&2
+      exit 1
+    fi
+    echo "📦 Staging bundled consumer Matrix crypto x64 twin"
+    npm_config_target_arch=x64 \
+      npm_config_arch=x64 \
+      "$VALIDATED_NODE_BIN" "$downloader_script" >/dev/null
+  fi
+
+  if [[ -z "$matrix_crypto_x64_source" ]]; then
+    echo "ERROR: bundled consumer Matrix crypto x64 staging did not produce a native addon." >&2
+    exit 1
+  fi
+
+  while IFS= read -r arm64_native; do
+    [[ -n "$arm64_native" ]] || continue
+    x64_target="${arm64_native/darwin-arm64/darwin-x64}"
+    if [[ -f "$x64_target" ]]; then
+      continue
+    fi
+    mkdir -p "$(dirname "$x64_target")"
+    cp "$matrix_crypto_x64_source" "$x64_target"
+  done < <(find "$bundled_runtime_dist_root" -type f -name '*.node' | grep 'darwin-arm64' || true)
+}
+
 prepare_bundled_consumer_runtime() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
     return 0
@@ -289,6 +333,8 @@ prepare_bundled_consumer_runtime() {
   rsync -a "$deploy_root/node_modules/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules/"
   rm -rf "$deploy_root"
   trap - RETURN
+
+  stage_consumer_matrix_crypto_x64_twin
 
   if printf '%s\n' "${BUILD_ARCHS[@]}" | grep -qx "x86_64"; then
     local arm64_native=""
