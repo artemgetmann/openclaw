@@ -120,6 +120,38 @@ fi
 BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
   "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
 
+sync_consumer_artifacts_to_canonical_dist() {
+  local stable_root
+  local stable_dist
+  local stable_app_path
+  local stable_zip_path
+  local zip_source
+
+  stable_root="$(consumer_instance_expected_home_checkout)"
+  stable_dist="$stable_root/dist"
+  stable_app_path="$stable_dist/$APP_BUNDLE_NAME"
+  stable_zip_path="$stable_dist/${APP_NAME}.zip"
+  zip_source="$APP_PATH"
+
+  mkdir -p "$stable_dist"
+
+  if [[ "$stable_root" != "$ROOT_DIR" ]]; then
+    # Keep the worktree build as the source of truth, but mirror the finished
+    # artifact into the canonical consumer home clone so the output survives
+    # worktree cleanup and is easy to hand to an Intel Mac later.
+    echo "📦 Copying consumer app bundle to canonical dist: $stable_app_path"
+    rm -rf "$stable_app_path"
+    ditto "$APP_PATH" "$stable_app_path"
+    zip_source="$stable_app_path"
+  fi
+
+  echo "📦 Writing consumer zip to canonical dist: $stable_zip_path"
+  rm -f "$stable_zip_path"
+  ditto -c -k --sequesterRsrc --keepParent "$zip_source" "$stable_zip_path"
+}
+
 echo "Consumer packaging note:"
 echo "  If the verifier passed, treat unrelated pnpm/TypeScript diagnostics separately from bundle assembly."
 echo "  Known current repo noise: skipWaitForIdle diagnostics from src/agents/pi-embedded-runner/run/attempt.ts can appear during packaging without breaking the consumer app bundle."
+
+sync_consumer_artifacts_to_canonical_dist
