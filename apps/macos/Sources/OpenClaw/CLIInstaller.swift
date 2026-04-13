@@ -2,6 +2,9 @@ import Foundation
 
 @MainActor
 enum CLIInstaller {
+    private static let missingBundledRuntimeMessage =
+        "This OpenClaw Consumer build is missing its bundled local runtime. Re-download the app bundle."
+
     enum EnsureResult: Equatable {
         case alreadyInstalled(String)
         case installed(String)
@@ -9,9 +12,13 @@ enum CLIInstaller {
     }
 
     static func installedLocation() -> String? {
+        self.installedLocation(fileManager: .default)
+    }
+
+    static func installedLocation(fileManager: FileManager) -> String? {
         self.installedLocation(
             searchPaths: CommandResolver.preferredPaths(),
-            fileManager: .default)
+            fileManager: fileManager)
     }
 
     static func installedLocation(
@@ -32,16 +39,31 @@ enum CLIInstaller {
     }
 
     static func ensureInstalledIfNeeded(
+        bundle: Bundle = .main,
+        fileManager: FileManager = .default,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void = { _ in })
         async -> EnsureResult
     {
-        if let location = self.installedLocation() {
+        let installedLocation = AppFlavor.current.isConsumer
+            ? self.consumerInstalledLocation(fileManager: fileManager)
+            : self.installedLocation(fileManager: fileManager)
+        if let location = installedLocation {
             return .alreadyInstalled(location)
+        }
+
+        if AppFlavor.current.isConsumer {
+            // Consumer first-run must stay inside the signed app bundle. If the
+            // helper is missing, repair it from bundled resources instead of
+            // shelling out to the network installer and reintroducing brew/git.
+            return await self.ensureBundledConsumerRuntime(
+                bundle: bundle,
+                fileManager: fileManager,
+                statusHandler: statusHandler)
         }
 
         await self.install(statusHandler: statusHandler)
 
-        if let location = self.installedLocation() {
+        if let location = self.installedLocation(fileManager: fileManager) {
             return .installed(location)
         }
 
@@ -74,8 +96,48 @@ enum CLIInstaller {
         await statusHandler("Install failed: \(detail.isEmpty ? fallback : detail)")
     }
 
+    private static func ensureBundledConsumerRuntime(
+        bundle: Bundle,
+        fileManager: FileManager,
+        statusHandler: @escaping @MainActor @Sendable (String) async -> Void)
+        async -> EnsureResult
+    {
+        await statusHandler("Repairing OpenClaw from the packaged app…")
+
+        guard let resourceURL = ConsumerBundledRuntime.resourceURL(bundle: bundle) else {
+            await statusHandler("Repair failed: \(self.missingBundledRuntimeMessage)")
+            return .failed(self.missingBundledRuntimeMessage)
+        }
+
+        do {
+            _ = try ConsumerBundledRuntime.seedIfNeeded(
+                from: resourceURL,
+                into: ConsumerRuntime.installPrefixURL,
+                fileManager: fileManager)
+        } catch {
+            let message = "Bundled local runtime repair failed: \(error.localizedDescription)"
+            await statusHandler("Repair failed: \(message)")
+            return .failed(message)
+        }
+
+        if let location = self.consumerInstalledLocation(fileManager: fileManager) {
+            await statusHandler("OpenClaw is ready on this Mac.")
+            return .installed(location)
+        }
+
+        let message = "Bundled local runtime repair finished, but the local helper is still missing."
+        await statusHandler("Repair failed: \(message)")
+        return .failed(message)
+    }
+
     private static func installPrefix() -> String {
         ConsumerRuntime.installPrefixURL.path
+    }
+
+    private static func consumerInstalledLocation(fileManager: FileManager) -> String? {
+        self.installedLocation(
+            searchPaths: [ConsumerRuntime.installPrefixURL.appendingPathComponent("bin").path],
+            fileManager: fileManager)
     }
 
     private static func isUsableHelper(

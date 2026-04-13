@@ -133,8 +133,8 @@ extension OnboardingView {
                                         .font(.headline)
                                     Text(
                                         helperBootstrap.hasFailure
-                                            ? "OpenClaw could not finish local bootstrap automatically. Retry here first; Terminal is only a backup path."
-                                            : "This local helper keeps the gateway running in the background. You do not need Terminal for the normal setup flow.")
+                                            ? "OpenClaw could not repair its local helper from the packaged app bundle. Reinstall the app bundle if this keeps happening."
+                                            : "This local helper keeps the gateway running in the background. OpenClaw repairs it from the packaged app bundle, so you do not need Terminal for the normal setup flow.")
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
@@ -154,7 +154,7 @@ extension OnboardingView {
 
                             if helperBootstrap.hasFailure && !helperBootstrap.isInstalling {
                                 HStack(spacing: 12) {
-                                    Button("Retry local setup") {
+                                    Button("Retry repair") {
                                         Task {
                                             await helperBootstrap.ensureInstalledIfNeeded(
                                                 connectionMode: self.state.connectionMode)
@@ -162,10 +162,12 @@ extension OnboardingView {
                                     }
                                     .buttonStyle(.borderedProminent)
 
-                                    Button(self.copied ? "Copied" : "Copy fallback command") {
-                                        self.copyToPasteboard(self.devLinkCommand)
+                                    if AppFlavor.current.isConsumer {
+                                        Button(self.copied ? "Copied" : "Copy repair note") {
+                                            self.copyToPasteboard(self.consumerRecoveryNote)
+                                        }
+                                        .buttonStyle(.bordered)
                                     }
-                                    .buttonStyle(.bordered)
                                 }
                             }
                         }

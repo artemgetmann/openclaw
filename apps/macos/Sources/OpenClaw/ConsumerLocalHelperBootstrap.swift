@@ -9,14 +9,15 @@ final class ConsumerLocalHelperBootstrap {
     private(set) var installedLocation: String?
     private(set) var statusMessage: String?
     private(set) var isInstalling = false
-    private var installTask: Task<CLIInstaller.EnsureResult, Never>?
+    private var bootstrapTask: Task<CLIInstaller.EnsureResult, Never>?
 
     private init() {
-        self.installedLocation = CLIInstaller.installedLocation()
+        self.installedLocation = Self.consumerInstalledLocation()
     }
 
     var hasFailure: Bool {
-        (self.statusMessage ?? "").hasPrefix("Install failed:")
+        let message = self.statusMessage ?? ""
+        return message.hasPrefix("Install failed:") || message.hasPrefix("Repair failed:")
     }
 
     var shouldShowStatusCard: Bool {
@@ -24,7 +25,7 @@ final class ConsumerLocalHelperBootstrap {
     }
 
     func refresh() {
-        self.installedLocation = CLIInstaller.installedLocation()
+        self.installedLocation = Self.consumerInstalledLocation()
     }
 
     func ensureInstalledIfNeeded(connectionMode: AppState.ConnectionMode) async {
@@ -37,29 +38,26 @@ final class ConsumerLocalHelperBootstrap {
             return
         }
 
-        if let installTask = self.installTask {
-            _ = await installTask.value
+        if let bootstrapTask = self.bootstrapTask {
+            _ = await bootstrapTask.value
             self.refresh()
             return
         }
 
         self.isInstalling = true
-        self.statusMessage = "Preparing OpenClaw on this Mac…"
+        self.statusMessage = "Repairing OpenClaw from the packaged app…"
 
-        // The consumer app should own local bootstrap instead of bouncing the
-        // user into Terminal. Keep one shared task so launch-time startup and
-        // the onboarding surface do not race duplicate installs.
+        // Keep one shared repair task so launch-time startup and onboarding do
+        // not race each other. Consumer repair stays bundled-only so we never
+        // bounce the user into a remote installer or Terminal.
         let task = Task<CLIInstaller.EnsureResult, Never> {
-            await CLIInstaller.ensureInstalledIfNeeded { message in
-                await MainActor.run {
-                    ConsumerLocalHelperBootstrap.shared.statusMessage =
-                        Self.consumerStatusMessage(for: message)
-                }
-            }
+            await CLIInstaller.ensureInstalledIfNeeded(
+                bundle: .main,
+                fileManager: .default)
         }
-        self.installTask = task
+        self.bootstrapTask = task
         let result = await task.value
-        self.installTask = nil
+        self.bootstrapTask = nil
         self.isInstalling = false
         self.refresh()
 
@@ -68,9 +66,7 @@ final class ConsumerLocalHelperBootstrap {
             self.installedLocation = location
             self.statusMessage = nil
         case let .failed(message):
-            if self.statusMessage == nil || self.statusMessage?.isEmpty == true {
-                self.statusMessage = message
-            }
+            self.statusMessage = message
         }
     }
 
@@ -89,17 +85,9 @@ final class ConsumerLocalHelperBootstrap {
         }
     }
 
-    private static func consumerStatusMessage(for raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return "Preparing OpenClaw on this Mac…"
-        }
-        if trimmed == "Installing openclaw CLI…" {
-            return "Preparing OpenClaw on this Mac…"
-        }
-        if trimmed.hasPrefix("Installed openclaw") {
-            return "OpenClaw is ready on this Mac."
-        }
-        return trimmed
+    private static func consumerInstalledLocation(fileManager: FileManager = .default) -> String? {
+        CLIInstaller.installedLocation(
+            searchPaths: [ConsumerRuntime.installPrefixURL.appendingPathComponent("bin").path],
+            fileManager: fileManager)
     }
 }
