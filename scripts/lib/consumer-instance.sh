@@ -64,7 +64,10 @@ consumer_instance_app_name() {
 
 consumer_instance_stable_tcc_identity_enabled() {
   local raw="${OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY:-}"
-  case "${raw,,}" in
+  # macOS ships Bash 3.2, so avoid newer `${var,,}` syntax here.
+  local normalized_raw
+  normalized_raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized_raw" in
     1|true|yes|on)
       return 0
       ;;
