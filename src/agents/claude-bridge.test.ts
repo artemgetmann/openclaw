@@ -2,6 +2,8 @@ import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearClaudeBridgeSessionsForTests, runClaudeBridgeAgent } from "./claude-bridge.js";
 
+type SystemPromptReport = Parameters<typeof runClaudeBridgeAgent>[0]["systemPromptReport"];
+
 const spawnMock = vi.fn();
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -60,6 +62,34 @@ function emitTurn(child: MockChild, text: string, sessionId: string, cacheRead =
   );
 }
 
+function emitAssistantEvent(child: MockChild, text: string) {
+  child.stdout.emit(
+    "data",
+    `${JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "text", text }] },
+    })}\n`,
+  );
+}
+
+function emitResultEvent(child: MockChild, text: string, sessionId: string, cacheRead = 0) {
+  child.stdout.emit(
+    "data",
+    `${JSON.stringify({
+      type: "result",
+      result: text,
+      session_id: sessionId,
+      usage: {
+        input_tokens: 3,
+        output_tokens: 6,
+        cache_read_input_tokens: cacheRead,
+        cache_write_input_tokens: 4,
+        total_tokens: 9,
+      },
+    })}\n`,
+  );
+}
+
 describe("runClaudeBridgeAgent", () => {
   beforeEach(async () => {
     spawnMock.mockReset();
@@ -93,7 +123,7 @@ describe("runClaudeBridgeAgent", () => {
         injectedFiles: [],
         skillsPrompt: "",
         tools: [],
-      },
+      } as SystemPromptReport,
     });
 
     await vi.waitFor(() => {
@@ -130,7 +160,7 @@ describe("runClaudeBridgeAgent", () => {
         injectedFiles: [],
         skillsPrompt: "",
         tools: [],
-      },
+      } as SystemPromptReport,
     });
 
     await vi.waitFor(() => {
@@ -143,5 +173,65 @@ describe("runClaudeBridgeAgent", () => {
     expect(child.stdin.writes).toHaveLength(2);
     expect(secondResult.payloads?.[0]?.text).toBe("TWO");
     expect(secondResult.meta.agentMeta?.usage?.cacheRead).toBe(17);
+  });
+
+  it("streams assistant progress through partial and block callbacks before resolving", async () => {
+    const child = new MockChild();
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+    spawnMock.mockReturnValue(child);
+
+    const runPromise = runClaudeBridgeAgent({
+      sessionId: "session-2",
+      workspaceDir: "/tmp",
+      configBackend: { command: "claude" },
+      prompt: "Reply with a short sentence.",
+      provider: "claude-bridge",
+      model: "sonnet",
+      timeoutMs: 5_000,
+      systemPromptReport: {
+        source: "run",
+        generatedAt: Date.now(),
+        sessionId: "session-2",
+        provider: "claude-bridge",
+        model: "sonnet",
+        workspaceDir: "/tmp",
+        bootstrapMaxChars: 1,
+        bootstrapTotalMaxChars: 1,
+        sandbox: { mode: "off", sandboxed: false },
+        systemPrompt: "",
+        bootstrapFiles: [],
+        injectedFiles: [],
+        skillsPrompt: "",
+        tools: [],
+      } as SystemPromptReport,
+      onAssistantMessageStart,
+      onPartialReply,
+      onBlockReply,
+    });
+
+    await vi.waitFor(() => {
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    emitAssistantEvent(child, "Hello");
+    emitAssistantEvent(child, "Hello there");
+    emitResultEvent(child, "Hello there.", "bridge-session-b");
+
+    const result = await runPromise;
+
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply.mock.calls).toEqual([
+      [{ text: "Hello" }],
+      [{ text: "Hello there" }],
+      [{ text: "Hello there." }],
+    ]);
+    expect(onBlockReply.mock.calls).toEqual([
+      [expect.objectContaining({ text: "Hello" })],
+      [expect.objectContaining({ text: " there" })],
+      [expect.objectContaining({ text: "." })],
+    ]);
+    expect(result.payloads?.[0]?.text).toBe("Hello there.");
   });
 });

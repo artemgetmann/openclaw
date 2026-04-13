@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -23,6 +25,14 @@ type ActiveTurn = {
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
   assistantTexts: string[];
+  lastAssistantText: string;
+  lastDeliveredPartialText: string;
+  assistantStarted: boolean;
+  callbackChain: Promise<void>;
+  onAssistantMessageStart?: () => void | Promise<void>;
+  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onBlockReply?: (payload: ReplyPayload) => void | Promise<void>;
+  blockAccumulator: ReturnType<typeof createStreamingDirectiveAccumulator>;
 };
 
 type ClaudeBridgeSessionHandle = {
@@ -99,6 +109,25 @@ function failActiveTurn(handle: ClaudeBridgeSessionHandle, error: Error): void {
   turn.reject(error);
 }
 
+function queueTurnCallback(
+  handle: ClaudeBridgeSessionHandle,
+  task: () => Promise<void> | void,
+): void {
+  const turn = handle.activeTurn;
+  if (!turn) {
+    return;
+  }
+  // Serialize callback delivery so partial text, typing, and block replies stay
+  // in the same order as Claude's stdout stream.
+  turn.callbackChain = turn.callbackChain
+    .then(async () => {
+      await task();
+    })
+    .catch((err) => {
+      log.warn(`claude bridge callback failed: session=${handle.key} ${String(err)}`);
+    });
+}
+
 function handleBridgeLine(handle: ClaudeBridgeSessionHandle, rawLine: string): void {
   const trimmedLine = rawLine.trim();
   if (LOG_RAW_EVENTS && trimmedLine) {
@@ -117,6 +146,46 @@ function handleBridgeLine(handle: ClaudeBridgeSessionHandle, rawLine: string): v
     );
     if (text) {
       turn.assistantTexts.push(text);
+      const previousText = turn.lastAssistantText;
+      const nextText = text;
+      const grewMonotonically = !previousText || nextText.startsWith(previousText);
+      const delta = !previousText
+        ? nextText
+        : grewMonotonically
+          ? nextText.slice(previousText.length)
+          : "";
+
+      if (nextText.length >= previousText.length) {
+        turn.lastAssistantText = nextText;
+      }
+
+      if (!turn.assistantStarted) {
+        turn.assistantStarted = true;
+        queueTurnCallback(handle, async () => {
+          await turn.onAssistantMessageStart?.();
+        });
+      }
+
+      if (
+        turn.onPartialReply &&
+        grewMonotonically &&
+        nextText &&
+        nextText !== turn.lastDeliveredPartialText
+      ) {
+        turn.lastDeliveredPartialText = nextText;
+        queueTurnCallback(handle, async () => {
+          await turn.onPartialReply?.({ text: nextText });
+        });
+      }
+
+      if (turn.onBlockReply && delta) {
+        const blockPayload = turn.blockAccumulator.consume(delta);
+        if (blockPayload) {
+          queueTurnCallback(handle, async () => {
+            await turn.onBlockReply?.(blockPayload);
+          });
+        }
+      }
     }
     return;
   }
@@ -131,16 +200,47 @@ function handleBridgeLine(handle: ClaudeBridgeSessionHandle, rawLine: string): v
     }
 
     const usage = readClaudeBridgeUsage(event.usage);
-    const text =
-      collectClaudeBridgeText(event.result) ||
-      turn.assistantTexts[turn.assistantTexts.length - 1] ||
-      "";
+    const resultText = collectClaudeBridgeText(event.result);
+    const previousText = turn.lastAssistantText;
+    const grewMonotonically = !previousText || resultText.startsWith(previousText);
+    const trailingDelta =
+      resultText && grewMonotonically ? resultText.slice(previousText.length) : "";
+
+    if (!turn.assistantStarted && (resultText || turn.lastAssistantText)) {
+      turn.assistantStarted = true;
+      queueTurnCallback(handle, async () => {
+        await turn.onAssistantMessageStart?.();
+      });
+    }
+
+    if (resultText) {
+      turn.lastAssistantText = resultText;
+      if (turn.onPartialReply && resultText !== turn.lastDeliveredPartialText) {
+        turn.lastDeliveredPartialText = resultText;
+        queueTurnCallback(handle, async () => {
+          await turn.onPartialReply?.({ text: resultText });
+        });
+      }
+    }
+
+    if (turn.onBlockReply) {
+      const finalBlockPayload = turn.blockAccumulator.consume(trailingDelta, { final: true });
+      if (finalBlockPayload) {
+        queueTurnCallback(handle, async () => {
+          await turn.onBlockReply?.(finalBlockPayload);
+        });
+      }
+    }
+
+    const text = resultText || turn.lastAssistantText || turn.assistantTexts.at(-1) || "";
     clearTimeout(turn.timer);
     handle.activeTurn = null;
-    turn.resolve({
-      text,
-      sessionId,
-      usage,
+    void turn.callbackChain.finally(() => {
+      turn.resolve({
+        text,
+        sessionId,
+        usage,
+      });
     });
   }
 }
@@ -234,6 +334,9 @@ async function runBridgeTurn(params: {
   prompt: string;
   timeoutMs: number;
   sessionId?: string;
+  onAssistantMessageStart?: () => void | Promise<void>;
+  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onBlockReply?: (payload: ReplyPayload) => void | Promise<void>;
 }): Promise<ClaudeBridgeTurnResult> {
   const child =
     params.handle.child ??
@@ -268,6 +371,14 @@ async function runBridgeTurn(params: {
       reject,
       timer,
       assistantTexts: [],
+      lastAssistantText: "",
+      lastDeliveredPartialText: "",
+      assistantStarted: false,
+      callbackChain: Promise.resolve(),
+      onAssistantMessageStart: params.onAssistantMessageStart,
+      onPartialReply: params.onPartialReply,
+      onBlockReply: params.onBlockReply,
+      blockAccumulator: createStreamingDirectiveAccumulator(),
     };
   });
 
@@ -287,6 +398,9 @@ export async function runClaudeBridgeAgent(params: {
   systemPrompt?: string;
   systemPromptReport: SessionSystemPromptReport;
   cliSessionId?: string;
+  onAssistantMessageStart?: () => void | Promise<void>;
+  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onBlockReply?: (payload: ReplyPayload) => void | Promise<void>;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
@@ -309,6 +423,9 @@ export async function runClaudeBridgeAgent(params: {
         prompt: params.prompt,
         timeoutMs: params.timeoutMs,
         sessionId: params.cliSessionId,
+        onAssistantMessageStart: params.onAssistantMessageStart,
+        onPartialReply: params.onPartialReply,
+        onBlockReply: params.onBlockReply,
       }),
     );
     handle.turnQueue = turnPromise.then(
