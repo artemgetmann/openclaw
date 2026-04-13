@@ -309,6 +309,20 @@ struct ConsumerBootstrapTests {
         #expect(firecrawl?["enabled"] as? Bool == true)
     }
 
+    @Test func `consumer bootstrap keeps audio enabled without seeding a broken speech model when key is absent`() async {
+        var root: [String: Any] = [:]
+
+        let changed = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+
+        let tools = root["tools"] as? [String: Any]
+        let media = tools?["media"] as? [String: Any]
+        let audio = media?["audio"] as? [String: Any]
+
+        #expect(changed)
+        #expect(audio?["enabled"] as? Bool == true)
+        #expect(audio?["models"] == nil)
+    }
+
     @Test func `consumer bootstrap preserves existing user choices`() async {
         await TestIsolation.withIsolatedState(
             env: [

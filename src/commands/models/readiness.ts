@@ -15,6 +15,7 @@ const PROBE_MAX_TOKENS = 8;
 
 export type ModelsReadinessStatus = "ready" | "blocked" | "checking";
 export type ModelsReadinessMode = "managed" | "byok";
+export type ModelsVoiceReadinessStatus = "ready" | "blocked";
 export type ModelsReadinessReasonCode =
   | "wrong_state_dir"
   | "missing_auth"
@@ -51,10 +52,16 @@ export type ModelsReadinessResult = {
   summary: string;
   actions: string[];
   byokAvailable: boolean;
+  voiceStatus: ModelsVoiceReadinessStatus;
+  voiceSummary: string;
+  voiceActions: string[];
   lastProbeAt?: number;
   probeLatencyMs?: number;
   probe?: ModelsReadinessProbe;
 };
+
+const CONSUMER_OPENAI_ENV_KEY = "OPENCLAW_CONSUMER_OPENAI_API_KEY";
+const VOICE_BYOK_PROVIDER_IDS = new Set(["openai", "google", "groq", "deepgram", "mistral"]);
 
 function resolveDefaultModel(cfg: OpenClawConfig): { provider: string; model: string } {
   return resolveConfiguredModelRef({
@@ -96,8 +103,10 @@ function inferMode(params: {
 }
 
 function buildBlockedResult(params: {
+  cfg: OpenClawConfig;
   mode: ModelsReadinessMode;
   defaultModel: string;
+  defaultProvider: string;
   configPath: string;
   stateDir: string;
   agentDir: string;
@@ -119,6 +128,11 @@ function buildBlockedResult(params: {
     summary: params.summary,
     actions: params.actions,
     byokAvailable: true,
+    ...resolveVoiceReadiness({
+      cfg: params.cfg,
+      mode: params.mode,
+      defaultProvider: params.defaultProvider,
+    }),
     lastProbeAt: Date.now(),
     probeLatencyMs: params.probe?.latencyMs,
     probe: params.probe,
@@ -236,6 +250,54 @@ function cloneConfigWithCanonicalManagedOrder(cfg: OpenClawConfig): OpenClawConf
   };
 }
 
+function readConsumerSpeechKey(cfg: OpenClawConfig): string | undefined {
+  const envValue = cfg.env?.vars?.[CONSUMER_OPENAI_ENV_KEY] ?? cfg.env?.[CONSUMER_OPENAI_ENV_KEY];
+  return typeof envValue === "string" && envValue.trim() ? envValue.trim() : undefined;
+}
+
+function resolveVoiceReadiness(params: {
+  cfg: OpenClawConfig;
+  mode: ModelsReadinessMode;
+  defaultProvider: string;
+}): Pick<ModelsReadinessResult, "voiceStatus" | "voiceSummary" | "voiceActions"> {
+  const audioEnabled = params.cfg.tools?.media?.audio?.enabled !== false;
+  if (!audioEnabled) {
+    return {
+      voiceStatus: "blocked",
+      voiceSummary: "Voice messages are turned off in this runtime.",
+      voiceActions: [
+        "Enable audio transcription in the consumer runtime before testing voice messages.",
+      ],
+    };
+  }
+
+  if (readConsumerSpeechKey(params.cfg)) {
+    return {
+      voiceStatus: "ready",
+      voiceSummary: "Voice messages are ready with the bundled consumer speech transcription key.",
+      voiceActions: [],
+    };
+  }
+
+  if (params.mode === "byok" && VOICE_BYOK_PROVIDER_IDS.has(params.defaultProvider)) {
+    return {
+      voiceStatus: "ready",
+      voiceSummary: "Voice messages will use the current BYOK provider for transcription.",
+      voiceActions: [],
+    };
+  }
+
+  return {
+    voiceStatus: "blocked",
+    voiceSummary:
+      "Voice messages are not ready yet. This consumer runtime needs either the bundled OpenAI speech key or a BYOK OpenAI/Gemini-style API key for transcription.",
+    voiceActions: [
+      "Rebuild/package the consumer app with OPENCLAW_CONSUMER_OPENAI_API_KEY when product policy allows it.",
+      "Or switch AI access to a BYOK speech-capable provider such as OpenAI or Gemini.",
+    ],
+  };
+}
+
 export async function resolveModelsReadiness(): Promise<ModelsReadinessResult> {
   const cfg = loadConfig();
   const configPath = createConfigIO().configPath;
@@ -261,6 +323,8 @@ export async function resolveModelsReadiness(): Promise<ModelsReadinessResult> {
     return buildBlockedResult({
       mode,
       defaultModel,
+      cfg,
+      defaultProvider: defaultModelRef.provider,
       configPath,
       stateDir,
       agentDir,
@@ -281,6 +345,8 @@ export async function resolveModelsReadiness(): Promise<ModelsReadinessResult> {
       return buildBlockedResult({
         mode,
         defaultModel,
+        cfg,
+        defaultProvider: defaultModelRef.provider,
         configPath,
         stateDir,
         agentDir,
@@ -323,6 +389,8 @@ export async function resolveModelsReadiness(): Promise<ModelsReadinessResult> {
     return buildBlockedResult({
       mode,
       defaultModel,
+      cfg,
+      defaultProvider: defaultModelRef.provider,
       configPath,
       stateDir,
       agentDir,
@@ -339,6 +407,8 @@ export async function resolveModelsReadiness(): Promise<ModelsReadinessResult> {
     return buildBlockedResult({
       mode,
       defaultModel,
+      cfg,
+      defaultProvider: defaultModelRef.provider,
       configPath,
       stateDir,
       agentDir,
@@ -368,6 +438,11 @@ export async function resolveModelsReadiness(): Promise<ModelsReadinessResult> {
         ? ["If this shared auth is rotated, run AI readiness again before the next demo."]
         : ["If you rotate your key or token, run AI readiness again before the next session."],
     byokAvailable: true,
+    ...resolveVoiceReadiness({
+      cfg,
+      mode,
+      defaultProvider: defaultModelRef.provider,
+    }),
     lastProbeAt: probeSummary.finishedAt,
     probeLatencyMs: probe.latencyMs,
     probe: toProbePayload(probe),

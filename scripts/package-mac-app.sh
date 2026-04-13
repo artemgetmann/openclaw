@@ -523,8 +523,12 @@ fi
 
 if [[ "$APP_VARIANT" == "consumer" ]]; then
   echo "🔐 Seeding bundled consumer defaults"
+  CONSUMER_SEEDED_DEFAULTS_PATH="$APP_ROOT/Contents/Resources/consumer-seeded-defaults.json"
   "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" \
-    "$APP_ROOT/Contents/Resources/consumer-seeded-defaults.json"
+    "$CONSUMER_SEEDED_DEFAULTS_PATH"
+  if ! grep -q '"OPENCLAW_CONSUMER_OPENAI_API_KEY"' "$CONSUMER_SEEDED_DEFAULTS_PATH"; then
+    echo "WARN: consumer bundle was packaged without the bundled speech transcription key; voice messages will require BYOK OpenAI/Gemini-style API auth or a rebuilt app." >&2
+  fi
   prepare_bundled_consumer_runtime
 fi
 

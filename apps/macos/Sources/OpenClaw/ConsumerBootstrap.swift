@@ -282,15 +282,52 @@ enum ConsumerBootstrap {
         into root: inout [String: Any])
         -> Bool
     {
+        // Keep audio transcription turned on so legitimate fallback paths
+        // (bundled consumer key, later BYOK OpenAI/Gemini auth, or local CLI
+        // transcribers) can activate without the user discovering another
+        // hidden toggle. The bug here was seeding a broken explicit OpenAI
+        // model entry even when the bundled consumer speech key did not exist.
+        var changed = self.setDefaultValue(
+            in: &root,
+            path: ["tools", "media", "audio", "enabled"],
+            value: true)
+
+        guard self.hasConsumerSpeechKeySeed(in: root) else {
+            return changed
+        }
+
         let audioModels: [[String: Any]] = [[
             "provider": "openai",
             "model": "gpt-4o-mini-transcribe",
             "apiKey": "${\(Self.consumerOpenAIEnvKey)}",
         ]]
-        return self.setDefaultValue(
+        changed = self.setDefaultValue(
             in: &root,
             path: ["tools", "media", "audio", "models"],
-            value: audioModels)
+            value: audioModels) || changed
+        return changed
+    }
+
+    private static func hasConsumerSpeechKeySeed(in root: [String: Any]) -> Bool {
+        let env = root["env"] as? [String: Any]
+        let vars = env?["vars"] as? [String: Any]
+        let configured =
+            (vars?[Self.consumerOpenAIEnvKey] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if configured?.isEmpty == false {
+            return true
+        }
+
+        let topLevel =
+            (env?[Self.consumerOpenAIEnvKey] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if topLevel?.isEmpty == false {
+            return true
+        }
+
+        let processValue = ProcessInfo.processInfo.environment[Self.consumerOpenAIEnvKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return processValue?.isEmpty == false
     }
 
     private static func ensureConsumerWorkspace() {
