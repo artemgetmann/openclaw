@@ -35,6 +35,12 @@ export type ModelsKeyboardParams = {
   pageSize?: number;
 };
 
+const CLAUDE_BRIDGE_DISPLAY_NAMES: Record<string, string> = {
+  haiku: "claude-haiku-4-5",
+  opus: "claude-opus-4-6",
+  sonnet: "claude-sonnet-4-6",
+};
+
 const MODELS_PAGE_SIZE = 8;
 const MAX_CALLBACK_DATA_BYTES = 64;
 const CALLBACK_PREFIX = {
@@ -207,7 +213,7 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     }
 
     const isCurrentModel = model === currentModelId;
-    const displayText = truncateModelId(model, 38);
+    const displayText = truncateModelId(formatModelDisplayName(provider, model), 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 
     rows.push([
@@ -248,6 +254,13 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.back }]);
 
   return rows;
+}
+
+function formatModelDisplayName(provider: string, model: string): string {
+  if (provider === "claude-bridge") {
+    return CLAUDE_BRIDGE_DISPLAY_NAMES[model] ?? model;
+  }
+  return model;
 }
 
 /**

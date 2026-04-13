@@ -77,6 +77,20 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+function resolveCliExtraSystemPromptForReplyRun(params: {
+  provider: string;
+  extraSystemPrompt?: string;
+}): string | undefined {
+  const normalizedProvider = params.provider.trim().toLowerCase();
+  if (normalizedProvider === "claude-bridge") {
+    // Telegram reply runs attach channel/session guidance here. Claude Bridge already
+    // has its own minimal runtime-workspace system prompt, so forwarding this baggage
+    // bloats the bridge envelope and trips the subscription lane.
+    return undefined;
+  }
+  return params.extraSystemPrompt;
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -242,7 +256,10 @@ export async function runAgentTurnWithFallback(params: {
                   thinkLevel: params.followupRun.run.thinkLevel,
                   timeoutMs: params.followupRun.run.timeoutMs,
                   runId,
-                  extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                  extraSystemPrompt: resolveCliExtraSystemPromptForReplyRun({
+                    provider,
+                    extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                  }),
                   ownerNumbers: params.followupRun.run.ownerNumbers,
                   cliSessionId,
                   bootstrapPromptWarningSignaturesSeen,
