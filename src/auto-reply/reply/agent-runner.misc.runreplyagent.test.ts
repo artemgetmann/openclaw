@@ -1191,7 +1191,7 @@ describe("runReplyAgent claude-bridge Telegram prompt envelope", () => {
     });
   }
 
-  it("drops Telegram extra system prompt baggage for claude-bridge", async () => {
+  it("keeps Telegram extra system prompt context for claude-bridge", async () => {
     runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
@@ -1212,7 +1212,35 @@ describe("runReplyAgent claude-bridge Telegram prompt envelope", () => {
       | { provider?: string; extraSystemPrompt?: string }
       | undefined;
     expect(call?.provider).toBe("claude-bridge");
-    expect(call?.extraSystemPrompt).toBeUndefined();
+    expect(call?.extraSystemPrompt).toBe("telegram ingress baggage");
+    expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("caps Claude bridge extra system prompt forwarding to the leading blocks", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-bridge",
+          model: "sonnet",
+        },
+      },
+    });
+
+    const firstBlock = "trusted metadata block";
+    const secondBlock = "permissions block";
+    const oversizedTail = "x".repeat(2_000);
+    const result = await createCliRun({
+      provider: "claude-bridge",
+      extraSystemPrompt: `${firstBlock}\n\n${secondBlock}\n\n${oversizedTail}`,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    const call = runCliAgentMock.mock.calls[0]?.[0] as
+      | { provider?: string; extraSystemPrompt?: string }
+      | undefined;
+    expect(call?.provider).toBe("claude-bridge");
+    expect(call?.extraSystemPrompt).toBe(`${firstBlock}\n\n${secondBlock}`);
     expect(result).toMatchObject({ text: "ok" });
   });
 
