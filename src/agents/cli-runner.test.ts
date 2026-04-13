@@ -134,6 +134,44 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.scopeKey).toContain("thread-123");
   });
 
+  it("forwards streaming callbacks to the claude bridge backend", async () => {
+    bridgeRunMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        durationMs: 10,
+        agentMeta: {
+          sessionId: "bridge-session",
+          provider: "claude-bridge",
+          model: "sonnet",
+        },
+      },
+    });
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+
+    await runCliAgent({
+      sessionId: "s-bridge",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "claude-bridge",
+      model: "sonnet",
+      timeoutMs: 1_000,
+      runId: "run-bridge",
+      onAssistantMessageStart,
+      onPartialReply,
+      onBlockReply,
+    });
+
+    expect(bridgeRunMock).toHaveBeenCalledTimes(1);
+    expect(bridgeRunMock.mock.calls[0]?.[0]).toMatchObject({
+      onAssistantMessageStart,
+      onPartialReply,
+      onBlockReply,
+    });
+  });
+
   it("fails with timeout when no-output watchdog trips", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

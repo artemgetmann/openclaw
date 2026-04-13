@@ -160,6 +160,7 @@ export async function runAgentTurnWithFallback(params: {
 
   while (true) {
     try {
+      const blockReplyPipeline = params.blockReplyPipeline;
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
@@ -199,6 +200,19 @@ export async function runAgentTurnWithFallback(params: {
         }
         return { text: sanitized, skip: false };
       };
+      const streamBlockReply = params.opts?.onBlockReply
+        ? createBlockReplyDeliveryHandler({
+            onBlockReply: params.opts.onBlockReply,
+            currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+            normalizeStreamingText,
+            applyReplyToMode: params.applyReplyToMode,
+            normalizeMediaPaths: normalizeReplyMediaPaths,
+            typingSignals: params.typingSignals,
+            blockStreamingEnabled: params.blockStreamingEnabled,
+            blockReplyPipeline,
+            directlySentBlockKeys,
+          })
+        : undefined;
       const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
         if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
           return undefined;
@@ -210,7 +224,6 @@ export async function runAgentTurnWithFallback(params: {
         await params.typingSignals.signalTextDelta(text);
         return text;
       };
-      const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
@@ -264,6 +277,28 @@ export async function runAgentTurnWithFallback(params: {
                       bootstrapPromptWarningSignaturesSeen.length - 1
                     ],
                   images: params.opts?.images,
+                  onAssistantMessageStart:
+                    params.typingSignals.shouldStartOnMessageStart ||
+                    params.opts?.onAssistantMessageStart
+                      ? async () => {
+                          await params.typingSignals.signalMessageStart();
+                          await params.opts?.onAssistantMessageStart?.();
+                        }
+                      : undefined,
+                  onPartialReply:
+                    params.typingSignals.shouldStartOnText || params.opts?.onPartialReply
+                      ? async (payload) => {
+                          const textForTyping = await handlePartialForTyping(payload);
+                          if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                            return;
+                          }
+                          await params.opts.onPartialReply({
+                            text: textForTyping,
+                            mediaUrls: payload.mediaUrls,
+                          });
+                        }
+                      : undefined,
+                  onBlockReply: streamBlockReply,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
@@ -424,20 +459,7 @@ export async function runAgentTurnWithFallback(params: {
                 // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
                 // even when regular block streaming is disabled. The handler sends directly
                 // via opts.onBlockReply when the pipeline isn't available.
-                onBlockReply: params.opts?.onBlockReply
-                  ? createBlockReplyDeliveryHandler({
-                      onBlockReply: params.opts.onBlockReply,
-                      currentMessageId:
-                        params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
-                      normalizeStreamingText,
-                      applyReplyToMode: params.applyReplyToMode,
-                      normalizeMediaPaths: normalizeReplyMediaPaths,
-                      typingSignals: params.typingSignals,
-                      blockStreamingEnabled: params.blockStreamingEnabled,
-                      blockReplyPipeline,
-                      directlySentBlockKeys,
-                    })
-                  : undefined,
+                onBlockReply: streamBlockReply,
                 onBlockReplyFlush:
                   params.blockStreamingEnabled && blockReplyPipeline
                     ? async () => {
