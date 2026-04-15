@@ -59,6 +59,64 @@ CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
   "MEMORY.md"
 )
 
+consumer_packaging_env_candidates() {
+  # Keep secrets machine-local: explicit override first, then the consumer-home
+  # shared file, then the optional fallback outside the worktree.
+  if [[ -n "${OPENCLAW_CONSUMER_ENV_FILE:-}" ]]; then
+    printf '%s\n' "$OPENCLAW_CONSUMER_ENV_FILE"
+  fi
+  printf '%s\n' "$HOME/Programming_Projects/openclaw-consumer/.config/consumer-packaging.env"
+  printf '%s\n' "$HOME/.config/openclaw/consumer-packaging.env"
+}
+
+load_consumer_packaging_env() {
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+
+  # Existing exports win so callers can override local packaging state without
+  # touching the shared env file.
+  if [[ -n "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" ]]; then
+    return 0
+  fi
+
+  local env_file=""
+  local loaded_env_file=""
+  local explicit_env_file="${OPENCLAW_CONSUMER_ENV_FILE:-}"
+
+  while IFS= read -r env_file; do
+    [[ -n "$env_file" ]] || continue
+    if [[ -r "$env_file" ]]; then
+      echo "📦 Loading consumer packaging env from $env_file"
+      set -a
+      # shellcheck disable=SC1090
+      source "$env_file"
+      set +a
+      if [[ -n "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" ]]; then
+        loaded_env_file="$env_file"
+        break
+      fi
+    elif [[ -n "$explicit_env_file" && "$env_file" == "$explicit_env_file" ]]; then
+      echo "WARN: OPENCLAW_CONSUMER_ENV_FILE is set but not readable: $env_file" >&2
+    fi
+  done < <(consumer_packaging_env_candidates)
+
+  if [[ -z "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" ]]; then
+    echo "ERROR: consumer packaging requires OPENCLAW_CONSUMER_OPENAI_API_KEY." >&2
+    if [[ -n "$loaded_env_file" ]]; then
+      echo "Loaded env file: $loaded_env_file" >&2
+    fi
+    echo "Checked, in order:" >&2
+    if [[ -n "$explicit_env_file" ]]; then
+      echo "  - $explicit_env_file" >&2
+    fi
+    echo "  - $HOME/Programming_Projects/openclaw-consumer/.config/consumer-packaging.env" >&2
+    echo "  - $HOME/.config/openclaw/consumer-packaging.env" >&2
+    echo "Export OPENCLAW_CONSUMER_OPENAI_API_KEY or create one of those env files before packaging." >&2
+    exit 1
+  fi
+}
+
 consumer_build_archs_are_universal() {
   case "$BUILD_ARCHS_VALUE" in
     all|"arm64 x86_64"|"x86_64 arm64")
@@ -78,6 +136,8 @@ if [[ "$APP_VARIANT" == "consumer" && "$ALLOW_SINGLE_ARCH_CONSUMER_SMOKE" != "1"
     exit 1
   fi
 fi
+
+load_consumer_packaging_env
 
 consumer_require_bundled_speech_key() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
