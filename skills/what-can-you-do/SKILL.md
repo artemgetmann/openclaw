@@ -32,7 +32,7 @@ They should come away knowing:
   travel/admin tasks, browser help, and personal workflows.
 - If you do not have enough context to specialize confidently, give a balanced
   answer that covers both personal-operator and builder use cases.
-- If `user.md`, `memory.md`, daily memory, or memory tools are visible in the
+- If `USER.md`, `MEMORY.md`, daily memory, or memory tools are visible in the
   current context, explain those only as they actually exist here. Do not assume
   a memory layout that you cannot see.
 
