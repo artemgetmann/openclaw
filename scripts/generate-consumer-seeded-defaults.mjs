@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CONSUMER_OPENAI_ENV_KEY = "OPENCLAW_CONSUMER_OPENAI_API_KEY";
+const CONSUMER_GEMINI_ENV_KEY = "OPENCLAW_CONSUMER_GEMINI_API_KEY";
 
 function readSeededEnvValue(envKey, env = process.env) {
   const rawValue = env[envKey];
@@ -86,6 +87,25 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
         },
       ],
     );
+  }
+
+  const geminiApiKey =
+    readSeededEnvValue(CONSUMER_GEMINI_ENV_KEY, env) ??
+    readNestedString(founderConfig, [
+      ["env", "vars", CONSUMER_GEMINI_ENV_KEY],
+      ["env", CONSUMER_GEMINI_ENV_KEY],
+      ["env", "vars", "GEMINI_API_KEY"],
+      ["env", "GEMINI_API_KEY"],
+      ["skills", "entries", "nano-banana-pro", "apiKey"],
+    ]);
+  if (geminiApiKey) {
+    // Default-enabling nano-banana-pro only makes sense when consumer bundles
+    // ship a dedicated Gemini credential. Seed both the consumer-owned env var
+    // and the runtime-facing GEMINI_API_KEY so the packaged launchd runtime and
+    // the skill status UI resolve the same secret source.
+    setNestedValue(seeded, ["env", "vars", CONSUMER_GEMINI_ENV_KEY], geminiApiKey);
+    setNestedValue(seeded, ["env", "vars", "GEMINI_API_KEY"], geminiApiKey);
+    setNestedValue(seeded, ["skills", "entries", "nano-banana-pro", "apiKey"], geminiApiKey);
   }
 
   const googlePlacesApiKey =

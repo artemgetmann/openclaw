@@ -24,55 +24,23 @@ struct ConsumerBundledRuntimeTests {
             at: resourceRoot.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true),
             withIntermediateDirectories: true)
         let bundledRoot = resourceRoot.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true)
-        try fm.createDirectory(
-            at: bundledRoot.appendingPathComponent("openclaw/dist", isDirectory: true),
-            withIntermediateDirectories: true)
-        try fm.createDirectory(
-            at: bundledRoot.appendingPathComponent("openclaw/node_modules/chalk", isDirectory: true),
-            withIntermediateDirectories: true)
         try self.writeBundledWorkspaceTemplates(into: bundledRoot)
-        try fm.createDirectory(
-            at: bundledRoot.appendingPathComponent("node/darwin-arm64/bin", isDirectory: true),
-            withIntermediateDirectories: true)
-        try fm.createDirectory(
-            at: bundledRoot.appendingPathComponent("node/darwin-x64/bin", isDirectory: true),
-            withIntermediateDirectories: true)
-
         let manifest = ConsumerBundledRuntime.Manifest(
             format: 1,
             bundleVersion: "123",
             gitCommit: "abc123",
-            nodeVersion: "22.22.1")
-        let manifestData = try JSONEncoder().encode(manifest)
-        try manifestData.write(to: bundledRoot.appendingPathComponent("manifest.json"))
-
-        try "export {}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/openclaw.mjs"),
-            atomically: true,
-            encoding: .utf8)
-        try "{\"name\":\"openclaw\"}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/package.json"),
-            atomically: true,
-            encoding: .utf8)
-        try "export {}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/dist/entry.js"),
-            atomically: true,
-            encoding: .utf8)
-        try "{\"name\":\"chalk\"}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/node_modules/chalk/package.json"),
-            atomically: true,
-            encoding: .utf8)
-
-        for arch in ["darwin-arm64", "darwin-x64"] {
-            let nodeURL = bundledRoot.appendingPathComponent("node/\(arch)/bin/node")
-            try "#!/bin/sh\necho v22.22.1\n".write(to: nodeURL, atomically: true, encoding: .utf8)
-            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodeURL.path)
-        }
+            nodeVersion: "22.22.1",
+            uvVersion: "0.9.21")
+        try BundledRuntimeFixtureHelper.writeMinimalBundledRuntime(
+            into: bundledRoot,
+            manifest: manifest,
+            fileManager: fm)
 
         let seeded = try ConsumerBundledRuntime.seedIfNeeded(from: bundledRoot, into: installPrefix, fileManager: fm)
         #expect(seeded == .seeded)
         #expect(fm.isExecutableFile(atPath: installPrefix.appendingPathComponent("bin/openclaw").path))
         #expect(fm.isExecutableFile(atPath: installPrefix.appendingPathComponent("tools/node/bin/node").path))
+        #expect(fm.isExecutableFile(atPath: installPrefix.appendingPathComponent("tools/uv/bin/uv").path))
         #expect(fm.isReadableFile(atPath: installPrefix.appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
         #expect(fm.isReadableFile(atPath: installPrefix.appendingPathComponent("lib/openclaw-bundled/node_modules/chalk/package.json").path))
         self.assertInstalledWorkspaceTemplates(at: installPrefix, fileManager: fm)
@@ -100,42 +68,18 @@ struct ConsumerBundledRuntimeTests {
             at: bundleResourcesURL.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true),
             withIntermediateDirectories: true)
         let bundledRoot = bundleResourcesURL.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true)
-        try fm.createDirectory(
-            at: bundledRoot.appendingPathComponent("openclaw/dist", isDirectory: true),
-            withIntermediateDirectories: true)
-        try fm.createDirectory(
-            at: bundledRoot.appendingPathComponent("openclaw/node_modules/chalk", isDirectory: true),
-            withIntermediateDirectories: true)
         try self.writeBundledWorkspaceTemplates(into: bundledRoot)
-        try fm.createDirectory(
-            at: bundledRoot.appendingPathComponent("node/darwin-arm64/bin", isDirectory: true),
-            withIntermediateDirectories: true)
 
         let manifest = ConsumerBundledRuntime.Manifest(
             format: 1,
             bundleVersion: "123",
             gitCommit: "abc123",
-            nodeVersion: "22.22.1")
-        try JSONEncoder().encode(manifest).write(to: bundledRoot.appendingPathComponent("manifest.json"))
-        try "export {}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/openclaw.mjs"),
-            atomically: true,
-            encoding: .utf8)
-        try "{\"name\":\"openclaw\"}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/package.json"),
-            atomically: true,
-            encoding: .utf8)
-        try "export {}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/dist/entry.js"),
-            atomically: true,
-            encoding: .utf8)
-        try "{\"name\":\"chalk\"}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/node_modules/chalk/package.json"),
-            atomically: true,
-            encoding: .utf8)
-        let nodeURL = bundledRoot.appendingPathComponent("node/darwin-arm64/bin/node")
-        try "#!/bin/sh\necho v22.22.1\n".write(to: nodeURL, atomically: true, encoding: .utf8)
-        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodeURL.path)
+            nodeVersion: "22.22.1",
+            uvVersion: "0.9.21")
+        try BundledRuntimeFixtureHelper.writeMinimalBundledRuntime(
+            into: bundledRoot,
+            manifest: manifest,
+            fileManager: fm)
 
         defer {
             try? fm.removeItem(at: homeURL)
@@ -154,6 +98,7 @@ struct ConsumerBundledRuntimeTests {
 
             #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("bin/openclaw").path))
             #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/node/bin/node").path))
+            #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/uv/bin/uv").path))
             #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
             self.assertInstalledWorkspaceTemplates(
                 at: ConsumerRuntime.installPrefixURL,

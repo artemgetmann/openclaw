@@ -10,6 +10,7 @@ void test("seeds only the supported consumer defaults from env", () => {
   const seeded = buildConsumerSeededDefaults({
     env: {
       OPENCLAW_CONSUMER_OPENAI_API_KEY: " consumer-openai-key ",
+      OPENCLAW_CONSUMER_GEMINI_API_KEY: " consumer-gemini-key ",
       GOOGLE_PLACES_API_KEY: " places-key ",
       FIRECRAWL_API_KEY: " firecrawl-key ",
       BRAVE_API_KEY: " brave-key ",
@@ -21,6 +22,8 @@ void test("seeds only the supported consumer defaults from env", () => {
     env: {
       vars: {
         OPENCLAW_CONSUMER_OPENAI_API_KEY: "consumer-openai-key",
+        OPENCLAW_CONSUMER_GEMINI_API_KEY: "consumer-gemini-key",
+        GEMINI_API_KEY: "consumer-gemini-key",
         GOOGLE_PLACES_API_KEY: "places-key",
         FIRECRAWL_API_KEY: "firecrawl-key",
         BRAVE_API_KEY: "brave-key",
@@ -30,6 +33,9 @@ void test("seeds only the supported consumer defaults from env", () => {
       entries: {
         goplaces: {
           apiKey: "places-key",
+        },
+        "nano-banana-pro": {
+          apiKey: "consumer-gemini-key",
         },
       },
     },
@@ -72,6 +78,7 @@ void test("falls back to founder config when shell env is empty", () => {
       env: {
         vars: {
           OPENCLAW_CONSUMER_OPENAI_API_KEY: "founder-consumer-openai",
+          OPENCLAW_CONSUMER_GEMINI_API_KEY: "founder-consumer-gemini",
           BRAVE_API_KEY: "founder-brave",
         },
         FIRECRAWL_API_KEY: "founder-firecrawl",
@@ -80,6 +87,9 @@ void test("falls back to founder config when shell env is empty", () => {
         entries: {
           goplaces: {
             apiKey: "founder-places",
+          },
+          "nano-banana-pro": {
+            apiKey: "founder-consumer-gemini",
           },
         },
       },
@@ -90,6 +100,8 @@ void test("falls back to founder config when shell env is empty", () => {
     env: {
       vars: {
         OPENCLAW_CONSUMER_OPENAI_API_KEY: "founder-consumer-openai",
+        OPENCLAW_CONSUMER_GEMINI_API_KEY: "founder-consumer-gemini",
+        GEMINI_API_KEY: "founder-consumer-gemini",
         GOOGLE_PLACES_API_KEY: "founder-places",
         FIRECRAWL_API_KEY: "founder-firecrawl",
         BRAVE_API_KEY: "founder-brave",
@@ -99,6 +111,9 @@ void test("falls back to founder config when shell env is empty", () => {
       entries: {
         goplaces: {
           apiKey: "founder-places",
+        },
+        "nano-banana-pro": {
+          apiKey: "founder-consumer-gemini",
         },
       },
     },

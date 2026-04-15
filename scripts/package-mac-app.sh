@@ -42,6 +42,7 @@ SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh
 DEFAULT_STANDARD_SPARKLE_FEED_URL="https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml"
 BUNDLED_CLI_ARCHIVE_NAME="openclaw-cli-bundle.tgz"
 BUNDLED_RUNTIME_RESOURCE_DIR="$APP_ROOT/Contents/Resources/OpenClawRuntime"
+UV_VERSION="${UV_VERSION:-0.9.21}"
 VALIDATED_NPM_BIN="$(dirname "$VALIDATED_NODE_BIN")/npm"
 if [[ ! -x "$VALIDATED_NPM_BIN" ]]; then
   VALIDATED_NPM_BIN="$(command -v npm || true)"
@@ -76,7 +77,7 @@ load_consumer_packaging_env() {
 
   # Existing exports win so callers can override local packaging state without
   # touching the shared env file.
-  if [[ -n "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" ]]; then
+  if [[ -n "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" && -n "${OPENCLAW_CONSUMER_GEMINI_API_KEY:-}" ]]; then
     return 0
   fi
 
@@ -92,7 +93,7 @@ load_consumer_packaging_env() {
       # shellcheck disable=SC1090
       source "$env_file"
       set +a
-      if [[ -n "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" ]]; then
+      if [[ -n "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" && -n "${OPENCLAW_CONSUMER_GEMINI_API_KEY:-}" ]]; then
         loaded_env_file="$env_file"
         break
       fi
@@ -101,8 +102,8 @@ load_consumer_packaging_env() {
     fi
   done < <(consumer_packaging_env_candidates)
 
-  if [[ -z "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" ]]; then
-    echo "ERROR: consumer packaging requires OPENCLAW_CONSUMER_OPENAI_API_KEY." >&2
+  if [[ -z "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" || -z "${OPENCLAW_CONSUMER_GEMINI_API_KEY:-}" ]]; then
+    echo "ERROR: consumer packaging requires both OPENCLAW_CONSUMER_OPENAI_API_KEY and OPENCLAW_CONSUMER_GEMINI_API_KEY." >&2
     if [[ -n "$loaded_env_file" ]]; then
       echo "Loaded env file: $loaded_env_file" >&2
     fi
@@ -112,7 +113,7 @@ load_consumer_packaging_env() {
     fi
     echo "  - $HOME/Programming_Projects/openclaw-consumer/.config/consumer-packaging.env" >&2
     echo "  - $HOME/.config/openclaw/consumer-packaging.env" >&2
-    echo "Export OPENCLAW_CONSUMER_OPENAI_API_KEY or create one of those env files before packaging." >&2
+    echo "Export both consumer keys or create one of those env files before packaging." >&2
     exit 1
   fi
 }
@@ -162,6 +163,28 @@ consumer_require_bundled_speech_key() {
 }
 
 consumer_require_bundled_speech_key
+
+consumer_require_bundled_gemini_key() {
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+
+  # Default-enabling nano-banana-pro means packaging must fail closed when the
+  # dedicated consumer Gemini key is missing instead of shipping a starter skill
+  # that is broken on first use.
+  local seeded_tmp
+  seeded_tmp="$(mktemp)"
+  "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" "$seeded_tmp"
+  if ! grep -q '"OPENCLAW_CONSUMER_GEMINI_API_KEY"' "$seeded_tmp"; then
+    rm -f "$seeded_tmp"
+    echo "ERROR: consumer bundle is missing OPENCLAW_CONSUMER_GEMINI_API_KEY." >&2
+    echo "Packaging must use the dedicated consumer Gemini key before nano-banana-pro can ship by default." >&2
+    exit 1
+  fi
+  rm -f "$seeded_tmp"
+}
+
+consumer_require_bundled_gemini_key
 
 verify_required_workspace_templates() {
   local template_dir="$1"
@@ -377,6 +400,69 @@ ensure_consumer_node_runtime() {
   printf '%s\n' "$cache_root"
 }
 
+ensure_consumer_uv_runtime() {
+  local version="$1"
+  local arch="$2"
+  local cache_root="${ROOT_DIR}/.cache/consumer-runtime/uv-v${version}-${arch}"
+  local download_root=""
+  local archive=""
+  local download_url=""
+  local extracted_root=""
+  local release_arch=""
+
+  if [[ -x "${cache_root}/bin/uv" ]]; then
+    local cached_version
+    cached_version="$("${cache_root}/bin/uv" --version 2>/dev/null | awk '{print $2}' | tr -d '\r')"
+    if [[ "$cached_version" == "$version" ]]; then
+      printf '%s\n' "$cache_root"
+      return 0
+    fi
+  fi
+
+  case "$arch" in
+    arm64)
+      release_arch="aarch64"
+      ;;
+    x86_64)
+      release_arch="x86_64"
+      ;;
+    *)
+      echo "ERROR: unsupported architecture for bundled uv runtime: $arch" >&2
+      exit 1
+      ;;
+  esac
+
+  download_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-uv.XXXXXX")"
+  archive="${download_root}/uv-${release_arch}-apple-darwin.tar.gz"
+  download_url="https://github.com/astral-sh/uv/releases/download/${version}/uv-${release_arch}-apple-darwin.tar.gz"
+
+  echo "📥 Downloading uv ${version} (${arch}) for bundled consumer runtime" >&2
+  curl -fsSL "$download_url" -o "$archive"
+  tar -xzf "$archive" -C "$download_root"
+  extracted_root="${download_root}/uv-${release_arch}-apple-darwin"
+
+  if [[ ! -x "${extracted_root}/uv" ]]; then
+    echo "ERROR: downloaded uv runtime is missing uv: ${download_url}" >&2
+    rm -rf "$download_root"
+    exit 1
+  fi
+
+  local actual_version
+  actual_version="$("${extracted_root}/uv" --version 2>/dev/null | awk '{print $2}' | tr -d '\r')"
+  if [[ "$actual_version" != "$version" ]]; then
+    echo "ERROR: downloaded uv runtime version mismatch for ${arch}. expected=${version} actual=${actual_version:-unknown}" >&2
+    rm -rf "$download_root"
+    exit 1
+  fi
+
+  rm -rf "$cache_root"
+  mkdir -p "$cache_root/bin"
+  cp "${extracted_root}/uv" "${cache_root}/bin/uv"
+  chmod +x "${cache_root}/bin/uv"
+  rm -rf "$download_root"
+  printf '%s\n' "$cache_root"
+}
+
 resolve_matrix_crypto_package_root() {
   local package_root=""
 
@@ -487,6 +573,8 @@ prepare_bundled_consumer_runtime() {
   local node_version=""
   local node_arm64_root=""
   local node_x64_root=""
+  local uv_arm64_root=""
+  local uv_x64_root=""
   local deploy_root=""
 
   node_version="$(openclaw_validated_node_version "$ROOT_DIR")"
@@ -495,6 +583,7 @@ prepare_bundled_consumer_runtime() {
   rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
   mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
   mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/node"
+  mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/uv"
 
   cp "$ROOT_DIR/openclaw.mjs" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/openclaw.mjs"
   cp "$ROOT_DIR/package.json" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/package.json"
@@ -558,8 +647,13 @@ prepare_bundled_consumer_runtime() {
   cp -R "$node_arm64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-arm64"
   cp -R "$node_x64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-x64"
 
+  uv_arm64_root="$(ensure_consumer_uv_runtime "$UV_VERSION" "arm64")"
+  uv_x64_root="$(ensure_consumer_uv_runtime "$UV_VERSION" "x86_64")"
+  cp -R "$uv_arm64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/uv/darwin-arm64"
+  cp -R "$uv_x64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/uv/darwin-x64"
+
   cat > "$manifest_path" <<EOF
-{"format":1,"bundleVersion":"${APP_BUILD}","gitCommit":"${GIT_COMMIT}","nodeVersion":"${node_version}"}
+{"format":1,"bundleVersion":"${APP_BUILD}","gitCommit":"${GIT_COMMIT}","nodeVersion":"${node_version}","uvVersion":"${UV_VERSION}"}
 EOF
 }
 

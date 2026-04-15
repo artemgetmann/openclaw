@@ -83,6 +83,7 @@ struct ConsumerBootstrapTests {
                 "goplaces",
                 "himalaya",
                 "wacli",
+                "nano-banana-pro",
                 "peekaboo",
                 "summarize",
                 "weather",
@@ -233,24 +234,29 @@ struct ConsumerBootstrapTests {
             ],
         ]
         let bundledDefaults: [String: Any] = [
-            "env": [
-                "vars": [
-                    "OPENCLAW_CONSUMER_OPENAI_API_KEY": "openai-seeded", // pragma: allowlist secret
-                    "FIRECRAWL_API_KEY": "fc-seeded", // pragma: allowlist secret
-                    "GOOGLE_PLACES_API_KEY": "places-seeded", // pragma: allowlist secret
-                ],
-            ],
-            "plugins": [
-                "entries": [:],
-            ],
-            "skills": [
-                "entries": [
-                    "goplaces": [
-                        "apiKey": "places-seeded", // pragma: allowlist secret
+                "env": [
+                    "vars": [
+                        "OPENCLAW_CONSUMER_OPENAI_API_KEY": "openai-seeded", // pragma: allowlist secret
+                        "OPENCLAW_CONSUMER_GEMINI_API_KEY": "gemini-seeded", // pragma: allowlist secret
+                        "GEMINI_API_KEY": "gemini-seeded", // pragma: allowlist secret
+                        "FIRECRAWL_API_KEY": "fc-seeded", // pragma: allowlist secret
+                        "GOOGLE_PLACES_API_KEY": "places-seeded", // pragma: allowlist secret
                     ],
                 ],
+                "plugins": [
+                "entries": [:],
             ],
-            "tools": [
+                "skills": [
+                    "entries": [
+                        "goplaces": [
+                            "apiKey": "places-seeded", // pragma: allowlist secret
+                        ],
+                        "nano-banana-pro": [
+                            "apiKey": "gemini-seeded", // pragma: allowlist secret
+                        ],
+                    ],
+                ],
+                "tools": [
                 "media": [
                     "audio": [
                         "models": [[
@@ -283,6 +289,7 @@ struct ConsumerBootstrapTests {
         let vars = env?["vars"] as? [String: Any]
         let skills = root["skills"] as? [String: Any]
         let entries = skills?["entries"] as? [String: Any]
+        let nanoBanana = entries?["nano-banana-pro"] as? [String: Any]
         let goplaces = entries?["goplaces"] as? [String: Any]
         let tools = root["tools"] as? [String: Any]
         let media = tools?["media"] as? [String: Any]
@@ -295,10 +302,13 @@ struct ConsumerBootstrapTests {
 
         #expect(changed)
         #expect(vars?["OPENCLAW_CONSUMER_OPENAI_API_KEY"] as? String == "openai-seeded")
+        #expect(vars?["OPENCLAW_CONSUMER_GEMINI_API_KEY"] as? String == "gemini-seeded")
+        #expect(vars?["GEMINI_API_KEY"] as? String == "gemini-seeded")
         #expect(vars?["OPENAI_API_KEY"] == nil)
         #expect(vars?["FIRECRAWL_API_KEY"] as? String == "fc-seeded")
         #expect(vars?["GOOGLE_PLACES_API_KEY"] as? String == "places-seeded")
         #expect(goplaces?["apiKey"] as? String == "places-seeded")
+        #expect(nanoBanana?["apiKey"] as? String == "gemini-seeded")
         #expect(audioModels?.count == 1)
         #expect(audioModels?.first?["provider"] as? String == "openai")
         #expect(audioModels?.first?["model"] as? String == "gpt-4o-mini-transcribe")

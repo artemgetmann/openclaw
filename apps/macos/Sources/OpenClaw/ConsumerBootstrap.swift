@@ -22,6 +22,7 @@ enum ConsumerBootstrap {
         // in the consumer starter set even though live WhatsApp chat is a separate
         // product surface.
         "wacli",
+        "nano-banana-pro",
         "peekaboo",
         "summarize",
         "weather",
