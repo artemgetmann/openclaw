@@ -48,6 +48,11 @@ struct OpenClawApp: App {
             gatewayLabel=\(ConsumerRuntime.gatewayLaunchdLabel, privacy: .public)
             """)
         GatewayConnectivityCoordinator.shared.start()
+        Task(priority: .utility) {
+            // Warm the nano-banana-pro Python environment in the background so
+            // first real use does not pay the dependency resolution cost.
+            _ = await ConsumerNanoBananaWarmupCoordinator.shared.startIfNeeded()
+        }
 
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)

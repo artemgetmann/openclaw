@@ -170,46 +170,15 @@ struct CLIInstallerTests {
         }
 
         let bundledRoot = resourceURL.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true)
-        try fileManager.createDirectory(
-            at: bundledRoot.appendingPathComponent("openclaw/dist", isDirectory: true),
-            withIntermediateDirectories: true)
-        try fileManager.createDirectory(
-            at: bundledRoot.appendingPathComponent("openclaw/node_modules/chalk", isDirectory: true),
-            withIntermediateDirectories: true)
-        try fileManager.createDirectory(
-            at: bundledRoot.appendingPathComponent("node/darwin-arm64/bin", isDirectory: true),
-            withIntermediateDirectories: true)
-        try fileManager.createDirectory(
-            at: bundledRoot.appendingPathComponent("node/darwin-x64/bin", isDirectory: true),
-            withIntermediateDirectories: true)
-
         let manifest = ConsumerBundledRuntime.Manifest(
             format: 1,
             bundleVersion: "123",
             gitCommit: "abc123",
-            nodeVersion: "22.22.1")
-        try JSONEncoder().encode(manifest).write(to: bundledRoot.appendingPathComponent("manifest.json"))
-        try "export {}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/openclaw.mjs"),
-            atomically: true,
-            encoding: .utf8)
-        try "{\"name\":\"openclaw\"}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/package.json"),
-            atomically: true,
-            encoding: .utf8)
-        try "export {}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/dist/entry.js"),
-            atomically: true,
-            encoding: .utf8)
-        try "{\"name\":\"chalk\"}\n".write(
-            to: bundledRoot.appendingPathComponent("openclaw/node_modules/chalk/package.json"),
-            atomically: true,
-            encoding: .utf8)
-
-        for arch in ["darwin-arm64", "darwin-x64"] {
-            let nodeURL = bundledRoot.appendingPathComponent("node/\(arch)/bin/node")
-            try "#!/bin/sh\necho v22.22.1\n".write(to: nodeURL, atomically: true, encoding: .utf8)
-            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodeURL.path)
-        }
+            nodeVersion: "22.22.1",
+            uvVersion: "0.9.21")
+        try BundledRuntimeFixtureHelper.writeMinimalBundledRuntime(
+            into: bundledRoot,
+            manifest: manifest,
+            fileManager: fileManager)
     }
 }

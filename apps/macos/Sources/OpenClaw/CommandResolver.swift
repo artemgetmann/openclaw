@@ -184,6 +184,7 @@ enum CommandResolver {
         for base in bases {
             let bin = base.appendingPathComponent("bin")
             let nodeBin = base.appendingPathComponent("tools/node/bin")
+            let uvBin = base.appendingPathComponent("tools/uv/bin")
             let includeConsumerPrefix = AppFlavor.current.isConsumer && base.path == ConsumerRuntime.installPrefixURL.path
             if includeConsumerPrefix || FileManager().fileExists(atPath: bin.path) {
                 if seen.insert(bin.path).inserted {
@@ -193,6 +194,11 @@ enum CommandResolver {
             if includeConsumerPrefix || FileManager().fileExists(atPath: nodeBin.path) {
                 if seen.insert(nodeBin.path).inserted {
                     paths.append(nodeBin.path)
+                }
+            }
+            if includeConsumerPrefix || FileManager().fileExists(atPath: uvBin.path) {
+                if seen.insert(uvBin.path).inserted {
+                    paths.append(uvBin.path)
                 }
             }
         }

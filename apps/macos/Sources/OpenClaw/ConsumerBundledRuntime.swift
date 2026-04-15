@@ -31,6 +31,7 @@ enum ConsumerBundledRuntime {
         let bundleVersion: String
         let gitCommit: String
         let nodeVersion: String
+        let uvVersion: String
     }
 
     enum SeedStatus: Equatable {
@@ -91,10 +92,14 @@ enum ConsumerBundledRuntime {
         let stagedNodeRoot = stagingRoot
             .appendingPathComponent("tools", isDirectory: true)
             .appendingPathComponent("node", isDirectory: true)
+        let stagedUvRoot = stagingRoot
+            .appendingPathComponent("tools", isDirectory: true)
+            .appendingPathComponent("uv", isDirectory: true)
         let stagedBinDir = stagingRoot.appendingPathComponent("bin", isDirectory: true)
 
         try fileManager.createDirectory(at: stagedOpenClawRoot.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fileManager.createDirectory(at: stagedNodeRoot.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: stagedUvRoot.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fileManager.createDirectory(at: stagedBinDir, withIntermediateDirectories: true)
 
         // Copy the built OpenClaw payload exactly once into the consumer-owned
@@ -105,6 +110,9 @@ enum ConsumerBundledRuntime {
         try fileManager.copyItem(
             at: try self.nodeRuntimeSourceURL(from: resourceURL),
             to: stagedNodeRoot)
+        try fileManager.copyItem(
+            at: try self.uvRuntimeSourceURL(from: resourceURL),
+            to: stagedUvRoot)
 
         let wrapperURL = stagedBinDir.appendingPathComponent("openclaw")
         try self.writeWrapperScript(at: wrapperURL)
@@ -130,6 +138,10 @@ enum ConsumerBundledRuntime {
             with: stagedNodeRoot,
             fileManager: fileManager)
         try self.replaceManagedPath(
+            at: installPrefixURL.appendingPathComponent("tools/uv", isDirectory: true),
+            with: stagedUvRoot,
+            fileManager: fileManager)
+        try self.replaceManagedPath(
             at: installPrefixURL.appendingPathComponent("lib/\(self.installedPayloadDirectoryName)", isDirectory: true),
             with: stagedOpenClawRoot,
             fileManager: fileManager)
@@ -149,11 +161,19 @@ enum ConsumerBundledRuntime {
     {
         let installedManifestURL = installPrefixURL.appendingPathComponent(self.installedManifestFileName)
         guard fileManager.fileExists(atPath: installedManifestURL.path) else { return false }
-        let installedManifest = try self.loadManifest(fromFile: installedManifestURL)
+        let installedManifest: Manifest
+        do {
+            // Treat older or partially-written manifests as stale so the
+            // consumer runtime reseeds itself instead of failing bootstrap.
+            installedManifest = try self.loadManifest(fromFile: installedManifestURL)
+        } catch {
+            return false
+        }
         guard installedManifest == manifest else { return false }
 
         let wrapperURL = installPrefixURL.appendingPathComponent("bin/openclaw")
         let nodeURL = installPrefixURL.appendingPathComponent("tools/node/bin/node")
+        let uvURL = installPrefixURL.appendingPathComponent("tools/uv/bin/uv")
         let entryURL = installPrefixURL
             .appendingPathComponent("lib", isDirectory: true)
             .appendingPathComponent(self.installedPayloadDirectoryName, isDirectory: true)
@@ -175,6 +195,7 @@ enum ConsumerBundledRuntime {
 
         return fileManager.isExecutableFile(atPath: wrapperURL.path)
             && fileManager.isExecutableFile(atPath: nodeURL.path)
+            && fileManager.isExecutableFile(atPath: uvURL.path)
             && fileManager.isReadableFile(atPath: entryURL.path)
             && fileManager.isReadableFile(atPath: chalkPackageURL.path)
             && self.installedRuntimeCodeIsValid(installPrefixURL: installPrefixURL, fileManager: fileManager)
@@ -205,6 +226,20 @@ enum ConsumerBundledRuntime {
                 domain: "ConsumerBundledRuntime",
                 code: 2,
                 userInfo: [NSLocalizedDescriptionKey: "Bundled Node runtime missing for \(arch)."])
+        }
+        return url
+    }
+
+    private static func uvRuntimeSourceURL(from resourceURL: URL) throws -> URL {
+        let arch = try self.currentNodeRuntimeDirectoryName()
+        let url = resourceURL
+            .appendingPathComponent("uv", isDirectory: true)
+            .appendingPathComponent(arch, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw NSError(
+                domain: "ConsumerBundledRuntime",
+                code: 8,
+                userInfo: [NSLocalizedDescriptionKey: "Bundled uv runtime missing for \(arch)."])
         }
         return url
     }

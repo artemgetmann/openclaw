@@ -411,6 +411,7 @@ import Testing
             let paths = CommandResolver.preferredPaths()
             #expect(paths.contains(ConsumerRuntime.installPrefixURL.appendingPathComponent("bin").path))
             #expect(paths.contains(ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/node/bin").path))
+            #expect(paths.contains(ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/uv/bin").path))
         }
     }
 

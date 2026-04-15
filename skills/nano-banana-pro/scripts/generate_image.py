@@ -11,6 +11,7 @@ Generate images using Google's Nano Banana Pro (Gemini 3 Pro Image) API.
 
 Usage:
     uv run generate_image.py --prompt "your image description" --filename "output.png" [--resolution 1K|2K|4K] [--api-key KEY]
+    uv run generate_image.py --warmup
 
 Multi-image editing (up to 14 images):
     uv run generate_image.py --prompt "combine these images" --filename "output.png" -i img1.png -i img2.png -i img3.png
@@ -74,13 +75,18 @@ def main():
         description="Generate images using Nano Banana Pro (Gemini 3 Pro Image)"
     )
     parser.add_argument(
+        "--warmup",
+        action="store_true",
+        help="Import the runtime dependencies and exit successfully without needing an API key."
+    )
+    parser.add_argument(
         "--prompt", "-p",
-        required=True,
+        required=False,
         help="Image description/prompt"
     )
     parser.add_argument(
         "--filename", "-f",
-        required=True,
+        required=False,
         help="Output filename (e.g., sunset-mountains.png)"
     )
     parser.add_argument(
@@ -109,6 +115,17 @@ def main():
 
     args = parser.parse_args()
 
+    if args.warmup:
+        # The consumer warmup path only needs to materialize the Python
+        # environment and import dependencies. It must not require a Gemini
+        # key or touch the generation API.
+        import_runtime_dependencies()
+        print("Warmup complete.")
+        return
+
+    if not args.prompt or not args.filename:
+        parser.error("--prompt and --filename are required unless --warmup is set")
+
     # Get API key
     api_key = get_api_key(args.api_key)
     if not api_key:
@@ -118,10 +135,7 @@ def main():
         print("  2. Set GEMINI_API_KEY environment variable", file=sys.stderr)
         sys.exit(1)
 
-    # Import here after checking API key to avoid slow import on error
-    from google import genai
-    from google.genai import types
-    from PIL import Image as PILImage
+    genai, types, PILImage = import_runtime_dependencies()
 
     # Initialise client
     client = genai.Client(api_key=api_key)
@@ -229,6 +243,16 @@ def main():
     except Exception as e:
         print(f"Error generating image: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def import_runtime_dependencies():
+    # Import lazily so the warmup path can materialize the environment without
+    # requiring a Gemini key or touching the generation API.
+    from google import genai
+    from google.genai import types
+    from PIL import Image as PILImage
+
+    return genai, types, PILImage
 
 
 if __name__ == "__main__":
