@@ -271,7 +271,14 @@ final class GatewayProcessManager {
         self.lastEnvironmentRefresh = now
         self.environmentRefreshTask = Task { [weak self] in
             let status = await Task.detached(priority: .utility) {
-                GatewayEnvironment.check()
+                // Consumer builds own a bundled helper/runtime. Reusing the
+                // generic gateway env check here can surface "install Node/CLI"
+                // guidance from the legacy operator path even though the
+                // packaged consumer app should repair itself from the bundle.
+                if AppFlavor.current.isConsumer {
+                    return await GatewayEnvironment.checkConsumerLane()
+                }
+                return GatewayEnvironment.check()
             }.value
             await MainActor.run {
                 guard let self else { return }
