@@ -198,6 +198,17 @@ The point of this checklist is clarity: if the verifier passes, the consumer
 bundle is assembled correctly. Any remaining friction is launch trust, not
 consumer bundle identity.
 
+Release/demo distribution builds must stay on the default consumer identity:
+
+- app name: `OpenClaw Consumer`
+- bundle id: `ai.openclaw.consumer.mac`
+- runtime root: `~/Library/Application Support/OpenClaw Consumer`
+- launch labels: `ai.openclaw.consumer` and `ai.openclaw.consumer.gateway`
+
+Do not pass `--instance` to `scripts/package-consumer-mac-dist.sh`, and do not
+leave `OPENCLAW_CONSUMER_INSTANCE_ID` set when producing a user-facing release
+artifact. Named instances are for tester/debug lanes only.
+
 Default consumer packaging and launch are reserved for the main consumer checkout. Feature worktrees should always use `--instance <id>` so they do not fight over the shared runtime or port.
 
 Consumer packaging policy lives in [openclaw-consumer-packaging-contract.md](./openclaw-consumer-packaging-contract.md).
