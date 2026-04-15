@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+source "$ROOT_DIR/scripts/lib/openclaw-runtime-payloads.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
@@ -64,6 +65,10 @@ plist_print() {
   /usr/libexec/PlistBuddy -c "Print :$key" "$INFO_PLIST"
 }
 
+team_id_for() {
+  codesign -dv --verbose=4 "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -n 1
+}
+
 actual_name="$(plist_print CFBundleDisplayName)"
 actual_bundle_id="$(plist_print CFBundleIdentifier)"
 actual_variant="$(plist_print OpenClawAppVariant)"
@@ -111,12 +116,37 @@ if [[ -n "$sparkle_feed_url" ]]; then
   fi
 fi
 
-codesign --verify --deep --strict "$APP_PATH" >/dev/null
-
 codesign_details="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)"
 signing_authority="$(printf '%s\n' "$codesign_details" | sed -n 's/^Authority=//p' | head -n 1)"
 team_identifier="$(printf '%s\n' "$codesign_details" | sed -n 's/^TeamIdentifier=//p' | head -n 1)"
 format_line="$(printf '%s\n' "$codesign_details" | sed -n 's/^Format=//p' | head -n 1)"
+
+while IFS= read -r -d '' runtime_file; do
+  if openclaw_runtime_node_should_be_macho "$runtime_file" && ! openclaw_file_is_macho "$runtime_file"; then
+    echo "ERROR: runtime addon is not Mach-O: $runtime_file" >&2
+    exit 1
+  fi
+
+  if openclaw_file_is_macho "$runtime_file"; then
+    if ! codesign --verify --strict "$runtime_file" >/dev/null; then
+      echo "ERROR: runtime payload failed codesign verification: $runtime_file" >&2
+      exit 1
+    fi
+
+    # Release builds need the bundled runtime payloads to come from the same
+    # signing team as the app shell. A separately signed addon can still look
+    # "valid" in isolation while Gatekeeper/runtime library validation blocks it.
+    runtime_team_identifier="$(team_id_for "$runtime_file")"
+    if [[ -n "$team_identifier" && "$runtime_team_identifier" != "$team_identifier" ]]; then
+      echo "ERROR: runtime payload Team ID mismatch: $runtime_file" >&2
+      echo "Expected: $team_identifier" >&2
+      echo "Actual: ${runtime_team_identifier:-<missing>}" >&2
+      exit 1
+    fi
+  fi
+done < <(openclaw_runtime_payload_files "$APP_PATH")
+
+codesign --verify --deep --strict "$APP_PATH" >/dev/null
 
 # Gatekeeper verdict is useful demo-distribution signal, but a local Apple
 # Development build should still count as a valid bundle assembly result.

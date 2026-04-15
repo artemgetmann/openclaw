@@ -6,6 +6,7 @@ IDENTITY="${SIGN_IDENTITY:-}"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 DISABLE_LIBRARY_VALIDATION="${DISABLE_LIBRARY_VALIDATION:-0}"
 SKIP_TEAM_ID_CHECK="${SKIP_TEAM_ID_CHECK:-0}"
+source "$(cd "$(dirname "$0")" && pwd)/lib/openclaw-runtime-payloads.sh"
 ENT_TMP_BASE=$(mktemp -t openclaw-entitlements-base.XXXXXX)
 ENT_TMP_APP_BASE=$(mktemp -t openclaw-entitlements-app-base.XXXXXX)
 ENT_TMP_RUNTIME=$(mktemp -t openclaw-entitlements-runtime.XXXXXX)
@@ -279,6 +280,16 @@ if [ -d "$APP_BUNDLE/Contents/Frameworks" ]; then
     echo "Signing framework: $f"; sign_plain_item "$f"
   done
 fi
+
+# Sign executable runtime payloads before the outer bundle signature lands.
+# The runtime lives under Resources, so codesign does not reach these binaries
+# unless we walk the tree explicitly.
+while IFS= read -r -d '' runtime_file; do
+  if openclaw_file_is_macho "$runtime_file"; then
+    echo "Signing runtime payload: $runtime_file"
+    sign_plain_item "$runtime_file"
+  fi
+done < <(openclaw_runtime_payload_files "$APP_BUNDLE")
 
 # Finally sign the bundle
 sign_item "$APP_BUNDLE" "$APP_ENTITLEMENTS"

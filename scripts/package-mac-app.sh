@@ -398,6 +398,21 @@ prepare_bundled_consumer_runtime() {
 EOF
 }
 
+prune_bundled_runtime_dangling_symlinks() {
+  if [[ ! -d "$BUNDLED_RUNTIME_RESOURCE_DIR" ]]; then
+    return 0
+  fi
+
+  # Some extension directories carry workspace/dev symlinks in node_modules
+  # that do not survive bundle assembly. Drop only the broken links so outer
+  # bundle verification does not fail on "No such file or directory".
+  while IFS= read -r broken_link; do
+    [[ -n "$broken_link" ]] || continue
+    echo "🧹 Removing broken bundled-runtime symlink: $broken_link"
+    rm -f "$broken_link"
+  done < <(find "$BUNDLED_RUNTIME_RESOURCE_DIR" -type l ! -exec test -e {} \; -print)
+}
+
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install)"
   openclaw_run_repo_pnpm "$ROOT_DIR" install --no-frozen-lockfile --config.node-linker=hoisted
@@ -557,6 +572,7 @@ if [[ "$APP_VARIANT" == "consumer" ]]; then
     exit 1
   fi
   prepare_bundled_consumer_runtime
+  prune_bundled_runtime_dangling_symlinks
 fi
 
 echo "📦 Copying model catalog"
