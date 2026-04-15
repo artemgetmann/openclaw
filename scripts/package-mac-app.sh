@@ -377,6 +377,33 @@ ensure_consumer_node_runtime() {
   printf '%s\n' "$cache_root"
 }
 
+resolve_matrix_crypto_package_root() {
+  local package_root=""
+
+  # pnpm can hoist the Matrix package, so resolve the installed package path
+  # instead of assuming a flat repo-local node_modules layout.
+  package_root="$(
+    "$VALIDATED_NODE_BIN" -e '
+      const path = require("node:path");
+      const { createRequire } = require("node:module");
+      const req = createRequire(process.argv[1]);
+      try {
+        const downloadLib = req.resolve("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
+        process.stdout.write(path.dirname(downloadLib));
+      } catch (err) {
+        process.stderr.write(
+          `Failed to resolve @matrix-org/matrix-sdk-crypto-nodejs package root: ${
+            err instanceof Error ? err.message : String(err)
+          }\n`,
+        );
+        process.exit(1);
+      }
+    ' "$ROOT_DIR/package.json"
+  )"
+
+  printf '%s\n' "$package_root"
+}
+
 stage_consumer_matrix_crypto_x64_twin() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
     return 0
@@ -385,13 +412,14 @@ stage_consumer_matrix_crypto_x64_twin() {
     return 0
   fi
 
-  local matrix_package_root="${ROOT_DIR}/node_modules/@matrix-org/matrix-sdk-crypto-nodejs"
+  local matrix_package_root=""
   local bundled_runtime_root="${BUNDLED_RUNTIME_RESOURCE_DIR}/openclaw"
   local bundled_runtime_dist_root="${bundled_runtime_root}/dist"
   local matrix_crypto_x64_source=""
   local arm64_native=""
   local x64_target=""
 
+  matrix_package_root="$(resolve_matrix_crypto_package_root)"
   matrix_crypto_x64_source="${matrix_package_root}/matrix-sdk-crypto.darwin-x64.node"
   if [[ ! -f "$matrix_crypto_x64_source" ]]; then
     local downloader_script="${matrix_package_root}/download-lib.js"
@@ -405,8 +433,9 @@ stage_consumer_matrix_crypto_x64_twin() {
       "$VALIDATED_NODE_BIN" "$downloader_script" >/dev/null
   fi
 
-  if [[ -z "$matrix_crypto_x64_source" ]]; then
-    echo "ERROR: bundled consumer Matrix crypto x64 staging did not produce a native addon." >&2
+  if [[ ! -f "$matrix_crypto_x64_source" ]]; then
+    echo "ERROR: bundled consumer Matrix crypto x64 staging did not produce the expected native addon:" >&2
+    echo "  $matrix_crypto_x64_source" >&2
     exit 1
   fi
 
@@ -419,6 +448,34 @@ stage_consumer_matrix_crypto_x64_twin() {
     mkdir -p "$(dirname "$x64_target")"
     cp "$matrix_crypto_x64_source" "$x64_target"
   done < <(find "$bundled_runtime_dist_root" -type f -name '*.node' | grep 'darwin-arm64' || true)
+}
+
+materialize_bundled_extension_node_modules() {
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+
+  local extension_dir=""
+  local extension_name=""
+  local source_node_modules=""
+  local dest_node_modules=""
+
+  # `cp -R` preserves the symlink forest emitted by pnpm, but the packaged app
+  # must be self-contained. Rehydrate each extension's production dependencies
+  # from the source checkout so the bundle does not retain broken links back to
+  # the developer worktree's `.pnpm` store.
+  while IFS= read -r -d '' extension_dir; do
+    extension_name="$(basename "$extension_dir")"
+    source_node_modules="$ROOT_DIR/extensions/$extension_name/node_modules"
+    if [[ ! -d "$source_node_modules" ]]; then
+      continue
+    fi
+
+    dest_node_modules="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions/$extension_name/node_modules"
+    rm -rf "$dest_node_modules"
+    mkdir -p "$(dirname "$dest_node_modules")"
+    rsync -aL "$source_node_modules/" "$dest_node_modules/"
+  done < <(find "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions" -mindepth 1 -maxdepth 1 -type d -print0)
 }
 
 prepare_bundled_consumer_runtime() {
@@ -482,6 +539,7 @@ prepare_bundled_consumer_runtime() {
 
   rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
   cp -R "$ROOT_DIR/extensions" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
+  materialize_bundled_extension_node_modules
   if [[ -d "$ROOT_DIR/skills" ]]; then
     rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
     cp -R "$ROOT_DIR/skills" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
