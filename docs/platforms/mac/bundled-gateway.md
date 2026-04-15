@@ -7,14 +7,23 @@ read_when:
 title: "Gateway on macOS"
 ---
 
-# Gateway on macOS (external launchd)
+# Gateway on macOS
 
-OpenClaw.app no longer bundles Node/Bun or the Gateway runtime. The macOS app
-expects an **external** `openclaw` CLI install, does not spawn the Gateway as a
-child process, and manages a per‑user launchd service to keep the Gateway
-running (or attaches to an existing local Gateway if one is already running).
+There are now two distinct macOS runtime shapes:
 
-## Install the CLI (required for local mode)
+- Consumer app:
+  - bundles its own Node runtime + `openclaw` payload inside the signed app
+  - seeds that bundled helper into the consumer-owned state dir on first run
+  - should not require CLT, Homebrew, git, npm, or pnpm on a fresh user Mac
+- Standard/operator app:
+  - still expects an external `openclaw` CLI install
+  - manages a per-user launchd service to keep the Gateway running
+  - can attach to an existing local Gateway if one is already running
+
+This page describes the standard/operator external-CLI flow unless noted
+otherwise.
+
+## Install the CLI (standard/operator app only)
 
 Node 24 is the default runtime on the Mac. Node 22 LTS, currently `22.16+`, still works for compatibility. Then install `openclaw` globally:
 
@@ -22,7 +31,11 @@ Node 24 is the default runtime on the Mac. Node 22 LTS, currently `22.16+`, stil
 npm install -g openclaw@<version>
 ```
 
-The macOS app’s **Install CLI** button runs the same flow via npm/pnpm (bun not recommended for Gateway runtime).
+The standard/operator macOS app’s **Install CLI** button runs the same flow via
+npm/pnpm (bun not recommended for Gateway runtime).
+
+Consumer builds should repair the local helper from the packaged app bundle
+instead of sending the user through this flow.
 
 ## Launchd (Gateway as LaunchAgent)
 
