@@ -48,6 +48,16 @@ if [[ ! -x "$VALIDATED_NPM_BIN" ]]; then
 fi
 CLI_ARCHIVE_STAGED=""
 CLI_ARCHIVE_STAGE_DIR=""
+CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
+  "AGENTS.md"
+  "SOUL.md"
+  "TOOLS.md"
+  "IDENTITY.md"
+  "USER.md"
+  "HEARTBEAT.md"
+  "BOOTSTRAP.md"
+  "MEMORY.md"
+)
 
 consumer_build_archs_are_universal() {
   case "$BUILD_ARCHS_VALUE" in
@@ -92,6 +102,35 @@ consumer_require_bundled_speech_key() {
 }
 
 consumer_require_bundled_speech_key
+
+verify_required_workspace_templates() {
+  local template_dir="$1"
+  local context_label="$2"
+  local missing=()
+  local template_name=""
+
+  if [[ ! -d "$template_dir" ]]; then
+    echo "ERROR: ${context_label} directory missing: $template_dir" >&2
+    return 1
+  fi
+
+  # Consumer packaging must ship the full bootstrap template set because the
+  # packaged JS helper resolves from docs/reference/templates under its own
+  # package root after install. A partial copy creates a runtime that looks
+  # healthy but fails on the first real workspace bootstrap.
+  for template_name in "${CONSUMER_REQUIRED_WORKSPACE_TEMPLATES[@]}"; do
+    if [[ ! -f "$template_dir/$template_name" ]]; then
+      missing+=("$template_name")
+    fi
+  done
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "ERROR: ${context_label} is missing required workspace templates." >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    echo "Expected directory: $template_dir" >&2
+    return 1
+  fi
+}
 
 default_sparkle_feed_url_for_bundle() {
   local bundle_id="$1"
@@ -388,6 +427,14 @@ prepare_bundled_consumer_runtime() {
     cp -R "$ROOT_DIR/skills" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
   fi
 
+  local bundled_template_src="$ROOT_DIR/docs/reference/templates"
+  local bundled_template_dest="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/docs/reference/templates"
+  verify_required_workspace_templates "$bundled_template_src" "consumer workspace template source"
+  rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/docs"
+  mkdir -p "$(dirname "$bundled_template_dest")"
+  cp -R "$bundled_template_src" "$bundled_template_dest"
+  verify_required_workspace_templates "$bundled_template_dest" "bundled consumer runtime workspace templates"
+
   node_arm64_root="$(ensure_consumer_node_runtime "$node_version" "darwin-arm64")"
   node_x64_root="$(ensure_consumer_node_runtime "$node_version" "darwin-x64")"
   cp -R "$node_arm64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-arm64"
@@ -553,12 +600,10 @@ cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/
 echo "📦 Copying consumer workspace templates"
 TEMPLATE_SRC="$ROOT_DIR/docs/reference/templates"
 TEMPLATE_DEST="$APP_ROOT/Contents/Resources/templates"
-if [ -d "$TEMPLATE_SRC" ]; then
-  rm -rf "$TEMPLATE_DEST"
-  cp -R "$TEMPLATE_SRC" "$TEMPLATE_DEST"
-else
-  echo "WARN: consumer template source missing at $TEMPLATE_SRC (continuing)" >&2
-fi
+verify_required_workspace_templates "$TEMPLATE_SRC" "consumer workspace template source"
+rm -rf "$TEMPLATE_DEST"
+cp -R "$TEMPLATE_SRC" "$TEMPLATE_DEST"
+verify_required_workspace_templates "$TEMPLATE_DEST" "packaged consumer app workspace templates"
 
 if [[ "$APP_VARIANT" == "consumer" ]]; then
   echo "🔐 Seeding bundled consumer defaults"

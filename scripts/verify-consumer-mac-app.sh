@@ -54,6 +54,16 @@ EXPECTED_URL_SCHEME="openclaw-consumer"
 EXPECTED_GATEWAY_PORT="$(consumer_instance_gateway_port "$NORMALIZED_INSTANCE_ID")"
 APP_PATH="${APP_PATH:-$(consumer_instance_app_path "$ROOT_DIR" "$NORMALIZED_INSTANCE_ID")}"
 INFO_PLIST="$APP_PATH/Contents/Info.plist"
+REQUIRED_WORKSPACE_TEMPLATES=(
+  "AGENTS.md"
+  "SOUL.md"
+  "TOOLS.md"
+  "IDENTITY.md"
+  "USER.md"
+  "HEARTBEAT.md"
+  "BOOTSTRAP.md"
+  "MEMORY.md"
+)
 
 if [[ ! -f "$INFO_PLIST" ]]; then
   echo "ERROR: consumer app bundle not found: $APP_PATH" >&2
@@ -84,6 +94,25 @@ runtime_node_entitlement_value() {
   entitlement_value="$(/usr/libexec/PlistBuddy -c "Print :${entitlement_key}" "$entitlements_file" 2>/dev/null || true)"
   rm -f "$entitlements_file"
   printf '%s\n' "$entitlement_value"
+}
+
+assert_required_templates() {
+  local template_dir="$1"
+  local context_label="$2"
+  local template_name=""
+
+  if [[ ! -d "$template_dir" ]]; then
+    echo "ERROR: ${context_label} directory missing: $template_dir" >&2
+    exit 1
+  fi
+
+  for template_name in "${REQUIRED_WORKSPACE_TEMPLATES[@]}"; do
+    if [[ ! -f "$template_dir/$template_name" ]]; then
+      echo "ERROR: ${context_label} missing required template '$template_name'" >&2
+      echo "Expected directory: $template_dir" >&2
+      exit 1
+    fi
+  done
 }
 
 actual_name="$(plist_print CFBundleDisplayName)"
@@ -123,6 +152,11 @@ if [[ "$actual_url_scheme" != "$EXPECTED_URL_SCHEME" ]]; then
   echo "ERROR: expected URL scheme '$EXPECTED_URL_SCHEME', got '$actual_url_scheme'" >&2
   exit 1
 fi
+
+assert_required_templates "$APP_PATH/Contents/Resources/templates" "app resource templates"
+assert_required_templates \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/docs/reference/templates" \
+  "bundled runtime workspace templates"
 
 sparkle_mode="disabled"
 if [[ -n "$sparkle_feed_url" ]]; then
