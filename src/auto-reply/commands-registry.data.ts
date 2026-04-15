@@ -145,6 +145,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "capabilities",
+      nativeName: "capabilities",
+      description: "Show what this bot can do right now.",
+      textAlias: "/capabilities",
+      category: "status",
+    }),
+    defineChatCommand({
       key: "skill",
       nativeName: "skill",
       description: "Run a skill by name.",
