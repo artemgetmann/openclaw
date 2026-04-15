@@ -4,6 +4,17 @@ import Testing
 
 @Suite(.serialized)
 struct ConsumerBundledRuntimeTests {
+    private static let requiredWorkspaceTemplateNames = [
+        "AGENTS.md",
+        "SOUL.md",
+        "TOOLS.md",
+        "IDENTITY.md",
+        "USER.md",
+        "HEARTBEAT.md",
+        "BOOTSTRAP.md",
+        "MEMORY.md",
+    ]
+
     @Test func `seeding writes bundled runtime into consumer prefix and is idempotent`() throws {
         let resourceRoot = try makeTempDirForTests()
         let installPrefix = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
@@ -19,6 +30,7 @@ struct ConsumerBundledRuntimeTests {
         try fm.createDirectory(
             at: bundledRoot.appendingPathComponent("openclaw/node_modules/chalk", isDirectory: true),
             withIntermediateDirectories: true)
+        try self.writeBundledWorkspaceTemplates(into: bundledRoot)
         try fm.createDirectory(
             at: bundledRoot.appendingPathComponent("node/darwin-arm64/bin", isDirectory: true),
             withIntermediateDirectories: true)
@@ -63,6 +75,7 @@ struct ConsumerBundledRuntimeTests {
         #expect(fm.isExecutableFile(atPath: installPrefix.appendingPathComponent("tools/node/bin/node").path))
         #expect(fm.isReadableFile(atPath: installPrefix.appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
         #expect(fm.isReadableFile(atPath: installPrefix.appendingPathComponent("lib/openclaw-bundled/node_modules/chalk/package.json").path))
+        self.assertInstalledWorkspaceTemplates(at: installPrefix, fileManager: fm)
 
         let ready = try ConsumerBundledRuntime.seedIfNeeded(from: bundledRoot, into: installPrefix, fileManager: fm)
         #expect(ready == .ready)
@@ -93,6 +106,7 @@ struct ConsumerBundledRuntimeTests {
         try fm.createDirectory(
             at: bundledRoot.appendingPathComponent("openclaw/node_modules/chalk", isDirectory: true),
             withIntermediateDirectories: true)
+        try self.writeBundledWorkspaceTemplates(into: bundledRoot)
         try fm.createDirectory(
             at: bundledRoot.appendingPathComponent("node/darwin-arm64/bin", isDirectory: true),
             withIntermediateDirectories: true)
@@ -141,6 +155,38 @@ struct ConsumerBundledRuntimeTests {
             #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("bin/openclaw").path))
             #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/node/bin/node").path))
             #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
+            self.assertInstalledWorkspaceTemplates(
+                at: ConsumerRuntime.installPrefixURL,
+                fileManager: FileManager.default)
+        }
+    }
+
+    private func writeBundledWorkspaceTemplates(into bundledRoot: URL) throws {
+        let templatesRoot = bundledRoot
+            .appendingPathComponent("openclaw", isDirectory: true)
+            .appendingPathComponent("docs", isDirectory: true)
+            .appendingPathComponent("reference", isDirectory: true)
+            .appendingPathComponent("templates", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: templatesRoot, withIntermediateDirectories: true)
+        for name in Self.requiredWorkspaceTemplateNames {
+            let fileURL = templatesRoot.appendingPathComponent(name)
+            try "# \(name)\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func assertInstalledWorkspaceTemplates(at installPrefix: URL, fileManager: FileManager) {
+        let templatesRoot = installPrefix
+            .appendingPathComponent("lib", isDirectory: true)
+            .appendingPathComponent("openclaw-bundled", isDirectory: true)
+            .appendingPathComponent("docs", isDirectory: true)
+            .appendingPathComponent("reference", isDirectory: true)
+            .appendingPathComponent("templates", isDirectory: true)
+
+        for name in Self.requiredWorkspaceTemplateNames {
+            let templateURL = templatesRoot.appendingPathComponent(name)
+            #expect(fileManager.fileExists(atPath: templateURL.path))
+            #expect(fileManager.isReadableFile(atPath: templateURL.path))
         }
     }
 
