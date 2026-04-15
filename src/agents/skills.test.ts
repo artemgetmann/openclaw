@@ -186,6 +186,21 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain(path.join(bundledSkillDir, "SKILL.md"));
   });
 
+  it("loads the bundled what-can-you-do skill without exposing a slash command", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.resolve("skills"),
+    });
+    const skill = entries.find((entry) => entry.skill.name === "what-can-you-do");
+
+    expect(skill).toBeDefined();
+    expect(skill?.skill.description).toContain("capability and intro questions");
+    expect(skill?.skill.description).toContain("still needs setup");
+    expect(skill?.invocation?.userInvocable).toBe(false);
+  });
+
   it("loads extra skill folders from config (lowest precedence)", async () => {
     const workspaceDir = await makeWorkspace();
     const extraDir = path.join(workspaceDir, ".extra");
