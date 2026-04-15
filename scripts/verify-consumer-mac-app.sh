@@ -69,6 +69,23 @@ team_id_for() {
   codesign -dv --verbose=4 "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -n 1
 }
 
+runtime_node_entitlement_value() {
+  local runtime_node="$1"
+  local entitlement_key="$2"
+  local entitlements_file
+  local entitlement_value=""
+
+  entitlements_file="$(mktemp)"
+  if ! codesign -d --entitlements :- "$runtime_node" >"$entitlements_file" 2>/dev/null; then
+    rm -f "$entitlements_file"
+    return 1
+  fi
+
+  entitlement_value="$(/usr/libexec/PlistBuddy -c "Print :${entitlement_key}" "$entitlements_file" 2>/dev/null || true)"
+  rm -f "$entitlements_file"
+  printf '%s\n' "$entitlement_value"
+}
+
 actual_name="$(plist_print CFBundleDisplayName)"
 actual_bundle_id="$(plist_print CFBundleIdentifier)"
 actual_variant="$(plist_print OpenClawAppVariant)"
@@ -120,6 +137,34 @@ codesign_details="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)"
 signing_authority="$(printf '%s\n' "$codesign_details" | sed -n 's/^Authority=//p' | head -n 1)"
 team_identifier="$(printf '%s\n' "$codesign_details" | sed -n 's/^TeamIdentifier=//p' | head -n 1)"
 format_line="$(printf '%s\n' "$codesign_details" | sed -n 's/^Format=//p' | head -n 1)"
+
+while IFS= read -r -d '' runtime_node; do
+  if ! openclaw_file_is_macho "$runtime_node"; then
+    echo "ERROR: runtime node binary is not Mach-O: $runtime_node" >&2
+    exit 1
+  fi
+
+  if ! codesign --verify --strict "$runtime_node" >/dev/null; then
+    echo "ERROR: runtime node binary failed codesign verification: $runtime_node" >&2
+    exit 1
+  fi
+
+  runtime_allow_jit="$(runtime_node_entitlement_value "$runtime_node" "com.apple.security.cs.allow-jit" || true)"
+  runtime_allow_unsigned_exec="$(runtime_node_entitlement_value "$runtime_node" "com.apple.security.cs.allow-unsigned-executable-memory" || true)"
+  if [[ "$runtime_allow_jit" != "true" || "$runtime_allow_unsigned_exec" != "true" ]]; then
+    echo "ERROR: runtime node binary is missing required JIT entitlements: $runtime_node" >&2
+    echo "Expected: com.apple.security.cs.allow-jit=true and com.apple.security.cs.allow-unsigned-executable-memory=true" >&2
+    exit 1
+  fi
+
+  runtime_team_identifier="$(team_id_for "$runtime_node")"
+  if [[ -n "$team_identifier" && "$runtime_team_identifier" != "$team_identifier" ]]; then
+    echo "ERROR: runtime node binary Team ID mismatch: $runtime_node" >&2
+    echo "Expected: $team_identifier" >&2
+    echo "Actual: ${runtime_team_identifier:-<missing>}" >&2
+    exit 1
+  fi
+done < <(openclaw_runtime_node_binary_files "$APP_PATH")
 
 while IFS= read -r -d '' runtime_file; do
   if openclaw_runtime_node_should_be_macho "$runtime_file" && ! openclaw_file_is_macho "$runtime_file"; then
