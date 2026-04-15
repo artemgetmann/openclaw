@@ -41,6 +41,9 @@ describe("summarizeTelegramTesterTokenPool", () => {
 
   it("builds a tester runtime config without mutating the canonical source config", () => {
     const baseConfig = {
+      env: {
+        OPENAI_API_KEY: "sk-live-test",
+      },
       channels: {
         telegram: {
           enabled: false,
@@ -67,8 +70,12 @@ describe("summarizeTelegramTesterTokenPool", () => {
 
     expect(baseConfig.channels.telegram.botToken).toBe("99999:main-bot");
     expect(baseConfig.channels.telegram.accounts.main.botToken).toBe("88888:main-account");
+    expect(baseConfig.env.OPENAI_API_KEY).toBe("sk-live-test");
+    expect(baseConfig.models.providers.openai.apiKey).toBe("sk-main-provider");
     expect(config.channels.telegram.botToken).toBe("tester-token");
     expect(config.channels.telegram.accounts).toBeUndefined();
+    expect(config.env.OPENAI_API_KEY).toBeUndefined();
+    expect(config.models.providers.openai.apiKey).toBeUndefined();
   });
 });
 

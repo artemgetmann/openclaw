@@ -124,11 +124,34 @@ describe("telegram live runtime helpers", () => {
     ]);
   });
 
-  it("builds a Telegram-only runtime config that disables ACP and uses API-key model routing", () => {
+  it("builds a Telegram-only runtime config that disables ACP without inheriting OpenAI secrets", () => {
     const config = buildTelegramLiveRuntimeConfig({
       baseConfig: {
         env: {
           OPENAI_API_KEY: "sk-live-test",
+          OPENCLAW_CONSUMER_OPENAI_API_KEY: "sk-consumer-test",
+          vars: {
+            OPENAI_API_KEY: "sk-live-vars",
+          },
+        },
+        messages: {
+          tts: {
+            openai: {
+              apiKey: "${OPENAI_API_KEY}",
+            },
+          },
+        },
+        tools: {
+          media: {
+            audio: {
+              models: [{ provider: "openai", apiKey: "${OPENCLAW_CONSUMER_OPENAI_API_KEY}" }],
+            },
+          },
+        },
+        models: {
+          providers: {
+            openai: { apiKey: "sk-main-provider" },
+          },
         },
         acp: {
           backend: "acpx",
@@ -177,10 +200,13 @@ describe("telegram live runtime helpers", () => {
         botToken: "tester-token",
       },
     });
-    expect(config.agents?.defaults?.model).toMatchObject({
-      primary: "openai/gpt-5.4",
-      fallbacks: [],
-    });
+    expect(config.env?.OPENAI_API_KEY).toBeUndefined();
+    expect(config.env?.OPENCLAW_CONSUMER_OPENAI_API_KEY).toBeUndefined();
+    expect(config.env?.vars?.OPENAI_API_KEY).toBeUndefined();
+    expect(config.messages?.tts?.openai?.apiKey).toBeUndefined();
+    expect(config.tools?.media?.audio?.models?.[0]?.apiKey).toBeUndefined();
+    expect(config.models?.providers?.openai?.apiKey).toBeUndefined();
+    expect(config.agents?.defaults?.model?.primary).not.toBe("openai/gpt-5.4");
     expect(config.agents?.defaults?.workspace).toBe("/tmp/openclaw-live-onboarding");
     expect(config.agents?.list).toEqual([{ id: "main" }]);
     expect(config.acp).toEqual({
