@@ -35,6 +35,69 @@ function normalizeStringList(values) {
   return normalizeTokenList(values);
 }
 
+function scrubOpenAiSecretsFromTesterRuntimeConfig(node) {
+  if (!node || typeof node !== "object") {
+    return node;
+  }
+
+  if (Array.isArray(node)) {
+    for (const entry of node) {
+      scrubOpenAiSecretsFromTesterRuntimeConfig(entry);
+    }
+    return node;
+  }
+
+  const obj = node;
+  const envVars = obj.env && typeof obj.env === "object" ? obj.env : null;
+  if (envVars) {
+    const vars = envVars.vars && typeof envVars.vars === "object" ? envVars.vars : null;
+    if (vars) {
+      for (const key of Object.keys(vars)) {
+        if (/^OPENAI(?:_.+)?_API_KEY$/.test(key) || key === "OPENCLAW_CONSUMER_OPENAI_API_KEY") {
+          delete vars[key];
+        }
+      }
+    }
+    for (const key of Object.keys(envVars)) {
+      if (/^OPENAI(?:_.+)?_API_KEY$/.test(key) || key === "OPENCLAW_CONSUMER_OPENAI_API_KEY") {
+        delete envVars[key];
+      }
+    }
+  }
+
+  const provider = typeof obj.provider === "string" ? obj.provider.trim().toLowerCase() : "";
+  if (provider === "openai" && "apiKey" in obj) {
+    delete obj.apiKey;
+  }
+
+  const modelProviders = obj.models && typeof obj.models === "object" ? obj.models.providers : null;
+  if (modelProviders && typeof modelProviders === "object") {
+    const openaiProvider = modelProviders.openai;
+    if (openaiProvider && typeof openaiProvider === "object") {
+      delete openaiProvider.apiKey;
+    }
+  }
+
+  const ttsOpenAi = obj.messages?.tts?.openai;
+  if (ttsOpenAi && typeof ttsOpenAi === "object") {
+    delete ttsOpenAi.apiKey;
+  }
+
+  if (
+    typeof obj.apiKey === "string" &&
+    (/\$\{OPENAI(?:_.+)?_API_KEY\}/.test(obj.apiKey) ||
+      /\$\{OPENCLAW_CONSUMER_OPENAI_API_KEY\}/.test(obj.apiKey))
+  ) {
+    delete obj.apiKey;
+  }
+
+  for (const value of Object.values(obj)) {
+    scrubOpenAiSecretsFromTesterRuntimeConfig(value);
+  }
+
+  return obj;
+}
+
 function normalizeClaimEntries(values) {
   const seen = new Set();
   const out = [];
@@ -471,6 +534,7 @@ export function buildTelegramLiveRuntimeConfig(params) {
   }
 
   const config = baseConfig;
+  scrubOpenAiSecretsFromTesterRuntimeConfig(config);
   const gateway = config.gateway && typeof config.gateway === "object" ? config.gateway : {};
   const controlUi =
     gateway.controlUi && typeof gateway.controlUi === "object" ? gateway.controlUi : {};
@@ -535,27 +599,6 @@ export function buildTelegramLiveRuntimeConfig(params) {
     agentDefaults.model = {
       ...defaultModel,
       primary: preferredModel,
-      fallbacks: Array.isArray(defaultModel.fallbacks) ? defaultModel.fallbacks : [],
-    };
-    config.agents = {
-      ...agents,
-      defaults: agentDefaults,
-    };
-  }
-
-  // Isolated Telegram tester lanes should not depend on the shared Codex OAuth
-  // session. If an OpenAI API key already exists, prefer the equivalent GPT-5.4
-  // API-key path so smoke tests stay isolated from refresh-token churn.
-  if (
-    !preferredModel &&
-    config.env &&
-    typeof config.env === "object" &&
-    typeof config.env.OPENAI_API_KEY === "string" &&
-    config.env.OPENAI_API_KEY.trim().length > 0
-  ) {
-    agentDefaults.model = {
-      ...defaultModel,
-      primary: "openai/gpt-5.4",
       fallbacks: Array.isArray(defaultModel.fallbacks) ? defaultModel.fallbacks : [],
     };
     config.agents = {

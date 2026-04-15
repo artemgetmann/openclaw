@@ -150,12 +150,40 @@ describe("new worktree tester baseline bootstrap", () => {
           },
         },
       },
+      env: {
+        OPENAI_API_KEY: "sk-live-env",
+        OPENCLAW_CONSUMER_OPENAI_API_KEY: "sk-consumer-env",
+        vars: {
+          OPENAI_API_KEY: "sk-vars-env",
+          OPENCLAW_CONSUMER_OPENAI_API_KEY: "sk-vars-consumer",
+        },
+      },
+      messages: {
+        tts: {
+          openai: {
+            apiKey: "${OPENAI_API_KEY}",
+          },
+        },
+      },
+      tools: {
+        media: {
+          audio: {
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4o-mini-transcribe",
+                apiKey: "${OPENCLAW_CONSUMER_OPENAI_API_KEY}",
+              },
+            ],
+          },
+        },
+      },
       agents: {
         list: [{ id: "main" }],
       },
       models: {
         providers: {
-          openai: { baseUrl: "https://api.openai.com/v1" },
+          openai: { baseUrl: "https://api.openai.com/v1", apiKey: "sk-main-provider" },
         },
       },
     };
@@ -203,8 +231,15 @@ describe("new worktree tester baseline bootstrap", () => {
 
     const inheritedConfig = JSON.parse(readFileSync(baselineConfigPath!, "utf8"));
     expect(inheritedConfig.models.providers.openai.baseUrl).toBe("https://api.openai.com/v1");
+    expect(inheritedConfig.models.providers.openai.apiKey).toBeUndefined();
     expect(inheritedConfig.channels.telegram.botToken).toBeUndefined();
     expect(inheritedConfig.channels.telegram.accounts.tester.botToken).toBeUndefined();
+    expect(inheritedConfig.env.OPENAI_API_KEY).toBeUndefined();
+    expect(inheritedConfig.env.OPENCLAW_CONSUMER_OPENAI_API_KEY).toBeUndefined();
+    expect(inheritedConfig.env.vars.OPENAI_API_KEY).toBeUndefined();
+    expect(inheritedConfig.env.vars.OPENCLAW_CONSUMER_OPENAI_API_KEY).toBeUndefined();
+    expect(inheritedConfig.messages.tts.openai.apiKey).toBeUndefined();
+    expect(inheritedConfig.tools.media.audio.models[0].apiKey).toBeUndefined();
 
     const inheritedAuthPath = path.join(
       baselineStateDir!,

@@ -721,6 +721,12 @@ if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runt
 
 fs.mkdirSync(runtimeStateDir, { recursive: true });
 const logFd = fs.openSync(runtimeLogPath, "a");
+const childEnv = { ...process.env };
+for (const key of Object.keys(childEnv)) {
+  if (/^OPENAI(?:_.+)?_API_KEY$/.test(key) || key === "OPENCLAW_CONSUMER_OPENAI_API_KEY") {
+    delete childEnv[key];
+  }
+}
 const child = spawn(
   process.execPath,
   [
@@ -739,7 +745,7 @@ const child = spawn(
     detached: true,
     stdio: ["ignore", logFd, logFd],
     env: {
-      ...process.env,
+      ...childEnv,
       OPENCLAW_STATE_DIR: runtimeStateDir,
       OPENCLAW_CONFIG_PATH: runtimeConfigPath,
       OPENCLAW_GATEWAY_PORT: runtimePort,

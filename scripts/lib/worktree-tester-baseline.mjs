@@ -17,6 +17,69 @@ function normalizeAgentIds(values) {
   return out;
 }
 
+function scrubInheritedOpenAiSecrets(node) {
+  if (!node || typeof node !== "object") {
+    return node;
+  }
+
+  if (Array.isArray(node)) {
+    for (const entry of node) {
+      scrubInheritedOpenAiSecrets(entry);
+    }
+    return node;
+  }
+
+  const obj = node;
+  const envVars = obj.env && typeof obj.env === "object" ? obj.env : null;
+  if (envVars) {
+    const vars = envVars.vars && typeof envVars.vars === "object" ? envVars.vars : null;
+    if (vars) {
+      for (const key of Object.keys(vars)) {
+        if (/^OPENAI(?:_.+)?_API_KEY$/.test(key) || key === "OPENCLAW_CONSUMER_OPENAI_API_KEY") {
+          delete vars[key];
+        }
+      }
+    }
+    for (const key of Object.keys(envVars)) {
+      if (/^OPENAI(?:_.+)?_API_KEY$/.test(key) || key === "OPENCLAW_CONSUMER_OPENAI_API_KEY") {
+        delete envVars[key];
+      }
+    }
+  }
+
+  const provider = typeof obj.provider === "string" ? obj.provider.trim().toLowerCase() : "";
+  if (provider === "openai" && "apiKey" in obj) {
+    delete obj.apiKey;
+  }
+
+  const modelProviders = obj.models && typeof obj.models === "object" ? obj.models.providers : null;
+  if (modelProviders && typeof modelProviders === "object") {
+    const openaiProvider = modelProviders.openai;
+    if (openaiProvider && typeof openaiProvider === "object") {
+      delete openaiProvider.apiKey;
+    }
+  }
+
+  const ttsOpenAi = obj.messages?.tts?.openai;
+  if (ttsOpenAi && typeof ttsOpenAi === "object") {
+    delete ttsOpenAi.apiKey;
+  }
+
+  if (
+    typeof obj.apiKey === "string" &&
+    (/\$\{OPENAI(?:_.+)?_API_KEY\}/.test(obj.apiKey) ||
+      /\$\{OPENCLAW_CONSUMER_OPENAI_API_KEY\}/.test(obj.apiKey))
+  ) {
+    delete obj.apiKey;
+  }
+
+  for (const value of Object.values(obj)) {
+    scrubInheritedOpenAiSecrets(value);
+  }
+
+  return obj;
+}
+
 export function deriveWorktreeTesterBaseline(params) {
   const worktreePath = path.resolve(String(params?.worktreePath ?? ""));
   const stateRoot =
@@ -66,6 +129,7 @@ export function sanitizeInheritedTesterConfig(baseConfig) {
     };
   }
 
+  scrubInheritedOpenAiSecrets(config);
   return config;
 }
 
