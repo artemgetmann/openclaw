@@ -11,6 +11,10 @@ enum ConsumerBundledRuntime {
     private static let installedPayloadDirectoryName = "openclaw-bundled"
     private static let manifestFileName = "manifest.json"
     private static let installedManifestFileName = ".consumer-bundled-runtime.json"
+    private static let requiredNodeEntitlements = [
+        "com.apple.security.cs.allow-jit",
+        "com.apple.security.cs.allow-unsigned-executable-memory",
+    ]
 
     struct Manifest: Codable, Equatable {
         let format: Int
@@ -123,6 +127,7 @@ enum ConsumerBundledRuntime {
             at: installPrefixURL.appendingPathComponent(self.installedManifestFileName),
             with: stagingRoot.appendingPathComponent(self.installedManifestFileName),
             fileManager: fileManager)
+        try self.verifyInstalledRuntimeCode(at: installPrefixURL, fileManager: fileManager)
 
         return .seeded
     }
@@ -154,6 +159,7 @@ enum ConsumerBundledRuntime {
             && fileManager.isExecutableFile(atPath: nodeURL.path)
             && fileManager.isReadableFile(atPath: entryURL.path)
             && fileManager.isReadableFile(atPath: chalkPackageURL.path)
+            && self.installedRuntimeCodeIsValid(installPrefixURL: installPrefixURL, fileManager: fileManager)
     }
 
     private static func loadManifest(from resourceURL: URL) throws -> Manifest {
@@ -229,5 +235,123 @@ enum ConsumerBundledRuntime {
             try fileManager.removeItem(at: destinationURL)
         }
         try fileManager.moveItem(at: sourceURL, to: destinationURL)
+    }
+
+    private static func installedRuntimeCodeIsValid(
+        installPrefixURL: URL,
+        fileManager: FileManager)
+    -> Bool
+    {
+        do {
+            try self.verifyInstalledRuntimeCode(at: installPrefixURL, fileManager: fileManager)
+            return true
+        } catch {
+            self.logger.warning(
+                "installed bundled runtime code verification failed at \(installPrefixURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    private static func verifyInstalledRuntimeCode(
+        at installPrefixURL: URL,
+        fileManager: FileManager) throws
+    {
+        let nodeURL = installPrefixURL.appendingPathComponent("tools/node/bin/node")
+        guard fileManager.isExecutableFile(atPath: nodeURL.path) else {
+            throw NSError(
+                domain: "ConsumerBundledRuntime",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Installed Node runtime missing at \(nodeURL.path)."])
+        }
+
+        try self.verifyCodeSignature(at: nodeURL)
+        try self.verifyNodeRuntimeEntitlements(at: nodeURL)
+
+        let addonRoot = installPrefixURL
+            .appendingPathComponent("lib", isDirectory: true)
+            .appendingPathComponent(self.installedPayloadDirectoryName, isDirectory: true)
+        if let enumerator = fileManager.enumerator(at: addonRoot, includingPropertiesForKeys: nil) {
+            // The bundle verifier already audits these native addons before ship.
+            // Re-check the installed copy so a stale or partially-copied runtime
+            // under Application Support does not look "current" just because the
+            // manifest matches.
+            for case let fileURL as URL in enumerator {
+                guard self.shouldVerifyInstalledAddon(fileURL) else { continue }
+                try self.verifyCodeSignature(at: fileURL)
+            }
+        }
+    }
+
+    private static func shouldVerifyInstalledAddon(_ fileURL: URL) -> Bool {
+        guard fileURL.pathExtension == "node" else { return false }
+        let lowercasedPath = fileURL.path.lowercased()
+        return lowercasedPath.contains("darwin") || lowercasedPath.contains("universal")
+    }
+
+    private static func verifyCodeSignature(at fileURL: URL) throws {
+        let result = self.runCommand(
+            executable: "/usr/bin/codesign",
+            arguments: ["--verify", "--strict", fileURL.path])
+        guard result.status == 0 else {
+            throw NSError(
+                domain: "ConsumerBundledRuntime",
+                code: 5,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "codesign verification failed for \(fileURL.path): \(result.stderr.isEmpty ? result.stdout : result.stderr)",
+                ])
+        }
+    }
+
+    private static func verifyNodeRuntimeEntitlements(at nodeURL: URL) throws {
+        let result = self.runCommand(
+            executable: "/usr/bin/codesign",
+            arguments: ["-d", "--entitlements", ":-", nodeURL.path])
+        guard result.status == 0 else {
+            throw NSError(
+                domain: "ConsumerBundledRuntime",
+                code: 6,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "failed to read Node runtime entitlements at \(nodeURL.path): \(result.stderr.isEmpty ? result.stdout : result.stderr)",
+                ])
+        }
+
+        // codesign prints entitlement XML to stderr, so check both streams.
+        let entitlementsOutput = result.stderr + result.stdout
+        for entitlement in self.requiredNodeEntitlements {
+            guard entitlementsOutput.contains("<key>\(entitlement)</key>") else {
+                throw NSError(
+                    domain: "ConsumerBundledRuntime",
+                    code: 7,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "installed Node runtime is missing required entitlement \(entitlement)",
+                    ])
+            }
+        }
+    }
+
+    private static func runCommand(executable: String, arguments: [String]) -> (status: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        do {
+            try process.run()
+        } catch {
+            return (1, "", "failed to start \(executable): \(error.localizedDescription)")
+        }
+
+        process.waitUntilExit()
+        let stdoutData = try? stdoutPipe.fileHandleForReading.readToEnd()
+        let stderrData = try? stderrPipe.fileHandleForReading.readToEnd()
+        return (
+            process.terminationStatus,
+            String(data: stdoutData ?? Data(), encoding: .utf8) ?? "",
+            String(data: stderrData ?? Data(), encoding: .utf8) ?? ""
+        )
     }
 }
