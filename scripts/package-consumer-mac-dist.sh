@@ -11,16 +11,20 @@ PRODUCT="OpenClaw"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
+INSTANCE_EXPLICIT=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/package-consumer-mac-dist.sh [--instance <id>]
+Usage: scripts/package-consumer-mac-dist.sh
 
 Env:
   SKIP_NOTARIZE=1     Build release zip + DMG without notarization/stapling
   SKIP_DSYM=1         Skip dSYM zip generation
   APP_VERSION=...     Override CFBundleShortVersionString
   APP_BUILD=...       Override CFBundleVersion
+
+Release packaging is intentionally default-instance only.
+Use scripts/package-consumer-mac-app.sh --instance <id> for isolated tester/debug lanes.
 EOF
 }
 
@@ -65,6 +69,7 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       INSTANCE_ID="$2"
+      INSTANCE_EXPLICIT=1
       shift 2
       ;;
     --help|-h)
@@ -89,11 +94,21 @@ if [[ "$CURRENT_ROOT" != "$CANONICAL_CONSUMER_CHECKOUT" ]]; then
   exit 1
 fi
 
-if [[ -z "$INSTANCE_ID" ]]; then
-  INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT_DIR")"
-fi
-
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
+# Release/demo artifacts must stay on the default consumer identity. Named
+# instances are for parallel tester lanes and would leak worktree/debug slugs
+# into the shipped bundle id plus runtime support paths.
+if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
+  echo "ERROR: consumer distribution packaging must use the stable default release identity." >&2
+  if [[ "$INSTANCE_EXPLICIT" == "1" ]]; then
+    echo "Do not pass --instance to scripts/package-consumer-mac-dist.sh." >&2
+  else
+    echo "Unset OPENCLAW_CONSUMER_INSTANCE_ID before running scripts/package-consumer-mac-dist.sh." >&2
+  fi
+  echo "Use scripts/package-consumer-mac-app.sh --instance <id> for isolated tester/debug lanes." >&2
+  echo "Leaking a worktree or lane slug into a release artifact would change bundle/runtime identity." >&2
+  exit 1
+fi
 
 APP_NAME="${APP_NAME:-$(consumer_instance_app_name "$NORMALIZED_INSTANCE_ID")}"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"

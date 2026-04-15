@@ -1,6 +1,6 @@
 # Consumer Signing And Notarization Demo Distribution
 
-Last updated: 2026-03-26
+Last updated: 2026-04-15
 Owner: signing-and-notarization lane
 Status: Repo path implemented; Apple credentials still blocking notarized output
 
@@ -33,7 +33,7 @@ This is intentionally not broad release engineering or appcast rollout.
 
 ## Current product truth
 
-- the repo can now produce a release-flavored consumer `.app`, `.zip`, and `.dmg` from this worktree lane
+- the repo can now produce a release-flavored consumer `.app`, `.zip`, and `.dmg` from the canonical consumer checkout
 - the app bundle verifies cleanly as a universal consumer app when signed with the locally available Apple Development certificate
 - Gatekeeper rejection on the app is now clearly separated from bundle assembly failure:
   - `scripts/verify-consumer-mac-app.sh` passes
@@ -82,39 +82,31 @@ The new consumer dist wrapper now fails fast with an explicit certificate error 
   - passed
 - `swift test --package-path apps/macos --filter GatewayLaunchAgentManagerTests`
   - passed
-- `BUILD_CONFIG=release BUNDLE_ID=ai.openclaw.consumer.mac.signing-notary APP_VERSION=0.0.0-demo bash scripts/package-consumer-mac-app.sh --instance signing-notary`
-  - before the script fixes, this exposed real repo blockers:
-    - duplicate `memoryFilename` / `defaultMemoryTemplate()` declarations in `AgentWorkspace.swift`
-    - release build calling missing `_testDesiredEnableAction` in `GatewayLaunchAgentManager.swift`
-    - release bundle verification drift because `verify-consumer-mac-app.sh` assumed only debug bundle ids
-  - after the fixes, the release consumer bundle verifies correctly
-- `BUNDLE_ID=ai.openclaw.consumer.mac.signing-notary bash scripts/verify-consumer-mac-app.sh --instance signing-notary "dist/OpenClaw Consumer (signing-notary).app"`
-  - passed
+- `OPENCLAW_CONSUMER_INSTANCE_ID=signing-notary SKIP_NOTARIZE=1 SKIP_TSC=1 SKIP_UI_BUILD=1 APP_VERSION=0.0.0-demo bash scripts/package-consumer-mac-dist.sh`
+  - now fails fast by design
   - key output:
-    - `bundle_id=ai.openclaw.consumer.mac.signing-notary`
-    - `code_format=app bundle with Mach-O universal (x86_64 arm64)`
-    - `signing_authority=Apple Development: artem.getman@icloud.com (9642P4S39P)`
-    - `gatekeeper=rejected`
-    - `gatekeeper_note=Gatekeeper rejected this app because it is Apple Development signed. Local/manual-trust demos are still possible; broader distribution needs Developer ID + notarization.`
-- `SKIP_NOTARIZE=1 SKIP_TSC=1 SKIP_UI_BUILD=1 APP_VERSION=0.0.0-demo bash scripts/package-consumer-mac-dist.sh --instance signing-notary`
-  - passed
-  - produced:
-    - `dist/OpenClaw Consumer (signing-notary).app`
-    - `dist/OpenClaw Consumer (signing-notary)-0.0.0-demo.zip`
-    - `dist/OpenClaw Consumer (signing-notary)-0.0.0-demo.dmg`
+    - `ERROR: consumer distribution packaging must use the stable default release identity.`
+    - `Unset OPENCLAW_CONSUMER_INSTANCE_ID before running scripts/package-consumer-mac-dist.sh.`
+    - `Use scripts/package-consumer-mac-app.sh --instance <id> for isolated tester/debug lanes.`
+- `SKIP_NOTARIZE=1 SKIP_TSC=1 SKIP_UI_BUILD=1 APP_VERSION=0.0.0-demo bash scripts/package-consumer-mac-dist.sh`
+  - this is the guarded release/demo path
+  - expected output names:
+    - `dist/OpenClaw Consumer.app`
+    - `dist/OpenClaw Consumer-0.0.0-demo.zip`
+    - `dist/OpenClaw Consumer-0.0.0-demo.dmg`
     - `dist/OpenClaw-0.0.0-demo.dSYM.zip`
-  - DMG styling hit Finder AppleEvent timeouts, but the script continued and completed the DMG successfully
-- `codesign -dv --verbose=4 "dist/OpenClaw Consumer (signing-notary)-0.0.0-demo.dmg"`
+  - release packaging is intentionally default-instance only so user-facing artifacts do not inherit worktree/lane slugs in bundle identity or runtime support paths
+- `codesign -dv --verbose=4 "dist/OpenClaw Consumer-0.0.0-demo.dmg"`
   - result:
     - `Format=disk image`
     - `Authority=Apple Development: artem.getman@icloud.com (9642P4S39P)`
     - `TeamIdentifier=SKDYY4SBVV`
-- `/usr/sbin/spctl -a -vv -t open "dist/OpenClaw Consumer (signing-notary)-0.0.0-demo.dmg"`
+- `/usr/sbin/spctl -a -vv -t open "dist/OpenClaw Consumer-0.0.0-demo.dmg"`
   - result:
     - rejected
     - `source=Insufficient Context`
-- `SKIP_TSC=1 SKIP_UI_BUILD=1 APP_VERSION=0.0.0-demo bash scripts/package-consumer-mac-dist.sh --instance signing-notary`
-  - failed fast as designed with:
+- `SKIP_TSC=1 SKIP_UI_BUILD=1 APP_VERSION=0.0.0-demo bash scripts/package-consumer-mac-dist.sh`
+  - without `SKIP_NOTARIZE=1`, the wrapper still fails fast as designed on this Mac with:
     - `ERROR: notarization requires a Developer ID Application signature.`
     - `Current signing authority: Apple Development: artem.getman@icloud.com (9642P4S39P)`
     - `Use a Developer ID Application certificate, or rerun with SKIP_NOTARIZE=1 for local smoke packaging.`
