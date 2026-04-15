@@ -743,7 +743,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("");
 
   lines.push("Status");
-  lines.push("  /status  |  /capabilities  |  /whoami  |  /context");
+  lines.push("  /status  |  /whoami  |  /context");
   lines.push("");
 
   lines.push("Skills");

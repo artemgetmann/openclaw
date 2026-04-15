@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../../test/helpers/temp-home.js";
 import { abortEmbeddedPiRun, compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import {
   addSubagentRunForTests,
@@ -188,27 +187,6 @@ async function readJsonFile<T>(filePath: string): Promise<T> {
 
 function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
   return buildCommandTestParams(commandBody, cfg, ctxOverrides, { workspaceDir: testWorkspaceDir });
-}
-
-async function withIsolatedSkillsWorkspace<T>(run: () => Promise<T>): Promise<T> {
-  return withTempHome(
-    async () => {
-      const bundledDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-empty-"));
-      const previousBundledDir = process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
-      process.env.OPENCLAW_BUNDLED_SKILLS_DIR = bundledDir;
-      try {
-        return await run();
-      } finally {
-        if (previousBundledDir === undefined) {
-          delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
-        } else {
-          process.env.OPENCLAW_BUNDLED_SKILLS_DIR = previousBundledDir;
-        }
-        await fs.rm(bundledDir, { recursive: true, force: true });
-      }
-    },
-    { prefix: "openclaw-commands-home-" },
-  );
 }
 
 describe("handleCommands gating", () => {
@@ -1486,68 +1464,6 @@ describe("handleCommands identity", () => {
     expect(result.reply?.text).toContain("User id: 12345");
     expect(result.reply?.text).toContain("Username: @TestUser");
     expect(result.reply?.text).toContain("AllowFrom: 12345");
-  });
-});
-
-describe("handleCommands capabilities", () => {
-  it("builds /capabilities from the current ready skills", async () => {
-    await withIsolatedSkillsWorkspace(async () => {
-      await fs.mkdir(path.join(testWorkspaceDir, "skills", "weather"), { recursive: true });
-      await fs.writeFile(
-        path.join(testWorkspaceDir, "skills", "weather", "SKILL.md"),
-        `---
-name: weather
-description: "Get current weather and forecasts for any location."
----
-
-# Weather
-`,
-        "utf-8",
-      );
-
-      const cfg = {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig;
-      const result = await handleCommands(buildParams("/capabilities", cfg));
-
-      expect(result.shouldContinue).toBe(false);
-      expect(result.reply?.text).toContain("What I can do here");
-      expect(result.reply?.text).toContain("ready skill");
-      expect(result.reply?.text).toContain(
-        "/weather - Get current weather and forecasts for any location.",
-      );
-      expect(result.reply?.text).toContain("/commands");
-    });
-  });
-
-  it("answers direct capability questions with the same grounded summary", async () => {
-    await withIsolatedSkillsWorkspace(async () => {
-      await fs.mkdir(path.join(testWorkspaceDir, "skills", "weather"), { recursive: true });
-      await fs.writeFile(
-        path.join(testWorkspaceDir, "skills", "weather", "SKILL.md"),
-        `---
-name: weather
-description: "Get current weather and forecasts for any location."
----
-
-# Weather
-`,
-        "utf-8",
-      );
-
-      const cfg = {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig;
-      const result = await handleCommands(buildParams("what can you do?", cfg));
-
-      expect(result.shouldContinue).toBe(false);
-      expect(result.reply?.text).toContain("What I can do here");
-      expect(result.reply?.text).toContain(
-        "/weather - Get current weather and forecasts for any location.",
-      );
-    });
   });
 });
 
