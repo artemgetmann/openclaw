@@ -15,6 +15,16 @@ enum ConsumerBundledRuntime {
         "com.apple.security.cs.allow-jit",
         "com.apple.security.cs.allow-unsigned-executable-memory",
     ]
+    private static let requiredWorkspaceTemplates = [
+        "AGENTS.md",
+        "SOUL.md",
+        "TOOLS.md",
+        "IDENTITY.md",
+        "USER.md",
+        "HEARTBEAT.md",
+        "BOOTSTRAP.md",
+        "MEMORY.md",
+    ]
 
     struct Manifest: Codable, Equatable {
         let format: Int
@@ -154,12 +164,21 @@ enum ConsumerBundledRuntime {
             .appendingPathComponent("node_modules", isDirectory: true)
             .appendingPathComponent("chalk", isDirectory: true)
             .appendingPathComponent("package.json")
+        let templateDirectoryURL = installPrefixURL
+            .appendingPathComponent("lib", isDirectory: true)
+            .appendingPathComponent(self.installedPayloadDirectoryName, isDirectory: true)
+            .appendingPathComponent("docs/reference/templates", isDirectory: true)
+        let templatesReady = self.requiredWorkspaceTemplates.allSatisfy { templateName in
+            fileManager.isReadableFile(
+                atPath: templateDirectoryURL.appendingPathComponent(templateName).path)
+        }
 
         return fileManager.isExecutableFile(atPath: wrapperURL.path)
             && fileManager.isExecutableFile(atPath: nodeURL.path)
             && fileManager.isReadableFile(atPath: entryURL.path)
             && fileManager.isReadableFile(atPath: chalkPackageURL.path)
             && self.installedRuntimeCodeIsValid(installPrefixURL: installPrefixURL, fileManager: fileManager)
+            && templatesReady
     }
 
     private static func loadManifest(from resourceURL: URL) throws -> Manifest {

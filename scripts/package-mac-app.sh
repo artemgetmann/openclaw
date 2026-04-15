@@ -48,6 +48,74 @@ if [[ ! -x "$VALIDATED_NPM_BIN" ]]; then
 fi
 CLI_ARCHIVE_STAGED=""
 CLI_ARCHIVE_STAGE_DIR=""
+CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
+  "AGENTS.md"
+  "SOUL.md"
+  "TOOLS.md"
+  "IDENTITY.md"
+  "USER.md"
+  "HEARTBEAT.md"
+  "BOOTSTRAP.md"
+  "MEMORY.md"
+)
+
+consumer_packaging_env_candidates() {
+  # Keep secrets machine-local: explicit override first, then the consumer-home
+  # shared file, then the optional fallback outside the worktree.
+  if [[ -n "${OPENCLAW_CONSUMER_ENV_FILE:-}" ]]; then
+    printf '%s\n' "$OPENCLAW_CONSUMER_ENV_FILE"
+  fi
+  printf '%s\n' "$HOME/Programming_Projects/openclaw-consumer/.config/consumer-packaging.env"
+  printf '%s\n' "$HOME/.config/openclaw/consumer-packaging.env"
+}
+
+load_consumer_packaging_env() {
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+
+  # Existing exports win so callers can override local packaging state without
+  # touching the shared env file.
+  if [[ -n "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" ]]; then
+    return 0
+  fi
+
+  local env_file=""
+  local loaded_env_file=""
+  local explicit_env_file="${OPENCLAW_CONSUMER_ENV_FILE:-}"
+
+  while IFS= read -r env_file; do
+    [[ -n "$env_file" ]] || continue
+    if [[ -r "$env_file" ]]; then
+      echo "📦 Loading consumer packaging env from $env_file"
+      set -a
+      # shellcheck disable=SC1090
+      source "$env_file"
+      set +a
+      if [[ -n "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" ]]; then
+        loaded_env_file="$env_file"
+        break
+      fi
+    elif [[ -n "$explicit_env_file" && "$env_file" == "$explicit_env_file" ]]; then
+      echo "WARN: OPENCLAW_CONSUMER_ENV_FILE is set but not readable: $env_file" >&2
+    fi
+  done < <(consumer_packaging_env_candidates)
+
+  if [[ -z "${OPENCLAW_CONSUMER_OPENAI_API_KEY:-}" ]]; then
+    echo "ERROR: consumer packaging requires OPENCLAW_CONSUMER_OPENAI_API_KEY." >&2
+    if [[ -n "$loaded_env_file" ]]; then
+      echo "Loaded env file: $loaded_env_file" >&2
+    fi
+    echo "Checked, in order:" >&2
+    if [[ -n "$explicit_env_file" ]]; then
+      echo "  - $explicit_env_file" >&2
+    fi
+    echo "  - $HOME/Programming_Projects/openclaw-consumer/.config/consumer-packaging.env" >&2
+    echo "  - $HOME/.config/openclaw/consumer-packaging.env" >&2
+    echo "Export OPENCLAW_CONSUMER_OPENAI_API_KEY or create one of those env files before packaging." >&2
+    exit 1
+  fi
+}
 
 consumer_build_archs_are_universal() {
   case "$BUILD_ARCHS_VALUE" in
@@ -68,6 +136,8 @@ if [[ "$APP_VARIANT" == "consumer" && "$ALLOW_SINGLE_ARCH_CONSUMER_SMOKE" != "1"
     exit 1
   fi
 fi
+
+load_consumer_packaging_env
 
 consumer_require_bundled_speech_key() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
@@ -92,6 +162,35 @@ consumer_require_bundled_speech_key() {
 }
 
 consumer_require_bundled_speech_key
+
+verify_required_workspace_templates() {
+  local template_dir="$1"
+  local context_label="$2"
+  local missing=()
+  local template_name=""
+
+  if [[ ! -d "$template_dir" ]]; then
+    echo "ERROR: ${context_label} directory missing: $template_dir" >&2
+    return 1
+  fi
+
+  # Consumer packaging must ship the full bootstrap template set because the
+  # packaged JS helper resolves from docs/reference/templates under its own
+  # package root after install. A partial copy creates a runtime that looks
+  # healthy but fails on the first real workspace bootstrap.
+  for template_name in "${CONSUMER_REQUIRED_WORKSPACE_TEMPLATES[@]}"; do
+    if [[ ! -f "$template_dir/$template_name" ]]; then
+      missing+=("$template_name")
+    fi
+  done
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "ERROR: ${context_label} is missing required workspace templates." >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    echo "Expected directory: $template_dir" >&2
+    return 1
+  fi
+}
 
 default_sparkle_feed_url_for_bundle() {
   local bundle_id="$1"
@@ -278,6 +377,33 @@ ensure_consumer_node_runtime() {
   printf '%s\n' "$cache_root"
 }
 
+resolve_matrix_crypto_package_root() {
+  local package_root=""
+
+  # pnpm can hoist the Matrix package, so resolve the installed package path
+  # instead of assuming a flat repo-local node_modules layout.
+  package_root="$(
+    "$VALIDATED_NODE_BIN" -e '
+      const path = require("node:path");
+      const { createRequire } = require("node:module");
+      const req = createRequire(process.argv[1]);
+      try {
+        const downloadLib = req.resolve("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
+        process.stdout.write(path.dirname(downloadLib));
+      } catch (err) {
+        process.stderr.write(
+          `Failed to resolve @matrix-org/matrix-sdk-crypto-nodejs package root: ${
+            err instanceof Error ? err.message : String(err)
+          }\n`,
+        );
+        process.exit(1);
+      }
+    ' "$ROOT_DIR/package.json"
+  )"
+
+  printf '%s\n' "$package_root"
+}
+
 stage_consumer_matrix_crypto_x64_twin() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
     return 0
@@ -286,13 +412,14 @@ stage_consumer_matrix_crypto_x64_twin() {
     return 0
   fi
 
-  local matrix_package_root="${ROOT_DIR}/node_modules/@matrix-org/matrix-sdk-crypto-nodejs"
+  local matrix_package_root=""
   local bundled_runtime_root="${BUNDLED_RUNTIME_RESOURCE_DIR}/openclaw"
   local bundled_runtime_dist_root="${bundled_runtime_root}/dist"
   local matrix_crypto_x64_source=""
   local arm64_native=""
   local x64_target=""
 
+  matrix_package_root="$(resolve_matrix_crypto_package_root)"
   matrix_crypto_x64_source="${matrix_package_root}/matrix-sdk-crypto.darwin-x64.node"
   if [[ ! -f "$matrix_crypto_x64_source" ]]; then
     local downloader_script="${matrix_package_root}/download-lib.js"
@@ -306,8 +433,9 @@ stage_consumer_matrix_crypto_x64_twin() {
       "$VALIDATED_NODE_BIN" "$downloader_script" >/dev/null
   fi
 
-  if [[ -z "$matrix_crypto_x64_source" ]]; then
-    echo "ERROR: bundled consumer Matrix crypto x64 staging did not produce a native addon." >&2
+  if [[ ! -f "$matrix_crypto_x64_source" ]]; then
+    echo "ERROR: bundled consumer Matrix crypto x64 staging did not produce the expected native addon:" >&2
+    echo "  $matrix_crypto_x64_source" >&2
     exit 1
   fi
 
@@ -320,6 +448,34 @@ stage_consumer_matrix_crypto_x64_twin() {
     mkdir -p "$(dirname "$x64_target")"
     cp "$matrix_crypto_x64_source" "$x64_target"
   done < <(find "$bundled_runtime_dist_root" -type f -name '*.node' | grep 'darwin-arm64' || true)
+}
+
+materialize_bundled_extension_node_modules() {
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+
+  local extension_dir=""
+  local extension_name=""
+  local source_node_modules=""
+  local dest_node_modules=""
+
+  # `cp -R` preserves the symlink forest emitted by pnpm, but the packaged app
+  # must be self-contained. Rehydrate each extension's production dependencies
+  # from the source checkout so the bundle does not retain broken links back to
+  # the developer worktree's `.pnpm` store.
+  while IFS= read -r -d '' extension_dir; do
+    extension_name="$(basename "$extension_dir")"
+    source_node_modules="$ROOT_DIR/extensions/$extension_name/node_modules"
+    if [[ ! -d "$source_node_modules" ]]; then
+      continue
+    fi
+
+    dest_node_modules="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions/$extension_name/node_modules"
+    rm -rf "$dest_node_modules"
+    mkdir -p "$(dirname "$dest_node_modules")"
+    rsync -aL "$source_node_modules/" "$dest_node_modules/"
+  done < <(find "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions" -mindepth 1 -maxdepth 1 -type d -print0)
 }
 
 prepare_bundled_consumer_runtime() {
@@ -383,10 +539,19 @@ prepare_bundled_consumer_runtime() {
 
   rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
   cp -R "$ROOT_DIR/extensions" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions"
+  materialize_bundled_extension_node_modules
   if [[ -d "$ROOT_DIR/skills" ]]; then
     rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
     cp -R "$ROOT_DIR/skills" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/skills"
   fi
+
+  local bundled_template_src="$ROOT_DIR/docs/reference/templates"
+  local bundled_template_dest="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/docs/reference/templates"
+  verify_required_workspace_templates "$bundled_template_src" "consumer workspace template source"
+  rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/docs"
+  mkdir -p "$(dirname "$bundled_template_dest")"
+  cp -R "$bundled_template_src" "$bundled_template_dest"
+  verify_required_workspace_templates "$bundled_template_dest" "bundled consumer runtime workspace templates"
 
   node_arm64_root="$(ensure_consumer_node_runtime "$node_version" "darwin-arm64")"
   node_x64_root="$(ensure_consumer_node_runtime "$node_version" "darwin-x64")"
@@ -553,12 +718,10 @@ cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/
 echo "📦 Copying consumer workspace templates"
 TEMPLATE_SRC="$ROOT_DIR/docs/reference/templates"
 TEMPLATE_DEST="$APP_ROOT/Contents/Resources/templates"
-if [ -d "$TEMPLATE_SRC" ]; then
-  rm -rf "$TEMPLATE_DEST"
-  cp -R "$TEMPLATE_SRC" "$TEMPLATE_DEST"
-else
-  echo "WARN: consumer template source missing at $TEMPLATE_SRC (continuing)" >&2
-fi
+verify_required_workspace_templates "$TEMPLATE_SRC" "consumer workspace template source"
+rm -rf "$TEMPLATE_DEST"
+cp -R "$TEMPLATE_SRC" "$TEMPLATE_DEST"
+verify_required_workspace_templates "$TEMPLATE_DEST" "packaged consumer app workspace templates"
 
 if [[ "$APP_VARIANT" == "consumer" ]]; then
   echo "🔐 Seeding bundled consumer defaults"
