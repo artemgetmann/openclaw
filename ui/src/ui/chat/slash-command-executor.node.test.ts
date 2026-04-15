@@ -407,7 +407,7 @@ describe("executeSlashCommand directives", () => {
       "",
     );
 
-    expect(result.content).toBe("Current verbose level: full.\nOptions: on, full, off.");
+    expect(result.content).toBe("Current verbose level: on.\nOptions: on, off.");
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
 

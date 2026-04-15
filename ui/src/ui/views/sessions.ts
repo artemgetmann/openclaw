@@ -51,7 +51,6 @@ const VERBOSE_LEVELS = [
   { value: "", label: "inherit" },
   { value: "off", label: "off (explicit)" },
   { value: "on", label: "on" },
-  { value: "full", label: "full" },
 ] as const;
 const FAST_LEVELS = [
   { value: "", label: "inherit" },

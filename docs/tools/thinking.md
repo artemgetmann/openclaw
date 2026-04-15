@@ -59,14 +59,14 @@ title: "Thinking Levels"
 
 ## Verbose directives (/verbose or /v)
 
-- Levels: `on` (minimal) | `full` | `off` (default).
+- Levels: `on` | `off` (default).
 - Directive-only message toggles session verbose and replies `Verbose logging enabled.` / `Verbose logging disabled.`; invalid levels return a hint without changing state.
 - `/verbose off` stores an explicit session override; clear it via the Sessions UI by choosing `inherit`.
 - Inline directive affects only that message; session/global defaults apply otherwise.
 - Send `/verbose` (or `/verbose:`) with no argument to see the current verbose level.
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command). These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
-- Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `on` or `full`.
-- When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
+- Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `on`.
+- When verbose is on, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). Legacy `full` is still accepted as an alias and resolves to `on`. If you toggle `/verbose on|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 
 ## Reasoning visibility (/reasoning)
 

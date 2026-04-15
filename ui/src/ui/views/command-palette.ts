@@ -73,7 +73,7 @@ const PALETTE_ITEMS: PaletteItem[] = [
     label: "Debug Mode",
     icon: "bug",
     category: "skills",
-    action: "/verbose full",
+    action: "/verbose on",
     description: "Toggle debug",
   },
 ];
