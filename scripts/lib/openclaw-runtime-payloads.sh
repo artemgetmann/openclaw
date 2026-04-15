@@ -24,9 +24,20 @@ openclaw_runtime_payload_files() {
     -name '*.node' -o \
     -name '*.dylib' -o \
     -name '*.so' -o \
-    -path '*/bin/node' -o \
     -perm -111 \
-  \) -print0
+  \) ! -path '*/bin/node' -print0
+}
+
+openclaw_runtime_node_binary_files() {
+  local app_bundle="$1"
+  local runtime_root
+
+  runtime_root="$(openclaw_runtime_payload_root "$app_bundle")"
+  [[ -d "$runtime_root" ]] || return 0
+
+  # The bundled Node runtime needs the full runtime/JIT entitlement set so the
+  # V8 engine can start and execute native code inside the signed bundle.
+  find "$runtime_root" -type f -path '*/bin/node' -print0
 }
 
 openclaw_file_is_macho() {

@@ -203,6 +203,11 @@ sign_plain_item() {
   codesign --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --sign "$IDENTITY" "$target"
 }
 
+sign_runtime_node_item() {
+  local target="$1"
+  codesign --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --entitlements "$ENT_TMP_RUNTIME" --sign "$IDENTITY" "$target"
+}
+
 team_id_for() {
   codesign -dv --verbose=4 "$1" 2>&1 | awk -F= '/^TeamIdentifier=/{print $2; exit}'
 }
@@ -281,9 +286,19 @@ if [ -d "$APP_BUNDLE/Contents/Frameworks" ]; then
   done
 fi
 
-# Sign executable runtime payloads before the outer bundle signature lands.
-# The runtime lives under Resources, so codesign does not reach these binaries
-# unless we walk the tree explicitly.
+# Sign the bundled Node runtime with JIT entitlements before the outer bundle
+# signature lands. The runtime lives under Resources, so codesign does not
+# reach these binaries unless we walk the tree explicitly.
+while IFS= read -r -d '' runtime_node; do
+  if openclaw_file_is_macho "$runtime_node"; then
+    echo "Signing runtime node binary with JIT entitlements: $runtime_node"
+    sign_runtime_node_item "$runtime_node"
+  fi
+done < <(openclaw_runtime_node_binary_files "$APP_BUNDLE")
+
+# Sign the rest of the executable runtime payloads before the outer bundle
+# signature lands. The runtime lives under Resources, so codesign does not
+# reach these binaries unless we walk the tree explicitly.
 while IFS= read -r -d '' runtime_file; do
   if openclaw_file_is_macho "$runtime_file"; then
     echo "Signing runtime payload: $runtime_file"
