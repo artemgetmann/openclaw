@@ -32,9 +32,11 @@ scripts/package-mac-app.sh
 
 Creates `dist/OpenClaw.app` and signs it via `scripts/codesign-mac-app.sh`.
 
-## Consumer build
+## Consumer packaging
 
-Use the guarded consumer wrappers instead of hand-setting env vars:
+Use the guarded consumer wrappers instead of hand-setting env vars.
+
+### Canonical full consumer packaging/release path
 
 ```bash
 bash scripts/package-consumer-mac-app.sh
@@ -42,16 +44,27 @@ bash scripts/verify-consumer-mac-app.sh
 bash scripts/open-consumer-mac-app.sh
 ```
 
-For fast local founder/tester iteration after dependencies and JS assets are
-already warm:
+Use this when you want the release-correct consumer bundle. It keeps the full
+packaging path: universal consumer output, runtime staging, codesign, strict
+verification, and the canonical `dist/` mirror/zip step.
+
+Consumer packages are universal by default. The single-arch escape hatch exists
+only for explicit local smoke/debug builds and should not be shipped.
+
+### Fast local packaged-smoke path
 
 ```bash
 bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>
 ```
 
-This keeps the final packaged artifact in `dist/`, but skips the repeated
-dependency reinstall, JS build, and Control UI build that are usually unrelated
-to a native-app relaunch loop.
+Use this for warm local smoke loops after dependencies and JS assets are
+already warm. It skips the repeated dependency reinstall, JS build, and Control
+UI build, but still packages and verifies the consumer app so you can relaunch
+from a fresh bundle without paying the full warm-up cost again.
+
+This path is optimized for local smoke only. It is not the release/distribution
+lane, and it should not be treated as a substitute for the full consumer
+packaging command above.
 
 This consumer flavor defaults to its own runtime identity:
 

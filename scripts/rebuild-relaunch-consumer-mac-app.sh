@@ -14,6 +14,7 @@ Fast founder/tester loop:
   - skips JS build
   - skips Control UI build
   - rebuilds the macOS app bundle in place
+  - uses the fast packaged-smoke path instead of the canonical mirror/zip flow
   - reopens the packaged consumer app from dist/
 
 Override any default via env, for example:
@@ -69,14 +70,15 @@ if [[ "${SKIP_TSC+x}" != x && ! -f "$ROOT_DIR/dist/index.js" ]]; then
   echo "📦 dist/index.js missing; forcing JS build once so relaunch can pass the worktree guard"
 fi
 
-# This wrapper is intentionally biased toward warm local iteration. The full
-# artifact still lands in dist/, but we stop pretending every relaunch needs
-# dependency resolution and unrelated frontend rebuilds.
+# This wrapper is intentionally biased toward warm local iteration. The bundle
+# still lands in the worktree dist/ directory, but we stop pretending every
+# relaunch needs dependency resolution, CLI tarball packaging, or canonical
+# consumer-home mirroring.
 CI="${CI:-true}" \
 SKIP_PNPM_INSTALL="${SKIP_PNPM_INSTALL:-1}" \
 SKIP_TSC="$DEFAULT_SKIP_TSC" \
 SKIP_UI_BUILD="${SKIP_UI_BUILD:-1}" \
 BUILD_CONFIG="${BUILD_CONFIG:-debug}" \
-  "$ROOT_DIR/scripts/package-consumer-mac-app.sh" "${PACKAGE_ARGS[@]}"
+  "$ROOT_DIR/scripts/package-consumer-mac-app-fast.sh" "${PACKAGE_ARGS[@]}"
 
 "$ROOT_DIR/scripts/open-consumer-mac-app.sh" "${OPEN_ARGS[@]}"
