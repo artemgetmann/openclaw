@@ -502,7 +502,8 @@ describe("tts", () => {
       const cases = [
         {
           env: {
-            OPENAI_API_KEY: "test-openai-key",
+            OPENAI_NON_MODEL_API_KEY: "test-openai-key",
+            OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
           },
