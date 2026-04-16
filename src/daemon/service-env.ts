@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
@@ -34,6 +35,12 @@ type SharedServiceEnvironmentFields = {
   proxyEnv: Record<string, string | undefined>;
   nodeCaCerts: string | undefined;
   nodeUseSystemCa: string | undefined;
+};
+
+type ResolveServiceCommandOptions = {
+  env?: Record<string, string | undefined>;
+  extraDirs?: string[];
+  platform?: NodeJS.Platform;
 };
 
 const SERVICE_PROXY_ENV_KEYS = [
@@ -106,6 +113,49 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
     return ["/usr/local/bin", "/usr/bin", "/bin"];
   }
   return [];
+}
+
+function commandIncludesPath(command: string): boolean {
+  return command.includes("/") || command.includes("\\");
+}
+
+function resolveExecutableInDir(
+  command: string,
+  dir: string,
+  platform: NodeJS.Platform,
+): string | undefined {
+  if (!dir) {
+    return undefined;
+  }
+  const candidate = path.join(dir, command);
+  try {
+    if (platform === "win32") {
+      fs.accessSync(candidate);
+    } else {
+      fs.accessSync(candidate, fs.constants.X_OK);
+    }
+    return candidate;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveExecutableFromPath(
+  command: string,
+  searchPath: string | undefined,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const trimmedPath = searchPath?.trim();
+  if (!trimmedPath) {
+    return undefined;
+  }
+  for (const dir of trimmedPath.split(path.delimiter)) {
+    const resolved = resolveExecutableInDir(command, dir, platform);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -240,6 +290,39 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
   }
 
   return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
+}
+
+/**
+ * launchd/systemd-style runtimes often start with a stripped PATH that omits
+ * user-installed CLI bins. Resolve a bare command against the current env PATH
+ * first, then against the same minimal service PATH we install into daemon envs.
+ */
+export function resolveServiceCommandExecutable(
+  command: string,
+  options: ResolveServiceCommandOptions = {},
+): string {
+  const trimmedCommand = command.trim();
+  if (!trimmedCommand) {
+    return trimmedCommand;
+  }
+
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32" || commandIncludesPath(trimmedCommand)) {
+    return trimmedCommand;
+  }
+
+  const env = options.env ?? process.env;
+  const resolvedFromEnvPath = resolveExecutableFromPath(trimmedCommand, env.PATH, platform);
+  if (resolvedFromEnvPath) {
+    return resolvedFromEnvPath;
+  }
+
+  const minimalPath = buildMinimalServicePath({
+    env,
+    extraDirs: options.extraDirs,
+    platform,
+  });
+  return resolveExecutableFromPath(trimmedCommand, minimalPath, platform) ?? trimmedCommand;
 }
 
 export function buildServiceEnvironment(params: {

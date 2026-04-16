@@ -2,6 +2,7 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveServiceCommandExecutable } from "../daemon/service-env.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -786,6 +787,15 @@ export async function runCliAgent(params: {
           `cli exec: provider=${params.provider} model=${normalizedModel} promptChars=${params.prompt.length}`,
         );
         const logOutputText = isTruthyEnvValue(process.env.OPENCLAW_CLAUDE_CLI_LOG_OUTPUT);
+        const env = (() => {
+          const next = { ...process.env, ...backend.env };
+          for (const key of backend.clearEnv ?? []) {
+            delete next[key];
+          }
+          return next;
+        })();
+        const resolvedCommand = resolveServiceCommandExecutable(backend.command, { env });
+
         if (logOutputText) {
           const logArgs: string[] = [];
           for (let i = 0; i < args.length; i += 1) {
@@ -819,16 +829,8 @@ export async function runCliAgent(params: {
               logArgs[promptIndex] = `<prompt:${argsPrompt.length} chars>`;
             }
           }
-          log.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
+          log.info(`cli argv: ${resolvedCommand} ${logArgs.join(" ")}`);
         }
-
-        const env = (() => {
-          const next = { ...process.env, ...backend.env };
-          for (const key of backend.clearEnv ?? []) {
-            delete next[key];
-          }
-          return next;
-        })();
         const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
           backend,
           timeoutMs: params.timeoutMs,
@@ -847,7 +849,7 @@ export async function runCliAgent(params: {
           scopeKey,
           replaceExistingScope: Boolean(useResume && scopeKey),
           mode: "child",
-          argv: [backend.command, ...args],
+          argv: [resolvedCommand, ...args],
           timeoutMs: params.timeoutMs,
           noOutputTimeoutMs,
           cwd: workspaceDir,

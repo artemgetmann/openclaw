@@ -66,6 +66,8 @@ describe("runCliAgent with process supervisor", () => {
   const originalClaudeBridgeSplit = process.env.OPENCLAW_CLAUDE_BRIDGE_SPLIT;
   const originalClaudeBridgeUseNormalPromptStack =
     process.env.OPENCLAW_CLAUDE_BRIDGE_USE_NORMAL_PROMPT_STACK;
+  const originalPath = process.env.PATH;
+  const originalHome = process.env.HOME;
 
   beforeEach(() => {
     supervisorSpawnMock.mockClear();
@@ -87,6 +89,16 @@ describe("runCliAgent with process supervisor", () => {
     } else {
       process.env.OPENCLAW_CLAUDE_BRIDGE_USE_NORMAL_PROMPT_STACK =
         originalClaudeBridgeUseNormalPromptStack;
+    }
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
     }
   });
 
@@ -127,11 +139,55 @@ describe("runCliAgent with process supervisor", () => {
       scopeKey?: string;
     };
     expect(input.mode).toBe("child");
-    expect(input.argv?.[0]).toBe("codex");
+    expect(path.basename(input.argv?.[0] ?? "")).toBe("codex");
     expect(input.timeoutMs).toBe(1_000);
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
+  });
+
+  it("resolves bare claude commands against launchd-safe user bin paths", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-runner-"));
+    const homeDir = path.join(tempRoot, "home");
+    const localBinDir = path.join(homeDir, ".local", "bin");
+    const claudePath = path.join(localBinDir, "claude");
+
+    await fs.mkdir(localBinDir, { recursive: true });
+    await fs.writeFile(claudePath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await fs.chmod(claudePath, 0o755);
+
+    process.env.HOME = homeDir;
+    process.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s-claude",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "sonnet",
+      timeoutMs: 1_000,
+      runId: "run-claude",
+      cliSessionId: "thread-claude",
+    });
+
+    const input = supervisorSpawnMock.mock.calls.at(-1)?.[0] as {
+      argv?: string[];
+    };
+    expect(input.argv?.[0]).toBe(claudePath);
   });
 
   it("forwards streaming callbacks to the claude bridge backend", async () => {

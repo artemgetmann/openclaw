@@ -3,6 +3,7 @@ import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streami
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type { CliBackendConfig } from "../config/types.js";
+import { resolveServiceCommandExecutable } from "../daemon/service-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   collectClaudeBridgeText,
@@ -285,9 +286,11 @@ async function startBridgeChild(params: {
   sessionId?: string;
   systemPrompt?: string;
 }): Promise<ChildProcessWithoutNullStreams> {
-  const child = spawn(backendCommand(params.backend), buildBridgeArgs(params), {
+  const env = buildBridgeEnv(params.backend);
+  const command = resolveServiceCommandExecutable(backendCommand(params.backend), { env });
+  const child = spawn(command, buildBridgeArgs(params), {
     cwd: params.workspaceDir,
-    env: buildBridgeEnv(params.backend),
+    env,
     stdio: ["pipe", "pipe", "pipe"],
   });
 

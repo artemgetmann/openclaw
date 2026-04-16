@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,6 +9,7 @@ import {
   buildServiceEnvironment,
   getMinimalServicePathParts,
   getMinimalServicePathPartsFromEnv,
+  resolveServiceCommandExecutable,
 } from "./service-env.js";
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
@@ -256,6 +258,53 @@ describe("buildMinimalServicePath", () => {
     const parts = splitPath(result, "linux");
     const unique = [...new Set(parts)];
     expect(parts.length).toBe(unique.length);
+  });
+});
+
+describe("resolveServiceCommandExecutable", () => {
+  it("keeps explicit command paths unchanged", () => {
+    expect(
+      resolveServiceCommandExecutable("/Users/test/.local/bin/claude", {
+        env: {
+          HOME: "/Users/test",
+          PATH: "/usr/bin:/bin",
+        },
+        platform: "darwin",
+      }),
+    ).toBe("/Users/test/.local/bin/claude");
+  });
+
+  it("finds user-installed binaries from the minimal service path on macOS", async () => {
+    const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-service-env-"));
+    const homeDir = path.join(tempRoot, "home");
+    const localBinDir = path.join(homeDir, ".local", "bin");
+    const claudePath = path.join(localBinDir, "claude");
+
+    await fs.promises.mkdir(localBinDir, { recursive: true });
+    await fs.promises.writeFile(claudePath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await fs.promises.chmod(claudePath, 0o755);
+
+    expect(
+      resolveServiceCommandExecutable("claude", {
+        env: {
+          HOME: homeDir,
+          PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+        },
+        platform: "darwin",
+      }),
+    ).toBe(claudePath);
+  });
+
+  it("returns the bare command when no launchd-safe fallback exists", () => {
+    expect(
+      resolveServiceCommandExecutable("claude", {
+        env: {
+          HOME: "/Users/test",
+          PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+        },
+        platform: "darwin",
+      }),
+    ).toBe("claude");
   });
 });
 
