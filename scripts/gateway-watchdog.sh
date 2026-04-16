@@ -140,7 +140,9 @@ cap_watchdog_logs() {
 }
 
 http_ready() {
-  curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/" >/dev/null 2>&1
+  # The gateway root path is not a liveness endpoint. Probe the documented
+  # shallow health route so a healthy runtime is not misclassified as down.
+  curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1
 }
 
 gateway_healthy() {
