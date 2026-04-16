@@ -68,12 +68,19 @@ function isCodexPinnedModel(model) {
     .startsWith("openai-codex/");
 }
 
+function codexTwinModelKey(model) {
+  const trimmed = String(model ?? "").trim();
+  if (!isCodexPinnedModel(trimmed)) {
+    return null;
+  }
+  return `openai/${trimmed.slice("openai-codex/".length)}`;
+}
+
 function sanitizeTelegramLiveAcpValidationAuth(config) {
   const auth = config.auth && typeof config.auth === "object" ? config.auth : null;
   if (!auth) {
     return;
   }
-
   const profiles = auth.profiles && typeof auth.profiles === "object" ? auth.profiles : {};
   const codexProfiles = Object.fromEntries(
     Object.entries(profiles).filter(([, profile]) => {
@@ -818,14 +825,36 @@ export function buildTelegramLiveRuntimeConfig(params) {
   }
 
   if (preferredModel) {
+    const preferredModelTwin = codexTwinModelKey(preferredModel);
+    const currentFallbacks = Array.isArray(defaultModel.fallbacks) ? defaultModel.fallbacks : [];
+    const nextFallbacks = preferredModelTwin
+      ? normalizeStringList(
+          currentFallbacks.filter(
+            (fallback) => String(fallback ?? "").trim() !== preferredModelTwin,
+          ),
+        )
+      : currentFallbacks;
+    const currentModelAllowlist =
+      agentDefaults.models && typeof agentDefaults.models === "object" ? agentDefaults.models : {};
+    const nextModelAllowlist = preferredModelTwin
+      ? Object.fromEntries(
+          Object.entries(currentModelAllowlist).filter(
+            ([key]) => key.trim() !== preferredModelTwin,
+          ),
+        )
+      : currentModelAllowlist;
+
     // Tester lanes need an explicit model pin so live validation proves the
     // provider we intended to test instead of inheriting whatever the base
     // config happened to prefer that day.
     agentDefaults.model = {
       ...defaultModel,
       primary: preferredModel,
-      fallbacks: Array.isArray(defaultModel.fallbacks) ? defaultModel.fallbacks : [],
+      fallbacks: nextFallbacks,
     };
+    if (preferredModelTwin) {
+      agentDefaults.models = nextModelAllowlist;
+    }
     config.agents = {
       ...agents,
       defaults: agentDefaults,
