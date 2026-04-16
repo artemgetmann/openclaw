@@ -37,6 +37,7 @@ import {
 } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { truncateLine } from "../../shared/subagents-format.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
@@ -54,6 +55,10 @@ import { resolveRunTypingPolicy } from "./typing-policy.js";
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
+const NATIVE_TELEGRAM_VERBOSE_PREVIEW_MAX_LINES = 6;
+const NATIVE_TELEGRAM_VERBOSE_PREVIEW_MAX_LINE_CHARS = 180;
+const NATIVE_TELEGRAM_VERBOSE_SHORT_TEXT_MAX_LINES = 3;
+const NATIVE_TELEGRAM_VERBOSE_SHORT_TEXT_MAX_CHARS = 240;
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -84,6 +89,33 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   }
   return AUDIO_HEADER_RE.test(trimmed);
 };
+
+function compactNativeTelegramToolText(text: string): string {
+  const normalized = text.replace(/\r\n?/g, "\n").trimEnd();
+  if (!normalized) {
+    return normalized;
+  }
+
+  const lines = normalized.split("\n");
+  if (
+    lines.length <= NATIVE_TELEGRAM_VERBOSE_SHORT_TEXT_MAX_LINES &&
+    normalized.length <= NATIVE_TELEGRAM_VERBOSE_SHORT_TEXT_MAX_CHARS
+  ) {
+    return normalized;
+  }
+
+  const previewLines: string[] = [];
+  for (const line of lines) {
+    if (previewLines.length >= NATIVE_TELEGRAM_VERBOSE_PREVIEW_MAX_LINES) {
+      break;
+    }
+    previewLines.push(truncateLine(line, NATIVE_TELEGRAM_VERBOSE_PREVIEW_MAX_LINE_CHARS));
+  }
+
+  const preview = previewLines.join("\n").trimEnd();
+  const suffix = `… truncated (${lines.length} lines, ${normalized.length} chars)`;
+  return preview ? `${preview}\n\n${suffix}` : suffix;
+}
 
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
@@ -482,7 +514,10 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
-    const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
+    const isNativeTelegramVerbose =
+      nativeTelegramVerboseLevel !== undefined && nativeTelegramVerboseLevel !== "off";
+    const shouldSendToolSummaries =
+      ctx.ChatType !== "group" && (ctx.CommandSource !== "native" || isNativeTelegramVerbose);
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
@@ -522,7 +557,11 @@ export async function dispatchReplyFromConfig(params: {
         return null;
       }
       if (shouldSendToolSummaries) {
-        return payload;
+        const text =
+          typeof payload.text === "string"
+            ? compactNativeTelegramToolText(payload.text)
+            : undefined;
+        return text === payload.text ? payload : { ...payload, text };
       }
       const execApproval =
         payload.channelData &&
@@ -543,7 +582,14 @@ export async function dispatchReplyFromConfig(params: {
         return null;
       }
       if (shouldShowNativeToolText) {
-        return payload;
+        const text =
+          typeof payload.text === "string"
+            ? compactNativeTelegramToolText(payload.text)
+            : undefined;
+        if (text === payload.text) {
+          return payload;
+        }
+        return { ...payload, text };
       }
       return { ...payload, text: undefined };
     };
