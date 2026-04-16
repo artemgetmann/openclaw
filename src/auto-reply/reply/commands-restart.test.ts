@@ -125,4 +125,40 @@ describe("handleRestartCommand", () => {
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(result?.reply?.text).toContain("SIGUSR1");
   });
+
+  it("ignores explicit natural-language restart approval phrases", async () => {
+    setPlatform("darwin");
+    isLocalRestartScriptAvailableMock.mockReturnValue(true);
+
+    const result = await handleRestartCommand(
+      buildParams("Okay I approve. Restart now.", {
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+      }),
+      true,
+    );
+
+    expect(result).toBeNull();
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores conversational restart mentions that are not explicit approvals", async () => {
+    setPlatform("darwin");
+    isLocalRestartScriptAvailableMock.mockReturnValue(true);
+
+    const result = await handleRestartCommand(
+      buildParams("Can you explain how restart works here?", {
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+      }),
+      true,
+    );
+
+    expect(result).toBeNull();
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+  });
 });
