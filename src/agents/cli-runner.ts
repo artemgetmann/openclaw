@@ -1,4 +1,6 @@
-import type { ImageContent } from "@mariozechner/pi-ai";
+import fs from "node:fs/promises";
+import type { ImageContent, Usage } from "@mariozechner/pi-ai";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -37,6 +39,7 @@ import {
 } from "./cli-runner/helpers.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
+import { normalizeProviderId } from "./model-selection.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -45,6 +48,12 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+import { prepareSessionManagerForRun } from "./pi-embedded-runner/session-manager-init.js";
+import { repairSessionFileIfNeeded } from "./session-file-repair.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionLockMaxHoldFromTimeout,
+} from "./session-write-lock.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
@@ -52,6 +61,20 @@ const log = createSubsystemLogger("agent/claude-cli");
 
 const CLAUDE_BRIDGE_PROMPT_TARGET_CHARS = 17_000;
 const CLAUDE_BRIDGE_TOOLS_DISABLED_LINE = "Tools are disabled in this session. Do not call tools.";
+const ZERO_CLI_TRANSCRIPT_USAGE: Usage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+  },
+};
 
 type ClaudeBridgePromptMode =
   | "neutral_full"
@@ -66,6 +89,20 @@ type ClaudeBridgePromptModule = {
   id: string;
   text: string;
 };
+
+function resolveCliTranscriptApi(provider: string): string {
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "claude-cli" || normalized === "claude-bridge") {
+    return "anthropic-messages";
+  }
+  if (normalized === "codex-cli") {
+    return "openai-codex-responses";
+  }
+  if (normalized === "google-gemini-cli") {
+    return "google-gemini-cli";
+  }
+  return "openai-completions";
+}
 
 function resolveClaudeBridgeUseNormalPromptStack(): boolean {
   return isTruthyEnvValue(process.env.OPENCLAW_CLAUDE_BRIDGE_USE_NORMAL_PROMPT_STACK);
@@ -532,6 +569,70 @@ async function buildCliAgentPromptStack(params: {
   return { systemPrompt, systemPromptReport };
 }
 
+async function persistCliTranscriptTurn(params: {
+  sessionFile: string;
+  sessionId: string;
+  workspaceDir: string;
+  provider: string;
+  model?: string;
+  prompt: string;
+  assistantText?: string;
+  timeoutMs: number;
+}): Promise<void> {
+  const trimmedPrompt = params.prompt.trim();
+  const trimmedAssistant = params.assistantText?.trim();
+  if (!trimmedPrompt || !trimmedAssistant) {
+    return;
+  }
+
+  const sessionLock = await acquireSessionWriteLock({
+    sessionFile: params.sessionFile,
+    maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
+      timeoutMs: params.timeoutMs,
+    }),
+  });
+
+  try {
+    // Reuse the same session transcript format as embedded runners so later
+    // provider switches can rebuild history from one shared file.
+    await repairSessionFileIfNeeded({
+      sessionFile: params.sessionFile,
+      warn: (message) => log.warn(message),
+    });
+    const hadSessionFile = await fs
+      .stat(params.sessionFile)
+      .then(() => true)
+      .catch(() => false);
+    const sessionManager = SessionManager.open(params.sessionFile);
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile: params.sessionFile,
+      hadSessionFile,
+      sessionId: params.sessionId,
+      cwd: params.workspaceDir,
+    });
+
+    const promptTimestamp = Date.now();
+    sessionManager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: trimmedPrompt }],
+      timestamp: promptTimestamp,
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      api: resolveCliTranscriptApi(params.provider),
+      provider: params.provider,
+      model: params.model || "unknown-cli-model",
+      usage: ZERO_CLI_TRANSCRIPT_USAGE,
+      stopReason: "stop",
+      content: [{ type: "text", text: trimmedAssistant }],
+      timestamp: promptTimestamp + 1,
+    });
+  } finally {
+    await sessionLock.release();
+  }
+}
+
 export async function runCliAgent(params: {
   sessionId: string;
   sessionKey?: string;
@@ -618,7 +719,7 @@ export async function runCliAgent(params: {
       customSystemPrompt,
     });
 
-    return runClaudeBridgeAgent({
+    const result = await runClaudeBridgeAgent({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       workspaceDir,
@@ -633,6 +734,21 @@ export async function runCliAgent(params: {
       // Never resume a persisted Claude CLI session id from session storage.
       cliSessionId: undefined,
     });
+    const assistantText = result.payloads
+      ?.map((payload) => payload.text?.trim() ?? "")
+      .filter(Boolean)
+      .join("\n\n");
+    await persistCliTranscriptTurn({
+      sessionFile: params.sessionFile,
+      sessionId: params.sessionId,
+      workspaceDir,
+      provider: params.provider,
+      model: modelId,
+      prompt: params.prompt,
+      assistantText,
+      timeoutMs: params.timeoutMs,
+    });
+    return result;
   }
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -942,7 +1058,7 @@ export async function runCliAgent(params: {
       const text = output.text?.trim();
       const payloads = text ? [{ text }] : undefined;
 
-      return {
+      const result = {
         payloads,
         meta: {
           durationMs: Date.now() - started,
@@ -955,6 +1071,17 @@ export async function runCliAgent(params: {
           },
         },
       };
+      await persistCliTranscriptTurn({
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        workspaceDir,
+        provider: params.provider,
+        model: modelId,
+        prompt: params.prompt,
+        assistantText: text,
+        timeoutMs: params.timeoutMs,
+      });
+      return result;
     } catch (err) {
       if (err instanceof FailoverError) {
         // Check if this is a session expired error and we have a session to clear
@@ -972,7 +1099,7 @@ export async function runCliAgent(params: {
           const text = output.text?.trim();
           const payloads = text ? [{ text }] : undefined;
 
-          return {
+          const result = {
             payloads,
             meta: {
               durationMs: Date.now() - started,
@@ -985,6 +1112,17 @@ export async function runCliAgent(params: {
               },
             },
           };
+          await persistCliTranscriptTurn({
+            sessionFile: params.sessionFile,
+            sessionId: params.sessionId,
+            workspaceDir,
+            provider: params.provider,
+            model: modelId,
+            prompt: params.prompt,
+            assistantText: text,
+            timeoutMs: params.timeoutMs,
+          });
+          return result;
         }
         throw err;
       }
