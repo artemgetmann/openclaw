@@ -54,6 +54,32 @@ function resolveModelProvider(modelRef) {
   return normalizeProviderId(trimmed.slice(0, slashIndex));
 }
 
+function isTruthyEnvFlag(value) {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function isTelegramLiveAcpValidationEnabled(params) {
+  return isTruthyEnvFlag(params?.acpValidation);
+}
+
+function resolveTelegramLivePreferredModel(params) {
+  const preferredModel = String(params?.preferredModel ?? "").trim();
+  if (preferredModel) {
+    return preferredModel;
+  }
+
+  // ACP validation must stay on Codex unless the caller explicitly overrides
+  // it, or startup can silently drift back onto another provider.
+  if (isTelegramLiveAcpValidationEnabled(params)) {
+    return "openai-codex/gpt-5.4";
+  }
+
+  return "";
+}
+
 function isCodexPinnedModel(model) {
   return String(model ?? "")
     .trim()
@@ -164,6 +190,40 @@ function codexTwinModelKey(model) {
     return null;
   }
   return `openai/${trimmed.slice("openai-codex/".length)}`;
+}
+
+function sanitizeTelegramLiveAcpValidationAuth(config) {
+  const auth = config.auth && typeof config.auth === "object" ? config.auth : null;
+  if (!auth) {
+    return;
+  }
+
+  const profiles = auth.profiles && typeof auth.profiles === "object" ? auth.profiles : {};
+  const codexProfiles = Object.fromEntries(
+    Object.entries(profiles).filter(([, profile]) => {
+      return (
+        profile &&
+        typeof profile === "object" &&
+        String(profile.provider ?? "")
+          .trim()
+          .toLowerCase() === "openai-codex"
+      );
+    }),
+  );
+
+  const order = auth.order && typeof auth.order === "object" ? auth.order : {};
+  const nextOrder =
+    Object.prototype.hasOwnProperty.call(order, "openai-codex") &&
+    order["openai-codex"] &&
+    typeof order["openai-codex"] === "object"
+      ? { "openai-codex": structuredClone(order["openai-codex"]) }
+      : {};
+
+  config.auth = {
+    ...auth,
+    profiles: codexProfiles,
+    order: nextOrder,
+  };
 }
 
 function scrubOpenAiSecretsFromTesterRuntimeConfig(node) {
@@ -291,15 +351,148 @@ function hashTelegramToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+function resolveCodexHomePath(codexHome) {
+  const configured = String(codexHome ?? process.env.CODEX_HOME ?? "").trim();
+  if (configured) {
+    return path.resolve(configured.replace(/^~(?=$|\/)/, os.homedir()));
+  }
+  return path.join(os.homedir(), ".codex");
+}
+
+function decodeJwtExpiryMs(token) {
+  if (typeof token !== "string" || !token) {
+    return null;
+  }
+
+  const segments = token.split(".");
+  if (segments.length < 2) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(segments[1], "base64url").toString("utf8"));
+    const exp = Number(payload?.exp);
+    if (!Number.isFinite(exp) || exp <= 0) {
+      return null;
+    }
+    return exp * 1000;
+  } catch {
+    return null;
+  }
+}
+
+export function bootstrapTelegramLiveAcpValidationAuthStore(params) {
+  const runtimeStateDir = path.resolve(String(params?.runtimeStateDir ?? ""));
+  const agentId = String(params?.agentId ?? "main").trim() || "main";
+  if (!runtimeStateDir) {
+    throw new Error("Missing runtimeStateDir for Telegram ACP auth bootstrap.");
+  }
+
+  const codexHome = resolveCodexHomePath(params?.codexHome);
+  const codexAuthPath = path.join(codexHome, "auth.json");
+  if (!fs.existsSync(codexAuthPath)) {
+    return {
+      ok: false,
+      reason: "codex_auth_missing",
+      codexAuthPath,
+      authStorePath: path.join(runtimeStateDir, "agents", agentId, "agent", "auth-profiles.json"),
+    };
+  }
+
+  const raw = JSON.parse(fs.readFileSync(codexAuthPath, "utf8"));
+  const tokens = raw && typeof raw === "object" ? raw.tokens : null;
+  const access = typeof tokens?.access_token === "string" ? tokens.access_token.trim() : "";
+  const refresh = typeof tokens?.refresh_token === "string" ? tokens.refresh_token.trim() : "";
+  if (!access || !refresh) {
+    return {
+      ok: false,
+      reason: "codex_auth_invalid",
+      codexAuthPath,
+      authStorePath: path.join(runtimeStateDir, "agents", agentId, "agent", "auth-profiles.json"),
+    };
+  }
+
+  let expires = decodeJwtExpiryMs(access);
+  if (expires === null) {
+    const stat = fs.statSync(codexAuthPath);
+    expires = stat.mtimeMs + 60 * 60 * 1000;
+  }
+
+  const authStorePath = path.join(
+    runtimeStateDir,
+    "agents",
+    agentId,
+    "agent",
+    "auth-profiles.json",
+  );
+  fs.mkdirSync(path.dirname(authStorePath), { recursive: true });
+  fs.writeFileSync(
+    authStorePath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access,
+            refresh,
+            expires,
+            ...(typeof tokens?.account_id === "string" && tokens.account_id.trim()
+              ? { accountId: tokens.account_id.trim() }
+              : {}),
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:default"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  fs.chmodSync(authStorePath, 0o600);
+
+  return {
+    ok: true,
+    codexAuthPath,
+    authStorePath,
+  };
+}
+
 export function buildTelegramLiveRuntimeChildEnv(params) {
   const parentEnv =
     params?.parentEnv && typeof params.parentEnv === "object" ? params.parentEnv : process.env;
   const env = { ...parentEnv };
+  const repoRoot =
+    typeof params?.repoRoot === "string" && params.repoRoot.trim().length > 0
+      ? path.resolve(params.repoRoot.trim())
+      : process.cwd();
 
   // Detached tester lanes should boot only from their isolated runtime config
   // plus synced auth store. Raw host OpenAI env defaults reintroduce product
   // credentials/model routing behind our back, so strip them on entry.
   stripRawOpenAiEnvKeys(env);
+
+  if (isTelegramLiveAcpValidationEnabled(params)) {
+    const acpxExecutable = process.platform === "win32" ? "acpx.cmd" : "acpx";
+    const acpxCandidatePaths = [
+      path.join(repoRoot, "dist", "extensions", "acpx", "node_modules", ".bin", acpxExecutable),
+      path.join(repoRoot, "extensions", "acpx", "node_modules", ".bin", acpxExecutable),
+    ];
+    const acpxCommand = acpxCandidatePaths.find((candidatePath) => fs.existsSync(candidatePath));
+
+    // Direct ACPX fallback commands run through the agent shell, not the plugin
+    // runtime backend. Seed the exact bundled/plugin-local binary path here so
+    // the ACP lane never depends on a globally installed `acpx`, and keep the
+    // fallback aligned with the dist skill bundle the model actually reads.
+    if (acpxCommand) {
+      const acpxBinDir = path.dirname(acpxCommand);
+      env.ACPX_CMD = acpxCommand;
+      env.PATH = env.PATH ? `${acpxBinDir}${path.delimiter}${env.PATH}` : acpxBinDir;
+    }
+  }
 
   return env;
 }
@@ -494,6 +687,7 @@ export function deriveTelegramLiveRuntimeProfile(params) {
     params?.stateRoot && String(params.stateRoot).trim().length > 0
       ? path.resolve(String(params.stateRoot))
       : path.join(os.homedir(), ".openclaw", "telegram-live-worktrees");
+  const acpValidation = isTelegramLiveAcpValidationEnabled(params);
   const portBase = Number.isFinite(params?.portBase) ? Number(params.portBase) : DEFAULT_PORT_BASE;
   const portRange =
     Number.isFinite(params?.portRange) && Number(params.portRange) > 0
@@ -504,7 +698,11 @@ export function deriveTelegramLiveRuntimeProfile(params) {
   const profileId = `tg-live-${hash.slice(0, 10)}`;
   const hashInt = Number.parseInt(hash.slice(0, 8), 16);
   const runtimePort = portBase + (Number.isFinite(hashInt) ? hashInt % portRange : 0);
-  const runtimeStateDir = path.join(stateRoot, profileId);
+  // ACP validation must not reuse the default Telegram live state tree, or
+  // stale auth/session artifacts can leak a different provider back in.
+  const runtimeStateDir = acpValidation
+    ? path.join(stateRoot, profileId, "acp-validation")
+    : path.join(stateRoot, profileId);
 
   return {
     worktreePath,
@@ -659,15 +857,22 @@ export function extractTelegramBotTokensFromConfig(config) {
 export function buildTelegramLiveRuntimeConfig(params) {
   const assignedToken = String(params?.assignedToken ?? "").trim();
   const runtimePort = Number.parseInt(String(params?.runtimePort ?? ""), 10);
+  const acpValidation = isTelegramLiveAcpValidationEnabled(params);
+  const fallbackWorkspaceDir =
+    acpValidation &&
+    typeof params?.worktreePath === "string" &&
+    params.worktreePath.trim().length > 0
+      ? path.resolve(params.worktreePath.trim())
+      : null;
   const workspaceDir =
     typeof params?.workspaceDir === "string" && params.workspaceDir.trim().length > 0
       ? path.resolve(params.workspaceDir.trim())
-      : null;
+      : fallbackWorkspaceDir;
   const dmPolicyOverride =
     typeof params?.dmPolicy === "string" && params.dmPolicy.trim().length > 0
       ? params.dmPolicy.trim()
       : null;
-  const preferredModel = String(params?.preferredModel ?? "").trim();
+  const preferredModel = resolveTelegramLivePreferredModel(params);
   const baseConfig =
     params?.baseConfig && typeof params.baseConfig === "object"
       ? structuredClone(params.baseConfig)
@@ -801,24 +1006,40 @@ export function buildTelegramLiveRuntimeConfig(params) {
   // only, so inherited bindings are treated as contamination and removed.
   config.bindings = [];
 
-  // Telegram live tester lanes must stay isolated from ACP/acpx because the
-  // base config may otherwise auto-enable ACP before Telegram can reply.
-  config.acp = {
-    enabled: false,
-    dispatch: {
+  if (acpValidation) {
+    // ACP validation lanes intentionally exercise ACP continuity over Telegram,
+    // so they must opt into acpx instead of inheriting the isolated default.
+    config.acp = {
+      backend: "acpx",
+      enabled: true,
+      dispatch: {
+        enabled: true,
+      },
+    };
+    // Validation lanes must also drop inherited non-Codex auth profiles, or
+    // secrets precheck can still demand unrelated provider API keys.
+    sanitizeTelegramLiveAcpValidationAuth(config);
+  } else {
+    // Telegram live tester lanes must stay isolated from ACP/acpx because the
+    // base config may otherwise auto-enable ACP before Telegram can reply.
+    config.acp = {
       enabled: false,
-    },
-  };
+      dispatch: {
+        enabled: false,
+      },
+    };
+  }
 
   config.plugins = {
     ...basePlugins,
     enabled: true,
-    allow: ["telegram"],
+    allow: acpValidation ? ["telegram", "acpx"] : ["telegram"],
     // The isolated Telegram live harness runs bundled Telegram only. Inherited
     // deny entries from the founder config can reference plugins unavailable in
     // the current checkout, which makes doctor reject the runtime before it
-    // even boots. Keep the denylist to the one thing we intentionally block.
-    deny: ["acpx"],
+    // even boots. Keep the default denylist to the one thing we intentionally
+    // block, and remove that block only for explicit ACP validation lanes.
+    deny: acpValidation ? [] : ["acpx"],
     entries: {
       telegram: {
         ...(pluginEntries.telegram && typeof pluginEntries.telegram === "object"
@@ -828,7 +1049,7 @@ export function buildTelegramLiveRuntimeConfig(params) {
       },
       acpx: {
         ...(pluginEntries.acpx && typeof pluginEntries.acpx === "object" ? pluginEntries.acpx : {}),
-        enabled: false,
+        enabled: acpValidation,
       },
     },
     slots: {

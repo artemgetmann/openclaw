@@ -95,14 +95,16 @@ mask_token() {
 }
 
 resolve_profile() {
+  local acp_validation="${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}"
   local profile_lines
   profile_lines="$(
-    WORKTREE_PATH="$WORKTREE" node --input-type=module - "$HELPER_MODULE" <<'NODE'
+    WORKTREE_PATH="$WORKTREE" OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION="$acp_validation" node --input-type=module - "$HELPER_MODULE" <<'NODE'
 import { pathToFileURL } from "node:url";
 
 const [helperPath] = process.argv.slice(2);
 const helpers = await import(pathToFileURL(helperPath).href);
 const profile = helpers.deriveTelegramLiveRuntimeProfile({
+  acpValidation: process.env.OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION,
   worktreePath: process.env.WORKTREE_PATH,
 });
 

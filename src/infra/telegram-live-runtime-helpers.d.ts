@@ -32,10 +32,12 @@ declare module "*telegram-live-runtime-helpers.mjs" {
           primary?: string;
           fallbacks?: string[];
         };
+        models?: Record<string, unknown>;
       };
       list?: Array<{ id: string }>;
     };
     acp: {
+      backend?: string;
       enabled: boolean;
       dispatch: {
         enabled: boolean;
@@ -48,6 +50,10 @@ declare module "*telegram-live-runtime-helpers.mjs" {
       deny?: string[];
       entries?: Record<string, { enabled?: boolean }>;
       slots?: Record<string, string>;
+    };
+    auth?: {
+      profiles?: Record<string, { provider?: string; mode?: string }>;
+      order?: Record<string, unknown>;
     };
     env?: Record<string, string>;
     tools?: Record<string, unknown>;
