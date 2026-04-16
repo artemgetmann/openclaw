@@ -115,8 +115,7 @@ extension ChannelsStore {
                 if pausedPollingProvider {
                     try? await self.restoreTelegramPairingAfterSetupPause(token: token)
                 }
-                await self.refresh(probe: true)
-                if self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible() {
+                if await self.consumerTelegramConfirmFirstTaskCompletionWithGrace() {
                     return
                 }
                 self.telegramSetupStatus = self.telegramCaptureFailureStatusAfterTimeout()
@@ -161,8 +160,7 @@ extension ChannelsStore {
             // the user clicked "Verify first task", do not replay the same DM
             // through the bootstrap helper. That replay is what produces the
             // duplicate first-run replies the user sees in Telegram.
-            await self.refresh(probe: true)
-            let activityAlreadyConfirmed = self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible()
+            let activityAlreadyConfirmed = await self.consumerTelegramConfirmFirstTaskCompletionWithGrace()
             switch Self.consumerTelegramFirstTaskReplayAction(
                 activityAlreadyConfirmed: activityAlreadyConfirmed)
             {
@@ -231,10 +229,10 @@ extension ChannelsStore {
     }
 
     func verifyConsumerTelegramFirstTask() async {
-        if self.consumerTelegramLooksLive() {
-            if await self.waitForConsumerTelegramFirstTaskActivityRefreshes() {
-                return
-            }
+        if self.consumerTelegramLooksLive(),
+           await self.consumerTelegramConfirmFirstTaskCompletionWithGrace()
+        {
+            return
         }
 
         await self.captureTelegramFirstDirectMessage()
@@ -305,7 +303,11 @@ extension ChannelsStore {
 
     private func waitForConsumerTelegramFirstTaskActivityRefreshes(
         attempts: Int = 12,
-        delayNanoseconds: UInt64 = 1_000_000_000
+        delayNanoseconds: UInt64 = 1_000_000_000,
+        refresh: (() async -> Void)? = nil,
+        sleep: @escaping (UInt64) async -> Void = { delay in
+            try? await Task.sleep(nanoseconds: delay)
+        }
     ) async -> Bool {
         // The snapshot can lag a real Telegram reply right after config reloads.
         // Spend a bounded grace period on the live activity signal before
@@ -314,7 +316,11 @@ extension ChannelsStore {
         // restart plus Telegram provider warm-up, which routinely burns more
         // than the original 4-second window while still producing a real reply.
         for attempt in 0..<attempts {
-            await self.refresh(probe: true)
+            if let refresh {
+                await refresh()
+            } else {
+                await self.refresh(probe: true)
+            }
             // Do not require the lane to look live before entering the wait.
             // During setup replay we intentionally churn config and restart the
             // gateway; healthy Telegram status can arrive a beat after the real
@@ -325,10 +331,28 @@ extension ChannelsStore {
                 return true
             }
             guard attempt + 1 < attempts else { break }
-            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            await sleep(delayNanoseconds)
         }
 
         return false
+    }
+
+    private func consumerTelegramConfirmFirstTaskCompletionWithGrace(
+        attempts: Int = 12,
+        delayNanoseconds: UInt64 = 1_000_000_000,
+        refresh: (() async -> Void)? = nil,
+        sleep: @escaping (UInt64) async -> Void = { delay in
+            try? await Task.sleep(nanoseconds: delay)
+        }
+    ) async -> Bool {
+        if self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible() {
+            return true
+        }
+        return await self.waitForConsumerTelegramFirstTaskActivityRefreshes(
+            attempts: attempts,
+            delayNanoseconds: delayNanoseconds,
+            refresh: refresh,
+            sleep: sleep)
     }
 
     private func telegramVerificationStatus(
@@ -726,6 +750,19 @@ extension ChannelsStore {
 
 #if DEBUG
 extension ChannelsStore {
+    func _testConsumerTelegramConfirmFirstTaskCompletionWithGrace(
+        attempts: Int = 12,
+        delayNanoseconds: UInt64 = 1_000_000_000,
+        refresh: (() async -> Void)? = nil,
+        sleep: @escaping (UInt64) async -> Void = { _ in }
+    ) async -> Bool {
+        await self.consumerTelegramConfirmFirstTaskCompletionWithGrace(
+            attempts: attempts,
+            delayNanoseconds: delayNanoseconds,
+            refresh: refresh,
+            sleep: sleep)
+    }
+
     static func _testRecoverConsumerGatewayAfterConfigBootstrap(
         retryDelayNanoseconds: UInt64 = 350_000_000,
         maxAttempts: Int = 5,

@@ -216,6 +216,8 @@ final class ConsumerModelSetupModel {
     private let applyModel: ModelApply
     private let runtimeOwnershipBlocker: RuntimeOwnershipBlocker
     private let restartGateway: RestartGateway
+    private let readinessProbeTimeoutSeconds: Double
+    private let postAuthReconnectProbeDelaysMs: [UInt64]
     private var lastReadiness: ConsumerModelsReadinessPayload?
 
     init(
@@ -225,7 +227,9 @@ final class ConsumerModelSetupModel {
         listModels: ModelsLoader? = nil,
         applyModel: ModelApply? = nil,
         runtimeOwnershipBlocker: RuntimeOwnershipBlocker? = nil,
-        restartGateway: RestartGateway? = nil)
+        restartGateway: RestartGateway? = nil,
+        readinessProbeTimeoutSeconds: Double? = nil,
+        postAuthReconnectProbeDelaysMs: [UInt64]? = nil)
     {
         self.probeReadiness = probeReadiness ?? Self.gatewayReadinessProbe
         let usesMockedDependencies =
@@ -256,6 +260,11 @@ final class ConsumerModelSetupModel {
             await GatewayProcessManager.shared.restartManagedGateway()
             try? await ControlChannel.shared.configure(mode: .local)
         }
+        // Cold-start readiness can briefly lag the UI. Keep the first probe
+        // bounded so the onboarding card can fail open and retry on the next
+        // activation instead of sitting on a permanent spinner.
+        self.readinessProbeTimeoutSeconds = readinessProbeTimeoutSeconds ?? 20.0
+        self.postAuthReconnectProbeDelaysMs = postAuthReconnectProbeDelaysMs ?? [150, 400, 900, 1_500]
     }
 
     var isComplete: Bool {
@@ -414,7 +423,7 @@ final class ConsumerModelSetupModel {
         }
 
         do {
-            let payload = try await self.probeReadiness()
+            let payload = try await self.probeReadinessWithTimeout()
             self.applyReadiness(payload)
             // The Settings switcher must stay available even when AI is already
             // healthy. Otherwise the card turns into a static status badge and
@@ -528,13 +537,12 @@ final class ConsumerModelSetupModel {
             return
         }
 
-        let delaysMs: [UInt64] = [150, 400, 900, 1_500]
-        for (index, delayMs) in delaysMs.enumerated() {
+        for (index, delayMs) in self.postAuthReconnectProbeDelaysMs.enumerated() {
             if index > 0 {
                 try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
             }
             do {
-                let payload = try await self.probeReadiness()
+                let payload = try await self.probeReadinessWithTimeout()
                 self.applyReadiness(payload)
                 await self.syncModelOptions(readiness: payload)
                 return
@@ -551,14 +559,25 @@ final class ConsumerModelSetupModel {
             }
         }
 
-        // If the gateway is still bouncing after the planned auth restart, keep
-        // the UI honest: the operator is reconnecting, not ready. Users can
-        // retry or the app can refresh on activation once the restart settles.
-        self.phase = .failed("OpenClaw is still reconnecting its AI operator after sign-in. Wait a moment, then try again.")
-        self.statusLine = "OpenClaw is still reconnecting its AI operator after sign-in. Wait a moment, then try again."
-        self.failureKind = .gatewayUnreachable
-        self.activeModelId = nil
-        self.authSectionExpanded = true
+        // If the gateway is still bouncing after the planned auth restart, do
+        // not convert that expected reconnect window into a hard failure. Keep
+        // the card in a reconnecting/checking state so the UI stays aligned
+        // with the runtime transition instead of flashing a false transport
+        // error that clears a moment later.
+        self.enterGatewayReconnectState(defaultStatusLine)
+    }
+
+    private func probeReadinessWithTimeout() async throws -> ConsumerModelsReadinessPayload {
+        let probe = self.probeReadiness
+        let timeoutSeconds = self.readinessProbeTimeoutSeconds
+        return try await AsyncTimeout.withTimeout(
+            seconds: timeoutSeconds,
+            onTimeout: {
+                ReadinessProbeTimeoutError()
+            },
+            operation: {
+                try await probe()
+            })
     }
 
     private func handleGatewayReconnectFailure(
@@ -778,6 +797,10 @@ final class ConsumerModelSetupModel {
     }
 
     private static func consumerFriendlyReadinessError(_ error: Error) -> String {
+        if error is ReadinessProbeTimeoutError {
+            return "OpenClaw could not check AI access yet. The operator may still be starting up. Try again in a moment."
+        }
+
         let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !detail.isEmpty else {
             return "OpenClaw could not check AI access yet. Try again in a moment."
@@ -819,6 +842,8 @@ final class ConsumerModelSetupModel {
             || lowercased.contains("gateway connection dropped")
             || lowercased.contains("gateway not connected")
             || lowercased.contains("socket is not connected")
+            || lowercased.contains("timed out")
+            || lowercased.contains("timeout")
         {
             return .gatewayUnreachable
         }
@@ -857,6 +882,12 @@ final class ConsumerModelSetupModel {
             method: .modelsConsumerApply,
             params: ["model": AnyCodable(modelId)],
             timeoutMs: 20_000)
+    }
+}
+
+private struct ReadinessProbeTimeoutError: LocalizedError, Sendable {
+    var errorDescription: String? {
+        "OpenClaw's AI access check timed out."
     }
 }
 

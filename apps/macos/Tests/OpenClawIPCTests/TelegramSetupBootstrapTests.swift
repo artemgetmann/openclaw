@@ -4,6 +4,69 @@ import Testing
 
 private typealias SnapshotAnyCodable = OpenClaw.AnyCodable
 
+private func makeConsumerTelegramSnapshot(
+    running: Bool,
+    inboundAt: Double,
+    outboundAt: Double,
+    botId: Int = 123,
+    username: String = "openclawbot"
+) -> ChannelsStatusSnapshot {
+    ChannelsStatusSnapshot(
+        ts: 1_700_000_000_000,
+        channelOrder: ["telegram"],
+        channelLabels: ["telegram": "Telegram"],
+        channelDetailLabels: nil,
+        channelSystemImages: nil,
+        channelMeta: nil,
+        channels: [
+            "telegram": SnapshotAnyCodable([
+                "configured": true,
+                "running": running,
+                "mode": "polling",
+                "probe": [
+                    "ok": true,
+                    "status": 200,
+                    "bot": ["id": botId, "username": username],
+                ],
+            ]),
+        ],
+        channelAccounts: [
+            "telegram": [
+                .init(
+                    accountId: "default",
+                    name: nil,
+                    enabled: true,
+                    configured: true,
+                    linked: nil,
+                    running: running,
+                    connected: nil,
+                    reconnectAttempts: nil,
+                    lastConnectedAt: nil,
+                    lastError: nil,
+                    lastStartAt: nil,
+                    lastStopAt: nil,
+                    lastInboundAt: inboundAt,
+                    lastOutboundAt: outboundAt,
+                    lastProbeAt: nil,
+                    mode: "polling",
+                    dmPolicy: "allowlist",
+                    allowFrom: ["42"],
+                    tokenSource: "config",
+                    botTokenSource: nil,
+                    appTokenSource: nil,
+                    baseUrl: nil,
+                    allowUnmentionedGroups: nil,
+                    cliPath: nil,
+                    dbPath: nil,
+                    port: nil,
+                    probe: nil,
+                    audit: nil,
+                    application: nil),
+            ],
+        ],
+        channelDefaultAccountId: ["telegram": "default"])
+}
+
 @Suite(.serialized)
 @MainActor
 struct TelegramSetupBootstrapTests {
@@ -436,6 +499,26 @@ struct TelegramSetupBootstrapTests {
         #expect(payload["chatId"] as? Int == 303)
     }
 
+    @Test func `consumer telegram access gate message replaces generic post-dm failure copy`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.telegramSetupBotId = 8_582_422_927
+            store.telegramSetupBotUsername = "openclawbot"
+            store.telegramSetupFirstSenderId = "1336356696"
+            store.telegramSetupStatus = "Telegram setup is saved, but OpenClaw could not confirm that the first Telegram task finished."
+            store.snapshot = makeConsumerTelegramSnapshot(
+                running: true,
+                inboundAt: 1_000,
+                outboundAt: 1_500)
+
+            let message = store.consumerTelegramAccessGateMessage(store.telegramSetupStatus)
+
+            #expect(message == "Telegram is connected, but the first real DM is still blocked behind pairing/access approval. Wait for access to be ready, then send one normal DM and click Verify first task again.")
+        }
+    }
+
     @Test func `telegram bootstrap reconnect gives up after bounded retries`() async {
         actor Recorder {
             var shutdownCalls = 0
@@ -478,5 +561,78 @@ struct TelegramSetupBootstrapTests {
         #expect(!recovered)
         #expect(snapshot.shutdowns == 3)
         #expect(snapshot.sleeps == 2)
+    }
+
+    @Test func `consumer telegram first task grace wait completes after a delayed refresh`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let verificationKey = ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(instanceId: nil)
+            UserDefaults.standard.removeObject(forKey: verificationKey)
+            defer { UserDefaults.standard.removeObject(forKey: verificationKey) }
+
+            let store = ChannelsStore(isPreview: true)
+            store.telegramSetupBotId = 456
+            store.telegramSetupBotUsername = "openclawbot"
+            store.telegramSetupBaselineInboundAt = 100
+            store.telegramSetupBaselineOutboundAt = 100
+            store.snapshot = makeConsumerTelegramSnapshot(
+                running: false,
+                inboundAt: 100,
+                outboundAt: 100)
+
+            var refreshCount = 0
+            let completed = await store._testConsumerTelegramConfirmFirstTaskCompletionWithGrace(
+                attempts: 3,
+                delayNanoseconds: 1,
+                refresh: {
+                    refreshCount += 1
+                    if refreshCount == 2 {
+                        store.snapshot = makeConsumerTelegramSnapshot(
+                            running: true,
+                            inboundAt: 100,
+                            outboundAt: 200)
+                    }
+                },
+                sleep: { _ in })
+
+            #expect(completed)
+            #expect(refreshCount == 2)
+            #expect(store.consumerTelegramFirstTaskVerified)
+            #expect(store.telegramSetupStatus == "Telegram bot is live as @openclawbot. First task verified.")
+        }
+    }
+
+    @Test func `consumer telegram first task grace wait stays false when activity never catches up`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let verificationKey = ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(instanceId: nil)
+            UserDefaults.standard.removeObject(forKey: verificationKey)
+            defer { UserDefaults.standard.removeObject(forKey: verificationKey) }
+
+            let store = ChannelsStore(isPreview: true)
+            store.telegramSetupBotId = 457
+            store.telegramSetupBotUsername = "openclawbot"
+            store.telegramSetupBaselineInboundAt = 100
+            store.telegramSetupBaselineOutboundAt = 100
+            store.snapshot = makeConsumerTelegramSnapshot(
+                running: false,
+                inboundAt: 100,
+                outboundAt: 100)
+
+            var refreshCount = 0
+            let completed = await store._testConsumerTelegramConfirmFirstTaskCompletionWithGrace(
+                attempts: 2,
+                delayNanoseconds: 1,
+                refresh: {
+                    refreshCount += 1
+                },
+                sleep: { _ in })
+
+            #expect(!completed)
+            #expect(refreshCount == 2)
+            #expect(!store.consumerTelegramFirstTaskVerified)
+        }
     }
 }
