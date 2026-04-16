@@ -4,6 +4,15 @@ import { clearClaudeBridgeSessionsForTests, runClaudeBridgeAgent } from "./claud
 
 const spawnMock = vi.fn();
 
+vi.mock("../infra/shell-env.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/shell-env.js")>();
+  return {
+    ...actual,
+    getShellPathFromLoginShell: vi.fn(() => null),
+    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
+  };
+});
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -11,6 +20,8 @@ vi.mock("node:child_process", async (importOriginal) => {
     spawn: (...args: unknown[]) => spawnMock(...args),
   };
 });
+
+const { getShellPathFromLoginShell } = await import("../infra/shell-env.js");
 
 class MockChild extends EventEmitter {
   stdout = new EventEmitter() as EventEmitter & { setEncoding: (encoding: string) => void };
@@ -63,7 +74,71 @@ function emitTurn(child: MockChild, text: string, sessionId: string, cacheRead =
 describe("runClaudeBridgeAgent", () => {
   beforeEach(async () => {
     spawnMock.mockReset();
+    vi.mocked(getShellPathFromLoginShell).mockReset();
+    vi.mocked(getShellPathFromLoginShell).mockReturnValue(null);
     await clearClaudeBridgeSessionsForTests();
+  });
+
+  it("merges login-shell PATH for bare claude bridge commands", async () => {
+    const child = new MockChild();
+    spawnMock.mockReturnValue(child);
+    vi.mocked(getShellPathFromLoginShell).mockReturnValue(
+      "/Users/user/.local/bin:/opt/homebrew/bin",
+    );
+    const originalPath = process.env.PATH;
+    process.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+    try {
+      const runPromise = runClaudeBridgeAgent({
+        sessionId: "session-path",
+        workspaceDir: "/tmp",
+        configBackend: { command: "claude" },
+        prompt: "Reply with exactly PATH.",
+        provider: "claude-bridge",
+        model: "sonnet",
+        timeoutMs: 5_000,
+        systemPromptReport: {
+          source: "run",
+          generatedAt: Date.now(),
+          sessionId: "session-path",
+          provider: "claude-bridge",
+          model: "sonnet",
+          workspaceDir: "/tmp",
+          bootstrapMaxChars: 1,
+          bootstrapTotalMaxChars: 1,
+          sandbox: { mode: "off", sandboxed: false },
+          systemPrompt: "",
+          bootstrapFiles: [],
+          injectedFiles: [],
+          skillsPrompt: "",
+          tools: [],
+        } as SystemPromptReport,
+      });
+
+      await vi.waitFor(() => {
+        expect(spawnMock).toHaveBeenCalledTimes(1);
+      });
+
+      const spawnEnv = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv;
+      expect(spawnEnv.PATH).toBe(
+        "/Users/user/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      );
+      expect(getShellPathFromLoginShell).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: process.env,
+          timeoutMs: 1234,
+        }),
+      );
+
+      emitTurn(child, "PATH", "bridge-session-path");
+      await runPromise;
+    } finally {
+      if (originalPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = originalPath;
+      }
+    }
   });
 
   it("reuses one live child and captures stream-json result usage", async () => {
