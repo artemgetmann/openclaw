@@ -49,6 +49,9 @@ if [[ ! -x "$VALIDATED_NPM_BIN" ]]; then
 fi
 CLI_ARCHIVE_STAGED=""
 CLI_ARCHIVE_STAGE_DIR=""
+OPENCLAW_CONSUMER_FAST_PACKAGING="${OPENCLAW_CONSUMER_FAST_PACKAGING:-0}"
+PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
+BUNDLED_RUNTIME_CACHE_ROOT="${OPENCLAW_CONSUMER_RUNTIME_CACHE_ROOT:-$ROOT_DIR/.cache/consumer-runtime-packages}"
 CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
   "AGENTS.md"
   "SOUL.md"
@@ -127,6 +130,25 @@ consumer_build_archs_are_universal() {
       return 1
       ;;
   esac
+}
+
+phase_now_ms() {
+  "$VALIDATED_NODE_BIN" -e 'process.stdout.write(String(Date.now()))'
+}
+
+phase_log_elapsed() {
+  local started_ms="$1"
+  local label="$2"
+  local finished_ms
+  local elapsed_ms
+
+  if [[ "$PACKAGE_TIMING" != "1" ]]; then
+    return 0
+  fi
+
+  finished_ms="$(phase_now_ms)"
+  elapsed_ms=$((finished_ms - started_ms))
+  printf '⏱  %s: %d.%03ds\n' "$label" "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))" >&2
 }
 
 if [[ "$APP_VARIANT" == "consumer" && "$ALLOW_SINGLE_ARCH_CONSUMER_SMOKE" != "1" ]]; then
@@ -564,12 +586,43 @@ materialize_bundled_extension_node_modules() {
   done < <(find "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions" -mindepth 1 -maxdepth 1 -type d -print0)
 }
 
+consumer_runtime_cache_key() {
+  local node_version=""
+  node_version="$(openclaw_validated_node_version "$ROOT_DIR")"
+
+  # The fast local smoke cache is only for already-built runtime payloads.
+  # Key it off the packaged runtime inputs, not unrelated source files, so we
+  # reuse safely when the staged JS/assets/templates are unchanged.
+  (
+    cd "$ROOT_DIR"
+    {
+      printf '%s\n' "$GIT_COMMIT"
+      printf '%s\n' "$node_version"
+      printf '%s\n' "$UV_VERSION"
+      printf '%s\n' "$BUILD_ARCHS_VALUE"
+      git status --porcelain -- \
+        dist \
+        openclaw.mjs \
+        package.json \
+        pnpm-lock.yaml \
+        scripts/generate-consumer-seeded-defaults.mjs \
+        extensions \
+        skills \
+        docs/reference/templates \
+        apps/macos/Sources/OpenClaw/Resources/DeviceModels
+    } | shasum -a 256 | awk '{print $1}'
+  )
+}
+
 prepare_bundled_consumer_runtime() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
     return 0
   fi
 
   local manifest_path="${BUNDLED_RUNTIME_RESOURCE_DIR}/manifest.json"
+  local cache_key=""
+  local cache_root=""
+  local cache_templates_dir=""
   local node_version=""
   local node_arm64_root=""
   local node_x64_root=""
@@ -578,6 +631,22 @@ prepare_bundled_consumer_runtime() {
   local deploy_root=""
 
   node_version="$(openclaw_validated_node_version "$ROOT_DIR")"
+  cache_key="$(consumer_runtime_cache_key)"
+  cache_root="${BUNDLED_RUNTIME_CACHE_ROOT}/${cache_key}"
+  cache_templates_dir="${cache_root}/openclaw/docs/reference/templates"
+
+  if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" && -d "$cache_root" && -f "$cache_root/manifest.json" ]]; then
+    if verify_required_workspace_templates "$cache_templates_dir" "cached bundled consumer runtime workspace templates"; then
+      echo "📦 Reusing cached bundled consumer runtime"
+      rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
+      mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
+      rsync -a "$cache_root/" "$BUNDLED_RUNTIME_RESOURCE_DIR/"
+      return 0
+    fi
+
+    echo "📦 Cached bundled runtime is incomplete; rebuilding it"
+    rm -rf "$cache_root"
+  fi
 
   echo "📦 Staging bundled consumer runtime"
   rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
@@ -655,6 +724,17 @@ prepare_bundled_consumer_runtime() {
   cat > "$manifest_path" <<EOF
 {"format":1,"bundleVersion":"${APP_BUILD}","gitCommit":"${GIT_COMMIT}","nodeVersion":"${node_version}","uvVersion":"${UV_VERSION}"}
 EOF
+
+  if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" ]]; then
+    local cache_stage_root=""
+
+    echo "📦 Caching bundled consumer runtime for the next smoke build"
+    cache_stage_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-runtime-cache.XXXXXX")"
+    rm -rf "$cache_root"
+    rsync -a "$BUNDLED_RUNTIME_RESOURCE_DIR/" "$cache_stage_root/"
+    mkdir -p "$(dirname "$cache_root")"
+    mv "$cache_stage_root" "$cache_root"
+  fi
 }
 
 prune_bundled_runtime_dangling_symlinks() {
@@ -674,7 +754,9 @@ prune_bundled_runtime_dangling_symlinks() {
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install)"
+  pnpm_install_started_ms="$(phase_now_ms)"
   openclaw_run_repo_pnpm "$ROOT_DIR" install --no-frozen-lockfile --config.node-linker=hoisted
+  phase_log_elapsed "$pnpm_install_started_ms" "Dependency install"
 else
   echo "📦 Skipping dependency install (SKIP_PNPM_INSTALL=1)"
 fi
@@ -699,14 +781,18 @@ fi
 
 if [[ "${SKIP_TSC:-0}" != "1" ]]; then
   echo "📦 Building JS (scripts/build-shared-runtime.sh)"
+  js_build_started_ms="$(phase_now_ms)"
   (cd "$ROOT_DIR" && "${ROOT_DIR}/scripts/build-shared-runtime.sh")
+  phase_log_elapsed "$js_build_started_ms" "JS/runtime build"
 else
   echo "📦 Skipping JS build (SKIP_TSC=1)"
 fi
 
 if [[ "${SKIP_UI_BUILD:-0}" != "1" ]]; then
   echo "🖥  Building Control UI (ui:build)"
+  ui_build_started_ms="$(phase_now_ms)"
   (cd "$ROOT_DIR" && "$VALIDATED_NODE_BIN" scripts/ui.js build)
+  phase_log_elapsed "$ui_build_started_ms" "Control UI build"
 else
   echo "🖥  Skipping Control UI build (SKIP_UI_BUILD=1)"
 fi
@@ -714,16 +800,24 @@ fi
 cd "$ROOT_DIR/apps/macos"
 
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
+swift_build_started_ms="$(phase_now_ms)"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
   swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 done
+phase_log_elapsed "$swift_build_started_ms" "Swift app build"
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
 echo "pkg: binary $BIN_PRIMARY" >&2
 echo "🧹 Cleaning old app bundle"
 rm -rf "$APP_ROOT"
-bundle_consumer_cli_archive
+if [[ "$APP_VARIANT" == "consumer" && "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" ]]; then
+  echo "📦 Skipping consumer CLI archive packaging (fast smoke path)"
+else
+  cli_archive_started_ms="$(phase_now_ms)"
+  bundle_consumer_cli_archive
+  phase_log_elapsed "$cli_archive_started_ms" "Consumer CLI archive packaging"
+fi
 mkdir -p "$APP_ROOT/Contents/MacOS"
 mkdir -p "$APP_ROOT/Contents/Resources"
 mkdir -p "$APP_ROOT/Contents/Frameworks"
@@ -828,7 +922,9 @@ if [[ "$APP_VARIANT" == "consumer" ]]; then
     echo "Set OPENCLAW_CONSUMER_OPENAI_API_KEY before packaging, or ship without bundled voice and rely on the blocked readiness/setup path explicitly." >&2
     exit 1
   fi
+  runtime_stage_started_ms="$(phase_now_ms)"
   prepare_bundled_consumer_runtime
+  phase_log_elapsed "$runtime_stage_started_ms" "Bundled consumer runtime staging"
   prune_bundled_runtime_dangling_symlinks
 fi
 
@@ -878,6 +974,8 @@ else
 fi
 
 echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
+codesign_started_ms="$(phase_now_ms)"
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
+phase_log_elapsed "$codesign_started_ms" "Codesign"
 
 echo "✅ Bundle ready at $APP_ROOT"

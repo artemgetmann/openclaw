@@ -10,6 +10,8 @@ source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 # Macs by default. Keep the same override escape hatch as the generic packager,
 # but stop making callers remember BUILD_ARCHS=all for the normal consumer path.
 export BUILD_ARCHS="${BUILD_ARCHS:-all}"
+OPENCLAW_CONSUMER_FAST_PACKAGING="${OPENCLAW_CONSUMER_FAST_PACKAGING:-0}"
+PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 
@@ -64,6 +66,26 @@ if [[ -z "$NORMALIZED_INSTANCE_ID" ]]; then
     exit 1
   fi
 fi
+
+phase_now_ms() {
+  "$OPENCLAW_NODE_BIN" -e 'process.stdout.write(String(Date.now()))'
+}
+
+phase_log_elapsed() {
+  local started_ms="$1"
+  local label="$2"
+  local finished_ms
+  local elapsed_ms
+
+  if [[ "$PACKAGE_TIMING" != "1" ]]; then
+    return 0
+  fi
+
+  finished_ms="$(phase_now_ms)"
+  elapsed_ms=$((finished_ms - started_ms))
+  printf '⏱  %s: %d.%03ds\n' "$label" "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))" >&2
+}
+
 EXPECTED_DISPLAY_NAME="${APP_NAME:-$(consumer_instance_display_name "$NORMALIZED_INSTANCE_ID")}"
 APP_NAME="$EXPECTED_DISPLAY_NAME"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-$(consumer_instance_app_name "$NORMALIZED_INSTANCE_ID").app}"
@@ -154,4 +176,11 @@ echo "Consumer packaging note:"
 echo "  If the verifier passed, treat unrelated pnpm/TypeScript diagnostics separately from bundle assembly."
 echo "  Known current repo noise: skipWaitForIdle diagnostics from src/agents/pi-embedded-runner/run/attempt.ts can appear during packaging without breaking the consumer app bundle."
 
-sync_consumer_artifacts_to_canonical_dist
+if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" ]]; then
+  echo "📦 Skipping canonical dist mirror/zip for fast smoke packaging"
+  echo "  App bundle remains at: $APP_PATH"
+else
+  sync_started_ms="$(phase_now_ms)"
+  sync_consumer_artifacts_to_canonical_dist
+  phase_log_elapsed "$sync_started_ms" "Canonical dist mirror/zip"
+fi

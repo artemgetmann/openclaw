@@ -6,6 +6,7 @@ IDENTITY="${SIGN_IDENTITY:-}"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 DISABLE_LIBRARY_VALIDATION="${DISABLE_LIBRARY_VALIDATION:-0}"
 SKIP_TEAM_ID_CHECK="${SKIP_TEAM_ID_CHECK:-0}"
+PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
 source "$(cd "$(dirname "$0")" && pwd)/lib/openclaw-runtime-payloads.sh"
 ENT_TMP_BASE=$(mktemp -t openclaw-entitlements-base.XXXXXX)
 ENT_TMP_APP_BASE=$(mktemp -t openclaw-entitlements-app-base.XXXXXX)
@@ -29,6 +30,25 @@ if [ ! -d "$APP_BUNDLE" ]; then
   echo "App bundle not found: $APP_BUNDLE" >&2
   exit 1
 fi
+
+phase_now_ms() {
+  "${OPENCLAW_NODE_BIN:-node}" -e 'process.stdout.write(String(Date.now()))'
+}
+
+phase_log_elapsed() {
+  local started_ms="$1"
+  local label="$2"
+  local finished_ms
+  local elapsed_ms
+
+  if [[ "$PACKAGE_TIMING" != "1" ]]; then
+    return 0
+  fi
+
+  finished_ms="$(phase_now_ms)"
+  elapsed_ms=$((finished_ms - started_ms))
+  printf '⏱  %s: %d.%03ds\n' "$label" "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))" >&2
+}
 
 select_identity() {
   local preferred available first
@@ -254,12 +274,15 @@ verify_team_ids() {
 }
 
 # Sign main binary
+main_binary_started_ms="$(phase_now_ms)"
 if [ -f "$APP_BUNDLE/Contents/MacOS/OpenClaw" ]; then
   echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/OpenClaw" "$APP_ENTITLEMENTS"
 fi
+phase_log_elapsed "$main_binary_started_ms" "Sign main binary"
 
 # Sign Sparkle deeply if present
 SPARKLE="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+sparkle_started_ms="$(phase_now_ms)"
 if [ -d "$SPARKLE" ]; then
   echo "Signing Sparkle framework and helpers"
   find "$SPARKLE" -type f -print0 | while IFS= read -r -d '' f; do
@@ -278,38 +301,49 @@ if [ -d "$SPARKLE" ]; then
   sign_plain_item "$SPARKLE/Versions/B"
   sign_plain_item "$SPARKLE"
 fi
+phase_log_elapsed "$sparkle_started_ms" "Sign Sparkle"
 
 # Sign any other embedded frameworks/dylibs
+frameworks_started_ms="$(phase_now_ms)"
 if [ -d "$APP_BUNDLE/Contents/Frameworks" ]; then
   find "$APP_BUNDLE/Contents/Frameworks" \( -name "*.framework" -o -name "*.dylib" \) ! -path "*Sparkle.framework*" -print0 | while IFS= read -r -d '' f; do
     echo "Signing framework: $f"; sign_plain_item "$f"
   done
 fi
+phase_log_elapsed "$frameworks_started_ms" "Sign embedded frameworks"
 
 # Sign the bundled Node runtime with JIT entitlements before the outer bundle
 # signature lands. The runtime lives under Resources, so codesign does not
 # reach these binaries unless we walk the tree explicitly.
+runtime_node_started_ms="$(phase_now_ms)"
 while IFS= read -r -d '' runtime_node; do
   if openclaw_file_is_macho "$runtime_node"; then
     echo "Signing runtime node binary with JIT entitlements: $runtime_node"
     sign_runtime_node_item "$runtime_node"
   fi
 done < <(openclaw_runtime_node_binary_files "$APP_BUNDLE")
+phase_log_elapsed "$runtime_node_started_ms" "Sign runtime node binaries"
 
 # Sign the rest of the executable runtime payloads before the outer bundle
 # signature lands. The runtime lives under Resources, so codesign does not
 # reach these binaries unless we walk the tree explicitly.
+runtime_payload_started_ms="$(phase_now_ms)"
 while IFS= read -r -d '' runtime_file; do
   if openclaw_file_is_macho "$runtime_file"; then
     echo "Signing runtime payload: $runtime_file"
     sign_plain_item "$runtime_file"
   fi
 done < <(openclaw_runtime_payload_files "$APP_BUNDLE")
+phase_log_elapsed "$runtime_payload_started_ms" "Sign runtime payloads"
 
 # Finally sign the bundle
+bundle_sign_started_ms="$(phase_now_ms)"
 sign_item "$APP_BUNDLE" "$APP_ENTITLEMENTS"
+phase_log_elapsed "$bundle_sign_started_ms" "Sign app bundle"
 
+team_audit_started_ms="$(phase_now_ms)"
 verify_team_ids
+phase_log_elapsed "$team_audit_started_ms" "Team ID audit"
 
 rm -f "$ENT_TMP_BASE" "$ENT_TMP_APP_BASE" "$ENT_TMP_RUNTIME"
 echo "Codesign complete for $APP_BUNDLE"
