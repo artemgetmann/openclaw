@@ -128,9 +128,25 @@ sparkle_feed_url="$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$INFO_PLIST" 
 sparkle_public_ed_key="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$INFO_PLIST" 2>/dev/null || true)"
 sparkle_auto_checks="$(/usr/libexec/PlistBuddy -c "Print :SUEnableAutomaticChecks" "$INFO_PLIST" 2>/dev/null || true)"
 
+if [[ -n "$actual_instance_id" ]]; then
+  normalized_actual_instance_id="$(consumer_instance_normalize_id "$actual_instance_id")"
+  if [[ "$actual_instance_id" != "$normalized_actual_instance_id" ]]; then
+    echo "ERROR: expected consumer instance id to be normalized, got '$actual_instance_id'" >&2
+    exit 1
+  fi
+fi
+
 if [[ "$actual_name" != "$EXPECTED_NAME" ]]; then
   echo "ERROR: expected consumer display name '$EXPECTED_NAME', got '$actual_name'" >&2
   exit 1
+fi
+
+EFFECTIVE_INSTANCE_ID="${NORMALIZED_INSTANCE_ID:-$actual_instance_id}"
+
+if [[ -z "${BUNDLE_ID:-}" ]]; then
+  # When the caller does not supply an explicit bundle override, the bundle id
+  # must still match the lane identity embedded in the app bundle itself.
+  EXPECTED_BUNDLE_ID="$(consumer_instance_bundle_id "$EFFECTIVE_INSTANCE_ID")"
 fi
 
 if [[ "$actual_bundle_id" != "$EXPECTED_BUNDLE_ID" ]]; then
@@ -140,11 +156,6 @@ fi
 
 if [[ "$actual_variant" != "$EXPECTED_VARIANT" ]]; then
   echo "ERROR: expected consumer variant '$EXPECTED_VARIANT', got '$actual_variant'" >&2
-  exit 1
-fi
-
-if [[ "$actual_instance_id" != "${NORMALIZED_INSTANCE_ID}" ]]; then
-  echo "ERROR: expected consumer instance id '${NORMALIZED_INSTANCE_ID}', got '${actual_instance_id}'" >&2
   exit 1
 fi
 
@@ -245,20 +256,20 @@ if [[ $spctl_status -ne 0 ]]; then
   fi
 fi
 
-runtime_root="$(consumer_instance_runtime_root "$HOME" "$NORMALIZED_INSTANCE_ID")"
-state_dir="$(consumer_instance_state_dir "$HOME" "$NORMALIZED_INSTANCE_ID")"
-config_path="$(consumer_instance_config_path "$HOME" "$NORMALIZED_INSTANCE_ID")"
-workspace_path="$(consumer_instance_workspace_path "$HOME" "$NORMALIZED_INSTANCE_ID")"
-logs_path="$(consumer_instance_logs_path "$HOME" "$NORMALIZED_INSTANCE_ID")"
-app_launchd_label="$(consumer_instance_launchd_label "$NORMALIZED_INSTANCE_ID")"
-gateway_launchd_label="$(consumer_instance_gateway_launchd_label "$NORMALIZED_INSTANCE_ID")"
+runtime_root="$(consumer_instance_runtime_root "$HOME" "$EFFECTIVE_INSTANCE_ID")"
+state_dir="$(consumer_instance_state_dir "$HOME" "$EFFECTIVE_INSTANCE_ID")"
+config_path="$(consumer_instance_config_path "$HOME" "$EFFECTIVE_INSTANCE_ID")"
+workspace_path="$(consumer_instance_workspace_path "$HOME" "$EFFECTIVE_INSTANCE_ID")"
+logs_path="$(consumer_instance_logs_path "$HOME" "$EFFECTIVE_INSTANCE_ID")"
+app_launchd_label="$(consumer_instance_launchd_label "$EFFECTIVE_INSTANCE_ID")"
+gateway_launchd_label="$(consumer_instance_gateway_launchd_label "$EFFECTIVE_INSTANCE_ID")"
 
 echo "Consumer app verification passed:"
 echo "  path=$APP_PATH"
 echo "  display_name=$actual_name"
 echo "  bundle_id=$actual_bundle_id"
 echo "  variant=$actual_variant"
-echo "  instance_id=${NORMALIZED_INSTANCE_ID:-default}"
+echo "  instance_id=${EFFECTIVE_INSTANCE_ID:-default}"
 echo "  url_scheme=$actual_url_scheme"
 echo "  version=$actual_version"
 echo "  build=$actual_build"
