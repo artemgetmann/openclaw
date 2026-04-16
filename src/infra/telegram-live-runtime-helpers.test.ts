@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildTelegramLiveRuntimeConfig,
+  buildTelegramLiveRuntimeChildEnv,
   collectActiveTelegramTokenLeaseEntries,
   extractTelegramBotTokensFromConfig,
   selectTelegramTesterToken,
@@ -124,7 +125,7 @@ describe("telegram live runtime helpers", () => {
     ]);
   });
 
-  it("builds a Telegram-only runtime config that disables ACP without inheriting OpenAI secrets", () => {
+  it("builds a Telegram-only runtime config that disables ACP without inheriting OpenAI secrets or auto-switching to plain OpenAI", () => {
     const config = buildTelegramLiveRuntimeConfig({
       baseConfig: {
         env: {
@@ -202,7 +203,7 @@ describe("telegram live runtime helpers", () => {
     expect(config.messages?.tts?.openai?.apiKey).toBeUndefined();
     expect(config.tools?.media?.audio?.models?.[0]?.apiKey).toBeUndefined();
     expect(config.models?.providers?.openai?.apiKey).toBeUndefined();
-    expect(config.agents?.defaults?.model?.primary).not.toBe("openai/gpt-5.4");
+    expect(config.agents?.defaults?.model).toBeUndefined();
     expect(config.acp).toEqual({
       enabled: false,
       dispatch: { enabled: false },
@@ -227,7 +228,11 @@ describe("telegram live runtime helpers", () => {
           defaults: {
             model: {
               primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-4-5"],
+              fallbacks: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-5"],
+            },
+            models: {
+              "openai/gpt-5.4": { alias: "GPT 5.4" },
+              "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
             },
           },
         },
@@ -240,6 +245,23 @@ describe("telegram live runtime helpers", () => {
     expect(config.agents?.defaults?.model).toMatchObject({
       primary: "openai-codex/gpt-5.4",
       fallbacks: ["anthropic/claude-sonnet-4-5"],
+    });
+    expect(config.agents?.defaults?.models).toEqual({
+      "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
+    });
+  });
+
+  it("strips inherited OPENAI_API_KEY from the detached runtime env when pinned to Codex", () => {
+    expect(
+      buildTelegramLiveRuntimeChildEnv({
+        preferredModel: "openai-codex/gpt-5.4",
+        parentEnv: {
+          OPENAI_API_KEY: "sk-live-test",
+          OTHER_VALUE: "kept",
+        },
+      }),
+    ).toEqual({
+      OTHER_VALUE: "kept",
     });
   });
 
