@@ -255,6 +255,31 @@ emit_runtime_log_summary() {
   echo "runtime_log_tail_end" >&2
 }
 
+is_truthy_env_flag() {
+  local value
+  value="$(trim "${1:-}")"
+  value="${value,,}"
+  [[ "$value" == "1" || "$value" == "true" || "$value" == "yes" || "$value" == "on" ]]
+}
+
+reset_acp_validation_runtime_state_if_needed() {
+  local acp_validation="${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}"
+  if ! is_truthy_env_flag "$acp_validation"; then
+    return
+  fi
+  if [[ -z "$RUNTIME_STATE_DIR" || ! -d "$RUNTIME_STATE_DIR" ]]; then
+    return
+  fi
+  if [[ -n "$RUNTIME_PID" ]]; then
+    return
+  fi
+
+  # ACP validation needs a genuinely clean runtime state snapshot. Reusing a
+  # stale Telegram live lane state dir is what kept secrets precheck pinned to
+  # Anthropic even after the runtime config switched to Codex-only auth.
+  rm -rf "$RUNTIME_STATE_DIR"
+}
+
 clear_env_assignment_file() {
   local file_path="$1"
   local key="$2"
@@ -294,14 +319,16 @@ resolve_profile() {
   fi
 
   local state_root="${OPENCLAW_TELEGRAM_LIVE_STATE_ROOT:-}"
+  local acp_validation="${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}"
   local profile_lines
   profile_lines="$(
-    WORKTREE_PATH="$WORKTREE" STATE_ROOT="$state_root" node --input-type=module - "$HELPER_MODULE" <<'NODE'
+    WORKTREE_PATH="$WORKTREE" STATE_ROOT="$state_root" OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION="$acp_validation" node --input-type=module - "$HELPER_MODULE" <<'NODE'
 import { pathToFileURL } from "node:url";
 
 const [helperPath] = process.argv.slice(2);
 const helpers = await import(pathToFileURL(helperPath).href);
 const profile = helpers.deriveTelegramLiveRuntimeProfile({
+  acpValidation: process.env.OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION,
   worktreePath: process.env.WORKTREE_PATH,
   stateRoot: process.env.STATE_ROOT || undefined,
 });
@@ -555,6 +582,7 @@ prepare_isolated_runtime_config() {
     RUNTIME_PORT="$RUNTIME_PORT" \
     OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR="${OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR:-}" \
     OPENCLAW_TELEGRAM_LIVE_DM_POLICY="${OPENCLAW_TELEGRAM_LIVE_DM_POLICY:-}" \
+    OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION="${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}" \
     OPENCLAW_TELEGRAM_LIVE_MODEL="${OPENCLAW_TELEGRAM_LIVE_MODEL:-}" \
     HELPER_MODULE="$HELPER_MODULE" \
     node --input-type=module - <<'NODE'
@@ -569,6 +597,7 @@ const runtimePort = Number.parseInt(process.env.RUNTIME_PORT ?? "", 10);
 const workspaceDir = process.env.OPENCLAW_TELEGRAM_LIVE_WORKSPACE_DIR;
 const dmPolicy = process.env.OPENCLAW_TELEGRAM_LIVE_DM_POLICY;
 const preferredModel = process.env.OPENCLAW_TELEGRAM_LIVE_MODEL ?? "";
+const acpValidation = process.env.OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION ?? "";
 const helperPath = process.env.HELPER_MODULE;
 
 if (!runtimeConfigPath || !assignedToken || !Number.isFinite(runtimePort) || runtimePort <= 0 || !helperPath) {
@@ -589,10 +618,12 @@ if (basePath && fs.existsSync(basePath)) {
   }
 }
 config = buildTelegramLiveRuntimeConfig({
+  acpValidation,
   baseConfig: config,
   assignedToken,
   preferredModel,
   runtimePort,
+  worktreePath: process.cwd(),
   workspaceDir,
   dmPolicy,
 });
@@ -606,6 +637,36 @@ NODE
 }
 
 sync_runtime_auth_profiles() {
+  local acp_validation="${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}"
+  local normalized_acp_validation
+  normalized_acp_validation="$(printf '%s' "$acp_validation" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$normalized_acp_validation" == "1" || "$normalized_acp_validation" == "true" || "$normalized_acp_validation" == "yes" || "$normalized_acp_validation" == "on" ]]; then
+    # ACP validation should boot from a clean isolated state dir and import
+    # local Codex auth before Telegram delivers the first turn. Relying on the
+    # runtime to lazily materialize auth on demand is too late for this lane.
+    if ! RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
+      HELPER_MODULE="$HELPER_MODULE" \
+      node --input-type=module - <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const runtimeStateDir = process.env.RUNTIME_STATE_DIR;
+const helperPath = process.env.HELPER_MODULE;
+if (!runtimeStateDir || !helperPath) {
+  throw new Error("Missing ACP validation auth bootstrap inputs.");
+}
+
+const { bootstrapTelegramLiveAcpValidationAuthStore } = await import(pathToFileURL(helperPath).href);
+const result = bootstrapTelegramLiveAcpValidationAuthStore({ runtimeStateDir, agentId: "main" });
+if (!result?.ok) {
+  throw new Error(`ACP validation auth bootstrap failed: ${result?.reason ?? "unknown"}`);
+}
+NODE
+    then
+      add_failure "runtime_auth_bootstrap_failed"
+    fi
+    return
+  fi
+
   if [[ -z "$RUNTIME_STATE_DIR" ]]; then
     add_failure "runtime_state_dir_missing"
     return
@@ -702,31 +763,39 @@ start_isolated_runtime() {
     RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
     RUNTIME_PORT="$RUNTIME_PORT" \
     RUNTIME_LOG_PATH="$RUNTIME_LOG_PATH" \
-    OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-1}" \
+    HELPER_MODULE="$HELPER_MODULE" \
+    OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION="${OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION:-}" \
+    OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-}" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
 import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 const repoRoot = process.env.REPO_ROOT;
 const runtimeStateDir = process.env.RUNTIME_STATE_DIR;
 const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
 const runtimePort = process.env.RUNTIME_PORT;
 const runtimeLogPath = process.env.RUNTIME_LOG_PATH;
+const helperPath = process.env.HELPER_MODULE;
+const acpValidation = process.env.OPENCLAW_TELEGRAM_LIVE_ACP_VALIDATION ?? "";
+const preferredModel = process.env.OPENCLAW_TELEGRAM_LIVE_MODEL ?? "";
 const disableExternalCliAuthSync =
-  process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "1";
+  process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ??
+  ((() => {
+    const normalized = acpValidation.trim().toLowerCase();
+    const acpValidationEnabled =
+      normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+    return acpValidationEnabled ? "0" : "1";
+  })());
 
 if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath) {
   throw new Error("Missing detached runtime launch parameters.");
 }
 
+const { buildTelegramLiveRuntimeChildEnv } = await import(pathToFileURL(helperPath).href);
+
 fs.mkdirSync(runtimeStateDir, { recursive: true });
 const logFd = fs.openSync(runtimeLogPath, "a");
-const childEnv = { ...process.env };
-for (const key of Object.keys(childEnv)) {
-  if (/^OPENAI(?:_.+)?_API_KEY$/.test(key) || key === "OPENCLAW_CONSUMER_OPENAI_API_KEY") {
-    delete childEnv[key];
-  }
-}
 const child = spawn(
   process.execPath,
   [
@@ -744,19 +813,24 @@ const child = spawn(
     cwd: repoRoot,
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: {
-      ...childEnv,
-      OPENCLAW_STATE_DIR: runtimeStateDir,
-      OPENCLAW_CONFIG_PATH: runtimeConfigPath,
-      OPENCLAW_GATEWAY_PORT: runtimePort,
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BONJOUR: "1",
-      OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE: "1",
-      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC: disableExternalCliAuthSync,
-    },
+    env: buildTelegramLiveRuntimeChildEnv({
+      acpValidation,
+      repoRoot,
+      parentEnv: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: runtimeStateDir,
+        OPENCLAW_CONFIG_PATH: runtimeConfigPath,
+        OPENCLAW_GATEWAY_PORT: runtimePort,
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE: "1",
+        OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC: disableExternalCliAuthSync,
+      },
+      preferredModel,
+    }),
   },
 );
 child.unref();
@@ -804,15 +878,20 @@ ensure_command() {
     add_failure "branch_detached_head"
   fi
 
-  ensure_tester_bot_claim
-  prepare_isolated_runtime_config
-  sync_runtime_auth_profiles
-
   resolve_runtime_owner
 
   if [[ -n "$RUNTIME_PID" && "$RUNTIME_OWNERSHIP" != "ok" ]]; then
     add_failure "runtime_owned_by_other_worktree_or_process"
   fi
+  if [[ "$FAIL" -eq 0 ]]; then
+    reset_acp_validation_runtime_state_if_needed
+  fi
+
+  ensure_tester_bot_claim
+  prepare_isolated_runtime_config
+  sync_runtime_auth_profiles
+
+  resolve_runtime_owner
 
   if [[ -z "$RUNTIME_PID" && "$FAIL" -eq 0 ]]; then
     start_isolated_runtime
