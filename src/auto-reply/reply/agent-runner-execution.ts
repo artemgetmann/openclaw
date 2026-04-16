@@ -248,10 +248,15 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
             return (async () => {
               let lifecycleTerminalEmitted = false;
               try {
+                if (provider.trim().toLowerCase() === "claude-bridge") {
+                  // Claude Bridge can sit quiet until its first visible chunk. Kick typing
+                  // immediately so Telegram shows activity before the CLI produces text.
+                  await params.typingSignals.signalToolStart();
+                }
+                const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
