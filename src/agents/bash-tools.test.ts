@@ -510,6 +510,19 @@ describe("exec gateway restart guard", () => {
     );
   });
 
+  it("blocks absolute restart script paths from live chat surfaces on macOS", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    const tool = createTestExecTool({ messageProvider: "telegram" });
+    await expect(
+      executeExecCommand(
+        tool,
+        "/Users/user/Programming_Projects/openclaw/scripts/restart-local-gateway.sh",
+      ),
+    ).rejects.toThrow("Restart command blocked in the live telegram chat.");
+  });
+
   it("allows read-only inspection of restart scripts from live chat surfaces", async () => {
     const tool = createTestExecTool({ messageProvider: "telegram" });
     const result = await executeExecCommand(
