@@ -60,11 +60,24 @@ describe("summarizeTelegramTesterTokenPool", () => {
           },
         },
       },
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-5"],
+          },
+          models: {
+            "openai/gpt-5.4": { alias: "GPT 5.4" },
+            "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
+          },
+        },
+      },
     };
 
     const config = buildTelegramLiveRuntimeConfig({
       baseConfig,
       assignedToken: "tester-token",
+      preferredModel: "openai-codex/gpt-5.4",
       runtimePort: 24567,
     });
 
@@ -76,6 +89,13 @@ describe("summarizeTelegramTesterTokenPool", () => {
     expect(config.channels.telegram.accounts).toBeUndefined();
     expect(config.env.OPENAI_API_KEY).toBeUndefined();
     expect(config.models.providers.openai.apiKey).toBeUndefined();
+    expect(config.agents?.defaults?.model).toMatchObject({
+      primary: "openai-codex/gpt-5.4",
+      fallbacks: ["anthropic/claude-sonnet-4-5"],
+    });
+    expect(config.agents?.defaults?.models).toEqual({
+      "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
+    });
   });
 });
 
