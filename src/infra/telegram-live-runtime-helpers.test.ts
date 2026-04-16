@@ -8,6 +8,7 @@ import {
   buildTelegramLiveRuntimeChildEnv,
   collectActiveTelegramTokenLeaseEntries,
   extractTelegramBotTokensFromConfig,
+  pruneTesterRuntimeAuthStore,
   selectTelegramTesterToken,
 } from "../../scripts/lib/telegram-live-runtime-helpers.mjs";
 
@@ -244,7 +245,7 @@ describe("telegram live runtime helpers", () => {
 
     expect(config.agents?.defaults?.model).toMatchObject({
       primary: "openai-codex/gpt-5.4",
-      fallbacks: ["anthropic/claude-sonnet-4-5"],
+      fallbacks: [],
     });
     expect(config.agents?.defaults?.models).toEqual({
       "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
@@ -263,6 +264,46 @@ describe("telegram live runtime helpers", () => {
     ).toEqual({
       OTHER_VALUE: "kept",
     });
+  });
+
+  it("prunes tester auth stores down to the pinned model provider", () => {
+    const pruned = pruneTesterRuntimeAuthStore({
+      preferredModel: "openai-codex/gpt-5.4",
+      store: {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "codex-access",
+            refresh: "codex-refresh",
+            expires: 123,
+          },
+          "anthropic:default": {
+            type: "api_key",
+            provider: "anthropic",
+            keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:default"],
+          anthropic: ["anthropic:default"],
+        },
+        lastGood: {
+          "openai-codex": "openai-codex:default",
+          anthropic: "anthropic:default",
+        },
+        usageStats: {
+          "openai-codex:default": { lastUsed: 1 },
+          "anthropic:default": { lastUsed: 2 },
+        },
+      },
+    });
+
+    expect(Object.keys(pruned.profiles)).toEqual(["openai-codex:default"]);
+    expect(pruned.order).toEqual({ "openai-codex": ["openai-codex:default"] });
+    expect(pruned.lastGood).toEqual({ "openai-codex": "openai-codex:default" });
+    expect(pruned.usageStats).toEqual({ "openai-codex:default": { lastUsed: 1 } });
   });
 
   it("does not mutate the canonical base config while deriving a tester runtime config", () => {

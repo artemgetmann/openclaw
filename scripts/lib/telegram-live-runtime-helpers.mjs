@@ -35,6 +35,25 @@ function normalizeStringList(values) {
   return normalizeTokenList(values);
 }
 
+function normalizeProviderId(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^z-ai$/u, "zai");
+}
+
+function resolveModelProvider(modelRef) {
+  const trimmed = String(modelRef ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex <= 0) {
+    return "";
+  }
+  return normalizeProviderId(trimmed.slice(0, slashIndex));
+}
+
 function isCodexPinnedModel(model) {
   return String(model ?? "")
     .trim()
@@ -624,14 +643,6 @@ export function buildTelegramLiveRuntimeConfig(params) {
 
   if (preferredModel) {
     const preferredModelTwin = codexTwinModelKey(preferredModel);
-    const currentFallbacks = Array.isArray(defaultModel.fallbacks) ? defaultModel.fallbacks : [];
-    const nextFallbacks = preferredModelTwin
-      ? normalizeStringList(
-          currentFallbacks.filter(
-            (fallback) => String(fallback ?? "").trim() !== preferredModelTwin,
-          ),
-        )
-      : currentFallbacks;
     const currentModelAllowlist =
       agentDefaults.models && typeof agentDefaults.models === "object" ? agentDefaults.models : {};
     const nextModelAllowlist = preferredModelTwin
@@ -642,13 +653,15 @@ export function buildTelegramLiveRuntimeConfig(params) {
         )
       : currentModelAllowlist;
 
-    // Tester lanes need an explicit model pin so live validation proves the
-    // provider we intended to test instead of inheriting whatever the base
-    // config happened to prefer that day.
+    // Tester lanes need a hard pin, not a soft preference. Keeping inherited
+    // fallback providers around makes startup secret prechecks chase unrelated
+    // auth refs and defeats the point of isolated Codex validation. Preserve
+    // the OpenAI/Codex auth split by also removing the plain OpenAI twin from
+    // the per-model allowlist when present.
     agentDefaults.model = {
       ...defaultModel,
       primary: preferredModel,
-      fallbacks: nextFallbacks,
+      fallbacks: [],
     };
     if (preferredModelTwin) {
       agentDefaults.models = nextModelAllowlist;
@@ -716,6 +729,84 @@ export function buildTelegramLiveRuntimeConfig(params) {
   config.tools = baseTools;
 
   return config;
+}
+
+export function pruneTesterRuntimeAuthStore(params) {
+  const modelProvider =
+    resolveModelProvider(params?.preferredModel) || resolveModelProvider(params?.defaultModel);
+  const sourceStore =
+    params?.store && typeof params.store === "object" && !Array.isArray(params.store)
+      ? structuredClone(params.store)
+      : { version: 1, profiles: {} };
+
+  if (!sourceStore.profiles || typeof sourceStore.profiles !== "object") {
+    sourceStore.profiles = {};
+  }
+
+  if (!modelProvider) {
+    return sourceStore;
+  }
+
+  const keptProfileIds = new Set();
+  const nextProfiles = {};
+  for (const [profileId, credential] of Object.entries(sourceStore.profiles)) {
+    const provider = normalizeProviderId(credential?.provider);
+    if (provider !== modelProvider) {
+      continue;
+    }
+    keptProfileIds.add(profileId);
+    nextProfiles[profileId] = credential;
+  }
+
+  const pruneRecord = (record) => {
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      return undefined;
+    }
+    const entries = Object.entries(record).filter(([key]) => keptProfileIds.has(key));
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  };
+
+  const pruneOrder = (order) => {
+    if (!order || typeof order !== "object" || Array.isArray(order)) {
+      return undefined;
+    }
+    const next = {};
+    for (const [provider, profileIds] of Object.entries(order)) {
+      if (normalizeProviderId(provider) !== modelProvider || !Array.isArray(profileIds)) {
+        continue;
+      }
+      const kept = profileIds.filter((profileId) => keptProfileIds.has(String(profileId)));
+      if (kept.length > 0) {
+        next[provider] = kept;
+      }
+    }
+    return Object.keys(next).length > 0 ? next : undefined;
+  };
+
+  const pruneLastGood = (lastGood) => {
+    if (!lastGood || typeof lastGood !== "object" || Array.isArray(lastGood)) {
+      return undefined;
+    }
+    const next = {};
+    for (const [provider, profileId] of Object.entries(lastGood)) {
+      if (
+        normalizeProviderId(provider) !== modelProvider ||
+        !keptProfileIds.has(String(profileId))
+      ) {
+        continue;
+      }
+      next[provider] = profileId;
+    }
+    return Object.keys(next).length > 0 ? next : undefined;
+  };
+
+  return {
+    version: Number.isFinite(sourceStore.version) ? sourceStore.version : 1,
+    profiles: nextProfiles,
+    order: pruneOrder(sourceStore.order),
+    lastGood: pruneLastGood(sourceStore.lastGood),
+    usageStats: pruneRecord(sourceStore.usageStats),
+  };
 }
 
 export function clearEnvAssignmentText(params) {

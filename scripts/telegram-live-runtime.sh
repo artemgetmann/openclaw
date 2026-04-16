@@ -636,6 +636,9 @@ if (!runtimeStateDir || !helperPath || !worktreePath) {
 const { deriveWorktreeTesterBaseline, resolveTesterBaselineAgentIds } = await import(
   pathToFileURL(helperPath).href
 );
+const { pruneTesterRuntimeAuthStore } = await import(
+  pathToFileURL(path.join(path.dirname(helperPath), "telegram-live-runtime-helpers.mjs")).href
+);
 
 let config = {};
 if (basePath && fs.existsSync(basePath)) {
@@ -648,6 +651,13 @@ if (basePath && fs.existsSync(basePath)) {
     // Ignore invalid base config here; auth sync simply falls back to defaults.
   }
 }
+
+const preferredModel =
+  typeof config?.agents?.defaults?.model?.primary === "string"
+    ? config.agents.defaults.model.primary
+    : typeof config?.agents?.defaults?.model === "string"
+      ? config.agents.defaults.model
+      : "";
 
 const baseline = deriveWorktreeTesterBaseline({ worktreePath });
 const baselineStateDir = baseline.stateDir;
@@ -676,8 +686,23 @@ for (const agentId of agentIds) {
     continue;
   }
 
+  let sourceStore = { version: 1, profiles: {} };
+  try {
+    const parsedStore = JSON.parse(fs.readFileSync(resolvedSourcePath, "utf8"));
+    if (parsedStore && typeof parsedStore === "object") {
+      sourceStore = parsedStore;
+    }
+  } catch {
+    continue;
+  }
+
+  const runtimeStore = pruneTesterRuntimeAuthStore({
+    store: sourceStore,
+    preferredModel,
+  });
+
   fs.mkdirSync(path.dirname(targetAuthPath), { recursive: true });
-  fs.copyFileSync(resolvedSourcePath, targetAuthPath);
+  fs.writeFileSync(targetAuthPath, `${JSON.stringify(runtimeStore, null, 2)}\n`, "utf8");
   fs.chmodSync(targetAuthPath, 0o600);
 }
 NODE
@@ -703,7 +728,7 @@ start_isolated_runtime() {
     RUNTIME_PORT="$RUNTIME_PORT" \
     RUNTIME_LOG_PATH="$RUNTIME_LOG_PATH" \
     HELPER_MODULE="$HELPER_MODULE" \
-    OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-1}" \
+    OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-0}" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
 import { spawn } from "node:child_process";
@@ -717,7 +742,7 @@ const runtimeLogPath = process.env.RUNTIME_LOG_PATH;
 const helperPath = process.env.HELPER_MODULE;
 const preferredModel = process.env.OPENCLAW_TELEGRAM_LIVE_MODEL ?? "";
 const disableExternalCliAuthSync =
-  process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "1";
+  process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "0";
 
 if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath || !helperPath) {
   throw new Error("Missing detached runtime launch parameters.");
