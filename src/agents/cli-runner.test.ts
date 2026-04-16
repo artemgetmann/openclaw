@@ -61,6 +61,25 @@ function createManagedRun(exit: MockRunExit, pid = 1234) {
   };
 }
 
+async function readTranscriptMessages(sessionFile: string) {
+  const raw = await fs.readFile(sessionFile, "utf-8");
+  return raw
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          type?: string;
+          message?: {
+            role?: string;
+            content?: Array<{ type?: string; text?: string }>;
+          };
+        },
+    )
+    .filter((entry) => entry.type === "message")
+    .map((entry) => entry.message);
+}
+
 describe("runCliAgent with process supervisor", () => {
   const originalClaudeBridgePromptMode = process.env.OPENCLAW_CLAUDE_BRIDGE_PROMPT_MODE;
   const originalClaudeBridgeSplit = process.env.OPENCLAW_CLAUDE_BRIDGE_SPLIT;
@@ -358,6 +377,51 @@ describe("runCliAgent with process supervisor", () => {
 
     const input = supervisorSpawnMock.mock.calls[0]?.[0] as { cwd?: string };
     expect(input.cwd).toBe(path.resolve(fallbackWorkspace));
+  });
+
+  it("mirrors successful one-shot CLI turns into the shared session transcript", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-transcript-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "stored nonce",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await runCliAgent({
+        sessionId: "s-cli",
+        sessionFile,
+        workspaceDir: tempDir,
+        prompt: "remember nonce N-1234",
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-cli-transcript",
+      });
+
+      const messages = await readTranscriptMessages(sessionFile);
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "remember nonce N-1234" }],
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "stored nonce" }],
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it.each([
@@ -706,6 +770,69 @@ describe("runCliAgent with process supervisor", () => {
     );
     expect(bridgeParams.systemPromptReport?.systemPrompt?.chars).toBeLessThanOrEqual(2_500);
     expect(bridgeParams.systemPromptReport?.systemPrompt?.projectContextChars).toBe(0);
+  });
+
+  it("mirrors successful claude-bridge turns into the shared session transcript", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bridge-transcript-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    delete process.env.OPENCLAW_CLAUDE_BRIDGE_PROMPT_MODE;
+    delete process.env.OPENCLAW_CLAUDE_BRIDGE_SPLIT;
+    delete process.env.OPENCLAW_CLAUDE_BRIDGE_USE_NORMAL_PROMPT_STACK;
+
+    bridgeRunMock.mockResolvedValueOnce({
+      payloads: [{ text: "N-9901" }],
+      meta: {
+        durationMs: 12,
+        systemPromptReport: {
+          source: "run",
+          generatedAt: Date.now(),
+          sessionId: "s-bridge",
+          provider: "claude-bridge",
+          model: "sonnet",
+          workspaceDir: tempDir,
+          bootstrapMaxChars: 1,
+          bootstrapTotalMaxChars: 1,
+          sandbox: { mode: "off", sandboxed: false },
+          systemPrompt: "",
+          bootstrapFiles: [],
+          injectedFiles: [],
+          skillsPrompt: "",
+          tools: [],
+        },
+        agentMeta: {
+          sessionId: "bridge-session",
+          provider: "claude-bridge",
+          model: "sonnet",
+        },
+      },
+    });
+
+    try {
+      await runCliAgent({
+        sessionId: "s-bridge",
+        sessionFile,
+        workspaceDir: tempDir,
+        prompt: "Remember nonce N-9901",
+        provider: "claude-bridge",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-bridge-transcript",
+      });
+
+      const messages = await readTranscriptMessages(sessionFile);
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "Remember nonce N-9901" }],
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "N-9901" }],
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
 
