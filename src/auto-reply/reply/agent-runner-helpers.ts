@@ -47,7 +47,7 @@ export const createShouldEmitToolResult = (params: VerboseGateParams): (() => bo
 };
 
 export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => boolean) => {
-  return createVerboseGate(params, (level) => level === "full");
+  return createVerboseGate(params, (level) => level !== "off");
 };
 
 export const finalizeWithFollowup = <T>(

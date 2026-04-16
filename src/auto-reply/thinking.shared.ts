@@ -121,7 +121,7 @@ function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefine
     return "off";
   }
   if (["full", "all", "everything"].includes(key)) {
-    return "full";
+    return "on";
   }
   if (["on", "minimal", "true", "yes", "1"].includes(key)) {
     return "on";

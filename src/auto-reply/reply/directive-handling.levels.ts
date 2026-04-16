@@ -1,4 +1,5 @@
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 
 export async function resolveCurrentDirectiveLevels(params: {
   sessionEntry?: {
@@ -29,8 +30,8 @@ export async function resolveCurrentDirectiveLevels(params: {
   const currentFastMode =
     typeof params.sessionEntry?.fastMode === "boolean" ? params.sessionEntry.fastMode : undefined;
   const currentVerboseLevel =
-    (params.sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
-    (params.agentCfg?.verboseDefault as VerboseLevel | undefined);
+    normalizeVerboseLevel(params.sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+    normalizeVerboseLevel(params.agentCfg?.verboseDefault as VerboseLevel | undefined);
   const currentReasoningLevel =
     (params.sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off";
   const currentElevatedLevel =

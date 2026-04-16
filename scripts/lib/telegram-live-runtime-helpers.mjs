@@ -54,6 +54,21 @@ function resolveModelProvider(modelRef) {
   return normalizeProviderId(trimmed.slice(0, slashIndex));
 }
 
+function isCodexPinnedModel(model) {
+  return String(model ?? "")
+    .trim()
+    .toLowerCase()
+    .startsWith("openai-codex/");
+}
+
+function codexTwinModelKey(model) {
+  const trimmed = String(model ?? "").trim();
+  if (!isCodexPinnedModel(trimmed)) {
+    return null;
+  }
+  return `openai/${trimmed.slice("openai-codex/".length)}`;
+}
+
 function scrubOpenAiSecretsFromTesterRuntimeConfig(node) {
   if (!node || typeof node !== "object") {
     return node;
@@ -177,6 +192,21 @@ function normalizeLeaseEntries(values) {
 
 function hashTelegramToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+export function buildTelegramLiveRuntimeChildEnv(params) {
+  const preferredModel = String(params?.preferredModel ?? "").trim();
+  const parentEnv =
+    params?.parentEnv && typeof params.parentEnv === "object" ? params.parentEnv : process.env;
+  const env = { ...parentEnv };
+
+  // A Codex-pinned tester lane must not inherit the host OpenAI API key, or
+  // Telegram sessions can silently drift back onto the plain openai route.
+  if (isCodexPinnedModel(preferredModel)) {
+    delete env.OPENAI_API_KEY;
+  }
+
+  return env;
 }
 
 function resolveTelegramTokenLeaseRoot(customRoot) {
@@ -612,14 +642,30 @@ export function buildTelegramLiveRuntimeConfig(params) {
   }
 
   if (preferredModel) {
+    const preferredModelTwin = codexTwinModelKey(preferredModel);
+    const currentModelAllowlist =
+      agentDefaults.models && typeof agentDefaults.models === "object" ? agentDefaults.models : {};
+    const nextModelAllowlist = preferredModelTwin
+      ? Object.fromEntries(
+          Object.entries(currentModelAllowlist).filter(
+            ([key]) => key.trim() !== preferredModelTwin,
+          ),
+        )
+      : currentModelAllowlist;
+
     // Tester lanes need a hard pin, not a soft preference. Keeping inherited
     // fallback providers around makes startup secret prechecks chase unrelated
-    // auth refs and defeats the point of isolated Codex validation.
+    // auth refs and defeats the point of isolated Codex validation. Preserve
+    // the OpenAI/Codex auth split by also removing the plain OpenAI twin from
+    // the per-model allowlist when present.
     agentDefaults.model = {
       ...defaultModel,
       primary: preferredModel,
       fallbacks: [],
     };
+    if (preferredModelTwin) {
+      agentDefaults.models = nextModelAllowlist;
+    }
     config.agents = {
       ...agents,
       defaults: agentDefaults,

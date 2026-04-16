@@ -6,6 +6,7 @@ import {
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
+import { normalizeVerboseLevel } from "../../auto-reply/thinking.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -379,7 +380,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         updatedAt: now,
         thinkingLevel: entry?.thinkingLevel,
         fastMode: entry?.fastMode,
-        verboseLevel: entry?.verboseLevel,
+        verboseLevel: normalizeVerboseLevel(entry?.verboseLevel),
         reasoningLevel: entry?.reasoningLevel,
         systemSent: entry?.systemSent,
         sendPolicy: entry?.sendPolicy,

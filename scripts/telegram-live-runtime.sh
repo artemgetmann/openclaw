@@ -727,31 +727,31 @@ start_isolated_runtime() {
     RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
     RUNTIME_PORT="$RUNTIME_PORT" \
     RUNTIME_LOG_PATH="$RUNTIME_LOG_PATH" \
+    HELPER_MODULE="$HELPER_MODULE" \
     OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC:-0}" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
 import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 const repoRoot = process.env.REPO_ROOT;
 const runtimeStateDir = process.env.RUNTIME_STATE_DIR;
 const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
 const runtimePort = process.env.RUNTIME_PORT;
 const runtimeLogPath = process.env.RUNTIME_LOG_PATH;
+const helperPath = process.env.HELPER_MODULE;
+const preferredModel = process.env.OPENCLAW_TELEGRAM_LIVE_MODEL ?? "";
 const disableExternalCliAuthSync =
   process.env.OPENCLAW_TELEGRAM_LIVE_DISABLE_EXTERNAL_CLI_AUTH_SYNC ?? "0";
 
-if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath) {
+if (!repoRoot || !runtimeStateDir || !runtimeConfigPath || !runtimePort || !runtimeLogPath || !helperPath) {
   throw new Error("Missing detached runtime launch parameters.");
 }
 
+const { buildTelegramLiveRuntimeChildEnv } = await import(pathToFileURL(helperPath).href);
+
 fs.mkdirSync(runtimeStateDir, { recursive: true });
 const logFd = fs.openSync(runtimeLogPath, "a");
-const childEnv = { ...process.env };
-for (const key of Object.keys(childEnv)) {
-  if (/^OPENAI(?:_.+)?_API_KEY$/.test(key) || key === "OPENCLAW_CONSUMER_OPENAI_API_KEY") {
-    delete childEnv[key];
-  }
-}
 const child = spawn(
   process.execPath,
   [
@@ -769,19 +769,22 @@ const child = spawn(
     cwd: repoRoot,
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: {
-      ...childEnv,
-      OPENCLAW_STATE_DIR: runtimeStateDir,
-      OPENCLAW_CONFIG_PATH: runtimeConfigPath,
-      OPENCLAW_GATEWAY_PORT: runtimePort,
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BONJOUR: "1",
-      OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE: "1",
-      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC: disableExternalCliAuthSync,
-    },
+    env: buildTelegramLiveRuntimeChildEnv({
+      parentEnv: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: runtimeStateDir,
+        OPENCLAW_CONFIG_PATH: runtimeConfigPath,
+        OPENCLAW_GATEWAY_PORT: runtimePort,
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_DISABLE_MAIN_AUTH_INHERITANCE: "1",
+        OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC: disableExternalCliAuthSync,
+      },
+      preferredModel,
+    }),
   },
 );
 child.unref();

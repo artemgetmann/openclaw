@@ -412,7 +412,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).not.toHaveBeenCalled();
   });
 
-  it("omits tool output when verbose is on (non-full)", () => {
+  it("keeps tool output when verbose is on", () => {
     const { chatLog, handleAgentEvent } = createHandlersHarness({
       state: {
         activeChatRunId: "run-123",
@@ -443,10 +443,17 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       },
     });
 
-    expect(chatLog.updateToolResult).toHaveBeenCalledTimes(1);
-    expect(chatLog.updateToolResult).toHaveBeenCalledWith(
+    expect(chatLog.updateToolResult).toHaveBeenCalledTimes(2);
+    expect(chatLog.updateToolResult).toHaveBeenNthCalledWith(
+      1,
       "tc-on",
-      { content: [] },
+      { content: [{ type: "text", text: "secret" }] },
+      { partial: true },
+    );
+    expect(chatLog.updateToolResult).toHaveBeenNthCalledWith(
+      2,
+      "tc-on",
+      { content: [{ type: "text", text: "secret" }] },
       { isError: false },
     );
   });

@@ -109,7 +109,7 @@ describe("buildStatusMessage", () => {
     const normalized = normalizeTestText(text);
 
     expect(normalized).toContain("Think: high");
-    expect(normalized).toContain("verbose:full");
+    expect(normalized).toContain("verbose");
     expect(normalized).toContain("Reasoning: on");
   });
 
