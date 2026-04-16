@@ -1,4 +1,5 @@
 import { resolveOpenAITtsInstructions } from "openclaw/plugin-sdk/voice-call";
+import { resolveOpenAiNonModelEnvApiKey } from "../../../src/openai/auth-split.js";
 import { pcmToMulaw } from "../telephony-audio.js";
 
 /**
@@ -83,8 +84,7 @@ export class OpenAITTSProvider {
   private instructions?: string;
 
   constructor(config: OpenAITTSConfig = {}) {
-    this.apiKey =
-      trimToUndefined(config.apiKey) ?? trimToUndefined(process.env.OPENAI_API_KEY) ?? "";
+    this.apiKey = trimToUndefined(config.apiKey) ?? resolveOpenAiNonModelEnvApiKey().apiKey ?? "";
     // Default to gpt-4o-mini-tts for intelligent realtime applications
     this.model = trimToUndefined(config.model) ?? "gpt-4o-mini-tts";
     // Default to coral - good balance of quality and natural tone
@@ -93,7 +93,7 @@ export class OpenAITTSProvider {
     this.instructions = trimToUndefined(config.instructions);
 
     if (!this.apiKey) {
-      throw new Error("OpenAI API key required (set OPENAI_API_KEY or pass apiKey)");
+      throw new Error("OpenAI API key required (set OPENAI_NON_MODEL_API_KEY or pass apiKey)");
     }
   }
 
