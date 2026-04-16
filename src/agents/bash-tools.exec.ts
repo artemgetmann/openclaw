@@ -105,6 +105,44 @@ function splitShellCommandSegments(command: string): string[] {
     .filter(Boolean);
 }
 
+function isGatewaySupervisorMutationSegment(segment: string): boolean {
+  // These patterns intentionally target mutation commands only.
+  // Read-only inspection like `cat scripts/restart-local-gateway.sh` must remain allowed.
+  // Accept both repo-relative and absolute entrypoints because workspace policy
+  // files can pin the restart script with a full path, which previously slipped
+  // past the chat self-restart guard and let Telegram cut its own runtime off.
+  if (
+    /(?:^|\s)(?:\/bin\/bash|\/bin\/sh|bash|sh|zsh)\s+(?:\S+\/)?(?:scripts\/)?restart-local-gateway\.sh(?:\s|$)/u.test(
+      segment,
+    )
+  ) {
+    return true;
+  }
+  if (/^(?:\S+\/)?(?:scripts\/)?restart-local-gateway\.sh(?:\s|$)/u.test(segment)) {
+    return true;
+  }
+  if (
+    /\bnode\b .*?\bopenclaw\.mjs\b .*?\bdaemon\b .*?\b(?:install|restart|start)\b/u.test(segment)
+  ) {
+    return true;
+  }
+  if (
+    /\bopenclaw\b .*?\b(?:gateway|daemon)\b .*?\b(?:restart|start|run|install)\b/u.test(segment)
+  ) {
+    return true;
+  }
+  if (
+    /\blaunchctl\b .*?\b(?:bootout|bootstrap|kickstart)\b .*?\bai\.openclaw\.gateway\b/u.test(
+      segment,
+    )
+  ) {
+    return true;
+  }
+  if (/\bpkill\b .*?\bopenclaw-gateway\b/u.test(segment)) {
+    return true;
+  }
+  return false;
+}
 function buildGatewayPathPrelude(env: Record<string, string>): {
   prepend: string;
   commandPrefix: string;
@@ -145,42 +183,6 @@ function ensureGatewayManagedCommandPrefix(params: {
     return existing;
   }
   return `${gatewayPathPrelude.commandPrefix}${existing}`;
-}
-
-function isGatewaySupervisorMutationSegment(segment: string): boolean {
-  // These patterns intentionally target mutation commands only.
-  // Read-only inspection like `cat scripts/restart-local-gateway.sh` must remain allowed.
-  if (
-    /(?:^|\s)(?:\/bin\/bash|\/bin\/sh|bash|sh|zsh)\s+(?:\S+\/)?scripts\/restart-local-gateway\.sh(?:\s|$)/u.test(
-      segment,
-    )
-  ) {
-    return true;
-  }
-  if (/^(?:\.\/)?scripts\/restart-local-gateway\.sh(?:\s|$)/u.test(segment)) {
-    return true;
-  }
-  if (
-    /\bnode\b .*?\bopenclaw\.mjs\b .*?\bdaemon\b .*?\b(?:install|restart|start)\b/u.test(segment)
-  ) {
-    return true;
-  }
-  if (
-    /\bopenclaw\b .*?\b(?:gateway|daemon)\b .*?\b(?:restart|start|run|install)\b/u.test(segment)
-  ) {
-    return true;
-  }
-  if (
-    /\blaunchctl\b .*?\b(?:bootout|bootstrap|kickstart)\b .*?\bai\.openclaw\.gateway\b/u.test(
-      segment,
-    )
-  ) {
-    return true;
-  }
-  if (/\bpkill\b .*?\bopenclaw-gateway\b/u.test(segment)) {
-    return true;
-  }
-  return false;
 }
 
 function isChatDrivenGatewaySelfRestartCommand(command: string): boolean {

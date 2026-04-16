@@ -682,12 +682,13 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   if (!allowTextCommands) {
     return null;
   }
-  if (params.command.commandBodyNormalized !== "/restart") {
+  const normalizedBody = params.command.commandBodyNormalized;
+  if (normalizedBody !== "/restart") {
     return null;
   }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
-      `Ignoring /restart from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+      `Ignoring restart request from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
   }
@@ -730,6 +731,8 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   if (hasSigusr1Listener) {
+    // Keep restart breadcrumbs pinned to the explicit slash command so chat
+    // text never looks executable in logs or postmortems.
     scheduleGatewaySigusr1Restart({ reason: "/restart" });
     return {
       shouldContinue: false,

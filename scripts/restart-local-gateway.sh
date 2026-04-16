@@ -14,8 +14,103 @@ HELPER_LOG_PATH="${OPENCLAW_RESTART_HELPER_LOG:-/tmp/openclaw-restart-helper.log
 source "$ROOT/scripts/lib/consumer-instance.sh"
 source "$ROOT/scripts/lib/worktree-guards.sh"
 
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+strip_outer_quotes() {
+  local value="$1"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    printf '%s' "${value:1:${#value}-2}"
+    return
+  fi
+  if [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    printf '%s' "${value:1:${#value}-2}"
+    return
+  fi
+  printf '%s' "$value"
+}
+
+parse_env_assignment() {
+  local key="$1"
+  local line="$2"
+  local parsed=""
+  if [[ "$line" =~ ^(export[[:space:]]+)?${key}[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+    parsed="$(trim "${BASH_REMATCH[2]}")"
+    parsed="$(strip_outer_quotes "$parsed")"
+  fi
+  printf '%s' "$parsed"
+}
+
+read_last_env_value() {
+  local file_path="$1"
+  local key="$2"
+  local line=""
+  local trimmed=""
+  local parsed=""
+  local last_value=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    trimmed="$(trim "$line")"
+    if [[ -z "$trimmed" || "$trimmed" == \#* ]]; then
+      continue
+    fi
+    parsed="$(parse_env_assignment "$key" "$trimmed")"
+    if [[ -n "$parsed" ]]; then
+      last_value="$parsed"
+    fi
+  done < "$file_path"
+
+  printf '%s' "$last_value"
+}
+
+apply_dev_launch_env_if_present() {
+  local dev_env_file="$ROOT/.dev-launch.env"
+  if [[ ! -f "$dev_env_file" ]]; then
+    return 0
+  fi
+
+  local lane_state_dir=""
+  local lane_config_path=""
+  local lane_gateway_port=""
+  lane_state_dir="$(read_last_env_value "$dev_env_file" "OPENCLAW_STATE_DIR")"
+  lane_config_path="$(read_last_env_value "$dev_env_file" "OPENCLAW_CONFIG_PATH")"
+  lane_gateway_port="$(read_last_env_value "$dev_env_file" "OPENCLAW_GATEWAY_PORT")"
+
+  if [[ -n "$lane_state_dir" ]]; then
+    export OPENCLAW_STATE_DIR="$lane_state_dir"
+  fi
+  if [[ -n "$lane_config_path" ]]; then
+    export OPENCLAW_CONFIG_PATH="$lane_config_path"
+  fi
+  if [[ -n "$lane_gateway_port" ]]; then
+    export OPENCLAW_GATEWAY_PORT="$lane_gateway_port"
+  fi
+}
+
+has_explicit_runtime_lane_env() {
+  [[ -n "${OPENCLAW_STATE_DIR:-}" || -n "${OPENCLAW_CONFIG_PATH:-}" || -n "${OPENCLAW_GATEWAY_PORT:-}" ]]
+}
+
+is_telegram_live_runtime_context() {
+  local config_path="${OPENCLAW_CONFIG_PATH:-}"
+  local state_dir="${OPENCLAW_STATE_DIR:-}"
+  [[ "$config_path" == *"/openclaw.telegram-live.json" ]] && return 0
+  [[ "$state_dir" == *"/.openclaw/telegram-live-worktrees/"* ]] && return 0
+  [[ "$state_dir" == *"/telegram-live-worktrees/"* ]] && return 0
+  return 1
+}
+
+# Apply the generated lane env before any consumer-instance fallback. Generic
+# linked worktrees like Telegram live lanes should restart the runtime they
+# booted, not manufacture a consumer instance from the checkout name.
+apply_dev_launch_env_if_present
+
 RAW_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
-if [[ -z "$RAW_INSTANCE_ID" ]]; then
+if [[ -z "$RAW_INSTANCE_ID" && ! has_explicit_runtime_lane_env ]]; then
   # Keep direct restarts aligned with `scripts/openclaw-local.sh`: a consumer
   # worktree should restart its own lane without requiring extra env exports.
   RAW_INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT")"
@@ -84,6 +179,47 @@ EOF
   echo "Helper log: ${HELPER_LOG_PATH}"
 }
 
+schedule_detached_telegram_live_restart() {
+  local helper_script
+  helper_script="$(mktemp "${TMPDIR:-/tmp}/openclaw-telegram-live-restart.XXXXXX.sh")"
+  cat >"$helper_script" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$1"
+PORT="$2"
+DELAY_SECONDS="$3"
+HELPER_SCRIPT="$0"
+
+sleep "$DELAY_SECONDS"
+
+if [[ -n "$PORT" ]]; then
+  runtime_pid="$(lsof -nP -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | sed -n '1p' || true)"
+  if [[ -n "$runtime_pid" ]]; then
+    kill "$runtime_pid" >/dev/null 2>&1 || true
+    for _ in {1..15}; do
+      if ! kill -0 "$runtime_pid" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
+    kill -9 "$runtime_pid" >/dev/null 2>&1 || true
+  fi
+fi
+
+cd "$ROOT"
+bash scripts/telegram-live-runtime.sh ensure
+rm -f "$HELPER_SCRIPT"
+EOF
+  chmod 700 "$helper_script"
+  nohup "$helper_script" "$ROOT" "${OPENCLAW_GATEWAY_PORT:-}" "$DEFERRED_RESTART_DELAY_SECONDS" \
+    >"$HELPER_LOG_PATH" 2>&1 </dev/null &
+  local helper_pid="$!"
+  disown || true
+  echo "OK: scheduled detached Telegram live restart helper (pid ${helper_pid})."
+  echo "Helper log: ${HELPER_LOG_PATH}"
+}
+
 # Reinstall the lane-local service from this worktree entrypoint itself. Using
 # the wrapper/legacy daemon alias here leaves room for whichever launch context
 # invoked the script to influence the resolved service target, which is how a
@@ -96,6 +232,11 @@ if [[ -n "${OPENCLAW_GATEWAY_PORT:-}" ]]; then
   INSTALL_PORT_ARGS=(--port "$OPENCLAW_GATEWAY_PORT")
 fi
 "$NODE" "$EXPECTED_ENTRY" gateway install --force --allow-shared-service-takeover --runtime node "${INSTALL_PORT_ARGS[@]}" >/dev/null
+
+if is_telegram_live_runtime_context; then
+  schedule_detached_telegram_live_restart
+  exit 0
+fi
 
 if is_self_restart_context; then
   schedule_detached_restart
