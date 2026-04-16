@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 
 enum LaunchAgentManager {
@@ -6,6 +7,7 @@ enum LaunchAgentManager {
         let environment: [String: String]
     }
 
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "app.launchd")
     private static var plistURL: URL {
         ConsumerRuntime.appLaunchAgentPlistURL
     }
@@ -53,6 +55,21 @@ enum LaunchAgentManager {
         // First-run consumer default should not kickstart a second copy of the app mid-onboarding.
         // Writing the plist is enough for next-login autostart while keeping this session stable.
         self.writePlist(bundlePath: bundlePath)
+    }
+
+    static func detachCurrentSessionJob() {
+        // Standard Quit should stop this session's app job from being supervised by launchd.
+        // We fire launchctl as a separate process so termination can continue normally without
+        // turning Quit into a custom UX flow.
+        let process = Process()
+        process.launchPath = "/bin/launchctl"
+        process.arguments = ["bootout", "gui/\(getuid())/\(launchdLabel)"]
+        do {
+            try process.run()
+        } catch {
+            self.logger.warning(
+                "failed to detach app launchd job on quit: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     static func launchAgentEnvironment(

@@ -379,6 +379,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await RemoteTunnelManager.shared.stopAll() }
         Task { await GatewayConnection.shared.shutdown() }
         Task { await PeekabooBridgeHostCoordinator.shared.stop() }
+        // Break the launchd supervision link for this app job so a normal Quit
+        // stays quit for the rest of the current login session.
+        LaunchAgentManager.detachCurrentSessionJob()
     }
 
     @MainActor
