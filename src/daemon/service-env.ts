@@ -336,6 +336,11 @@ function buildCommonServiceEnvironment(
   const consumerMinimalStartup = env.OPENCLAW_CONSUMER_MINIMAL_STARTUP?.trim() || undefined;
   const serviceEnv: Record<string, string | undefined> = {
     HOME: env.HOME,
+    // Preserve the basic user identity launchd/systemd-supervised CLIs expect when they
+    // look up per-user auth/session state outside the shell. Claude Code subscription auth
+    // can drift without USER/LOGNAME even when HOME/TMPDIR/PATH are present.
+    USER: env.USER,
+    LOGNAME: env.LOGNAME,
     TMPDIR: sharedEnv.tmpDir,
     ...sharedEnv.proxyEnv,
     ...sharedEnv.skillEnv,
