@@ -291,6 +291,21 @@ describe("buildServiceEnvironment", () => {
     expect(env.TMPDIR).toBe("/var/folders/xw/abc123/T/");
   });
 
+  it("preserves USER and LOGNAME for service-launched CLIs", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/Users/user",
+        USER: "user",
+        LOGNAME: "user",
+      },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.USER).toBe("user");
+    expect(env.LOGNAME).toBe("user");
+  });
+
   it("falls back to os.tmpdir when TMPDIR is not set", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
@@ -408,6 +423,15 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user", TMPDIR: "/tmp/custom" },
     });
     expect(env.TMPDIR).toBe("/tmp/custom");
+  });
+
+  it("preserves USER and LOGNAME for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/Users/user", USER: "user", LOGNAME: "user" },
+      platform: "darwin",
+    });
+    expect(env.USER).toBe("user");
+    expect(env.LOGNAME).toBe("user");
   });
 
   it("falls back to os.tmpdir for node services when TMPDIR is not set", () => {
