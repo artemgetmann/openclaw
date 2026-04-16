@@ -75,19 +75,6 @@ fi
 worktree_guard_require_sacred_home_clone_base_branch "$ROOT" "scripts/openclaw-local.sh"
 worktree_guard_reject_sacred_home_edits "$ROOT" worktree --context "scripts/openclaw-local.sh"
 
-RAW_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
-if [[ -z "$RAW_INSTANCE_ID" ]]; then
-  # Consumer worktrees should behave like consumer lanes by default. Requiring
-  # every manual `pnpm openclaw:local ...` call to export an instance id first
-  # is exactly how auth/status commands drift back to ~/.openclaw.
-  RAW_INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT")"
-fi
-
-NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$RAW_INSTANCE_ID")"
-if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
-  consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
-fi
-
 # Short local CLI commands are an easy place to accidentally mutate the shared
 # runtime from a manually-created worktree. Require the generated dev launch env
 # before we let linked worktrees talk to the local runtime wrapper at all.
@@ -99,6 +86,9 @@ worktree_guard_run_for_linked_checkout \
   --quiet
 
 DEV_ENV_FILE="$ROOT/.dev-launch.env"
+lane_state_dir=""
+lane_config_path=""
+lane_gateway_port=""
 if [[ -f "$DEV_ENV_FILE" ]]; then
   # Linked worktree operator commands must use the lane's generated baseline,
   # not silently drift back to ~/.openclaw because the shell lacked explicit env.
@@ -106,6 +96,10 @@ if [[ -f "$DEV_ENV_FILE" ]]; then
   lane_config_path="$(read_last_env_value "$DEV_ENV_FILE" "OPENCLAW_CONFIG_PATH")"
   lane_gateway_port="$(read_last_env_value "$DEV_ENV_FILE" "OPENCLAW_GATEWAY_PORT")"
 
+  # A generated lane baseline is authoritative for isolated runtimes such as
+  # Telegram live worktrees. If we infer a consumer instance first, the checkout
+  # name hijacks restart/status onto ~/Library/Application Support/OpenClaw
+  # Consumer/... instead of the lane that is actually running.
   if [[ -n "$lane_state_dir" ]]; then
     export OPENCLAW_STATE_DIR="$lane_state_dir"
   fi
@@ -115,6 +109,19 @@ if [[ -f "$DEV_ENV_FILE" ]]; then
   if [[ -n "$lane_gateway_port" ]]; then
     export OPENCLAW_GATEWAY_PORT="$lane_gateway_port"
   fi
+fi
+
+RAW_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
+if [[ -z "$RAW_INSTANCE_ID" && -z "$lane_state_dir" && -z "$lane_config_path" && -z "$lane_gateway_port" ]]; then
+  # Consumer worktrees should behave like consumer lanes by default. Requiring
+  # every manual `pnpm openclaw:local ...` call to export an instance id first
+  # is exactly how auth/status commands drift back to ~/.openclaw.
+  RAW_INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT")"
+fi
+
+NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$RAW_INSTANCE_ID")"
+if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
+  consumer_instance_apply_runtime_env "$NORMALIZED_INSTANCE_ID"
 fi
 
 if [[ -x "$LOCAL_RESTART" ]]; then
