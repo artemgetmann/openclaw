@@ -66,6 +66,44 @@ describe("runCapability auto audio entries", () => {
     expect(result.decision.outcome).toBe("success");
   });
 
+  it("uses OPENAI_NON_MODEL_API_KEY when no provider apiKey is configured", async () => {
+    const previousNonModel = process.env.OPENAI_NON_MODEL_API_KEY;
+    const previousGeneric = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_NON_MODEL_API_KEY = "sk-non-model"; // pragma: allowlist secret
+    delete process.env.OPENAI_API_KEY;
+    let seenModel: string | undefined;
+    try {
+      const result = await runAutoAudioCase({
+        transcribeAudio: async (req) => {
+          seenModel = req.model;
+          return { text: "ok", model: req.model ?? "unknown" };
+        },
+        cfgExtra: {
+          models: {
+            providers: {
+              openai: {
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(result.outputs[0]?.text).toBe("ok");
+      expect(seenModel).toBe("gpt-4o-mini-transcribe");
+    } finally {
+      if (previousNonModel === undefined) {
+        delete process.env.OPENAI_NON_MODEL_API_KEY;
+      } else {
+        process.env.OPENAI_NON_MODEL_API_KEY = previousNonModel;
+      }
+      if (previousGeneric === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousGeneric;
+      }
+    }
+  });
+
   it("skips auto audio when disabled", async () => {
     const result = await runAutoAudioCase({
       transcribeAudio: async () => ({

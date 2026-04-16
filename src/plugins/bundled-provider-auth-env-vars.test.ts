@@ -16,7 +16,10 @@ describe("bundled provider auth env vars", () => {
       "MINIMAX_OAUTH_TOKEN",
       "MINIMAX_API_KEY",
     ]);
-    expect(BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES.openai).toEqual(["OPENAI_API_KEY"]);
+    expect(BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES.openai).toEqual([
+      "OPENAI_MODEL_API_KEY",
+      "OPENAI_API_KEY",
+    ]);
     expect(BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES["openai-codex"]).toBeUndefined();
   });
 });

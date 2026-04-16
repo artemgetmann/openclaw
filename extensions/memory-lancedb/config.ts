@@ -138,7 +138,7 @@ export const memoryConfigSchema = {
       label: "OpenAI API Key",
       sensitive: true,
       placeholder: "sk-proj-...",
-      help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
+      help: "API key for OpenAI embeddings (or use ${OPENAI_NON_MODEL_API_KEY})",
     },
     "embedding.baseUrl": {
       label: "Base URL",

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { resolveOpenAiNonModelEnvApiKey } from "../openai/auth-split.js";
 import type { EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
@@ -49,17 +50,27 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   });
   const remoteBaseUrl = remote?.baseUrl?.trim();
   const providerConfig = params.options.config.models?.providers?.[params.provider];
+  const openAiNonModelEnv =
+    params.provider === "openai"
+      ? resolveOpenAiNonModelEnvApiKey()
+      : { apiKey: undefined, envVar: undefined };
   const resolvedAuth = remoteApiKey
     ? {
         apiKey: remoteApiKey,
         source: "agents.*.memorySearch.remote.apiKey",
         mode: "api-key" as const,
       }
-    : await resolveApiKeyForProvider({
-        provider: params.provider,
-        cfg: params.options.config,
-        agentDir: params.options.agentDir,
-      });
+    : openAiNonModelEnv.apiKey
+      ? {
+          apiKey: openAiNonModelEnv.apiKey,
+          source: `env: ${openAiNonModelEnv.envVar}`,
+          mode: "api-key" as const,
+        }
+      : await resolveApiKeyForProvider({
+          provider: params.provider,
+          cfg: params.options.config,
+          agentDir: params.options.agentDir,
+        });
   const apiKey = requireApiKey(resolvedAuth, params.provider);
   const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || params.defaultBaseUrl;
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);

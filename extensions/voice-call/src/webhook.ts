@@ -5,6 +5,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/voice-call";
+import { resolveOpenAiNonModelEnvApiKey } from "../../../src/openai/auth-split.js";
 import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import type { CallManager } from "./manager.js";
@@ -89,7 +90,7 @@ export class VoiceCallWebhookServer {
    */
   private initializeMediaStreaming(): void {
     const streaming = this.config.streaming;
-    const apiKey = streaming.openaiApiKey ?? process.env.OPENAI_API_KEY;
+    const apiKey = streaming.openaiApiKey ?? resolveOpenAiNonModelEnvApiKey().apiKey;
 
     if (!apiKey) {
       console.warn("[voice-call] Streaming enabled but no OpenAI API key found");
