@@ -583,7 +583,7 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
-  it("strips tool output when verbose is on", () => {
+  it("keeps tool output when verbose is on", () => {
     const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
@@ -607,12 +607,12 @@ describe("agent event handler", () => {
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
     const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
-    expect(payload.data?.result).toBeUndefined();
-    expect(payload.data?.partialResult).toBeUndefined();
+    expect(payload.data?.result).toEqual({ content: [{ type: "text", text: "secret" }] });
+    expect(payload.data?.partialResult).toEqual({ content: [{ type: "text", text: "partial" }] });
     resetAgentRunContextForTest();
   });
 
-  it("keeps tool output when verbose is full", () => {
+  it("keeps tool output when verbose full is used as an alias", () => {
     const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });

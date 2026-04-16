@@ -142,7 +142,7 @@ describe("directive behavior", () => {
         defaults: { verboseDefault: "on" },
       });
       expect(verboseText).toContain("Current verbose level: on");
-      expect(verboseText).toContain("Options: on, full, off.");
+      expect(verboseText).toContain("Options: on, off.");
 
       const reasoningText = await runCommand(home, "/reasoning");
       expect(reasoningText).toContain("Current reasoning level: off");

@@ -18,6 +18,7 @@ import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveFutureThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
   maybeHandleModelDirectiveInfo,
@@ -170,13 +171,13 @@ export async function handleDirectiveOnly(
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
     if (!directives.rawVerboseLevel) {
-      const level = currentVerboseLevel ?? "off";
+      const level = normalizeVerboseLevel(currentVerboseLevel) ?? "off";
       return {
-        text: withOptions(`Current verbose level: ${level}.`, "on, full, off"),
+        text: withOptions(`Current verbose level: ${level}.`, "on, off"),
       };
     }
     return {
-      text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full.`,
+      text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on.`,
     };
   }
   if (directives.hasFastDirective && directives.fastMode === undefined) {
@@ -474,9 +475,7 @@ export async function handleDirectiveOnly(
     parts.push(
       directives.verboseLevel === "off"
         ? formatDirectiveAck("Verbose logging disabled.")
-        : directives.verboseLevel === "full"
-          ? formatDirectiveAck("Verbose logging set to full.")
-          : formatDirectiveAck("Verbose logging enabled."),
+        : formatDirectiveAck("Verbose logging enabled."),
     );
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {

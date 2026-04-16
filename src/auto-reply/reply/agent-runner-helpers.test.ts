@@ -47,7 +47,7 @@ describe("agent runner helpers", () => {
   it("uses fallback verbose level when session context is missing", () => {
     expect(createShouldEmitToolResult({ resolvedVerboseLevel: "off" })()).toBe(false);
     expect(createShouldEmitToolResult({ resolvedVerboseLevel: "on" })()).toBe(true);
-    expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "on" })()).toBe(false);
+    expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "on" })()).toBe(true);
     expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "full" })()).toBe(true);
   });
 

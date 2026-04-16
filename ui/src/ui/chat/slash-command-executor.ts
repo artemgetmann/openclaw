@@ -226,7 +226,7 @@ async function executeVerbose(
       return {
         content: formatDirectiveOptions(
           `Current verbose level: ${normalizeVerboseLevel(session?.verboseLevel) ?? "off"}.`,
-          "on, full, off",
+          "on, off",
         ),
       };
     } catch (err) {
@@ -237,7 +237,7 @@ async function executeVerbose(
   const level = normalizeVerboseLevel(rawLevel);
   if (!level) {
     return {
-      content: `Unrecognized verbose level "${rawLevel}". Valid levels: off, on, full.`,
+      content: `Unrecognized verbose level "${rawLevel}". Valid levels: off, on.`,
     };
   }
 

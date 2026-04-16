@@ -7,6 +7,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { normalizeVerboseLevel } from "../../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
@@ -1012,7 +1013,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         catalog,
       });
     }
-    const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    const verboseLevel =
+      normalizeVerboseLevel(entry?.verboseLevel) ??
+      normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault);
     respond(true, {
       sessionKey,
       sessionId,

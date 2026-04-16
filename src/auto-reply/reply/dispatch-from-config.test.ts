@@ -661,6 +661,46 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("compacts oversized Telegram tool summaries in DM sessions", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      CommandSource: "text",
+    });
+    const longBody = Array.from(
+      { length: 20 },
+      (_, index) => `line ${index + 1}: ${"x".repeat(80)}`,
+    ).join("\n");
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      expect(opts?.onToolResult).toBeDefined();
+      await opts?.onToolResult?.({ text: "🔧 read: ~/workspace/SOUL.md" });
+      await opts?.onToolResult?.({ text: longBody });
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "🔧 read: ~/workspace/SOUL.md" }),
+    );
+    const compacted = dispatcher.sendToolResult.mock.calls[1]?.[0] as ReplyPayload | undefined;
+    expect(compacted?.text).toContain("line 1:");
+    expect(compacted?.text).toContain("… truncated (20 lines,");
+    expect(compacted?.text).not.toContain("line 20:");
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
   it("suppresses group tool summaries but still forwards tool media", async () => {
     setNoAbort();
     const cfg = emptyConfig;
@@ -766,6 +806,9 @@ describe("dispatchReplyFromConfig", () => {
 
   it("suppresses native tool summaries but still forwards tool media", async () => {
     setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -796,7 +839,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("sends native Telegram tool summaries when verbose is on", async () => {
+  it("sends native Telegram tool traces when verbose is on", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -840,6 +883,51 @@ describe("dispatchReplyFromConfig", () => {
         mediaUrl: "https://example.com/tts-native.opus",
       }),
     );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("compacts oversized native Telegram tool traces when verbose is on", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      CommandSource: "native",
+      SessionKey: "telegram:slash:456",
+      CommandTargetSessionKey: "agent:main:telegram:direct:456",
+    });
+    const longBody = Array.from(
+      { length: 20 },
+      (_, index) => `line ${index + 1}: ${"x".repeat(80)}`,
+    ).join("\n");
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      expect(opts?.onToolResult).toBeDefined();
+      await opts?.onToolResult?.({ text: "🔧 read: ~/workspace/SOUL.md" });
+      await opts?.onToolResult?.({ text: longBody });
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "🔧 read: ~/workspace/SOUL.md" }),
+    );
+    const compacted = dispatcher.sendToolResult.mock.calls[1]?.[0] as ReplyPayload | undefined;
+    expect(compacted?.text).toContain("line 1:");
+    expect(compacted?.text).toContain("… truncated (20 lines,");
+    expect(compacted?.text).not.toContain("line 20:");
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 

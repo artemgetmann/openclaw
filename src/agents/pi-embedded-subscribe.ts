@@ -315,11 +315,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const shouldEmitToolResult = () =>
     typeof params.shouldEmitToolResult === "function"
       ? params.shouldEmitToolResult()
-      : params.verboseLevel === "on" || params.verboseLevel === "full";
+      : params.verboseLevel !== "off";
   const shouldEmitToolOutput = () =>
     typeof params.shouldEmitToolOutput === "function"
       ? params.shouldEmitToolOutput()
-      : params.verboseLevel === "full";
+      : params.verboseLevel !== "off";
   const formatToolOutputBlock = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) {
