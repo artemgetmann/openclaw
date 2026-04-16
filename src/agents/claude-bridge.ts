@@ -6,7 +6,9 @@ import type { CliBackendConfig } from "../config/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   collectClaudeBridgeText,
+  isClaudeBridgeAssistantMessageStart,
   parseClaudeBridgeLine,
+  readClaudeBridgeTextDelta,
   readClaudeBridgeUsage,
   type ClaudeBridgeUsage,
 } from "./claude-bridge.stream.js";
@@ -60,6 +62,7 @@ function buildBridgeArgs(params: {
     "stream-json",
     "--output-format",
     "stream-json",
+    "--include-partial-messages",
     "--permission-mode",
     "bypassPermissions",
     "--model",
@@ -139,6 +142,47 @@ function handleBridgeLine(handle: ClaudeBridgeSessionHandle, rawLine: string): v
   }
 
   const turn = handle.activeTurn;
+
+  // Claude's partial-message mode emits low-level stream events before the
+  // final assistant snapshot. Consume those deltas directly so Telegram can
+  // stream live text instead of waiting for the terminal assistant/result pair.
+  if (isClaudeBridgeAssistantMessageStart(event) && !turn.assistantStarted) {
+    turn.assistantStarted = true;
+    queueTurnCallback(handle, async () => {
+      await turn.onAssistantMessageStart?.();
+    });
+    return;
+  }
+
+  const textDelta = readClaudeBridgeTextDelta(event);
+  if (textDelta) {
+    const nextText = `${turn.lastAssistantText}${textDelta}`;
+    turn.lastAssistantText = nextText;
+
+    if (!turn.assistantStarted) {
+      turn.assistantStarted = true;
+      queueTurnCallback(handle, async () => {
+        await turn.onAssistantMessageStart?.();
+      });
+    }
+
+    if (turn.onPartialReply && nextText !== turn.lastDeliveredPartialText) {
+      turn.lastDeliveredPartialText = nextText;
+      queueTurnCallback(handle, async () => {
+        await turn.onPartialReply?.({ text: nextText });
+      });
+    }
+
+    if (turn.onBlockReply) {
+      const blockPayload = turn.blockAccumulator.consume(textDelta);
+      if (blockPayload) {
+        queueTurnCallback(handle, async () => {
+          await turn.onBlockReply?.(blockPayload);
+        });
+      }
+    }
+    return;
+  }
 
   if (event.type === "assistant") {
     const text = collectClaudeBridgeText(
