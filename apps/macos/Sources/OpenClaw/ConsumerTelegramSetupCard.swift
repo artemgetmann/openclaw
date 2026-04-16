@@ -26,6 +26,9 @@ struct ConsumerTelegramSetupCardContent: View {
         if let conflict = self.store.consumerTelegramConflictMessage(self.store.telegramSetupStatus) {
             return conflict
         }
+        if let accessGate = self.store.consumerTelegramAccessGateMessage(self.store.telegramSetupStatus) {
+            return accessGate
+        }
         return self.store.telegramSetupStatus
     }
 

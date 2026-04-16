@@ -379,4 +379,83 @@ describe("consumer auth", () => {
       expect(cfg.auth?.order?.anthropic).toEqual(["anthropic:claude-cli"]);
     });
   });
+
+  it("retries the ChatGPT OAuth auth flow once before failing the consumer setup", async () => {
+    await withConsumerAuthFixture(async () => {
+      const runtime = createRuntime();
+      const run = vi
+        .fn<ProviderAuthContext["run"]>()
+        .mockResolvedValueOnce({
+          profiles: [],
+          notes: ["Local callback did not complete on 127.0.0.1:1455."],
+        })
+        .mockResolvedValueOnce({
+          profiles: [
+            {
+              profileId: "openai-codex:user@example.com",
+              credential: {
+                type: "oauth",
+                provider: "openai-codex",
+                access: "codex-access",
+                refresh: "codex-refresh",
+                expires: Date.now() + 60_000,
+                email: "user@example.com",
+              },
+            },
+          ],
+          defaultModel: "openai-codex/gpt-5.4",
+          notes: ["Opened the ChatGPT sign-in flow."],
+        });
+      const providers = [
+        buildProvider({
+          id: "openai-codex",
+          label: "OpenAI Codex",
+          methodId: "oauth",
+          methodKind: "oauth",
+          run: async (ctx) => await run(ctx),
+        }),
+      ];
+
+      const result = await applyConsumerAuth({
+        optionId: "openai-codex-oauth",
+        providers,
+        runtime,
+        resolveReadiness: async () => readyReadiness("openai-codex/gpt-5.4"),
+      });
+
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(result.profileIds).toEqual(["openai-codex:user@example.com"]);
+      expect(result.notes).toContain("Opened the ChatGPT sign-in flow.");
+    });
+  });
+
+  it("surfaces the real ChatGPT OAuth failure note instead of the generic empty-credential error", async () => {
+    await withConsumerAuthFixture(async () => {
+      const runtime = createRuntime();
+      const run = vi.fn().mockResolvedValue({
+        profiles: [],
+        notes: ["Local callback did not complete on 127.0.0.1:1455."],
+      });
+      const providers = [
+        buildProvider({
+          id: "openai-codex",
+          label: "OpenAI Codex",
+          methodId: "oauth",
+          methodKind: "oauth",
+          run: async (ctx) => await run(ctx),
+        }),
+      ];
+
+      await expect(
+        applyConsumerAuth({
+          optionId: "openai-codex-oauth",
+          providers,
+          runtime,
+          resolveReadiness: async () => readyReadiness("openai-codex/gpt-5.4"),
+        }),
+      ).rejects.toThrow("Local callback did not complete on 127.0.0.1:1455.");
+
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+  });
 });

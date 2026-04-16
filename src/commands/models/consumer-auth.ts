@@ -307,6 +307,24 @@ function buildConsumerRuntime(notes: string[]): RuntimeEnv {
   };
 }
 
+function trimConsumerAuthNotes(notes: string[]): string[] {
+  return notes.map((note) => note.trim()).filter(Boolean);
+}
+
+function consumerAuthFailureMessage(params: {
+  choice: ConsumerAuthChoiceDefinition;
+  notes: string[];
+}): string {
+  const lastNote = [...params.notes].toReversed().find((note) => note.trim().length > 0);
+  if (lastNote) {
+    return lastNote;
+  }
+  if (params.choice.providerId === "openai-codex" && params.choice.kind === "oauth") {
+    return "ChatGPT sign-in did not finish cleanly on this Mac. The localhost callback may still be settling. Try again.";
+  }
+  return "Login did not return a usable credential.";
+}
+
 function buildConsumerPrompter(params: {
   choice: ConsumerAuthChoiceDefinition;
   notes: string[];
@@ -684,29 +702,48 @@ export async function applyConsumerAuth(
       notes,
       secret: params.secret,
     });
-    const result = await resolved.method.run({
-      config: cfg,
-      agentDir,
-      workspaceDir,
-      prompter,
-      runtime,
-      opts:
-        choice.kind === "api_key"
-          ? { token: params.secret, tokenProvider: choice.providerId }
-          : undefined,
-      secretInputMode: "plaintext",
-      allowSecretRefPrompt: false,
-      isRemote: false,
-      openUrl: async (url) => {
-        await (params.openUrl ?? openUrl)(url);
-      },
-      oauth: {
-        createVpsAwareHandlers: createVpsAwareOAuthHandlers,
-      },
-    });
-    notesFromProvider = (result.notes ?? []).map((note) => note.trim()).filter(Boolean);
+    const runProviderAuth = async () =>
+      await resolved.method.run({
+        config: cfg,
+        agentDir,
+        workspaceDir,
+        prompter,
+        runtime,
+        opts:
+          choice.kind === "api_key"
+            ? { token: params.secret, tokenProvider: choice.providerId }
+            : undefined,
+        secretInputMode: "plaintext",
+        allowSecretRefPrompt: false,
+        isRemote: false,
+        openUrl: async (url) => {
+          await (params.openUrl ?? openUrl)(url);
+        },
+        oauth: {
+          createVpsAwareOAuthHandlers: createVpsAwareOAuthHandlers,
+        },
+      });
+    let result = await runProviderAuth();
+    notesFromProvider = trimConsumerAuthNotes(result.notes ?? []);
+    if (
+      result.profiles.length === 0 &&
+      choice.providerId === "openai-codex" &&
+      choice.kind === "oauth"
+    ) {
+      // First-run consumer OAuth can lose the localhost callback handoff once
+      // while the bundled app and browser finish spinning up. Retry the exact
+      // same provider-owned flow once before we make the user do it manually.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      result = await runProviderAuth();
+      notesFromProvider = trimConsumerAuthNotes(result.notes ?? []);
+    }
     if (result.profiles.length === 0) {
-      throw new Error("Login did not return a usable credential.");
+      throw new Error(
+        consumerAuthFailureMessage({
+          choice,
+          notes: [...notes, ...notesFromProvider],
+        }),
+      );
     }
 
     for (const profile of result.profiles) {

@@ -318,7 +318,10 @@ struct ConsumerSetupReadinessTests {
             })
 
         await model.refreshIfNeeded()
-        #expect(model.phase == .failed("consumer control endpoint timed out"))
+        #expect(
+            model.phase
+                == .failed(
+                    "OpenClaw could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."))
 
         await model.refreshIfNeeded()
 
@@ -380,6 +383,50 @@ struct ConsumerSetupReadinessTests {
         #expect(model.draftSecret.isEmpty)
         #expect(model.modelOptions.map(\.id) == ["openai/gpt-5.4", "openai-codex/gpt-5.3-codex"])
         #expect(model.selectedModelId == "openai/gpt-5.4")
+    }
+
+    @Test func `consumer model keeps reconnecting after auth apply when gateway stays unreachable`() async {
+        let probeCalls = SendableCounter()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                if probeCalls.value == 1 {
+                    return blockedReadinessPayload()
+                }
+                throw NSError(
+                    domain: "gateway",
+                    code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "gateway connect: connect to gateway @ ws://127.0.0.1:21068: Could not connect to the server.",
+                    ])
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [subscriptionOptionPayload()], activeOptionId: nil)
+            },
+            applyAuth: { optionId, _ in
+                #expect(optionId == "openai-codex-oauth")
+                return ConsumerModelsAuthApplyPayload(
+                    optionId: optionId,
+                    providerId: "openai-codex",
+                    methodId: "oauth",
+                    defaultModel: "openai-codex/gpt-5.4",
+                    notes: ["Opened the ChatGPT sign-in flow."],
+                    profileIds: ["openai-codex:default"],
+                    readiness: readyReadinessPayload())
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            postAuthReconnectProbeDelaysMs: [0, 0, 0, 0])
+
+        await model.refresh()
+        await model.submitSelectedAuth()
+
+        #expect(probeCalls.value == 5)
+        #expect(model.phase == .checking)
+        #expect(model.statusLine == "Reconnecting AI operator after sign-in…")
+        #expect(model.failureKind == nil)
+        #expect(!model.isComplete)
     }
 
     @Test func `consumer model apply auth re-probes after restart churn and routes reused token to reauth`() async {

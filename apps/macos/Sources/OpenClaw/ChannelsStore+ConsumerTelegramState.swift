@@ -129,6 +129,24 @@ extension ChannelsStore {
         return nil
     }
 
+    func consumerTelegramAccessGateMessage(_ raw: String?) -> String? {
+        guard AppFlavor.current.isConsumer else { return nil }
+        guard self.telegramSetupFirstSenderId != nil else { return nil }
+        guard !self.telegramSetupWaitingForDM else { return nil }
+
+        let normalized = raw?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        guard normalized.hasPrefix("telegram setup is saved, but openclaw could not finish the first telegram task")
+            || normalized.hasPrefix("telegram setup is saved, but openclaw could not confirm that the first telegram task finished")
+        else {
+            return nil
+        }
+        guard self.consumerTelegramLooksLive() else { return nil }
+
+        return "Telegram is connected, but the first real DM is still blocked behind pairing/access approval. Wait for access to be ready, then send one normal DM and click Verify first task again."
+    }
+
     func consumerTelegramBotUsername() -> String? {
         if let username = self.snapshot?
             .decodeChannel("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)?
