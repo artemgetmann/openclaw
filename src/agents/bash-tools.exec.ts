@@ -107,14 +107,17 @@ function splitShellCommandSegments(command: string): string[] {
 function isGatewaySupervisorMutationSegment(segment: string): boolean {
   // These patterns intentionally target mutation commands only.
   // Read-only inspection like `cat scripts/restart-local-gateway.sh` must remain allowed.
+  // Accept both repo-relative and absolute entrypoints because workspace policy
+  // files can pin the restart script with a full path, which previously slipped
+  // past the chat self-restart guard and let Telegram cut its own runtime off.
   if (
-    /(?:^|\s)(?:\/bin\/bash|\/bin\/sh|bash|sh|zsh)\s+(?:\S+\/)?scripts\/restart-local-gateway\.sh(?:\s|$)/u.test(
+    /(?:^|\s)(?:\/bin\/bash|\/bin\/sh|bash|sh|zsh)\s+(?:\S+\/)?(?:scripts\/)?restart-local-gateway\.sh(?:\s|$)/u.test(
       segment,
     )
   ) {
     return true;
   }
-  if (/^(?:\.\/)?scripts\/restart-local-gateway\.sh(?:\s|$)/u.test(segment)) {
+  if (/^(?:\S+\/)?(?:scripts\/)?restart-local-gateway\.sh(?:\s|$)/u.test(segment)) {
     return true;
   }
   if (

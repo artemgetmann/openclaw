@@ -36,6 +36,12 @@ const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
+const NATURAL_LANGUAGE_RESTART_APPROVAL_PATTERNS = [
+  /\bi\s+(?:fully\s+|hereby\s+)?approve\b[\s\S]{0,80}\brestart\b/iu,
+  /\b(?:ok|okay)\b[\s\S]{0,20}\bi\s+approve\b[\s\S]{0,80}\brestart\b/iu,
+  /\byou have my permission\b[\s\S]{0,80}\brestart\b/iu,
+  /\b(?:go ahead|do it)\b[\s\S]{0,40}\brestart\b/iu,
+] as const;
 let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | undefined;
 
 function getChannelRuntime() {
@@ -682,12 +688,17 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   if (!allowTextCommands) {
     return null;
   }
-  if (params.command.commandBodyNormalized !== "/restart") {
+  const normalizedBody = params.command.commandBodyNormalized;
+  const isSlashRestart = normalizedBody === "/restart";
+  const isNaturalLanguageApproval =
+    !normalizedBody.startsWith("/") &&
+    NATURAL_LANGUAGE_RESTART_APPROVAL_PATTERNS.some((pattern) => pattern.test(normalizedBody));
+  if (!isSlashRestart && !isNaturalLanguageApproval) {
     return null;
   }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
-      `Ignoring /restart from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+      `Ignoring restart request from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
   }
@@ -699,6 +710,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  const restartReason = isSlashRestart ? "/restart" : "natural-language restart approval";
   const commandSurface = resolveCommandSurfaceChannel(params);
   const preferLocalScriptRestart =
     process.platform === "darwin" && commandSurface.length > 0 && isLocalRestartScriptAvailable();
@@ -730,7 +742,9 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   if (hasSigusr1Listener) {
-    scheduleGatewaySigusr1Restart({ reason: "/restart" });
+    // Keep the restart reason explicit so crash/restart breadcrumbs show whether
+    // the user used `/restart` or an approval phrase in the same chat.
+    scheduleGatewaySigusr1Restart({ reason: restartReason });
     return {
       shouldContinue: false,
       reply: {

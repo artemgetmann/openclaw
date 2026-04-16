@@ -125,4 +125,46 @@ describe("handleRestartCommand", () => {
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(result?.reply?.text).toContain("SIGUSR1");
   });
+
+  it("treats explicit natural-language restart approval as a safe restart trigger", async () => {
+    setPlatform("darwin");
+    isLocalRestartScriptAvailableMock.mockReturnValue(true);
+
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: true,
+      method: "launchctl",
+      detail: "scheduled local restart script: /tmp/openclaw-restart-local-gateway.sh",
+    });
+
+    const result = await handleRestartCommand(
+      buildParams("Okay I approve. Restart now.", {
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+      }),
+      true,
+    );
+
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledWith({ preferLocalScript: true });
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(result?.reply?.text).toContain("local restart script");
+  });
+
+  it("ignores conversational restart mentions that are not explicit approvals", async () => {
+    setPlatform("darwin");
+    isLocalRestartScriptAvailableMock.mockReturnValue(true);
+
+    const result = await handleRestartCommand(
+      buildParams("Can you explain how restart works here?", {
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+      }),
+      true,
+    );
+
+    expect(result).toBeNull();
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+  });
 });
