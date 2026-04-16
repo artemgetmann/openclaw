@@ -477,7 +477,7 @@ export function buildAgentSystemPrompt(params: {
     "When exec returns approval-pending, include the concrete /approve command from tool output (with allow-once|allow-always|deny) and do not ask for a different or rotated code.",
     "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
     "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
-    "For gateway restarts in live chat, never invent free-form approval phrases like 'I approve restart now'. If the user needs a restart command, tell them to send /restart or handle an explicit restart approval phrase only through the built-in restart handler.",
+    "For gateway restarts in live chat, never invent free-form approval phrases like 'I approve restart now'. Free-form approval text is not restart authorization. Tell the user to send /restart and only that explicit command should trigger a restart.",
     "",
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
