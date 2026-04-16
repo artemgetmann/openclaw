@@ -35,6 +35,21 @@ function normalizeStringList(values) {
   return normalizeTokenList(values);
 }
 
+function isCodexPinnedModel(model) {
+  return String(model ?? "")
+    .trim()
+    .toLowerCase()
+    .startsWith("openai-codex/");
+}
+
+function codexTwinModelKey(model) {
+  const trimmed = String(model ?? "").trim();
+  if (!isCodexPinnedModel(trimmed)) {
+    return null;
+  }
+  return `openai/${trimmed.slice("openai-codex/".length)}`;
+}
+
 function normalizeClaimEntries(values) {
   const seen = new Set();
   const out = [];
@@ -95,6 +110,21 @@ function normalizeLeaseEntries(values) {
 
 function hashTelegramToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+export function buildTelegramLiveRuntimeChildEnv(params) {
+  const preferredModel = String(params?.preferredModel ?? "").trim();
+  const parentEnv =
+    params?.parentEnv && typeof params.parentEnv === "object" ? params.parentEnv : process.env;
+  const env = { ...parentEnv };
+
+  // A Codex-pinned tester lane must not inherit the host OpenAI API key, or
+  // Telegram sessions can silently drift back onto the plain openai route.
+  if (isCodexPinnedModel(preferredModel)) {
+    delete env.OPENAI_API_KEY;
+  }
+
+  return env;
 }
 
 function resolveTelegramTokenLeaseRoot(customRoot) {
@@ -529,35 +559,36 @@ export function buildTelegramLiveRuntimeConfig(params) {
   }
 
   if (preferredModel) {
+    const preferredModelTwin = codexTwinModelKey(preferredModel);
+    const currentFallbacks = Array.isArray(defaultModel.fallbacks) ? defaultModel.fallbacks : [];
+    const nextFallbacks = preferredModelTwin
+      ? normalizeStringList(
+          currentFallbacks.filter(
+            (fallback) => String(fallback ?? "").trim() !== preferredModelTwin,
+          ),
+        )
+      : currentFallbacks;
+    const currentModelAllowlist =
+      agentDefaults.models && typeof agentDefaults.models === "object" ? agentDefaults.models : {};
+    const nextModelAllowlist = preferredModelTwin
+      ? Object.fromEntries(
+          Object.entries(currentModelAllowlist).filter(
+            ([key]) => key.trim() !== preferredModelTwin,
+          ),
+        )
+      : currentModelAllowlist;
+
     // Tester lanes need an explicit model pin so live validation proves the
     // provider we intended to test instead of inheriting whatever the base
     // config happened to prefer that day.
     agentDefaults.model = {
       ...defaultModel,
       primary: preferredModel,
-      fallbacks: Array.isArray(defaultModel.fallbacks) ? defaultModel.fallbacks : [],
+      fallbacks: nextFallbacks,
     };
-    config.agents = {
-      ...agents,
-      defaults: agentDefaults,
-    };
-  }
-
-  // Isolated Telegram tester lanes should not depend on the shared Codex OAuth
-  // session. If an OpenAI API key already exists, prefer the equivalent GPT-5.4
-  // API-key path so smoke tests stay isolated from refresh-token churn.
-  if (
-    !preferredModel &&
-    config.env &&
-    typeof config.env === "object" &&
-    typeof config.env.OPENAI_API_KEY === "string" &&
-    config.env.OPENAI_API_KEY.trim().length > 0
-  ) {
-    agentDefaults.model = {
-      ...defaultModel,
-      primary: "openai/gpt-5.4",
-      fallbacks: Array.isArray(defaultModel.fallbacks) ? defaultModel.fallbacks : [],
-    };
+    if (preferredModelTwin) {
+      agentDefaults.models = nextModelAllowlist;
+    }
     config.agents = {
       ...agents,
       defaults: agentDefaults,
