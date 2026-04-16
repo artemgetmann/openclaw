@@ -228,6 +228,31 @@ describe("resolveUsableCustomProviderApiKey", () => {
   });
 });
 
+describe("resolveApiKeyForProvider – built-in provider env resolution", () => {
+  it("prefers OPENAI_MODEL_API_KEY for the openai provider", async () => {
+    const previousModel = process.env.OPENAI_MODEL_API_KEY;
+    const previousGeneric = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_MODEL_API_KEY = "sk-model-key"; // pragma: allowlist secret
+    process.env.OPENAI_API_KEY = "sk-generic-key"; // pragma: allowlist secret
+    try {
+      const auth = await resolveApiKeyForProvider({ provider: "openai", cfg: {} });
+      expect(auth.apiKey).toBe("sk-model-key");
+      expect(auth.source).toContain("OPENAI_MODEL_API_KEY");
+    } finally {
+      if (previousModel === undefined) {
+        delete process.env.OPENAI_MODEL_API_KEY;
+      } else {
+        process.env.OPENAI_MODEL_API_KEY = previousModel;
+      }
+      if (previousGeneric === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousGeneric;
+      }
+    }
+  });
+});
+
 describe("resolveApiKeyForProvider – synthetic local auth for custom providers", () => {
   it("synthesizes a local auth marker for custom providers with a local baseUrl and no apiKey", async () => {
     const auth = await resolveApiKeyForProvider({

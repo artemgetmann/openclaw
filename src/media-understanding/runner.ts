@@ -24,6 +24,7 @@ import {
   resolveIMessageAttachmentRoots,
 } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
+import { resolveOpenAiNonModelEnvApiKey } from "../openai/auth-split.js";
 import { runExec } from "../process/exec.js";
 import {
   MediaAttachmentCache,
@@ -363,7 +364,15 @@ async function resolveKeyEntry(params: {
       return null;
     }
     try {
-      await resolveApiKeyForProvider({ provider: providerId, cfg, agentDir });
+      if (capability === "audio" && providerId === "openai") {
+        const hasExplicitProviderApiKey = Boolean(cfg.models?.providers?.openai?.apiKey);
+        const hasNonModelEnvKey = Boolean(resolveOpenAiNonModelEnvApiKey().apiKey);
+        if (!hasExplicitProviderApiKey && !hasNonModelEnvKey) {
+          return null;
+        }
+      } else {
+        await resolveApiKeyForProvider({ provider: providerId, cfg, agentDir });
+      }
       return { type: "provider" as const, provider: providerId, model };
     } catch {
       return null;
