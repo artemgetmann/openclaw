@@ -15,6 +15,7 @@ import type {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveOpenAiNonModelEnvApiKey } from "../openai/auth-split.js";
 import { runExec } from "../process/exec.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
@@ -341,6 +342,43 @@ async function resolveProviderExecutionAuth(params: {
   entry: MediaUnderstandingModelConfig;
   agentDir?: string;
 }) {
+  const providerConfig = params.cfg.models?.providers?.[params.providerId];
+  if (params.providerId === "openai") {
+    const hasExplicitProviderConfig = Boolean(
+      providerConfig && typeof providerConfig === "object" && "apiKey" in providerConfig,
+    );
+    if (hasExplicitProviderConfig) {
+      const auth = await resolveApiKeyForProvider({
+        provider: params.providerId,
+        cfg: params.cfg,
+        profileId: params.entry.profile,
+        preferredProfile: params.entry.preferredProfile,
+        agentDir: params.agentDir,
+      });
+      return {
+        apiKeys: collectProviderApiKeysForExecution({
+          provider: params.providerId,
+          primaryApiKey: requireApiKey(auth, params.providerId),
+        }),
+        providerConfig,
+      };
+    }
+
+    const envApiKey = resolveOpenAiNonModelEnvApiKey().apiKey;
+    if (!envApiKey) {
+      throw new Error(
+        "OpenAI audio transcription requires a non-model API key (set models.providers.openai.apiKey or OPENAI_NON_MODEL_API_KEY).",
+      );
+    }
+    return {
+      apiKeys: collectProviderApiKeysForExecution({
+        provider: params.providerId,
+        primaryApiKey: envApiKey,
+      }),
+      providerConfig,
+    };
+  }
+
   const auth = await resolveApiKeyForProvider({
     provider: params.providerId,
     cfg: params.cfg,
@@ -353,7 +391,7 @@ async function resolveProviderExecutionAuth(params: {
       provider: params.providerId,
       primaryApiKey: requireApiKey(auth, params.providerId),
     }),
-    providerConfig: params.cfg.models?.providers?.[params.providerId],
+    providerConfig,
   };
 }
 

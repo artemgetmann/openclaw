@@ -2,7 +2,7 @@
   "id": "openai",
   "providers": ["openai", "openai-codex"],
   "providerAuthEnvVars": {
-    "openai": ["OPENAI_API_KEY"]
+    "openai": ["OPENAI_MODEL_API_KEY", "OPENAI_API_KEY"]
   },
   "providerAuthChoices": [
     {

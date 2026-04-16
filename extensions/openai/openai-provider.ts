@@ -93,7 +93,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
     id: PROVIDER_ID,
     label: "OpenAI",
     docsPath: "/providers/models",
-    envVars: ["OPENAI_API_KEY"],
+    envVars: ["OPENAI_MODEL_API_KEY", "OPENAI_API_KEY"],
     auth: [
       createProviderApiKeyAuthMethod({
         providerId: PROVIDER_ID,
@@ -102,8 +102,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
         hint: "Direct OpenAI API key",
         optionKey: "openaiApiKey",
         flagName: "--openai-api-key",
-        envVar: "OPENAI_API_KEY",
-        promptMessage: "Enter OpenAI API key",
+        envVar: "OPENAI_MODEL_API_KEY",
+        promptMessage: "Enter OpenAI model API key",
         defaultModel: OPENAI_DEFAULT_MODEL,
         expectedProviders: ["openai"],
         applyConfig: (cfg) => applyOpenAIConfig(cfg),
@@ -132,7 +132,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
       if (ctx.provider !== PROVIDER_ID || ctx.listProfileIds("openai-codex").length === 0) {
         return undefined;
       }
-      return 'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.';
+      return 'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_MODEL_API_KEY (or OPENAI_API_KEY) to use openai/gpt-5.4.';
     },
     suppressBuiltInModel: (ctx) => {
       if (
