@@ -3,7 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_MODULE="${SCRIPT_DIR}/lib/telegram-live-runtime-helpers.mjs"
-BASE_CONFIG_PATH="${OPENCLAW_TELEGRAM_BASE_CONFIG_PATH:-${OPENCLAW_CONFIG_PATH:-${HOME}/.openclaw/openclaw.json}}"
+# Reserved-token detection must look at the canonical shared runtime config,
+# not the sanitized per-worktree baseline. Otherwise isolated tester lanes can
+# stop seeing production/shared bot reservations and accidentally claim them.
+RESERVED_CONFIG_PATH="${OPENCLAW_TELEGRAM_RESERVED_CONFIG_PATH:-${HOME}/.openclaw/openclaw.json}"
 
 # Trim leading/trailing whitespace for robust .env parsing.
 trim() {
@@ -105,7 +108,7 @@ fi
 
 selection="$(
   HELPER_MODULE="$HELPER_MODULE" \
-  BASE_CONFIG_PATH="$BASE_CONFIG_PATH" \
+  BASE_CONFIG_PATH="$RESERVED_CONFIG_PATH" \
   CURRENT_WORKTREE="$(pwd -P)" \
   node --input-type=module - <<'NODE'
 import fs from "node:fs";

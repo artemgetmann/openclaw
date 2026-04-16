@@ -13,7 +13,7 @@ if [[ -d "$WORKTREE" ]]; then
   WORKTREE="$(cd "$WORKTREE" && pwd -P)"
 fi
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-BASE_CONFIG_PATH="${OPENCLAW_TELEGRAM_BASE_CONFIG_PATH:-${OPENCLAW_CONFIG_PATH:-${HOME}/.openclaw/openclaw.json}}"
+BASE_CONFIG_PATH=""
 
 PROFILE_ID=""
 RUNTIME_PORT=""
@@ -124,6 +124,45 @@ add_failure() {
   local reason="$1"
   FAIL=1
   FAIL_REASONS+=("$reason")
+}
+
+resolve_base_config_path() {
+  local explicit_path="${OPENCLAW_TELEGRAM_BASE_CONFIG_PATH:-${OPENCLAW_CONFIG_PATH:-}}"
+
+  if [[ -n "$explicit_path" ]]; then
+    BASE_CONFIG_PATH="$explicit_path"
+    return
+  fi
+
+  if [[ ! -f "$BASELINE_HELPER_MODULE" ]]; then
+    BASE_CONFIG_PATH="${HOME}/.openclaw/openclaw.json"
+    return
+  fi
+
+  # Default to the sanitized per-worktree tester baseline so fresh Telegram
+  # lanes inherit the same cleaned config that bootstrap prepared for them.
+  local baseline_path=""
+  baseline_path="$(
+    WORKTREE_PATH="$WORKTREE" node --input-type=module - "$BASELINE_HELPER_MODULE" <<'NODE'
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const [helperPath] = process.argv.slice(2);
+const worktreePath = process.env.WORKTREE_PATH;
+const { deriveWorktreeTesterBaseline } = await import(pathToFileURL(helperPath).href);
+
+const baseline = deriveWorktreeTesterBaseline({ worktreePath });
+if (fs.existsSync(baseline.configPath)) {
+  process.stdout.write(baseline.configPath);
+}
+NODE
+  )" || true
+
+  if [[ -n "$baseline_path" ]]; then
+    BASE_CONFIG_PATH="$baseline_path"
+  else
+    BASE_CONFIG_PATH="${HOME}/.openclaw/openclaw.json"
+  fi
 }
 
 parse_assign_bot_output() {
@@ -317,6 +356,40 @@ NODE
 
   if [[ -z "$PROFILE_ID" || -z "$RUNTIME_PORT" || -z "$RUNTIME_STATE_DIR" ]]; then
     add_failure "profile_resolution_failed"
+  fi
+}
+
+remove_runtime_state_dir() {
+  if [[ -z "$RUNTIME_STATE_DIR" ]]; then
+    add_failure "runtime_state_dir_missing"
+    return
+  fi
+
+  # Only delete the exact derived profile dir for this worktree. That keeps the
+  # cleanup narrow even when callers override the shared state root.
+  local resolved_state_dir=""
+  resolved_state_dir="$(
+    WORKTREE_PATH="$WORKTREE" STATE_ROOT="${OPENCLAW_TELEGRAM_LIVE_STATE_ROOT:-}" node --input-type=module - "$HELPER_MODULE" <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const [helperPath] = process.argv.slice(2);
+const helpers = await import(pathToFileURL(helperPath).href);
+const profile = helpers.deriveTelegramLiveRuntimeProfile({
+  worktreePath: process.env.WORKTREE_PATH,
+  stateRoot: process.env.STATE_ROOT || undefined,
+});
+
+process.stdout.write(profile.runtimeStateDir);
+NODE
+  )" || true
+
+  if [[ -z "$resolved_state_dir" || "$resolved_state_dir" != "$RUNTIME_STATE_DIR" ]]; then
+    add_failure "runtime_state_dir_mismatch"
+    return
+  fi
+
+  if [[ -d "$RUNTIME_STATE_DIR" ]]; then
+    rm -rf "$RUNTIME_STATE_DIR"
   fi
 }
 
@@ -610,11 +683,15 @@ sync_runtime_auth_profiles() {
     add_failure "runtime_state_dir_missing"
     return
   fi
+  if [[ -z "$RUNTIME_CONFIG_PATH" ]]; then
+    add_failure "runtime_config_path_missing"
+    return
+  fi
 
   # Seed the isolated Telegram runtime from the lane's tester baseline snapshot.
   # That gives fresh worktrees real provider auth without pointing them back at
   # the shared main auth store during runtime.
-  if ! BASE_CONFIG_PATH="$BASE_CONFIG_PATH" \
+  if ! RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
     RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
     BASELINE_HELPER_MODULE="$BASELINE_HELPER_MODULE" \
     WORKTREE_PATH="$WORKTREE" \
@@ -624,12 +701,12 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const basePath = process.env.BASE_CONFIG_PATH;
+const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
 const runtimeStateDir = process.env.RUNTIME_STATE_DIR;
 const helperPath = process.env.BASELINE_HELPER_MODULE;
 const worktreePath = process.env.WORKTREE_PATH;
 
-if (!runtimeStateDir || !helperPath || !worktreePath) {
+if (!runtimeConfigPath || !runtimeStateDir || !helperPath || !worktreePath) {
   throw new Error("Missing runtime state dir or baseline helper inputs.");
 }
 
@@ -641,14 +718,14 @@ const { pruneTesterRuntimeAuthStore } = await import(
 );
 
 let config = {};
-if (basePath && fs.existsSync(basePath)) {
+if (fs.existsSync(runtimeConfigPath)) {
   try {
-    const parsed = JSON.parse(fs.readFileSync(basePath, "utf8"));
+    const parsed = JSON.parse(fs.readFileSync(runtimeConfigPath, "utf8"));
     if (parsed && typeof parsed === "object") {
       config = parsed;
     }
   } catch {
-    // Ignore invalid base config here; auth sync simply falls back to defaults.
+    // Ignore invalid runtime config here; auth sync simply falls back to defaults.
   }
 }
 
@@ -827,6 +904,7 @@ emit_ensure_proof_lines() {
 
 ensure_command() {
   resolve_profile
+  resolve_base_config_path
 
   if [[ -z "${BRANCH}" || "${BRANCH}" == "HEAD" ]]; then
     add_failure "branch_detached_head"
@@ -959,6 +1037,7 @@ release_command() {
   local release_token_cleared="no"
   local release_token_fingerprint="none"
   local release_runtime_pid="${RUNTIME_PID:-}"
+  local release_runtime_state_removed="no"
   local token_before=""
 
   if [[ -f "$env_local" ]]; then
@@ -993,10 +1072,21 @@ release_command() {
     fi
   fi
 
+  if [[ "$FAIL" -eq 0 ]]; then
+    remove_runtime_state_dir
+    if [[ ! -e "$RUNTIME_STATE_DIR" ]]; then
+      release_runtime_state_removed="yes"
+    else
+      add_failure "release_runtime_state_remove_failed"
+    fi
+  fi
+
   echo "release_worktree=${WORKTREE}"
   echo "release_runtime_port=${RUNTIME_PORT:-}"
   echo "release_runtime_pid=${release_runtime_pid}"
   echo "release_runtime_stop=${RUNTIME_STOP_RESULT}"
+  echo "release_runtime_state_dir=${RUNTIME_STATE_DIR:-}"
+  echo "release_runtime_state_removed=${release_runtime_state_removed}"
   echo "release_token_present_before=${release_token_present_before}"
   echo "release_token_cleared=${release_token_cleared}"
   echo "release_token_fingerprint=${release_token_fingerprint}"

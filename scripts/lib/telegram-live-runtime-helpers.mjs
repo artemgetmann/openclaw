@@ -61,6 +61,103 @@ function isCodexPinnedModel(model) {
     .startsWith("openai-codex/");
 }
 
+function isPlainOpenAiModel(model) {
+  return resolveModelProvider(model) === "openai";
+}
+
+function codexTwinForPlainOpenAiModel(model) {
+  const trimmed = String(model ?? "").trim();
+  if (!isPlainOpenAiModel(trimmed)) {
+    return "";
+  }
+  return `openai-codex/${trimmed.slice("openai/".length)}`;
+}
+
+function normalizeModelFallbacks(fallbacks) {
+  return normalizeTokenList(Array.isArray(fallbacks) ? fallbacks : []);
+}
+
+function resolveConfiguredModelPrimary(modelConfig) {
+  if (typeof modelConfig === "string") {
+    return modelConfig.trim();
+  }
+  if (modelConfig && typeof modelConfig === "object") {
+    return String(modelConfig.primary ?? "").trim();
+  }
+  return "";
+}
+
+function sanitizeTelegramTesterModelSelection(params) {
+  const preferredModel = String(params?.preferredModel ?? "").trim();
+  const currentModelConfig =
+    typeof params?.currentModelConfig === "string" ||
+    (params?.currentModelConfig && typeof params.currentModelConfig === "object")
+      ? params.currentModelConfig
+      : {};
+
+  const inheritedPrimary = resolveConfiguredModelPrimary(currentModelConfig);
+  const inheritedFallbacks = normalizeModelFallbacks(currentModelConfig.fallbacks);
+  const safeFallbacks = inheritedFallbacks.filter(
+    (model) => model !== preferredModel && model !== inheritedPrimary && !isPlainOpenAiModel(model),
+  );
+
+  // Tester/live lanes must never silently keep the product's plain OpenAI
+  // default. If the caller did not force a model, try inherited safe fallbacks
+  // first, then fall back to the Codex twin of the inherited OpenAI default.
+  if (preferredModel) {
+    return {
+      effectiveModel: preferredModel,
+      fallbackModels: [],
+    };
+  }
+
+  if (inheritedPrimary && !isPlainOpenAiModel(inheritedPrimary)) {
+    return {
+      effectiveModel: inheritedPrimary,
+      fallbackModels: safeFallbacks,
+    };
+  }
+
+  const safeInheritedFallback = safeFallbacks[0] ?? "";
+  if (safeInheritedFallback) {
+    return {
+      effectiveModel: safeInheritedFallback,
+      fallbackModels: safeFallbacks.filter((model) => model !== safeInheritedFallback),
+    };
+  }
+
+  const codexTwin = codexTwinForPlainOpenAiModel(inheritedPrimary);
+  return {
+    effectiveModel: codexTwin,
+    fallbackModels: [],
+  };
+}
+
+function stripRawOpenAiEnvKeys(env) {
+  if (!env || typeof env !== "object") {
+    return env;
+  }
+
+  const rawOpenAiEnvKeys = [
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_API_BASE",
+    "OPENAI_MODEL",
+    "OPENAI_ORG_ID",
+    "OPENAI_ORGANIZATION",
+    "OPENAI_PROJECT",
+    "OPENAI_PROJECT_ID",
+    "OPENCLAW_CONSUMER_OPENAI_API_KEY",
+  ];
+
+  for (const key of rawOpenAiEnvKeys) {
+    delete env[key];
+  }
+
+  return env;
+}
+
 function codexTwinModelKey(model) {
   const trimmed = String(model ?? "").trim();
   if (!isCodexPinnedModel(trimmed)) {
@@ -195,16 +292,14 @@ function hashTelegramToken(token) {
 }
 
 export function buildTelegramLiveRuntimeChildEnv(params) {
-  const preferredModel = String(params?.preferredModel ?? "").trim();
   const parentEnv =
     params?.parentEnv && typeof params.parentEnv === "object" ? params.parentEnv : process.env;
   const env = { ...parentEnv };
 
-  // A Codex-pinned tester lane must not inherit the host OpenAI API key, or
-  // Telegram sessions can silently drift back onto the plain openai route.
-  if (isCodexPinnedModel(preferredModel)) {
-    delete env.OPENAI_API_KEY;
-  }
+  // Detached tester lanes should boot only from their isolated runtime config
+  // plus synced auth store. Raw host OpenAI env defaults reintroduce product
+  // credentials/model routing behind our back, so strip them on entry.
+  stripRawOpenAiEnvKeys(env);
 
   return env;
 }
@@ -637,33 +732,53 @@ export function buildTelegramLiveRuntimeConfig(params) {
     agentDefaults.model && typeof agentDefaults.model === "object"
       ? structuredClone(agentDefaults.model)
       : {};
+  const effectiveModel = sanitizeTelegramTesterModelSelection({
+    preferredModel,
+    currentModelConfig:
+      typeof agentDefaults.model === "string" ||
+      (agentDefaults.model && typeof agentDefaults.model === "object")
+        ? agentDefaults.model
+        : {},
+  });
   if (workspaceDir) {
     agentDefaults.workspace = workspaceDir;
   }
 
-  if (preferredModel) {
-    const preferredModelTwin = codexTwinModelKey(preferredModel);
+  // Product config loading can inject default heartbeat settings later if this
+  // block is absent. Mark tester lanes as explicitly disabled so they stay
+  // quiet even when the product defaults evolve.
+  agentDefaults.heartbeat = {
+    ...(agentDefaults.heartbeat && typeof agentDefaults.heartbeat === "object"
+      ? agentDefaults.heartbeat
+      : {}),
+    every: "0m",
+    target: "none",
+  };
+
+  if (effectiveModel.effectiveModel) {
+    const preferredModelTwin = codexTwinModelKey(effectiveModel.effectiveModel);
+    const plainOpenAiTwin = codexTwinForPlainOpenAiModel(effectiveModel.effectiveModel);
     const currentModelAllowlist =
       agentDefaults.models && typeof agentDefaults.models === "object" ? agentDefaults.models : {};
-    const nextModelAllowlist = preferredModelTwin
-      ? Object.fromEntries(
-          Object.entries(currentModelAllowlist).filter(
-            ([key]) => key.trim() !== preferredModelTwin,
-          ),
-        )
-      : currentModelAllowlist;
+    const disallowedModelKeys = new Set([preferredModelTwin, plainOpenAiTwin].filter(Boolean));
+    const nextModelAllowlist =
+      disallowedModelKeys.size > 0
+        ? Object.fromEntries(
+            Object.entries(currentModelAllowlist).filter(
+              ([key]) => !disallowedModelKeys.has(key.trim()),
+            ),
+          )
+        : currentModelAllowlist;
 
-    // Tester lanes need a hard pin, not a soft preference. Keeping inherited
-    // fallback providers around makes startup secret prechecks chase unrelated
-    // auth refs and defeats the point of isolated Codex validation. Preserve
-    // the OpenAI/Codex auth split by also removing the plain OpenAI twin from
-    // the per-model allowlist when present.
+    // Tester lanes need an explicit effective primary model plus a cleaned
+    // allowlist. Preserve the OpenAI/Codex auth split by removing the plain
+    // OpenAI twin whenever the effective selection is a Codex variant.
     agentDefaults.model = {
       ...defaultModel,
-      primary: preferredModel,
-      fallbacks: [],
+      primary: effectiveModel.effectiveModel,
+      fallbacks: effectiveModel.fallbackModels,
     };
-    if (preferredModelTwin) {
+    if (disallowedModelKeys.size > 0) {
       agentDefaults.models = nextModelAllowlist;
     }
     config.agents = {
