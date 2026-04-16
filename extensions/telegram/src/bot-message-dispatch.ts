@@ -53,8 +53,9 @@ import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
-/** Minimum chars before sending first streaming message (improves push notification UX) */
-const DRAFT_MIN_INITIAL_CHARS = 30;
+/** Minimum chars before sending first streaming message (improves push notification UX). */
+const DRAFT_MIN_INITIAL_CHARS = 12;
+const DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW = 1;
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -195,11 +196,13 @@ export const dispatchTelegramMessage = async ({
   const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
-  const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
   // Keep DM preview lanes on real message transport. Native draft previews still
   // require a draft->message materialize hop, and that overlap keeps reintroducing
   // a visible duplicate flash at finalize time.
   const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
+  const draftMinInitialChars = useMessagePreviewTransportForDm
+    ? DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW
+    : DRAFT_MIN_INITIAL_CHARS;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
