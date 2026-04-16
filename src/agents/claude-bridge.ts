@@ -1,8 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import path from "node:path";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type { CliBackendConfig } from "../config/types.js";
+import {
+  getShellPathFromLoginShell,
+  resolveShellEnvFallbackTimeoutMs,
+} from "../infra/shell-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   collectClaudeBridgeText,
@@ -78,6 +83,31 @@ function buildBridgeEnv(backend: CliBackendConfig): NodeJS.ProcessEnv {
   const next = { ...process.env, ...backend.env };
   for (const key of backend.clearEnv ?? []) {
     delete next[key];
+  }
+  // Bridge runs spawn a bare CLI binary directly, so launchd/clean-room PATH values
+  // like `/usr/bin:/bin:/usr/sbin:/sbin` can hide user-installed Claude binaries
+  // even though the same command works in the operator's login shell.
+  if (!backend.env?.PATH && !backend.command.includes("/") && process.platform !== "win32") {
+    const shellPath = getShellPathFromLoginShell({
+      env: process.env,
+      timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
+    });
+    if (shellPath?.trim()) {
+      const mergedPath = new Set<string>();
+      for (const candidate of shellPath.split(path.delimiter)) {
+        const trimmed = candidate.trim();
+        if (trimmed) {
+          mergedPath.add(trimmed);
+        }
+      }
+      for (const candidate of (next.PATH ?? "").split(path.delimiter)) {
+        const trimmed = candidate.trim();
+        if (trimmed) {
+          mergedPath.add(trimmed);
+        }
+      }
+      next.PATH = Array.from(mergedPath).join(path.delimiter);
+    }
   }
   return next;
 }
