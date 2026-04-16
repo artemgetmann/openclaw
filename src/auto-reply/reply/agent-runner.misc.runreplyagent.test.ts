@@ -1120,6 +1120,8 @@ describe("runReplyAgent claude-cli routing", () => {
 });
 
 describe("runReplyAgent claude-bridge Telegram prompt envelope", () => {
+  let latestTypingStartLoopMock: { mock: { calls: unknown[][] } } | undefined;
+
   function createCliRun(params: {
     provider: string;
     model?: string;
@@ -1130,6 +1132,9 @@ describe("runReplyAgent claude-bridge Telegram prompt envelope", () => {
     };
   }) {
     const typing = createMockTypingController();
+    latestTypingStartLoopMock = typing.startTypingLoop as unknown as {
+      mock: { calls: unknown[][] };
+    };
     const sessionCtx = {
       Provider: "telegram",
       OriginatingChannel: "telegram",
@@ -1241,6 +1246,32 @@ describe("runReplyAgent claude-bridge Telegram prompt envelope", () => {
       | undefined;
     expect(call?.provider).toBe("claude-bridge");
     expect(call?.extraSystemPrompt).toBe(`${firstBlock}\n\n${secondBlock}`);
+    expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("kicks typing immediately for claude-bridge CLI runs", async () => {
+    let typingStartedBeforeCli = false;
+    runCliAgentMock.mockImplementationOnce(async () => {
+      typingStartedBeforeCli = (latestTypingStartLoopMock?.mock.calls.length ?? 0) > 0;
+      return {
+        payloads: [{ text: "ok" }],
+        meta: {
+          agentMeta: {
+            provider: "claude-bridge",
+            model: "sonnet",
+          },
+        },
+      };
+    });
+
+    const result = await createCliRun({
+      provider: "claude-bridge",
+      model: "sonnet",
+      blockStreamingEnabled: false,
+    });
+
+    expect(typingStartedBeforeCli).toBe(true);
+    expect(latestTypingStartLoopMock?.mock.calls.length).toBeGreaterThan(0);
     expect(result).toMatchObject({ text: "ok" });
   });
 
