@@ -18,6 +18,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 try:
   import fcntl
@@ -29,7 +30,7 @@ try:
 except Exception:  # pragma: no cover - POSIX fallback
   msvcrt = None
 
-from telethon import TelegramClient
+from telethon_compat import create_telegram_client
 
 
 DEFAULT_SESSION = Path(__file__).resolve().parent / "tmp" / "userbot.session"
@@ -187,9 +188,14 @@ def build_parser() -> argparse.ArgumentParser:
   return parser
 
 
-async def connect_client(session_path: Path) -> tuple[TelegramClient, object]:
+async def connect_client(session_path: Path) -> tuple[Any, object]:
   api_id, api_hash = resolve_api_credentials()
-  client = TelegramClient(str(session_path), api_id, api_hash, flood_sleep_threshold = 0)
+  client = create_telegram_client(
+    session_path,
+    api_id,
+    api_hash,
+    flood_sleep_threshold = 0,
+  )
   await client.connect()
   if not await client.is_user_authorized():
     await client.disconnect()
