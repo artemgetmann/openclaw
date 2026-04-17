@@ -297,7 +297,7 @@ emit_runtime_log_summary() {
 is_truthy_env_flag() {
   local value
   value="$(trim "${1:-}")"
-  value="${value,,}"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
   [[ "$value" == "1" || "$value" == "true" || "$value" == "yes" || "$value" == "on" ]]
 }
 
