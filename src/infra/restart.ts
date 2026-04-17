@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import {
+  GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
@@ -326,6 +327,28 @@ export function isLocalRestartScriptAvailable(): boolean {
   return resolveLocalRestartScriptPath() !== null;
 }
 
+function resolveCurrentLaunchdLabel(env: NodeJS.ProcessEnv = process.env): string {
+  const configuredLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  if (configuredLabel) {
+    return configuredLabel;
+  }
+  return resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+}
+
+export function isCanonicalSharedMainLaunchdRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  // The detached helper reinstalls and boots out a lane-local launch agent.
+  // That is safe for isolated profiles, but it is not safe for the canonical
+  // shared main service because it can tear down ai.openclaw.gateway in-place.
+  return resolveCurrentLaunchdLabel(env) === GATEWAY_LAUNCH_AGENT_LABEL;
+}
+
+export function isSafeLocalRestartScriptAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (isCanonicalSharedMainLaunchdRuntime(env)) {
+    return false;
+  }
+  return resolveLocalRestartScriptPath() !== null;
+}
+
 function triggerDetachedLocalRestartScript(scriptPath: string): {
   ok: boolean;
   command: string;
@@ -418,7 +441,9 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   const shouldPreferLocalScript = opts?.preferLocalScript === true;
   let localScriptFailure: string | undefined;
   if (shouldPreferLocalScript) {
-    const localRestartScriptPath = resolveLocalRestartScriptPath();
+    const localRestartScriptPath = isSafeLocalRestartScriptAvailable()
+      ? resolveLocalRestartScriptPath()
+      : null;
     if (localRestartScriptPath) {
       const scriptRestart = triggerDetachedLocalRestartScript(localRestartScriptPath);
       tried.push(`local-restart-script ${scriptRestart.command}`);

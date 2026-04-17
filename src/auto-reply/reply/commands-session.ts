@@ -11,7 +11,7 @@ import {
   type PermissionMode,
 } from "../../infra/permissions-mode.js";
 import {
-  isLocalRestartScriptAvailable,
+  isSafeLocalRestartScriptAvailable,
   scheduleGatewaySigusr1Restart,
   triggerOpenClawRestart,
 } from "../../infra/restart.js";
@@ -702,10 +702,14 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const commandSurface = resolveCommandSurfaceChannel(params);
   const preferLocalScriptRestart =
-    process.platform === "darwin" && commandSurface.length > 0 && isLocalRestartScriptAvailable();
+    process.platform === "darwin" &&
+    commandSurface.length > 0 &&
+    isSafeLocalRestartScriptAvailable();
   // Any live chat surface on macOS can be hosted by the same gateway process
   // tree it is trying to restart. Prefer the detached local restart script so
-  // the command can return before launchctl tears the session down.
+  // the command can return before launchctl tears the session down. The
+  // canonical shared main LaunchAgent is excluded because the helper reinstalls
+  // a lane-local service and must never take over ai.openclaw.gateway.
   if (preferLocalScriptRestart) {
     const restartMethod = triggerOpenClawRestart({ preferLocalScript: true });
     if (!restartMethod.ok) {
