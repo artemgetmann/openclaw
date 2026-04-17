@@ -1249,6 +1249,39 @@ describe("runReplyAgent claude-bridge Telegram prompt envelope", () => {
     expect(result).toMatchObject({ text: "ok" });
   });
 
+  it("drops trusted inbound metadata JSON before forwarding to claude-bridge", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-bridge",
+          model: "sonnet",
+        },
+      },
+    });
+
+    const inboundMetaBlock = [
+      "## Inbound Context (trusted metadata)",
+      "```json",
+      '{ "schema": "openclaw.inbound_meta.v1", "channel": "telegram" }',
+      "```",
+    ].join("\n");
+    const permissionBlock =
+      "Execution permissions for this chat: Full Permissions. Direct commands are still preferred.";
+    const result = await createCliRun({
+      provider: "claude-bridge",
+      extraSystemPrompt: `${inboundMetaBlock}\n\n${permissionBlock}`,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    const call = runCliAgentMock.mock.calls[0]?.[0] as
+      | { provider?: string; extraSystemPrompt?: string }
+      | undefined;
+    expect(call?.provider).toBe("claude-bridge");
+    expect(call?.extraSystemPrompt).toBe(permissionBlock);
+    expect(result).toMatchObject({ text: "ok" });
+  });
+
   it("kicks typing immediately for claude-bridge CLI runs", async () => {
     let typingStartedBeforeCli = false;
     runCliAgentMock.mockImplementationOnce(async () => {
