@@ -45,23 +45,8 @@ copy_if_exists() {
   fi
 }
 
-# Bot token pool for worktree assignment.
-copy_if_exists "$MAIN_REPO/.env.bots" "./.env.bots"
-
-if [[ -f "./.env.bots" ]]; then
-  assign_output="$({ bash scripts/assign-bot.sh; } 2>&1)" || {
-    if [[ "$OPTIONAL" -eq 1 ]] && [[ "$assign_output" == *"no eligible tester bot tokens available"* ]]; then
-      echo "warning: telegram bot pool exhausted; skipping optional claim"
-    else
-      printf '%s\n' "$assign_output" >&2
-      exit 1
-    fi
-  }
-else
-  echo "skip: .env.bots missing in main repo"
-fi
-
-# Optional userbot E2E files for true inbound Telegram verification.
+# Copy canonical local Telegram assets before any best-effort tester claim. A
+# full token pool must not block credential continuity into a fresh worktree.
 copy_if_exists "$MAIN_REPO/scripts/telegram-e2e/.env" "./scripts/telegram-e2e/.env"
 copy_if_exists "$MAIN_REPO/scripts/telegram-e2e/.env.local" "./scripts/telegram-e2e/.env.local"
 if [[ -f "$MAIN_REPO/scripts/telegram-e2e/tmp/userbot.session" ]]; then
@@ -72,6 +57,23 @@ elif [[ -f "$MAIN_REPO/scripts/telegram-e2e/userbot.session" ]]; then
   copy_if_exists \
     "$MAIN_REPO/scripts/telegram-e2e/userbot.session" \
     "./scripts/telegram-e2e/tmp/userbot.session"
+fi
+
+# Bot token pool for worktree assignment.
+copy_if_exists "$MAIN_REPO/.env.bots" "./.env.bots"
+
+if [[ -f "./.env.bots" ]]; then
+  assign_output="$({ bash scripts/assign-bot.sh; } 2>&1)" || {
+    if [[ "$OPTIONAL" -eq 1 ]] && [[ "$assign_output" == *"no eligible tester bot tokens available"* ]]; then
+      echo "warning: telegram tester claim deferred; pool exhausted after copying .env.bots" >&2
+      echo "warning: run 'bash scripts/telegram-live-runtime.sh ensure' after releasing an unused tester lane" >&2
+    else
+      printf '%s\n' "$assign_output" >&2
+      exit 1
+    fi
+  }
+else
+  echo "skip: .env.bots missing in main repo"
 fi
 
 echo "telegram bootstrap complete"
