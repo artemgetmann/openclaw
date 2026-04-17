@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnAndCollect, type SpawnCommandOptions } from "./process.js";
@@ -10,7 +11,32 @@ const ACPX_BUILTIN_AGENT_COMMANDS: Record<string, string> = {
   pi: "npx pi-acp",
 };
 
-const MCP_PROXY_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "mcp-proxy.mjs");
+function resolveMcpProxyPath(
+  moduleUrl: string = import.meta.url,
+  fileExists: (path: string) => boolean = existsSync,
+): string {
+  const moduleDir = path.dirname(fileURLToPath(moduleUrl));
+  const siblingPath = path.resolve(moduleDir, "mcp-proxy.mjs");
+  if (fileExists(siblingPath)) {
+    return siblingPath;
+  }
+
+  // The bundled acpx runtime lives under dist/extensions/acpx/index.js, but the
+  // helper script is source-only today. Fall back to the source helper in the
+  // same checkout so persistent ACP bootstrap does not silently point at a
+  // missing dist file.
+  const sourceFallback = path.resolve(
+    moduleDir,
+    "../../../extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
+  );
+  if (fileExists(sourceFallback)) {
+    return sourceFallback;
+  }
+
+  return siblingPath;
+}
+
+const MCP_PROXY_PATH = resolveMcpProxyPath();
 
 type AcpxConfigDisplay = {
   agents?: Record<string, { command?: unknown }>;
@@ -39,6 +65,7 @@ function quoteCommandPart(value: string): string {
 
 export const __testing = {
   quoteCommandPart,
+  resolveMcpProxyPath,
 };
 
 function toCommandLine(parts: string[]): string {

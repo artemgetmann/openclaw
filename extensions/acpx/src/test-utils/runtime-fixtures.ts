@@ -76,8 +76,30 @@ const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
 
 if (command === "sessions" && args[commandIndex + 1] === "ensure") {
   writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
-  if (process.env.MOCK_ACPX_ENSURE_EMPTY === "1") {
-    emitJson({ action: "session_ensured", name: ensureName });
+  if (process.env.MOCK_ACPX_ENSURE_RESULT_RECORD_IDS === "1") {
+    emitJson({
+      jsonrpc: "2.0",
+      id: "ensure-session",
+      result: {
+        created: false,
+        record: {
+          acpxRecordId: "rec-" + ensureName,
+          acpxSessionId: "sid-" + ensureName,
+          agentSessionId: "inner-" + ensureName,
+        },
+      },
+    });
+  } else if (process.env.MOCK_ACPX_ENSURE_SESSION_ID === "1") {
+    emitJson({
+      action: "session_ensured",
+      sessionId: "sid-" + ensureName,
+      name: ensureName,
+      created: true,
+    });
+  } else if (process.env.MOCK_ACPX_ENSURE_SUCCESS_NO_IDS === "1") {
+    emitJson({ action: "session_ensured", name: ensureName, created: true });
+  } else if (process.env.MOCK_ACPX_ENSURE_EMPTY === "1") {
+    emitJson({ name: ensureName });
   } else {
     emitJson({
       action: "session_ensured",
@@ -93,8 +115,48 @@ if (command === "sessions" && args[commandIndex + 1] === "ensure") {
 
 if (command === "sessions" && args[commandIndex + 1] === "new") {
   writeLog({ kind: "new", agent, args, sessionName: ensureName });
-  if (process.env.MOCK_ACPX_NEW_EMPTY === "1") {
-    emitJson({ action: "session_created", name: ensureName });
+  if (process.env.MOCK_ACPX_NEW_RESULT_RECORD_IDS === "1") {
+    emitJson({
+      jsonrpc: "2.0",
+      id: "new-session",
+      result: {
+        created: true,
+        record: {
+          acpxRecordId: "rec-" + ensureName,
+          acpxSessionId: "sid-" + ensureName,
+          agentSessionId: "inner-" + ensureName,
+        },
+      },
+    });
+  } else if (process.env.MOCK_ACPX_NEW_RESULT_SESSION_ID === "1") {
+    emitJson({
+      jsonrpc: "2.0",
+      id: "new-session",
+      result: {
+        sessionId: "sid-" + ensureName,
+      },
+    });
+  } else if (process.env.MOCK_ACPX_NEW_RESULT_ALL_IDS === "1") {
+    emitJson({
+      jsonrpc: "2.0",
+      id: "new-session",
+      result: {
+        acpxRecordId: "rec-" + ensureName,
+        acpxSessionId: "sid-" + ensureName,
+        agentSessionId: "inner-" + ensureName,
+      },
+    });
+  } else if (process.env.MOCK_ACPX_NEW_SESSION_ID === "1") {
+    emitJson({
+      action: "session_created",
+      sessionId: "sid-" + ensureName,
+      name: ensureName,
+      created: true,
+    });
+  } else if (process.env.MOCK_ACPX_NEW_SUCCESS_NO_IDS === "1") {
+    emitJson({ action: "session_created", name: ensureName, created: true });
+  } else if (process.env.MOCK_ACPX_NEW_EMPTY === "1") {
+    emitJson({ name: ensureName });
   } else {
     emitJson({
       action: "session_created",

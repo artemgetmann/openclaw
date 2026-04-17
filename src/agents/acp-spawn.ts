@@ -4,6 +4,10 @@ import {
   cleanupFailedAcpSpawn,
   type AcpSpawnRuntimeCloseHandle,
 } from "../acp/control-plane/spawn.js";
+import {
+  buildTelegramTopicConversationId,
+  parseTelegramChatIdFromTarget,
+} from "../acp/conversation-id.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.js";
 import {
   resolveAcpSessionCwd,
@@ -121,6 +125,7 @@ type PreparedAcpThreadBinding = {
   channel: string;
   accountId: string;
   conversationId: string;
+  placement: "current" | "child";
 };
 
 function resolveSpawnMode(params: {
@@ -311,9 +316,26 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
 }
 
 function resolveConversationIdForThreadBinding(params: {
+  channel: string;
   to?: string;
   threadId?: string | number;
 }): string | undefined {
+  if (params.channel === "telegram") {
+    const threadId = params.threadId != null ? String(params.threadId).trim() : "";
+    const chatId = parseTelegramChatIdFromTarget(params.to);
+    if (threadId && chatId) {
+      return (
+        buildTelegramTopicConversationId({
+          chatId,
+          topicId: threadId,
+        }) ?? `${chatId}:topic:${threadId}`
+      );
+    }
+    if (chatId && !chatId.startsWith("-")) {
+      return chatId;
+    }
+    return undefined;
+  }
   return resolveConversationIdFromTargets({
     threadId: params.threadId,
     targets: [params.to],
@@ -373,13 +395,28 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  if (!capabilities.bindSupported || !capabilities.placements.includes("child")) {
+  if (!capabilities.bindSupported) {
+    return {
+      ok: false,
+      error: `Thread bindings do not support ACP thread spawn for ${policy.channel}.`,
+    };
+  }
+  const placement =
+    policy.channel === "telegram"
+      ? capabilities.placements.includes("current")
+        ? "current"
+        : undefined
+      : capabilities.placements.includes("child")
+        ? "child"
+        : undefined;
+  if (!placement) {
     return {
       ok: false,
       error: `Thread bindings do not support ACP thread spawn for ${policy.channel}.`,
     };
   }
   const conversationId = resolveConversationIdForThreadBinding({
+    channel: policy.channel,
     to: params.to,
     threadId: params.threadId,
   });
@@ -396,6 +433,7 @@ function prepareAcpThreadBinding(params: {
       channel: policy.channel,
       accountId: policy.accountId,
       conversationId,
+      placement,
     },
   };
 }
@@ -588,7 +626,7 @@ export async function spawnAcpDirect(
           accountId: preparedBinding.accountId,
           conversationId: preparedBinding.conversationId,
         },
-        placement: "child",
+        placement: preparedBinding.placement,
         metadata: {
           threadName: resolveThreadBindingThreadName({
             agentId: targetAgentId,
@@ -623,7 +661,11 @@ export async function spawnAcpDirect(
           `Failed to create and bind a ${preparedBinding.channel} thread for this ACP session.`,
         );
       }
-      if (sessionId) {
+      // Only child placement creates a new downstream thread identifier that
+      // should be persisted back onto the session transcript metadata. Current
+      // placement reuses the caller's conversation, so overwriting threadId
+      // with the canonical conversation id would be misleading.
+      if (sessionId && preparedBinding.placement === "child") {
         const boundThreadId = String(binding.conversation.conversationId).trim() || undefined;
         if (boundThreadId) {
           sessionEntry = await persistAcpSpawnSessionFileBestEffort({
@@ -660,7 +702,8 @@ export async function spawnAcpDirect(
     threadId: ctx.agentThreadId,
   });
   // For thread-bound ACP spawns, force bootstrap delivery to the new child thread.
-  const boundThreadIdRaw = binding?.conversation.conversationId;
+  const boundThreadIdRaw =
+    preparedBinding?.placement === "child" ? binding?.conversation.conversationId : undefined;
   const boundThreadId = boundThreadIdRaw ? String(boundThreadIdRaw).trim() || undefined : undefined;
   const fallbackThreadIdRaw = requesterOrigin?.threadId;
   const fallbackThreadId =

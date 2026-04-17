@@ -9,9 +9,9 @@ export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
-export const ACPX_PINNED_VERSION = "0.1.16";
 export const ACPX_VERSION_ANY = "any";
 const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
+const ACPX_DEPENDENCY_SEMVER_PATTERN = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/;
 
 export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
   let cursor = path.dirname(fileURLToPath(moduleUrl));
@@ -33,7 +33,57 @@ export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): stri
 }
 
 export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
+
+function resolvePinnedAcpxVersion(pluginRoot: string): string {
+  const packageJsonPath = path.join(pluginRoot, "package.json");
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+    dependencies?: Record<string, unknown>;
+  };
+  const dependencySpec = packageJson.dependencies?.acpx;
+  if (typeof dependencySpec === "string") {
+    const semverMatch = dependencySpec.trim().match(ACPX_DEPENDENCY_SEMVER_PATTERN);
+    if (semverMatch?.[0]) {
+      return semverMatch[0];
+    }
+  }
+
+  throw new Error(
+    `extensions/acpx/package.json dependencies.acpx must include a semver pin (found ${String(dependencySpec)})`,
+  );
+}
+
+export const ACPX_PINNED_VERSION = resolvePinnedAcpxVersion(ACPX_PLUGIN_ROOT);
 export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
+
+function getManagedAcpxCommandCandidates(pluginRoot: string): string[] {
+  const candidates = [path.join(pluginRoot, "node_modules", ".bin", ACPX_BIN_NAME)];
+
+  // When the plugin is loaded from dist/, local installs may still live under the worktree source
+  // extension directory. Keep that source-local binary as the managed fallback before giving up.
+  if (
+    path.basename(pluginRoot) === "acpx" &&
+    path.basename(path.dirname(pluginRoot)) === "extensions" &&
+    path.basename(path.dirname(path.dirname(pluginRoot))) === "dist"
+  ) {
+    const repoRoot = path.dirname(path.dirname(path.dirname(pluginRoot)));
+    candidates.push(
+      path.join(repoRoot, "extensions", "acpx", "node_modules", ".bin", ACPX_BIN_NAME),
+    );
+  }
+
+  return [...new Set(candidates)];
+}
+
+export function resolveManagedAcpxCommand(pluginRoot: string = ACPX_PLUGIN_ROOT): string {
+  const candidates = getManagedAcpxCommandCandidates(pluginRoot);
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return candidates[0] ?? path.join(pluginRoot, "node_modules", ".bin", ACPX_BIN_NAME);
+}
+
 export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
   return `npm install --omit=dev --no-save acpx@${version}`;
 }
@@ -254,10 +304,14 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
   };
 }
 
-function resolveConfiguredCommand(params: { configured?: string; workspaceDir?: string }): string {
+function resolveConfiguredCommand(params: {
+  configured?: string;
+  workspaceDir?: string;
+  managedPluginRoot?: string;
+}): string {
   const configured = params.configured?.trim();
   if (!configured) {
-    return ACPX_BUNDLED_BIN;
+    return resolveManagedAcpxCommand(params.managedPluginRoot);
   }
   if (path.isAbsolute(configured) || configured.includes(path.sep) || configured.includes("/")) {
     const baseDir = params.workspaceDir?.trim() || process.cwd();
@@ -341,6 +395,7 @@ export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): Ac
 export function resolveAcpxPluginConfig(params: {
   rawConfig: unknown;
   workspaceDir?: string;
+  managedPluginRoot?: string;
 }): ResolvedAcpxPluginConfig {
   const parsed = parseAcpxPluginConfig(params.rawConfig);
   if (!parsed.ok) {
@@ -352,9 +407,10 @@ export function resolveAcpxPluginConfig(params: {
   const command = resolveConfiguredCommand({
     configured: normalized.command,
     workspaceDir: params.workspaceDir,
+    managedPluginRoot: params.managedPluginRoot,
   });
-  const allowPluginLocalInstall = command === ACPX_BUNDLED_BIN;
-  const stripProviderAuthEnvVars = command === ACPX_BUNDLED_BIN;
+  const allowPluginLocalInstall = !normalized.command;
+  const stripProviderAuthEnvVars = !normalized.command;
   const configuredExpectedVersion = normalized.expectedVersion;
   const expectedVersion =
     configuredExpectedVersion === ACPX_VERSION_ANY

@@ -4,8 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  bootstrapTelegramLiveAcpValidationAuthStore,
+  buildTelegramLiveRuntimeChildEnv,
   buildTelegramLiveRuntimeConfig,
   collectActiveTelegramTokenLeaseEntries,
+  deriveTelegramLiveRuntimeProfile,
   extractTelegramBotTokensFromConfig,
   selectTelegramTesterToken,
 } from "../../scripts/lib/telegram-live-runtime-helpers.mjs";
@@ -178,6 +181,16 @@ describe("telegram live runtime helpers", () => {
             memory: "default",
           },
         },
+        auth: {
+          profiles: {
+            "anthropic:default": { provider: "anthropic", mode: "api_key" },
+            "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+          },
+          order: {
+            anthropic: ["anthropic:default"],
+            "openai-codex": ["openai-codex:default"],
+          },
+        },
       },
       assignedToken: "tester-token",
       runtimePort: 24567,
@@ -222,6 +235,16 @@ describe("telegram live runtime helpers", () => {
     expect(config.plugins?.deny).toEqual(["acpx"]);
     expect(config.plugins?.entries?.telegram).toMatchObject({ enabled: true });
     expect(config.plugins?.entries?.acpx).toMatchObject({ enabled: false });
+    expect(config.auth).toEqual({
+      profiles: {
+        "anthropic:default": { provider: "anthropic", mode: "api_key" },
+        "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+      },
+      order: {
+        anthropic: ["anthropic:default"],
+        "openai-codex": ["openai-codex:default"],
+      },
+    });
   });
 
   it("honors an explicit preferred model for isolated Telegram tester lanes", () => {
@@ -234,7 +257,11 @@ describe("telegram live runtime helpers", () => {
           defaults: {
             model: {
               primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-4-5"],
+              fallbacks: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-5"],
+            },
+            models: {
+              "openai/gpt-5.4": { alias: "GPT 5.4" },
+              "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
             },
           },
         },
@@ -247,6 +274,234 @@ describe("telegram live runtime helpers", () => {
     expect(config.agents?.defaults?.model).toMatchObject({
       primary: "openai-codex/gpt-5.4",
       fallbacks: ["anthropic/claude-sonnet-4-5"],
+    });
+    expect(config.agents?.defaults?.models).toEqual({
+      "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
+    });
+  });
+
+  it("enables ACP validation mode with acpx and a Codex default model", () => {
+    const config = buildTelegramLiveRuntimeConfig({
+      acpValidation: "1",
+      worktreePath: "/repo/live-lane",
+      baseConfig: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["anthropic/claude-sonnet-4-5"],
+            },
+          },
+        },
+        acp: {
+          enabled: false,
+          dispatch: { enabled: false },
+        },
+        plugins: {
+          deny: ["legacy"],
+          entries: {
+            acpx: { enabled: false },
+          },
+        },
+        auth: {
+          profiles: {
+            "anthropic:default": { provider: "anthropic", mode: "api_key" },
+            "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+            "openai:default": { provider: "openai", mode: "api_key" },
+          },
+          order: {
+            anthropic: ["anthropic:default"],
+            openai: ["openai:default"],
+            "openai-codex": ["openai-codex:default"],
+          },
+        },
+      },
+      assignedToken: "tester-token",
+      runtimePort: 24567,
+    });
+
+    expect(config.agents?.defaults?.model).toMatchObject({
+      primary: "openai-codex/gpt-5.4",
+      fallbacks: ["anthropic/claude-sonnet-4-5"],
+    });
+    expect(config.agents?.defaults?.workspace).toBe("/repo/live-lane");
+    expect(config.acp).toEqual({
+      backend: "acpx",
+      enabled: true,
+      dispatch: { enabled: true },
+    });
+    expect(config.plugins).toMatchObject({
+      allow: ["telegram", "acpx"],
+      deny: [],
+    });
+    expect(config.plugins?.entries?.acpx).toMatchObject({ enabled: true });
+    expect(config.auth).toEqual({
+      profiles: {
+        "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+      },
+      order: {
+        "openai-codex": ["openai-codex:default"],
+      },
+    });
+  });
+
+  it("strips inherited OPENAI_API_KEY from the detached runtime env when pinned to Codex", () => {
+    expect(
+      buildTelegramLiveRuntimeChildEnv({
+        preferredModel: "openai-codex/gpt-5.4",
+        parentEnv: {
+          OPENAI_API_KEY: "sk-live-test",
+          OTHER_VALUE: "kept",
+        },
+      }),
+    ).toEqual({
+      OTHER_VALUE: "kept",
+    });
+  });
+
+  it("keeps external CLI auth sync compatible with ACP validation Codex lanes", () => {
+    const acpxBinDir = path.resolve("dist", "extensions", "acpx", "node_modules", ".bin");
+    const acpxCommand = path.join(acpxBinDir, process.platform === "win32" ? "acpx.cmd" : "acpx");
+    fs.mkdirSync(acpxBinDir, { recursive: true });
+    fs.writeFileSync(acpxCommand, "");
+    expect(
+      buildTelegramLiveRuntimeChildEnv({
+        acpValidation: "true",
+        parentEnv: {
+          OPENAI_API_KEY: "sk-live-test",
+          OTHER_VALUE: "kept",
+        },
+      }),
+    ).toEqual({
+      ACPX_CMD: acpxCommand,
+      OTHER_VALUE: "kept",
+      PATH: acpxBinDir,
+    });
+  });
+
+  it("exports the plugin-local acpx command into ACP validation child env", () => {
+    const repoRoot = makeTempDir();
+    const acpxBinDir = path.join(repoRoot, "dist", "extensions", "acpx", "node_modules", ".bin");
+    const acpxCommand = path.join(acpxBinDir, process.platform === "win32" ? "acpx.cmd" : "acpx");
+    fs.mkdirSync(acpxBinDir, { recursive: true });
+    fs.writeFileSync(acpxCommand, "");
+
+    expect(
+      buildTelegramLiveRuntimeChildEnv({
+        acpValidation: "1",
+        repoRoot,
+        parentEnv: {
+          PATH: "/usr/bin",
+          OTHER_VALUE: "kept",
+        },
+      }),
+    ).toEqual({
+      ACPX_CMD: acpxCommand,
+      PATH: `${acpxBinDir}${path.delimiter}/usr/bin`,
+      OTHER_VALUE: "kept",
+    });
+  });
+
+  it("falls back to the source acpx command when the bundled dist binary is missing", () => {
+    const repoRoot = makeTempDir();
+    const acpxBinDir = path.join(repoRoot, "extensions", "acpx", "node_modules", ".bin");
+    const acpxCommand = path.join(acpxBinDir, process.platform === "win32" ? "acpx.cmd" : "acpx");
+    fs.mkdirSync(acpxBinDir, { recursive: true });
+    fs.writeFileSync(acpxCommand, "");
+
+    expect(
+      buildTelegramLiveRuntimeChildEnv({
+        acpValidation: "1",
+        repoRoot,
+        parentEnv: {
+          PATH: "/usr/bin",
+          OTHER_VALUE: "kept",
+        },
+      }),
+    ).toEqual({
+      ACPX_CMD: acpxCommand,
+      PATH: `${acpxBinDir}${path.delimiter}/usr/bin`,
+      OTHER_VALUE: "kept",
+    });
+  });
+
+  it("uses a dedicated state dir for ACP validation lanes", () => {
+    const profile = deriveTelegramLiveRuntimeProfile({
+      worktreePath: "/repo/current",
+      stateRoot: "/tmp/openclaw-telegram-live",
+      acpValidation: "1",
+    });
+
+    expect(profile.runtimeStateDir).toMatch(
+      /^\/tmp\/openclaw-telegram-live\/tg-live-[0-9a-f]{10}\/acp-validation$/,
+    );
+  });
+
+  it("bootstraps the ACP validation auth store from local Codex auth", () => {
+    const runtimeStateDir = makeTempDir();
+    const codexHome = makeTempDir();
+    const codexAuthPath = path.join(codexHome, "auth.json");
+    fs.writeFileSync(
+      codexAuthPath,
+      JSON.stringify(
+        {
+          tokens: {
+            access_token: "not-a-jwt-access-token",
+            refresh_token: "refresh-token",
+            account_id: "acct_123",
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = bootstrapTelegramLiveAcpValidationAuthStore({
+      runtimeStateDir,
+      codexHome,
+      agentId: "main",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      codexAuthPath,
+      authStorePath: path.join(runtimeStateDir, "agents", "main", "agent", "auth-profiles.json"),
+    });
+    expect(
+      JSON.parse(fs.readFileSync(result.authStorePath, "utf8")) as {
+        profiles: Record<string, Record<string, unknown>>;
+        order: Record<string, string[]>;
+      },
+    ).toMatchObject({
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "not-a-jwt-access-token",
+          refresh: "refresh-token",
+          accountId: "acct_123",
+        },
+      },
+      order: {
+        "openai-codex": ["openai-codex:default"],
+      },
+    });
+  });
+
+  it("reports a missing local Codex auth file during ACP validation bootstrap", () => {
+    const runtimeStateDir = makeTempDir();
+    const codexHome = makeTempDir();
+
+    expect(
+      bootstrapTelegramLiveAcpValidationAuthStore({
+        runtimeStateDir,
+        codexHome,
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: "codex_auth_missing",
+      codexAuthPath: path.join(codexHome, "auth.json"),
+      authStorePath: path.join(runtimeStateDir, "agents", "main", "agent", "auth-profiles.json"),
     });
   });
 
