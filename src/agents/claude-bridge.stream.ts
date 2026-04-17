@@ -13,6 +13,17 @@ export type ClaudeBridgeRawEvent = {
   [key: string]: unknown;
 };
 
+function readTextDelta(value: unknown): string {
+  if (!isRecord(value)) {
+    return "";
+  }
+  const delta = isRecord(value.delta) ? value.delta : value;
+  if (delta.type !== "text_delta") {
+    return "";
+  }
+  return typeof delta.text === "string" ? delta.text : "";
+}
+
 function collectText(value: unknown): string {
   if (!value) {
     return "";
@@ -56,6 +67,26 @@ export function parseClaudeBridgeLine(raw: string): ClaudeBridgeRawEvent | null 
 
 export function collectClaudeBridgeText(value: unknown): string {
   return collectText(value).trim();
+}
+
+export function isClaudeBridgeAssistantMessageStart(event: ClaudeBridgeRawEvent): boolean {
+  if (event.type !== "stream_event" || !isRecord(event.event)) {
+    return false;
+  }
+  if (event.event.type !== "message_start" || !isRecord(event.event.message)) {
+    return false;
+  }
+  return event.event.message.role === "assistant";
+}
+
+export function readClaudeBridgeTextDelta(event: ClaudeBridgeRawEvent): string {
+  if (event.type !== "stream_event" || !isRecord(event.event)) {
+    return "";
+  }
+  if (event.event.type !== "content_block_delta") {
+    return "";
+  }
+  return readTextDelta(event.event);
 }
 
 export function readClaudeBridgeUsage(rawUsage: unknown): ClaudeBridgeUsage | undefined {

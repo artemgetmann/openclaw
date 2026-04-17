@@ -83,6 +83,35 @@ function emitAssistantEvent(child: MockChild, text: string) {
   );
 }
 
+function emitAssistantStartEvent(child: MockChild) {
+  child.stdout.emit(
+    "data",
+    `${JSON.stringify({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { role: "assistant" },
+      },
+    })}\n`,
+  );
+}
+
+function emitTextDeltaEvent(child: MockChild, text: string) {
+  child.stdout.emit(
+    "data",
+    `${JSON.stringify({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: {
+          type: "text_delta",
+          text,
+        },
+      },
+    })}\n`,
+  );
+}
+
 function emitResultEvent(child: MockChild, text: string, sessionId: string, cacheRead = 0) {
   child.stdout.emit(
     "data",
@@ -205,6 +234,7 @@ describe("runClaudeBridgeAgent", () => {
       expect(spawnMock).toHaveBeenCalledTimes(1);
       expect(child.stdin.writes).toHaveLength(1);
     });
+    expect(spawnMock.mock.calls[0]?.[1]).toContain("--include-partial-messages");
     emitTurn(child, "ONE", "bridge-session-a");
 
     const firstResult = await first;
@@ -308,5 +338,61 @@ describe("runClaudeBridgeAgent", () => {
       [expect.objectContaining({ text: "." })],
     ]);
     expect(result.payloads?.[0]?.text).toBe("Hello there.");
+  });
+
+  it("consumes Claude partial-message stream events as incremental text", async () => {
+    const child = new MockChild();
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+    spawnMock.mockReturnValue(child);
+
+    const runPromise = runClaudeBridgeAgent({
+      sessionId: "session-3",
+      workspaceDir: "/tmp",
+      configBackend: { command: "claude" },
+      prompt: "Reply with a short sentence.",
+      provider: "claude-bridge",
+      model: "sonnet",
+      timeoutMs: 5_000,
+      systemPromptReport: {
+        source: "run",
+        generatedAt: Date.now(),
+        sessionId: "session-3",
+        provider: "claude-bridge",
+        model: "sonnet",
+        workspaceDir: "/tmp",
+        bootstrapMaxChars: 1,
+        bootstrapTotalMaxChars: 1,
+        sandbox: { mode: "off", sandboxed: false },
+        systemPrompt: "",
+        bootstrapFiles: [],
+        injectedFiles: [],
+        skillsPrompt: "",
+        tools: [],
+      } as SystemPromptReport,
+      onAssistantMessageStart,
+      onPartialReply,
+      onBlockReply,
+    });
+
+    await vi.waitFor(() => {
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    emitAssistantStartEvent(child);
+    emitTextDeltaEvent(child, "Hello");
+    emitTextDeltaEvent(child, " there");
+    emitResultEvent(child, "Hello there", "bridge-session-c");
+
+    const result = await runPromise;
+
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply.mock.calls).toEqual([[{ text: "Hello" }], [{ text: "Hello there" }]]);
+    expect(onBlockReply.mock.calls).toEqual([
+      [expect.objectContaining({ text: "Hello" })],
+      [expect.objectContaining({ text: " there" })],
+    ]);
+    expect(result.payloads?.[0]?.text).toBe("Hello there");
   });
 });
