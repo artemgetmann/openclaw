@@ -654,6 +654,9 @@ export async function runCliAgent(params: {
   /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
+  onAssistantMessageStart?: () => Promise<void> | void;
+  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onBlockReply?: (payload: import("../auto-reply/types.js").ReplyPayload) => Promise<void> | void;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -733,6 +736,9 @@ export async function runCliAgent(params: {
       // Bridge turns should only reuse the in-process child/session handle.
       // Never resume a persisted Claude CLI session id from session storage.
       cliSessionId: undefined,
+      onAssistantMessageStart: params.onAssistantMessageStart,
+      onPartialReply: params.onPartialReply,
+      onBlockReply: params.onBlockReply,
     });
     const assistantText = result.payloads
       ?.map((payload) => payload.text?.trim() ?? "")
