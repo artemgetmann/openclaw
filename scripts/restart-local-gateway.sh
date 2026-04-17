@@ -126,6 +126,16 @@ LAUNCHD_LABEL="${OPENCLAW_LAUNCHD_LABEL:-ai.openclaw.gateway}"
 PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
 LAUNCHD_TARGET="${LAUNCHD_DOMAIN}/${LAUNCHD_LABEL}"
 
+if [[ "$LAUNCHD_LABEL" == "ai.openclaw.gateway" ]]; then
+  # This helper is lane-local by design: it reinstalls a launch agent from the
+  # current checkout before restarting it. Running that flow against the
+  # canonical shared label can unload the primary bot runtime and fail to bring
+  # it back. Shared main must use the dedicated restart/recovery paths instead.
+  echo "ERROR: scripts/restart-local-gateway.sh refuses to manage the canonical shared main launchd service ai.openclaw.gateway." >&2
+  echo "Use 'openclaw gateway restart' or 'bash scripts/restart-mac.sh' from ~/Programming_Projects/openclaw on main instead." >&2
+  exit 1
+fi
+
 if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi

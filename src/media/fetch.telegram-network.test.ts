@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  resetTelegramTransportStickyIpv4CacheForTests,
   resolveTelegramTransport,
   shouldRetryTelegramIpv4Fallback,
 } from "../../extensions/telegram/src/fetch.js";
@@ -40,6 +41,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
     undiciMocks.agentCtor.mockClear();
     undiciMocks.envHttpProxyAgentCtor.mockClear();
     undiciMocks.proxyAgentCtor.mockClear();
+    resetTelegramTransportStickyIpv4CacheForTests();
     vi.unstubAllEnvs();
   });
 
@@ -204,6 +206,79 @@ describe("fetchRemoteMedia telegram network policy", () => {
         family: 4,
         autoSelectFamily: false,
         lookup: expect.any(Function),
+      }),
+    );
+  });
+
+  it("reuses learned sticky IPv4 fallback across fresh Telegram transport instances", async () => {
+    const firstError = createTelegramFetchFailedError("EHOSTUNREACH");
+    undiciMocks.fetch
+      .mockRejectedValueOnce(firstError)
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }))
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const firstTransport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await firstTransport.fetch("https://api.telegram.org/botTEST/getUpdates");
+
+    const secondTransport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await secondTransport.fetch("https://api.telegram.org/botTEST/getUpdates");
+
+    const firstAttemptInit = undiciMocks.fetch.mock.calls[0]?.[1] as
+      | (RequestInit & {
+          dispatcher?: {
+            options?: {
+              connect?: Record<string, unknown>;
+            };
+          };
+        })
+      | undefined;
+    const firstRetryInit = undiciMocks.fetch.mock.calls[1]?.[1] as
+      | (RequestInit & {
+          dispatcher?: {
+            options?: {
+              connect?: Record<string, unknown>;
+            };
+          };
+        })
+      | undefined;
+    const secondTransportInit = undiciMocks.fetch.mock.calls[2]?.[1] as
+      | (RequestInit & {
+          dispatcher?: {
+            options?: {
+              connect?: Record<string, unknown>;
+            };
+          };
+        })
+      | undefined;
+
+    expect(firstAttemptInit?.dispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      }),
+    );
+    expect(firstRetryInit?.dispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
+      }),
+    );
+    expect(secondTransportInit?.dispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
       }),
     );
   });

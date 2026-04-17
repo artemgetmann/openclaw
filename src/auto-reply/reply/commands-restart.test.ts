@@ -5,10 +5,11 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const scheduleGatewaySigusr1RestartMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
-const isLocalRestartScriptAvailableMock = vi.hoisted(() => vi.fn());
+const isSafeLocalRestartScriptAvailableMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/restart.js", () => ({
-  isLocalRestartScriptAvailable: (...args: unknown[]) => isLocalRestartScriptAvailableMock(...args),
+  isSafeLocalRestartScriptAvailable: (...args: unknown[]) =>
+    isSafeLocalRestartScriptAvailableMock(...args),
   scheduleGatewaySigusr1Restart: (...args: unknown[]) => scheduleGatewaySigusr1RestartMock(...args),
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
 }));
@@ -37,10 +38,10 @@ function buildParams(commandBody: string, overrides?: Record<string, unknown>) {
 }
 
 beforeEach(() => {
-  isLocalRestartScriptAvailableMock.mockReset();
+  isSafeLocalRestartScriptAvailableMock.mockReset();
   scheduleGatewaySigusr1RestartMock.mockReset();
   triggerOpenClawRestartMock.mockReset();
-  isLocalRestartScriptAvailableMock.mockReturnValue(false);
+  isSafeLocalRestartScriptAvailableMock.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -56,7 +57,7 @@ describe("handleRestartCommand", () => {
     "prefers local restart script for %s on macOS when available",
     async (surface) => {
       setPlatform("darwin");
-      isLocalRestartScriptAvailableMock.mockReturnValue(true);
+      isSafeLocalRestartScriptAvailableMock.mockReturnValue(true);
 
       vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
         signal === "SIGUSR1" ? 1 : 0,
@@ -85,7 +86,7 @@ describe("handleRestartCommand", () => {
 
   it("uses in-process SIGUSR1 scheduling for empty/unknown surfaces", async () => {
     setPlatform("darwin");
-    isLocalRestartScriptAvailableMock.mockReturnValue(true);
+    isSafeLocalRestartScriptAvailableMock.mockReturnValue(true);
 
     vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
       signal === "SIGUSR1" ? 1 : 0,
@@ -107,7 +108,7 @@ describe("handleRestartCommand", () => {
 
   it("keeps SIGUSR1 path for Telegram when no local script is configured", async () => {
     setPlatform("darwin");
-    isLocalRestartScriptAvailableMock.mockReturnValue(false);
+    isSafeLocalRestartScriptAvailableMock.mockReturnValue(false);
     vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
       signal === "SIGUSR1" ? 1 : 0,
     );
@@ -128,7 +129,7 @@ describe("handleRestartCommand", () => {
 
   it("ignores explicit natural-language restart approval phrases", async () => {
     setPlatform("darwin");
-    isLocalRestartScriptAvailableMock.mockReturnValue(true);
+    isSafeLocalRestartScriptAvailableMock.mockReturnValue(true);
 
     const result = await handleRestartCommand(
       buildParams("Okay I approve. Restart now.", {
@@ -146,7 +147,7 @@ describe("handleRestartCommand", () => {
 
   it("ignores conversational restart mentions that are not explicit approvals", async () => {
     setPlatform("darwin");
-    isLocalRestartScriptAvailableMock.mockReturnValue(true);
+    isSafeLocalRestartScriptAvailableMock.mockReturnValue(true);
 
     const result = await handleRestartCommand(
       buildParams("Can you explain how restart works here?", {
