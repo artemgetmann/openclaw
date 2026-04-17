@@ -127,6 +127,25 @@ describe("runGatewayStartupConfigPreflight", () => {
 
   it("refuses noncanonical startup when the canonical shared config owns the token", async () => {
     const home = makeTempDir();
+    const canonicalMainRepo = path.join(home, "Programming_Projects", "openclaw");
+    fs.mkdirSync(path.join(canonicalMainRepo, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(canonicalMainRepo, "dist", "index.js"), "", "utf8");
+    fs.writeFileSync(path.join(canonicalMainRepo, "package.json"), "{}\n", "utf8");
+    const canonicalMainRepoReal = fs.realpathSync.native(canonicalMainRepo);
+    const fakeBin = path.join(home, "bin");
+    fs.mkdirSync(fakeBin, { recursive: true });
+    fs.writeFileSync(
+      path.join(fakeBin, "launchctl"),
+      `#!/bin/sh\nprintf 'pid = 123\\nprogram = "${canonicalMainRepoReal}/dist/index.js"\\n'\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(fakeBin, "ps"),
+      `#!/bin/sh\nprintf 'node ${canonicalMainRepoReal}/dist/index.js gateway run\\n'\n`,
+      "utf8",
+    );
+    fs.chmodSync(path.join(fakeBin, "launchctl"), 0o755);
+    fs.chmodSync(path.join(fakeBin, "ps"), 0o755);
     fs.mkdirSync(path.join(home, ".openclaw"), { recursive: true });
     fs.writeFileSync(
       path.join(home, ".openclaw", "openclaw.json"),
@@ -173,13 +192,15 @@ describe("runGatewayStartupConfigPreflight", () => {
         isNixMode: false,
         env: {
           HOME: home,
+          OPENCLAW_MAIN_REPO: canonicalMainRepo,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
         },
       }),
     ).rejects.toEqual(
       expect.objectContaining<Partial<GatewayStartupPreflightError>>({
         phase: "config_validation",
         message: expect.stringContaining(
-          "Refusing to start gateway with Telegram bot token(s) reserved for the canonical shared gateway: main-token, finance-token.",
+          "Refusing to start gateway with Telegram bot token(s) actively owned by the canonical shared gateway: main-token, finance-token.",
         ),
       }),
     );

@@ -1,4 +1,8 @@
 export function collectActiveTelegramTokenLeaseEntries(params?: unknown): unknown[];
+export function isCanonicalSharedGatewayActive(params?: unknown): boolean;
+export function collectActiveReservedTelegramBotTokensFromCanonicalConfig(
+  params?: unknown,
+): string[];
 export function deriveTelegramLiveRuntimeProfile(params?: unknown): {
   worktreePath: string;
   profileId: string;
