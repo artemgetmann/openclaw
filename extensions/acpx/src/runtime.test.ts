@@ -582,6 +582,182 @@ describe("AcpxRuntime", () => {
     }
   });
 
+  it("accepts 'sessionId' as the backend session identifier during session bootstrap", async () => {
+    process.env.MOCK_ACPX_ENSURE_SESSION_ID = "1";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:session-id-shape";
+      const handle = await runtime.ensureSession({
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+      expect(handle.backendSessionId).toBe("sid-" + sessionKey);
+      expect(handle.acpxRecordId).toBeUndefined();
+      expect(handle.agentSessionId).toBeUndefined();
+
+      const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+      expect(decoded?.backendSessionId).toBe("sid-" + sessionKey);
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
+      expect(logs.some((entry) => entry.kind === "new")).toBe(false);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_SESSION_ID;
+    }
+  });
+
+  it("accepts nested JSON-RPC result.sessionId during session/new bootstrap fallback", async () => {
+    process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
+    process.env.MOCK_ACPX_NEW_RESULT_SESSION_ID = "1";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:result-session-id-shape";
+      const handle = await runtime.ensureSession({
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+      expect(handle.backendSessionId).toBe("sid-" + sessionKey);
+      expect(handle.acpxRecordId).toBeUndefined();
+      expect(handle.agentSessionId).toBeUndefined();
+
+      const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+      expect(decoded?.backendSessionId).toBe("sid-" + sessionKey);
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
+      expect(logs.some((entry) => entry.kind === "new")).toBe(true);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_EMPTY;
+      delete process.env.MOCK_ACPX_NEW_RESULT_SESSION_ID;
+    }
+  });
+
+  it("accepts nested JSON-RPC result IDs during session/new bootstrap fallback", async () => {
+    process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
+    process.env.MOCK_ACPX_NEW_RESULT_ALL_IDS = "1";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:result-all-ids-shape";
+      const handle = await runtime.ensureSession({
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+      expect(handle.backendSessionId).toBe("sid-" + sessionKey);
+      expect(handle.acpxRecordId).toBe("rec-" + sessionKey);
+      expect(handle.agentSessionId).toBe("inner-" + sessionKey);
+
+      const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+      expect(decoded?.backendSessionId).toBe("sid-" + sessionKey);
+      expect(decoded?.acpxRecordId).toBe("rec-" + sessionKey);
+      expect(decoded?.agentSessionId).toBe("inner-" + sessionKey);
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
+      expect(logs.some((entry) => entry.kind === "new")).toBe(true);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_EMPTY;
+      delete process.env.MOCK_ACPX_NEW_RESULT_ALL_IDS;
+    }
+  });
+
+  it("accepts nested JSON-RPC result.record IDs during session ensure bootstrap", async () => {
+    process.env.MOCK_ACPX_ENSURE_RESULT_RECORD_IDS = "1";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:ensure-result-record-shape";
+      const handle = await runtime.ensureSession({
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+      expect(handle.backendSessionId).toBe("sid-" + sessionKey);
+      expect(handle.acpxRecordId).toBe("rec-" + sessionKey);
+      expect(handle.agentSessionId).toBe("inner-" + sessionKey);
+
+      const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+      expect(decoded?.backendSessionId).toBe("sid-" + sessionKey);
+      expect(decoded?.acpxRecordId).toBe("rec-" + sessionKey);
+      expect(decoded?.agentSessionId).toBe("inner-" + sessionKey);
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
+      expect(logs.some((entry) => entry.kind === "new")).toBe(false);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_RESULT_RECORD_IDS;
+    }
+  });
+
+  it("accepts nested JSON-RPC result.record IDs during session/new bootstrap fallback", async () => {
+    process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
+    process.env.MOCK_ACPX_NEW_RESULT_RECORD_IDS = "1";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:new-result-record-shape";
+      const handle = await runtime.ensureSession({
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+      expect(handle.backendSessionId).toBe("sid-" + sessionKey);
+      expect(handle.acpxRecordId).toBe("rec-" + sessionKey);
+      expect(handle.agentSessionId).toBe("inner-" + sessionKey);
+
+      const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+      expect(decoded?.backendSessionId).toBe("sid-" + sessionKey);
+      expect(decoded?.acpxRecordId).toBe("rec-" + sessionKey);
+      expect(decoded?.agentSessionId).toBe("inner-" + sessionKey);
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
+      expect(logs.some((entry) => entry.kind === "new")).toBe(true);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_EMPTY;
+      delete process.env.MOCK_ACPX_NEW_RESULT_RECORD_IDS;
+    }
+  });
+
+  it("accepts bootstrap success markers even when stable session IDs are deferred", async () => {
+    process.env.MOCK_ACPX_ENSURE_SUCCESS_NO_IDS = "1";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:pending-bootstrap";
+      const handle = await runtime.ensureSession({
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+      expect(handle.acpxRecordId).toBeUndefined();
+      expect(handle.backendSessionId).toBeUndefined();
+      expect(handle.agentSessionId).toBeUndefined();
+
+      const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+      expect(decoded?.name).toBe(sessionKey);
+      expect(decoded?.agent).toBe("codex");
+      expect(decoded?.mode).toBe("persistent");
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
+      expect(logs.some((entry) => entry.kind === "new")).toBe(false);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_SUCCESS_NO_IDS;
+    }
+  });
+
   it("fails with ACP_SESSION_INIT_FAILED when both ensure and new omit session IDs", async () => {
     process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
     process.env.MOCK_ACPX_NEW_EMPTY = "1";
