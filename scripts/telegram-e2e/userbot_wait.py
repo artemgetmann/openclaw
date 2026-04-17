@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from telethon import TelegramClient
+from telethon_compat import create_telegram_client
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -109,7 +109,7 @@ async def run() -> int:
   chat_entity = int(args.chat) if args.chat.lstrip("-").isdigit() else args.chat
   deadline = time.time() + max(1, args.timeout)
 
-  client = TelegramClient(str(session_path), args.api_id, args.api_hash)
+  client = create_telegram_client(session_path, args.api_id, args.api_hash)
   await client.start()
   try:
     ignored_recent: list[dict[str, object | None]] = []

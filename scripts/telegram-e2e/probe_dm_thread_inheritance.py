@@ -9,9 +9,10 @@ import pathlib
 import sys
 import time
 
-from telethon import TelegramClient, functions
+from telethon import functions
 from telethon.errors import FloodWaitError
 
+from telethon_compat import create_telegram_client
 from userbot_guard import acquire_session_guard, load_env_file, sanitize_error_text, SessionGuardError
 
 DEFAULT_CHAT = "@Artem_jarvis_exec_bot"
@@ -191,8 +192,8 @@ async def main() -> int:
     return 1
 
   chat: int | str = int(chat_raw) if chat_raw.lstrip("-").isdigit() else chat_raw
-  client = TelegramClient(
-    str(session_path),
+  client = create_telegram_client(
+    session_path,
     int(env["TELEGRAM_API_ID"]),
     env["TELEGRAM_API_HASH"],
     flood_sleep_threshold=0,

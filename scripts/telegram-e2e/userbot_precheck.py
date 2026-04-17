@@ -19,6 +19,8 @@ import re
 import sys
 from pathlib import Path
 
+from telethon_compat import create_telegram_client
+
 
 EXIT_MISSING_CREDS = 10
 EXIT_MISSING_SESSION = 11
@@ -75,20 +77,18 @@ async def run() -> int:
   if not os.access(session_path, os.R_OK):
     return fail("E_MISSING_SESSION", f"session file is not readable: {session_path}", EXIT_MISSING_SESSION)
 
-  try:
-    from telethon import TelegramClient
-  except Exception:
-    return fail(
-      "E_TELETHON_MISSING",
-      "telethon is not installed. Run pnpm openclaw:local telegram-user precheck to auto-bootstrap.",
-      EXIT_TELETHON_MISSING,
-    )
-
   chat_entity: int | str = chat_raw
   if chat_raw.lstrip("-").isdigit():
     chat_entity = int(chat_raw)
 
-  client = TelegramClient(str(session_path), args.api_id, api_hash)
+  try:
+    client = create_telegram_client(session_path, args.api_id, api_hash)
+  except Exception as err:
+    return fail(
+      "E_TELETHON_MISSING",
+      sanitize_error_text(str(err)),
+      EXIT_TELETHON_MISSING,
+    )
   try:
     await client.connect()
     if not await client.is_user_authorized():
