@@ -126,8 +126,8 @@ if (!helperPath) {
 
 const {
   classifyTelegramTesterClaimEntries,
+  collectActiveReservedTelegramBotTokensFromCanonicalConfig,
   collectActiveTelegramTokenLeaseEntries,
-  extractTelegramBotTokensFromConfig,
   summarizeTelegramTesterTokenPool,
 } = await import(pathToFileURL(helperPath).href);
 
@@ -202,15 +202,9 @@ for (const line of worktreeList.split(/\r?\n/g)) {
   }
 }
 
-let reservedTokens = [];
-if (baseConfigPath && fs.existsSync(baseConfigPath)) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(baseConfigPath, "utf8"));
-    reservedTokens = extractTelegramBotTokensFromConfig(parsed);
-  } catch {
-    reservedTokens = [];
-  }
-}
+const reservedTokens = collectActiveReservedTelegramBotTokensFromCanonicalConfig({
+  baseConfigPath,
+});
 
 const leasedEntries = collectActiveTelegramTokenLeaseEntries({
   tokens: poolTokens,
