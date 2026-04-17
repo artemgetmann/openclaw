@@ -66,11 +66,62 @@ type BackendEnvBuild = {
   meta: TelegramUserBackendMeta;
 };
 
+type ParsedVersion = {
+  major: number;
+  minor: number;
+  patch: number;
+};
+
+const minTelethonVersion: ParsedVersion = { major: 1, minor: 43, patch: 1 };
+
 function resolveVenvPythonPath(): string {
   if (process.platform === "win32") {
     return path.join(telegramE2eDir, ".venv", "Scripts", "python.exe");
   }
   return path.join(telegramE2eDir, ".venv", "bin", "python");
+}
+
+function parseVersion(raw: string): ParsedVersion | null {
+  const trimmed = raw.trim().replace(/^v/, "");
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
+}
+
+function isAtLeastVersion(actual: ParsedVersion, minimum: ParsedVersion): boolean {
+  if (actual.major !== minimum.major) {
+    return actual.major > minimum.major;
+  }
+  if (actual.minor !== minimum.minor) {
+    return actual.minor > minimum.minor;
+  }
+  return actual.patch >= minimum.patch;
+}
+
+async function readTelethonVersion(pythonPath: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      pythonPath,
+      ["-c", "import telethon; print(getattr(telethon, '__version__', '0.0.0'))"],
+      { timeout: 8_000 },
+    );
+    const version = stdout.trim();
+    return version || null;
+  } catch {
+    return null;
+  }
+}
+
+async function hasCompatibleTelethon(pythonPath: string): Promise<boolean> {
+  const versionText = await readTelethonVersion(pythonPath);
+  const parsed = versionText ? parseVersion(versionText) : null;
+  return parsed !== null && isAtLeastVersion(parsed, minTelethonVersion);
 }
 
 function sanitizeBackendText(raw: string, env: NodeJS.ProcessEnv): string {
@@ -140,12 +191,12 @@ async function detectSystemPython(): Promise<PythonInvocation> {
 async function ensureTelethonPython(): Promise<string> {
   const venvPython = resolveVenvPythonPath();
   if (await fileExists(venvPython)) {
-    try {
-      await execFileAsync(venvPython, ["-c", "import telethon"], { timeout: 8_000 });
+    if (await hasCompatibleTelethon(venvPython)) {
       return venvPython;
-    } catch {
-      // Fall through to repair the virtualenv in place.
     }
+    // Import-only health checks let stale Telethon builds survive forever.
+    // Rebuild/upgrade the venv when the installed release is too old for the
+    // current Telegram session schema.
   }
 
   const python = await detectSystemPython();
@@ -161,7 +212,9 @@ async function ensureTelethonPython(): Promise<string> {
       maxBuffer: 2 * 1024 * 1024,
     },
   );
-  await execFileAsync(venvPython, ["-c", "import telethon"], { timeout: 8_000 });
+  if (!(await hasCompatibleTelethon(venvPython))) {
+    throw new Error("Telegram user tooling bootstrap installed an incompatible Telethon version.");
+  }
   return venvPython;
 }
 
