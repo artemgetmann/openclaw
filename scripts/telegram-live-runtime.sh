@@ -866,7 +866,10 @@ emit_ensure_proof_lines() {
   echo "assigned_bot_username=${ASSIGNED_BOT_USERNAME}"
   echo "assigned_bot_name=${ASSIGNED_BOT_NAME}"
   echo "token_claim_count=${TOKEN_CLAIM_COUNT}"
-  for claim_path in "${TOKEN_CLAIM_PATHS[@]}"; do
+  for claim_path in "${TOKEN_CLAIM_PATHS[@]-}"; do
+    if [[ -z "$claim_path" ]]; then
+      continue
+    fi
     echo "token_claim_path=${claim_path}"
   done
 }
