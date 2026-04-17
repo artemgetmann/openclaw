@@ -15,6 +15,7 @@ const log = createSubsystemLogger("telegram/network");
 
 const TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 const TELEGRAM_API_HOSTNAME = "api.telegram.org";
+const stickyIpv4FallbackCache = new Set<string>();
 
 type RequestInitWithDispatcher = RequestInit & {
   dispatcher?: unknown;
@@ -49,14 +50,14 @@ const FALLBACK_RETRY_ERROR_CODES = [
   "UND_ERR_SOCKET",
 ] as const;
 
-type Ipv4FallbackContext = {
+type Ipv4FallbackCandidate = {
   message: string;
   codes: Set<string>;
 };
 
 type Ipv4FallbackRule = {
   name: string;
-  matches: (ctx: Ipv4FallbackContext) => boolean;
+  matches: (ctx: Ipv4FallbackCandidate) => boolean;
 };
 
 const IPV4_FALLBACK_RULES: readonly Ipv4FallbackRule[] = [
@@ -370,27 +371,83 @@ function collectErrorCodes(err: unknown): Set<string> {
   return codes;
 }
 
+function collectIpv4FallbackCandidates(err: unknown): Ipv4FallbackCandidate[] {
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+  const candidates: Ipv4FallbackCandidate[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    candidates.push({
+      message:
+        current instanceof Error
+          ? current.message.toLowerCase()
+          : typeof current === "object" && current && "message" in current
+            ? String((current as { message?: unknown }).message).toLowerCase()
+            : "",
+      codes: collectErrorCodes(current),
+    });
+    if (typeof current === "object") {
+      const cause = (current as { cause?: unknown }).cause;
+      if (cause && !seen.has(cause)) {
+        queue.push(cause);
+      }
+      const error = (current as { error?: unknown }).error;
+      if (error && !seen.has(error)) {
+        queue.push(error);
+      }
+      const errors = (current as { errors?: unknown }).errors;
+      if (Array.isArray(errors)) {
+        for (const nested of errors) {
+          if (nested && !seen.has(nested)) {
+            queue.push(nested);
+          }
+        }
+      }
+    }
+  }
+
+  return candidates;
+}
+
 function formatErrorCodes(err: unknown): string {
   const codes = [...collectErrorCodes(err)];
   return codes.length > 0 ? codes.join(",") : "none";
 }
 
 function shouldRetryWithIpv4Fallback(err: unknown): boolean {
-  const ctx: Ipv4FallbackContext = {
-    message:
-      err && typeof err === "object" && "message" in err ? String(err.message).toLowerCase() : "",
-    codes: collectErrorCodes(err),
-  };
-  for (const rule of IPV4_FALLBACK_RULES) {
-    if (!rule.matches(ctx)) {
-      return false;
-    }
-  }
-  return true;
+  const candidates = collectIpv4FallbackCandidates(err);
+  return candidates.some((candidate) =>
+    IPV4_FALLBACK_RULES.every((rule) => rule.matches(candidate)),
+  );
+}
+
+function buildStickyIpv4FallbackCacheKey(params: {
+  autoSelectFamily: boolean | null;
+  dnsResultOrder: TelegramDnsResultOrder | null;
+  explicitProxyUrl?: string;
+  useEnvProxy: boolean;
+  shouldBypassEnvProxy: boolean;
+}): string {
+  return JSON.stringify({
+    autoSelectFamily: params.autoSelectFamily,
+    dnsResultOrder: params.dnsResultOrder,
+    explicitProxyUrl: params.explicitProxyUrl?.trim() || null,
+    useEnvProxy: params.useEnvProxy,
+    shouldBypassEnvProxy: params.shouldBypassEnvProxy,
+  });
 }
 
 export function shouldRetryTelegramIpv4Fallback(err: unknown): boolean {
   return shouldRetryWithIpv4Fallback(err);
+}
+
+export function resetTelegramTransportStickyIpv4CacheForTests(): void {
+  stickyIpv4FallbackCache.clear();
 }
 
 // Prefer wrapped fetch when available to normalize AbortSignal across runtimes.
@@ -442,6 +499,13 @@ export function resolveTelegramTransport(
   const allowStickyIpv4Fallback =
     defaultDispatcher.mode === "direct" ||
     (defaultDispatcher.mode === "env-proxy" && shouldBypassEnvProxy);
+  const stickyIpv4FallbackCacheKey = buildStickyIpv4FallbackCacheKey({
+    autoSelectFamily: autoSelectDecision.value,
+    dnsResultOrder,
+    explicitProxyUrl,
+    useEnvProxy,
+    shouldBypassEnvProxy,
+  });
   const stickyShouldUseEnvProxy = defaultDispatcher.mode === "env-proxy";
   const fallbackPinnedDispatcherPolicy = allowStickyIpv4Fallback
     ? resolveTelegramDispatcherPolicy({
@@ -453,7 +517,10 @@ export function resolveTelegramTransport(
       }).policy
     : undefined;
 
-  let stickyIpv4FallbackEnabled = false;
+  // Persist IPv4 fallback across fresh bot/runner instances so polling restarts do not
+  // re-enter the same failing IPv6/auto-select path before the first successful request.
+  let stickyIpv4FallbackEnabled =
+    allowStickyIpv4Fallback && stickyIpv4FallbackCache.has(stickyIpv4FallbackCacheKey);
   let stickyIpv4Dispatcher: TelegramDispatcher | null = null;
   const resolveStickyIpv4Dispatcher = () => {
     if (!stickyIpv4Dispatcher) {
@@ -488,6 +555,7 @@ export function resolveTelegramTransport(
         }
         if (!stickyIpv4FallbackEnabled) {
           stickyIpv4FallbackEnabled = true;
+          stickyIpv4FallbackCache.add(stickyIpv4FallbackCacheKey);
           log.warn(
             `fetch fallback: enabling sticky IPv4-only dispatcher (codes=${formatErrorCodes(err)})`,
           );

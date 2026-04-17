@@ -34,7 +34,11 @@ vi.mock("./openclaw-root.js", () => ({
     resolveOpenClawPackageRootSyncMock(...args),
 }));
 
-import { triggerOpenClawRestart } from "./restart.js";
+import {
+  isCanonicalSharedMainLaunchdRuntime,
+  isSafeLocalRestartScriptAvailable,
+  triggerOpenClawRestart,
+} from "./restart.js";
 
 const envSnapshot = captureFullEnv();
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -68,6 +72,7 @@ describe("triggerOpenClawRestart local script mode", () => {
     setPlatform("darwin");
     delete process.env.VITEST;
     delete process.env.NODE_ENV;
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.test-lane.gateway";
 
     const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-script-"));
     const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
@@ -110,6 +115,7 @@ describe("triggerOpenClawRestart local script mode", () => {
     setPlatform("darwin");
     delete process.env.VITEST;
     delete process.env.NODE_ENV;
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.test-lane.gateway";
     process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = "/tmp/definitely-missing-openclaw-restart.sh";
 
     spawnSyncMock.mockReturnValue({
@@ -131,7 +137,7 @@ describe("triggerOpenClawRestart local script mode", () => {
       expect.arrayContaining([
         "kickstart",
         "-k",
-        expect.stringMatching(/^gui\/\d+\/ai\.openclaw\.gateway$/),
+        expect.stringMatching(/^gui\/\d+\/ai\.openclaw\.test-lane\.gateway$/),
       ]),
       expect.objectContaining({
         encoding: "utf8",
@@ -145,6 +151,7 @@ describe("triggerOpenClawRestart local script mode", () => {
     delete process.env.VITEST;
     delete process.env.NODE_ENV;
     delete process.env.OPENCLAW_LOCAL_RESTART_SCRIPT;
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.test-lane.gateway";
 
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-root-"));
     const scriptDir = path.join(rootDir, "scripts");
@@ -178,6 +185,68 @@ describe("triggerOpenClawRestart local script mode", () => {
       expect(spawnSyncMock).not.toHaveBeenCalled();
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats the canonical shared main launchd label as unsafe for the local restart helper", async () => {
+    setPlatform("darwin");
+    delete process.env.VITEST;
+    delete process.env.NODE_ENV;
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+
+    const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-script-"));
+    const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
+    await fs.writeFile(scriptPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+    process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
+
+    try {
+      expect(isCanonicalSharedMainLaunchdRuntime()).toBe(true);
+      expect(isSafeLocalRestartScriptAvailable()).toBe(false);
+    } finally {
+      await fs.rm(scriptDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to launchctl instead of the detached helper for the canonical shared main launchd label", async () => {
+    setPlatform("darwin");
+    delete process.env.VITEST;
+    delete process.env.NODE_ENV;
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+
+    const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-script-"));
+    const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
+    await fs.writeFile(scriptPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+    process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
+
+    spawnSyncMock.mockReturnValue({
+      error: undefined,
+      status: 0,
+      stdout: "",
+      stderr: "",
+    });
+
+    try {
+      const result = triggerOpenClawRestart({ preferLocalScript: true });
+      expect(result).toMatchObject({
+        ok: true,
+        method: "launchctl",
+      });
+      expect(result.detail).toBeUndefined();
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(spawnSyncMock).toHaveBeenCalledWith(
+        "launchctl",
+        expect.arrayContaining([
+          "kickstart",
+          "-k",
+          expect.stringMatching(/^gui\/\d+\/ai\.openclaw\.gateway$/),
+        ]),
+        expect.objectContaining({
+          encoding: "utf8",
+          timeout: 2000,
+        }),
+      );
+    } finally {
+      await fs.rm(scriptDir, { recursive: true, force: true });
     }
   });
 });
