@@ -70,6 +70,13 @@ function normalizePersistedUpdateId(value: number | null): number | null {
   return value;
 }
 
+function shouldIgnorePersistedUpdateOffset(env: NodeJS.ProcessEnv = process.env): boolean {
+  const normalized = String(env.OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET ?? "")
+    .trim()
+    .toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 /** Check if error is a Grammy HttpError (used to scope unhandled rejection handling) */
 const isGrammyHttpError = (err: unknown): boolean => {
   if (!err || typeof err !== "object") {
@@ -149,8 +156,17 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       accountId: account.accountId,
       botToken: token,
     });
-    let lastUpdateId = normalizePersistedUpdateId(persistedOffsetRaw);
-    if (persistedOffsetRaw !== null && lastUpdateId === null) {
+    const ignorePersistedOffset = shouldIgnorePersistedUpdateOffset();
+    let lastUpdateId = ignorePersistedOffset
+      ? null
+      : normalizePersistedUpdateId(persistedOffsetRaw);
+    if (ignorePersistedOffset) {
+      log(
+        persistedOffsetRaw === null
+          ? "[telegram] Ignoring persisted update offset for this runtime; starting without skip cutoff."
+          : `[telegram] Ignoring persisted update offset (${String(persistedOffsetRaw)}) for this runtime; starting without skip cutoff.`,
+      );
+    } else if (persistedOffsetRaw !== null && lastUpdateId === null) {
       log(
         `[telegram] Ignoring invalid persisted update offset (${String(persistedOffsetRaw)}); starting without offset confirmation.`,
       );

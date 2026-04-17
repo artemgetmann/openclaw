@@ -37,6 +37,18 @@ export function createAcpxRuntimeService(
 ): OpenClawPluginService {
   let runtime: AcpxRuntimeLike | null = null;
   let lifecycleRevision = 0;
+  let readinessPromise: Promise<void> | null = null;
+
+  async function refreshBackendReadiness(currentRevision: number): Promise<void> {
+    const activeRuntime = runtime;
+    if (!activeRuntime) {
+      return;
+    }
+    await activeRuntime.probeAvailability();
+    if (currentRevision !== lifecycleRevision) {
+      return;
+    }
+  }
 
   return {
     id: "acpx-runtime",
@@ -56,6 +68,14 @@ export function createAcpxRuntimeService(
         id: ACPX_BACKEND_ID,
         runtime,
         healthy: () => runtime?.isHealthy() ?? false,
+        ready: async () => {
+          await readinessPromise;
+          // Startup readiness only covers the initial ensure/probe path.
+          // If a later runtime command marks the backend unhealthy (for example
+          // after a transient missing-command spawn failure), re-probe here so
+          // the registry can recover without requiring a full gateway restart.
+          await refreshBackendReadiness(lifecycleRevision);
+        },
       });
       const expectedVersionLabel = pluginConfig.expectedVersion ?? "any";
       const installLabel = pluginConfig.allowPluginLocalInstall ? "enabled" : "disabled";
@@ -65,7 +85,7 @@ export function createAcpxRuntimeService(
 
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
-      void (async () => {
+      readinessPromise = (async () => {
         try {
           await ensureAcpx({
             command: pluginConfig.command,
@@ -80,7 +100,7 @@ export function createAcpxRuntimeService(
           if (currentRevision !== lifecycleRevision) {
             return;
           }
-          await runtime?.probeAvailability();
+          await refreshBackendReadiness(currentRevision);
           if (runtime?.isHealthy()) {
             ctx.logger.info("acpx runtime backend ready");
           } else {
@@ -99,6 +119,7 @@ export function createAcpxRuntimeService(
     async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
       lifecycleRevision += 1;
       unregisterAcpRuntimeBackend(ACPX_BACKEND_ID);
+      readinessPromise = null;
       runtime = null;
     },
   };

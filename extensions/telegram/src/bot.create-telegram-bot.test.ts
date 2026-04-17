@@ -585,6 +585,46 @@ describe("createTelegramBot", () => {
       persistedAfterDrain.length > 0 ? Math.max(...persistedAfterDrain) : -Infinity;
     expect(maxPersistedAfterDrain).toBe(102);
   });
+
+  it("logs when persisted cutoff skips an update before routing", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+
+    createTelegramBot({
+      token: "tok",
+      runtime,
+      updateOffset: {
+        lastUpdateId: 100,
+      },
+    });
+
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    await handler({
+      update: {
+        update_id: 100,
+      },
+      message: {
+        message_id: 42,
+        chat: { id: 1234, type: "private" },
+        text: "fresh-ish probe",
+        date: 1736380800,
+        from: { id: 7, first_name: "Ada" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "[telegram] Skipping update_id 100 because persisted cutoff 100 is active (update:100).",
+    );
+  });
   it("allows distinct callback_query ids without update_id", async () => {
     loadConfig.mockReturnValue({
       channels: {

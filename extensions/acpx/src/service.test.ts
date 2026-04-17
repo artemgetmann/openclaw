@@ -1,6 +1,5 @@
 import type { AcpRuntime, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/acpx";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AcpRuntimeError } from "../../../src/acp/runtime/errors.js";
 import {
   __testing,
   getAcpRuntimeBackend,
@@ -8,6 +7,20 @@ import {
 } from "../../../src/acp/runtime/registry.js";
 import { ACPX_BUNDLED_BIN, ACPX_PINNED_VERSION } from "./config.js";
 import { createAcpxRuntimeService } from "./service.js";
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 const { ensureAcpxSpy } = vi.hoisted(() => ({
   ensureAcpxSpy: vi.fn(async () => {}),
@@ -101,6 +114,36 @@ describe("createAcpxRuntimeService", () => {
     expect(getAcpRuntimeBackend("acpx")).toBeNull();
   });
 
+  it("waits for the startup probe before serving the first backend lookup", async () => {
+    const ready = createDeferred<void>();
+    let healthy = false;
+    const { runtime, probeAvailabilitySpy, isHealthySpy } = createRuntimeStub(false);
+    probeAvailabilitySpy.mockImplementation(async () => {
+      await ready.promise;
+      healthy = true;
+    });
+    isHealthySpy.mockImplementation(() => healthy);
+    const service = createAcpxRuntimeService({
+      runtimeFactory: () => runtime,
+    });
+    const context = createServiceContext();
+
+    await service.start(context);
+
+    const backendLookup = requireAcpRuntimeBackend("acpx");
+    await Promise.resolve();
+    expect(isHealthySpy).toHaveBeenCalledTimes(1);
+
+    ready.resolve();
+
+    await expect(backendLookup).resolves.toMatchObject({
+      id: "acpx",
+      runtime,
+    });
+    expect(probeAvailabilitySpy).toHaveBeenCalledTimes(2);
+    expect(isHealthySpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("marks backend unavailable when runtime health check fails", async () => {
     const { runtime } = createRuntimeStub(false);
     const service = createAcpxRuntimeService({
@@ -110,13 +153,35 @@ describe("createAcpxRuntimeService", () => {
 
     await service.start(context);
 
-    expect(() => requireAcpRuntimeBackend("acpx")).toThrowError(AcpRuntimeError);
-    try {
-      requireAcpRuntimeBackend("acpx");
-      throw new Error("expected ACP backend lookup to fail");
-    } catch (error) {
-      expect((error as AcpRuntimeError).code).toBe("ACP_BACKEND_UNAVAILABLE");
-    }
+    await expect(requireAcpRuntimeBackend("acpx")).rejects.toMatchObject({
+      code: "ACP_BACKEND_UNAVAILABLE",
+    });
+  });
+
+  it("re-probes an unhealthy backend after startup readiness already completed", async () => {
+    let healthy = true;
+    const { runtime, probeAvailabilitySpy, isHealthySpy } = createRuntimeStub(true);
+    isHealthySpy.mockImplementation(() => healthy);
+    probeAvailabilitySpy.mockImplementation(async () => {
+      healthy = true;
+    });
+    const service = createAcpxRuntimeService({
+      runtimeFactory: () => runtime,
+    });
+    const context = createServiceContext();
+
+    await service.start(context);
+    await vi.waitFor(() => {
+      expect(probeAvailabilitySpy).toHaveBeenCalledOnce();
+    });
+
+    healthy = false;
+
+    await expect(requireAcpRuntimeBackend("acpx")).resolves.toMatchObject({
+      id: "acpx",
+      runtime,
+    });
+    expect(probeAvailabilitySpy).toHaveBeenCalledTimes(2);
   });
 
   it("passes queue-owner TTL from plugin config", async () => {

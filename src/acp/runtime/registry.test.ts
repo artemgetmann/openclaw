@@ -9,6 +9,20 @@ import {
 } from "./registry.js";
 import type { AcpRuntime } from "./types.js";
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function createRuntimeStub(): AcpRuntime {
   return {
     ensureSession: vi.fn(async (input) => ({
@@ -57,25 +71,44 @@ describe("acp runtime registry", () => {
     expect(backend?.id).toBe("healthy");
   });
 
-  it("throws a typed missing-backend error when no backend is registered", () => {
-    expect(() => requireAcpRuntimeBackend()).toThrowError(AcpRuntimeError);
-    expect(() => requireAcpRuntimeBackend()).toThrowError(/ACP runtime backend is not configured/i);
+  it("throws a typed missing-backend error when no backend is registered", async () => {
+    await expect(requireAcpRuntimeBackend()).rejects.toBeInstanceOf(AcpRuntimeError);
+    await expect(requireAcpRuntimeBackend()).rejects.toThrowError(
+      /ACP runtime backend is not configured/i,
+    );
   });
 
-  it("throws a typed unavailable error when the requested backend is unhealthy", () => {
+  it("waits for in-flight readiness before failing a backend lookup", async () => {
+    const ready = createDeferred<void>();
+    const healthy = vi.fn(() => false);
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime: createRuntimeStub(),
+      healthy,
+      ready: () => ready.promise,
+    });
+
+    const lookup = requireAcpRuntimeBackend("acpx");
+    expect(healthy).toHaveBeenCalledTimes(1);
+
+    ready.resolve();
+
+    await expect(lookup).rejects.toMatchObject({
+      code: "ACP_BACKEND_UNAVAILABLE",
+    });
+    expect(healthy).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws a typed unavailable error when the requested backend is unhealthy", async () => {
     registerAcpRuntimeBackend({
       id: "acpx",
       runtime: createRuntimeStub(),
       healthy: () => false,
     });
 
-    try {
-      requireAcpRuntimeBackend("acpx");
-      throw new Error("expected requireAcpRuntimeBackend to throw");
-    } catch (err) {
-      expect(err).toBeInstanceOf(AcpRuntimeError);
-      expect((err as AcpRuntimeError).code).toBe("ACP_BACKEND_UNAVAILABLE");
-    }
+    await expect(requireAcpRuntimeBackend("acpx")).rejects.toMatchObject({
+      code: "ACP_BACKEND_UNAVAILABLE",
+    });
   });
 
   it("unregisters a backend by id", () => {

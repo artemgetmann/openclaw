@@ -27,13 +27,19 @@ Mandatory preflight for coding-agent thread requests:
 Choose one of these paths:
 
 1. OpenClaw ACP runtime path (default): use `sessions_spawn` / ACP runtime tools.
-2. Direct `acpx` path (telephone game): use `acpx` CLI through `exec` to drive the harness session directly.
+2. Direct `acpx` path (telephone game): use `acpx` CLI through `exec` only for explicit one-shot/direct-acpx intent.
 
-Use direct `acpx` when one of these is true:
+Use direct `acpx` only when one of these is true:
 
 - user explicitly asks for direct `acpx` driving
-- ACP runtime/plugin path is unavailable or unhealthy
-- the task is "just relay prompts to harness" and no OpenClaw ACP lifecycle features are needed
+- user explicitly asks for one-shot behavior instead of a reusable session/thread
+
+Do not use direct `acpx` as a fallback for:
+
+- `runtime: "acp"` requests
+- thread-bound harness requests
+- persistent/session requests
+- requests to continue or relay to an existing harness worker
 
 Do not use:
 
@@ -70,6 +76,12 @@ Required behavior:
 5. Set `agentId` explicitly unless ACP default agent is known.
 6. Do not ask user to run slash commands or CLI when this path works directly.
 
+Persistence invariant:
+
+- If the user wants a reusable harness worker, a bound thread, a follow-up relay target, or a continued ACP conversation, stay on the ACP runtime path.
+- For those requests, do not silently switch execution models.
+- If ACP cannot be repaired into a usable persistent session, fail loudly with the exact ACP error instead of using direct `acpx exec`.
+
 Example:
 
 User: "spawn a test codex session in thread and tell it to say hi"
@@ -90,7 +102,7 @@ Call:
 
 When the user asks to start a coding harness in a thread (for example "start a codex/claude/pi/kimi thread"), treat that as an ACP runtime request and try to satisfy it end-to-end.
 
-Required behavior when ACP backend is unavailable:
+Required behavior when ACP backend is unavailable for a persistent/thread-bound ACP request:
 
 1. Do not immediately ask the user to pick an alternate path.
 2. First attempt automatic local repair:
@@ -98,12 +110,15 @@ Required behavior when ACP backend is unavailable:
    - verify `${ACPX_CMD} --version`
 3. After reinstall/repair, restart the gateway and explicitly offer to run that restart for the user.
 4. Retry ACP thread spawn once after repair.
-5. Only if repair+retry fails, report the concrete error and then offer fallback options.
+5. Only if repair+retry fails, report the concrete error and stop.
 
-When offering fallback, keep ACP first:
+Fail-closed rule for persistent requests:
 
-- Option 1: retry ACP spawn after showing exact failing step
-- Option 2: direct acpx telephone-game flow
+- Do not offer direct `acpx` telephone-game flow as fallback for thread-bound or persistent ACP requests.
+- Do not convert a persistent ACP request into one-shot `acpx exec`.
+- The only acceptable outcomes are:
+  - persistent ACP session created or reused successfully
+  - explicit failure with the exact ACP error and failing step
 
 Do not default to subagent runtime for these requests.
 
@@ -112,33 +127,47 @@ Do not default to subagent runtime for these requests.
 For this repo, direct `acpx` calls must follow the same pinned policy as the `@openclaw/acpx` extension.
 
 1. Prefer plugin-local binary, not global PATH:
-   - `./extensions/acpx/node_modules/.bin/acpx`
+   - `${ACPX_CMD}` when already injected into the environment
+   - otherwise `./dist/extensions/acpx/node_modules/.bin/acpx`
+   - otherwise `./extensions/acpx/node_modules/.bin/acpx`
 2. Resolve pinned version from extension dependency:
    - `node -e "console.log(require('./extensions/acpx/package.json').dependencies.acpx)"`
 3. If binary is missing or version mismatched, install plugin-local pinned version:
    - `cd extensions/acpx && npm install --omit=dev --no-save acpx@<pinnedVersion>`
 4. Verify before use:
-   - `./extensions/acpx/node_modules/.bin/acpx --version`
+   - `"${ACPX_CMD}" --version`
 5. If install/repair changed ACPX artifacts, restart the gateway and offer to run the restart.
 6. Do not run `npm install -g acpx` unless the user explicitly asks for global install.
+7. Never replace `${ACPX_CMD}` with guessed package-manager paths like `/opt/homebrew/lib/node_modules/...`.
 
 Set and reuse:
 
 ```bash
-ACPX_CMD="./extensions/acpx/node_modules/.bin/acpx"
+if [[ -z "${ACPX_CMD:-}" ]]; then
+  if [[ -x "./dist/extensions/acpx/node_modules/.bin/acpx" ]]; then
+    ACPX_CMD="./dist/extensions/acpx/node_modules/.bin/acpx"
+  elif [[ -x "./extensions/acpx/node_modules/.bin/acpx" ]]; then
+    ACPX_CMD="./extensions/acpx/node_modules/.bin/acpx"
+  else
+    echo "acpx binary missing in dist/ and extensions/" >&2
+    exit 1
+  fi
+fi
 ```
 
 ## Direct acpx path ("telephone game")
 
 Use this path to drive harness sessions without `/acp` or subagent runtime.
+This path is for explicit direct-acpx or explicit one-shot requests only.
 
 ### Rules
 
 1. Use `exec` commands that call `${ACPX_CMD}`.
 2. Reuse a stable session name per conversation so follow-up prompts stay in the same harness context.
-3. Prefer `--format quiet` for clean assistant text to relay back to user.
+3. Do not invent unsupported `acpx` flags. For Codex direct calls, prefer only flags shown by `${ACPX_CMD} codex --help`.
 4. Use `exec` (one-shot) only when the user wants one-shot behavior.
-5. Keep working directory explicit (`--cwd`) when task scope depends on repo context.
+5. Keep working directory explicit via the shell/tool `workdir`, not by adding unsupported `--cwd` flags to `acpx`.
+6. Do not use this path to satisfy a request that was already identified as a persistent/thread-bound ACP request.
 
 ### Session naming
 
@@ -156,14 +185,18 @@ Persistent session (create if missing, then prompt):
 ${ACPX_CMD} codex sessions show oc-codex-<conversationId> \
   || ${ACPX_CMD} codex sessions new --name oc-codex-<conversationId>
 
-${ACPX_CMD} codex -s oc-codex-<conversationId> --cwd <workspacePath> --format quiet "<prompt>"
+printf '%s' "<prompt>" | ${ACPX_CMD} codex prompt -s oc-codex-<conversationId> -f -
 ```
+
+Run that command from the target repo as the shell/tool `workdir`.
 
 One-shot:
 
 ```bash
-${ACPX_CMD} codex exec --cwd <workspacePath> --format quiet "<prompt>"
+printf '%s' "<prompt>" | ${ACPX_CMD} codex exec -f -
 ```
+
+Run that command from the target repo as the shell/tool `workdir`.
 
 Cancel in-flight turn:
 
@@ -202,13 +235,13 @@ If `~/.acpx/config.json` overrides `agents`, those overrides replace defaults.
 ### Failure handling
 
 - `acpx: command not found`:
-  - for thread-spawn ACP requests, install plugin-local pinned acpx in `extensions/acpx` immediately
+  - for explicit direct-acpx requests, install plugin-local pinned acpx in `extensions/acpx` immediately
   - restart gateway after install and offer to run the restart automatically
   - then retry once
   - do not ask for install permission first unless policy explicitly requires it
   - do not install global `acpx` unless explicitly requested
 - adapter command missing (for example `claude-agent-acp` not found):
-  - for thread-spawn ACP requests, first restore built-in defaults by removing broken `~/.acpx/config.json` agent overrides
+  - for explicit direct-acpx requests, first restore built-in defaults by removing broken `~/.acpx/config.json` agent overrides
   - then retry once before offering fallback
   - if user wants binary-based overrides, install exactly the configured adapter binary
 - `NO_SESSION`: run `${ACPX_CMD} <agent> sessions new --name <sessionName>` then retry prompt.

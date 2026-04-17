@@ -223,7 +223,9 @@ export class AcpSessionManager {
     const agent = normalizeAgentId(input.agent);
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
     return await this.withSessionActor(sessionKey, async () => {
-      const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
+      const backend = await this.deps.requireRuntimeBackend(
+        input.backendId || input.cfg.acp?.backend,
+      );
       const runtime = backend.runtime;
       const initialRuntimeOptions = validateRuntimeOptionPatch({ cwd: input.cwd });
       const requestedCwd = initialRuntimeOptions.cwd;
@@ -932,7 +934,7 @@ export class AcpSessionManager {
       sessionKey: params.sessionKey,
     });
 
-    const backend = this.deps.requireRuntimeBackend(configuredBackend || undefined);
+    const backend = await this.deps.requireRuntimeBackend(configuredBackend || undefined);
     const runtime = backend.runtime;
     const ensured = await withAcpRuntimeErrorBoundary({
       run: async () =>

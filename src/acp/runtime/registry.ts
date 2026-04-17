@@ -5,6 +5,7 @@ export type AcpRuntimeBackend = {
   id: string;
   runtime: AcpRuntime;
   healthy?: () => boolean;
+  ready?: () => Promise<void>;
 };
 
 type AcpRuntimeRegistryGlobalState = {
@@ -46,6 +47,18 @@ function isBackendHealthy(backend: AcpRuntimeBackend): boolean {
   }
 }
 
+async function waitForBackendReadiness(backend: AcpRuntimeBackend): Promise<void> {
+  if (!backend.ready) {
+    return;
+  }
+  try {
+    // Readiness failures still surface through the health re-check below.
+    await backend.ready();
+  } catch {
+    // Swallow here so callers consistently receive the typed unavailable error.
+  }
+}
+
 export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
   const id = normalizeBackendId(backend.id);
   if (!id) {
@@ -84,7 +97,7 @@ export function getAcpRuntimeBackend(id?: string): AcpRuntimeBackend | null {
   return ACP_BACKENDS_BY_ID.values().next().value ?? null;
 }
 
-export function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend {
+export async function requireAcpRuntimeBackend(id?: string): Promise<AcpRuntimeBackend> {
   const normalized = normalizeBackendId(id);
   const backend = getAcpRuntimeBackend(normalized || undefined);
   if (!backend) {
@@ -94,10 +107,16 @@ export function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend {
     );
   }
   if (!isBackendHealthy(backend)) {
-    throw new AcpRuntimeError(
-      "ACP_BACKEND_UNAVAILABLE",
-      "ACP runtime backend is currently unavailable. Try again in a moment.",
-    );
+    // A backend can be registered before its first install/probe pass completes.
+    // Wait for that in-flight readiness work once so initial ACP requests do not
+    // fail on a stale unhealthy flag.
+    await waitForBackendReadiness(backend);
+    if (!isBackendHealthy(backend)) {
+      throw new AcpRuntimeError(
+        "ACP_BACKEND_UNAVAILABLE",
+        "ACP runtime backend is currently unavailable. Try again in a moment.",
+      );
+    }
   }
   if (normalized && backend.id !== normalized) {
     throw new AcpRuntimeError(

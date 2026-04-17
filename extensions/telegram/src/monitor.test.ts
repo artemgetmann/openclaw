@@ -607,6 +607,28 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(order).toEqual(["deleteWebhook", "run"]);
   });
 
+  it("ignores persisted update offset when the runtime requests fresh ingestion", async () => {
+    const previous = process.env.OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET;
+    process.env.OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET = "1";
+    try {
+      readTelegramUpdateOffsetSpy.mockResolvedValueOnce(549076203);
+      const abort = new AbortController();
+      mockRunOnceAndAbort(abort);
+
+      await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+      expect(createTelegramBotCalls.at(-1)?.updateOffset).toMatchObject({
+        lastUpdateId: null,
+      });
+    } finally {
+      if (typeof previous === "string") {
+        process.env.OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET = previous;
+      } else {
+        delete process.env.OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET;
+      }
+    }
+  });
+
   it("skips offset confirmation when no persisted offset exists", async () => {
     await expectOffsetConfirmationSkipped(null);
   });

@@ -24,6 +24,20 @@ function createDefaultSpawnConfig(): OpenClawConfig {
   };
 }
 
+function createTelegramSpawnConfig(): OpenClawConfig {
+  return {
+    ...createDefaultSpawnConfig(),
+    channels: {
+      telegram: {
+        threadBindings: {
+          enabled: true,
+          spawnAcpSessions: true,
+        },
+      },
+    },
+  };
+}
+
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
   const sessionBindingCapabilitiesMock = vi.fn();
@@ -270,16 +284,19 @@ describe("spawnAcpDirect", () => {
       .mockImplementation(
         async (input: {
           targetSessionKey: string;
-          conversation: { accountId: string };
+          placement: "current" | "child";
+          conversation: { channel: string; accountId: string; conversationId: string };
           metadata?: Record<string, unknown>;
         }) =>
           createSessionBinding({
             targetSessionKey: input.targetSessionKey,
             conversation: {
-              channel: "discord",
+              channel: input.conversation.channel,
               accountId: input.conversation.accountId,
-              conversationId: "child-thread",
-              parentConversationId: "parent-channel",
+              conversationId:
+                input.placement === "child" ? "child-thread" : input.conversation.conversationId,
+              parentConversationId:
+                input.placement === "child" ? input.conversation.conversationId : undefined,
             },
             metadata: {
               boundBy:
@@ -966,6 +983,14 @@ describe("spawnAcpDirect", () => {
   });
 
   it("keeps inline delivery for thread-bound ACP session mode", async () => {
+    hoisted.state.cfg = createTelegramSpawnConfig();
+    hoisted.sessionBindingCapabilitiesMock.mockReturnValue({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"] as const,
+    });
+
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
@@ -984,11 +1009,22 @@ describe("spawnAcpDirect", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.mode).toBe("session");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "telegram",
+          conversationId: "-1003342490704:topic:2",
+        }),
+      }),
+    );
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.channel).toBe("telegram");
+    expect(agentCall?.params?.to).toBe("telegram:-1003342490704");
+    expect(agentCall?.params?.threadId).toBe("2");
   });
 
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {

@@ -25,6 +25,20 @@ export function toAcpxErrorEvent(value: unknown): AcpxErrorEvent | null {
 
 export function parseJsonLines(value: string): AcpxJsonObject[] {
   const events: AcpxJsonObject[] = [];
+  const pushParsedValue = (parsed: unknown) => {
+    if (isRecord(parsed)) {
+      events.push(parsed);
+      return;
+    }
+    if (Array.isArray(parsed)) {
+      for (const entry of parsed) {
+        if (isRecord(entry)) {
+          events.push(entry);
+        }
+      }
+    }
+  };
+
   for (const line of value.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -32,13 +46,29 @@ export function parseJsonLines(value: string): AcpxJsonObject[] {
     }
     try {
       const parsed = JSON.parse(trimmed) as unknown;
-      if (isRecord(parsed)) {
-        events.push(parsed);
-      }
+      pushParsedValue(parsed);
     } catch {
       // Ignore malformed lines; callers handle missing typed events via exit code.
     }
   }
+
+  if (events.length > 0) {
+    return events;
+  }
+
+  // Some acpx control paths emit one full JSON document instead of NDJSON.
+  // Accept top-level objects and arrays so bootstrap success responses are not
+  // discarded just because they were pretty-printed or wrapped in an array.
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return events;
+  }
+  try {
+    pushParsedValue(JSON.parse(trimmed) as unknown);
+  } catch {
+    // Keep the original empty result when the full payload is not valid JSON.
+  }
+
   return events;
 }
 

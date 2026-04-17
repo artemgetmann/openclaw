@@ -5,13 +5,25 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   ACPX_BUNDLED_BIN,
+  ACPX_PLUGIN_ROOT,
   ACPX_PINNED_VERSION,
   createAcpxPluginConfigSchema,
+  resolveManagedAcpxCommand,
   resolveAcpxPluginRoot,
   resolveAcpxPluginConfig,
 } from "./config.js";
 
 describe("acpx plugin config parsing", () => {
+  it("keeps the pinned acpx version aligned with the extension dependency", () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(ACPX_PLUGIN_ROOT, "package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, unknown>;
+    };
+
+    expect(packageJson.dependencies?.acpx).toBe(ACPX_PINNED_VERSION);
+  });
+
   it("resolves source-layout plugin root from a file under src", () => {
     const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-root-source-"));
     try {
@@ -53,6 +65,46 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.stripProviderAuthEnvVars).toBe(true);
     expect(resolved.cwd).toBe(path.resolve("/tmp/workspace"));
     expect(resolved.strictWindowsCmdWrapper).toBe(true);
+  });
+
+  it("falls back from dist-local acpx bin to source-local bin when dist bin is absent", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-bundled-fallback-"));
+    const distPluginRoot = path.join(repoRoot, "dist", "extensions", "acpx");
+    const sourceBin = path.join(repoRoot, "extensions", "acpx", "node_modules", ".bin", "acpx");
+
+    try {
+      fs.mkdirSync(distPluginRoot, { recursive: true });
+      fs.mkdirSync(path.dirname(sourceBin), { recursive: true });
+      fs.writeFileSync(sourceBin, "#!/bin/sh\n", "utf8");
+
+      expect(resolveManagedAcpxCommand(distPluginRoot)).toBe(sourceBin);
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("treats the source fallback as a managed default command", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-config-fallback-"));
+    const distPluginRoot = path.join(repoRoot, "dist", "extensions", "acpx");
+    const sourceBin = path.join(repoRoot, "extensions", "acpx", "node_modules", ".bin", "acpx");
+
+    try {
+      fs.mkdirSync(distPluginRoot, { recursive: true });
+      fs.mkdirSync(path.dirname(sourceBin), { recursive: true });
+      fs.writeFileSync(sourceBin, "#!/bin/sh\n", "utf8");
+      const resolved = resolveAcpxPluginConfig({
+        rawConfig: undefined,
+        workspaceDir: "/tmp/workspace",
+        managedPluginRoot: distPluginRoot,
+      });
+
+      expect(resolved.command).toBe(sourceBin);
+      expect(resolved.allowPluginLocalInstall).toBe(true);
+      expect(resolved.stripProviderAuthEnvVars).toBe(true);
+      expect(resolved.expectedVersion).toBe(ACPX_PINNED_VERSION);
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
   });
 
   it("accepts command override and disables plugin-local auto-install", () => {
