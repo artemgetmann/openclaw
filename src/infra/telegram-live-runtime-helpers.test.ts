@@ -352,7 +352,7 @@ describe("telegram live runtime helpers", () => {
 
     expect(config.agents?.defaults?.model).toMatchObject({
       primary: "openai-codex/gpt-5.4",
-      fallbacks: ["anthropic/claude-sonnet-4-5"],
+      fallbacks: [],
     });
     expect(config.agents?.defaults?.workspace).toBe("/repo/live-lane");
     expect(config.acp).toEqual({
