@@ -9,11 +9,13 @@ const hoisted = vi.hoisted(() => {
   const readAcpSessionEntryMock = vi.fn();
   const upsertAcpSessionMetaMock = vi.fn();
   const requireAcpRuntimeBackendMock = vi.fn();
+  const appendAcpContinuityEventToSessionTranscriptMock = vi.fn();
   return {
     listAcpSessionEntriesMock,
     readAcpSessionEntryMock,
     upsertAcpSessionMetaMock,
     requireAcpRuntimeBackendMock,
+    appendAcpContinuityEventToSessionTranscriptMock,
   };
 });
 
@@ -29,6 +31,15 @@ vi.mock("../runtime/registry.js", async (importOriginal) => {
     ...actual,
     requireAcpRuntimeBackend: (backendId?: string) =>
       hoisted.requireAcpRuntimeBackendMock(backendId),
+  };
+});
+
+vi.mock("../../config/sessions/transcript.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/transcript.js")>();
+  return {
+    ...actual,
+    appendAcpContinuityEventToSessionTranscript: (params: unknown) =>
+      hoisted.appendAcpContinuityEventToSessionTranscriptMock(params),
   };
 });
 
@@ -151,6 +162,9 @@ describe("AcpSessionManager", () => {
     hoisted.readAcpSessionEntryMock.mockReset();
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue(null);
     hoisted.requireAcpRuntimeBackendMock.mockReset();
+    hoisted.appendAcpContinuityEventToSessionTranscriptMock
+      .mockReset()
+      .mockResolvedValue({ ok: true, sessionFile: "/tmp/acp-session.jsonl" });
   });
 
   it("marks ACP-shaped sessions without metadata as stale", () => {
@@ -967,6 +981,165 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.getStatus).toHaveBeenCalledTimes(1);
     expect(currentMeta.identity?.acpxSessionId).toBe("acpx-fresh");
     expect(currentMeta.identity?.agentSessionId).toBe("agent-fresh");
+  });
+
+  it("records a resumed_persisted continuity event when a turn restores a worker from persisted ACP state", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockResolvedValue({
+      sessionKey: "agent:codex:acp:session-1",
+      backend: "acpx",
+      runtimeSessionName: "runtime-1",
+      backendSessionId: "acpx-fresh",
+      agentSessionId: "agent-fresh",
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      identity: {
+        state: "resolved",
+        source: "status",
+        acpxSessionId: "acpx-stale",
+        agentSessionId: "agent-stale",
+        lastUpdatedAt: Date.now(),
+      },
+    };
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey =
+        (paramsUnknown as { sessionKey?: string }).sessionKey ?? "agent:codex:acp:session-1";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:telegram:default:direct:1337",
+          channel: "telegram",
+          acp: currentMeta,
+        },
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:telegram:default:direct:1337",
+        channel: "telegram",
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "resume this worker",
+      mode: "prompt",
+      requestId: "run-resume-1",
+    });
+
+    expect(hoisted.appendAcpContinuityEventToSessionTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:session-1",
+        continuity: "resumed_persisted",
+        runtimeSessionName: "runtime-1",
+        reason: "turn resumed an ACP worker from persisted session metadata",
+      }),
+    );
+  });
+
+  it("records a reused_live continuity event when a turn reuses the cached ACP worker runtime", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockResolvedValue({
+      sessionKey: "agent:codex:acp:session-1",
+      backend: "acpx",
+      runtimeSessionName: "runtime-1",
+      backendSessionId: "acpx-live",
+      agentSessionId: "agent-live",
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    let currentMeta: SessionAcpMeta | undefined;
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey =
+        (paramsUnknown as { sessionKey?: string }).sessionKey ?? "agent:codex:acp:session-1";
+      return currentMeta
+        ? {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "session-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:telegram:default:direct:1337",
+              channel: "telegram",
+              acp: currentMeta,
+            },
+            acp: currentMeta,
+          }
+        : null;
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, currentMeta ? { acp: currentMeta } : undefined);
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:telegram:default:direct:1337",
+        channel: "telegram",
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      agent: "codex",
+      mode: "persistent",
+    });
+    hoisted.appendAcpContinuityEventToSessionTranscriptMock.mockClear();
+
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "continue this worker",
+      mode: "prompt",
+      requestId: "run-live-1",
+    });
+
+    expect(hoisted.appendAcpContinuityEventToSessionTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:session-1",
+        continuity: "reused_live",
+        runtimeSessionName: "runtime-1",
+        reason: "turn reused the currently live ACP worker runtime",
+      }),
+    );
   });
 
   it("reconciles pending ACP identities during startup scan", async () => {

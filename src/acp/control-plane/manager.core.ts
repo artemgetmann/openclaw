@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { appendAcpContinuityEventToSessionTranscript } from "../../config/sessions/transcript.js";
 import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
@@ -312,6 +313,13 @@ export class AcpSessionManager {
         mode: input.mode,
         cwd: effectiveCwd,
       });
+      await this.appendAcpContinuityEvent({
+        sessionKey,
+        meta,
+        continuity: "spawned_new",
+        nextIdentity: initializedIdentity,
+        reason: "persistent ACP worker session created",
+      });
       return {
         runtime,
         handle,
@@ -614,6 +622,7 @@ export class AcpSessionManager {
         runtime,
         handle: ensuredHandle,
         meta: ensuredMeta,
+        continuity,
       } = await this.ensureRuntimeHandle({
         cfg: input.cfg,
         sessionKey,
@@ -621,6 +630,19 @@ export class AcpSessionManager {
       });
       let handle = ensuredHandle;
       const meta = ensuredMeta;
+      if (continuity) {
+        await this.appendAcpContinuityEvent({
+          sessionKey,
+          meta,
+          continuity,
+          previousIdentity: resolveSessionIdentityFromMeta(resolvedMeta),
+          nextIdentity: resolveSessionIdentityFromMeta(meta),
+          reason:
+            continuity === "resumed_persisted"
+              ? "turn resumed an ACP worker from persisted session metadata"
+              : "turn reused the currently live ACP worker runtime",
+        });
+      }
       await this.applyRuntimeControls({
         sessionKey,
         runtime,
@@ -904,7 +926,12 @@ export class AcpSessionManager {
     cfg: OpenClawConfig;
     sessionKey: string;
     meta: SessionAcpMeta;
-  }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
+  }): Promise<{
+    runtime: AcpRuntime;
+    handle: AcpRuntimeHandle;
+    meta: SessionAcpMeta;
+    continuity?: "reused_live" | "resumed_persisted";
+  }> {
     const agent =
       params.meta.agent?.trim() || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
     const mode = params.meta.mode;
@@ -922,6 +949,7 @@ export class AcpSessionManager {
           runtime: cached.runtime,
           handle: cached.handle,
           meta: params.meta,
+          continuity: "reused_live" as const,
         };
       }
       this.clearCachedRuntimeState(params.sessionKey);
@@ -1018,7 +1046,32 @@ export class AcpSessionManager {
       runtime,
       handle: nextHandle,
       meta: nextMeta,
+      continuity: "resumed_persisted" as const,
     };
+  }
+
+  private async appendAcpContinuityEvent(params: {
+    sessionKey: string;
+    meta: SessionAcpMeta;
+    continuity: "spawned_new" | "resumed_persisted" | "reused_live";
+    previousIdentity?: ReturnType<typeof resolveSessionIdentityFromMeta>;
+    nextIdentity?: ReturnType<typeof resolveSessionIdentityFromMeta>;
+    reason: string;
+  }): Promise<void> {
+    const appended = await appendAcpContinuityEventToSessionTranscript({
+      agentId: params.meta.agent,
+      sessionKey: params.sessionKey,
+      continuity: params.continuity,
+      runtimeSessionName: params.meta.runtimeSessionName,
+      previousIdentity: params.previousIdentity,
+      nextIdentity: params.nextIdentity,
+      reason: params.reason,
+    });
+    if (!appended.ok) {
+      logVerbose(
+        `acp-manager: failed appending continuity transcript event for ${params.sessionKey}: ${appended.reason}`,
+      );
+    }
   }
 
   private async persistRuntimeOptions(params: {
