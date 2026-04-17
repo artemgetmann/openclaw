@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -30,7 +31,71 @@ function normalizePathForComparison(targetPath: string | null | undefined): stri
   }
 }
 
-export function extractTelegramBotTokensFromConfig(config: OpenClawConfig): string[] {
+function execText(command: string, args: string[], env: NodeJS.ProcessEnv = process.env): string {
+  try {
+    return execFileSync(command, args, {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...env,
+      },
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function parseLaunchctlPid(output: string): number | null {
+  const rawPid =
+    output.match(/^\s*pid\s*=\s*(\d+)\s*$/m)?.[1] ??
+    output.match(/^\s*"pid"\s*=\s*(\d+)\s*$/m)?.[1] ??
+    "";
+  const pid = Number.parseInt(rawPid, 10);
+  return Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function resolveCanonicalSharedGatewayLabel(env: NodeJS.ProcessEnv = process.env): string {
+  return env.OPENCLAW_CANONICAL_SHARED_GATEWAY_LABEL?.trim() || "ai.openclaw.gateway";
+}
+
+export function isCanonicalSharedGatewayActive(env: NodeJS.ProcessEnv = process.env): boolean {
+  const canonicalMainRepoRoot = resolveCanonicalMainRepoRoot(env);
+  if (!canonicalMainRepoRoot || typeof process.getuid !== "function") {
+    return false;
+  }
+
+  // Only count the shared runtime as active when launchd still points at the
+  // canonical main checkout. A loaded-but-detached label should not reserve bots.
+  const launchctlTarget = `gui/${process.getuid()}/${resolveCanonicalSharedGatewayLabel(env)}`;
+  const launchState = execText("launchctl", ["print", launchctlTarget], env);
+  const pid = parseLaunchctlPid(launchState);
+  if (!launchState || pid === null) {
+    return false;
+  }
+
+  const expectedRuntime = path.join(canonicalMainRepoRoot, "dist", "index.js");
+  const expectedEntrypoint = path.join(canonicalMainRepoRoot, "openclaw.mjs");
+  if (!launchState.includes(expectedRuntime) && !launchState.includes(expectedEntrypoint)) {
+    return false;
+  }
+
+  const command = execText("ps", ["-o", "command=", "-p", String(pid)], env);
+  return Boolean(
+    command &&
+    (command.includes(expectedRuntime) ||
+      command.includes(expectedEntrypoint) ||
+      command.includes(" gateway run") ||
+      command.includes("openclaw-gateway")),
+  );
+}
+
+export function extractTelegramBotTokensFromConfig(
+  config: OpenClawConfig,
+  opts: {
+    includeDisabledAccounts?: boolean;
+  } = {},
+): string[] {
   const tokens: string[] = [];
   const telegram =
     config.channels && typeof config.channels === "object" && config.channels.telegram
@@ -46,6 +111,11 @@ export function extractTelegramBotTokensFromConfig(config: OpenClawConfig): stri
       telegram.accounts && typeof telegram.accounts === "object" ? telegram.accounts : {};
     for (const entry of Object.values(accounts)) {
       if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      // Disabled canonical accounts are not started by the shared gateway, so
+      // their tokens should not be treated as actively owned.
+      if (!opts.includeDisabledAccounts && "enabled" in entry && entry.enabled === false) {
         continue;
       }
       if (typeof entry.botToken === "string" && entry.botToken.trim()) {
@@ -130,6 +200,10 @@ function readCanonicalSharedGatewayConfig(
 export function collectProtectedCanonicalTelegramBotTokens(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
+  if (!isCanonicalSharedGatewayActive(env)) {
+    return [];
+  }
+
   const canonicalConfig = readCanonicalSharedGatewayConfig(env);
   if (!canonicalConfig) {
     return [];
