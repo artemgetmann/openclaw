@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   bootstrapTelegramLiveAcpValidationAuthStore,
+  buildTelegramLiveRuntimeChildEnv,
   buildTelegramLiveRuntimeConfig,
   collectActiveTelegramTokenLeaseEntries,
   deriveTelegramLiveRuntimeProfile,
@@ -256,7 +257,11 @@ describe("telegram live runtime helpers", () => {
           defaults: {
             model: {
               primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-4-5"],
+              fallbacks: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-5"],
+            },
+            models: {
+              "openai/gpt-5.4": { alias: "GPT 5.4" },
+              "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
             },
           },
         },
