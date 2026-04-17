@@ -7,9 +7,11 @@ import {
   bootstrapTelegramLiveAcpValidationAuthStore,
   buildTelegramLiveRuntimeChildEnv,
   buildTelegramLiveRuntimeConfig,
+  collectActiveReservedTelegramBotTokensFromCanonicalConfig,
   collectActiveTelegramTokenLeaseEntries,
   deriveTelegramLiveRuntimeProfile,
   extractTelegramBotTokensFromConfig,
+  isCanonicalSharedGatewayActive,
   selectTelegramTesterToken,
 } from "../../scripts/lib/telegram-live-runtime-helpers.mjs";
 
@@ -127,7 +129,67 @@ describe("telegram live runtime helpers", () => {
     ]);
   });
 
-  it("builds a Telegram-only runtime config that disables ACP without inheriting OpenAI secrets", () => {
+  it("treats canonical-config tokens as reserved only while the shared gateway is active", () => {
+    const home = makeTempDir();
+    const canonicalMainRepo = path.join(home, "Programming_Projects", "openclaw");
+    const canonicalConfigPath = path.join(home, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.join(canonicalMainRepo, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(canonicalMainRepo, "dist", "index.js"), "", "utf8");
+    fs.writeFileSync(path.join(canonicalMainRepo, "package.json"), "{}\n", "utf8");
+    const canonicalMainRepoReal = fs.realpathSync.native(canonicalMainRepo);
+    fs.mkdirSync(path.dirname(canonicalConfigPath), { recursive: true });
+    fs.writeFileSync(
+      canonicalConfigPath,
+      JSON.stringify({
+        channels: {
+          telegram: {
+            botToken: "exec-token",
+            accounts: {
+              finance: { botToken: "finance-token" },
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const execTextFn = (command, args) => {
+      const joined = `${command} ${args.join(" ")}`;
+      if (joined.includes("launchctl print")) {
+        return `pid = 456\nprogram = "${canonicalMainRepoReal}/dist/index.js"\n`;
+      }
+      if (joined.includes("ps -o command=")) {
+        return `node ${canonicalMainRepoReal}/dist/index.js gateway run`;
+      }
+      return "";
+    };
+
+    expect(
+      isCanonicalSharedGatewayActive({
+        env: { HOME: home, OPENCLAW_MAIN_REPO: canonicalMainRepo },
+        execTextFn,
+        getUidFn: () => 501,
+      }),
+    ).toBe(true);
+    expect(
+      collectActiveReservedTelegramBotTokensFromCanonicalConfig({
+        env: { HOME: home, OPENCLAW_MAIN_REPO: canonicalMainRepo },
+        baseConfigPath: canonicalConfigPath,
+        execTextFn,
+        getUidFn: () => 501,
+      }),
+    ).toEqual(["exec-token", "finance-token"]);
+    expect(
+      collectActiveReservedTelegramBotTokensFromCanonicalConfig({
+        env: { HOME: home, OPENCLAW_MAIN_REPO: canonicalMainRepo },
+        baseConfigPath: canonicalConfigPath,
+        execTextFn: () => "",
+        getUidFn: () => 501,
+      }),
+    ).toEqual([]);
+  });
+
+  it("builds a Telegram-only runtime config that disables ACP without inheriting OpenAI secrets or auto-switching to plain OpenAI", () => {
     const config = buildTelegramLiveRuntimeConfig({
       baseConfig: {
         env: {

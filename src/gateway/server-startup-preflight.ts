@@ -154,10 +154,10 @@ function buildProtectedTelegramTokenConflictMessage(params: {
   protectedBy: string;
 }): string {
   return [
-    `Refusing to start gateway with Telegram bot token(s) reserved for the canonical shared gateway: ${params.tokens.join(", ")}.`,
+    `Refusing to start gateway with Telegram bot token(s) actively owned by the canonical shared gateway: ${params.tokens.join(", ")}.`,
     `Config path: ${params.configPath}`,
     `Protected by: ${params.protectedBy}`,
-    "Use dedicated tester bot tokens for this runtime, or run the canonical shared gateway from the main checkout.",
+    "Use dedicated tester bot tokens for this runtime, or stop the canonical shared gateway before borrowing one of its configured bots.",
   ].join("\n");
 }
 

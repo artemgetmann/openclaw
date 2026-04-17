@@ -197,6 +197,110 @@ function normalizeClaimEntries(values) {
   return out;
 }
 
+function normalizePathForComparison(targetPath) {
+  const trimmed = String(targetPath ?? "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    return fs.realpathSync.native(path.resolve(trimmed));
+  } catch {
+    return path.resolve(trimmed);
+  }
+}
+
+function parseLaunchctlPid(output) {
+  const match =
+    String(output ?? "").match(/^\s*pid\s*=\s*(\d+)\s*$/m) ??
+    String(output ?? "").match(/^\s*"pid"\s*=\s*(\d+)\s*$/m);
+  const pid = Number.parseInt(match?.[1] ?? "", 10);
+  return Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function resolveCanonicalMainRepoRoot(params) {
+  const env = params?.env && typeof params.env === "object" ? params.env : process.env;
+  const home = String(env.HOME ?? process.env.HOME ?? os.homedir()).trim();
+  const candidates = [
+    env.OPENCLAW_MAIN_REPO,
+    home ? path.join(home, "Programming_Projects", "openclaw") : "",
+    home ? path.join(home, "Projects", "openclaw") : "",
+  ]
+    .map((candidate) => normalizePathForComparison(candidate))
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (
+      fs.existsSync(path.join(candidate, ".git")) ||
+      fs.existsSync(path.join(candidate, "package.json"))
+    ) {
+      return candidate;
+    }
+  }
+
+  return candidates[0] ?? null;
+}
+
+export function isCanonicalSharedGatewayActive(params) {
+  const env = params?.env && typeof params.env === "object" ? params.env : process.env;
+  const execTextFn = typeof params?.execTextFn === "function" ? params.execTextFn : execText;
+  const getUidFn = typeof params?.getUidFn === "function" ? params.getUidFn : process.getuid;
+  const canonicalMainRepoRoot =
+    normalizePathForComparison(params?.canonicalMainRepoPath) ??
+    resolveCanonicalMainRepoRoot({ env });
+  if (!canonicalMainRepoRoot || typeof getUidFn !== "function") {
+    return false;
+  }
+
+  // Match the active launchd-owned main runtime only; config presence alone is not ownership.
+  const label = String(env.OPENCLAW_CANONICAL_SHARED_GATEWAY_LABEL ?? "ai.openclaw.gateway").trim();
+  const launchState = execTextFn("launchctl", ["print", `gui/${getUidFn()}/${label}`]);
+  const pid = parseLaunchctlPid(launchState);
+  if (!launchState || pid === null) {
+    return false;
+  }
+
+  const expectedRuntime = path.join(canonicalMainRepoRoot, "dist", "index.js");
+  const expectedEntrypoint = path.join(canonicalMainRepoRoot, "openclaw.mjs");
+  if (!launchState.includes(expectedRuntime) && !launchState.includes(expectedEntrypoint)) {
+    return false;
+  }
+
+  const command = execTextFn("ps", ["-o", "command=", "-p", String(pid)]);
+  return Boolean(
+    command &&
+    (command.includes(expectedRuntime) ||
+      command.includes(expectedEntrypoint) ||
+      command.includes(" gateway run") ||
+      command.includes("openclaw-gateway")),
+  );
+}
+
+export function collectActiveReservedTelegramBotTokensFromCanonicalConfig(params) {
+  const env = params?.env && typeof params.env === "object" ? params.env : process.env;
+  if (
+    !isCanonicalSharedGatewayActive({
+      env,
+      execTextFn: params?.execTextFn,
+      getUidFn: params?.getUidFn,
+      canonicalMainRepoPath: params?.canonicalMainRepoPath,
+    })
+  ) {
+    return [];
+  }
+
+  const baseConfigPath = String(params?.baseConfigPath ?? "").trim();
+  if (!baseConfigPath || !fs.existsSync(baseConfigPath)) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(baseConfigPath, "utf8"));
+    return extractTelegramBotTokensFromConfig(parsed);
+  } catch {
+    return [];
+  }
+}
+
 function normalizeLeaseEntries(values) {
   const seen = new Set();
   const out = [];
@@ -706,7 +810,7 @@ export function summarizeTelegramTesterTokenPool(params) {
     currentTokenStatus,
   };
 }
-export function extractTelegramBotTokensFromConfig(config) {
+export function extractTelegramBotTokensFromConfig(config, opts = {}) {
   if (!config || typeof config !== "object") {
     return [];
   }
@@ -726,6 +830,11 @@ export function extractTelegramBotTokensFromConfig(config) {
       telegram.accounts && typeof telegram.accounts === "object" ? telegram.accounts : {};
     for (const entry of Object.values(accounts)) {
       if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      // Disabled canonical accounts are not started by the shared gateway, so
+      // isolated runtimes may borrow those tokens safely.
+      if (!opts.includeDisabledAccounts && "enabled" in entry && entry.enabled === false) {
         continue;
       }
       if (typeof entry.botToken === "string" && entry.botToken.trim()) {
