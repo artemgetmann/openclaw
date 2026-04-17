@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
@@ -11,7 +12,43 @@ import {
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore } from "./store.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionAcpIdentity, SessionEntry } from "./types.js";
+
+export const ACP_SESSION_CONTINUITY_CUSTOM_TYPE = "openclaw:acp-session-continuity";
+
+type AcpSessionContinuity = "spawned_new" | "resumed_persisted" | "reused_live";
+
+function sanitizeSessionAcpIdentity(
+  identity: SessionAcpIdentity | undefined,
+): SessionAcpIdentity | undefined {
+  if (!identity) {
+    return undefined;
+  }
+  const acpxRecordId = identity.acpxRecordId?.trim();
+  const acpxSessionId = identity.acpxSessionId?.trim();
+  const agentSessionId = identity.agentSessionId?.trim();
+  return {
+    state: identity.state,
+    ...(acpxRecordId ? { acpxRecordId } : {}),
+    ...(acpxSessionId ? { acpxSessionId } : {}),
+    ...(agentSessionId ? { agentSessionId } : {}),
+    source: identity.source,
+    lastUpdatedAt: identity.lastUpdatedAt,
+  };
+}
+
+function resolveSessionChannel(entry: SessionEntry | undefined): string | undefined {
+  const deliveryChannel = entry?.deliveryContext?.channel?.trim();
+  if (deliveryChannel) {
+    return deliveryChannel;
+  }
+  const lastChannel = typeof entry?.lastChannel === "string" ? entry.lastChannel.trim() : "";
+  if (lastChannel) {
+    return lastChannel;
+  }
+  const channel = entry?.channel?.trim();
+  return channel || undefined;
+}
 
 function stripQuery(value: string): string {
   const noHash = value.split("#")[0] ?? value;
@@ -212,6 +249,81 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     timestamp: Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
   });
+
+  emitSessionTranscriptUpdate(sessionFile);
+  return { ok: true, sessionFile };
+}
+
+export async function appendAcpContinuityEventToSessionTranscript(params: {
+  agentId?: string;
+  sessionKey: string;
+  continuity: AcpSessionContinuity;
+  runtimeSessionName: string;
+  previousIdentity?: SessionAcpIdentity;
+  nextIdentity?: SessionAcpIdentity;
+  reason?: string;
+  /** Optional override for store path (mostly for tests). */
+  storePath?: string;
+}): Promise<{ ok: true; sessionFile: string } | { ok: false; reason: string }> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return { ok: false, reason: "missing sessionKey" };
+  }
+  const runtimeSessionName = params.runtimeSessionName.trim();
+  if (!runtimeSessionName) {
+    return { ok: false, reason: "missing runtimeSessionName" };
+  }
+
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const entry = store[sessionKey] as SessionEntry | undefined;
+  if (!entry?.sessionId) {
+    return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
+  }
+
+  let sessionFile: string;
+  try {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: entry.sessionId,
+      sessionKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: entry,
+      agentId: params.agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    sessionFile = resolvedSessionFile.sessionFile;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+  const sourceChannel = resolveSessionChannel(entry);
+  const previousIdentity = sanitizeSessionAcpIdentity(params.previousIdentity);
+  const nextIdentity = sanitizeSessionAcpIdentity(params.nextIdentity);
+
+  const customEntry = {
+    type: "custom",
+    customType: ACP_SESSION_CONTINUITY_CUSTOM_TYPE,
+    data: {
+      timestamp: Date.now(),
+      sessionKey,
+      continuity: params.continuity,
+      runtimeSessionName,
+      ...(sourceChannel ? { sourceChannel } : {}),
+      ...(entry.spawnedBy ? { parentSessionKey: entry.spawnedBy } : {}),
+      ...(params.reason?.trim() ? { reason: params.reason.trim() } : {}),
+      ...(previousIdentity ? { previousIdentity } : {}),
+      ...(nextIdentity ? { nextIdentity } : {}),
+    },
+    id: crypto.randomUUID().slice(0, 8),
+    parentId: null,
+    timestamp: new Date().toISOString(),
+  };
+  await fs.promises.appendFile(sessionFile, `${JSON.stringify(customEntry)}\n`, "utf-8");
 
   emitSessionTranscriptUpdate(sessionFile);
   return { ok: true, sessionFile };

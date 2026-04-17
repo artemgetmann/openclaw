@@ -19,7 +19,11 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
-import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
+import {
+  ACP_SESSION_CONTINUITY_CUSTOM_TYPE,
+  appendAcpContinuityEventToSessionTranscript,
+  appendAssistantMessageToSessionTranscript,
+} from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
 function useTempSessionsFixture(prefix: string) {
@@ -428,6 +432,83 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(result.ok).toBe(true);
     const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
     expect(lines.length).toBe(3);
+  });
+});
+
+describe("appendAcpContinuityEventToSessionTranscript", () => {
+  const fixture = useTempSessionsFixture("acp-continuity-test-");
+  const sessionId = "worker-session-id";
+  const sessionKey = "agent:codex:acp:worker-1";
+
+  function writeTranscriptStore() {
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now(),
+          channel: "telegram",
+          spawnedBy: "agent:main:telegram:default:direct:1337",
+        },
+      }),
+      "utf-8",
+    );
+  }
+
+  it("appends a continuity custom entry with session identity details", async () => {
+    writeTranscriptStore();
+
+    const result = await appendAcpContinuityEventToSessionTranscript({
+      sessionKey,
+      continuity: "resumed_persisted",
+      runtimeSessionName: "runtime-1",
+      previousIdentity: {
+        state: "resolved",
+        source: "status",
+        acpxSessionId: "acpx-stale",
+        agentSessionId: "agent-stale",
+        lastUpdatedAt: 1,
+      },
+      nextIdentity: {
+        state: "resolved",
+        source: "status",
+        acpxSessionId: "acpx-fresh",
+        agentSessionId: "agent-fresh",
+        lastUpdatedAt: 2,
+      },
+      reason: "turn resumed an ACP worker from persisted session metadata",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+
+    const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+    expect(lines.length).toBe(2);
+
+    const eventLine = JSON.parse(lines[1]);
+    expect(eventLine.type).toBe("custom");
+    expect(eventLine.customType).toBe(ACP_SESSION_CONTINUITY_CUSTOM_TYPE);
+    expect(eventLine.data).toEqual(
+      expect.objectContaining({
+        sessionKey,
+        continuity: "resumed_persisted",
+        runtimeSessionName: "runtime-1",
+        sourceChannel: "telegram",
+        parentSessionKey: "agent:main:telegram:default:direct:1337",
+        reason: "turn resumed an ACP worker from persisted session metadata",
+        previousIdentity: expect.objectContaining({
+          acpxSessionId: "acpx-stale",
+          agentSessionId: "agent-stale",
+        }),
+        nextIdentity: expect.objectContaining({
+          acpxSessionId: "acpx-fresh",
+          agentSessionId: "agent-fresh",
+        }),
+      }),
+    );
   });
 });
 
