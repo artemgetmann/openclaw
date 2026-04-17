@@ -237,6 +237,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const pendingUpdateIds = new Set<number>();
   let highestCompletedUpdateId: number | null = initialUpdateId;
   let highestPersistedUpdateId: number | null = initialUpdateId;
+  let persistedSkipLogs = 0;
+  const MAX_PERSISTED_SKIP_LOGS = 10;
   const maybePersistSafeWatermark = () => {
     if (typeof opts.updateOffset?.onUpdateId !== "function") {
       return;
@@ -267,6 +269,18 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const updateId = resolveTelegramUpdateId(ctx);
     const skipCutoff = highestPersistedUpdateId ?? initialUpdateId;
     if (typeof updateId === "number" && skipCutoff !== null && updateId <= skipCutoff) {
+      if (persistedSkipLogs < MAX_PERSISTED_SKIP_LOGS) {
+        const key = buildTelegramUpdateKey(ctx);
+        runtime.log(
+          `[telegram] Skipping update_id ${updateId} because persisted cutoff ${skipCutoff} is active${key ? ` (${key})` : ""}.`,
+        );
+        persistedSkipLogs += 1;
+        if (persistedSkipLogs === MAX_PERSISTED_SKIP_LOGS) {
+          runtime.log(
+            "[telegram] Further persisted-cutoff skip logs suppressed for this bot instance.",
+          );
+        }
+      }
       return true;
     }
     const key = buildTelegramUpdateKey(ctx);

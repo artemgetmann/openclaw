@@ -475,6 +475,7 @@ describe("telegram live runtime helpers", () => {
       }),
     ).toEqual({
       ACPX_CMD: acpxCommand,
+      OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET: "1",
       OTHER_VALUE: "kept",
       PATH: acpxBinDir,
     });
@@ -498,6 +499,7 @@ describe("telegram live runtime helpers", () => {
       }),
     ).toEqual({
       ACPX_CMD: acpxCommand,
+      OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET: "1",
       PATH: `${acpxBinDir}${path.delimiter}/usr/bin`,
       OTHER_VALUE: "kept",
     });
@@ -521,6 +523,7 @@ describe("telegram live runtime helpers", () => {
       }),
     ).toEqual({
       ACPX_CMD: acpxCommand,
+      OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET: "1",
       PATH: `${acpxBinDir}${path.delimiter}/usr/bin`,
       OTHER_VALUE: "kept",
     });

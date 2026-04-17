@@ -476,6 +476,12 @@ export function buildTelegramLiveRuntimeChildEnv(params) {
   stripRawOpenAiEnvKeys(env);
 
   if (isTelegramLiveAcpValidationEnabled(params)) {
+    // ACP validation lanes intentionally restart/repair the isolated runtime
+    // while proving Telegram continuity. Persisted skip cutoffs can hide the
+    // first fresh post-restart probe, so force this lane to re-ingest instead
+    // of inheriting the prior runtime's offset watermark.
+    env.OPENCLAW_TELEGRAM_IGNORE_PERSISTED_UPDATE_OFFSET = "1";
+
     const acpxExecutable = process.platform === "win32" ? "acpx.cmd" : "acpx";
     const acpxCandidatePaths = [
       path.join(repoRoot, "dist", "extensions", "acpx", "node_modules", ".bin", acpxExecutable),

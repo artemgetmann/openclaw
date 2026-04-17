@@ -81,7 +81,7 @@ export async function handleAcpDoctorAction(
   }
 
   try {
-    const backend = requireAcpRuntimeBackend(backendId);
+    const backend = await requireAcpRuntimeBackend(backendId);
     const capabilities = backend.runtime.getCapabilities
       ? await backend.runtime.getCapabilities({})
       : { controls: [] as string[], configOptionKeys: [] as string[] };
