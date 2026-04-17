@@ -78,6 +78,14 @@ export type AgentRunLoopResult =
   | { kind: "final"; payload: ReplyPayload };
 
 const CLAUDE_BRIDGE_EXTRA_SYSTEM_PROMPT_MAX_CHARS = 1_500;
+const CLAUDE_BRIDGE_INBOUND_META_SCHEMA = '"schema": "openclaw.inbound_meta.v1"';
+
+function shouldKeepClaudeBridgeExtraSystemPromptBlock(block: string): boolean {
+  // Claude's extra-usage lane rejects the trusted inbound metadata JSON when we
+  // forward it through --append-system-prompt. Keep the human-readable framing
+  // and permission hints, but drop that machine-generated JSON block.
+  return !block.includes(CLAUDE_BRIDGE_INBOUND_META_SCHEMA);
+}
 
 function resolveCliExtraSystemPromptForReplyRun(params: {
   provider: string;
@@ -96,14 +104,20 @@ function resolveCliExtraSystemPromptForReplyRun(params: {
     // Keep the forwarded slice intentionally small so we restore continuity
     // without reintroducing the larger prompt envelope that previously hurt the
     // subscription-auth lane.
-    if (trimmedPrompt.length <= CLAUDE_BRIDGE_EXTRA_SYSTEM_PROMPT_MAX_CHARS) {
-      return trimmedPrompt;
-    }
-
     const blocks = trimmedPrompt
       .split(/\n{2,}/)
       .map((block) => block.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter(shouldKeepClaudeBridgeExtraSystemPromptBlock);
+    if (blocks.length === 0) {
+      return undefined;
+    }
+
+    const filteredPrompt = blocks.join("\n\n").trim();
+    if (filteredPrompt.length <= CLAUDE_BRIDGE_EXTRA_SYSTEM_PROMPT_MAX_CHARS) {
+      return filteredPrompt;
+    }
+
     const keptBlocks: string[] = [];
     let usedChars = 0;
     for (const block of blocks) {
@@ -122,7 +136,7 @@ function resolveCliExtraSystemPromptForReplyRun(params: {
     }
     return (
       keptBlocks.join("\n\n").trim() ||
-      trimmedPrompt.slice(0, CLAUDE_BRIDGE_EXTRA_SYSTEM_PROMPT_MAX_CHARS).trimEnd()
+      filteredPrompt.slice(0, CLAUDE_BRIDGE_EXTRA_SYSTEM_PROMPT_MAX_CHARS).trimEnd()
     );
   }
   return trimmedPrompt;
