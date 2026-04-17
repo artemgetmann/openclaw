@@ -47,6 +47,7 @@ export const ACPX_BACKEND_ID = "acpx";
 const ACPX_RUNTIME_HANDLE_PREFIX = "acpx:v1:";
 const DEFAULT_AGENT_FALLBACK = "codex";
 const ACPX_EXIT_CODE_PERMISSION_DENIED = 5;
+const ACPX_SESSION_SUCCESS_ACTIONS = new Set(["session_ensured", "session_created"]);
 const ACPX_CAPABILITIES: AcpRuntimeCapabilities = {
   controls: ["session/set_mode", "session/set_config_option", "session/status"],
 };
@@ -72,6 +73,13 @@ type AcpxHealthCheckResult =
             error: unknown;
           };
     };
+
+type AcpxControlCommandResult = {
+  events: AcpxJsonObject[];
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+};
 
 function formatPermissionModeGuidance(): string {
   return "Configure plugins.entries.acpx.config.permissionMode to one of: approve-reads, approve-all, deny-all.";
@@ -137,6 +145,77 @@ export function decodeAcpxRuntimeHandleState(runtimeSessionName: string): AcpxHa
   } catch {
     return null;
   }
+}
+
+function extractSessionBootstrapOutcome(event: AcpxJsonObject): {
+  acpxRecordId?: string;
+  backendSessionId?: string;
+  agentSessionId?: string;
+} | null {
+  // Codex ACP bootstrap responses may arrive as plain objects or JSON-RPC results.
+  // Preserve the legacy top-level shape while also accepting wrapped result/record IDs.
+  const result = isRecord(event.result) ? event.result : null;
+  const record =
+    (isRecord(event.record) ? event.record : null) ??
+    (result && isRecord(result.record) ? result.record : null);
+  const acpxRecordId =
+    asOptionalString(event.acpxRecordId) ??
+    (result ? asOptionalString(result.acpxRecordId) : undefined) ??
+    (record ? asOptionalString(record.acpxRecordId) : undefined);
+  const backendSessionId =
+    asOptionalString(event.acpxSessionId) ??
+    asOptionalString(event.sessionId) ??
+    (result
+      ? (asOptionalString(result.acpxSessionId) ?? asOptionalString(result.sessionId))
+      : undefined) ??
+    (record
+      ? (asOptionalString(record.acpxSessionId) ?? asOptionalString(record.sessionId))
+      : undefined);
+  const agentSessionId =
+    asOptionalString(event.agentSessionId) ??
+    (result ? asOptionalString(result.agentSessionId) : undefined) ??
+    (record ? asOptionalString(record.agentSessionId) : undefined);
+  if (acpxRecordId || backendSessionId || agentSessionId) {
+    return {
+      ...(acpxRecordId ? { acpxRecordId } : {}),
+      ...(backendSessionId ? { backendSessionId } : {}),
+      ...(agentSessionId ? { agentSessionId } : {}),
+    };
+  }
+
+  // Codex ACP sometimes reports bootstrap success with a success action but delays stable IDs
+  // until a later status/turn. Accept that session as pending instead of rejecting it outright.
+  const action = asOptionalString(event.action);
+  if (action && ACPX_SESSION_SUCCESS_ACTIONS.has(action)) {
+    return {};
+  }
+  return null;
+}
+
+function summarizeBootstrapEvents(events: AcpxJsonObject[]): string {
+  return events
+    .slice(0, 5)
+    .map((event, index) => {
+      const keys = Object.keys(event).slice(0, 8).join(",");
+      const action = asOptionalString(event.action) ?? "n/a";
+      const method = asOptionalString(event.method) ?? "n/a";
+      const hasResult = isRecord(event.result) ? "yes" : "no";
+      return `#${index + 1}{keys=${keys} action=${action} method=${method} result=${hasResult}}`;
+    })
+    .join(" ");
+}
+
+function truncateForLog(value: string, maxChars: number = 1200): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "<empty>";
+  }
+  return trimmed.length <= maxChars ? trimmed : `${trimmed.slice(0, maxChars)}...`;
+}
+
+function summarizeControlCommandArgs(args: string[]): string {
+  const joined = args.join(" ");
+  return truncateForLog(joined, 1600);
 }
 
 export class AcpxRuntime implements AcpRuntime {
@@ -273,37 +352,40 @@ export class AcpxRuntime implements AcpRuntime {
       command: ensureSubcommand,
     });
 
-    let events = await this.runControlCommand({
+    let ensureResult = await this.runControlCommand({
       args: ensureCommand,
       cwd,
       fallbackCode: "ACP_SESSION_INIT_FAILED",
     });
-    let ensuredEvent = events.find(
-      (event) =>
-        asOptionalString(event.agentSessionId) ||
-        asOptionalString(event.acpxSessionId) ||
-        asOptionalString(event.acpxRecordId),
-    );
+    let ensuredOutcome = ensureResult.events
+      .map(extractSessionBootstrapOutcome)
+      .find((event) => event != null);
 
-    if (!ensuredEvent && !resumeSessionId) {
+    if (!ensuredOutcome && !resumeSessionId) {
       const newCommand = await this.buildVerbArgs({
         agent,
         cwd,
         command: ["sessions", "new", "--name", sessionName],
       });
-      events = await this.runControlCommand({
+      ensureResult = await this.runControlCommand({
         args: newCommand,
         cwd,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
       });
-      ensuredEvent = events.find(
-        (event) =>
-          asOptionalString(event.agentSessionId) ||
-          asOptionalString(event.acpxSessionId) ||
-          asOptionalString(event.acpxRecordId),
-      );
+      ensuredOutcome = ensureResult.events
+        .map(extractSessionBootstrapOutcome)
+        .find((event) => event != null);
     }
-    if (!ensuredEvent) {
+    if (!ensuredOutcome) {
+      this.logger?.warn?.(
+        `acpx bootstrap returned no recognized session identifiers for ${sessionName}; ` +
+          `cwd=${cwd} ` +
+          `args=${summarizeControlCommandArgs(ensureCommand)} ` +
+          `exitCode=${ensureResult.exitCode ?? "null"} ` +
+          `events=${ensureResult.events.length} ${summarizeBootstrapEvents(ensureResult.events)} ` +
+          `stdout=${truncateForLog(ensureResult.stdout)} ` +
+          `stderr=${truncateForLog(ensureResult.stderr)}`,
+      );
       throw new AcpRuntimeError(
         "ACP_SESSION_INIT_FAILED",
         resumeSessionId
@@ -312,11 +394,9 @@ export class AcpxRuntime implements AcpRuntime {
       );
     }
 
-    const acpxRecordId = ensuredEvent ? asOptionalString(ensuredEvent.acpxRecordId) : undefined;
-    const agentSessionId = ensuredEvent ? asOptionalString(ensuredEvent.agentSessionId) : undefined;
-    const backendSessionId = ensuredEvent
-      ? asOptionalString(ensuredEvent.acpxSessionId)
-      : undefined;
+    const acpxRecordId = ensuredOutcome.acpxRecordId;
+    const agentSessionId = ensuredOutcome.agentSessionId;
+    const backendSessionId = ensuredOutcome.backendSessionId;
 
     return {
       sessionKey: input.sessionKey,
@@ -475,14 +555,14 @@ export class AcpxRuntime implements AcpRuntime {
       cwd: state.cwd,
       command: ["status", "--session", state.name],
     });
-    const events = await this.runControlCommand({
+    const result = await this.runControlCommand({
       args,
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
       signal: input.signal,
     });
-    const detail = events.find((event) => !toAcpxErrorEvent(event)) ?? events[0];
+    const detail = result.events.find((event) => !toAcpxErrorEvent(event)) ?? result.events[0];
     if (!detail) {
       return {
         summary: "acpx status unavailable",
@@ -490,7 +570,8 @@ export class AcpxRuntime implements AcpRuntime {
     }
     const status = asTrimmedString(detail.status) || "unknown";
     const acpxRecordId = asOptionalString(detail.acpxRecordId);
-    const acpxSessionId = asOptionalString(detail.acpxSessionId);
+    const acpxSessionId =
+      asOptionalString(detail.acpxSessionId) ?? asOptionalString(detail.sessionId);
     const agentSessionId = asOptionalString(detail.agentSessionId);
     const pid = typeof detail.pid === "number" && Number.isFinite(detail.pid) ? detail.pid : null;
     const summary = [
@@ -506,7 +587,10 @@ export class AcpxRuntime implements AcpRuntime {
       ...(acpxRecordId ? { acpxRecordId } : {}),
       ...(acpxSessionId ? { backendSessionId: acpxSessionId } : {}),
       ...(agentSessionId ? { agentSessionId } : {}),
-      details: detail,
+      details: {
+        ...detail,
+        ...(acpxSessionId ? { backendSessionId: acpxSessionId } : {}),
+      },
     };
   }
 
@@ -755,7 +839,7 @@ export class AcpxRuntime implements AcpRuntime {
     fallbackCode: AcpRuntimeErrorCode;
     ignoreNoSession?: boolean;
     signal?: AbortSignal;
-  }): Promise<AcpxJsonObject[]> {
+  }): Promise<AcpxControlCommandResult> {
     const result = await spawnAndCollect(
       {
         command: this.config.command,
@@ -793,7 +877,12 @@ export class AcpxRuntime implements AcpRuntime {
     const errorEvent = events.map((event) => toAcpxErrorEvent(event)).find(Boolean) ?? null;
     if (errorEvent) {
       if (params.ignoreNoSession && errorEvent.code === "NO_SESSION") {
-        return events;
+        return {
+          events,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.code,
+        };
       }
       throw new AcpRuntimeError(
         params.fallbackCode,
@@ -810,6 +899,11 @@ export class AcpxRuntime implements AcpRuntime {
         }),
       );
     }
-    return events;
+    return {
+      events,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.code,
+    };
   }
 }

@@ -46,6 +46,15 @@ describe("resolveAcpxAgentCommand", () => {
 });
 
 describe("buildMcpProxyAgentCommand", () => {
+  it("falls back to the source helper when the bundled dist helper is missing", () => {
+    const resolved = __testing.resolveMcpProxyPath(
+      "file:///repo/dist/extensions/acpx/index.js",
+      (candidate) => candidate === "/repo/extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
+    );
+
+    expect(resolved).toBe("/repo/extensions/acpx/src/runtime-internals/mcp-proxy.mjs");
+  });
+
   it("escapes Windows-style proxy paths without double-escaping backslashes", () => {
     const quoted = __testing.quoteCommandPart(
       "C:\\repo\\extensions\\acpx\\src\\runtime-internals\\mcp-proxy.mjs",
