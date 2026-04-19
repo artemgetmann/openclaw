@@ -15,6 +15,7 @@ Consumer macOS packaging must stay safe for both Intel and Apple Silicon Macs.
 - `scripts/package-consumer-mac-dist.sh` follows the same universal packaging expectation for release-style consumer artifacts.
 - Release/demo packaging must run from the canonical consumer home checkout at `~/Programming_Projects/openclaw-consumer`, not from a feature worktree.
 - For any human-facing handoff artifact, use `bash scripts/package-consumer-mac-dist.sh` instead of ad hoc zip/DMG commands so bundle identity, seeded defaults, signing, and output naming stay correct.
+- For the exact release/demo command, expected outputs, and current notarization warning, see [consumer-packaging-handoff-note.md](./consumer-packaging-handoff-note.md).
 
 ## Failure contract
 
