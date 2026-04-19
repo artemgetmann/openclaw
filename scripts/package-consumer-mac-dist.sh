@@ -22,6 +22,9 @@ Env:
   SKIP_DSYM=1         Skip dSYM zip generation
   APP_VERSION=...     Override CFBundleShortVersionString
   APP_BUILD=...       Override CFBundleVersion
+  VERSIONED_ARTIFACT_NAMES=1
+                      Opt into versioned zip/dmg filenames instead of the
+                      clean handoff defaults
 
 Release packaging is intentionally default-instance only.
 Use scripts/package-consumer-mac-app.sh --instance <id> for isolated tester/debug lanes.
@@ -145,8 +148,16 @@ BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
   "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
-ZIP="$ROOT_DIR/dist/${APP_NAME}-${VERSION}.zip"
-DMG="$ROOT_DIR/dist/${APP_NAME}-${VERSION}.dmg"
+ARTIFACT_BASENAME="${APP_NAME}"
+if [[ "${VERSIONED_ARTIFACT_NAMES:-0}" == "1" ]]; then
+  # Clean filenames are the default for human handoff because most consumer
+  # drops are shared directly, not archived in a formal release bucket. Keep
+  # the old versioned naming available for agents that explicitly want it.
+  ARTIFACT_BASENAME="${APP_NAME}-${VERSION}"
+fi
+
+ZIP="$ROOT_DIR/dist/${ARTIFACT_BASENAME}.zip"
+DMG="$ROOT_DIR/dist/${ARTIFACT_BASENAME}.dmg"
 NOTARY_ZIP="$ROOT_DIR/dist/${APP_NAME}-${VERSION}.notary.zip"
 DSYM_ZIP="$ROOT_DIR/dist/${PRODUCT}-${VERSION}.dSYM.zip"
 SIGNING_AUTHORITY="$(bundle_signing_authority "$APP_PATH")"
@@ -216,6 +227,7 @@ echo "Consumer distribution package ready:"
 echo "  app=$APP_PATH"
 echo "  zip=$ZIP"
 echo "  dmg=$DMG"
+echo "  app_version=$VERSION"
 echo "  signing_authority=${SIGNING_AUTHORITY:-unknown}"
 if [[ "$NOTARIZE" == "1" ]]; then
   echo "  notarization=completed"

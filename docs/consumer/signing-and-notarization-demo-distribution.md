@@ -92,16 +92,18 @@ The new consumer dist wrapper now fails fast with an explicit certificate error 
   - this is the guarded release/demo path
   - expected output names:
     - `dist/OpenClaw Consumer.app`
-    - `dist/OpenClaw Consumer-0.0.0-demo.zip`
-    - `dist/OpenClaw Consumer-0.0.0-demo.dmg`
+    - `dist/OpenClaw Consumer.zip`
+    - `dist/OpenClaw Consumer.dmg`
     - `dist/OpenClaw-0.0.0-demo.dSYM.zip`
+  - versioned handoff filenames are opt-in:
+    - `VERSIONED_ARTIFACT_NAMES=1`
   - release packaging is intentionally default-instance only so user-facing artifacts do not inherit worktree/lane slugs in bundle identity or runtime support paths
-- `codesign -dv --verbose=4 "dist/OpenClaw Consumer-0.0.0-demo.dmg"`
+- `codesign -dv --verbose=4 "dist/OpenClaw Consumer.dmg"`
   - result:
     - `Format=disk image`
     - `Authority=Apple Development: artem.getman@icloud.com (9642P4S39P)`
     - `TeamIdentifier=SKDYY4SBVV`
-- `/usr/sbin/spctl -a -vv -t open "dist/OpenClaw Consumer-0.0.0-demo.dmg"`
+- `/usr/sbin/spctl -a -vv -t open "dist/OpenClaw Consumer.dmg"`
   - result:
     - rejected
     - `source=Insufficient Context`
