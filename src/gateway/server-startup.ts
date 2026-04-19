@@ -35,8 +35,10 @@ export function resolveGatewaySidecarStartupPolicy(env: NodeJS.ProcessEnv) {
   const consumerMinimalStartup = isTruthyEnvValue(env.OPENCLAW_CONSUMER_MINIMAL_STARTUP);
   return {
     consumerMinimalStartup,
-    skipSessionLockCleanup:
-      consumerMinimalStartup || isTruthyEnvValue(env.OPENCLAW_DEBUG_SKIP_SESSION_LOCK_CLEANUP),
+    // Keep stale session-lock healing on by default even in minimal startup.
+    // Minimal mode skips heavy sidecars, not the startup repair that prevents
+    // stale locks from blocking the next real session.
+    skipSessionLockCleanup: isTruthyEnvValue(env.OPENCLAW_DEBUG_SKIP_SESSION_LOCK_CLEANUP),
     // Consumer onboarding depends on browser readiness. Keep the browser control server
     // available even in "minimal startup" mode so the first-run path can actually verify
     // the selected Chrome profile instead of failing every browser.request as UNAVAILABLE.
