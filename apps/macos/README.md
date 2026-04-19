@@ -39,14 +39,22 @@ Use the guarded consumer wrappers instead of hand-setting env vars.
 ### Canonical full consumer packaging/release path
 
 ```bash
-bash scripts/package-consumer-mac-app.sh
-bash scripts/verify-consumer-mac-app.sh
-bash scripts/open-consumer-mac-app.sh
+bash scripts/package-consumer-mac-dist.sh
 ```
 
-Use this when you want the release-correct consumer bundle. It keeps the full
-packaging path: universal consumer output, runtime staging, codesign, strict
-verification, and the canonical `dist/` mirror/zip step.
+Use this when you want the human-facing consumer handoff package. It keeps the
+full release packaging path: universal consumer output, runtime staging,
+codesign, strict verification, clean `dist/` artifact names, DMG creation, DMG
+signing, and optional notarization.
+
+Default outputs:
+
+- `dist/OpenClaw Consumer.app`
+- `dist/OpenClaw Consumer.zip`
+- `dist/OpenClaw Consumer.dmg`
+
+If you explicitly need versioned filenames for archival or release-bucket
+automation, rerun with `VERSIONED_ARTIFACT_NAMES=1`.
 
 Consumer packages are universal by default. The single-arch escape hatch exists
 only for explicit local smoke/debug builds and should not be shipped.

@@ -16,6 +16,8 @@ set -euo pipefail
 #   DMG_APPS_POS           default: "375 160"
 #   SKIP_DMG_STYLE=1       skip Finder styling
 #   DMG_EXTRA_SECTORS      extra sectors to keep when shrinking RW image (default: 2048)
+#   DMG_SIZE_MB            explicit RW image size override in MB
+#   DMG_HEADROOM_MB        extra slack added to detected app size (default: 512)
 
 APP_PATH="${1:-}"
 OUT_PATH="${2:-}"
@@ -34,9 +36,8 @@ BUILD_DIR="$ROOT_DIR/dist"
 mkdir -p "$BUILD_DIR"
 
 APP_NAME=$(/usr/libexec/PlistBuddy -c "Print CFBundleName" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "OpenClaw")
-VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
 
-DMG_NAME="${APP_NAME}-${VERSION}.dmg"
+DMG_NAME="${APP_NAME}.dmg"
 DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-$APP_NAME}"
 DMG_BACKGROUND_SMALL="${DMG_BACKGROUND_SMALL:-$ROOT_DIR/assets/dmg-background-small.png}"
 DMG_BACKGROUND_PATH="${DMG_BACKGROUND_PATH:-$ROOT_DIR/assets/dmg-background.png}"
@@ -46,6 +47,7 @@ DMG_ICON_SIZE="${DMG_ICON_SIZE:-128}"
 DMG_APP_POS="${DMG_APP_POS:-125 160}"
 DMG_APPS_POS="${DMG_APPS_POS:-375 160}"
 DMG_EXTRA_SECTORS="${DMG_EXTRA_SECTORS:-2048}"
+DMG_HEADROOM_MB="${DMG_HEADROOM_MB:-512}"
 
 to_applescript_list4() {
   local raw="$1"
@@ -78,7 +80,12 @@ cp -R "$APP_PATH" "$DMG_TEMP/"
 ln -s /Applications "$DMG_TEMP/Applications"
 
 APP_SIZE_MB=$(du -sm "$APP_PATH" | awk '{print $1}')
-DMG_SIZE_MB=$((APP_SIZE_MB + 80))
+if [[ -n "${DMG_SIZE_MB:-}" ]]; then
+  echo "Using explicit DMG size override: ${DMG_SIZE_MB} MB"
+else
+  DMG_SIZE_MB=$((APP_SIZE_MB + DMG_HEADROOM_MB))
+  echo "Sizing DMG from app size: ${APP_SIZE_MB} MB + ${DMG_HEADROOM_MB} MB headroom = ${DMG_SIZE_MB} MB"
+fi
 
 DMG_RW_PATH="${OUT_PATH%.dmg}-rw.dmg"
 rm -f "$DMG_RW_PATH" "$OUT_PATH"
