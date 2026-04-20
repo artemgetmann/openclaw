@@ -2,6 +2,7 @@ import process from "node:process";
 import { createInterface } from "node:readline/promises";
 import type { RuntimeEnv } from "../runtime.js";
 import {
+  runTelegramUserInbox,
   runTelegramUserLogin,
   runTelegramUserLogout,
   runTelegramUserPrecheck,
@@ -13,6 +14,8 @@ import type {
   TelegramUserAuthStatus,
   TelegramUserBackendMeta,
   TelegramUserBackendOptions,
+  TelegramUserInboxDialog,
+  TelegramUserInboxResult,
   TelegramUserLoginResult,
   TelegramUserMessage,
   TelegramUserLogoutResult,
@@ -93,6 +96,62 @@ function formatTelegramUserMessages(messages: TelegramUserMessage[]): string {
       { key: "Text", header: "Text", flex: true, minWidth: 24 },
     ],
     rows: renderTelegramUserMessageRows(messages),
+  }).trimEnd();
+}
+
+function formatTelegramInboxLastMessage(dialog: TelegramUserInboxDialog): string {
+  const lastMessage = dialog.last_message;
+  if (!lastMessage) {
+    return "-";
+  }
+  const text = lastMessage.text.replace(/\s+/g, " ").trim();
+  if (text) {
+    return text;
+  }
+  return `[message ${lastMessage.message_id}]`;
+}
+
+function formatTelegramInboxType(dialog: TelegramUserInboxDialog): string {
+  if (dialog.is_user) {
+    return dialog.is_bot ? "bot-dm" : "dm";
+  }
+  if (dialog.is_group) {
+    return "group";
+  }
+  if (dialog.is_channel) {
+    return "channel";
+  }
+  return "chat";
+}
+
+function renderTelegramInboxRows(dialogs: TelegramUserInboxDialog[]) {
+  return dialogs.map((dialog) => ({
+    Chat: dialog.display_name,
+    Type: formatTelegramInboxType(dialog),
+    Unread: String(dialog.unread_count),
+    Mentions: String(dialog.unread_mentions_count),
+    Reactions: String(dialog.unread_reactions_count),
+    Flags:
+      [dialog.pinned ? "pin" : "", dialog.archived ? "arch" : "", dialog.muted ? "mute" : ""]
+        .filter(Boolean)
+        .join(",") || "-",
+    Last: formatTelegramInboxLastMessage(dialog),
+  }));
+}
+
+function formatTelegramInbox(dialogs: TelegramUserInboxDialog[]): string {
+  return renderTable({
+    width: getTerminalTableWidth(),
+    columns: [
+      { key: "Chat", header: "Chat", minWidth: 18 },
+      { key: "Type", header: "Type", minWidth: 10 },
+      { key: "Unread", header: "Unread", minWidth: 8 },
+      { key: "Mentions", header: "Mentions", minWidth: 10 },
+      { key: "Reactions", header: "React", minWidth: 8 },
+      { key: "Flags", header: "Flags", minWidth: 12 },
+      { key: "Last", header: "Last", flex: true, minWidth: 28 },
+    ],
+    rows: renderTelegramInboxRows(dialogs),
   }).trimEnd();
 }
 
@@ -215,6 +274,24 @@ function logReadText(runtime: RuntimeEnv, result: TelegramUserReadResult) {
     return;
   }
   runtime.log(formatTelegramUserMessages(result.messages));
+}
+
+function logInboxText(
+  runtime: RuntimeEnv,
+  result: TelegramUserInboxResult,
+  filters: {
+    dmOnly: boolean;
+    unreadOnly: boolean;
+  },
+) {
+  runtime.log(
+    `Telegram user inbox completed. dialogs=${result.dialogs.length} unread_only=${filters.unreadOnly} dm_only=${filters.dmOnly} ${formatBackendMeta(result.backend_meta)}`,
+  );
+  if (result.dialogs.length === 0) {
+    runtime.log("No Telegram user dialogs matched the requested filters.");
+    return;
+  }
+  runtime.log(formatTelegramInbox(result.dialogs));
 }
 
 function logWaitText(runtime: RuntimeEnv, result: TelegramUserWaitResult) {
@@ -459,6 +536,22 @@ export async function telegramUserReadCommand(opts: Record<string, unknown>, run
     return;
   }
   logReadText(runtime, result);
+}
+
+export async function telegramUserInboxCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
+  const unreadOnly = readBooleanOpt(opts, "unread");
+  const dmOnly = readBooleanOpt(opts, "dmOnly");
+  const result = await runTelegramUserInbox({
+    ...resolveBackendOptions(opts),
+    dmOnly,
+    limit: readNumberOpt(opts, "limit") ?? 20,
+    unreadOnly,
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logInboxText(runtime, result, { dmOnly, unreadOnly });
 }
 
 export async function telegramUserWaitCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
