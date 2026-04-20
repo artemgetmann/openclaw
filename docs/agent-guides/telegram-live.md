@@ -43,7 +43,11 @@ and more reliable default.
   - `pnpm openclaw:local telegram runtime ensure`
   - `pnpm openclaw:local telegram smoke dm-reply --chat @jarvis_tester_1_bot --json`
 - User E2E operator path:
-  - `pnpm openclaw:local telegram-user <precheck|send|read|wait> ...`
+  - Start broad triage with `pnpm openclaw:local telegram-user inbox --json`
+  - Use `pnpm openclaw:local telegram-user inbox --unread --json` for unread-only sweeps
+  - Narrow with `--dm-only` and `--limit` when you only need a lighter scan
+  - Use `pnpm openclaw:local telegram-user read --chat <chat> --limit <n> --json` only after picking the target chat
+  - Then continue with `precheck`, `send`, or `wait` on that chosen chat
 - Full repo-local details:
   - `scripts/telegram-e2e/README.md`
 
