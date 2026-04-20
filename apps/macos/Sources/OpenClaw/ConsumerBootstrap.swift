@@ -22,6 +22,10 @@ enum ConsumerBootstrap {
         // in the consumer starter set even though live WhatsApp chat is a separate
         // product surface.
         "wacli",
+        // Telegram userbot flows follow the same consumer bootstrap model as
+        // wacli: expose the bundled skill by default so the starter skill set
+        // includes direct messaging coverage on first launch.
+        "telegram-user",
         "nano-banana-pro",
         "peekaboo",
         "summarize",
