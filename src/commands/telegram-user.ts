@@ -1,5 +1,6 @@
 import type { RuntimeEnv } from "../runtime.js";
 import {
+  runTelegramUserInbox,
   runTelegramUserPrecheck,
   runTelegramUserRead,
   runTelegramUserSend,
@@ -7,6 +8,9 @@ import {
 import type {
   TelegramUserBackendMeta,
   TelegramUserBackendOptions,
+  TelegramUserDialog,
+  TelegramUserInboxParams,
+  TelegramUserInboxResult,
   TelegramUserMessage,
   TelegramUserPrecheck,
   TelegramUserReadResult,
@@ -77,6 +81,41 @@ function formatTelegramUserMessages(messages: TelegramUserMessage[]): string {
   }).trimEnd();
 }
 
+function renderTelegramUserDialogRows(dialogs: TelegramUserDialog[]) {
+  return dialogs.map((dialog) => ({
+    Name: dialog.display_name,
+    Type: dialog.is_user ? "dm" : dialog.is_group ? "group" : dialog.is_channel ? "channel" : "-",
+    Unread: String(dialog.unread_count),
+    Mentions: String(dialog.unread_mentions_count),
+    Reacts: String(dialog.unread_reactions_count),
+    Flags:
+      [
+        dialog.pinned ? "pinned" : "",
+        dialog.muted ? "muted" : "",
+        dialog.archived ? "archived" : "",
+      ]
+        .filter(Boolean)
+        .join(", ") || "-",
+    Last: dialog.last_message?.text.replace(/\s+/g, " ").trim() || "-",
+  }));
+}
+
+function formatTelegramUserDialogs(dialogs: TelegramUserDialog[]): string {
+  return renderTable({
+    width: getTerminalTableWidth(),
+    columns: [
+      { key: "Name", header: "Name", minWidth: 18 },
+      { key: "Type", header: "Type", minWidth: 8 },
+      { key: "Unread", header: "Unread", minWidth: 8 },
+      { key: "Mentions", header: "Mentions", minWidth: 10 },
+      { key: "Reacts", header: "Reacts", minWidth: 8 },
+      { key: "Flags", header: "Flags", minWidth: 16 },
+      { key: "Last", header: "Last", flex: true, minWidth: 24 },
+    ],
+    rows: renderTelegramUserDialogRows(dialogs),
+  }).trimEnd();
+}
+
 function logJson(runtime: RuntimeEnv, payload: unknown) {
   runtime.log(JSON.stringify(payload, null, 2));
 }
@@ -128,6 +167,21 @@ function logReadText(runtime: RuntimeEnv, result: TelegramUserReadResult) {
     return;
   }
   runtime.log(formatTelegramUserMessages(result.messages));
+}
+
+function logInboxText(
+  runtime: RuntimeEnv,
+  result: TelegramUserInboxResult,
+  params: TelegramUserInboxParams,
+) {
+  runtime.log(
+    `Telegram user inbox completed. dialogs=${result.dialogs.length} unread_only=${Boolean(params.unreadOnly)} dm_only=${Boolean(params.dmOnly)} ${formatBackendMeta(result.backend_meta)}`,
+  );
+  if (result.dialogs.length === 0) {
+    runtime.log("No Telegram dialogs matched the requested inbox filters.");
+    return;
+  }
+  runtime.log(formatTelegramUserDialogs(result.dialogs));
 }
 
 function logWaitText(runtime: RuntimeEnv, result: TelegramUserWaitResult) {
@@ -196,6 +250,21 @@ export async function telegramUserReadCommand(opts: Record<string, unknown>, run
     return;
   }
   logReadText(runtime, result);
+}
+
+export async function telegramUserInboxCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
+  const params: TelegramUserInboxParams = {
+    ...resolveBackendOptions(opts),
+    dmOnly: readBooleanOpt(opts, "dmOnly"),
+    limit: readNumberOpt(opts, "limit") ?? 20,
+    unreadOnly: readBooleanOpt(opts, "unread"),
+  };
+  const result = await runTelegramUserInbox(params);
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logInboxText(runtime, result, params);
 }
 
 export async function telegramUserWaitCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {

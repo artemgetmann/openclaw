@@ -77,6 +77,7 @@ openclaw pairing approve telegram <CODE>
     group messages, disable **Privacy Mode** in BotFather and then remove +
     re-add the bot in the group so Telegram applies the new mode. For
     topic-based group work, also enable threaded mode/topics.
+
   </Step>
 </Steps>
 
@@ -805,13 +806,21 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `--buttons` for inline keyboards when `channels.telegram.capabilities.inlineButtons` allows it
     - `--force-document` to send outbound images and GIFs as documents instead of compressed photo or animated-media uploads
 
-    For local Telegram user-account E2E, prefer the repo-local MTProto CLI instead of ad-hoc Python helpers. The old bash wrappers are compatibility shims only.
+    For local Telegram user-account E2E, prefer the repo-local MTProto CLI instead of ad-hoc Python helpers.
 
 ```bash
+pnpm openclaw:local telegram-user inbox --json
+pnpm openclaw:local telegram-user inbox --unread --json
+pnpm openclaw:local telegram-user inbox --unread --dm-only --limit 10 --json
 pnpm openclaw:local telegram-user send --chat @jarvis_tester_1_bot --message "hi" --json
 pnpm openclaw:local telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json
 pnpm openclaw:local telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json
 ```
+
+    Broad unread triage should start with `telegram-user inbox`, especially
+    `--unread` when the operator is looking for what needs attention next.
+    Use `read --chat ...` only after choosing a target chat from that inbox
+    sweep or when the user already named the chat explicitly.
 
     `telegram-user wait` matches replies using the raw metadata that matters in Telegram E2E:
 

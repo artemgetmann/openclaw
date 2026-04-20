@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../runtime.js";
 const backendMocks = vi.hoisted(() => ({
   getTelegramUserDefaultPollIntervalMs: vi.fn(() => 1),
   getTelegramUserDefaultWaitTimeoutMs: vi.fn(() => 5),
+  runTelegramUserInbox: vi.fn(),
   runTelegramUserPrecheck: vi.fn(),
   runTelegramUserRead: vi.fn(),
   runTelegramUserSend: vi.fn(),
@@ -26,6 +27,7 @@ const runtime: RuntimeEnv = {
 };
 
 const {
+  telegramUserInboxCommand,
   telegramUserPrecheckCommand,
   telegramUserReadCommand,
   telegramUserSendCommand,
@@ -110,6 +112,107 @@ describe("telegram-user commands", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("reply text"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("200"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("messages=1"));
+  });
+
+  it("renders inbox JSON output with unread DM filters", async () => {
+    backendMocks.runTelegramUserInbox.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      dialogs: [
+        {
+          archived: false,
+          chat_id: 10,
+          chat_title: null,
+          chat_username: "jarvis_tester_1_bot",
+          display_name: "Jarvis Tester 1",
+          folder_id: null,
+          is_bot: true,
+          is_channel: false,
+          is_group: false,
+          is_user: true,
+          last_message: {
+            chat_id: 10,
+            chat_title: null,
+            chat_username: "jarvis_tester_1_bot",
+            date: "2026-03-24T00:00:00.000Z",
+            direct_messages_topic: null,
+            direct_messages_topic_id: null,
+            message_id: 321,
+            out: false,
+            reply_to_msg_id: null,
+            reply_to_top_id: null,
+            sender_id: 555,
+            text: "Need attention",
+            thread_anchor: null,
+          },
+          muted: false,
+          pinned: true,
+          unread_count: 3,
+          unread_mentions_count: 1,
+          unread_reactions_count: 0,
+        },
+      ],
+    });
+
+    await telegramUserInboxCommand({ dmOnly: true, json: true, limit: "5", unread: true }, runtime);
+
+    expect(backendMocks.runTelegramUserInbox).toHaveBeenCalledWith({
+      dmOnly: true,
+      envFile: undefined,
+      limit: 5,
+      session: undefined,
+      unreadOnly: true,
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining('"display_name": "Jarvis Tester 1"'),
+    );
+  });
+
+  it("renders inbox text output with triage summary", async () => {
+    backendMocks.runTelegramUserInbox.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      dialogs: [
+        {
+          archived: true,
+          chat_id: 10,
+          chat_title: "Ops Room",
+          chat_username: null,
+          display_name: "Ops Room",
+          folder_id: 1,
+          is_bot: false,
+          is_channel: false,
+          is_group: true,
+          is_user: false,
+          last_message: {
+            chat_id: 10,
+            chat_title: "Ops Room",
+            chat_username: null,
+            date: "2026-03-24T00:00:00.000Z",
+            direct_messages_topic: null,
+            direct_messages_topic_id: null,
+            message_id: 322,
+            out: false,
+            reply_to_msg_id: null,
+            reply_to_top_id: null,
+            sender_id: 556,
+            text: "server down",
+            thread_anchor: null,
+          },
+          muted: true,
+          pinned: false,
+          unread_count: 9,
+          unread_mentions_count: 2,
+          unread_reactions_count: 1,
+        },
+      ],
+    });
+
+    await telegramUserInboxCommand({}, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("dialogs=1 unread_only=false dm_only=false"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Ops Room"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("server down"));
   });
 
   it("waits until a reply matches by DM topic id", async () => {

@@ -37,6 +37,10 @@ export function registerTelegramUserCli(program: Command) {
             "Read recent DM messages with raw metadata.",
           ],
           [
+            "pnpm openclaw:local telegram-user inbox --unread --dm-only --limit 10 --json",
+            "List inbox dialogs for unread DM triage with raw metadata.",
+          ],
+          [
             "pnpm openclaw:local telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json",
             "Wait for a matching reply with structured diagnostics.",
           ],
@@ -90,6 +94,19 @@ export function registerTelegramUserCli(program: Command) {
       await runTelegramUserCommand(async () => {
         const { telegramUserReadCommand } = await import("../commands/telegram-user.js");
         await telegramUserReadCommand(opts, defaultRuntime);
+      });
+    });
+
+  withTelegramUserBase(
+    telegramUser.command("inbox").description("List Telegram dialogs with unread triage metadata"),
+  )
+    .option("--unread", "Only include dialogs with unread counts, mentions, or reactions", false)
+    .option("--dm-only", "Only include direct-message dialogs", false)
+    .option("--limit <n>", "List up to this many dialogs", "20")
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { telegramUserInboxCommand } = await import("../commands/telegram-user.js");
+        await telegramUserInboxCommand(opts, defaultRuntime);
       });
     });
 
