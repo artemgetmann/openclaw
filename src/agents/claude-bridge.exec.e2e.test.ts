@@ -114,6 +114,27 @@ rl.once("line", async () => {
 
   process.stdout.write(
     JSON.stringify({
+      type: "tool_call",
+      id: "bridge-exec-call-1",
+      name: "exec",
+      arguments: {
+        command: command.map((part) => JSON.stringify(part)).join(" "),
+        workdir: process.cwd(),
+        timeout: 5,
+      },
+    }) + "\\n",
+  );
+  process.stdout.write(
+    JSON.stringify({
+      type: "tool_result",
+      id: "bridge-exec-call-1",
+      name: "exec",
+      output: text,
+    }) + "\\n",
+  );
+
+  process.stdout.write(
+    JSON.stringify({
       type: "assistant",
       message: { content: [{ type: "text", text: message }] },
     }) + "\\n",
@@ -130,6 +151,16 @@ rl.once("line", async () => {
 });
 `,
   );
+}
+
+async function readTranscriptMessages(sessionFile: string) {
+  const raw = await fs.readFile(sessionFile, "utf-8");
+  return raw
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { type?: string; message?: Record<string, unknown> })
+    .filter((entry) => entry.type === "message")
+    .map((entry) => entry.message);
 }
 
 describe("runCliAgent claude-bridge native exec e2e", () => {
@@ -190,6 +221,42 @@ describe("runCliAgent claude-bridge native exec e2e", () => {
         expect(assistantText).toContain("CLAUDE BRIDGE NATIVE EXEC OK");
         expect(assistantText).toContain(nonce);
         await expect(fs.readFile(markerPath, "utf-8")).resolves.toBe(nonce);
+
+        const messages = await readTranscriptMessages(sessionFile);
+        expect(messages).toEqual([
+          expect.objectContaining({ role: "user" }),
+          expect.objectContaining({
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              expect.objectContaining({
+                type: "toolCall",
+                id: "bridge-exec-call-1",
+                name: "exec",
+              }),
+            ],
+          }),
+          expect.objectContaining({
+            role: "toolResult",
+            toolCallId: "bridge-exec-call-1",
+            toolName: "exec",
+            content: [
+              expect.objectContaining({
+                type: "text",
+                text: expect.stringContaining(nonce),
+              }),
+            ],
+          }),
+          expect.objectContaining({
+            role: "assistant",
+            content: [
+              expect.objectContaining({
+                type: "text",
+                text: expect.stringContaining("CLAUDE BRIDGE NATIVE EXEC OK"),
+              }),
+            ],
+          }),
+        ]);
       } finally {
         await clearClaudeBridgeSessionsForTests();
         await fs.rm(tempHome, { recursive: true, force: true });

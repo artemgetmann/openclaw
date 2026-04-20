@@ -13,6 +13,19 @@ export type ClaudeBridgeRawEvent = {
   [key: string]: unknown;
 };
 
+export type ClaudeBridgeToolCallEvent = {
+  id: string;
+  name: string;
+  arguments: unknown;
+};
+
+export type ClaudeBridgeToolResultEvent = {
+  id: string;
+  toolName?: string;
+  text: string;
+  isError: boolean;
+};
+
 function readTextDelta(value: unknown): string {
   if (!isRecord(value)) {
     return "";
@@ -67,6 +80,95 @@ export function parseClaudeBridgeLine(raw: string): ClaudeBridgeRawEvent | null 
 
 export function collectClaudeBridgeText(value: unknown): string {
   return collectText(value).trim();
+}
+
+function normalizeBridgeJsonLikeValue(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value ?? {};
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return trimmed;
+  }
+}
+
+function stringifyClaudeBridgeValue(value: unknown): string {
+  const text = collectClaudeBridgeText(value);
+  if (text) {
+    return text;
+  }
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (value === undefined || value === null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
+function pickNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+export function readClaudeBridgeToolCallEvent(
+  event: ClaudeBridgeRawEvent,
+): ClaudeBridgeToolCallEvent | undefined {
+  const id = pickNonEmptyString(event.id, event.tool_call_id, event.toolUseId, event.tool_use_id);
+  const name = pickNonEmptyString(event.name, event.tool_name, event.toolName);
+  if (!id || !name) {
+    return undefined;
+  }
+
+  return {
+    id,
+    name,
+    arguments: normalizeBridgeJsonLikeValue(event.arguments ?? event.input ?? event.args),
+  };
+}
+
+export function readClaudeBridgeToolResultEvent(
+  event: ClaudeBridgeRawEvent,
+): ClaudeBridgeToolResultEvent | undefined {
+  const id = pickNonEmptyString(event.id, event.tool_call_id, event.toolUseId, event.tool_use_id);
+  if (!id) {
+    return undefined;
+  }
+
+  const text = stringifyClaudeBridgeValue(
+    event.output ?? event.result ?? event.content ?? event.error,
+  );
+  const isError =
+    event.is_error === true ||
+    event.isError === true ||
+    (typeof event.status === "string" && event.status.trim().toLowerCase() === "error") ||
+    (event.error !== undefined && event.error !== null);
+
+  return {
+    id,
+    toolName: pickNonEmptyString(event.tool_name, event.toolName, event.name),
+    text,
+    isError,
+  };
 }
 
 export function isClaudeBridgeAssistantMessageStart(event: ClaudeBridgeRawEvent): boolean {
