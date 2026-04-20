@@ -396,7 +396,7 @@ describe("runClaudeBridgeAgent", () => {
     expect(result.payloads?.[0]?.text).toBe("Hello there");
   });
 
-  it("ignores tool-style bridge events, so transcript-level tool continuity cannot be reconstructed yet", async () => {
+  it("captures tool-style bridge events as transcript-grade assistant/toolResult messages", async () => {
     const child = new MockChild();
     spawnMock.mockReturnValue(child);
 
@@ -454,5 +454,31 @@ describe("runClaudeBridgeAgent", () => {
 
     expect(result.payloads?.[0]?.text).toBe("Tool finished.");
     expect(result.meta.agentMeta?.sessionId).toBe("bridge-session-tool-gap");
+    expect(result.transcriptMessages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "tool-call-1",
+            name: "exec",
+            arguments: { command: "echo hi" },
+          },
+        ],
+      }),
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "tool-call-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "hi" }],
+        isError: false,
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Tool finished." }],
+      }),
+    ]);
   });
 });
