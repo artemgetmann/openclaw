@@ -34,6 +34,41 @@ export type TelegramUserPrecheck = {
   };
 };
 
+export type TelegramUserAuthState =
+  | "ready"
+  | "awaiting_code"
+  | "awaiting_password"
+  | "missing_credentials"
+  | "missing_session"
+  | "needs_reauth";
+
+export type TelegramUserAuthStatus = {
+  backend_meta?: TelegramUserBackendMeta;
+  chat: TelegramUserPrecheck["chat"];
+  pending_login: {
+    phone: string | null;
+    state: Extract<TelegramUserAuthState, "awaiting_code" | "awaiting_password">;
+  } | null;
+  session_path: string;
+  state: TelegramUserAuthState;
+  user: TelegramUserPrecheck["user"] | null;
+};
+
+export type TelegramUserLoginResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  pending_login: TelegramUserAuthStatus["pending_login"];
+  session_path: string;
+  state: Extract<TelegramUserAuthState, "awaiting_code" | "awaiting_password" | "ready">;
+  user: TelegramUserPrecheck["user"] | null;
+};
+
+export type TelegramUserLogoutResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  cleared: boolean;
+  removed_paths: string[];
+  session_path: string;
+};
+
 export type TelegramUserSendResult = {
   backend_meta?: TelegramUserBackendMeta;
   message: TelegramUserMessage;

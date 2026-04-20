@@ -455,6 +455,8 @@ export function buildAgentSystemPrompt(params: {
     "Concrete anti-pattern: do not author a WhatsApp reply monitor around raw `wacli sync --once` plus `wacli messages list --chat ...` when the skill already provides `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json` for that check.",
     "Concrete anti-pattern: do not retry raw `wacli send ...` against a locked store when the WhatsApp skill already provides `skills/wacli/scripts/wacli-send-safe.sh` to pause the recorded sync owner, send, and restore it automatically.",
     "For WhatsApp monitor-driven replies or Telegram-approved follow-up sends, the send path should be `skills/wacli/scripts/wacli-send-safe.sh`, not a hand-rolled kill/send/restart loop around `wacli sync --follow`.",
+    "For Telegram-as-me messaging, use the `telegram-user` path (`login`, `status`, `precheck`, `send`, `read`, `wait`) and keep it separate from the bot-account Telegram channel.",
+    "Concrete anti-pattern: do not fake Telegram-as-me replies through the bot channel when the real-account `telegram-user` path is available and already carries session and thread metadata.",
     "If a shared `~/.wacli` owner is live, do not stop it manually unless the safe helper is unavailable or demonstrably broken.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",

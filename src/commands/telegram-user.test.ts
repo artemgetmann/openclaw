@@ -4,9 +4,12 @@ import type { RuntimeEnv } from "../runtime.js";
 const backendMocks = vi.hoisted(() => ({
   getTelegramUserDefaultPollIntervalMs: vi.fn(() => 1),
   getTelegramUserDefaultWaitTimeoutMs: vi.fn(() => 5),
+  runTelegramUserLogin: vi.fn(),
+  runTelegramUserLogout: vi.fn(),
   runTelegramUserPrecheck: vi.fn(),
   runTelegramUserRead: vi.fn(),
   runTelegramUserSend: vi.fn(),
+  runTelegramUserStatus: vi.fn(),
   sleep: vi.fn(async () => {}),
 }));
 
@@ -26,9 +29,12 @@ const runtime: RuntimeEnv = {
 };
 
 const {
+  telegramUserLoginCommand,
+  telegramUserLogoutCommand,
   telegramUserPrecheckCommand,
   telegramUserReadCommand,
   telegramUserSendCommand,
+  telegramUserStatusCommand,
   telegramUserWaitCommand,
 } = await import("./telegram-user.js");
 
@@ -48,6 +54,75 @@ describe("telegram-user commands", () => {
     await telegramUserPrecheckCommand({ chat: "@jarvis_tester_1_bot", json: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"user_id": 99'));
+  });
+
+  it("renders status output for an expired session", async () => {
+    backendMocks.runTelegramUserStatus.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat: null,
+      pending_login: null,
+      session_path: "scripts/telegram-e2e/tmp/userbot.session",
+      state: "needs_reauth",
+      user: null,
+    });
+
+    await telegramUserStatusCommand({}, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("state=needs_reauth"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("pending_state=-"));
+  });
+
+  it("renders login output when a code was sent", async () => {
+    backendMocks.runTelegramUserLogin.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      pending_login: { phone: "+15551234567", state: "awaiting_code" },
+      session_path: "scripts/telegram-e2e/tmp/userbot.session",
+      state: "awaiting_code",
+      user: null,
+    });
+
+    await telegramUserLoginCommand({ phone: "+15551234567", code: "12345" }, runtime);
+
+    expect(backendMocks.runTelegramUserLogin).toHaveBeenCalledWith({
+      code: "12345",
+      envFile: undefined,
+      password: undefined,
+      phone: "+15551234567",
+      session: undefined,
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("login pending"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("state=awaiting_code"));
+  });
+
+  it("keeps login JSON mode non-interactive and reads 2FA from env", async () => {
+    vi.stubEnv("OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD", "super-secret");
+    backendMocks.runTelegramUserLogin.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      pending_login: { phone: "+15551234567", state: "awaiting_password" },
+      session_path: "scripts/telegram-e2e/tmp/userbot.session",
+      state: "awaiting_password",
+      user: null,
+    });
+
+    await telegramUserLoginCommand({ phone: "+15551234567", json: true }, runtime);
+
+    expect(backendMocks.runTelegramUserLogin).toHaveBeenCalledWith({
+      code: undefined,
+      envFile: undefined,
+      password: "super-secret",
+      phone: "+15551234567",
+      session: undefined,
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining('"state": "awaiting_password"'),
+    );
+    vi.unstubAllEnvs();
+  });
+
+  it("rejects login JSON mode without a phone instead of prompting", async () => {
+    await expect(telegramUserLoginCommand({ json: true }, runtime)).rejects.toThrow(
+      /requires --phone when --json is enabled/i,
+    );
   });
 
   it("renders send text output with raw reply metadata", async () => {
@@ -210,5 +285,24 @@ describe("telegram-user commands", () => {
         runtime,
       ),
     ).rejects.toThrow(/Ignored recent candidates/);
+  });
+
+  it("renders logout output with cleared paths", async () => {
+    backendMocks.runTelegramUserLogout.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      cleared: true,
+      removed_paths: [
+        "scripts/telegram-e2e/tmp/userbot.session",
+        "scripts/telegram-e2e/tmp/userbot.session.openclaw-login.json",
+      ],
+      session_path: "scripts/telegram-e2e/tmp/userbot.session",
+    });
+
+    await telegramUserLogoutCommand({}, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("cleared session state"));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("userbot.session.openclaw-login.json"),
+    );
   });
 });

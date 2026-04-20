@@ -392,7 +392,7 @@ describe("exec approvals safe bins", () => {
           resolvedPath: `/usr/bin/${argv[0]}`,
           executableName: argv[0],
         },
-        safeBins: normalizeSafeBins(["gog", "himalaya", "wacli"]),
+        safeBins: normalizeSafeBins(["gog", "himalaya", "wacli", "openclaw"]),
       });
 
     expect(evaluate(["gog", "gmail", "search", "newer_than:7d", "--max", "10", "--json"])).toBe(
@@ -410,6 +410,32 @@ describe("exec approvals safe bins", () => {
     expect(
       evaluate(["wacli", "messages", "search", "invoice", "--transport", "history", "--json"]),
     ).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
+        "login",
+        "--phone",
+        "+15551234567",
+        "--code",
+        "12345",
+        "--json",
+      ]),
+    ).toBe(true);
+    expect(evaluate(["openclaw", "telegram-user", "status", "--json"])).toBe(true);
+    expect(
+      evaluate([
+        "openclaw",
+        "telegram-user",
+        "send",
+        "--chat",
+        "@jarvis_tester_1_bot",
+        "--message",
+        "hello",
+        "--reply-to",
+        "123",
+      ]),
+    ).toBe(true);
     expect(evaluate(["bash", "-lc", "gog auth add test@example.com"])).toBe(false);
   });
 
@@ -425,12 +451,14 @@ describe("exec approvals safe bins", () => {
           resolvedPath: `/usr/bin/${argv[0]}`,
           executableName: argv[0],
         },
-        safeBins: normalizeSafeBins(["gog", "himalaya", "wacli"]),
+        safeBins: normalizeSafeBins(["gog", "himalaya", "wacli", "openclaw"]),
       });
 
     expect(evaluate(["gog", "totally", "made", "up"])).toBe(false);
     expect(evaluate(["himalaya", "message", "list", "inbox"])).toBe(false);
     expect(evaluate(["wacli", "random", "command"])).toBe(false);
+    expect(evaluate(["openclaw", "telegram-user", "random"])).toBe(false);
+    expect(evaluate(["openclaw", "telegram", "status"])).toBe(false);
   });
 
   it("blocks sort output flags independent of file existence", () => {

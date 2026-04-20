@@ -294,6 +294,40 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ...PRODUCT_CLI_FORBID_VALUE_GUARDS,
     },
   },
+  openclaw: {
+    // Telegram-as-me uses the OpenClaw CLI entrypoint, but only through the
+    // dedicated telegram-user subcommand family. Keep this narrow so Normal
+    // mode does not become a blanket openclaw escape hatch.
+    maxPositional: 2,
+    commandFamilies: [
+      ["telegram-user", "status"],
+      ["telegram-user", "login"],
+      ["telegram-user", "logout"],
+      ["telegram-user", "precheck"],
+      ["telegram-user", "send"],
+      ["telegram-user", "read"],
+      ["telegram-user", "wait"],
+    ],
+    allowUnknownOptions: false,
+    allowedFlags: ["--help", "--json", "--version"],
+    allowedValueFlags: [
+      "--after-id",
+      "--before-id",
+      "--chat",
+      "--code",
+      "--contains",
+      "--env-file",
+      "--limit",
+      "--message",
+      "--phone",
+      "--poll-interval-ms",
+      "--reply-to",
+      "--sender-id",
+      "--session",
+      "--thread-anchor",
+      "--timeout-ms",
+    ],
+  },
   jq: {
     maxPositional: 1,
     allowedValueFlags: ["--arg", "--argjson", "--argstr"],

@@ -6,9 +6,12 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import dotenv from "dotenv";
 import type {
+  TelegramUserAuthStatus,
   TelegramUserBackendMeta,
   TelegramUserBackendError,
   TelegramUserBackendOptions,
+  TelegramUserLoginResult,
+  TelegramUserLogoutResult,
   TelegramUserPrecheck,
   TelegramUserReadResult,
   TelegramUserSendResult,
@@ -51,6 +54,7 @@ const backendScriptPath = path.join(telegramE2eDir, "telethon_cli.py");
 const requirementsPath = path.join(telegramE2eDir, "requirements.txt");
 const defaultEnvFilePath = path.join(telegramE2eDir, ".env.local");
 const defaultSessionPath = path.join(telegramE2eDir, "tmp", "userbot.session");
+const loginPasswordEnvKey = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD";
 
 type PythonInvocation = {
   argsPrefix: string[];
@@ -59,6 +63,7 @@ type PythonInvocation = {
 
 type BackendCallOptions = TelegramUserBackendOptions & {
   args: string[];
+  envOverrides?: Record<string, string | undefined>;
 };
 
 type BackendEnvBuild = {
@@ -131,6 +136,7 @@ function sanitizeBackendText(raw: string, env: NodeJS.ProcessEnv): string {
     env.TELEGRAM_BOT_TOKEN,
     env.TG_BOT_TOKEN,
     env.OPENCLAW_TELEGRAM_USER_API_HASH,
+    env[loginPasswordEnvKey],
   ]) {
     if (secret) {
       text = text.split(secret).join("<redacted>");
@@ -251,6 +257,24 @@ async function buildBackendEnv(options: TelegramUserBackendOptions): Promise<Bac
   };
 }
 
+function applyEnvOverrides(
+  env: NodeJS.ProcessEnv,
+  overrides: Record<string, string | undefined> | undefined,
+): NodeJS.ProcessEnv {
+  if (!overrides) {
+    return env;
+  }
+  const merged: NodeJS.ProcessEnv = { ...env };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (typeof value === "string") {
+      merged[key] = value;
+      continue;
+    }
+    delete merged[key];
+  }
+  return merged;
+}
+
 function parseBackendJson<T>(raw: string, fallbackMessage: string): T {
   try {
     return JSON.parse(raw) as T;
@@ -299,7 +323,8 @@ function readExecErrorStderr(error: unknown): string {
 
 async function runBackendCommand<T>(options: BackendCallOptions): Promise<T> {
   const python = await ensureTelethonPython();
-  const { env, meta } = await buildBackendEnv(options);
+  const { env: baseEnv, meta } = await buildBackendEnv(options);
+  const env = applyEnvOverrides(baseEnv, options.envOverrides);
   try {
     const { stdout } = await execFileAsync(python, [backendScriptPath, ...options.args], {
       cwd: repoRoot,
@@ -348,6 +373,47 @@ export async function runTelegramUserPrecheck(
   const args = ["precheck"];
   pushOptionalStringArg(args, "--chat", params.chat);
   return runBackendCommand<TelegramUserPrecheck>({
+    ...params,
+    args,
+  });
+}
+
+export async function runTelegramUserStatus(
+  params: {
+    chat?: string | null;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserAuthStatus> {
+  const args = ["status"];
+  pushOptionalStringArg(args, "--chat", params.chat);
+  return runBackendCommand<TelegramUserAuthStatus>({
+    ...params,
+    args,
+  });
+}
+
+export async function runTelegramUserLogin(
+  params: {
+    code?: string | null;
+    password?: string | null;
+    phone: string;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserLoginResult> {
+  const args = ["login", "--phone", params.phone];
+  pushOptionalStringArg(args, "--code", params.code);
+  return runBackendCommand<TelegramUserLoginResult>({
+    ...params,
+    args,
+    envOverrides: {
+      [loginPasswordEnvKey]: params.password ?? undefined,
+    },
+  });
+}
+
+export async function runTelegramUserLogout(
+  params: TelegramUserBackendOptions,
+): Promise<TelegramUserLogoutResult> {
+  const args = ["logout"];
+  return runBackendCommand<TelegramUserLogoutResult>({
     ...params,
     args,
   });
