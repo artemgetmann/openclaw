@@ -10,6 +10,7 @@ import type {
   TelegramUserBackendMeta,
   TelegramUserBackendError,
   TelegramUserBackendOptions,
+  TelegramUserInboxResult,
   TelegramUserLoginResult,
   TelegramUserLogoutResult,
   TelegramUserPrecheck,
@@ -447,6 +448,27 @@ export async function runTelegramUserRead(
   pushOptionalNumberArg(args, "--after-id", params.afterId);
   pushOptionalNumberArg(args, "--before-id", params.beforeId);
   return runBackendCommand<TelegramUserReadResult>({
+    ...params,
+    args,
+  });
+}
+
+export async function runTelegramUserInbox(
+  params: {
+    dmOnly?: boolean | null;
+    limit?: number | null;
+    unreadOnly?: boolean | null;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserInboxResult> {
+  const args = ["inbox"];
+  pushOptionalNumberArg(args, "--limit", params.limit);
+  if (params.unreadOnly) {
+    args.push("--unread");
+  }
+  if (params.dmOnly) {
+    args.push("--dm-only");
+  }
+  return runBackendCommand<TelegramUserInboxResult>({
     ...params,
     args,
   });

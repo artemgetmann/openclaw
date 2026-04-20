@@ -309,6 +309,66 @@ def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
   }
 
 
+def dialog_has_unread(dialog) -> bool:
+  return any(
+    int(getattr(dialog, field, 0) or 0) > 0
+    for field in ("unread_count", "unread_mentions_count", "unread_reactions_count")
+  )
+
+
+def dialog_matches_inbox_filters(dialog, *, dm_only: bool, unread_only: bool) -> bool:
+  if dm_only and not bool(getattr(dialog, "is_user", False)):
+    return False
+  if unread_only and not dialog_has_unread(dialog):
+    return False
+  return True
+
+
+def compute_inbox_scan_cap(*, limit: int, dm_only: bool, unread_only: bool) -> int:
+  # Unfiltered inbox reads can stop at the caller's requested window because every
+  # scanned dialog is eligible for return. Filtered reads are different: a busy
+  # account can have hundreds of pinned/groups/read chats ahead of the first
+  # unread DM, so we reserve a larger but still bounded scan budget.
+  if not dm_only and not unread_only:
+    return limit
+
+  filter_multiplier = 12
+  if dm_only and unread_only:
+    filter_multiplier = 25
+  elif dm_only or unread_only:
+    filter_multiplier = 15
+  return min(5_000, max(limit * filter_multiplier, 1_000))
+
+
+def build_dialog_payload(dialog) -> dict[str, object | None]:
+  entity = getattr(dialog, "entity", None)
+  notify_settings = getattr(dialog, "dialog", None)
+  mute_until = getattr(getattr(notify_settings, "notify_settings", None), "mute_until", None)
+  muted = bool(mute_until and int(mute_until) > int(time.time()))
+  name = str(getattr(dialog, "name", "") or "").strip()
+  title = getattr(entity, "title", None)
+  username = getattr(entity, "username", None)
+  last_message = getattr(dialog, "message", None)
+  return {
+    "archived": bool(getattr(dialog, "archived", False)),
+    "chat_id": int(getattr(entity, "id", 0) or 0) or None,
+    "chat_title": title,
+    "chat_username": username,
+    "display_name": name or title or username or str(getattr(entity, "id", "unknown")),
+    "folder_id": int(getattr(dialog, "folder_id", 0)) if getattr(dialog, "folder_id", None) is not None else None,
+    "is_bot": bool(getattr(entity, "bot", False)),
+    "is_channel": bool(getattr(dialog, "is_channel", False)),
+    "is_group": bool(getattr(dialog, "is_group", False)),
+    "is_user": bool(getattr(dialog, "is_user", False)),
+    "last_message": build_message_payload(last_message, chat = entity) if last_message is not None else None,
+    "muted": muted,
+    "pinned": bool(getattr(dialog, "pinned", False)),
+    "unread_count": int(getattr(dialog, "unread_count", 0) or 0),
+    "unread_mentions_count": int(getattr(dialog, "unread_mentions_count", 0) or 0),
+    "unread_reactions_count": int(getattr(dialog, "unread_reactions_count", 0) or 0),
+  }
+
+
 def build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(description = "Telethon transport for OpenClaw Telegram user tooling")
   parser.add_argument("--session", help = "Telethon session path override")
@@ -334,6 +394,11 @@ def build_parser() -> argparse.ArgumentParser:
   read.add_argument("--limit", type = int, default = 20, help = "Maximum number of messages")
   read.add_argument("--after-id", type = int, default = 0, help = "Only return newer messages")
   read.add_argument("--before-id", type = int, default = 0, help = "Only return older messages")
+
+  inbox = subparsers.add_parser("inbox", help = "List dialogs with unread metadata")
+  inbox.add_argument("--limit", type = int, default = 20, help = "Maximum number of dialogs")
+  inbox.add_argument("--unread", action = "store_true", help = "Only include unread dialogs")
+  inbox.add_argument("--dm-only", action = "store_true", help = "Only include direct messages")
 
   subparsers.add_parser("logout", help = "Clear the Telegram user session")
   return parser
@@ -611,6 +676,35 @@ async def run_read(args: argparse.Namespace) -> int:
       await client.disconnect()
 
 
+async def run_inbox(args: argparse.Namespace) -> int:
+  session_path = resolve_session_path(args.session)
+  limit = max(1, min(int(args.limit or 20), 200))
+  with acquire_session_lock(session_path):
+    client, _ = await connect_client(session_path)
+    try:
+      dialogs = []
+      scan_cap = compute_inbox_scan_cap(
+        limit = limit,
+        dm_only = bool(args.dm_only),
+        unread_only = bool(args.unread),
+      )
+      # Keep the scan bounded, but do not assume the first few hundred dialogs are
+      # representative once filters are applied client-side.
+      async for dialog in client.iter_dialogs(limit = scan_cap, ignore_pinned = False):
+        if not dialog_matches_inbox_filters(
+          dialog,
+          dm_only = bool(args.dm_only),
+          unread_only = bool(args.unread),
+        ):
+          continue
+        dialogs.append(build_dialog_payload(dialog))
+        if len(dialogs) >= limit:
+          break
+      return emit({"dialogs": dialogs})
+    finally:
+      await client.disconnect()
+
+
 async def run_logout(args: argparse.Namespace) -> int:
   session_path = resolve_session_path(args.session)
   with acquire_session_lock(session_path):
@@ -641,6 +735,8 @@ async def run() -> int:
       return await run_send(args)
     if args.command == "read":
       return await run_read(args)
+    if args.command == "inbox":
+      return await run_inbox(args)
     return fail("E_USAGE", f"Unsupported command: {args.command}")
   except TimeoutError as err:
     return fail("E_SESSION_LOCK_TIMEOUT", sanitize_error_text(str(err)))

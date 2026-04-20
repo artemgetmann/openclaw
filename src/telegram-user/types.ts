@@ -79,6 +79,30 @@ export type TelegramUserReadResult = {
   messages: TelegramUserMessage[];
 };
 
+export type TelegramUserInboxDialog = {
+  archived: boolean;
+  chat_id: number | null;
+  chat_title: string | null;
+  chat_username: string | null;
+  display_name: string;
+  folder_id: number | null;
+  is_bot: boolean;
+  is_channel: boolean;
+  is_group: boolean;
+  is_user: boolean;
+  last_message: TelegramUserMessage | null;
+  muted: boolean;
+  pinned: boolean;
+  unread_count: number;
+  unread_mentions_count: number;
+  unread_reactions_count: number;
+};
+
+export type TelegramUserInboxResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  dialogs: TelegramUserInboxDialog[];
+};
+
 export type TelegramUserBackendError = {
   code: string;
   details?: Record<string, unknown> | null;
