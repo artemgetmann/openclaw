@@ -38,14 +38,22 @@ Automation Rule
   around the wrapper unless the user explicitly asks for raw shell plumbing.
 - Start with the cheapest truthful check:
   `openclaw telegram-user status --json`
+- For broad unread triage, start with inbox discovery before picking a chat:
+  `openclaw telegram-user inbox --json`
+- To focus only on unread conversations, use:
+  `openclaw telegram-user inbox --unread --json`
+- Narrow scope with `--dm-only` or `--limit` when the user wants a lighter inbox sweep.
 - For a target-specific read/send workflow, prove the session first with
   `status --json` or `precheck --chat <chat> --json` before write actions.
+- Use `read --chat <chat>` only after inbox triage or the user has already named
+  the target chat.
 - Prefer direct repo-local execution on this machine. Do not invent a second
   Python backend or wrap a third-party Telegram CLI.
 
 When To Use
 
 - Read recent messages from a Telegram chat as the user's real account.
+- Triage broad unread Telegram activity before drilling into one chat.
 - Send or reply to a Telegram chat as the user's real account.
 - Wait for a matching reply in a Telegram DM/thread/topic-aware flow.
 - Check Telegram-as-me auth/session health.
@@ -91,9 +99,15 @@ Default Commands
 
 - Status:
   `openclaw telegram-user status --json`
+- Inbox overview across recent chats:
+  `openclaw telegram-user inbox --json`
+- Inbox overview limited to unread chats:
+  `openclaw telegram-user inbox --unread --json`
+- Unread DM-only sweep with a smaller result set:
+  `openclaw telegram-user inbox --unread --dm-only --limit 10 --json`
 - Precheck one chat:
   `openclaw telegram-user precheck --chat @jarvis_tester_1_bot --json`
-- Read recent messages:
+- Read recent messages from one chosen chat:
   `openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json`
 - Send a message:
   `openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hello" --json`
@@ -109,6 +123,8 @@ Behavior Notes
 - This surface reads and writes as the user's real Telegram account.
 - `telegram-user login` persists pending login state so the caller does not
   manage `phone_code_hash` by hand.
+- Use `inbox` for discovery and unread triage across chats.
+- Use `read --chat` only once the target chat is known.
 - `wait` is thread-aware through the existing backend semantics around
   `reply_to_msg_id`, `reply_to_top_id`, and DM topic metadata.
 - Prefer text-first workflows for now. Do not promise broad media/history
