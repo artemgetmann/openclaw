@@ -61,9 +61,20 @@ function buildBridgeArgs(params: {
   systemPrompt?: string;
   sessionId?: string;
 }): string[] {
+  const legacyArgs = [
+    "-p",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--permission-mode",
+    "bypassPermissions",
+  ];
   const baseArgs = params.sessionId
-    ? (params.backend.resumeArgs ?? params.backend.args ?? [])
-    : (params.backend.args ?? []);
+    ? (params.backend.resumeArgs ?? params.backend.args ?? legacyArgs)
+    : (params.backend.args ?? legacyArgs);
   const args = baseArgs.map((arg) => (arg === "{sessionId}" ? (params.sessionId ?? arg) : arg));
 
   // Use the resolved backend argv as the source of truth so injected flags such as
