@@ -80,6 +80,31 @@ explicitly ask for the CLI path.
   status, because it can misreport `CONNECTED false` while a healthy sync owner
   holds the lock.
 
+### Telegram-as-me
+
+- Missing states usually look like:
+  `openclaw telegram-user status --json` returning `missing_credentials`,
+  `missing_session`, `awaiting_code`, `awaiting_password`, or `needs_reauth`.
+- Tell the user Telegram-as-me is not connected on this Mac yet.
+- Explain the split clearly: this path uses the user's real Telegram account.
+  It is not the normal Telegram bot channel and it does not use BotFather.
+- For `missing_credentials`, explain that this Mac still needs the user's
+  Telegram API ID and API hash from `my.telegram.org/apps`.
+- For `missing_session`, explain that the API credentials exist but the real
+  account has not been logged in on this Mac yet.
+- For `awaiting_code`, ask only for the OTP that Telegram just sent.
+- For `awaiting_password`, explain that Telegram 2FA is still required and
+  prefer a local interactive prompt over asking the user to paste that password
+  into chat.
+- For `needs_reauth`, explain that the saved Telegram-as-me session is no
+  longer valid and needs a fresh login on this Mac.
+- Prefer product-language guidance such as "I can help connect your real
+  Telegram account now" over dumping raw login commands into chat.
+- Verify with the cheapest read-only check first:
+  `openclaw telegram-user status --json`.
+- After verification succeeds, continue the user's original Telegram-as-me task
+  instead of stopping at "setup is done".
+
 ### gog
 
 - Missing states usually look like: no OAuth client credentials, no authorized

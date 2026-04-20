@@ -129,6 +129,12 @@ Use this when debugging auth or deciding what to back up:
 
 - **WhatsApp**: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
 - **Telegram bot token**: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
+- **Telegram-as-me on a fresh Mac**:
+  - This is separate from the Telegram bot channel.
+  - It uses your real Telegram account, not a BotFather token.
+  - First-time setup needs Telegram API credentials from `my.telegram.org/apps`, then a one-time login on this Mac with your phone number, OTP, and maybe Telegram 2FA.
+  - Repo-local default paths are `scripts/telegram-e2e/.env.local` for the API credentials and `scripts/telegram-e2e/tmp/userbot.session` for the saved session.
+  - If a skill says Telegram-as-me is not connected yet, let OpenClaw guide that setup flow first instead of trying the bot setup path.
 - **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
 - **Pairing allowlists**:

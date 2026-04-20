@@ -1,20 +1,31 @@
 ---
 name: telegram-user
-description: Use the in-repo Telegram-as-me CLI to read, send, and wait for replies as the user's real Telegram account.
+description: Use when OpenClaw must read, send, or wait as the user's real Telegram account on this Mac, not the normal Telegram bot channel.
 metadata: { "openclaw": { "emoji": "✈️", "requires": { "bins": ["openclaw"] } } }
 ---
 
 # Telegram User
 
-Use `telegram-user` when the user wants OpenClaw to read or send messages as
-their real Telegram account.
+Use `telegram-user` only for Telegram-as-me flows on this machine: the user's
+own Telegram account, not a bot token and not BotFather setup.
 
-Do not use this skill for the normal Telegram bot-account channel. That path is
-separate.
+Use it when the user means:
+
+- "send from my Telegram account"
+- "read my real Telegram messages"
+- "wait for their reply to land in my Telegram account"
+- "connect or repair Telegram-as-me on this Mac"
+
+Do not use this skill for:
+
+- the normal Telegram bot-account channel
+- BotFather token creation or bot onboarding
+- generic "set up Telegram" requests when the user really means the bot channel
+- Telegram Desktop UI automation
 
 This skill is the Telegram analogue of the WhatsApp CLI surface: a narrow,
-deterministic command layer on top of the existing in-repo MTProto backend, not
-macOS UI automation and not a second Telegram runtime.
+deterministic command layer on top of the existing in-repo MTProto backend. It
+is not macOS UI automation and not a second Telegram runtime.
 
 Automation Rule
 
