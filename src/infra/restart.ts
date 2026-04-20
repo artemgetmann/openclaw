@@ -330,6 +330,15 @@ export function isLocalRestartScriptAvailable(): boolean {
   return resolveLocalRestartScriptPath() !== null;
 }
 
+export function isSafeLocalRestartScriptAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
+  const label =
+    env.OPENCLAW_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+  if (isCurrentProcessLaunchdServiceLabel(label)) {
+    return false;
+  }
+  return isLocalRestartScriptAvailable();
+}
+
 function triggerDetachedLocalRestartScript(scriptPath: string): {
   ok: boolean;
   command: string;
