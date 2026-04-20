@@ -395,4 +395,64 @@ describe("runClaudeBridgeAgent", () => {
     ]);
     expect(result.payloads?.[0]?.text).toBe("Hello there");
   });
+
+  it("ignores tool-style bridge events, so transcript-level tool continuity cannot be reconstructed yet", async () => {
+    const child = new MockChild();
+    spawnMock.mockReturnValue(child);
+
+    const runPromise = runClaudeBridgeAgent({
+      sessionId: "session-tool-gap",
+      workspaceDir: "/tmp",
+      configBackend: { command: "claude" },
+      prompt: "Use the tool and explain what happened.",
+      provider: "claude-bridge",
+      model: "sonnet",
+      timeoutMs: 5_000,
+      systemPromptReport: {
+        source: "run",
+        generatedAt: Date.now(),
+        sessionId: "session-tool-gap",
+        provider: "claude-bridge",
+        model: "sonnet",
+        workspaceDir: "/tmp",
+        bootstrapMaxChars: 1,
+        bootstrapTotalMaxChars: 1,
+        sandbox: { mode: "off", sandboxed: false },
+        systemPrompt: "",
+        bootstrapFiles: [],
+        injectedFiles: [],
+        skillsPrompt: "",
+        tools: [],
+      } as SystemPromptReport,
+    });
+
+    await vi.waitFor(() => {
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        type: "tool_call",
+        id: "tool-call-1",
+        name: "exec",
+        arguments: { command: "echo hi" },
+      })}\n`,
+    );
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        type: "tool_result",
+        id: "tool-call-1",
+        output: "hi",
+      })}\n`,
+    );
+    emitAssistantEvent(child, "Tool finished.");
+    emitResultEvent(child, "Tool finished.", "bridge-session-tool-gap");
+
+    const result = await runPromise;
+
+    expect(result.payloads?.[0]?.text).toBe("Tool finished.");
+    expect(result.meta.agentMeta?.sessionId).toBe("bridge-session-tool-gap");
+  });
 });
