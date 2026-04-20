@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
@@ -8,6 +9,8 @@ import {
   collectClaudeBridgeText,
   isClaudeBridgeAssistantMessageStart,
   parseClaudeBridgeLine,
+  readClaudeBridgeToolCallEvent,
+  readClaudeBridgeToolResultEvent,
   readClaudeBridgeTextDelta,
   readClaudeBridgeUsage,
   type ClaudeBridgeUsage,
@@ -20,6 +23,7 @@ type ClaudeBridgeTurnResult = {
   text: string;
   sessionId?: string;
   usage?: ClaudeBridgeUsage;
+  transcriptMessages: AgentMessage[];
 };
 
 type ActiveTurn = {
@@ -35,6 +39,15 @@ type ActiveTurn = {
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onBlockReply?: (payload: ReplyPayload) => void | Promise<void>;
   blockAccumulator: ReturnType<typeof createStreamingDirectiveAccumulator>;
+  transcriptMessages: AgentMessage[];
+  pendingToolCallBlocks: Array<{
+    type: "toolCall";
+    id: string;
+    name: string;
+    arguments: unknown;
+  }>;
+  toolNamesById: Map<string, string>;
+  nextTranscriptTimestamp: number;
 };
 
 type ClaudeBridgeSessionHandle = {
@@ -49,6 +62,20 @@ type ClaudeBridgeSessionHandle = {
 const log = createSubsystemLogger("agent/claude-bridge");
 const SESSION_REGISTRY = new Map<string, ClaudeBridgeSessionHandle>();
 const LOG_RAW_EVENTS = process.env.OPENCLAW_CLAUDE_BRIDGE_LOG_RAW === "1";
+const ZERO_TRANSCRIPT_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+  },
+} as const;
 
 function buildBridgeArgs(params: {
   backend: CliBackendConfig;
@@ -139,6 +166,30 @@ function queueTurnCallback(
     });
 }
 
+function nextTranscriptTimestamp(turn: ActiveTurn): number {
+  const now = Date.now();
+  const next = Math.max(now, turn.nextTranscriptTimestamp);
+  turn.nextTranscriptTimestamp = next + 1;
+  return next;
+}
+
+function flushPendingToolCalls(turn: ActiveTurn): void {
+  if (turn.pendingToolCallBlocks.length === 0) {
+    return;
+  }
+
+  // Persist bridge tool requests as normal assistant toolCall blocks so the
+  // shared session transcript can be replayed by the existing provider paths.
+  turn.transcriptMessages.push({
+    role: "assistant",
+    content: [...turn.pendingToolCallBlocks],
+    stopReason: "toolUse",
+    usage: ZERO_TRANSCRIPT_USAGE,
+    timestamp: nextTranscriptTimestamp(turn),
+  } as AgentMessage);
+  turn.pendingToolCallBlocks = [];
+}
+
 function handleBridgeLine(handle: ClaudeBridgeSessionHandle, rawLine: string): void {
   const trimmedLine = rawLine.trim();
   if (LOG_RAW_EVENTS && trimmedLine) {
@@ -188,6 +239,39 @@ function handleBridgeLine(handle: ClaudeBridgeSessionHandle, rawLine: string): v
         });
       }
     }
+    return;
+  }
+
+  if (event.type === "tool_call") {
+    const toolCall = readClaudeBridgeToolCallEvent(event);
+    if (!toolCall) {
+      return;
+    }
+    turn.pendingToolCallBlocks.push({
+      type: "toolCall",
+      id: toolCall.id,
+      name: toolCall.name,
+      arguments: toolCall.arguments,
+    });
+    turn.toolNamesById.set(toolCall.id, toolCall.name);
+    return;
+  }
+
+  if (event.type === "tool_result") {
+    const toolResult = readClaudeBridgeToolResultEvent(event);
+    if (!toolResult) {
+      return;
+    }
+
+    flushPendingToolCalls(turn);
+    turn.transcriptMessages.push({
+      role: "toolResult",
+      toolCallId: toolResult.id,
+      toolName: toolResult.toolName ?? turn.toolNamesById.get(toolResult.id),
+      content: toolResult.text ? [{ type: "text", text: toolResult.text }] : [],
+      isError: toolResult.isError,
+      timestamp: nextTranscriptTimestamp(turn),
+    } as AgentMessage);
     return;
   }
 
@@ -283,7 +367,24 @@ function handleBridgeLine(handle: ClaudeBridgeSessionHandle, rawLine: string): v
       }
     }
 
-    const text = resultText || turn.lastAssistantText || turn.assistantTexts.at(-1) || "";
+    flushPendingToolCalls(turn);
+
+    const finalAssistantText =
+      resultText || turn.lastAssistantText || turn.assistantTexts.at(-1) || "";
+    if (finalAssistantText) {
+      // The final result event is the source of truth for persisted assistant text.
+      // Partial assistant events still drive streaming callbacks, but the transcript
+      // should store one stable assistant message for replay continuity.
+      turn.transcriptMessages.push({
+        role: "assistant",
+        content: [{ type: "text", text: finalAssistantText }],
+        stopReason: "stop",
+        usage: ZERO_TRANSCRIPT_USAGE,
+        timestamp: nextTranscriptTimestamp(turn),
+      } as AgentMessage);
+    }
+
+    const text = finalAssistantText;
     clearTimeout(turn.timer);
     handle.activeTurn = null;
     void turn.callbackChain.finally(() => {
@@ -291,6 +392,7 @@ function handleBridgeLine(handle: ClaudeBridgeSessionHandle, rawLine: string): v
         text,
         sessionId,
         usage,
+        transcriptMessages: [...turn.transcriptMessages],
       });
     });
   }
@@ -443,6 +545,10 @@ async function runBridgeTurn(params: {
       onPartialReply: params.onPartialReply,
       onBlockReply: params.onBlockReply,
       blockAccumulator: createStreamingDirectiveAccumulator(),
+      transcriptMessages: [],
+      pendingToolCallBlocks: [],
+      toolNamesById: new Map(),
+      nextTranscriptTimestamp: Date.now(),
     };
   });
 
@@ -501,6 +607,7 @@ export async function runClaudeBridgeAgent(params: {
     const text = turn.text.trim();
     return {
       payloads: text ? [{ text }] : undefined,
+      transcriptMessages: turn.transcriptMessages,
       meta: {
         durationMs: Date.now() - started,
         systemPromptReport: params.systemPromptReport,

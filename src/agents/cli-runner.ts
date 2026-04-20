@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent, Usage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
@@ -50,6 +51,8 @@ import {
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { prepareSessionManagerForRun } from "./pi-embedded-runner/session-manager-init.js";
 import { repairSessionFileIfNeeded } from "./session-file-repair.js";
+import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
+import { repairToolUseResultPairing, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
@@ -574,11 +577,20 @@ async function persistCliTranscriptTurn(params: {
   model?: string;
   prompt: string;
   assistantText?: string;
+  transcriptMessages?: AgentMessage[];
   timeoutMs: number;
 }): Promise<void> {
   const trimmedPrompt = params.prompt.trim();
   const trimmedAssistant = params.assistantText?.trim();
-  if (!trimmedPrompt || !trimmedAssistant) {
+  const rawTurnMessages =
+    params.transcriptMessages && params.transcriptMessages.length > 0
+      ? params.transcriptMessages
+      : trimmedAssistant
+        ? ([
+            { role: "assistant", content: [{ type: "text", text: trimmedAssistant }] },
+          ] as AgentMessage[])
+        : [];
+  if (!trimmedPrompt || rawTurnMessages.length === 0) {
     return;
   }
 
@@ -600,7 +612,7 @@ async function persistCliTranscriptTurn(params: {
       .stat(params.sessionFile)
       .then(() => true)
       .catch(() => false);
-    const sessionManager = SessionManager.open(params.sessionFile);
+    const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile));
     await prepareSessionManagerForRun({
       sessionManager,
       sessionFile: params.sessionFile,
@@ -615,16 +627,56 @@ async function persistCliTranscriptTurn(params: {
       content: [{ type: "text", text: trimmedPrompt }],
       timestamp: promptTimestamp,
     });
-    sessionManager.appendMessage({
-      role: "assistant",
-      api: resolveCliTranscriptApi(params.provider),
-      provider: params.provider,
-      model: params.model || "unknown-cli-model",
-      usage: ZERO_CLI_TRANSCRIPT_USAGE,
-      stopReason: "stop",
-      content: [{ type: "text", text: trimmedAssistant }],
-      timestamp: promptTimestamp + 1,
-    });
+    // Bridge runs now persist transcript-grade tool turns through the same
+    // SessionManager JSONL path as embedded providers so replay continuity works
+    // across backend switches and later runs.
+    const repairedTurnMessages = repairToolUseResultPairing(
+      sanitizeToolCallInputs(rawTurnMessages),
+    ).messages;
+
+    let nextTimestamp = promptTimestamp + 1;
+    for (const message of repairedTurnMessages) {
+      if (!message || typeof message !== "object") {
+        continue;
+      }
+      const role = (message as { role?: unknown }).role;
+      const timestamp =
+        typeof (message as { timestamp?: unknown }).timestamp === "number"
+          ? ((message as { timestamp: number }).timestamp ?? nextTimestamp)
+          : nextTimestamp;
+      nextTimestamp = Math.max(nextTimestamp, timestamp + 1);
+
+      if (role === "assistant") {
+        const assistantMessage = message as Extract<AgentMessage, { role: "assistant" }>;
+        const content = Array.isArray(assistantMessage.content) ? assistantMessage.content : [];
+        const hasToolCalls = content.some(
+          (block) =>
+            !!block &&
+            typeof block === "object" &&
+            (block as { type?: unknown }).type === "toolCall",
+        );
+
+        sessionManager.appendMessage({
+          ...assistantMessage,
+          api: assistantMessage.api ?? resolveCliTranscriptApi(params.provider),
+          provider: assistantMessage.provider ?? params.provider,
+          model: assistantMessage.model ?? params.model ?? "unknown-cli-model",
+          usage: assistantMessage.usage ?? ZERO_CLI_TRANSCRIPT_USAGE,
+          stopReason: assistantMessage.stopReason ?? (hasToolCalls ? "toolUse" : "stop"),
+          timestamp,
+        });
+        continue;
+      }
+
+      if (role === "toolResult") {
+        sessionManager.appendMessage({
+          ...(message as Extract<AgentMessage, { role: "toolResult" }>),
+          timestamp,
+        });
+      }
+    }
+
+    sessionManager.flushPendingToolResults?.();
   } finally {
     await sessionLock.release();
   }
@@ -754,6 +806,7 @@ export async function runCliAgent(params: {
       model: modelId,
       prompt: params.prompt,
       assistantText,
+      transcriptMessages: result.transcriptMessages,
       timeoutMs: params.timeoutMs,
     });
     return result;

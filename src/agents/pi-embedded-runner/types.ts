@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 
@@ -74,6 +75,11 @@ export type EmbeddedPiRunResult = {
   messagingToolSentTargets?: MessagingToolSend[];
   // Count of successful cron.add tool calls in this run.
   successfulCronAdds?: number;
+  /**
+   * Optional transcript-grade messages for the completed turn. CLI backends can
+   * use this to persist structured tool turns instead of flattening to plain text.
+   */
+  transcriptMessages?: AgentMessage[];
 };
 
 export type EmbeddedPiCompactResult = {
