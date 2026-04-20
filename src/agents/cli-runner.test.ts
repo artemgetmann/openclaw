@@ -77,7 +77,17 @@ async function readTranscriptMessages(sessionFile: string) {
           type?: string;
           message?: {
             role?: string;
-            content?: Array<{ type?: string; text?: string }>;
+            stopReason?: string;
+            toolCallId?: string;
+            toolName?: string;
+            isError?: boolean;
+            content?: Array<{
+              type?: string;
+              text?: string;
+              id?: string;
+              name?: string;
+              arguments?: unknown;
+            }>;
           };
         },
     )
@@ -852,6 +862,28 @@ describe("runCliAgent with process supervisor", () => {
 
     bridgeRunMock.mockResolvedValueOnce({
       payloads: [{ text: "N-9901" }],
+      transcriptMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "bridge-call-1",
+              name: " exec ",
+              arguments: { command: "printf N-9901" },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "bridge-call-1",
+          content: [{ type: "text", text: "N-9901" }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "N-9901" }],
+        },
+      ],
       meta: {
         durationMs: 12,
         systemPromptReport: {
@@ -898,7 +930,123 @@ describe("runCliAgent with process supervisor", () => {
         }),
         expect.objectContaining({
           role: "assistant",
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "bridge-call-1",
+              name: "exec",
+              arguments: { command: "printf N-9901" },
+            },
+          ],
+        }),
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: "bridge-call-1",
+          toolName: "exec",
           content: [{ type: "text", text: "N-9901" }],
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "N-9901" }],
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs bridge tool turns before persistence so replay continuity keeps a paired toolResult", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bridge-repair-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+
+    bridgeRunMock.mockResolvedValueOnce({
+      payloads: [{ text: "final reply" }],
+      transcriptMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "bridge-call-missing-result",
+              name: " read ",
+              arguments: { path: "/tmp/demo.txt" },
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "final reply" }],
+        },
+      ],
+      meta: {
+        durationMs: 12,
+        systemPromptReport: {
+          source: "run",
+          generatedAt: Date.now(),
+          sessionId: "s-bridge-repair",
+          provider: "claude-bridge",
+          model: "sonnet",
+          workspaceDir: tempDir,
+          bootstrapMaxChars: 1,
+          bootstrapTotalMaxChars: 1,
+          sandbox: { mode: "off", sandboxed: false },
+          systemPrompt: "",
+          bootstrapFiles: [],
+          injectedFiles: [],
+          skillsPrompt: "",
+          tools: [],
+        },
+        agentMeta: {
+          sessionId: "bridge-session-repair",
+          provider: "claude-bridge",
+          model: "sonnet",
+        },
+      },
+    });
+
+    try {
+      await runCliAgent({
+        sessionId: "s-bridge-repair",
+        sessionFile,
+        workspaceDir: tempDir,
+        prompt: "Read the file then answer.",
+        provider: "claude-bridge",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-bridge-repair",
+      });
+
+      const messages = await readTranscriptMessages(sessionFile);
+      expect(messages).toEqual([
+        expect.objectContaining({ role: "user" }),
+        expect.objectContaining({
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "bridge-call-missing-result",
+              name: "read",
+              arguments: { path: "/tmp/demo.txt" },
+            },
+          ],
+        }),
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: "bridge-call-missing-result",
+          toolName: "read",
+          isError: true,
+          content: [
+            expect.objectContaining({
+              type: "text",
+              text: expect.stringContaining("missing tool result"),
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "final reply" }],
         }),
       ]);
     } finally {
