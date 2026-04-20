@@ -56,11 +56,12 @@ const SESSION_REGISTRY = new Map<string, ClaudeBridgeSessionHandle>();
 const LOG_RAW_EVENTS = process.env.OPENCLAW_CLAUDE_BRIDGE_LOG_RAW === "1";
 
 function buildBridgeArgs(params: {
+  backend: CliBackendConfig;
   model: string;
   systemPrompt?: string;
   sessionId?: string;
 }): string[] {
-  const args = [
+  const legacyArgs = [
     "-p",
     "--verbose",
     "--input-format",
@@ -70,14 +71,21 @@ function buildBridgeArgs(params: {
     "--include-partial-messages",
     "--permission-mode",
     "bypassPermissions",
-    "--model",
-    params.model,
   ];
-  if (params.sessionId) {
-    args.push("--resume", params.sessionId);
+  const baseArgs = params.sessionId
+    ? (params.backend.resumeArgs ?? params.backend.args ?? legacyArgs)
+    : (params.backend.args ?? legacyArgs);
+  const args = baseArgs.map((arg) => (arg === "{sessionId}" ? (params.sessionId ?? arg) : arg));
+
+  // Use the resolved backend argv as the source of truth so injected flags such as
+  // bundle MCP overlays reach the real Claude bridge subprocess.
+  const modelArg = params.backend.modelArg?.trim() || "--model";
+  if (modelArg && params.model) {
+    args.push(modelArg, params.model);
   }
-  if (params.systemPrompt?.trim()) {
-    args.push("--append-system-prompt", params.systemPrompt);
+  const systemPromptArg = params.backend.systemPromptArg?.trim() || "--append-system-prompt";
+  if (systemPromptArg && params.systemPrompt?.trim()) {
+    args.push(systemPromptArg, params.systemPrompt);
   }
   return args;
 }
@@ -359,11 +367,20 @@ async function startBridgeChild(params: {
   sessionId?: string;
   systemPrompt?: string;
 }): Promise<ChildProcessWithoutNullStreams> {
-  const child = spawn(backendCommand(params.backend), buildBridgeArgs(params), {
-    cwd: params.workspaceDir,
-    env: buildBridgeEnv(params.backend),
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  const child = spawn(
+    backendCommand(params.backend),
+    buildBridgeArgs({
+      backend: params.backend,
+      model: params.model,
+      systemPrompt: params.systemPrompt,
+      sessionId: params.sessionId,
+    }),
+    {
+      cwd: params.workspaceDir,
+      env: buildBridgeEnv(params.backend),
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
 
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -384,16 +401,20 @@ async function startBridgeChild(params: {
   // Claude writes incidental diagnostics to stderr. The spike does not need them.
   child.stderr.on("data", () => {});
 
-  child.on("exit", (code, signal) => {
-    if (params.handle.activeTurn) {
-      const error = new Error(
-        `Claude bridge process exited before completing the turn (code=${code ?? "null"}, signal=${signal ?? "null"})`,
-      );
-      failActiveTurn(params.handle, error);
-    }
+  child.on("close", (code, signal) => {
     params.handle.child = undefined;
     params.handle.stdoutBuffer = "";
     SESSION_REGISTRY.delete(params.handle.key);
+
+    // `close` waits for stdout/stderr to drain, which avoids racing a clean exit
+    // against the final streamed `result` line that clears the active turn.
+    if (!params.handle.activeTurn) {
+      return;
+    }
+    const error = new Error(
+      `Claude bridge process exited before completing the turn (code=${code ?? "null"}, signal=${signal ?? "null"})`,
+    );
+    failActiveTurn(params.handle, error);
   });
 
   return child;

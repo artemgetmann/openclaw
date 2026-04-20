@@ -60,7 +60,6 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js"
 const log = createSubsystemLogger("agent/claude-cli");
 
 const CLAUDE_BRIDGE_PROMPT_TARGET_CHARS = 17_000;
-const CLAUDE_BRIDGE_TOOLS_DISABLED_LINE = "Tools are disabled in this session. Do not call tools.";
 const ZERO_CLI_TRANSCRIPT_USAGE: Usage = {
   input: 0,
   output: 0,
@@ -421,9 +420,7 @@ function buildClaudeBridgePrompt(params: {
   const sections = buildClaudeBridgePromptModules(params.mode, params.splitMode).map(
     (module) => module.text,
   );
-  const prompt = [...sections, params.extraSystemPrompt?.trim(), CLAUDE_BRIDGE_TOOLS_DISABLED_LINE]
-    .filter(Boolean)
-    .join("\n\n");
+  const prompt = [...sections, params.extraSystemPrompt?.trim()].filter(Boolean).join("\n\n");
 
   if (!shouldPadClaudeBridgePrompt(params.mode)) {
     return prompt;
@@ -684,6 +681,8 @@ export async function runCliAgent(params: {
     backendId: backendResolved.id,
     backend: backendResolved.config,
     workspaceDir,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
     config: params.config,
     warn: (message) => log.warn(message),
   });
@@ -692,12 +691,15 @@ export async function runCliAgent(params: {
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
 
-  const extraSystemPrompt = [
-    params.extraSystemPrompt?.trim(),
-    "Tools are disabled in this session. Do not call tools.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  // Preserve the legacy tool-disable line for non-bridge CLIs only.
+  // The Claude bridge has real tool wiring elsewhere, so injecting that line
+  // into either prompt path makes the bridge lie about available capabilities.
+  const extraSystemPrompt =
+    backendResolved.id === "claude-bridge"
+      ? (params.extraSystemPrompt?.trim() ?? "")
+      : [params.extraSystemPrompt?.trim(), "Tools are disabled in this session. Do not call tools."]
+          .filter(Boolean)
+          .join("\n");
 
   if (backendResolved.id === "claude-bridge") {
     const customSystemPrompt = resolveClaudeBridgeUseNormalPromptStack()
@@ -726,7 +728,7 @@ export async function runCliAgent(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       workspaceDir,
-      configBackend: backendResolved.config,
+      configBackend: backend,
       prompt: params.prompt,
       provider: params.provider,
       model: modelId,
