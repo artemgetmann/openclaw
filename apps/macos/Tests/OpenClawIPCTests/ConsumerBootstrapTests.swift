@@ -83,6 +83,7 @@ struct ConsumerBootstrapTests {
                 "goplaces",
                 "himalaya",
                 "wacli",
+                "telegram-user",
                 "nano-banana-pro",
                 "peekaboo",
                 "summarize",
@@ -444,6 +445,7 @@ struct ConsumerBootstrapTests {
             #expect(allowBundled?.contains("consumer-setup") == true)
             #expect(allowBundled?.contains("gog") == true)
             #expect(allowBundled?.contains("wacli") == true)
+            #expect(allowBundled?.contains("telegram-user") == true)
         }
     }
 
