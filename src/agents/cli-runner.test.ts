@@ -10,6 +10,7 @@ const supervisorSpawnMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
 const bridgeRunMock = vi.fn();
+const prepareCliBundleMcpConfigMock = vi.fn();
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
@@ -31,6 +32,10 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
 
 vi.mock("./claude-bridge.js", () => ({
   runClaudeBridgeAgent: (...args: unknown[]) => bridgeRunMock(...args),
+}));
+
+vi.mock("./cli-runner/bundle-mcp.js", () => ({
+  prepareCliBundleMcpConfig: (...args: unknown[]) => prepareCliBundleMcpConfigMock(...args),
 }));
 
 type MockRunExit = {
@@ -91,6 +96,10 @@ describe("runCliAgent with process supervisor", () => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
     bridgeRunMock.mockClear();
+    prepareCliBundleMcpConfigMock.mockReset();
+    prepareCliBundleMcpConfigMock.mockImplementation(async ({ backend }: { backend: unknown }) => ({
+      backend,
+    }));
     if (originalClaudeBridgePromptMode === undefined) {
       delete process.env.OPENCLAW_CLAUDE_BRIDGE_PROMPT_MODE;
     } else {
@@ -153,6 +162,46 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.scopeKey).toContain("thread-123");
   });
 
+  it("forwards streaming callbacks to the claude bridge backend", async () => {
+    const preparedBackend = { command: "claude", args: ["--mcp-overlay"] };
+    prepareCliBundleMcpConfigMock.mockResolvedValueOnce({ backend: preparedBackend });
+    bridgeRunMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        durationMs: 10,
+        agentMeta: {
+          sessionId: "bridge-session",
+          provider: "claude-bridge",
+          model: "sonnet",
+        },
+      },
+    });
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+
+    await runCliAgent({
+      sessionId: "s-bridge",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "claude-bridge",
+      model: "sonnet",
+      timeoutMs: 1_000,
+      runId: "run-bridge",
+      onAssistantMessageStart,
+      onPartialReply,
+      onBlockReply,
+    });
+
+    expect(bridgeRunMock).toHaveBeenCalledTimes(1);
+    expect(bridgeRunMock.mock.calls[0]?.[0]).toMatchObject({
+      configBackend: preparedBackend,
+      onAssistantMessageStart,
+      onPartialReply,
+      onBlockReply,
+    });
+  });
   it("fails with timeout when no-output watchdog trips", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -517,6 +566,8 @@ describe("runCliAgent with process supervisor", () => {
     } else {
       process.env.OPENCLAW_CLAUDE_BRIDGE_SPLIT = testCase.splitValue;
     }
+    const preparedBackend = { command: "claude", args: ["--bundle-mcp"] };
+    prepareCliBundleMcpConfigMock.mockResolvedValueOnce({ backend: preparedBackend });
     bridgeRunMock.mockResolvedValueOnce({
       payloads: [{ text: "bridge-ok" }],
       meta: {
@@ -561,6 +612,7 @@ describe("runCliAgent with process supervisor", () => {
     expect(supervisorSpawnMock).not.toHaveBeenCalled();
     const bridgeParams = bridgeRunMock.mock.calls[0]?.[0] as {
       cliSessionId?: string;
+      configBackend?: unknown;
       systemPrompt?: string;
       systemPromptReport?: {
         injectedWorkspaceFiles?: unknown[];
@@ -570,7 +622,8 @@ describe("runCliAgent with process supervisor", () => {
         };
       };
     };
-    expect(bridgeParams.systemPrompt).toContain(
+    expect(bridgeParams.configBackend).toBe(preparedBackend);
+    expect(bridgeParams.systemPrompt).not.toContain(
       "Tools are disabled in this session. Do not call tools.",
     );
     expect(bridgeParams.cliSessionId).toBeUndefined();
@@ -668,6 +721,61 @@ describe("runCliAgent with process supervisor", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("does not inject the tools-disabled line when claude-bridge uses the normal prompt stack", async () => {
+    process.env.OPENCLAW_CLAUDE_BRIDGE_USE_NORMAL_PROMPT_STACK = "1";
+    const preparedBackend = { command: "claude", args: ["--bundle-mcp"] };
+    prepareCliBundleMcpConfigMock.mockResolvedValueOnce({ backend: preparedBackend });
+    bridgeRunMock.mockResolvedValueOnce({
+      payloads: [{ text: "bridge-ok" }],
+      meta: {
+        durationMs: 12,
+        systemPromptReport: {
+          source: "run",
+          generatedAt: Date.now(),
+          sessionId: "s1",
+          provider: "claude-bridge",
+          model: "sonnet",
+          workspaceDir: "/tmp",
+          bootstrapMaxChars: 1,
+          bootstrapTotalMaxChars: 1,
+          sandbox: { mode: "off", sandboxed: false },
+          systemPrompt: "",
+          bootstrapFiles: [],
+          injectedFiles: [],
+          skillsPrompt: "",
+          tools: [],
+        },
+        agentMeta: {
+          sessionId: "bridge-session",
+          provider: "claude-bridge",
+          model: "sonnet",
+        },
+      },
+    });
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "claude-bridge",
+      model: "sonnet",
+      timeoutMs: 1_000,
+      runId: "run-bridge-normal-stack",
+      extraSystemPrompt: "extra bridge rule",
+    });
+
+    const bridgeParams = bridgeRunMock.mock.calls[0]?.[0] as {
+      configBackend?: unknown;
+      systemPrompt?: string;
+    };
+    expect(bridgeParams.configBackend).toBe(preparedBackend);
+    expect(bridgeParams.systemPrompt).toContain("extra bridge rule");
+    expect(bridgeParams.systemPrompt).not.toContain(
+      "Tools are disabled in this session. Do not call tools.",
+    );
   });
 
   it("defaults claude-bridge to the condensed pointer prompt when no mode env is set", async () => {

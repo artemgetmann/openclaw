@@ -44,6 +44,7 @@ async function writeFakeClaudeCli(filePath: string): Promise<void> {
     `#!/usr/bin/env node
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import readline from "node:readline";
 import { Client } from ${JSON.stringify(SDK_CLIENT_INDEX_PATH)};
 import { StdioClientTransport } from ${JSON.stringify(SDK_CLIENT_STDIO_PATH)};
 
@@ -100,12 +101,36 @@ const text = Array.isArray(result.content)
       .join("\\n")
   : "";
 
-process.stdout.write(
-  JSON.stringify({
-    session_id: readArg("--session-id") ?? randomUUID(),
-    message: "BUNDLE MCP OK " + text,
-  }) + "\\n",
-);
+const message = "BUNDLE MCP OK " + text;
+const sessionId = readArg("--session-id") ?? randomUUID();
+
+if (readArg("--input-format") === "stream-json") {
+  const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  rl.once("line", () => {
+    process.stdout.write(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: message }] },
+      }) + "\\n",
+    );
+    process.stdout.write(
+      JSON.stringify({
+        type: "result",
+        session_id: sessionId,
+        result: message,
+      }) + "\\n",
+    );
+    // Give the parent enough time to clear the active turn before this fake bridge exits.
+    setTimeout(() => process.exit(0), 250);
+  });
+} else {
+  process.stdout.write(
+    JSON.stringify({
+      session_id: sessionId,
+      message,
+    }) + "\\n",
+  );
+}
 `,
   );
 }
@@ -142,10 +167,10 @@ async function writeClaudeBundle(params: {
 }
 
 describe("runCliAgent bundle MCP e2e", () => {
-  it(
-    "routes enabled bundle MCP config into the claude-cli backend and executes the tool",
+  it.each(["claude-cli", "claude-bridge"])(
+    "routes enabled bundle MCP config into %s and executes the tool",
     { timeout: E2E_TIMEOUT_MS },
-    async () => {
+    async (provider) => {
       const envSnapshot = captureEnv(["HOME"]);
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-bundle-mcp-"));
       process.env.HOME = tempHome;
@@ -161,14 +186,29 @@ describe("runCliAgent bundle MCP e2e", () => {
       await writeFakeClaudeCli(fakeClaudePath);
       await writeClaudeBundle({ pluginRoot, serverScriptPath });
 
+      const backendArgs =
+        provider === "claude-bridge"
+          ? [
+              fakeClaudePath,
+              "-p",
+              "--verbose",
+              "--input-format",
+              "stream-json",
+              "--output-format",
+              "stream-json",
+              "--permission-mode",
+              "bypassPermissions",
+            ]
+          : [fakeClaudePath];
+
       const config: OpenClawConfig = {
         agents: {
           defaults: {
             workspace: workspaceDir,
             cliBackends: {
-              "claude-cli": {
+              [provider]: {
                 command: "node",
-                args: [fakeClaudePath],
+                args: backendArgs,
                 clearEnv: [],
               },
             },
@@ -188,7 +228,7 @@ describe("runCliAgent bundle MCP e2e", () => {
           workspaceDir,
           config,
           prompt: "Use your configured MCP tools and report the bundle probe text.",
-          provider: "claude-cli",
+          provider,
           model: "test-bundle",
           timeoutMs: 10_000,
           runId: "bundle-mcp-e2e",

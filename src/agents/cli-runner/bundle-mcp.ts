@@ -10,11 +10,23 @@ import {
   type BundleMcpServerConfig,
 } from "../../plugins/bundle-mcp.js";
 import { isRecord } from "../../utils.js";
+import {
+  createNativeOpenClawMcpServerConfig,
+  OPENCLAW_NATIVE_MCP_SERVER_KEY,
+} from "./native-mcp.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
 };
+
+function supportsBundleMcpOverlay(backendId: string): boolean {
+  return backendId === "claude-cli" || backendId === "claude-bridge";
+}
+
+function supportsNativeOpenClawMcpServer(backendId: string): boolean {
+  return backendId === "claude-bridge";
+}
 
 function extractServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
   if (!isRecord(raw)) {
@@ -89,10 +101,12 @@ export async function prepareCliBundleMcpConfig(params: {
   backendId: string;
   backend: CliBackendConfig;
   workspaceDir: string;
+  sessionKey?: string;
+  agentId?: string;
   config?: OpenClawConfig;
   warn?: (message: string) => void;
 }): Promise<PreparedCliBundleMcpConfig> {
-  if (params.backendId !== "claude-cli") {
+  if (!supportsBundleMcpOverlay(params.backendId)) {
     return { backend: params.backend };
   }
 
@@ -119,11 +133,25 @@ export async function prepareCliBundleMcpConfig(params: {
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
 
-  if (Object.keys(mergedConfig.mcpServers).length === 0) {
+  const needsNativeServer = supportsNativeOpenClawMcpServer(params.backendId);
+  if (!needsNativeServer && Object.keys(mergedConfig.mcpServers).length === 0) {
     return { backend: params.backend };
   }
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
+  if (needsNativeServer) {
+    mergedConfig = applyMergePatch(mergedConfig, {
+      mcpServers: {
+        [OPENCLAW_NATIVE_MCP_SERVER_KEY]: await createNativeOpenClawMcpServerConfig({
+          tempDir,
+          workspaceDir: params.workspaceDir,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+        }),
+      },
+    }) as BundleMcpConfig;
+  }
   const mcpConfigPath = path.join(tempDir, "mcp.json");
   await fs.writeFile(mcpConfigPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, "utf-8");
 
