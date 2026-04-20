@@ -114,6 +114,40 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(entries.map((entry) => entry.skill.name)).toContain("diffs");
   });
 
+  it("loads bundled skills whose description contains an unquoted colon", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const skillDir = path.join(bundledDir, "telegram-user");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      `---
+name: telegram-user
+description: Use for Telegram-as-me requests on this Mac: reading, sending, replying, or waiting as the user's real Telegram account.
+metadata: { "openclaw": { "emoji": "✈️", "requires": { "bins": ["openclaw"] } } }
+---
+
+# Telegram User
+`,
+      "utf-8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        skills: {
+          allowBundled: ["telegram-user"],
+        },
+      },
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: bundledDir,
+    });
+
+    const telegramUser = entries.find((entry) => entry.skill.name === "telegram-user");
+    expect(telegramUser).toBeDefined();
+    expect(telegramUser?.skill.description).toContain("Telegram-as-me requests on this Mac");
+    expect(telegramUser?.metadata?.emoji).toBe("✈️");
+  });
+
   it("excludes diffs plugin skill when the plugin is disabled", async () => {
     const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithDiffsPlugin();
 

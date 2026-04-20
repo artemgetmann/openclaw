@@ -1,6 +1,6 @@
-import { loadSkillsFromDir } from "@mariozechner/pi-coding-agent";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveBundledSkillsDir, type BundledSkillsResolveOptions } from "./bundled-dir.js";
+import { loadSkillsFromDirWithFrontmatterFallback } from "./loader.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 let hasWarnedMissingBundledDir = false;
@@ -29,7 +29,10 @@ export function resolveBundledSkillsContext(
   if (cachedBundledContext?.dir === dir) {
     return { dir, names: new Set(cachedBundledContext.names) };
   }
-  const result = loadSkillsFromDir({ dir, source: "openclaw-bundled" });
+  const result = loadSkillsFromDirWithFrontmatterFallback({
+    dir,
+    source: "openclaw-bundled",
+  });
   for (const skill of result.skills) {
     if (skill.name.trim()) {
       names.add(skill.name);

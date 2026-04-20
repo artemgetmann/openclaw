@@ -1,11 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  formatSkillsForPrompt,
-  loadSkillsFromDir,
-  type Skill,
-} from "@mariozechner/pi-coding-agent";
+import { formatSkillsForPrompt, type Skill } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -19,6 +15,7 @@ import {
   resolveOpenClawMetadata,
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
+import { loadSkillsFromDirWithFrontmatterFallback } from "./loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import type {
@@ -351,7 +348,10 @@ function loadSkillEntries(
         return [];
       }
 
-      const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
+      const loaded = loadSkillsFromDirWithFrontmatterFallback({
+        dir: baseDir,
+        source: params.source,
+      });
       return filterLoadedSkillsInsideRoot({
         skills: unwrapLoadedSkills(loaded),
         source: params.source,
@@ -425,7 +425,10 @@ function loadSkillEntries(
         continue;
       }
 
-      const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
+      const loaded = loadSkillsFromDirWithFrontmatterFallback({
+        dir: skillDir,
+        source: params.source,
+      });
       loadedSkills.push(
         ...filterLoadedSkillsInsideRoot({
           skills: unwrapLoadedSkills(loaded),
