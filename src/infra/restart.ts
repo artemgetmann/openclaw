@@ -4,10 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import {
-  GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
+import {
+  isCurrentProcessLaunchdServiceLabel,
+  scheduleDetachedLaunchdRestartHandoff,
+} from "../daemon/launchd-restart-handoff.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
@@ -327,28 +330,6 @@ export function isLocalRestartScriptAvailable(): boolean {
   return resolveLocalRestartScriptPath() !== null;
 }
 
-function resolveCurrentLaunchdLabel(env: NodeJS.ProcessEnv = process.env): string {
-  const configuredLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
-  if (configuredLabel) {
-    return configuredLabel;
-  }
-  return resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
-}
-
-export function isCanonicalSharedMainLaunchdRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
-  // The detached helper reinstalls and boots out a lane-local launch agent.
-  // That is safe for isolated profiles, but it is not safe for the canonical
-  // shared main service because it can tear down ai.openclaw.gateway in-place.
-  return resolveCurrentLaunchdLabel(env) === GATEWAY_LAUNCH_AGENT_LABEL;
-}
-
-export function isSafeLocalRestartScriptAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (isCanonicalSharedMainLaunchdRuntime(env)) {
-    return false;
-  }
-  return resolveLocalRestartScriptPath() !== null;
-}
-
 function triggerDetachedLocalRestartScript(scriptPath: string): {
   ok: boolean;
   command: string;
@@ -380,6 +361,31 @@ function triggerDetachedLocalRestartScript(scriptPath: string): {
       detail: `local restart script failed: ${detail}`,
     };
   }
+}
+
+function triggerDetachedLaunchdRestartHandoff(label: string): {
+  ok: boolean;
+  command: string;
+  detail?: string;
+} {
+  const command = `launchd-handoff kickstart ${label}`;
+  const handoff = scheduleDetachedLaunchdRestartHandoff({
+    env: process.env,
+    mode: "kickstart",
+    waitForPid: process.pid,
+  });
+  if (!handoff.ok) {
+    return {
+      ok: false,
+      command,
+      detail: handoff.detail ?? "launchd restart handoff failed",
+    };
+  }
+  return {
+    ok: true,
+    command,
+    detail: `scheduled detached launchd restart handoff for ${label}`,
+  };
 }
 
 export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): RestartAttempt {
@@ -441,9 +447,24 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   const shouldPreferLocalScript = opts?.preferLocalScript === true;
   let localScriptFailure: string | undefined;
   if (shouldPreferLocalScript) {
-    const localRestartScriptPath = isSafeLocalRestartScriptAvailable()
-      ? resolveLocalRestartScriptPath()
-      : null;
+    // When the gateway is already running under launchd, restart the existing
+    // service registration in-place instead of delegating to a checkout-local
+    // helper that may rewrite the plist from ambient worktree env.
+    if (isCurrentProcessLaunchdServiceLabel(label)) {
+      const handoffRestart = triggerDetachedLaunchdRestartHandoff(label);
+      tried.push(handoffRestart.command);
+      if (handoffRestart.ok) {
+        return {
+          ok: true,
+          method: "launchctl",
+          detail: handoffRestart.detail,
+          tried,
+        };
+      }
+      localScriptFailure = handoffRestart.detail;
+    }
+
+    const localRestartScriptPath = resolveLocalRestartScriptPath();
     if (localRestartScriptPath) {
       const scriptRestart = triggerDetachedLocalRestartScript(localRestartScriptPath);
       tried.push(`local-restart-script ${scriptRestart.command}`);

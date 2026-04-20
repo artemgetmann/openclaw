@@ -64,6 +64,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const useSingleActiveProfile = normalizeProviderId(provider) === "openai-codex";
   const order = resolveAuthProfileOrder({ cfg, store, provider });
   let current = sessionEntry.authProfileOverride?.trim();
 
@@ -88,12 +89,6 @@ export async function resolveSessionAuthProfileOverride(params: {
 
   const pickFirstAvailable = () =>
     order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
-  const pickSingleActiveProfile = () =>
-    resolvePrimaryAuthProfileId({
-      cfg,
-      store,
-      provider,
-    });
   const pickNextAvailable = (active: string) => {
     const startIndex = order.indexOf(active);
     if (startIndex < 0) {
@@ -125,10 +120,17 @@ export async function resolveSessionAuthProfileOverride(params: {
     return current;
   }
 
-  const useSingleActiveProfile = normalizeProviderId(provider) === "openai-codex";
   let next = current;
   if (useSingleActiveProfile) {
-    next = pickSingleActiveProfile() ?? current;
+    // Codex auth is treated as one canonical active account. Auto-selected
+    // session overrides must follow that active/default profile rather than
+    // silently reviving whichever sibling account happens to be first in store order.
+    next = resolvePrimaryAuthProfileId({
+      cfg,
+      store,
+      provider,
+      preferredProfile: source === "user" ? current : undefined,
+    });
   } else if (isNewSession) {
     next = current ? pickNextAvailable(current) : pickFirstAvailable();
   } else if (current && compactionCount > storedCompaction) {

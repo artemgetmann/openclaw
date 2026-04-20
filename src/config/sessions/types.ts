@@ -95,6 +95,18 @@ export type RecentHeartbeatEntry = {
   status: "sent";
 };
 
+export type SessionPendingRestartConfirmation = {
+  /**
+   * Session-scoped restart authorization only applies to restart-capable gateway
+   * actions and must be preceded by an explicit assistant ask in this chat.
+   */
+  scope: "gateway-restart-capable";
+  /** When the assistant armed the confirmation gate (epoch ms). */
+  requestedAt: number;
+  /** Hard expiry for the pending confirmation (epoch ms). */
+  expiresAt: number;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -218,6 +230,8 @@ export type SessionEntry = {
    * shared = must not auto-load personal memory files
    */
   memoryScope?: SessionMemoryScope;
+  /** Pending confirmation gate for restart-capable gateway actions in this chat session. */
+  pendingRestartConfirmation?: SessionPendingRestartConfirmation;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionChannelId;
   lastTo?: string;

@@ -2,7 +2,14 @@ import { Type } from "@sinclair/typebox";
 import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveConfigSnapshotHash } from "../../config/io.js";
-import { extractDeliveryInfo } from "../../config/sessions.js";
+import {
+  consumePendingRestartConfirmationForSession,
+  extractDeliveryInfo,
+  recordPendingRestartConfirmationForSession,
+  RESTART_CONFIRMATION_RECOMMENDED_PROMPT,
+  resolveAgentIdFromSessionKey,
+} from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -33,6 +40,7 @@ function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
 
 const GATEWAY_ACTIONS = [
   "restart",
+  "restart.request_confirmation",
   "config.get",
   "config.schema.lookup",
   "config.apply",
@@ -76,19 +84,74 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, arm restart confirmation for the current chat, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use restart.request_confirmation before restart-capable actions in live chat. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
+      const liveChatSessionKey = opts?.agentSessionKey?.trim() || undefined;
+      const liveChatAgentId = resolveAgentIdFromSessionKey(liveChatSessionKey);
+      const storePath = resolveStorePath(opts?.config?.session?.store, {
+        agentId: liveChatAgentId,
+      });
+      const resolveCurrentSessionKey = (): string | undefined =>
+        liveChatSessionKey ||
+        (typeof params.sessionKey === "string" && params.sessionKey.trim()
+          ? params.sessionKey.trim()
+          : undefined);
+      const requirePendingRestartConfirmation = async () => {
+        if (!liveChatSessionKey) {
+          return;
+        }
+        const consumed = await consumePendingRestartConfirmationForSession({
+          storePath,
+          sessionKey: liveChatSessionKey,
+        });
+        if (consumed.status === "ready") {
+          return;
+        }
+        if (consumed.status === "awaiting-next-user-turn") {
+          throw new Error(
+            "Restart confirmation is armed for this chat, but you cannot consume it in the same turn. Ask the user, wait for the next reply, and only proceed if that reply clearly confirms the restart-capable action.",
+          );
+        }
+        if (consumed.status === "expired") {
+          throw new Error(
+            `The pending restart confirmation expired. Ask again: "${RESTART_CONFIRMATION_RECOMMENDED_PROMPT}" and record it with action="restart.request_confirmation".`,
+          );
+        }
+        throw new Error(
+          `Restart confirmation required for live chat sessions. Ask: "${RESTART_CONFIRMATION_RECOMMENDED_PROMPT}" then call gateway with action="restart.request_confirmation" for this session before attempting restart-capable actions.`,
+        );
+      };
+      if (action === "restart.request_confirmation") {
+        if (!liveChatSessionKey) {
+          throw new Error(
+            "restart.request_confirmation is only available from a live chat session with a current session key.",
+          );
+        }
+        const entry = await recordPendingRestartConfirmationForSession({
+          storePath,
+          sessionKey: liveChatSessionKey,
+        });
+        if (!entry) {
+          throw new Error(
+            "Could not arm restart confirmation because the current session entry was not found.",
+          );
+        }
+        return jsonResult({
+          ok: true,
+          sessionKey: liveChatSessionKey,
+          prompt: RESTART_CONFIRMATION_RECOMMENDED_PROMPT,
+          expiresAt: entry.pendingRestartConfirmation?.expiresAt ?? null,
+        });
+      }
       if (action === "restart") {
         if (!isRestartEnabled(opts?.config)) {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
         }
-        const sessionKey =
-          typeof params.sessionKey === "string" && params.sessionKey.trim()
-            ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
+        await requirePendingRestartConfirmation();
+        const sessionKey = resolveCurrentSessionKey();
         const delayMs =
           typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
             ? Math.floor(params.delayMs)
@@ -138,10 +201,7 @@ export function createGatewayTool(opts?: {
         note: string | undefined;
         restartDelayMs: number | undefined;
       } => {
-        const sessionKey =
-          typeof params.sessionKey === "string" && params.sessionKey.trim()
-            ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
+        const sessionKey = resolveCurrentSessionKey();
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const restartDelayMs =
@@ -183,6 +243,7 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result });
       }
       if (action === "config.apply") {
+        await requirePendingRestartConfirmation();
         const { raw, baseHash, sessionKey, note, restartDelayMs } =
           await resolveConfigWriteParams();
         const result = await callGatewayTool("config.apply", gatewayOpts, {
@@ -195,6 +256,7 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result });
       }
       if (action === "config.patch") {
+        await requirePendingRestartConfirmation();
         const { raw, baseHash, sessionKey, note, restartDelayMs } =
           await resolveConfigWriteParams();
         const result = await callGatewayTool("config.patch", gatewayOpts, {
@@ -207,6 +269,7 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result });
       }
       if (action === "update.run") {
+        await requirePendingRestartConfirmation();
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
         const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
         const updateGatewayOpts = {

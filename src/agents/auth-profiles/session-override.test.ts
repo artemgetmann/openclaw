@@ -20,22 +20,36 @@ async function writeAuthStore(agentDir: string) {
   await fs.writeFile(authPath, JSON.stringify(payload), "utf-8");
 }
 
+async function writeOpenAiAuthStore(agentDir: string) {
+  const authPath = path.join(agentDir, "auth-profiles.json");
+  const payload = {
+    version: 1,
+    profiles: {
+      "openai:p1": { type: "api_key", provider: "openai", key: "sk-p1" },
+      "openai:p2": { type: "api_key", provider: "openai", key: "sk-p2" },
+    },
+    usageStats: {
+      "openai:p1": { lastUsed: 1 },
+      "openai:p2": { lastUsed: 2 },
+    },
+  };
+  await fs.writeFile(authPath, JSON.stringify(payload), "utf-8");
+}
+
 async function writeCodexAuthStore(agentDir: string) {
   const authPath = path.join(agentDir, "auth-profiles.json");
   const payload = {
     version: 1,
     profiles: {
-      "openai-codex:notblockedamazon": {
-        type: "oauth",
-        provider: "openai-codex",
-        access: "expired-access",
-        refresh: "expired-refresh",
-      },
       "openai-codex:default": {
-        type: "oauth",
+        type: "api_key",
         provider: "openai-codex",
-        access: "fresh-access",
-        refresh: "fresh-refresh",
+        key: "sk-default",
+      },
+      "openai-codex:notblockedamazon": {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "sk-stale-store-first",
       },
     },
     order: {
@@ -76,27 +90,41 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("pins new openai-codex sessions to the default profile instead of reviving stale ordered profiles", async () => {
+  it("pins codex auto override to the canonical default instead of stale store order", async () => {
     await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
       const agentDir = path.join(stateDir, "agent");
       await fs.mkdir(agentDir, { recursive: true });
       await writeCodexAuthStore(agentDir);
 
       const sessionEntry: SessionEntry = {
-        sessionId: "s1",
+        sessionId: "s-codex",
         updatedAt: Date.now(),
       };
-      const sessionStore = { "agent:main:telegram:new-topic": sessionEntry };
+      const sessionStore = { "agent:main:codex": sessionEntry };
+      const cfg = {
+        auth: {
+          profiles: {
+            "openai-codex:default": { provider: "openai-codex", mode: "api_key" },
+            "openai-codex:notblockedamazon": {
+              provider: "openai-codex",
+              mode: "api_key",
+            },
+          },
+          order: {
+            "openai-codex": ["openai-codex:default", "openai-codex:notblockedamazon"],
+          },
+        },
+      } as OpenClawConfig;
 
       const resolved = await resolveSessionAuthProfileOverride({
-        cfg: {} as OpenClawConfig,
+        cfg,
         provider: "openai-codex",
         agentDir,
         sessionEntry,
         sessionStore,
-        sessionKey: "agent:main:telegram:new-topic",
+        sessionKey: "agent:main:codex",
         storePath: undefined,
-        isNewSession: true,
+        isNewSession: false,
       });
 
       expect(resolved).toBe("openai-codex:default");
@@ -105,19 +133,19 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("replaces stale auto-selected openai-codex profiles on existing sessions", async () => {
+  it("keeps explicit codex user override intact", async () => {
     await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
       const agentDir = path.join(stateDir, "agent");
       await fs.mkdir(agentDir, { recursive: true });
       await writeCodexAuthStore(agentDir);
 
       const sessionEntry: SessionEntry = {
-        sessionId: "s1",
+        sessionId: "s-codex-user",
         updatedAt: Date.now(),
         authProfileOverride: "openai-codex:notblockedamazon",
-        authProfileOverrideSource: "auto",
+        authProfileOverrideSource: "user",
       };
-      const sessionStore = { "agent:main:telegram:existing-topic": sessionEntry };
+      const sessionStore = { "agent:main:codex-user": sessionEntry };
 
       const resolved = await resolveSessionAuthProfileOverride({
         cfg: {} as OpenClawConfig,
@@ -125,13 +153,42 @@ describe("resolveSessionAuthProfileOverride", () => {
         agentDir,
         sessionEntry,
         sessionStore,
-        sessionKey: "agent:main:telegram:existing-topic",
+        sessionKey: "agent:main:codex-user",
         storePath: undefined,
         isNewSession: false,
       });
 
-      expect(resolved).toBe("openai-codex:default");
-      expect(sessionEntry.authProfileOverride).toBe("openai-codex:default");
+      expect(resolved).toBe("openai-codex:notblockedamazon");
+      expect(sessionEntry.authProfileOverride).toBe("openai-codex:notblockedamazon");
+      expect(sessionEntry.authProfileOverrideSource).toBe("user");
+    });
+  });
+
+  it("keeps non-codex providers on round-robin auto selection", async () => {
+    await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
+      const agentDir = path.join(stateDir, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await writeOpenAiAuthStore(agentDir);
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s-openai",
+        updatedAt: Date.now(),
+      };
+      const sessionStore = { "agent:main:openai": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "openai",
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:openai",
+        storePath: undefined,
+        isNewSession: false,
+      });
+
+      expect(resolved).toBe("openai:p1");
+      expect(sessionEntry.authProfileOverride).toBe("openai:p1");
       expect(sessionEntry.authProfileOverrideSource).toBe("auto");
     });
   });
