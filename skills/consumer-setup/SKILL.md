@@ -1,15 +1,26 @@
 ---
 name: consumer-setup
-description: Help consumer users connect bundled skills without dumping raw CLI setup instructions into the chat.
+description: Use when the right consumer-facing skill is installed but blocked on account connection, permissions, login, OAuth, or local setup, and the next turn should guide setup instead of attempting the task or dumping raw CLI steps.
 homepage: https://docs.openclaw.ai/platforms/macos
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
 # Consumer Setup
 
-Use this shared setup surface when a consumer-facing skill is installed but not
-ready because it still needs account connection, permissions, configuration, or
-API credentials.
+Use this skill when another consumer-facing skill is the correct match for the
+user's request, but that skill cannot proceed yet because the account,
+permissions, OAuth session, local login, or product-side configuration is not
+ready.
+
+Trigger it for requests like:
+
+- "read my email" when mail is not connected yet
+- "check my calendar" when Google auth is missing
+- "send a Telegram message as me" when Telegram-as-me still needs login
+- "create a reminder" when macOS access has not been granted yet
+
+Do not use it when the underlying skill is already connected and ready, or when
+the problem is normal task execution rather than setup.
 
 ## Core Behavior
 
@@ -79,6 +90,31 @@ explicitly ask for the CLI path.
 - Use raw `wacli doctor` only for fallback debugging, not as the primary user
   status, because it can misreport `CONNECTED false` while a healthy sync owner
   holds the lock.
+
+### Telegram-as-me
+
+- Missing states usually look like:
+  `openclaw telegram-user status --json` returning `missing_credentials`,
+  `missing_session`, `awaiting_code`, `awaiting_password`, or `needs_reauth`.
+- Tell the user Telegram-as-me is not connected on this Mac yet.
+- Explain the split clearly: this path uses the user's real Telegram account.
+  It is not the normal Telegram bot channel and it does not use BotFather.
+- For `missing_credentials`, explain that this Mac still needs the user's
+  Telegram API ID and API hash from `my.telegram.org/apps`.
+- For `missing_session`, explain that the API credentials exist but the real
+  account has not been logged in on this Mac yet.
+- For `awaiting_code`, ask only for the OTP that Telegram just sent.
+- For `awaiting_password`, explain that Telegram 2FA is still required and
+  prefer a local interactive prompt over asking the user to paste that password
+  into chat.
+- For `needs_reauth`, explain that the saved Telegram-as-me session is no
+  longer valid and needs a fresh login on this Mac.
+- Prefer product-language guidance such as "I can help connect your real
+  Telegram account now" over dumping raw login commands into chat.
+- Verify with the cheapest read-only check first:
+  `openclaw telegram-user status --json`.
+- After verification succeeds, continue the user's original Telegram-as-me task
+  instead of stopping at "setup is done".
 
 ### gog
 
