@@ -1,0 +1,111 @@
+---
+name: telegram-user
+description: Use the in-repo Telegram-as-me CLI to read, send, and wait for replies as the user's real Telegram account.
+metadata: { "openclaw": { "emoji": "✈️", "requires": { "bins": ["openclaw"] } } }
+---
+
+# Telegram User
+
+Use `telegram-user` when the user wants OpenClaw to read or send messages as
+their real Telegram account.
+
+Do not use this skill for the normal Telegram bot-account channel. That path is
+separate.
+
+This skill is the Telegram analogue of the WhatsApp CLI surface: a narrow,
+deterministic command layer on top of the existing in-repo MTProto backend, not
+macOS UI automation and not a second Telegram runtime.
+
+Automation Rule
+
+- Prefer the installed OpenClaw CLI first:
+  `openclaw telegram-user <subcommand> ...`
+- Use the bundled wrapper only as a human/operator fallback when you are
+  already inside this repo and explicitly want the lane-local entrypoint:
+  `skills/telegram-user/scripts/telegram-user-cli.sh <subcommand> ...`
+- Run one command per call. Do not add shell chains, pipes, or redirection
+  around the wrapper unless the user explicitly asks for raw shell plumbing.
+- Start with the cheapest truthful check:
+  `openclaw telegram-user status --json`
+- For a target-specific read/send workflow, prove the session first with
+  `status --json` or `precheck --chat <chat> --json` before write actions.
+- Prefer direct repo-local execution on this machine. Do not invent a second
+  Python backend or wrap a third-party Telegram CLI.
+
+When To Use
+
+- Read recent messages from a Telegram chat as the user's real account.
+- Send or reply to a Telegram chat as the user's real account.
+- Wait for a matching reply in a Telegram DM/thread/topic-aware flow.
+- Check Telegram-as-me auth/session health.
+
+When Not To Use
+
+- Normal Telegram bot-account routing in OpenClaw.
+- Telegram group/bot setup through BotFather.
+- macOS UI clicking/typing in Telegram Desktop.
+- Broad history sync/search features that the current `telegram-user` backend
+  does not promise yet.
+
+Setup Routing
+
+- If `status --json` returns `missing_credentials`, route through
+  `consumer-setup`.
+  Explain plainly that Telegram-as-me is not connected yet because this Mac
+  still needs the user's Telegram API credentials from `my.telegram.org/apps`.
+- If `status --json` returns `missing_session`, route through `consumer-setup`.
+  Explain that Telegram-as-me is not logged in yet and offer to connect it now.
+- If `status --json` returns `awaiting_code`, ask the user for the Telegram OTP
+  that was just sent to their Telegram app/SMS.
+- If `status --json` returns `awaiting_password`, explain that Telegram 2FA is
+  still required before the real-account session can be used.
+- If `status --json` returns `needs_reauth`, say the saved Telegram session is
+  no longer accepted and must be logged in again.
+- If the user explicitly wants the terminal path, use the exact commands below.
+  Otherwise keep the explanation in product language first.
+
+Login Flow
+
+- Start login:
+  `openclaw telegram-user login --phone "+15551234567" --json`
+- Submit OTP:
+  `openclaw telegram-user login --phone "+15551234567" --code 12345 --json`
+- If Telegram 2FA is enabled, prefer the interactive prompt path or set
+  `OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD` in the environment.
+  Do not pass the Telegram account password on argv.
+- Re-check state after each login step:
+  `openclaw telegram-user status --json`
+
+Default Commands
+
+- Status:
+  `openclaw telegram-user status --json`
+- Precheck one chat:
+  `openclaw telegram-user precheck --chat @jarvis_tester_1_bot --json`
+- Read recent messages:
+  `openclaw telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json`
+- Send a message:
+  `openclaw telegram-user send --chat @jarvis_tester_1_bot --message "hello" --json`
+- Reply to a specific message:
+  `openclaw telegram-user send --chat @jarvis_tester_1_bot --reply-to 12345 --message "on it" --json`
+- Wait for a reply:
+  `openclaw telegram-user wait --chat @jarvis_tester_1_bot --after-id 12345 --sender-id 67890 --json`
+- Logout / clear local session:
+  `openclaw telegram-user logout --json`
+
+Behavior Notes
+
+- This surface reads and writes as the user's real Telegram account.
+- `telegram-user login` persists pending login state so the caller does not
+  manage `phone_code_hash` by hand.
+- `wait` is thread-aware through the existing backend semantics around
+  `reply_to_msg_id`, `reply_to_top_id`, and DM topic metadata.
+- Prefer text-first workflows for now. Do not promise broad media/history
+  features unless the underlying CLI already supports them.
+
+Safety
+
+- Require an explicit chat target and explicit message text before sending.
+- Confirm the intended recipient when the target is ambiguous.
+- Do not expose Telegram API hash, session files, OTPs, or 2FA secrets in logs
+  or chat transcripts.

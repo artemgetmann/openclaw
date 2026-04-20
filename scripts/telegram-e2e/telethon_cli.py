@@ -174,6 +174,30 @@ def dialog_has_unread(dialog) -> bool:
   )
 
 
+def dialog_matches_inbox_filters(dialog, *, dm_only: bool, unread_only: bool) -> bool:
+  if dm_only and not bool(getattr(dialog, "is_user", False)):
+    return False
+  if unread_only and not dialog_has_unread(dialog):
+    return False
+  return True
+
+
+def compute_inbox_scan_cap(*, limit: int, dm_only: bool, unread_only: bool) -> int:
+  # Unfiltered inbox reads can stop at the caller's requested window because
+  # every scanned dialog is eligible for return. Filtered reads are different:
+  # a busy account can have hundreds of pinned/groups/read chats ahead of the
+  # first unread DM, so reserve a larger but still bounded scan budget.
+  if not dm_only and not unread_only:
+    return limit
+
+  filter_multiplier = 12
+  if dm_only and unread_only:
+    filter_multiplier = 25
+  elif dm_only or unread_only:
+    filter_multiplier = 15
+  return min(5_000, max(limit * filter_multiplier, 1_000))
+
+
 def build_dialog_payload(dialog) -> dict[str, object | None]:
   entity = getattr(dialog, "entity", None)
   notify_settings = getattr(dialog, "dialog", None)
@@ -319,13 +343,19 @@ async def run_inbox(args: argparse.Namespace) -> int:
     client, _ = await connect_client(session_path)
     try:
       dialogs = []
-      # Overfetch a little so unread/DM filters still return a useful page
-      # instead of stopping after one noisy batch of irrelevant dialogs.
-      fetch_limit = min(400, max(limit * 4, limit))
-      async for dialog in client.iter_dialogs(limit = fetch_limit, ignore_pinned = False):
-        if args.dm_only and not bool(getattr(dialog, "is_user", False)):
-          continue
-        if args.unread and not dialog_has_unread(dialog):
+      scan_cap = compute_inbox_scan_cap(
+        limit = limit,
+        dm_only = bool(args.dm_only),
+        unread_only = bool(args.unread),
+      )
+      # Keep the scan bounded, but do not assume the first few hundred dialogs
+      # are representative once filters are applied client-side.
+      async for dialog in client.iter_dialogs(limit = scan_cap, ignore_pinned = False):
+        if not dialog_matches_inbox_filters(
+          dialog,
+          dm_only = bool(args.dm_only),
+          unread_only = bool(args.unread),
+        ):
           continue
         dialogs.append(build_dialog_payload(dialog))
         if len(dialogs) >= limit:
