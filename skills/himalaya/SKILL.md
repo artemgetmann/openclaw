@@ -1,6 +1,6 @@
 ---
 name: himalaya
-description: "CLI to manage emails via IMAP/SMTP. Use `himalaya` to list, read, write, reply, forward, search, and organize emails from the terminal. Supports multiple accounts and message composition with MML (MIME Meta Language)."
+description: "Use for generic email tasks on configured IMAP/SMTP accounts: list, read, search, draft, reply, forward, send, and organize mail from the terminal. Prefer this when the user asks for email help without specifically needing Gmail or Google Workspace tools."
 homepage: https://github.com/pimalaya/himalaya
 metadata:
   {
@@ -25,6 +25,10 @@ metadata:
 # Himalaya Email CLI
 
 Himalaya is a CLI email client that lets you manage emails from the terminal using IMAP, SMTP, Notmuch, or Sendmail backends.
+
+Use this skill for generic email requests when the user wants mailbox access,
+message search, drafting, replying, forwarding, or folder management and the
+request is not specifically about Gmail or broader Google Workspace surfaces.
 
 ## References
 
