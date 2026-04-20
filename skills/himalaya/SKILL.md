@@ -1,6 +1,6 @@
 ---
 name: himalaya
-description: "CLI to manage emails via IMAP/SMTP. Use `himalaya` to list, read, write, reply, forward, search, and organize emails from the terminal. Supports multiple accounts and message composition with MML (MIME Meta Language)."
+description: "Use for generic email tasks on connected mail accounts: search, read, summarize, draft, reply, forward, send, and organize email over IMAP/SMTP. This is the better match for normal mailbox work that is not specifically a Gmail or Google Workspace request."
 homepage: https://github.com/pimalaya/himalaya
 metadata:
   {

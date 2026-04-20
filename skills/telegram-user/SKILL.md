@@ -1,6 +1,6 @@
 ---
 name: telegram-user
-description: Use when OpenClaw must read, send, or wait as the user's real Telegram account on this Mac, not the normal Telegram bot channel.
+description: Use for Telegram-as-me requests on this Mac: reading, sending, replying, or waiting as the user's real Telegram account. Do not use it for the normal Telegram bot channel, BotFather setup, or generic bot onboarding.
 metadata: { "openclaw": { "emoji": "✈️", "requires": { "bins": ["openclaw"] } } }
 ---
 

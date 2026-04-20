@@ -1,6 +1,6 @@
 ---
 name: gog
-description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.
+description: Use for Google Workspace requests tied to Gmail, Google Calendar, Drive, Docs, Sheets, or Contacts, especially when the user explicitly mentions Google or needs cross-surface Google account access. Prefer this over generic email skills when the task is clearly in the Google ecosystem.
 homepage: https://gogcli.sh
 metadata:
   {
@@ -24,7 +24,19 @@ metadata:
 
 # gog
 
-Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
+Use `gog` for Gmail, Google Calendar, Drive, Docs, Sheets, and Contacts work.
+This is the Google-account skill, not the generic mailbox skill.
+
+Use it when the user means things like:
+
+- "search Gmail" or "reply in my Gmail"
+- "check my Google Calendar" or "create a calendar event"
+- "find a file in Drive"
+- "read a Google Doc" or "update a Google Sheet"
+- "look up a contact from my Google account"
+
+If the task is generic email read/reply/search without a Google-specific ask,
+prefer `himalaya` instead. Requires OAuth setup.
 
 Setup routing
 

@@ -1,15 +1,26 @@
 ---
 name: consumer-setup
-description: Help consumer users connect bundled skills without dumping raw CLI setup instructions into the chat.
+description: Use when the right consumer-facing skill is installed but blocked on account connection, permissions, login, OAuth, or local setup, and the next turn should guide setup instead of attempting the task or dumping raw CLI steps.
 homepage: https://docs.openclaw.ai/platforms/macos
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
 # Consumer Setup
 
-Use this shared setup surface when a consumer-facing skill is installed but not
-ready because it still needs account connection, permissions, configuration, or
-API credentials.
+Use this skill when another consumer-facing skill is the correct match for the
+user's request, but that skill cannot proceed yet because the account,
+permissions, OAuth session, local login, or product-side configuration is not
+ready.
+
+Trigger it for requests like:
+
+- "read my email" when mail is not connected yet
+- "check my calendar" when Google auth is missing
+- "send a Telegram message as me" when Telegram-as-me still needs login
+- "create a reminder" when macOS access has not been granted yet
+
+Do not use it when the underlying skill is already connected and ready, or when
+the problem is normal task execution rather than setup.
 
 ## Core Behavior
 
