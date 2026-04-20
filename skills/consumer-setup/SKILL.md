@@ -1,15 +1,27 @@
 ---
 name: consumer-setup
-description: Help consumer users connect bundled skills without dumping raw CLI setup instructions into the chat.
+description: Route here when a consumer skill is installed but blocked on account connection, permissions, configuration, or credentials, and the user needs setup help instead of raw CLI steps.
 homepage: https://docs.openclaw.ai/platforms/macos
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
 # Consumer Setup
 
-Use this shared setup surface when a consumer-facing skill is installed but not
-ready because it still needs account connection, permissions, configuration, or
-API credentials.
+Use this skill when the model has already identified the right product surface,
+but that surface is not usable yet because setup is missing.
+
+Route here when:
+
+- the requested skill exists, but the account is not connected yet
+- the user still needs to approve permissions, sign in, or finish OAuth
+- required configuration, secrets, or API credentials are missing
+- the right response is setup guidance in product language, not a raw CLI dump
+
+Do not route here when:
+
+- a different skill is the better product match for the request
+- the integration is already connected and the user is asking for the actual
+  task, not setup
 
 ## Core Behavior
 
