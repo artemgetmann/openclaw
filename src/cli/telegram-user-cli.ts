@@ -23,11 +23,25 @@ function runTelegramUserCommand(action: () => Promise<void>) {
 export function registerTelegramUserCli(program: Command) {
   const telegramUser = program
     .command("telegram-user")
-    .description("Operator-grade Telegram user MTProto tooling for local E2E")
+    .description(
+      "Telegram-as-me MTProto tooling for login, session health, and real-account messaging",
+    )
     .addHelpText(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            'pnpm openclaw:local telegram-user login --phone "+15551234567"',
+            "Start login, prompt for OTP/2FA when needed, and store the session locally.",
+          ],
+          [
+            'OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD="hunter2" pnpm openclaw:local telegram-user login --phone "+15551234567" --code 12345 --json',
+            "Finish a 2FA step non-interactively without exposing the password in process arguments.",
+          ],
+          [
+            "pnpm openclaw:local telegram-user status --json",
+            "Inspect whether the Telegram-as-me session is ready, expired, or awaiting reauth.",
+          ],
           [
             'pnpm openclaw:local telegram-user send --chat @jarvis_tester_1_bot --message "hello"',
             "Send as the Telegram user account.",
@@ -48,6 +62,44 @@ export function registerTelegramUserCli(program: Command) {
     .action(() => {
       telegramUser.help({ error: true });
     });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("status")
+      .description("Inspect Telegram user login/session state and optional chat resolution"),
+  )
+    .option("--chat <target>", "Resolve and validate this chat target when session is healthy")
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { telegramUserStatusCommand } = await import("../commands/telegram-user.js");
+        await telegramUserStatusCommand(opts, defaultRuntime);
+      });
+    });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("login")
+      .description("Connect a real Telegram account and persist the local user session"),
+  )
+    .option("--phone <e164>", "Telegram phone number in international format")
+    .option("--code <otp>", "Telegram login code from Telegram")
+    .action(async (opts) => {
+      await runTelegramUserCommand(async () => {
+        const { telegramUserLoginCommand } = await import("../commands/telegram-user.js");
+        await telegramUserLoginCommand(opts, defaultRuntime);
+      });
+    });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("logout")
+      .description("Clear the persisted Telegram user session and pending login state"),
+  ).action(async (opts) => {
+    await runTelegramUserCommand(async () => {
+      const { telegramUserLogoutCommand } = await import("../commands/telegram-user.js");
+      await telegramUserLogoutCommand(opts, defaultRuntime);
+    });
+  });
 
   withTelegramUserBase(
     telegramUser

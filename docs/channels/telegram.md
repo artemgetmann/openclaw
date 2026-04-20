@@ -787,13 +787,44 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `--buttons` for inline keyboards when `channels.telegram.capabilities.inlineButtons` allows it
     - `--force-document` to send outbound images and GIFs as documents instead of compressed photo or animated-media uploads
 
-    For local Telegram user-account E2E, prefer the repo-local MTProto CLI instead of ad-hoc Python helpers. The old bash wrappers are compatibility shims only.
+    For local Telegram-as-me work, prefer the repo-local MTProto CLI instead of ad-hoc Python helpers. The old bash wrappers are compatibility shims only.
+
+    For agent/tooling workflows, use the bundled WhatsApp-style skill surface:
+
+    - `skills/telegram-user/SKILL.md`
+    - stable wrapper: `skills/telegram-user/scripts/telegram-user-cli.sh`
+
+    The skill is for "send/read as my real Telegram account" flows. It is not
+    the normal Telegram bot-account channel.
 
 ```bash
+skills/telegram-user/scripts/telegram-user-cli.sh status --json
+skills/telegram-user/scripts/telegram-user-cli.sh precheck --chat @jarvis_tester_1_bot --json
+skills/telegram-user/scripts/telegram-user-cli.sh send --chat @jarvis_tester_1_bot --message "hi" --json
+skills/telegram-user/scripts/telegram-user-cli.sh read --chat @jarvis_tester_1_bot --limit 5 --json
+skills/telegram-user/scripts/telegram-user-cli.sh wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json
+skills/telegram-user/scripts/telegram-user-cli.sh logout --json
+
+pnpm openclaw:local telegram-user status --json
+pnpm openclaw:local telegram-user login --phone "+15551234567"
+OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD="hunter2" \
+  pnpm openclaw:local telegram-user login --phone "+15551234567" --code 12345 --json
 pnpm openclaw:local telegram-user send --chat @jarvis_tester_1_bot --message "hi" --json
 pnpm openclaw:local telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json
 pnpm openclaw:local telegram-user wait --chat @jarvis_tester_1_bot --after-id 123 --sender-id 456 --json
+pnpm openclaw:local telegram-user logout --json
 ```
+
+    Supported Telegram-as-me session states:
+
+    - `ready`: session is healthy and can read/send as the real account
+    - `awaiting_code`: login started and waiting for the OTP from Telegram
+    - `awaiting_password`: OTP accepted and Telegram 2FA password is still required
+    - `missing_credentials`: `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` are missing
+    - `missing_session`: no persisted Telethon session exists yet
+    - `needs_reauth`: session file exists but Telegram no longer accepts it
+
+    `telegram-user login` persists pending login state next to the session file, so callers do not have to manage `phone_code_hash` or other MTProto internals manually. For Telegram 2FA, set `OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD` in the environment or use the interactive prompt; do not pass account passwords on argv.
 
     `telegram-user wait` matches replies using the raw metadata that matters in Telegram E2E:
 

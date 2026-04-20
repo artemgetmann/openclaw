@@ -240,6 +240,10 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain("wacli-send-safe.sh");
     expect(prompt).toContain("not a hand-rolled kill/send/restart loop");
+    expect(prompt).toContain("Telegram-as-me messaging");
+    expect(prompt).toContain("telegram-user");
+    expect(prompt).toContain("keep it separate from the bot-account Telegram channel");
+    expect(prompt).toContain("do not fake Telegram-as-me replies through the bot channel");
   });
 
   it("classifies cron as the default for reminders and explicit monitors", () => {

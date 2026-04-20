@@ -68,6 +68,17 @@ Use `telegram-user` directly when you need the lower-level MTProto primitives:
 Use the repo-local CLI for normal operator work and automation:
 
 ```bash
+pnpm openclaw:local telegram-user status --json
+
+pnpm openclaw:local telegram-user login \
+  --phone "+15551234567"
+
+OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD="hunter2" \
+  pnpm openclaw:local telegram-user login \
+    --phone "+15551234567" \
+    --code 12345 \
+    --json
+
 pnpm openclaw:local telegram-user precheck --chat @jarvis_tester_1_bot
 
 pnpm openclaw:local telegram-user send \
@@ -86,15 +97,29 @@ pnpm openclaw:local telegram-user wait \
   --sender-id 67890 \
   --thread-anchor 7001 \
   --json
+
+pnpm openclaw:local telegram-user logout --json
 ```
+
+Session states returned by `telegram-user status`:
+
+1. `ready`: session is healthy and messaging can proceed.
+2. `awaiting_code`: login started and waiting for the OTP from Telegram.
+3. `awaiting_password`: OTP accepted but Telegram 2FA password is still required.
+4. `missing_credentials`: `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` are missing.
+5. `missing_session`: no persisted Telethon session exists yet.
+6. `needs_reauth`: session file exists but Telegram no longer authorizes it.
+
+For Telegram 2FA, use the interactive password prompt or set `OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD` in the environment for automation. Do not pass account passwords on argv.
 
 Why this is the preferred path:
 
-1. one command surface for send/read/wait instead of scattered scripts
+1. one command surface for login/status/send/read/wait/logout instead of scattered scripts
 2. shared thread matching for `reply_to_top_id`, `reply_to_msg_id`, and DM topic ids
 3. session locking so parallel probes fail loudly instead of corrupting Telethon state
 4. secrets stay in env and env-files, not process arguments
-5. `openclaw telegram smoke dm-reply` writes stable run artifacts into `.artifacts/telegram-smoke/`
+5. pending login state is stored next to the session file so callers do not manage MTProto `phone_code_hash` details by hand
+6. `openclaw telegram smoke dm-reply` writes stable run artifacts into `.artifacts/telegram-smoke/`
 
 ### Compatibility wrapper
 

@@ -179,10 +179,61 @@ describe("exec safe bin policy product-owned cli defaults", () => {
     ).toBe(true);
   });
 
+  it("allows Telegram-as-me direct commands only through telegram-user families", () => {
+    const openclawProfile = SAFE_BIN_PROFILES.openclaw;
+    expect(validateSafeBinArgv(["telegram-user", "status", "--json"], openclawProfile)).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        ["telegram-user", "login", "--phone", "+15551234567", "--code", "12345", "--json"],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
+          "send",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--message",
+          "hello",
+          "--reply-to",
+          "123",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(true);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
+          "wait",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--after-id",
+          "10",
+          "--sender-id",
+          "456",
+          "--contains",
+          "reply",
+          "--limit",
+          "20",
+          "--timeout-ms",
+          "1000",
+          "--poll-interval-ms",
+          "50",
+          "--json",
+        ],
+        openclawProfile,
+      ),
+    ).toBe(true);
+  });
+
   it("still blocks path handoffs for product-owned CLIs even when the flag itself is allowed", () => {
     const gogProfile = SAFE_BIN_PROFILES.gog;
     const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
     const wacliProfile = SAFE_BIN_PROFILES.wacli;
+    const openclawProfile = SAFE_BIN_PROFILES.openclaw;
     expect(
       validateSafeBinArgv(["auth", "credentials", "--client", "./secret.json"], gogProfile),
     ).toBe(false);
@@ -198,12 +249,19 @@ describe("exec safe bin policy product-owned cli defaults", () => {
     expect(validateSafeBinArgv(["send", "file", "--file", "/tmp/doc.pdf"], wacliProfile)).toBe(
       false,
     );
+    expect(
+      validateSafeBinArgv(
+        ["telegram-user", "send", "--chat", "@jarvis_tester_1_bot", "--file", "/tmp/doc.pdf"],
+        openclawProfile,
+      ),
+    ).toBe(false);
   });
 
   it("still blocks product-owned CLI command lines that blow past bounded positionals", () => {
     const gogProfile = SAFE_BIN_PROFILES.gog;
     const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
     const wacliProfile = SAFE_BIN_PROFILES.wacli;
+    const openclawProfile = SAFE_BIN_PROFILES.openclaw;
     expect(
       validateSafeBinArgv(
         ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"],
@@ -222,12 +280,16 @@ describe("exec safe bin policy product-owned cli defaults", () => {
         wacliProfile,
       ),
     ).toBe(false);
+    expect(
+      validateSafeBinArgv(["telegram-user", "status", "one", "two", "three"], openclawProfile),
+    ).toBe(false);
   });
 
   it("still blocks path-like values on unknown options inside trusted command families", () => {
     const gogProfile = SAFE_BIN_PROFILES.gog;
     const himalayaProfile = SAFE_BIN_PROFILES.himalaya;
     const wacliProfile = SAFE_BIN_PROFILES.wacli;
+    const openclawProfile = SAFE_BIN_PROFILES.openclaw;
     expect(
       validateSafeBinArgv(
         ["gmail", "search", "newer_than:7d", "--config", "./secret.json"],
@@ -241,6 +303,19 @@ describe("exec safe bin policy product-owned cli defaults", () => {
       validateSafeBinArgv(
         ["messages", "search", "invoice", "--db-path", "../wa.sqlite"],
         wacliProfile,
+      ),
+    ).toBe(false);
+    expect(
+      validateSafeBinArgv(
+        [
+          "telegram-user",
+          "wait",
+          "--chat",
+          "@jarvis_tester_1_bot",
+          "--session",
+          "../userbot.session",
+        ],
+        openclawProfile,
       ),
     ).toBe(false);
   });

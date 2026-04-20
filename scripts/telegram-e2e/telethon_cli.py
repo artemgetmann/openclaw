@@ -35,6 +35,8 @@ from telethon_compat import create_telegram_client
 
 DEFAULT_SESSION = Path(__file__).resolve().parent / "tmp" / "userbot.session"
 DEFAULT_LOCK_TIMEOUT_SECONDS = 15
+PENDING_AUTH_SUFFIX = ".openclaw-login.json"
+LOGIN_PASSWORD_ENV = "OPENCLAW_TELEGRAM_USER_LOGIN_PASSWORD"
 
 
 def emit(payload: object, *, stream = sys.stdout) -> int:
@@ -50,6 +52,7 @@ def sanitize_error_text(raw: str) -> str:
     os.environ.get("TELEGRAM_API_HASH", ""),
     os.environ.get("TELEGRAM_BOT_TOKEN", ""),
     os.environ.get("TG_BOT_TOKEN", ""),
+    os.environ.get(LOGIN_PASSWORD_ENV, ""),
   ):
     if secret:
       text = text.replace(secret, "<redacted>")
@@ -94,6 +97,145 @@ def resolve_chat(chat_raw: str) -> int | str:
   if chat.lstrip("-").isdigit():
     return int(chat)
   return chat
+
+
+def resolve_pending_auth_path(session_path: Path) -> Path:
+  return session_path.with_name(f"{session_path.name}{PENDING_AUTH_SUFFIX}")
+
+
+def is_valid_pending_auth_state(state: str) -> bool:
+  return state in {"awaiting_code", "awaiting_password"}
+
+
+def read_pending_auth_state(session_path: Path) -> dict[str, object] | None:
+  pending_path = resolve_pending_auth_path(session_path)
+  if not pending_path.exists() or not pending_path.is_file():
+    return None
+  try:
+    payload = json.loads(pending_path.read_text(encoding = "utf-8"))
+  except Exception:
+    return None
+  if not isinstance(payload, dict):
+    return None
+  return payload
+
+
+def write_pending_auth_state(
+  session_path: Path,
+  *,
+  phone: str,
+  phone_code_hash: str,
+  state: str,
+) -> dict[str, object]:
+  payload = {
+    "phone": phone,
+    "phone_code_hash": phone_code_hash,
+    "state": state,
+  }
+  pending_path = resolve_pending_auth_path(session_path)
+  pending_path.parent.mkdir(parents = True, exist_ok = True)
+  pending_path.write_text(json.dumps(payload, ensure_ascii = True, indent = 2) + "\n", encoding = "utf-8")
+  return payload
+
+
+def clear_pending_auth_state(session_path: Path) -> None:
+  pending_path = resolve_pending_auth_path(session_path)
+  try:
+    pending_path.unlink()
+  except FileNotFoundError:
+    return
+
+
+def build_user_payload(me) -> dict[str, object | None]:
+  return {
+    "first_name": getattr(me, "first_name", None),
+    "user_id": int(getattr(me, "id", 0) or 0),
+    "username": getattr(me, "username", None),
+  }
+
+
+def build_pending_login_payload(pending_auth: dict[str, object] | None) -> dict[str, object | None] | None:
+  if not pending_auth:
+    return None
+  state = str(pending_auth.get("state") or "").strip()
+  phone = str(pending_auth.get("phone") or "").strip()
+  if not is_valid_pending_auth_state(state):
+    return None
+  return {
+    "phone": phone or None,
+    "state": state,
+  }
+
+
+def emit_auth_status(
+  *,
+  chat_payload: dict[str, object | None] | None,
+  pending_auth: dict[str, object] | None,
+  session_path: Path,
+  state: str,
+  user_payload: dict[str, object | None] | None,
+) -> int:
+  return emit(
+    {
+      "chat": chat_payload,
+      "pending_login": build_pending_login_payload(pending_auth),
+      "session_path": str(session_path),
+      "state": state,
+      "user": user_payload,
+    }
+  )
+
+
+def clear_session_artifacts(session_path: Path) -> list[str]:
+  removed_paths: list[str] = []
+  if session_path.exists() and session_path.is_dir():
+    raise ValueError(
+      f"Refusing to clear Telegram session artifacts because session path is a directory: {session_path}"
+    )
+  # Telethon can leave SQLite sidecars behind depending on shutdown timing and
+  # platform filesystem semantics. Only delete the exact file artifacts that
+  # belong to this session path; never recurse into directories.
+  candidate_paths = [
+    session_path,
+    resolve_pending_auth_path(session_path),
+    session_path.with_name(f"{session_path.name}.openclaw.lock"),
+    Path(f"{session_path}-journal"),
+    Path(f"{session_path}-shm"),
+    Path(f"{session_path}-wal"),
+  ]
+
+  for candidate in candidate_paths:
+    if candidate.exists() and candidate.is_dir():
+      raise ValueError(f"Refusing to delete unexpected directory artifact: {candidate}")
+    try:
+      candidate.unlink()
+      removed_paths.append(str(candidate))
+    except FileNotFoundError:
+      continue
+  return removed_paths
+
+
+async def refresh_pending_code_request(
+  client,
+  session_path: Path,
+  *,
+  phone: str,
+) -> dict[str, object]:
+  sent = await client.send_code_request(phone)
+  return write_pending_auth_state(
+    session_path,
+    phone = phone,
+    phone_code_hash = str(getattr(sent, "phone_code_hash", "") or ""),
+    state = "awaiting_code",
+  )
+
+
+def read_login_password() -> str:
+  return str(os.environ.get(LOGIN_PASSWORD_ENV) or "").strip()
+
+
+def classify_login_error(error: Exception) -> str:
+  return error.__class__.__name__
 
 
 @contextmanager
@@ -172,6 +314,13 @@ def build_parser() -> argparse.ArgumentParser:
   parser.add_argument("--session", help = "Telethon session path override")
   subparsers = parser.add_subparsers(dest = "command", required = True)
 
+  status = subparsers.add_parser("status", help = "Inspect login/session health")
+  status.add_argument("--chat", help = "Optional chat target to resolve")
+
+  login = subparsers.add_parser("login", help = "Log in a real Telegram account")
+  login.add_argument("--phone", required = True, help = "Telegram phone number")
+  login.add_argument("--code", help = "Telegram login code")
+
   precheck = subparsers.add_parser("precheck", help = "Validate the Telegram user session")
   precheck.add_argument("--chat", help = "Optional chat target to resolve")
 
@@ -185,6 +334,8 @@ def build_parser() -> argparse.ArgumentParser:
   read.add_argument("--limit", type = int, default = 20, help = "Maximum number of messages")
   read.add_argument("--after-id", type = int, default = 0, help = "Only return newer messages")
   read.add_argument("--before-id", type = int, default = 0, help = "Only return older messages")
+
+  subparsers.add_parser("logout", help = "Clear the Telegram user session")
   return parser
 
 
@@ -224,12 +375,201 @@ async def run_precheck(args: argparse.Namespace) -> int:
         {
           "chat": chat_payload,
           "session_path": str(session_path),
-          "user": {
-            "first_name": getattr(me, "first_name", None),
-            "user_id": int(getattr(me, "id", 0) or 0),
-            "username": getattr(me, "username", None),
-          },
+          "user": build_user_payload(me),
         }
+      )
+    finally:
+      await client.disconnect()
+
+
+async def run_status(args: argparse.Namespace) -> int:
+  session_path = resolve_session_path(args.session)
+  pending_auth = read_pending_auth_state(session_path)
+
+  try:
+    resolve_api_credentials()
+  except Exception:
+    return emit_auth_status(
+      chat_payload = None,
+      pending_auth = pending_auth,
+      session_path = session_path,
+      state = "missing_credentials",
+      user_payload = None,
+    )
+
+  if session_path.exists():
+    with acquire_session_lock(session_path):
+      api_id, api_hash = resolve_api_credentials()
+      client = create_telegram_client(
+        session_path,
+        api_id,
+        api_hash,
+        flood_sleep_threshold = 0,
+      )
+      try:
+        await client.connect()
+        if await client.is_user_authorized():
+          clear_pending_auth_state(session_path)
+          me = await client.get_me()
+          chat_payload = None
+          if args.chat:
+            resolved = await client.get_entity(resolve_chat(args.chat))
+            chat_payload = build_chat_payload(resolved)
+          return emit_auth_status(
+            chat_payload = chat_payload,
+            pending_auth = None,
+            session_path = session_path,
+            state = "ready",
+            user_payload = build_user_payload(me),
+          )
+      finally:
+        await client.disconnect()
+
+  if pending_auth is not None:
+    pending_state = str(pending_auth.get("state") or "").strip()
+    if is_valid_pending_auth_state(pending_state):
+      return emit_auth_status(
+        chat_payload = None,
+        pending_auth = pending_auth,
+        session_path = session_path,
+        state = pending_state,
+        user_payload = None,
+      )
+
+  if not session_path.exists():
+    return emit_auth_status(
+      chat_payload = None,
+      pending_auth = None,
+      session_path = session_path,
+      state = "missing_session",
+      user_payload = None,
+    )
+
+  return emit_auth_status(
+    chat_payload = None,
+    pending_auth = None,
+    session_path = session_path,
+    state = "needs_reauth",
+    user_payload = None,
+  )
+
+
+async def run_login(args: argparse.Namespace) -> int:
+  session_path = resolve_session_path(args.session)
+  phone = str(args.phone or "").strip()
+  code = str(args.code or "").strip()
+  password = read_login_password()
+  if not phone:
+    return fail("E_USAGE", "Telegram login requires --phone.")
+
+  with acquire_session_lock(session_path):
+    api_id, api_hash = resolve_api_credentials()
+    client = create_telegram_client(
+      session_path,
+      api_id,
+      api_hash,
+      flood_sleep_threshold = 0,
+    )
+    try:
+      await client.connect()
+      if await client.is_user_authorized():
+        clear_pending_auth_state(session_path)
+        me = await client.get_me()
+        return emit_auth_status(
+          chat_payload = None,
+          pending_auth = None,
+          session_path = session_path,
+          state = "ready",
+          user_payload = build_user_payload(me),
+        )
+
+      pending_auth = read_pending_auth_state(session_path)
+      pending_phone = str((pending_auth or {}).get("phone") or "").strip()
+      pending_hash = str((pending_auth or {}).get("phone_code_hash") or "").strip()
+      pending_state = str((pending_auth or {}).get("state") or "").strip()
+
+      # Reusing the existing code hash avoids spamming fresh OTP sends while a
+      # caller is still in the middle of the same login attempt.
+      if (
+        not code
+        and not password
+        and pending_auth is not None
+        and pending_phone == phone
+        and is_valid_pending_auth_state(pending_state)
+      ):
+        return emit_auth_status(
+          chat_payload = None,
+          pending_auth = pending_auth,
+          session_path = session_path,
+          state = pending_state,
+          user_payload = None,
+        )
+
+      if not code and not password:
+        stored = await refresh_pending_code_request(client, session_path, phone = phone)
+        return emit_auth_status(
+          chat_payload = None,
+          pending_auth = stored,
+          session_path = session_path,
+          state = "awaiting_code",
+          user_payload = None,
+        )
+
+      if not pending_hash or pending_phone != phone:
+        return fail(
+          "E_LOGIN_CODE_NOT_REQUESTED",
+          "No pending Telegram login code was found for this phone. Start login without --code first.",
+        )
+
+      try:
+        if password:
+          await client.sign_in(password = password)
+        else:
+          await client.sign_in(phone = phone, code = code, phone_code_hash = pending_hash)
+      except Exception as err:
+        error_name = classify_login_error(err)
+        if error_name == "SessionPasswordNeededError":
+          stored = write_pending_auth_state(
+            session_path,
+            phone = phone,
+            phone_code_hash = pending_hash,
+            state = "awaiting_password",
+          )
+          return emit_auth_status(
+            chat_payload = None,
+            pending_auth = stored,
+            session_path = session_path,
+            state = "awaiting_password",
+            user_payload = None,
+          )
+        if error_name in {
+          "PhoneCodeEmptyError",
+          "PhoneCodeExpiredError",
+          "PhoneCodeHashEmptyError",
+          "PhoneCodeHashExpiredError",
+          "PhoneCodeInvalidError",
+        }:
+          stored = await refresh_pending_code_request(client, session_path, phone = phone)
+          return emit_auth_status(
+            chat_payload = None,
+            pending_auth = stored,
+            session_path = session_path,
+            state = "awaiting_code",
+            user_payload = None,
+          )
+        raise
+
+      if not await client.is_user_authorized():
+        return fail("E_UNAUTHORIZED_SESSION", "Telegram login completed without an authorized session.")
+
+      clear_pending_auth_state(session_path)
+      me = await client.get_me()
+      return emit_auth_status(
+        chat_payload = None,
+        pending_auth = None,
+        session_path = session_path,
+        state = "ready",
+        user_payload = build_user_payload(me),
       )
     finally:
       await client.disconnect()
@@ -271,16 +611,32 @@ async def run_read(args: argparse.Namespace) -> int:
       await client.disconnect()
 
 
+async def run_logout(args: argparse.Namespace) -> int:
+  session_path = resolve_session_path(args.session)
+  with acquire_session_lock(session_path):
+    removed_paths = clear_session_artifacts(session_path)
+  return emit(
+    {
+      "cleared": len(removed_paths) > 0,
+      "removed_paths": removed_paths,
+      "session_path": str(session_path),
+    }
+  )
+
+
 async def run() -> int:
   args = build_parser().parse_args()
-  try:
-    resolve_api_credentials()
-  except Exception as err:
-    return fail("E_MISSING_CREDS", sanitize_error_text(str(err)))
 
   try:
+    if args.command == "status":
+      return await run_status(args)
+    if args.command == "logout":
+      return await run_logout(args)
+    resolve_api_credentials()
     if args.command == "precheck":
       return await run_precheck(args)
+    if args.command == "login":
+      return await run_login(args)
     if args.command == "send":
       return await run_send(args)
     if args.command == "read":

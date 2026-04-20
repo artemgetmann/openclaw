@@ -268,7 +268,7 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "telegram-user",
-    description: "Operator-grade Telegram user MTProto tooling for local E2E",
+    description: "Telegram-as-me MTProto tooling for login, health, and real-account messaging",
     hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../telegram-user-cli.js");
