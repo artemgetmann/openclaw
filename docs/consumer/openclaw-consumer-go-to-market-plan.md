@@ -1,220 +1,371 @@
-# OpenClaw Consumer Wrapper — Architecture, MVP, Pricing, Launch Plan
+# OpenClaw Consumer — Go-to-Market Plan
 
-## 0) Positioning (the one-liner)
+Last updated: 2026-04-22
+Status: working recommendation
 
-**“Your personal AI operator in Telegram, running on your own Mac.”**
+## Positioning
 
-Not a generic chatbot. Not “another agent framework.”
-A practical operator with real-world reliability and trust controls.
+**Your personal AI operator in Telegram, running on your own Mac.**
 
----
-
-## 1) Product architecture (v1)
-
-```mermaid
-flowchart LR
-  U[User in Telegram] --> B[User Bot]
-  B --> C[Control Plane Service]
-  C --> A[Local Mac Agent Runtime]
-  A --> G[OpenClaw Gateway]
-  G --> T[Tools + Skills + Browser + File Ops]
-  G --> L[Action Log + Audit Timeline]
-
-  C --> S[Safety Policy Engine]
-  S --> G
-
-  C --> P[Subscription + Billing + License]
-  C --> O[Onboarding Orchestrator]
-
-  subgraph Optional Later
-    M[Managed Mac Host]
-    X[Cloud Linux Worker - Limited Tasks]
-  end
-
-  C -.optional routing.-> M
-  C -.optional routing.-> X
-```
-
-### Core components
-
-1. **Client layer (Telegram-first)**
-   - User talks to personal bot.
-   - Bot identity is user-owned.
-
-2. **Control plane (your SaaS layer)**
-   - Onboarding orchestration
-   - Subscription/licensing
-   - Device registration and health status
-   - Remote pause/revoke
-
-3. **Execution plane (local-first)**
-   - OpenClaw runtime on user Mac
-   - Full local capability (browser sessions, files, desktop apps)
-
-4. **Safety layer (not approval spam)**
-   - Policy profiles: Safe / Balanced / Power
-   - Irreversible action gate only
-   - Panic pause + session kill
-
-5. **Observability layer**
-   - Human-readable timeline (“what happened”)
-   - Action replay metadata for debugging and trust
+Not a generic chatbot.
+Not a cloud agent you have to mentally route.
+A practical operator that works in the same environment where your real digital life already exists.
 
 ---
 
-## 2) Security model for MVP (minimal but real)
+## Core product thesis
 
-### Action classes
+The winning consumer story is not "hosted-first" or "hybrid-first."
+It is:
 
-- **Class A — Low risk (auto-allow)**
-  - Read files, summarize, research, draft text, navigate pages
+**one default execution environment that users do not have to think about.**
 
-- **Class B — Medium risk (policy-driven)**
-  - Edit local files, post drafts, create calendar drafts
-
-- **Class C — Irreversible/high risk (must confirm)**
-  - External send (email/message)
-  - Payments/checkout/booking final submit
-  - Deletes/destructive commands
-  - Account/security settings changes
-
-### Default profile recommendation
-
-- Start users on **Balanced**.
-- Let advanced users flip to **Power**.
-- Don’t default to Safe unless user explicitly wants high friction.
-
----
-
-## 3) MVP scope (P0)
-
-## Must ship (P0)
-
-1. **Installer + setup wizard on macOS**
-2. **Telegram channel setup (guided BotFather flow, manual step)**
-3. **Runtime health checks + auto-reconnect**
-4. **Safety profiles (Safe/Balanced/Power)**
-5. **Irreversible action confirmation gate**
-6. **Activity timeline UI/log view**
-7. **Panic pause button**
-8. **Basic billing + license enforcement**
-
-## Nice-to-have but can wait (P1)
-
-1. WhatsApp channel
-2. Managed Mac hosting tier
-3. Cloud worker for limited tasks
-4. Team/shared mode
-5. Mobile controller app
-
----
-
-## 4) Pricing model (recommended)
-
-## Tier structure
-
-1. **Starter (Local)** — $29/mo
-   - 1 device
-   - Telegram
-   - Balanced/Power modes
-   - Community support
-
-2. **Pro (Local+)** — $79/mo
-   - 2–3 devices
-   - Priority queue for heavy tasks
-   - Advanced policy customization
-   - Faster support
-
-3. **Concierge (Managed Mac)** — $249–$499/mo
-   - You host/operate managed Mac environment
-   - White-glove onboarding
-   - SLA + premium support
-
-## Why this pricing works
-
-- Starter low enough to validate demand quickly.
-- Pro captures power users with higher willingness to pay.
-- Concierge becomes high-margin service moat.
-
----
-
-## 5) 30-day launch plan
-
-## Week 1 — Foundations
-
-- Lock architecture and safety policy contract
-- Implement policy engine + action classifier
-- Build onboarding flow copy and screens
-- Set up billing skeleton
-
-## Week 2 — Core product
-
-- Telegram-first end-to-end working path
-- Activity timeline + panic pause
-- Health monitor + reconnect/restart handlers
-
-## Week 3 — Private beta
-
-- 15–30 design partners
-- Daily bug triage + onboarding friction fixes
-- Collect time-to-value and retention signals
-
-## Week 4 — Public launch v1
-
-- Public landing page and waitlist conversion
-- Founder-led demos
-- Weekly shipping cadence + changelog marketing
-
----
-
-## 6) Launch metrics (what matters)
-
-1. **Activation rate**: install → first successful delegated task
-2. **Time to first value**: target under 10 minutes
-3. **7-day retention**: users running at least 3 delegated tasks/week
-4. **Autonomy success rate**: tasks completed without manual rescue
-5. **Trust incidents**: accidental unsafe actions (target near zero)
-
-If these are healthy, scale. If not, fix onboarding + reliability first.
-
----
-
-## 7) Open questions to resolve now
-
-1. **Bot identity strategy**
-   - User-owned bot token vs shared bot + tenant routing
-2. **Policy explainability UX**
-   - How to clearly explain why an action was blocked/requested
-3. **Local app UX**
-   - Menu bar only vs full desktop shell
-4. **Model routing**
-   - Single default provider vs user-owned API keys
-5. **Support model**
-   - Product-led vs concierge-heavy
-6. **Legal boundaries**
-   - Terms around autonomous actions and user liability boundaries
-
----
-
-## 8) Clear recommendation
-
-Start **narrow and brutal**:
-
-- macOS local runtime
-- Telegram only
-- Balanced safety default
-- one killer promise: **“delegate real digital work from chat, safely, on your own machine.”**
-
-Everything else is phase 2.
-
----
-
-## 9) Artifact format recommendation
-
-Use **one artifact document with embedded visual architecture diagram** (like this file).
+For Jarvis/OpenClaw, that default environment should be the user's Mac.
 
 Why:
 
-- Easy to share with builders + investors
-- One source of truth
-- You can export to pitch deck later without rewriting
+- browser continuity lives there
+- local files live there
+- Apple ecosystem integrations live there
+- GUI/computer-use workflows live there
+- existing CLI tools, MCP servers, helper scripts, and project weirdness live there
+- users should not have to predict whether a task will later need GUI, browser, or local state
+
+This matters more than theoretical cloud elegance.
+
+### Human-operator principle
+
+The product should feel less like "assigning work to infrastructure" and more like "delegating to a human operator who already has the right setup."
+
+If a user tells a human assistant:
+
+- monitor Instagram every hour
+- send WhatsApp messages at a given time
+- check a certain workflow repeatedly
+- use the already-connected apps, files, tools, and secrets
+
+then the user expects the assistant to **just execute**.
+They do not want to think about:
+
+- whether the task is cloud-safe
+- whether the runtime has the right secrets
+- whether the right tools are installed in that environment
+- whether the file, MCP server, or CLI exists on that machine
+
+That means Jarvis should be designed around a simple rule:
+
+**once a user's environment is set up, scheduled and delegated work should keep running in that same real environment by default.**
+
+Do not force the user to mentally translate a human-style delegation model into cloud-runtime edge cases.
+
+---
+
+## What we are not doing
+
+Do **not** make users choose:
+
+- local vs cloud per task
+- Linux VPS vs Mac runtime per workflow
+- which tasks are safe to offload
+
+That creates decision tax.
+Decision tax kills product magic.
+
+Cloud may still exist later as an invisible helper layer, but it should not be the user-facing default story.
+
+---
+
+## Product recommendation
+
+### User-facing truth
+
+**Jarvis runs on your Mac.**
+
+That is the simplest and most honest mental model.
+
+### Internal optimization truth
+
+If we later use cloud infrastructure, it should be mostly invisible and narrow in scope:
+
+- ingress/webhooks
+- lightweight scheduling
+- optional background acceleration for bounded tasks
+
+Not the primary execution world.
+
+---
+
+## Hardware recommendation ladder
+
+### Option 1 — Fastest onboarding
+
+## MacBook Neo
+
+Best for:
+
+- non-technical users
+- users who want the cheapest all-in-one setup
+- users who are unsure whether they will commit
+- users who do not want to buy extra peripherals
+
+Why it works:
+
+- lowest friction
+- single-box setup
+- easiest to understand
+- easiest way to test whether Jarvis fits their life
+
+Tradeoffs:
+
+- sleep/lid/power-management quirks
+- more fragile for 24/7 operation
+- more likely to require workarounds like caffeinate / sleep tuning
+
+### Option 2 — Best serious setup
+
+## Mac mini
+
+Best for:
+
+- technical users
+- users who already have a primary laptop
+- users who want a dedicated always-on agent machine
+- long-running coding-agent, browser, or automation-heavy workflows
+
+Why it wins:
+
+- more reliable always-on behavior
+- fewer sleep/power-management headaches
+- better dedicated machine story
+- stronger long-term fit for serious users
+
+Tradeoffs:
+
+- slightly more setup friction
+- some users need monitor/keyboard/mouse unless they already have them
+
+### Recommendation ladder
+
+- **MacBook Neo = easiest entry**
+- **Mac mini = best long-term serious setup**
+
+Do not force one answer.
+Give users a ladder.
+
+---
+
+## Remote access recommendation
+
+Recommend a simple remote-access fallback during onboarding.
+
+Initial recommendation:
+
+- TeamViewer is acceptable early
+- later we can evaluate stronger options like Screens / Jump Desktop / Tailscale-backed flows
+
+Purpose:
+
+- users can recover the machine remotely
+- support friction drops
+- the machine feels safer to rely on
+
+The main goal is not elegance.
+The goal is: **can the user get back into the machine quickly if needed?**
+
+---
+
+## Why Linux VPS-first is the wrong default
+
+A Linux VPS solves one narrow problem well:
+
+- public uptime / always-on chat endpoint
+
+It does **not** solve the broader product problem:
+
+- browser continuity
+- local file access
+- Apple-native capability
+- GUI/computer-use
+- existing local tooling
+- real session/auth state
+
+Worse, it creates new problems:
+
+- split-brain workflows
+- duplicated setup
+- duplicated skills/config/docs
+- missing MCP servers, CLIs, env vars, and machine-specific context
+- user confusion about where work is actually happening
+
+This is acceptable for power-user infra.
+It is a bad default consumer story.
+
+---
+
+## Why cloud offloading is brittle in real workflows
+
+On paper, offloading selected tasks to the cloud sounds elegant.
+In real workflows it often fails because the user does not know in advance whether a task will stay simple.
+
+A task can begin as:
+
+- write code
+- edit files
+- run tests
+
+and later expand into:
+
+- inspect a real browser session
+- open the site locally
+- use a local CLI tool
+- read a local file
+- touch a machine-specific MCP server
+- use existing auth/session state
+- run an Apple-specific build/test/package flow
+
+If the system asks the user to predict this upfront, the product gets worse.
+
+### Working rule
+
+**Do not make runtime placement a user decision.**
+
+Default to the environment with the broadest real capability surface: the user's Mac.
+
+---
+
+## Sync model for MacBook + Mac mini
+
+For users with more than one Mac, the best early answer is simple Mac-to-Mac sync.
+
+### Shared across machines
+
+Use iCloud Drive (or later a more advanced sync layer) for:
+
+- skills
+- prompt docs
+- plans
+- memory docs
+- reusable helper scripts
+- non-secret agent configuration
+
+### Kept local per machine
+
+Do not blindly sync:
+
+- browser profiles
+- cookies/session state
+- Keychain items
+- secrets / .env.local
+- OS permissions
+- machine-specific binary paths
+- local app installs
+
+### Practical recommendation
+
+- put shared human-readable agent assets in iCloud Drive
+- symlink them into runtime/workspace locations
+- keep secrets and machine-specific state local
+
+This gives a clean model:
+
+- **shared brain**
+- **local body**
+
+### Why this matters for delegated scheduled work
+
+If the user has already configured Jarvis with:
+
+- the needed skills
+- the needed docs/memory
+- the needed helper scripts
+- the needed local tools
+- the needed application logins and permissions
+
+then scheduled work should run against that same prepared environment.
+
+That is another reason Mac-to-Mac sync is preferable to cloud offloading for the consumer product: the system stays closer to the user's real operational setup instead of drifting into a second incomplete environment.
+
+---
+
+## MVP scope
+
+### Must ship
+
+1. macOS setup/install path
+2. Telegram-first control surface
+3. health/reconnect monitoring
+4. clear safety profiles
+5. confirmation gates for irreversible actions
+6. activity timeline / audit log
+7. remote access fallback recommendation during onboarding
+8. simple hardware recommendation ladder (MacBook Neo vs Mac mini)
+
+### Should not block MVP
+
+1. Linux VPS primary runtime
+2. managed hosted Mac tier
+3. generic full desktop cloud offloading
+4. per-task runtime selection UX
+5. complex consumer infra choices
+
+---
+
+## Sales / onboarding script
+
+### For non-technical or hesitant users
+
+Recommend **MacBook Neo**.
+
+Message:
+
+- fastest way to get started
+- one device
+- lowest friction
+- good enough for many real use cases
+
+### For serious / technical / always-on users
+
+Recommend **Mac mini**.
+
+Message:
+
+- best long-term Jarvis setup
+- more stable for always-on use
+- best for serious coding-agent and automation workflows
+
+### For both
+
+Recommend simple remote access setup.
+
+---
+
+## Pricing implication
+
+The value story should not be:
+
+- cheap local models
+
+The value story should be:
+
+- runs in your real environment
+- uses your existing subscriptions/accounts where applicable
+- avoids fragile cloud-context switching
+- gives you a practical always-on operator on your own machine
+
+---
+
+## Clear go-to-market recommendation
+
+Start narrow and honest:
+
+- local Mac-first execution
+- Telegram-first user experience
+- MacBook Neo as the easiest entry path
+- Mac mini as the best serious path
+- remote access fallback during onboarding
+- no Linux VPS-first story for consumers
+- no visible runtime-placement decisions for users
+
+### One-line product promise
+
+**Delegate real digital work from Telegram, on your own Mac, without having to think about infrastructure.**
