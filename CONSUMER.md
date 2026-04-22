@@ -38,6 +38,8 @@ Read this before doing consumer-product work in this repo.
   - `docs/consumer/CODEX-PROMPT.md`
 - GTM and packaging direction:
   - `docs/consumer/openclaw-consumer-go-to-market-plan.md`
+- Hosted architecture decision:
+  - `docs/consumer/openclaw-consumer-hosted-architecture-decision.md`
 - Execution board:
   - `docs/consumer/openclaw-consumer-brutal-execution-board.md`
 - Investor context:
