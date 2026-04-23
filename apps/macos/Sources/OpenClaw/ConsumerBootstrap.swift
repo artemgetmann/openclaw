@@ -37,6 +37,7 @@ enum ConsumerBootstrap {
     // the consumer agent directory, so default to the matching provider/model.
     private static let consumerDefaultModelRef = "openai-codex/gpt-5.4"
     private static let consumerDefaultModelAlias = "GPT"
+    private static let consumerDefaultImageGenerationModelRef = "openai/gpt-image-2"
     // Keep a tiny but real starter catalog on disk so the consumer picker stays
     // stable even if one provider catalog call is temporarily incomplete.
     private static let consumerSeededModels: [(ref: String, alias: String)] = [
@@ -99,6 +100,7 @@ enum ConsumerBootstrap {
         // browser readiness or gateway startup re-reads the config.
         changed = self.migrateLegacyBraveSearchAPIKey(in: &root) || changed
         changed = self.seedConsumerAudioTranscriptionDefaults(into: &root) || changed
+        changed = self.seedConsumerImageGenerationDefaults(into: &root) || changed
 
         // Seed only missing values so we keep the consumer runtime opinionated
         // without stomping on settings a user already changed.
@@ -333,6 +335,23 @@ enum ConsumerBootstrap {
         let processValue = ProcessInfo.processInfo.environment[Self.consumerOpenAIEnvKey]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return processValue?.isEmpty == false
+    }
+
+    private static func seedConsumerImageGenerationDefaults(
+        into root: inout [String: Any])
+        -> Bool
+    {
+        guard self.hasConsumerSpeechKeySeed(in: root) else {
+            return false
+        }
+
+        // Temporary consumer-testing policy: the bundled OpenAI utility key
+        // powers both speech-to-text and native image generation. Keep this as
+        // a default-only seed so BYOK/user model choices still win.
+        return self.setDefaultValue(
+            in: &root,
+            path: ["agents", "defaults", "imageGenerationModel", "primary"],
+            value: Self.consumerDefaultImageGenerationModelRef)
     }
 
     private static func ensureConsumerWorkspace() {

@@ -271,6 +271,8 @@ export function buildAgentSystemPrompt(params: {
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+    image_generate:
+      "Generate new images or edit reference images with the configured image-generation model",
     image: "Analyze an image with the configured image model",
   };
 
@@ -298,6 +300,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_send",
     "subagents",
     "session_status",
+    "image_generate",
     "image",
   ];
 

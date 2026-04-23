@@ -76,6 +76,14 @@ export function buildConsumerSeededDefaults({ env = process.env, founderConfig =
     // policy, which makes fresh consumer packages look voice-ready while they
     // still fail on the first inbound voice note.
     setNestedValue(seeded, ["env", "vars", CONSUMER_OPENAI_ENV_KEY], openAiApiKey);
+    // Temporary early-consumer policy: the bundled OpenAI utility key also
+    // enables native image generation until this moves behind subscription/proxy
+    // auth. Seed only the model selector; runtime auth resolves the env key.
+    setNestedValue(
+      seeded,
+      ["agents", "defaults", "imageGenerationModel", "primary"],
+      "openai/gpt-image-2",
+    );
     setNestedValue(
       seeded,
       ["tools", "media", "audio", "models"],

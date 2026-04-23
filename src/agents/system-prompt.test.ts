@@ -292,6 +292,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("describes image_generate when the tool is available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["image_generate", "image"],
+    });
+
+    expect(prompt).toContain(
+      "- image_generate: Generate new images or edit reference images with the configured image-generation model",
+    );
+    expect(prompt).toContain("- image: Analyze an image with the configured image model");
+  });
+
   it("documents ACP sessions_spawn agent targeting requirements", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
