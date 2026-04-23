@@ -7,6 +7,7 @@ import {
   createSandboxMediaStageConfig,
   withSandboxMediaTempHome,
 } from "./stage-sandbox-media.test-harness.js";
+import type { MsgContext, TemplateContext } from "./templating.js";
 
 const sandboxMocks = vi.hoisted(() => ({
   ensureSandboxWorkspaceForSession: vi.fn(),
@@ -53,10 +54,32 @@ async function writeInboundMedia(
   return mediaPath;
 }
 
+function setMediaBatch(
+  ctx: MsgContext,
+  sessionCtx: TemplateContext,
+  entries: Array<{ path: string; url?: string; type?: string }>,
+): void {
+  const paths = entries.map((entry) => entry.path);
+  const urls = entries.map((entry) => entry.url ?? entry.path);
+  const types = entries.map((entry) => entry.type ?? "application/octet-stream");
+  ctx.MediaPaths = paths;
+  sessionCtx.MediaPaths = [...paths];
+  ctx.MediaUrls = urls;
+  sessionCtx.MediaUrls = [...urls];
+  ctx.MediaTypes = types;
+  sessionCtx.MediaTypes = [...types];
+  ctx.MediaPath = paths[0];
+  sessionCtx.MediaPath = paths[0];
+  ctx.MediaUrl = urls[0];
+  sessionCtx.MediaUrl = urls[0];
+  ctx.MediaType = types[0];
+  sessionCtx.MediaType = types[0];
+}
+
 describe("stageSandboxMedia", () => {
   it("stages allowed media and blocks unsafe paths", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
-      const { cfg, workspaceDir, sandboxDir } = setupSandboxWorkspace(home);
+      const { cfg, workspaceDir } = setupSandboxWorkspace(home);
 
       {
         const mediaPath = await writeInboundMedia(home, "photo.jpg", "test");
@@ -70,13 +93,13 @@ describe("stageSandboxMedia", () => {
           workspaceDir,
         });
 
-        const stagedPath = `media/inbound/${basename(mediaPath)}`;
+        const stagedPath = join(home, ".openclaw", "media", "inbound", basename(mediaPath));
         expect(ctx.MediaPath).toBe(stagedPath);
         expect(sessionCtx.MediaPath).toBe(stagedPath);
         expect(ctx.MediaUrl).toBe(stagedPath);
         expect(sessionCtx.MediaUrl).toBe(stagedPath);
         await expect(
-          fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
+          fs.stat(join(home, ".openclaw", "media", "inbound", basename(mediaPath))),
         ).resolves.toBeTruthy();
       }
 
@@ -94,7 +117,7 @@ describe("stageSandboxMedia", () => {
         });
 
         await expect(
-          fs.stat(join(sandboxDir, "media", "inbound", basename(sensitiveFile))),
+          fs.stat(join(home, ".openclaw", "media", "inbound", basename(sensitiveFile))),
         ).rejects.toThrow();
         expect(ctx.MediaPath).toBe(sensitiveFile);
       }
@@ -118,6 +141,138 @@ describe("stageSandboxMedia", () => {
         expect(childProcessMocks.spawn).not.toHaveBeenCalled();
         expect(ctx.MediaPath).toBe("/etc/passwd");
       }
+    });
+  });
+
+  it("skips staging a transcribed voice note and clears exposed media paths", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir } = setupSandboxWorkspace(home);
+      const voicePath = await writeInboundMedia(home, "voice.ogg", "voice-bytes");
+
+      const { ctx, sessionCtx } = createSandboxMediaContexts(voicePath);
+      ctx.MediaType = "audio/ogg";
+      sessionCtx.MediaType = "audio/ogg";
+      ctx.Transcript = "transcript text";
+      sessionCtx.Transcript = "transcript text";
+      ctx.MediaUnderstanding = [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "transcript text",
+          provider: "whisper",
+        },
+      ];
+      sessionCtx.MediaUnderstanding = ctx.MediaUnderstanding;
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      expect(ctx.MediaPath).toBeUndefined();
+      expect(sessionCtx.MediaPath).toBeUndefined();
+      expect(ctx.MediaPaths).toBeUndefined();
+      expect(sessionCtx.MediaPaths).toBeUndefined();
+      expect(ctx.MediaUrl).toBeUndefined();
+      expect(sessionCtx.MediaUrl).toBeUndefined();
+      expect(ctx.MediaUrls).toBeUndefined();
+      expect(sessionCtx.MediaUrls).toBeUndefined();
+      expect(ctx.Transcript).toBe("transcript text");
+      expect(sessionCtx.Transcript).toBe("transcript text");
+    });
+  });
+
+  it("keeps an untranscribed voice note staged for fallback", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir } = setupSandboxWorkspace(home);
+      const voicePath = await writeInboundMedia(home, "voice.ogg", "voice-bytes");
+
+      const { ctx, sessionCtx } = createSandboxMediaContexts(voicePath);
+      ctx.MediaType = "audio/ogg";
+      sessionCtx.MediaType = "audio/ogg";
+      ctx.MediaUnderstandingDecisions = [
+        {
+          capability: "audio",
+          outcome: "skipped",
+          attachments: [
+            {
+              attachmentIndex: 0,
+              attempts: [
+                {
+                  type: "provider",
+                  outcome: "failed",
+                  reason: "provider error",
+                },
+              ],
+            },
+          ],
+        },
+      ];
+      sessionCtx.MediaUnderstandingDecisions = ctx.MediaUnderstandingDecisions;
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = join(home, ".openclaw", "media", "inbound", basename(voicePath));
+      expect(ctx.MediaPath).toBe(stagedPath);
+      expect(sessionCtx.MediaPath).toBe(stagedPath);
+      expect(ctx.MediaUrl).toBe(stagedPath);
+      expect(sessionCtx.MediaUrl).toBe(stagedPath);
+    });
+  });
+
+  it("removes transcribed audio but keeps other attachments in order", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir } = setupSandboxWorkspace(home);
+      const voicePath = await writeInboundMedia(home, "voice.ogg", "voice-bytes");
+      const imagePath = await writeInboundMedia(home, "photo.png", "image-bytes");
+
+      const { ctx, sessionCtx } = createSandboxMediaContexts(voicePath);
+      setMediaBatch(ctx, sessionCtx, [
+        { path: voicePath, type: "audio/ogg" },
+        { path: imagePath, type: "image/png" },
+      ]);
+      ctx.Transcript = "voice transcript";
+      sessionCtx.Transcript = "voice transcript";
+      ctx.MediaUnderstanding = [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "voice transcript",
+          provider: "whisper",
+        },
+      ];
+      sessionCtx.MediaUnderstanding = ctx.MediaUnderstanding;
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedImagePath = join(home, ".openclaw", "media", "inbound", basename(imagePath));
+      expect(ctx.MediaPaths).toEqual([stagedImagePath]);
+      expect(sessionCtx.MediaPaths).toEqual([stagedImagePath]);
+      expect(ctx.MediaPath).toBe(stagedImagePath);
+      expect(sessionCtx.MediaPath).toBe(stagedImagePath);
+      expect(ctx.MediaUrls).toEqual([stagedImagePath]);
+      expect(sessionCtx.MediaUrls).toEqual([stagedImagePath]);
+      expect(ctx.MediaUrl).toBe(stagedImagePath);
+      expect(sessionCtx.MediaUrl).toBe(stagedImagePath);
+      expect(ctx.MediaTypes).toEqual(["image/png"]);
+      expect(sessionCtx.MediaTypes).toEqual(["image/png"]);
+      expect(ctx.MediaType).toBe("image/png");
+      expect(sessionCtx.MediaType).toBe("image/png");
     });
   });
 
