@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
 import { ToolInputError } from "../agents/tools/common.js";
@@ -203,10 +203,12 @@ export async function handleToolsInvokeHttpRequest(
   const agentThreadId = getHeader(req, "x-openclaw-thread-id")?.trim() || undefined;
 
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const agentDir = resolveAgentDir(cfg, agentId);
   // HTTP invoke should expose the same coding-tool catalog the live agent uses.
   // Using the reduced OpenClaw-only catalog drops exec/read/write before policy runs.
   const allTools = createOpenClawCodingTools({
     sessionKey,
+    agentDir,
     messageProvider: messageChannel ?? undefined,
     agentAccountId: accountId,
     messageTo: agentTo,
