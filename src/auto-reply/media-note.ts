@@ -46,16 +46,39 @@ function isAudioPath(path: string | undefined): boolean {
   return false;
 }
 
-export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
-  // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
-  const suppressed = new Set<number>();
+export function getTranscribedAudioAttachmentIndices(
+  ctx: Pick<MsgContext, "MediaUnderstanding" | "MediaUnderstandingDecisions">,
+): Set<number> {
   const transcribedAudioIndices = new Set<number>();
   if (Array.isArray(ctx.MediaUnderstanding)) {
     for (const output of ctx.MediaUnderstanding) {
-      suppressed.add(output.attachmentIndex);
       if (output.kind === "audio.transcription") {
         transcribedAudioIndices.add(output.attachmentIndex);
       }
+    }
+  }
+  if (Array.isArray(ctx.MediaUnderstandingDecisions)) {
+    for (const decision of ctx.MediaUnderstandingDecisions) {
+      if (decision.outcome !== "success" || decision.capability !== "audio") {
+        continue;
+      }
+      for (const attachment of decision.attachments) {
+        if (attachment.chosen?.outcome === "success") {
+          transcribedAudioIndices.add(attachment.attachmentIndex);
+        }
+      }
+    }
+  }
+  return transcribedAudioIndices;
+}
+
+export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
+  // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
+  const suppressed = new Set<number>();
+  const transcribedAudioIndices = getTranscribedAudioAttachmentIndices(ctx);
+  if (Array.isArray(ctx.MediaUnderstanding)) {
+    for (const output of ctx.MediaUnderstanding) {
+      suppressed.add(output.attachmentIndex);
     }
   }
   if (Array.isArray(ctx.MediaUnderstandingDecisions)) {
@@ -66,9 +89,6 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       for (const attachment of decision.attachments) {
         if (attachment.chosen?.outcome === "success") {
           suppressed.add(attachment.attachmentIndex);
-          if (decision.capability === "audio") {
-            transcribedAudioIndices.add(attachment.attachmentIndex);
-          }
         }
       }
     }
