@@ -295,7 +295,7 @@ Reference payload:
 
 - `scripts/telegram-e2e/lean-model-allowlist.jsonc`
 
-Default remains `openai-codex/gpt-5.3-codex`.
+Default inherits the active config default model, which is currently `openai-codex/gpt-5.4` in this consumer setup.
 
 ## Critical runtime rule (prevents false negatives)
 
@@ -366,8 +366,7 @@ Use the MTProto probe for debugging, not as the final ship gate:
 
 ```bash
 scripts/telegram-e2e/.venv/bin/python scripts/telegram-e2e/probe_dm_thread_inheritance.py \
-  --chat "${TG_DM_CHAT_ID:-@Artem_jarvis_exec_bot}" \
-  --target-model "anthropic/claude-sonnet-4-6"
+  --chat "${TG_DM_CHAT_ID:-@Artem_jarvis_exec_bot}"
 ```
 
 ## First-reply smoke
@@ -466,8 +465,8 @@ set +a
 
 scripts/telegram-e2e/run-model-inheritance-e2e.sh \
   --chat "$TG_DM_CHAT_ID" \
-  --set-model "openai-codex/gpt-5.3-codex" \
-  --expect-model "openai-codex/gpt-5.3-codex" \
+  --set-model "openai-codex/gpt-5.4" \
+  --expect-model "openai-codex/gpt-5.4" \
   --thread-a-reply-to "$TG_DM_THREAD_X_ID" \
   --thread-b-reply-to "$TG_DM_THREAD_Y_ID" \
   --thread-b-id "$TG_DM_THREAD_Y_ID"

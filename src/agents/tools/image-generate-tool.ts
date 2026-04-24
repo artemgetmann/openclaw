@@ -203,6 +203,10 @@ function getConfiguredMediaMaxBytes(cfg?: OpenClawConfig): number | undefined {
   return undefined;
 }
 
+function resolveLoadedImageMimeType(media: { contentType?: string; mimeType?: string }): string {
+  return media.contentType?.trim() || media.mimeType?.trim() || "image/png";
+}
+
 function getImageGenerationProviderAuthEnvVars(providerId: string): string[] {
   return [...(PROVIDER_ENV_VARS[providerId] ?? [])];
 }
@@ -323,7 +327,7 @@ async function loadReferenceImages(params: {
     loaded.push({
       sourceImage: {
         buffer: media.buffer,
-        mimeType: ("contentType" in media ? media.contentType : media.mimeType) ?? "image/png",
+        mimeType: resolveLoadedImageMimeType(media),
       },
       resolvedImage,
     });

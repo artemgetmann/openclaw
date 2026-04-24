@@ -14,10 +14,9 @@ from telethon.errors import FloodWaitError
 
 from telethon_compat import create_telegram_client
 from userbot_guard import acquire_session_guard, load_env_file, sanitize_error_text, SessionGuardError
+from model_defaults import resolve_default_model
 
 DEFAULT_CHAT = "@Artem_jarvis_exec_bot"
-DEFAULT_BASELINE_MODEL = "openai-codex/gpt-5.3-codex"
-DEFAULT_TARGET_MODEL = "anthropic/claude-sonnet-4-6"
 DEFAULT_TIMEOUT_SECONDS = 40
 
 
@@ -180,10 +179,11 @@ async def main() -> int:
   args = build_parser().parse_args()
   env = load_env_file(pathlib.Path("scripts/telegram-e2e/.env.local"))
   chat_raw = (args.chat or env.get("TG_DM_CHAT_ID") or DEFAULT_CHAT).strip()
-  baseline_model = (
-    args.baseline_model or env.get("TG_PROBE_BASELINE_MODEL") or DEFAULT_BASELINE_MODEL
-  ).strip()
-  target_model = (args.target_model or env.get("TG_PROBE_MODEL") or DEFAULT_TARGET_MODEL).strip()
+  default_model = resolve_default_model(
+    config_path=env.get("OPENCLAW_CONFIG_PATH"),
+  )
+  baseline_model = (args.baseline_model or env.get("TG_PROBE_BASELINE_MODEL") or default_model).strip()
+  target_model = (args.target_model or env.get("TG_PROBE_MODEL") or default_model).strip()
   session_raw = env.get("USERBOT_SESSION") or "scripts/telegram-e2e/tmp/userbot.session"
   session_path = pathlib.Path(session_raw).expanduser()
 
