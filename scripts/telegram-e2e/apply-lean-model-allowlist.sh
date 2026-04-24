@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_MODEL="$(
+  PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}" python3 - <<'PY'
+from model_defaults import resolve_default_model
+print(resolve_default_model())
+PY
+)"
+
 # Apply the lean Telegram /model catalog preset to the active OpenClaw config.
-# This keeps the active default at Codex 5.3 and limits picker choices to the
-# agreed allowlist.
+# This keeps the active default aligned with the current config and limits
+# picker choices to the agreed allowlist.
 
 if ! command -v openclaw >/dev/null 2>&1; then
   echo "openclaw CLI not found in PATH." >&2
@@ -28,8 +36,8 @@ read -r -d '' MODELS_JSON <<'JSON' || true
 }
 JSON
 
-echo "Setting default model to openai-codex/gpt-5.3-codex..."
-openclaw config set agents.defaults.model.primary openai-codex/gpt-5.3-codex
+echo "Setting default model to ${DEFAULT_MODEL}..."
+openclaw config set agents.defaults.model.primary "${DEFAULT_MODEL}"
 
 echo "Applying lean allowlist to agents.defaults.models..."
 openclaw config set agents.defaults.models "${MODELS_JSON}" --strict-json
