@@ -606,7 +606,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = registry.imageGenerationProviders.find((entry) => entry.provider.id === id);
+    const imageGenerationProviders = registry.imageGenerationProviders ?? [];
+    const existing = imageGenerationProviders.find((entry) => entry.provider.id === id);
     if (existing) {
       pushDiagnostic({
         level: "error",
@@ -616,13 +617,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    registry.imageGenerationProviders.push({
+    imageGenerationProviders.push({
       pluginId: record.id,
       pluginName: record.name,
       provider,
       source: record.source,
       rootDir: record.rootDir,
     });
+    registry.imageGenerationProviders = imageGenerationProviders;
   };
 
   const registerCli = (
