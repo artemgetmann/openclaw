@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime, timedelta, timezone
 import os
 import sys
 import tempfile
@@ -282,6 +283,17 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TelethonCliSyncTests(unittest.TestCase):
+  def test_build_dialog_payload_accepts_datetime_mute_until(self) -> None:
+    future_mute_until = datetime.now(timezone.utc) + timedelta(hours = 1)
+    dialog = build_fake_dialog(chat_id = 101, is_user = True, unread_count = 1)
+    dialog.dialog.notify_settings.mute_until = future_mute_until
+
+    payload = telethon_cli.build_dialog_payload(dialog)
+
+    self.assertTrue(payload["muted"])
+    self.assertEqual(payload["chat_id"], 101)
+    self.assertEqual(payload["unread_count"], 1)
+
   def test_clear_session_artifacts_refuses_directory_session_path(self) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
       session_path = Path(temp_dir) / "session-dir"
