@@ -3,4 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-exec node --import tsx "$SCRIPT_DIR/wacli-send-safe.ts" "$@"
+
+# Run directly on Node's native TypeScript stripping so the helper does not
+# depend on a separate tsx install being globally resolvable on the host.
+exec node --experimental-strip-types "$SCRIPT_DIR/wacli-send-safe.ts" "$@"
