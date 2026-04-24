@@ -5,6 +5,7 @@ import type { RequirementConfigCheck, Requirements } from "../shared/requirement
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
+  hasRelativeSkillBin,
   isBundledSkillAllowed,
   isConfigPathTruthy,
   loadWorkspaceSkillEntries,
@@ -190,12 +191,13 @@ function buildSkillStatus(
     bundledNames && bundledNames.size > 0
       ? bundledNames.has(entry.skill.name)
       : entry.skill.source === "openclaw-bundled";
+  const hasLocalBin = (bin: string) => hasRelativeSkillBin(entry, bin) || hasBinary(bin);
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({
       always,
       entry,
-      hasLocalBin: hasBinary,
+      hasLocalBin,
       remote: eligibility?.remote,
       isEnvSatisfied,
       isConfigSatisfied,
