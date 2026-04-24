@@ -142,6 +142,20 @@ vi.mock("../agents/pi-tools.js", () => {
       },
     },
     {
+      name: "image_generate",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string" },
+        },
+        additionalProperties: true,
+      },
+      execute: async (_toolCallId: string, args: unknown) => ({
+        ok: true,
+        action: (args as { action?: unknown })?.action,
+      }),
+    },
+    {
       name: "tools_invoke_test",
       parameters: {
         type: "object",
@@ -208,6 +222,9 @@ vi.mock("../agents/pi-tools.js", () => {
     const alsoAllow = new Set(globalTools.alsoAllow ?? []);
 
     return input.filter((tool) => {
+      if (tool.name === "image_generate" && !ctx.agentDir) {
+        return false;
+      }
       if (
         globalProfile === "minimal" &&
         tool.name !== "session_status" &&
@@ -443,6 +460,34 @@ describe("POST /tools/invoke", () => {
         }),
       }),
     );
+  });
+
+  it("exposes image_generate over HTTP when image generation is configured", async () => {
+    setMainAllowedTools({ allow: ["image_generate"] });
+    cfg = {
+      ...cfg,
+      agents: {
+        ...(cfg.agents as Record<string, unknown>),
+        defaults: {
+          imageGenerationModel: {
+            primary: "openai/gpt-image-2",
+          },
+        },
+      },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "image_generate",
+      action: "list",
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(lastCreateOpenClawCodingToolsContext?.agentDir).toBeTruthy();
+    expect(body.result).toMatchObject({
+      ok: true,
+      action: "list",
+    });
   });
 
   it("allows exec via HTTP when session policy allows it", async () => {
