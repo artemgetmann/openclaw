@@ -141,7 +141,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(mocks.resolvePreferredNodePath).toHaveBeenCalled();
   });
 
-  it("merges config env vars into the environment", async () => {
+  it("does not persist config env vars into the daemon environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
@@ -163,15 +163,13 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    // Config env vars should be present
-    expect(plan.environment.GOOGLE_API_KEY).toBe("test-key");
-    expect(plan.environment.CUSTOM_VAR).toBe("custom-value");
-    // Service environment vars should take precedence
+    expect(plan.environment.GOOGLE_API_KEY).toBeUndefined();
+    expect(plan.environment.CUSTOM_VAR).toBeUndefined();
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
     expect(plan.environment.HOME).toBe("/Users/me");
   });
 
-  it("drops dangerous config env vars before service merge", async () => {
+  it("still omits dangerous config env vars from the daemon environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
@@ -193,10 +191,10 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(plan.environment.NODE_OPTIONS).toBeUndefined();
-    expect(plan.environment.SAFE_KEY).toBe("safe-value");
+    expect(plan.environment.SAFE_KEY).toBeUndefined();
   });
 
-  it("does not include empty config env values", async () => {
+  it("ignores config env vars even when they are non-empty", async () => {
     mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
@@ -213,11 +211,11 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    expect(plan.environment.VALID_KEY).toBe("valid");
+    expect(plan.environment.VALID_KEY).toBeUndefined();
     expect(plan.environment.EMPTY_KEY).toBeUndefined();
   });
 
-  it("drops whitespace-only config env values", async () => {
+  it("ignores config env inline keys too", async () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: {} });
 
     const plan = await buildGatewayInstallPlan({
@@ -234,11 +232,11 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    expect(plan.environment.VALID_KEY).toBe("valid");
+    expect(plan.environment.VALID_KEY).toBeUndefined();
     expect(plan.environment.TRIMMED_KEY).toBeUndefined();
   });
 
-  it("keeps service env values over config env vars", async () => {
+  it("keeps service env values without config env fallback", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         HOME: "/Users/service",
@@ -262,6 +260,7 @@ describe("buildGatewayInstallPlan", () => {
 
     expect(plan.environment.HOME).toBe("/Users/service");
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+    expect(plan.environment.OPENCLAW_PORT).not.toBe("9999");
   });
 
   it("merges env-backed auth-profile refs into the service environment", async () => {
@@ -297,6 +296,44 @@ describe("buildGatewayInstallPlan", () => {
 
     expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
     expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
+  });
+
+  it("keeps env-backed auth refs while excluding config env vars", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
+      },
+      port: 3000,
+      runtime: "node",
+      config: {
+        env: {
+          vars: {
+            GOOGLE_API_KEY: "cfg-key", // pragma: allowlist secret
+          },
+          CUSTOM_VAR: "custom-value",
+        },
+      },
+    });
+
+    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
+    expect(plan.environment.GOOGLE_API_KEY).toBeUndefined();
+    expect(plan.environment.CUSTOM_VAR).toBeUndefined();
   });
 
   it("skips unresolved auth-profile env refs", async () => {
