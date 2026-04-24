@@ -74,7 +74,7 @@ function isRelativeSkillBin(bin: string): boolean {
   return bin.startsWith("./") || bin.startsWith("../");
 }
 
-function hasRelativeSkillBin(entry: SkillEntry, bin: string): boolean {
+export function hasRelativeSkillBin(entry: SkillEntry, bin: string): boolean {
   if (!isRelativeSkillBin(bin)) {
     return false;
   }
