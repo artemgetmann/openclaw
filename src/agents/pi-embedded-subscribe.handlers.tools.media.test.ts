@@ -117,6 +117,30 @@ async function emitWhatsAppQrToolResult(ctx: EmbeddedPiSubscribeContext) {
   });
 }
 
+async function emitImageGenerateToolResult(ctx: EmbeddedPiSubscribeContext, mediaPath: string) {
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: "image_generate",
+    toolCallId: "tc-image-generate-1",
+    isError: false,
+    result: {
+      content: [
+        {
+          type: "text",
+          text: `Generated 1 image with openai/gpt-image-2.\nMEDIA:${mediaPath}`,
+        },
+      ],
+      details: {
+        provider: "openai",
+        model: "gpt-image-2",
+        count: 1,
+        media: { mediaUrls: [mediaPath] },
+        paths: [mediaPath],
+      },
+    },
+  });
+}
+
 describe("handleToolExecutionEnd media emission", () => {
   it("does not warn for read tool when path is provided via file_path alias", async () => {
     const ctx = createMockContext();
@@ -154,6 +178,20 @@ describe("handleToolExecutionEnd media emission", () => {
     await emitWhatsAppQrToolResult(ctx);
 
     expect(onToolResult).toHaveBeenCalledWith({ mediaUrls: [qrPath] });
+  });
+
+  it("trusts image_generate local tool-image-generation media when verbose output is off", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+    const generatedPath = path.join(
+      resolvePreferredOpenClawTmpDir(),
+      "tool-image-generation",
+      "generated-image.png",
+    );
+
+    await emitImageGenerateToolResult(ctx, generatedPath);
+
+    expect(onToolResult).toHaveBeenCalledWith({ mediaUrls: [generatedPath] });
   });
 
   it("does NOT emit local media for untrusted tools", async () => {
