@@ -39,6 +39,7 @@ import type {
   PluginDiagnostic,
   PluginBundleFormat,
   PluginFormat,
+  ImageGenerationProviderPlugin,
   PluginLogger,
   PluginOrigin,
   PluginKind,
@@ -110,6 +111,14 @@ export type PluginWebSearchProviderRegistration = {
   rootDir?: string;
 };
 
+export type PluginImageGenerationProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: ImageGenerationProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginHookRegistration = {
   pluginId: string;
   entry: HookEntry;
@@ -174,6 +183,7 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  imageGenerationProviders?: PluginImageGenerationProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
@@ -219,6 +229,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     channels: [],
     channelSetups: [],
     providers: [],
+    imageGenerationProviders: [],
     webSearchProviders: [],
     gatewayHandlers: {},
     httpRoutes: [],
@@ -581,6 +592,39 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerImageGenerationProvider = (
+    record: PluginRecord,
+    provider: ImageGenerationProviderPlugin,
+  ) => {
+    const id = provider.id?.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "image-generation provider registration missing id",
+      });
+      return;
+    }
+    const existing = registry.imageGenerationProviders.find((entry) => entry.provider.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `image-generation provider already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    registry.imageGenerationProviders.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      provider,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
@@ -789,6 +833,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerChannel: (registration) => registerChannel(record, registration, registrationMode),
       registerProvider:
         registrationMode === "full" ? (provider) => registerProvider(record, provider) : () => {},
+      registerImageGenerationProvider:
+        registrationMode === "full"
+          ? (provider) => registerImageGenerationProvider(record, provider)
+          : () => {},
       registerWebSearchProvider:
         registrationMode === "full"
           ? (provider) => registerWebSearchProvider(record, provider)
