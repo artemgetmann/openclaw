@@ -334,6 +334,52 @@ struct ConsumerBootstrapTests {
         #expect(audio?["models"] == nil)
     }
 
+    @Test func `consumer bootstrap seeds native image generation when consumer OpenAI key exists`() async {
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_CONSUMER_OPENAI_API_KEY": "consumer-openai-seeded", // pragma: allowlist secret
+                ConsumerInstance.envKey: nil,
+            ]) {
+            var root: [String: Any] = [:]
+
+            let changed = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+
+            let agents = root["agents"] as? [String: Any]
+            let defaults = agents?["defaults"] as? [String: Any]
+            let imageGenerationModel = defaults?["imageGenerationModel"] as? [String: Any]
+
+            #expect(changed)
+            #expect(imageGenerationModel?["primary"] as? String == "openai/gpt-image-2")
+        }
+    }
+
+    @Test func `consumer bootstrap preserves existing native image generation choice`() async {
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_CONSUMER_OPENAI_API_KEY": "consumer-openai-seeded", // pragma: allowlist secret
+                ConsumerInstance.envKey: nil,
+            ]) {
+            var root: [String: Any] = [
+                "agents": [
+                    "defaults": [
+                        "imageGenerationModel": [
+                            "primary": "custom/image-model",
+                        ],
+                    ],
+                ],
+            ]
+
+            let changed = ConsumerBootstrap.applyMissingConfigDefaults(to: &root)
+
+            let agents = root["agents"] as? [String: Any]
+            let defaults = agents?["defaults"] as? [String: Any]
+            let imageGenerationModel = defaults?["imageGenerationModel"] as? [String: Any]
+
+            #expect(changed)
+            #expect(imageGenerationModel?["primary"] as? String == "custom/image-model")
+        }
+    }
+
     @Test func `consumer bootstrap preserves existing user choices`() async {
         await TestIsolation.withIsolatedState(
             env: [

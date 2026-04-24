@@ -19,6 +19,13 @@ void test("seeds only the supported consumer defaults from env", () => {
   });
 
   assert.deepEqual(seeded, {
+    agents: {
+      defaults: {
+        imageGenerationModel: {
+          primary: "openai/gpt-image-2",
+        },
+      },
+    },
     env: {
       vars: {
         OPENCLAW_CONSUMER_OPENAI_API_KEY: "consumer-openai-key",
@@ -97,6 +104,13 @@ void test("falls back to founder config when shell env is empty", () => {
   });
 
   assert.deepEqual(seeded, {
+    agents: {
+      defaults: {
+        imageGenerationModel: {
+          primary: "openai/gpt-image-2",
+        },
+      },
+    },
     env: {
       vars: {
         OPENCLAW_CONSUMER_OPENAI_API_KEY: "founder-consumer-openai",
@@ -174,7 +188,7 @@ void test("falls back to Brave search when Firecrawl is not available", () => {
   });
 });
 
-void test("seeds consumer OpenAI utility defaults for audio transcription only", () => {
+void test("seeds consumer OpenAI utility defaults for audio transcription and image generation", () => {
   const seeded = buildConsumerSeededDefaults({
     env: {
       OPENCLAW_CONSUMER_OPENAI_API_KEY: " consumer-openai-key ",
@@ -182,6 +196,13 @@ void test("seeds consumer OpenAI utility defaults for audio transcription only",
   });
 
   assert.deepEqual(seeded, {
+    agents: {
+      defaults: {
+        imageGenerationModel: {
+          primary: "openai/gpt-image-2",
+        },
+      },
+    },
     env: {
       vars: {
         OPENCLAW_CONSUMER_OPENAI_API_KEY: "consumer-openai-key",
