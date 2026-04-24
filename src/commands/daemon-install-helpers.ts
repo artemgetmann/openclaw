@@ -3,7 +3,6 @@ import {
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectConfigServiceEnvVars } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
@@ -57,7 +56,7 @@ export async function buildGatewayInstallPlan(params: {
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
-  /** Full config to extract env vars from (env vars + inline env keys). */
+  /** Config stays available for call-site parity; install env must not persist config.env. */
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): Promise<GatewayInstallPlan> {
@@ -89,10 +88,10 @@ export async function buildGatewayInstallPlan(params: {
         : undefined,
   });
 
-  // Merge config env vars into the service environment (vars + inline env keys).
-  // Config env vars are added first so service-specific vars take precedence.
+  // Persist only daemon-owned env here. config.env is loaded again at runtime via
+  // loadConfig(), so snapshotting it into launchd/systemd would let stale secrets
+  // survive normal restarts until the service is explicitly reinstalled.
   const environment: Record<string, string | undefined> = {
-    ...collectConfigServiceEnvVars(params.config),
     ...collectAuthProfileServiceEnvVars({
       env: params.env,
       authStore: params.authStore,
