@@ -34,7 +34,9 @@ const MEDIA_ATTACHED_PATH_REGEX_SOURCE =
   "^\\s*(.+?\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\s*(?:\\(|$|\\|)";
 const MESSAGE_IMAGE_REGEX_SOURCE =
   "\\[Image:\\s*source:\\s*([^\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\]";
-const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
+const FILE_URL_REGEX_SOURCE = "file://[^<>\"'`\\]]+?\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
+const QUOTED_PATH_REGEX_SOURCE =
+  "([\"'`])((?:\\.\\.?/|[~/])[^\"'`\\r\\n]*?\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\1";
 const PATH_REGEX_SOURCE =
   "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
 
@@ -120,6 +122,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   const mediaAttachedPathPattern = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
   const messageImagePattern = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
   const fileUrlPattern = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
+  const quotedPathPattern = new RegExp(QUOTED_PATH_REGEX_SOURCE, "gi");
   const pathPattern = new RegExp(PATH_REGEX_SOURCE, "gi");
   let match: RegExpExecArray | null;
   while ((match = mediaAttachedPattern.exec(prompt)) !== null) {
@@ -164,6 +167,16 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
       refs.push({ raw, type: "path", resolved });
     } catch {
       // Skip malformed file:// URLs
+    }
+  }
+
+  // Quoted paths can contain spaces in directory names, such as macOS
+  // "Application Support". Scan them before the free-text path regex so the
+  // structured full path wins and the later whitespace-bounded pass dedupes.
+  while ((match = quotedPathPattern.exec(prompt)) !== null) {
+    const raw = match[2]?.trim();
+    if (raw) {
+      addPathRef(raw);
     }
   }
 

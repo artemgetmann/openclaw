@@ -2,16 +2,20 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-struct ConsumerRuntimeTests {
+@Suite(.serialized) struct ConsumerRuntimeTests {
     @Test func `consumer runtime exposes isolated defaults`() async {
-        await TestIsolation.withIsolatedState(env: [ConsumerInstance.envKey: nil]) {
+        await TestIsolation.withIsolatedState(env: [
+            ConsumerInstance.envKey: nil,
+            "OPENCLAW_IMAGE_BACKEND": nil,
+        ]) {
             #expect(ConsumerRuntime.profile == "consumer")
             #expect(ConsumerRuntime.gatewayPort == 19001)
             #expect(ConsumerRuntime.gatewayBind == "loopback")
             #expect(ConsumerRuntime.launchdLabel == "ai.openclaw.consumer")
             #expect(ConsumerRuntime.gatewayLaunchdLabel == "ai.openclaw.consumer.gateway")
             #expect(ConsumerRuntime.appLaunchAgentPlistURL.lastPathComponent == "ai.openclaw.consumer.plist")
-            #expect(ConsumerRuntime.gatewayLaunchAgentPlistURL.lastPathComponent == "ai.openclaw.consumer.gateway.plist")
+            #expect(ConsumerRuntime.gatewayLaunchAgentPlistURL
+                .lastPathComponent == "ai.openclaw.consumer.gateway.plist")
         }
     }
 
@@ -22,6 +26,18 @@ struct ConsumerRuntimeTests {
             #expect(OpenClawEnv.path("OPENCLAW_GATEWAY_PORT") == "19001")
             #expect(OpenClawEnv.path("OPENCLAW_GATEWAY_BIND") == "loopback")
             #expect(OpenClawEnv.path("OPENCLAW_CONSUMER_MINIMAL_STARTUP") == "1")
+            #expect(OpenClawEnv.path("OPENCLAW_IMAGE_BACKEND") == "sips")
+        }
+    }
+
+    @Test func `consumer bootstrap preserves explicit image backend override`() async {
+        await TestIsolation.withIsolatedState(env: [
+            ConsumerInstance.envKey: nil,
+            "OPENCLAW_IMAGE_BACKEND": "sharp",
+        ]) {
+            ConsumerRuntime.bootstrapProcessEnvironment()
+
+            #expect(OpenClawEnv.path("OPENCLAW_IMAGE_BACKEND") == "sharp")
         }
     }
 

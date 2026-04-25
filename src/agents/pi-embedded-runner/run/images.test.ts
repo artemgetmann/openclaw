@@ -192,6 +192,49 @@ what is this?`;
     expect(refs).toHaveLength(1);
     expect(refs[0]?.resolved).toContain("ChatGPT Image Apr 21, 2025.png");
   });
+
+  it("preserves spaces in macOS Application Support paths from media attachments", () => {
+    const prompt = `[media attached: /Users/test/Library/Application Support/OpenClaw/media/image.png (image/png)]`;
+    const refs = detectImageReferences(prompt);
+
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.raw).toBe("/Users/test/Library/Application Support/OpenClaw/media/image.png");
+    expect(refs[0]?.resolved).toBe(
+      "/Users/test/Library/Application Support/OpenClaw/media/image.png",
+    );
+  });
+
+  it("preserves spaces in quoted local paths", () => {
+    const prompt =
+      'Inspect "/Users/test/Library/Application Support/OpenClaw/media/image.png" please';
+    const refs = detectImageReferences(prompt);
+
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.raw).toBe("/Users/test/Library/Application Support/OpenClaw/media/image.png");
+  });
+
+  it("preserves spaces in file URLs", () => {
+    const prompt =
+      "Inspect file:///Users/test/Library/Application Support/OpenClaw/media/image.png";
+    const refs = detectImageReferences(prompt);
+
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.raw).toBe(
+      "file:///Users/test/Library/Application Support/OpenClaw/media/image.png",
+    );
+    expect(refs[0]?.resolved).toBe(
+      "/Users/test/Library/Application Support/OpenClaw/media/image.png",
+    );
+  });
+
+  it("preserves spaces in bracketed Image source paths", () => {
+    const prompt =
+      "[Image: source: /Users/test/Library/Application Support/OpenClaw/media/image.png]";
+    const refs = detectImageReferences(prompt);
+
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.raw).toBe("/Users/test/Library/Application Support/OpenClaw/media/image.png");
+  });
 });
 
 describe("modelSupportsImages", () => {

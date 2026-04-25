@@ -11,6 +11,7 @@ struct LaunchAgentManagerTests {
             "XDG_DATA_HOME": "/tmp/openclaw-clean/xdg-data",
             "GOG_KEYRING_PASSWORD": "openclaw-consumer-cleanroom",
             "OPENCLAW_SERVICE_PATH_PREFIX": "/tmp/openclaw-clean/bin",
+            "OPENCLAW_IMAGE_BACKEND": nil,
         ]) {
             let env = LaunchAgentManager.launchAgentEnvironment()
 
@@ -20,6 +21,7 @@ struct LaunchAgentManagerTests {
             #expect(env["XDG_DATA_HOME"] == "/tmp/openclaw-clean/xdg-data")
             #expect(env["GOG_KEYRING_PASSWORD"] == "openclaw-consumer-cleanroom")
             #expect(env["OPENCLAW_SERVICE_PATH_PREFIX"] == "/tmp/openclaw-clean/bin")
+            #expect(env["OPENCLAW_IMAGE_BACKEND"] == "sips")
         }
     }
 
