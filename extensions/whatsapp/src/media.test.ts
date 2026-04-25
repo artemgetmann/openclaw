@@ -208,6 +208,17 @@ describe("web media loading", () => {
     expect(result.buffer[1]).toBe(0xd8);
   });
 
+  it("preserves the real optimizer failure when JPEG resizing fails", async () => {
+    try {
+      await optimizeImageToJpeg(Buffer.from("not an image"), 1);
+      throw new Error("expected optimizeImageToJpeg to fail");
+    } catch (err) {
+      expect(err).toMatchObject({ cause: expect.any(Error) });
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/Failed to optimize image: /);
+    }
+  });
+
   it("includes URL + status in fetch errors", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: false,

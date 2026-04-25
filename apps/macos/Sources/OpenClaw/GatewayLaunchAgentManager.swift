@@ -7,7 +7,10 @@ enum GatewayLaunchAgentManager {
     // production implementation simple while still letting tests observe command selection.
     private nonisolated(unsafe) static var testLaunchAgentWriteDisabledHook: (() -> Bool)?
     private nonisolated(unsafe) static var testReadDaemonLoadedHook: (() async -> Bool?)?
-    private nonisolated(unsafe) static var testRunDaemonCommandHook: ((_ args: [String], _ timeout: Double, _ quiet: Bool) async -> String?)?
+    private nonisolated(unsafe) static var testRunDaemonCommandHook: ((
+        _ args: [String],
+        _ timeout: Double,
+        _ quiet: Bool) async -> String?)?
     #endif
 
     struct EntrypointOwnership: Equatable {
@@ -118,7 +121,8 @@ enum GatewayLaunchAgentManager {
 
         if enabled {
             let action = await self.desiredEnableAction()
-            self.logger.info("launchd enable requested action=\(String(describing: action), privacy: .public) port=\(port)")
+            self.logger
+                .info("launchd enable requested action=\(String(describing: action), privacy: .public) port=\(port)")
             switch action {
             case .restart:
                 if let error = await self.runServiceBringupCommand(["restart"], timeout: 20) {
@@ -193,7 +197,9 @@ enum GatewayLaunchAgentManager {
         guard let actualEntrypoint = ownership.actualEntrypoint else { return nil }
         guard ownership.matchesCurrentEntrypoint == false else { return nil }
         return """
-        Telegram live testing is blocked because this app expects \(expectedEntrypoint), but the consumer gateway is pinned to \(actualEntrypoint). Restart the consumer gateway from this build before capturing the first DM.
+        Telegram live testing is blocked because this app expects \(
+            expectedEntrypoint), but the consumer gateway is pinned to \(
+            actualEntrypoint). Restart the consumer gateway from this build before capturing the first DM.
         """
     }
 }
@@ -376,6 +382,11 @@ extension GatewayLaunchAgentManager {
         env["OPENCLAW_GATEWAY_BIND"] = instance.gatewayBind
         env["OPENCLAW_LOG_DIR"] = instance.logsDirURL.path
         env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] = "1"
+        // Packaged consumer runs through Bun on macOS; default to sips unless
+        // the caller intentionally asks for the sharp backend.
+        env["OPENCLAW_IMAGE_BACKEND"] =
+            base["OPENCLAW_IMAGE_BACKEND"]?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+                ?? ConsumerRuntime.imageBackend
         if let id = instance.id {
             env[ConsumerInstance.envKey] = id
         } else {
@@ -396,8 +407,8 @@ extension GatewayLaunchAgentManager {
         return args + ["--json"]
     }
 
-    // Keep the decision logic in a non-DEBUG helper so release packaging can reuse the
-    // same branch selection that tests assert against.
+    /// Keep the decision logic in a non-DEBUG helper so release packaging can reuse the
+    /// same branch selection that tests assert against.
     private static func computeDesiredEnableAction(
         loaded: Bool?,
         hasPlist: Bool,
