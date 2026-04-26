@@ -77,6 +77,73 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.install[0]?.id).toBe("brew");
   });
 
+  it("warns when an active workspace skill shadows a different bundled skill", async () => {
+    const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-shadow-skill-"));
+    const workspaceSkillDir = path.join(fixtureDir, "workspace", "skills", "demo");
+    const bundledSkillDir = path.join(fixtureDir, "bundled", "demo");
+    await mkdir(workspaceSkillDir, { recursive: true });
+    await mkdir(bundledSkillDir, { recursive: true });
+    await writeFile(
+      path.join(workspaceSkillDir, "SKILL.md"),
+      "---\nname: demo\ndescription: Demo\n---\n# Workspace demo\n",
+    );
+    await writeFile(
+      path.join(bundledSkillDir, "SKILL.md"),
+      "---\nname: demo\ndescription: Demo\n---\n# Bundled demo\n",
+    );
+
+    const entry = makeEntry({
+      name: "demo",
+      baseDir: workspaceSkillDir,
+    });
+
+    const report = withEnv({ OPENCLAW_BUNDLED_SKILLS_DIR: path.join(fixtureDir, "bundled") }, () =>
+      buildWorkspaceSkillStatus(path.join(fixtureDir, "workspace"), {
+        entries: [entry],
+      }),
+    );
+    const skill = report.skills.find((reportEntry) => reportEntry.name === "demo");
+
+    expect(skill?.shadowedBundledSkill).toEqual(
+      expect.objectContaining({
+        kind: "bundled-shadow",
+        source: "openclaw-workspace",
+        activePath: expect.stringContaining(path.join("workspace", "skills", "demo")),
+        bundledPath: expect.stringContaining(path.join("bundled", "demo")),
+      }),
+    );
+  });
+
+  it("does not warn when a workspace skill matches the bundled skill contents", async () => {
+    const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-shadow-skill-"));
+    const workspaceSkillDir = path.join(fixtureDir, "workspace", "skills", "demo");
+    const bundledSkillDir = path.join(fixtureDir, "bundled", "demo");
+    await mkdir(workspaceSkillDir, { recursive: true });
+    await mkdir(bundledSkillDir, { recursive: true });
+    await writeFile(
+      path.join(workspaceSkillDir, "SKILL.md"),
+      "---\nname: demo\ndescription: Demo\n---\n# Same demo\n",
+    );
+    await writeFile(
+      path.join(bundledSkillDir, "SKILL.md"),
+      "---\nname: demo\ndescription: Demo\n---\n# Same demo\n",
+    );
+
+    const entry = makeEntry({
+      name: "demo",
+      baseDir: workspaceSkillDir,
+    });
+
+    const report = withEnv({ OPENCLAW_BUNDLED_SKILLS_DIR: path.join(fixtureDir, "bundled") }, () =>
+      buildWorkspaceSkillStatus(path.join(fixtureDir, "workspace"), {
+        entries: [entry],
+      }),
+    );
+    const skill = report.skills.find((reportEntry) => reportEntry.name === "demo");
+
+    expect(skill?.shadowedBundledSkill).toBeUndefined();
+  });
+
   it("resolves relative helper bin requirements from the skill directory", async () => {
     const baseDir = await mkdtemp(path.join(tmpdir(), "openclaw-status-skill-"));
     await mkdir(path.join(baseDir, "scripts"), { recursive: true });

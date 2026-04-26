@@ -160,6 +160,27 @@ describe("skills-cli", () => {
       const output = formatSkillInfo(report, "info-emoji", {});
       expect(output).toContain("🎛️");
     });
+
+    it("shows a shadow warning when a skill shadows a bundled skill", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "wacli",
+          source: "openclaw-workspace",
+          shadowedBundledSkill: {
+            kind: "bundled-shadow",
+            source: "openclaw-workspace",
+            activePath: "/workspace/skills/wacli",
+            bundledPath: "/repo/skills/wacli",
+            reason: "Active non-bundled skill shadows bundled skill with different contents.",
+          },
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "wacli", {});
+      expect(output).toContain("Shadow warning");
+      expect(output).toContain("/workspace/skills/wacli");
+      expect(output).toContain("/repo/skills/wacli");
+    });
   });
 
   describe("formatSkillsCheck", () => {
@@ -197,6 +218,27 @@ describe("skills-cli", () => {
       const output = formatSkillsCheck(report, {});
       expect(output).toContain("🎛️ ready-emoji");
       expect(output).toContain("🎙️ missing-emoji");
+    });
+
+    it("lists shadowed bundled skills in check output", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "wacli",
+          source: "openclaw-workspace",
+          shadowedBundledSkill: {
+            kind: "bundled-shadow",
+            source: "openclaw-workspace",
+            activePath: "/workspace/skills/wacli",
+            bundledPath: "/repo/skills/wacli",
+            reason: "Active non-bundled skill shadows bundled skill with different contents.",
+          },
+        }),
+      ]);
+
+      const output = formatSkillsCheck(report, {});
+      expect(output).toContain("Shadowed bundled skills");
+      expect(output).toContain("wacli");
+      expect(output).toContain("/workspace/skills/wacli");
     });
   });
 

@@ -32,8 +32,13 @@ type LiveStatus = {
   ownerPid?: number;
   ownerCommandMatches?: boolean;
   lockHeldByOwner?: boolean;
+  lockPid?: number;
   connected?: boolean;
   message?: string;
+  forcedStop?: boolean;
+  stopSignal?: "SIGINT" | "SIGKILL";
+  stoppedPid?: number;
+  stopReason?: string;
 };
 
 type SendReport = {
@@ -44,6 +49,7 @@ type SendReport = {
   ownerPaused: boolean;
   ownerRestored: boolean;
   ownerBefore?: LiveStatus;
+  ownerStop?: LiveStatus;
   ownerAfter?: LiveStatus;
   send: {
     exitCode: number | null;
@@ -309,7 +315,7 @@ async function waitForOwnerRelease(flags: Flags, deps: Pick<Deps, "runCommand" |
   let lastStatus = await readOwnerStatus(flags, deps);
 
   while (Date.now() <= deadline) {
-    if (lastStatus?.ownerRunning !== true && lastStatus?.lockHeldByOwner !== true) {
+    if (lastStatus?.ownerRunning !== true && lastStatus?.lockPid == null) {
       return lastStatus;
     }
     await deps.sleep(250);
@@ -346,11 +352,12 @@ async function runOwnerSafeSend(
   let retryAttempted = false;
   let sendResult: CommandResult | undefined;
   let sendRaw = "";
+  let ownerStop: LiveStatus | undefined;
 
   if (shouldPauseOwner) {
-    await runLiveCommand("stop", flags, deps);
+    ownerStop = await runLiveCommand("stop", flags, deps);
     const releaseStatus = await waitForOwnerRelease(flags, deps);
-    ownerPaused = releaseStatus?.ownerRunning !== true && releaseStatus?.lockHeldByOwner !== true;
+    ownerPaused = releaseStatus?.ownerRunning !== true && releaseStatus?.lockPid == null;
     if (!ownerPaused) {
       return {
         ok: false,
@@ -360,10 +367,14 @@ async function runOwnerSafeSend(
         ownerPaused: false,
         ownerRestored: false,
         ownerBefore,
+        ownerStop,
         send: { exitCode: null, stdout: "", stderr: "", timedOut: false },
         retryAttempted: false,
         message: "Failed to pause the recorded wacli sync owner before sending.",
-        error: "The recorded owner could not be stopped cleanly.",
+        error:
+          releaseStatus?.lockPid != null
+            ? `The wacli store is still locked by PID ${String(releaseStatus.lockPid)}.`
+            : "The recorded owner could not be stopped cleanly.",
       };
     }
   }
@@ -410,6 +421,7 @@ async function runOwnerSafeSend(
       ownerPaused,
       ownerRestored,
       ownerBefore,
+      ownerStop,
       send: {
         exitCode: sendResult.exitCode,
         stdout: sendResult.stdout,
@@ -443,6 +455,7 @@ async function runOwnerSafeSend(
     ownerPaused,
     ownerRestored,
     ownerBefore,
+    ownerStop,
     ownerAfter,
     send: {
       exitCode: sendResult.exitCode,
@@ -465,6 +478,12 @@ function emit(report: SendReport, asJson: boolean) {
   console.log(`owner_paused=${String(report.ownerPaused)}`);
   console.log(`owner_restored=${String(report.ownerRestored)}`);
   console.log(`retry_attempted=${String(report.retryAttempted)}`);
+  if (report.ownerStop?.forcedStop) {
+    console.log("owner_stop_forced=true");
+  }
+  if (report.ownerStop?.stopSignal) {
+    console.log(`owner_stop_signal=${report.ownerStop.stopSignal}`);
+  }
   if (!report.ok && report.error) {
     console.log(`error=${report.error}`);
   }
