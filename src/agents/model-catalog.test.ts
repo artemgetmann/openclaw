@@ -99,6 +99,7 @@ describe("loadModelCatalog", () => {
         id: "gpt-5.2-codex",
         provider: "openai-codex",
         name: "GPT-5.2 Codex",
+        reasoning: true,
       },
     ]);
 
@@ -110,7 +111,7 @@ describe("loadModelCatalog", () => {
       }),
     );
     const spark = result.find((entry) => entry.id === "gpt-5.3-codex-spark");
-    expect(spark?.name).toBe("gpt-5.3-codex-spark");
+    expect(spark?.name).toBe("GPT-5.3 Codex Spark");
     expect(spark?.reasoning).toBe(true);
   });
 
@@ -163,8 +164,13 @@ describe("loadModelCatalog", () => {
     );
   });
 
-  it("filters stale openai-codex gpt-5.1 codex variants while keeping spark", async () => {
+  it("filters stale openai-codex codex variants while keeping spark", async () => {
     mockPiDiscoveryModels([
+      {
+        id: "gpt-5.3-codex",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex",
+      },
       {
         id: "gpt-5.1-codex",
         provider: "openai-codex",
@@ -190,6 +196,7 @@ describe("loadModelCatalog", () => {
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
     const keys = result.map((entry) => `${entry.provider}/${entry.id}`);
 
+    expect(keys).not.toContain("openai-codex/gpt-5.3-codex");
     expect(keys).not.toContain("openai-codex/gpt-5.1-codex");
     expect(keys).not.toContain("openai-codex/gpt-5.1-codex-mini");
     expect(keys).not.toContain("openai-codex/gpt-5.1-codex-max");
@@ -222,6 +229,14 @@ describe("loadModelCatalog", () => {
         contextWindow: 272000,
         input: ["text", "image"],
       },
+      {
+        id: "gpt-5.2-codex",
+        provider: "openai-codex",
+        name: "GPT-5.2 Codex",
+        reasoning: true,
+        contextWindow: 272000,
+        input: ["text", "image"],
+      },
     ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
@@ -230,35 +245,42 @@ describe("loadModelCatalog", () => {
       expect.objectContaining({
         provider: "openai",
         id: "gpt-5.5",
-        name: "gpt-5.5",
+        name: "GPT-5.5",
       }),
     );
     expect(result).toContainEqual(
       expect.objectContaining({
         provider: "openai",
         id: "gpt-5.4",
-        name: "gpt-5.4",
+        name: "GPT-5.4",
       }),
     );
     expect(result).toContainEqual(
       expect.objectContaining({
         provider: "openai",
         id: "gpt-5.4-pro",
-        name: "gpt-5.4-pro",
+        name: "GPT-5.4 Pro",
       }),
     );
     expect(result).toContainEqual(
       expect.objectContaining({
         provider: "openai-codex",
         id: "gpt-5.5",
-        name: "gpt-5.5",
+        name: "GPT-5.5",
       }),
     );
     expect(result).toContainEqual(
       expect.objectContaining({
         provider: "openai-codex",
         id: "gpt-5.4",
-        name: "gpt-5.4",
+        name: "GPT-5.4",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 Mini",
       }),
     );
   });

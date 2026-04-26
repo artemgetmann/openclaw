@@ -182,21 +182,21 @@ export function buildOpenAIProvider(): ProviderPlugin {
           ? {
               ...openAiGpt55Template,
               id: OPENAI_GPT_55_MODEL_ID,
-              name: OPENAI_GPT_55_MODEL_ID,
+              name: "GPT-5.5",
             }
           : undefined,
         openAiGpt54Template
           ? {
               ...openAiGpt54Template,
               id: OPENAI_GPT_54_MODEL_ID,
-              name: OPENAI_GPT_54_MODEL_ID,
+              name: "GPT-5.4",
             }
           : undefined,
         openAiGpt54ProTemplate
           ? {
               ...openAiGpt54ProTemplate,
               id: OPENAI_GPT_54_PRO_MODEL_ID,
-              name: OPENAI_GPT_54_PRO_MODEL_ID,
+              name: "GPT-5.4 Pro",
             }
           : undefined,
       ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);

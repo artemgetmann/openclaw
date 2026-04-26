@@ -647,13 +647,16 @@ describe("resolveModel", () => {
     });
   });
 
-  it("builds an openai-codex fallback for gpt-5.3-codex", () => {
+  it("builds an openai-codex fallback for gpt-5.4-mini", () => {
     mockOpenAICodexTemplateModel();
 
-    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
+    const result = resolveModel("openai-codex", "gpt-5.4-mini", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"),
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
   });
 
   it("builds an openai-codex fallback for gpt-5.4", () => {
@@ -898,7 +901,7 @@ describe("resolveModel", () => {
     expectUnknownModelError("openai-codex", "gpt-4.1-mini");
   });
 
-  it.each(["gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-codex-max"])(
+  it.each(["gpt-5.3-codex", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-codex-max"])(
     "suppresses stale openai-codex %s instead of falling through provider fallback",
     (modelId) => {
       const cfg = {
