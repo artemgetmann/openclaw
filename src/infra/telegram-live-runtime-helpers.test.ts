@@ -372,6 +372,26 @@ describe("telegram live runtime helpers", () => {
     });
   });
 
+  it("preseeds isolated gateway auth so startup does not rewrite config", () => {
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig: {
+        gateway: {
+          auth: {
+            mode: "token",
+          },
+        },
+      },
+      assignedToken: "tester-token",
+      gatewayAuthToken: "isolated-gateway-token",
+      runtimePort: 24567,
+    });
+
+    expect(config.gateway?.auth).toMatchObject({
+      mode: "token",
+      token: "isolated-gateway-token",
+    });
+  });
+
   it("derives a safe effective model when the inherited default is plain openai", () => {
     const config = buildTelegramLiveRuntimeConfig({
       baseConfig: {

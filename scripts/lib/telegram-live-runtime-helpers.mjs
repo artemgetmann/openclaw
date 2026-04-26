@@ -1000,6 +1000,7 @@ export function extractTelegramBotTokensFromConfig(config, opts = {}) {
 export function buildTelegramLiveRuntimeConfig(params) {
   const assignedToken = String(params?.assignedToken ?? "").trim();
   const runtimePort = Number.parseInt(String(params?.runtimePort ?? ""), 10);
+  const gatewayAuthToken = String(params?.gatewayAuthToken ?? "").trim();
   const acpValidation = isTelegramLiveAcpValidationEnabled(params);
   const fallbackWorkspaceDir =
     acpValidation &&
@@ -1028,6 +1029,9 @@ export function buildTelegramLiveRuntimeConfig(params) {
   const config = baseConfig;
   scrubOpenAiSecretsFromTesterRuntimeConfig(config);
   const gateway = config.gateway && typeof config.gateway === "object" ? config.gateway : {};
+  const gatewayAuth = gateway.auth && typeof gateway.auth === "object" ? gateway.auth : {};
+  const effectiveGatewayAuthToken =
+    gatewayAuthToken || (typeof gatewayAuth.token === "string" ? gatewayAuth.token.trim() : "");
   const controlUi =
     gateway.controlUi && typeof gateway.controlUi === "object" ? gateway.controlUi : {};
   config.gateway = {
@@ -1035,6 +1039,14 @@ export function buildTelegramLiveRuntimeConfig(params) {
     port: runtimePort,
     bind: "loopback",
     mode: "local",
+    ...(effectiveGatewayAuthToken
+      ? {
+          auth: {
+            ...gatewayAuth,
+            token: effectiveGatewayAuthToken,
+          },
+        }
+      : {}),
     controlUi: {
       ...controlUi,
       enabled: false,

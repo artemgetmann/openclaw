@@ -107,6 +107,19 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("forwards explicit sessionKey to the gateway agent request", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", sessionKey: "agent:main:main" }, runtime);
+
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+        params?: { sessionKey?: string };
+      };
+      expect(request.params?.sessionKey).toBe("agent:main:main");
+    });
+  });
+
   it("falls back to embedded agent when gateway fails", async () => {
     await withTempStore(async () => {
       vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));

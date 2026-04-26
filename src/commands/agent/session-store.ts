@@ -103,7 +103,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
   const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], next);
+    const current = store[sessionKey];
+    const patch = { ...next };
+    if (!current?.pendingRestartConfirmation) {
+      delete patch.pendingRestartConfirmation;
+    }
+    const merged = mergeSessionEntry(current, patch);
     store[sessionKey] = merged;
     return merged;
   });

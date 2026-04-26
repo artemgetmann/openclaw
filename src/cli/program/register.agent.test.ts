@@ -100,6 +100,19 @@ describe("registerAgentCommands", () => {
     );
   });
 
+  it("forwards explicit agent session key", async () => {
+    await runCli(["agent", "--session-key", "agent:main:main", "--message", "hi"]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "hi",
+        sessionKey: "agent:main:main",
+      }),
+      runtime,
+      { deps: true },
+    );
+  });
+
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     expect(agentsAddCommandMock).toHaveBeenNthCalledWith(

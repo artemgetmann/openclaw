@@ -660,6 +660,7 @@ prepare_isolated_runtime_config() {
     HELPER_MODULE="$HELPER_MODULE" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -692,10 +693,26 @@ if (basePath && fs.existsSync(basePath)) {
     // Fall back to a minimal config if base config is absent/invalid.
   }
 }
+let gatewayAuthToken = "";
+if (fs.existsSync(runtimeConfigPath)) {
+  try {
+    const existing = JSON.parse(fs.readFileSync(runtimeConfigPath, "utf8"));
+    const token = existing?.gateway?.auth?.token;
+    if (typeof token === "string" && token.trim()) {
+      gatewayAuthToken = token.trim();
+    }
+  } catch {
+    // Ignore corrupt prior runtime config; a fresh isolated token is safer.
+  }
+}
+if (!gatewayAuthToken) {
+  gatewayAuthToken = crypto.randomBytes(32).toString("base64url");
+}
 config = buildTelegramLiveRuntimeConfig({
   acpValidation,
   baseConfig: config,
   assignedToken,
+  gatewayAuthToken,
   preferredModel,
   preferCodexAuth: isLocalCodexAuthAvailable(),
   runtimePort,
