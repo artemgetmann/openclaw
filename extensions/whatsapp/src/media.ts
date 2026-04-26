@@ -153,6 +153,12 @@ function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
 }
 
+function errorWithCause(message: string, cause: unknown): Error {
+  return cause instanceof Error
+    ? new Error(`${message}: ${cause.message}`, { cause })
+    : new Error(`${message}: ${String(cause)}`);
+}
+
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
   if (opts.contentType && HEIC_MIME_RE.test(opts.contentType.trim())) {
     return true;
@@ -450,6 +456,7 @@ export async function optimizeImageToJpeg(
     resizeSide: number;
     quality: number;
   } | null = null;
+  let firstFailure: unknown;
 
   for (const side of sides) {
     for (const quality of qualities) {
@@ -472,8 +479,10 @@ export async function optimizeImageToJpeg(
             quality,
           };
         }
-      } catch {
-        // Continue trying other size/quality combinations
+      } catch (err) {
+        // Keep the concrete backend failure. Without this, packaged users only
+        // see a generic optimization error when sharp import/resize fails.
+        firstFailure ??= err;
       }
     }
   }
@@ -487,6 +496,9 @@ export async function optimizeImageToJpeg(
     };
   }
 
+  if (firstFailure) {
+    throw errorWithCause("Failed to optimize image", firstFailure);
+  }
   throw new Error("Failed to optimize image");
 }
 

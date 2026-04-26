@@ -31,6 +31,27 @@ describe("splitMediaFromOutput", () => {
     }
   });
 
+  it("preserves unquoted macOS Application Support media paths", () => {
+    const result = splitMediaFromOutput(
+      "MEDIA:~/Library/Application Support/OpenClaw/media/photo.png",
+    );
+
+    expect(result.mediaUrls).toEqual(["~/Library/Application Support/OpenClaw/media/photo.png"]);
+    expect(result.mediaUrl).toBe("~/Library/Application Support/OpenClaw/media/photo.png");
+    expect(result.text).toBe("");
+  });
+
+  it("preserves file URL media paths with spaces", () => {
+    const result = splitMediaFromOutput(
+      "MEDIA:file:///Users/test/Library/Application Support/OpenClaw/media/photo.png",
+    );
+
+    expect(result.mediaUrls).toEqual([
+      "/Users/test/Library/Application Support/OpenClaw/media/photo.png",
+    ]);
+    expect(result.text).toBe("");
+  });
+
   it("keeps audio_as_voice detection stable across calls", () => {
     const input = "Hello [[audio_as_voice]]";
     const first = splitMediaFromOutput(input);

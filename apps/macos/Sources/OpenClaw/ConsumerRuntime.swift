@@ -2,6 +2,8 @@ import Darwin
 import Foundation
 
 enum ConsumerRuntime {
+    static let imageBackend = "sips"
+
     private static var instance: ConsumerInstance {
         .current
     }
@@ -76,6 +78,7 @@ enum ConsumerRuntime {
         self.setEnv("OPENCLAW_GATEWAY_BIND", value: instance.gatewayBind)
         self.setEnv("OPENCLAW_LOG_DIR", value: instance.logsDirURL.path)
         self.setEnv("OPENCLAW_LAUNCHD_LABEL", value: instance.gatewayLaunchdLabel)
+        self.setDefaultEnv("OPENCLAW_IMAGE_BACKEND", value: self.imageBackend)
         if let id = instance.id {
             self.setEnv(ConsumerInstance.envKey, value: id)
         } else {
@@ -93,6 +96,13 @@ enum ConsumerRuntime {
     }
 
     private static func setEnv(_ key: String, value: String) {
+        setenv(key, value, 1)
+    }
+
+    private static func setDefaultEnv(_ key: String, value: String) {
+        let current = ProcessInfo.processInfo.environment[key]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard current.isEmpty else { return }
         setenv(key, value, 1)
     }
 }

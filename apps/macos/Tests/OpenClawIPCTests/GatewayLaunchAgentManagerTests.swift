@@ -76,7 +76,38 @@ struct GatewayLaunchAgentManagerTests {
             port: 18789)
 
         #expect(error == nil)
-        #expect(calls == [["install", "--force", "--allow-shared-service-takeover", "--port", "18789", "--runtime", "node"]])
+        #expect(calls == [[
+            "install",
+            "--force",
+            "--allow-shared-service-takeover",
+            "--port",
+            "18789",
+            "--runtime",
+            "node",
+        ]])
+    }
+
+    @Test func `daemon command environment defaults image backend to sips`() async {
+        await TestIsolation.withEnvValues([
+            ConsumerInstance.envKey: nil,
+            "OPENCLAW_IMAGE_BACKEND": nil,
+        ]) {
+            let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
+                base: [:],
+                projectRootHint: "/tmp/openclaw-worktree")
+
+            #expect(env["OPENCLAW_IMAGE_BACKEND"] == "sips")
+        }
+    }
+
+    @Test func `daemon command environment preserves explicit image backend override`() async {
+        await TestIsolation.withEnvValues([ConsumerInstance.envKey: nil]) {
+            let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
+                base: ["OPENCLAW_IMAGE_BACKEND": " sharp "],
+                projectRootHint: nil)
+
+            #expect(env["OPENCLAW_IMAGE_BACKEND"] == "sharp")
+        }
     }
 
     @Test func `real launchd install stays pinned to canonical repo and restart preserves entrypoint`() async throws {
@@ -112,47 +143,46 @@ struct GatewayLaunchAgentManagerTests {
             ],
             defaults: [
                 "openclaw.gatewayProjectRootPath": repoRoot.path,
-            ]
-        ) {
-            // Clean up any stale throwaway label first so the assertions only observe
-            // the install/restart triggered by this test body.
-            _ = await GatewayLaunchAgentManager.set(enabled: false, bundlePath: bundlePath, port: port)
-            do {
-                let installError = await GatewayLaunchAgentManager.set(
-                    enabled: true,
-                    bundlePath: bundlePath,
-                    port: port)
-                #expect(installError == nil)
+            ]) {
+                // Clean up any stale throwaway label first so the assertions only observe
+                // the install/restart triggered by this test body.
+                _ = await GatewayLaunchAgentManager.set(enabled: false, bundlePath: bundlePath, port: port)
+                do {
+                    let installError = await GatewayLaunchAgentManager.set(
+                        enabled: true,
+                        bundlePath: bundlePath,
+                        port: port)
+                    #expect(installError == nil)
 
-                let before = try await self.waitForLaunchAgentSnapshot(at: plistURL)
-                #expect(before.programArguments.count >= 3)
-                if before.programArguments.count >= 3 {
-                    #expect(before.programArguments[1] == expectedEntrypoint)
-                    #expect(before.programArguments[2] == "gateway")
+                    let before = try await self.waitForLaunchAgentSnapshot(at: plistURL)
+                    #expect(before.programArguments.count >= 3)
+                    if before.programArguments.count >= 3 {
+                        #expect(before.programArguments[1] == expectedEntrypoint)
+                        #expect(before.programArguments[2] == "gateway")
+                    }
+
+                    let beforePid = try await self.waitForRunningLaunchdPid(label: label)
+                    let restartError = await GatewayLaunchAgentManager.restartOrStart(
+                        bundlePath: bundlePath,
+                        port: port)
+                    #expect(restartError == nil)
+
+                    let after = try await self.waitForLaunchAgentSnapshot(at: plistURL)
+                    #expect(after.programArguments == before.programArguments)
+
+                    let afterPid = try await self.waitForRunningLaunchdPid(label: label, pidNot: beforePid)
+                    #expect(afterPid != beforePid)
+                } catch {
+                    _ = await GatewayLaunchAgentManager.set(enabled: false, bundlePath: bundlePath, port: port)
+                    throw error
                 }
 
-                let beforePid = try await self.waitForRunningLaunchdPid(label: label)
-                let restartError = await GatewayLaunchAgentManager.restartOrStart(
+                let uninstallError = await GatewayLaunchAgentManager.set(
+                    enabled: false,
                     bundlePath: bundlePath,
                     port: port)
-                #expect(restartError == nil)
-
-                let after = try await self.waitForLaunchAgentSnapshot(at: plistURL)
-                #expect(after.programArguments == before.programArguments)
-
-                let afterPid = try await self.waitForRunningLaunchdPid(label: label, pidNot: beforePid)
-                #expect(afterPid != beforePid)
-            } catch {
-                _ = await GatewayLaunchAgentManager.set(enabled: false, bundlePath: bundlePath, port: port)
-                throw error
+                #expect(uninstallError == nil)
             }
-
-            let uninstallError = await GatewayLaunchAgentManager.set(
-                enabled: false,
-                bundlePath: bundlePath,
-                port: port)
-            #expect(uninstallError == nil)
-        }
         #endif
     }
 }

@@ -25,7 +25,25 @@ enum LaunchAgentManager {
         }
     }
 
+    static func launchAgentEnvironment(
+        base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String]
+    {
+        [
+            "PATH": CommandResolver.preferredPaths().joined(separator: ":"),
+            "OPENCLAW_IMAGE_BACKEND": base["OPENCLAW_IMAGE_BACKEND"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? ConsumerRuntime.imageBackend,
+        ]
+    }
+
     private static func writePlist(bundlePath: String) {
+        let env = self.launchAgentEnvironment()
+        let envLines = env.keys.sorted().compactMap { key -> String? in
+            guard let value = env[key], !value.isEmpty else { return nil }
+            return """
+            <key>\(self.plistEscape(key))</key>
+            <string>\(self.plistEscape(value))</string>
+            """
+        }.joined(separator: "\n")
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -45,8 +63,7 @@ enum LaunchAgentManager {
           <true/>
           <key>EnvironmentVariables</key>
           <dict>
-            <key>PATH</key>
-            <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
+            \(envLines)
           </dict>
           <key>StandardOutPath</key>
           <string>\(LogLocator.launchdLogPath)</string>
@@ -56,6 +73,15 @@ enum LaunchAgentManager {
         </plist>
         """
         try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
+    }
+
+    private static func plistEscape(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     @discardableResult

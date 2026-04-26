@@ -79,6 +79,28 @@ function unwrapQuoted(value: string): string | undefined {
   return trimmed.slice(1, -1).trim();
 }
 
+function countWhitespaceSeparatedFileRefs(value: string): number {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => cleanCandidate(part))
+    .filter((part) => HAS_FILE_EXT.test(part)).length;
+}
+
+function shouldPreserveUnquotedPathWithSpaces(value: string): boolean {
+  const trimmed = value.trim();
+  if (!/\s/.test(trimmed)) {
+    return false;
+  }
+  // A single local/file URL can contain spaces in macOS folders such as
+  // "Application Support". Keep that payload whole when it only names one
+  // file, but still allow intentional multi-media lines like MEDIA:/a.png /b.png.
+  if (!(isLikelyLocalPath(trimmed) || trimmed.startsWith("file://"))) {
+    return false;
+  }
+  return countWhitespaceSeparatedFileRefs(trimmed) <= 1;
+}
+
 function mayContainFenceMarkers(input: string): boolean {
   return input.includes("```") || input.includes("~~~");
 }
@@ -150,7 +172,10 @@ export function splitMediaFromOutput(raw: string): {
       const payload = match[1];
       const unwrapped = unwrapQuoted(payload);
       const payloadValue = unwrapped ?? payload;
-      const parts = unwrapped ? [unwrapped] : payload.split(/\s+/).filter(Boolean);
+      const parts =
+        unwrapped || shouldPreserveUnquotedPathWithSpaces(payloadValue)
+          ? [payloadValue]
+          : payload.split(/\s+/).filter(Boolean);
       const mediaStartIndex = media.length;
       let validCount = 0;
       const invalidParts: string[] = [];
