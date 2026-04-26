@@ -5,7 +5,7 @@ import Testing
 private func blockedReadinessPayload() -> ConsumerModelsReadinessPayload {
     ConsumerModelsReadinessPayload(
         status: "blocked",
-        defaultModel: "openai-codex/gpt-5.4",
+        defaultModel: "openai-codex/gpt-5.5",
         summary: "OpenClaw-managed AI is configured, but the shared auth is no longer usable.",
         reasonCodes: ["probe_auth_failed"])
 }
@@ -13,7 +13,7 @@ private func blockedReadinessPayload() -> ConsumerModelsReadinessPayload {
 private func authMissingReadinessPayload() -> ConsumerModelsReadinessPayload {
     ConsumerModelsReadinessPayload(
         status: "blocked",
-        defaultModel: "openai-codex/gpt-5.4",
+        defaultModel: "openai-codex/gpt-5.5",
         summary: "OpenClaw-managed AI is selected, but the canonical shared auth profile is missing from this consumer runtime.",
         reasonCodes: ["missing_auth"])
 }
@@ -21,7 +21,7 @@ private func authMissingReadinessPayload() -> ConsumerModelsReadinessPayload {
 private func refreshTokenReusedPayload() -> ConsumerModelsReadinessPayload {
     ConsumerModelsReadinessPayload(
         status: "blocked",
-        defaultModel: "openai-codex/gpt-5.4",
+        defaultModel: "openai-codex/gpt-5.5",
         summary: "ChatGPT sign-in expired for this Mac (refresh_token_reused). Sign in again to continue.",
         reasonCodes: ["probe_auth_failed"])
 }
@@ -29,7 +29,7 @@ private func refreshTokenReusedPayload() -> ConsumerModelsReadinessPayload {
 private func readinessFailedPayload() -> ConsumerModelsReadinessPayload {
     ConsumerModelsReadinessPayload(
         status: "blocked",
-        defaultModel: "openai-codex/gpt-5.4",
+        defaultModel: "openai-codex/gpt-5.5",
         summary: "OpenClaw-managed AI did not answer the readiness probe in time.",
         reasonCodes: ["probe_timeout"])
 }
@@ -37,7 +37,7 @@ private func readinessFailedPayload() -> ConsumerModelsReadinessPayload {
 private func readyReadinessPayload() -> ConsumerModelsReadinessPayload {
     ConsumerModelsReadinessPayload(
         status: "ready",
-        defaultModel: "openai-codex/gpt-5.4",
+        defaultModel: "openai-codex/gpt-5.5",
         summary: "OpenClaw-managed AI passed a live readiness check for the default model.",
         reasonCodes: [])
 }
@@ -118,10 +118,12 @@ private func claudeApiKeyOptionPayload() -> ConsumerModelsAuthOptionPayload {
 }
 
 private func curatedModelsPayload(
-    currentModel: String = "openai-codex/gpt-5.4",
+    currentModel: String = "openai-codex/gpt-5.5",
     options: [ConsumerSelectableModel] = [
-        .init(id: "openai-codex/gpt-5.4", title: "GPT-5.4", detail: "Default ChatGPT / Codex path for early testers."),
+        .init(id: "openai-codex/gpt-5.5", title: "GPT-5.5", detail: "Primary ChatGPT / Codex path for consumer managed AI."),
+        .init(id: "openai-codex/gpt-5.4", title: "GPT-5.4", detail: "Practical Codex fallback when GPT-5.5 is not available."),
         .init(id: "openai-codex/gpt-5.3-codex", title: "Codex 5.3", detail: "Codex-focused model for coding-heavy work."),
+        .init(id: "openai-codex/gpt-5.3-codex-spark", title: "GPT-5.3-Codex-Spark", detail: "Faster Codex variant when the OAuth catalog exposes Spark."),
     ]) -> ConsumerModelsModelListPayload
 {
     ConsumerModelsModelListPayload(
@@ -153,14 +155,19 @@ struct ConsumerSetupReadinessTests {
         await model.refresh()
 
         #expect(model.isComplete)
-        #expect(model.phase == .ready("openai-codex/gpt-5.4"))
-        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.4.")
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
         #expect(model.authSectionExpanded == false)
         #expect(model.authOptionsLoaded)
         #expect(model.selectedOptionId == "openai-codex-oauth")
         #expect(model.activeAccessTitle == "ChatGPT / Codex login")
-        #expect(model.modelOptions.map(\.id) == ["openai-codex/gpt-5.4", "openai-codex/gpt-5.3-codex"])
-        #expect(model.selectedModelId == "openai-codex/gpt-5.4")
+        #expect(model.modelOptions.map(\.id) == [
+            "openai-codex/gpt-5.5",
+            "openai-codex/gpt-5.4",
+            "openai-codex/gpt-5.3-codex",
+            "openai-codex/gpt-5.3-codex-spark",
+        ])
+        #expect(model.selectedModelId == "openai-codex/gpt-5.5")
     }
 
     @Test func `consumer model readiness appends voice blocker when speech transcription is not ready`() async {
@@ -168,7 +175,7 @@ struct ConsumerSetupReadinessTests {
             probeReadiness: {
                 ConsumerModelsReadinessPayload(
                     status: "ready",
-                    defaultModel: "openai-codex/gpt-5.4",
+                    defaultModel: "openai-codex/gpt-5.5",
                     summary: "OpenClaw-managed AI passed a live readiness check for the default model.",
                     reasonCodes: [],
                     voiceStatus: "blocked",
@@ -188,10 +195,10 @@ struct ConsumerSetupReadinessTests {
 
         await model.refresh()
 
-        #expect(model.phase == .ready("openai-codex/gpt-5.4"))
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
         #expect(
             model.statusLine
-                == "AI ready on openai-codex/gpt-5.4. Voice messages are not ready yet. This consumer runtime needs either the bundled OpenAI speech key or a BYOK OpenAI/Gemini-style API key for transcription.")
+                == "AI ready on openai-codex/gpt-5.5. Voice messages are not ready yet. This consumer runtime needs either the bundled OpenAI speech key or a BYOK OpenAI/Gemini-style API key for transcription.")
     }
 
     @Test func `consumer model readiness surfaces blocked live probe summary`() async {
@@ -296,8 +303,8 @@ struct ConsumerSetupReadinessTests {
         await model.refreshOnAppActivationIfNeeded()
 
         #expect(probeCalls.value == 2)
-        #expect(model.phase == .ready("openai-codex/gpt-5.4"))
-        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.4.")
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
     }
 
     @Test func `consumer model refreshIfNeeded retries after transient failure`() async {
@@ -326,8 +333,8 @@ struct ConsumerSetupReadinessTests {
         await model.refreshIfNeeded()
 
         #expect(probeCalls.value == 2)
-        #expect(model.phase == .ready("openai-codex/gpt-5.4"))
-        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.4.")
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
     }
 
     @Test func `consumer model apply auth consumes returned readiness and marks ready`() async {
@@ -409,7 +416,7 @@ struct ConsumerSetupReadinessTests {
                     optionId: optionId,
                     providerId: "openai-codex",
                     methodId: "oauth",
-                    defaultModel: "openai-codex/gpt-5.4",
+                    defaultModel: "openai-codex/gpt-5.5",
                     notes: ["Opened the ChatGPT sign-in flow."],
                     profileIds: ["openai-codex:default"],
                     readiness: readyReadinessPayload())
@@ -454,7 +461,7 @@ struct ConsumerSetupReadinessTests {
                     optionId: optionId,
                     providerId: "openai-codex",
                     methodId: "oauth",
-                    defaultModel: "openai-codex/gpt-5.4",
+                    defaultModel: "openai-codex/gpt-5.5",
                     notes: ["Opened the ChatGPT sign-in flow."],
                     profileIds: ["openai-codex:default"],
                     readiness: readyReadinessPayload())
@@ -683,8 +690,8 @@ struct ConsumerSetupReadinessTests {
         await model.submitSelectedModel()
 
         #expect(probeCalls.value == 2)
-        #expect(model.phase == .ready("openai-codex/gpt-5.4"))
-        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.4.")
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
         #expect(model.modelError == nil)
         #expect(model.failureKind == nil)
     }
@@ -718,9 +725,9 @@ struct ConsumerSetupReadinessTests {
 
         #expect(restartCalls.value == 1)
         #expect(probeCalls.value == 2)
-        #expect(model.phase == .ready("openai-codex/gpt-5.4"))
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
         #expect(model.failureKind == nil)
-        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.4.")
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
         #expect(!model.canRestartOperator)
         #expect(!model.isRestartingOperator)
     }

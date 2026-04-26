@@ -50,7 +50,7 @@ function makeManagedConfig() {
   return {
     agents: {
       defaults: {
-        model: "openai-codex/gpt-5.4",
+        model: "openai-codex/gpt-5.5",
       },
     },
     auth: {
@@ -117,7 +117,7 @@ beforeEach(() => {
     results: [
       {
         provider: "openai-codex",
-        model: "openai-codex/gpt-5.4",
+        model: "openai-codex/gpt-5.5",
         profileId: CONSUMER_CANONICAL_SHARED_PROFILE_ID,
         label: CONSUMER_CANONICAL_SHARED_PROFILE_ID,
         source: "profile",
@@ -198,7 +198,7 @@ describe("resolveModelsReadiness", () => {
     mocks.loadConfig.mockReturnValue({
       agents: {
         defaults: {
-          model: "openai-codex/gpt-5.4",
+          model: "openai-codex/gpt-5.5",
         },
       },
       auth: {},
@@ -243,7 +243,7 @@ describe("resolveModelsReadiness", () => {
       results: [
         {
           provider: "openai-codex",
-          model: "openai-codex/gpt-5.4",
+          model: "openai-codex/gpt-5.5",
           profileId: CONSUMER_CANONICAL_SHARED_PROFILE_ID,
           label: CONSUMER_CANONICAL_SHARED_PROFILE_ID,
           source: "profile",
@@ -278,7 +278,7 @@ describe("resolveModelsReadiness", () => {
       results: [
         {
           provider: "openai-codex",
-          model: "openai-codex/gpt-5.4",
+          model: "openai-codex/gpt-5.5",
           profileId: CONSUMER_CANONICAL_SHARED_PROFILE_ID,
           label: CONSUMER_CANONICAL_SHARED_PROFILE_ID,
           source: "profile",

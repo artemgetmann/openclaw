@@ -127,7 +127,7 @@ const CONSUMER_AUTH_CHOICES: readonly ConsumerAuthChoiceDefinition[] = [
     methodLabel: "Continue with ChatGPT",
     methodDescription: "Use your ChatGPT subscription. Best early-tester path for coding tasks.",
     kind: "oauth",
-    defaultModel: "openai-codex/gpt-5.4",
+    defaultModel: "openai-codex/gpt-5.5",
   },
   {
     id: "anthropic-claude-cli",

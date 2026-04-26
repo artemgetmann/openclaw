@@ -5,7 +5,7 @@ This is the consumer MVP operating path for founder-managed shared AI auth.
 ## Scope
 
 - Use one canonical shared profile only: `openai-codex:default`
-- Keep the current default model on `openai-codex/gpt-5.4`
+- Keep the current default model on `openai-codex/gpt-5.5`; keep `openai-codex/gpt-5.4` as the practical fallback
 - Treat this as a trusted-tester path only
 - BYOK stays available as the fallback, not the default setup
 
