@@ -230,6 +230,53 @@ describe("modelsListCommand forward-compat", () => {
         }),
       ]);
     });
+
+    it("hides suppressed configured codex rows from compact listings", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({
+        entries: [
+          {
+            key: "openai-codex/gpt-5.1-codex-mini",
+            ref: { provider: "openai-codex", model: "gpt-5.1-codex-mini" },
+            tags: new Set(["configured"]),
+            aliases: [],
+          },
+          {
+            key: "openai-codex/gpt-5.3-codex",
+            ref: { provider: "openai-codex", model: "gpt-5.3-codex" },
+            tags: new Set(["configured"]),
+            aliases: [],
+          },
+          {
+            key: "openai-codex/gpt-5.3-codex-spark",
+            ref: { provider: "openai-codex", model: "gpt-5.3-codex-spark" },
+            tags: new Set(["configured"]),
+            aliases: [],
+          },
+          {
+            key: "openai-codex/gpt-5.4-mini",
+            ref: { provider: "openai-codex", model: "gpt-5.4-mini" },
+            tags: new Set(["configured"]),
+            aliases: [],
+          },
+        ],
+      });
+      mocks.resolveModelWithRegistry.mockImplementation(
+        ({ provider, modelId }: { provider: string; modelId: string }) => ({
+          ...OPENAI_CODEX_MODEL,
+          provider,
+          id: modelId,
+        }),
+      );
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true, provider: "openai-codex" }, runtime as never);
+
+      expect(mocks.printModelTable).toHaveBeenCalled();
+      expect(lastPrintedRows<{ key: string }>()).toEqual([
+        expect.objectContaining({ key: "openai-codex/gpt-5.3-codex-spark" }),
+        expect.objectContaining({ key: "openai-codex/gpt-5.4-mini" }),
+      ]);
+    });
   });
 
   describe("availability fallback", () => {
@@ -326,15 +373,18 @@ describe("modelsListCommand forward-compat", () => {
       ]);
     });
 
-    it("keeps discovered rows in --all output when catalog lookup is empty", async () => {
+    it("hides suppressed discovered rows in --all output when catalog lookup is empty", async () => {
       mockDiscoveredCodex53Registry();
       mocks.loadModelCatalog.mockResolvedValueOnce([]);
-      await runAllOpenAiCodexCommand();
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({
-          key: "openai-codex/gpt-5.3-codex",
-        }),
-      ]);
+      const runtime = createRuntime();
+
+      await modelsListCommand(
+        { all: true, provider: "openai-codex", json: true },
+        runtime as never,
+      );
+
+      expect(mocks.printModelTable).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith("No models found.");
     });
 
     it("suppresses direct openai gpt-5.3-codex-spark rows in --all output", async () => {
@@ -364,14 +414,27 @@ describe("modelsListCommand forward-compat", () => {
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           },
           { ...OPENAI_CODEX_53_MODEL },
+          {
+            ...OPENAI_CODEX_53_MODEL,
+            id: "gpt-5.3-codex-spark",
+            name: "GPT-5.3 Codex Spark",
+          },
         ],
         availableKeys: new Set([
           "openai/gpt-5.3-codex-spark",
           "azure-openai-responses/gpt-5.3-codex-spark",
           "openai-codex/gpt-5.3-codex",
+          "openai-codex/gpt-5.3-codex-spark",
         ]),
         registry: {
-          getAll: () => [{ ...OPENAI_CODEX_53_MODEL }],
+          getAll: () => [
+            { ...OPENAI_CODEX_53_MODEL },
+            {
+              ...OPENAI_CODEX_53_MODEL,
+              id: "gpt-5.3-codex-spark",
+              name: "GPT-5.3 Codex Spark",
+            },
+          ],
         },
       });
       mocks.loadModelCatalog.mockResolvedValueOnce([]);
@@ -382,7 +445,7 @@ describe("modelsListCommand forward-compat", () => {
       expect(mocks.printModelTable).toHaveBeenCalled();
       expect(lastPrintedRows<{ key: string }>()).toEqual([
         expect.objectContaining({
-          key: "openai-codex/gpt-5.3-codex",
+          key: "openai-codex/gpt-5.3-codex-spark",
         }),
       ]);
     });
