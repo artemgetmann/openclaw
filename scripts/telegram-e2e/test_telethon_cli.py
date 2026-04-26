@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import sys
 import tempfile
 import unittest
@@ -116,6 +117,17 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TelethonCliSyncTests(unittest.TestCase):
+  def test_build_dialog_payload_accepts_datetime_mute_until(self) -> None:
+    future_mute_until = datetime.now(timezone.utc) + timedelta(hours = 1)
+    dialog = build_fake_dialog(chat_id = 101, is_user = True, unread_count = 1)
+    dialog.dialog.notify_settings.mute_until = future_mute_until
+
+    payload = telethon_cli.build_dialog_payload(dialog)
+
+    self.assertTrue(payload["muted"])
+    self.assertEqual(payload["chat_id"], 101)
+    self.assertEqual(payload["unread_count"], 1)
+
   def test_compute_inbox_scan_cap_keeps_filtered_queries_bounded_but_deeper(self) -> None:
     self.assertEqual(
       telethon_cli.compute_inbox_scan_cap(limit = 20, dm_only = False, unread_only = False),
