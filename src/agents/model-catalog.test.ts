@@ -163,7 +163,40 @@ describe("loadModelCatalog", () => {
     );
   });
 
-  it("adds gpt-5.4 forward-compat catalog entries when template models exist", async () => {
+  it("filters stale openai-codex gpt-5.1 codex variants while keeping spark", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.1-codex",
+        provider: "openai-codex",
+        name: "GPT-5.1 Codex",
+      },
+      {
+        id: "gpt-5.1-codex-mini",
+        provider: "openai-codex",
+        name: "GPT-5.1 Codex Mini",
+      },
+      {
+        id: "gpt-5.1-codex-max",
+        provider: "openai-codex",
+        name: "GPT-5.1 Codex Max",
+      },
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex Spark",
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    const keys = result.map((entry) => `${entry.provider}/${entry.id}`);
+
+    expect(keys).not.toContain("openai-codex/gpt-5.1-codex");
+    expect(keys).not.toContain("openai-codex/gpt-5.1-codex-mini");
+    expect(keys).not.toContain("openai-codex/gpt-5.1-codex-max");
+    expect(keys).toContain("openai-codex/gpt-5.3-codex-spark");
+  });
+
+  it("adds OpenAI/Codex forward-compat catalog entries when template models exist", async () => {
     mockPiDiscoveryModels([
       {
         id: "gpt-5.2",
@@ -196,6 +229,13 @@ describe("loadModelCatalog", () => {
     expect(result).toContainEqual(
       expect.objectContaining({
         provider: "openai",
+        id: "gpt-5.5",
+        name: "gpt-5.5",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
         id: "gpt-5.4",
         name: "gpt-5.4",
       }),
@@ -205,6 +245,13 @@ describe("loadModelCatalog", () => {
         provider: "openai",
         id: "gpt-5.4-pro",
         name: "gpt-5.4-pro",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.5",
+        name: "gpt-5.5",
       }),
     );
     expect(result).toContainEqual(

@@ -18,14 +18,27 @@ import {
 } from "./shared.js";
 
 const PROVIDER_ID = "openai";
+const OPENAI_GPT_55_MODEL_ID = "gpt-5.5";
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
+const OPENAI_GPT_55_TEMPLATE_MODEL_IDS = ["gpt-5.4", "gpt-5.2"] as const;
 const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
-const OPENAI_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.4-pro", "gpt-5.2"] as const;
-const OPENAI_MODERN_MODEL_IDS = ["gpt-5.4", "gpt-5.4-pro", "gpt-5.2", "gpt-5.0"] as const;
+const OPENAI_XHIGH_MODEL_IDS = [
+  OPENAI_GPT_55_MODEL_ID,
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.2",
+] as const;
+const OPENAI_MODERN_MODEL_IDS = [
+  OPENAI_GPT_55_MODEL_ID,
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.2",
+  "gpt-5.0",
+] as const;
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 
@@ -49,7 +62,9 @@ function resolveOpenAIGpt54ForwardCompatModel(
   const trimmedModelId = ctx.modelId.trim();
   const lower = trimmedModelId.toLowerCase();
   let templateIds: readonly string[];
-  if (lower === OPENAI_GPT_54_MODEL_ID) {
+  if (lower === OPENAI_GPT_55_MODEL_ID) {
+    templateIds = OPENAI_GPT_55_TEMPLATE_MODEL_IDS;
+  } else if (lower === OPENAI_GPT_54_MODEL_ID) {
     templateIds = OPENAI_GPT_54_TEMPLATE_MODEL_IDS;
   } else if (lower === OPENAI_GPT_54_PRO_MODEL_ID) {
     templateIds = OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS;
@@ -132,7 +147,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
       if (ctx.provider !== PROVIDER_ID || ctx.listProfileIds("openai-codex").length === 0) {
         return undefined;
       }
-      return 'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_MODEL_API_KEY (or OPENAI_API_KEY) to use openai/gpt-5.4.';
+      return 'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.5 (OAuth) or set OPENAI_MODEL_API_KEY (or OPENAI_API_KEY) to use openai/gpt-5.5.';
     },
     suppressBuiltInModel: (ctx) => {
       if (
@@ -147,6 +162,11 @@ export function buildOpenAIProvider(): ProviderPlugin {
       };
     },
     augmentModelCatalog: (ctx) => {
+      const openAiGpt55Template = findCatalogTemplate({
+        entries: ctx.entries,
+        providerId: PROVIDER_ID,
+        templateIds: OPENAI_GPT_55_TEMPLATE_MODEL_IDS,
+      });
       const openAiGpt54Template = findCatalogTemplate({
         entries: ctx.entries,
         providerId: PROVIDER_ID,
@@ -158,6 +178,13 @@ export function buildOpenAIProvider(): ProviderPlugin {
         templateIds: OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS,
       });
       return [
+        openAiGpt55Template
+          ? {
+              ...openAiGpt55Template,
+              id: OPENAI_GPT_55_MODEL_ID,
+              name: OPENAI_GPT_55_MODEL_ID,
+            }
+          : undefined,
         openAiGpt54Template
           ? {
               ...openAiGpt54Template,
