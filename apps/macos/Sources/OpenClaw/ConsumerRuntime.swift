@@ -2,6 +2,8 @@ import Darwin
 import Foundation
 
 enum ConsumerRuntime {
+    static let imageBackend = "sips"
+
     private static let toolIsolationEnvironmentKeys = [
         "HIMALAYA_CONFIG",
         "XDG_CONFIG_HOME",
@@ -91,6 +93,7 @@ enum ConsumerRuntime {
         self.setEnv("OPENCLAW_GATEWAY_BIND", value: instance.gatewayBind)
         self.setEnv("OPENCLAW_LOG_DIR", value: instance.logsDirURL.path)
         self.setEnv("OPENCLAW_LAUNCHD_LABEL", value: instance.gatewayLaunchdLabel)
+        self.setDefaultEnv("OPENCLAW_IMAGE_BACKEND", value: self.imageBackend)
         if let id = instance.id {
             self.setEnv(ConsumerInstance.envKey, value: id)
         } else {
@@ -109,8 +112,8 @@ enum ConsumerRuntime {
 
     static func applyInheritedToolIsolationEnvironment(
         to env: inout [String: String],
-        base: [String: String] = ProcessInfo.processInfo.environment
-    ) {
+        base: [String: String] = ProcessInfo.processInfo.environment)
+    {
         // Setup-sensitive CLIs must stay inside the lane-local cleanroom once the app
         // is launched there. Persist only the explicit allowlist so relaunch agents do
         // not accidentally inherit unrelated shell junk.
@@ -125,6 +128,13 @@ enum ConsumerRuntime {
     }
 
     private static func setEnv(_ key: String, value: String) {
+        setenv(key, value, 1)
+    }
+
+    private static func setDefaultEnv(_ key: String, value: String) {
+        let current = ProcessInfo.processInfo.environment[key]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard current.isEmpty else { return }
         setenv(key, value, 1)
     }
 
@@ -156,7 +166,7 @@ enum ConsumerRuntime {
     private static func readJSONObject(
         at url: URL,
         fileManager: FileManager)
-    -> [String: Any]?
+        -> [String: Any]?
     {
         guard fileManager.fileExists(atPath: url.path) else { return nil }
         guard let data = try? Data(contentsOf: url) else { return nil }

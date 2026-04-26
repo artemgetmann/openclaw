@@ -17,6 +17,9 @@ BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.consumer.mac.debug}"
 APP_VARIANT="${APP_VARIANT:-consumer}"
 APP_INSTANCE_ID="${APP_INSTANCE_ID:-}"
 URL_SCHEME="${URL_SCHEME:-openclaw-consumer}"
+if [[ "$APP_VARIANT" == "consumer" ]]; then
+  export OPENCLAW_IMAGE_BACKEND="${OPENCLAW_IMAGE_BACKEND:-sips}"
+fi
 PKG_VERSION="$(cd "$ROOT_DIR" && "$VALIDATED_NODE_BIN" -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")

@@ -1,5 +1,5 @@
-import OSLog
 import Foundation
+import OSLog
 
 enum LaunchAgentManager {
     struct LaunchAgentSnapshot: Equatable {
@@ -30,8 +30,8 @@ enum LaunchAgentManager {
 
     static func needsRefresh(
         bundlePath: String,
-        base: [String: String] = ProcessInfo.processInfo.environment
-    ) -> Bool {
+        base: [String: String] = ProcessInfo.processInfo.environment) -> Bool
+    {
         self.needsRefresh(
             snapshot: self.snapshot(),
             bundlePath: bundlePath,
@@ -73,8 +73,8 @@ enum LaunchAgentManager {
     }
 
     static func launchAgentEnvironment(
-        base: [String: String] = ProcessInfo.processInfo.environment
-    ) -> [String: String] {
+        base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String]
+    {
         let instance = ConsumerInstance.current
         var env: [String: String] = [
             "PATH": CommandResolver.preferredPaths().joined(separator: ":"),
@@ -86,6 +86,8 @@ enum LaunchAgentManager {
             "OPENCLAW_GATEWAY_BIND": ConsumerRuntime.gatewayBind,
             "OPENCLAW_LOG_DIR": ConsumerRuntime.logsDirURL.path,
             "OPENCLAW_LAUNCHD_LABEL": ConsumerRuntime.gatewayLaunchdLabel,
+            "OPENCLAW_IMAGE_BACKEND": base["OPENCLAW_IMAGE_BACKEND"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? ConsumerRuntime.imageBackend,
         ]
         if let id = instance.id {
             env[ConsumerInstance.envKey] = id
@@ -99,9 +101,9 @@ enum LaunchAgentManager {
         let envLines = env.keys.sorted().compactMap { key -> String? in
             guard let value = env[key], !value.isEmpty else { return nil }
             return """
-          <key>\(self.plistEscape(key))</key>
-          <string>\(self.plistEscape(value))</string>
-        """
+              <key>\(self.plistEscape(key))</key>
+              <string>\(self.plistEscape(value))</string>
+            """
         }.joined(separator: "\n")
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -151,8 +153,8 @@ enum LaunchAgentManager {
     static func needsRefresh(
         snapshot: LaunchAgentSnapshot?,
         bundlePath: String,
-        base: [String: String]
-    ) -> Bool {
+        base: [String: String]) -> Bool
+    {
         guard let snapshot else { return true }
         let expectedBinary = "\(bundlePath)/Contents/MacOS/OpenClaw"
         guard snapshot.programArguments.first == expectedBinary else { return true }

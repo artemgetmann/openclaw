@@ -40,7 +40,10 @@ struct GatewayLaunchAgentManagerTests {
     }
 
     @Test func `daemon command environment pins consumer runtime paths`() async {
-        await TestIsolation.withEnvValues([ConsumerInstance.envKey: nil]) {
+        await TestIsolation.withEnvValues([
+            ConsumerInstance.envKey: nil,
+            "OPENCLAW_IMAGE_BACKEND": nil,
+        ]) {
             let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
                 base: [:],
                 projectRootHint: "/tmp/openclaw-worktree")
@@ -53,7 +56,18 @@ struct GatewayLaunchAgentManagerTests {
             #expect(env["OPENCLAW_GATEWAY_BIND"] == ConsumerRuntime.gatewayBind)
             #expect(env["OPENCLAW_LAUNCHD_LABEL"] == gatewayLaunchdLabel)
             #expect(env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] == "1")
+            #expect(env["OPENCLAW_IMAGE_BACKEND"] == "sips")
             #expect(env["OPENCLAW_FORK_ROOT"] == "/tmp/openclaw-worktree")
+        }
+    }
+
+    @Test func `daemon command environment preserves explicit image backend override`() async {
+        await TestIsolation.withEnvValues([ConsumerInstance.envKey: nil]) {
+            let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
+                base: ["OPENCLAW_IMAGE_BACKEND": " sharp "],
+                projectRootHint: nil)
+
+            #expect(env["OPENCLAW_IMAGE_BACKEND"] == "sharp")
         }
     }
 

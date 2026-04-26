@@ -30,6 +30,12 @@ function prefersSips(): boolean {
   );
 }
 
+function errorWithCause(message: string, cause: unknown): Error {
+  return cause instanceof Error
+    ? new Error(`${message}: ${cause.message}`, { cause })
+    : new Error(`${message}: ${String(cause)}`);
+}
+
 async function loadSharp(): Promise<(buffer: Buffer) => ReturnType<Sharp>> {
   const mod = (await import("sharp")) as unknown as { default?: Sharp };
   const sharp = mod.default ?? (mod as unknown as Sharp);
@@ -425,6 +431,7 @@ export async function optimizeImageToPng(
     resizeSide: number;
     compressionLevel: number;
   } | null = null;
+  let firstFailure: unknown;
 
   for (const side of sides) {
     for (const compressionLevel of compressionLevels) {
@@ -447,8 +454,10 @@ export async function optimizeImageToPng(
             compressionLevel,
           };
         }
-      } catch {
-        // Continue trying other size/compression combinations.
+      } catch (err) {
+        // Preserve the first real backend error so callers/logs can diagnose
+        // sharp import failures, unsupported input, or sips execution issues.
+        firstFailure ??= err;
       }
     }
   }
@@ -462,6 +471,9 @@ export async function optimizeImageToPng(
     };
   }
 
+  if (firstFailure) {
+    throw errorWithCause("Failed to optimize PNG image", firstFailure);
+  }
   throw new Error("Failed to optimize PNG image");
 }
 
