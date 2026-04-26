@@ -5,12 +5,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   bootstrapTelegramLiveAcpValidationAuthStore,
+  bootstrapTelegramLiveCodexAuthStore,
   buildTelegramLiveRuntimeConfig,
   buildTelegramLiveRuntimeChildEnv,
   collectActiveReservedTelegramBotTokensFromCanonicalConfig,
   collectActiveTelegramTokenLeaseEntries,
   deriveTelegramLiveRuntimeProfile,
   extractTelegramBotTokensFromConfig,
+  isLocalCodexAuthAvailable,
   isCanonicalSharedGatewayActive,
   pruneTesterRuntimeAuthStore,
   selectTelegramTesterToken,
@@ -340,6 +342,36 @@ describe("telegram live runtime helpers", () => {
     });
   });
 
+  it("defaults isolated tester lanes to Codex when local Codex auth is available", () => {
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["anthropic/claude-sonnet-4-5"],
+            },
+            models: {
+              "anthropic/claude-opus-4-6": { alias: "Claude Opus" },
+              "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
+            },
+          },
+        },
+      },
+      assignedToken: "tester-token",
+      preferCodexAuth: true,
+      runtimePort: 24567,
+    });
+
+    expect(config.agents?.defaults?.model).toMatchObject({
+      primary: "openai-codex/gpt-5.4",
+      fallbacks: [],
+    });
+    expect(config.agents?.defaults?.models).toEqual({
+      "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
+    });
+  });
+
   it("derives a safe effective model when the inherited default is plain openai", () => {
     const config = buildTelegramLiveRuntimeConfig({
       baseConfig: {
@@ -652,6 +684,57 @@ describe("telegram live runtime helpers", () => {
         "openai-codex": ["openai-codex:default"],
       },
     });
+  });
+
+  it("detects usable local Codex auth without exposing token contents", () => {
+    const codexHome = makeTempDir();
+    const codexAuthPath = path.join(codexHome, "auth.json");
+
+    expect(isLocalCodexAuthAvailable({ codexHome })).toBe(false);
+
+    fs.writeFileSync(
+      codexAuthPath,
+      JSON.stringify({
+        tokens: {
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+        },
+      }),
+    );
+
+    expect(isLocalCodexAuthAvailable({ codexHome })).toBe(true);
+  });
+
+  it("bootstraps generic tester Codex auth stores from local Codex auth", () => {
+    const runtimeStateDir = makeTempDir();
+    const codexHome = makeTempDir();
+    const codexAuthPath = path.join(codexHome, "auth.json");
+    fs.writeFileSync(
+      codexAuthPath,
+      JSON.stringify({
+        tokens: {
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+        },
+      }),
+    );
+
+    const result = bootstrapTelegramLiveCodexAuthStore({
+      runtimeStateDir,
+      codexHome,
+      agentId: "main",
+    });
+
+    expect(result.ok).toBe(true);
+    const store = JSON.parse(fs.readFileSync(result.authStorePath, "utf8")) as {
+      profiles: Record<string, Record<string, unknown>>;
+      order: Record<string, string[]>;
+    };
+    expect(store.profiles["openai-codex:default"]).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+    });
+    expect(store.order).toEqual({ "openai-codex": ["openai-codex:default"] });
   });
 
   it("reports a missing local Codex auth file during ACP validation bootstrap", () => {

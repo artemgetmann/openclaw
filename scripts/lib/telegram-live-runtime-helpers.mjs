@@ -6,6 +6,7 @@ import path from "node:path";
 
 const DEFAULT_PORT_BASE = 20000;
 const DEFAULT_PORT_RANGE = 10000;
+const DEFAULT_CODEX_TESTER_MODEL = "openai-codex/gpt-5.4";
 
 function normalizeTokenList(values) {
   const seen = new Set();
@@ -71,10 +72,12 @@ function resolveTelegramLivePreferredModel(params) {
     return preferredModel;
   }
 
-  // ACP validation must stay on Codex unless the caller explicitly overrides
-  // it, or startup can silently drift back onto another provider.
-  if (isTelegramLiveAcpValidationEnabled(params)) {
-    return "openai-codex/gpt-5.4";
+  // ACP validation and local Codex-auth tester lanes must stay on Codex unless
+  // the caller explicitly overrides them. Otherwise inherited Anthropic/OpenAI
+  // defaults can trigger missing-secret prechecks before the usable Codex auth
+  // profile is even considered.
+  if (isTelegramLiveAcpValidationEnabled(params) || params?.preferCodexAuth === true) {
+    return DEFAULT_CODEX_TESTER_MODEL;
   }
 
   return "";
@@ -463,6 +466,27 @@ function resolveCodexHomePath(codexHome) {
   return path.join(os.homedir(), ".codex");
 }
 
+export function isLocalCodexAuthAvailable(params = {}) {
+  const codexHome = resolveCodexHomePath(params.codexHome);
+  const codexAuthPath = path.join(codexHome, "auth.json");
+  if (!fs.existsSync(codexAuthPath)) {
+    return false;
+  }
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(codexAuthPath, "utf8"));
+    const tokens = raw && typeof raw === "object" ? raw.tokens : null;
+    return Boolean(
+      typeof tokens?.access_token === "string" &&
+      tokens.access_token.trim() &&
+      typeof tokens?.refresh_token === "string" &&
+      tokens.refresh_token.trim(),
+    );
+  } catch {
+    return false;
+  }
+}
+
 function decodeJwtExpiryMs(token) {
   if (typeof token !== "string" || !token) {
     return null;
@@ -485,11 +509,11 @@ function decodeJwtExpiryMs(token) {
   }
 }
 
-export function bootstrapTelegramLiveAcpValidationAuthStore(params) {
+export function bootstrapTelegramLiveCodexAuthStore(params) {
   const runtimeStateDir = path.resolve(String(params?.runtimeStateDir ?? ""));
   const agentId = String(params?.agentId ?? "main").trim() || "main";
   if (!runtimeStateDir) {
-    throw new Error("Missing runtimeStateDir for Telegram ACP auth bootstrap.");
+    throw new Error("Missing runtimeStateDir for Telegram Codex auth bootstrap.");
   }
 
   const codexHome = resolveCodexHomePath(params?.codexHome);
@@ -563,6 +587,10 @@ export function bootstrapTelegramLiveAcpValidationAuthStore(params) {
     codexAuthPath,
     authStorePath,
   };
+}
+
+export function bootstrapTelegramLiveAcpValidationAuthStore(params) {
+  return bootstrapTelegramLiveCodexAuthStore(params);
 }
 
 export function buildTelegramLiveRuntimeChildEnv(params) {
@@ -1078,9 +1106,18 @@ export function buildTelegramLiveRuntimeConfig(params) {
   if (effectiveModel.effectiveModel) {
     const preferredModelTwin = codexTwinModelKey(effectiveModel.effectiveModel);
     const plainOpenAiTwin = codexTwinForPlainOpenAiModel(effectiveModel.effectiveModel);
+    const inheritedPrimary = resolveConfiguredModelPrimary(defaultModel);
     const currentModelAllowlist =
       agentDefaults.models && typeof agentDefaults.models === "object" ? agentDefaults.models : {};
-    const disallowedModelKeys = new Set([preferredModelTwin, plainOpenAiTwin].filter(Boolean));
+    const disallowedModelKeys = new Set(
+      [
+        preferredModelTwin,
+        plainOpenAiTwin,
+        preferredModel && inheritedPrimary !== effectiveModel.effectiveModel
+          ? inheritedPrimary
+          : "",
+      ].filter(Boolean),
+    );
     const nextModelAllowlist =
       disallowedModelKeys.size > 0
         ? Object.fromEntries(
