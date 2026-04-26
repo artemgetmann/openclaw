@@ -36,7 +36,7 @@ describe("provider catalog contract", () => {
     });
   });
 
-  it.each(["gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-codex-max"])(
+  it.each(["gpt-5.3-codex", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-codex-max"])(
     "keeps stale codex model suppression wired through the provider runtime for %s",
     (modelId) => {
       expect(
@@ -78,19 +78,21 @@ describe("provider catalog contract", () => {
             { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
             { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
             { provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
+            { provider: "openai-codex", id: "gpt-5.2-codex", name: "GPT-5.2 Codex" },
           ],
         },
       }),
     ).resolves.toEqual([
-      { provider: "openai", id: "gpt-5.5", name: "gpt-5.5" },
-      { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-      { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-      { provider: "openai-codex", id: "gpt-5.5", name: "gpt-5.5" },
-      { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
+      { provider: "openai", id: "gpt-5.4-pro", name: "GPT-5.4 Pro" },
+      { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
+      { provider: "openai-codex", id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
       {
         provider: "openai-codex",
         id: "gpt-5.3-codex-spark",
-        name: "gpt-5.3-codex-spark",
+        name: "GPT-5.3 Codex Spark",
       },
     ]);
   });
