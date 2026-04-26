@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime
 import json
 import os
 import re
@@ -202,7 +203,16 @@ def build_dialog_payload(dialog) -> dict[str, object | None]:
   entity = getattr(dialog, "entity", None)
   notify_settings = getattr(dialog, "dialog", None)
   mute_until = getattr(getattr(notify_settings, "notify_settings", None), "mute_until", None)
-  muted = bool(mute_until and int(mute_until) > int(time.time()))
+  # Telethon can surface mute_until either as an epoch-like integer or as a
+  # concrete datetime. Normalize both shapes before comparing against "now" so
+  # inbox serialization never crashes on unread dialog enumeration.
+  if isinstance(mute_until, datetime):
+    mute_until_epoch = mute_until.timestamp()
+  elif mute_until is None:
+    mute_until_epoch = None
+  else:
+    mute_until_epoch = float(mute_until)
+  muted = bool(mute_until_epoch and mute_until_epoch > time.time())
   name = str(getattr(dialog, "name", "") or "").strip()
   title = getattr(entity, "title", None)
   username = getattr(entity, "username", None)
