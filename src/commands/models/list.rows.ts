@@ -146,6 +146,9 @@ export function appendConfiguredRows(params: {
   context: RowBuilderContext;
 }) {
   for (const entry of params.entries) {
+    if (shouldSuppressBuiltInModel({ provider: entry.ref.provider, id: entry.ref.model })) {
+      continue;
+    }
     if (
       params.context.filter.provider &&
       entry.ref.provider.toLowerCase() !== params.context.filter.provider
