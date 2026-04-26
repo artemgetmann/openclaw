@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPendingRestartConfirmation } from "../../config/sessions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -12,12 +13,16 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   resolveEmbeddedSessionLane: vi.fn().mockReturnValue("session:session-key"),
 }));
 
-vi.mock("../../config/sessions.js", () => ({
-  resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
-  resolveSessionFilePath: vi.fn().mockReturnValue("/tmp/session.jsonl"),
-  resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
-  updateSessionStore: vi.fn(),
-}));
+vi.mock("../../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
+    resolveSessionFilePath: vi.fn().mockReturnValue("/tmp/session.jsonl"),
+    resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
+    updateSessionStore: vi.fn(),
+  };
+});
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
@@ -28,9 +33,13 @@ vi.mock("../../process/command-queue.js", () => ({
   getQueueSize: vi.fn().mockReturnValue(0),
 }));
 
-vi.mock("../../routing/session-key.js", () => ({
-  normalizeMainKey: vi.fn().mockReturnValue("main"),
-}));
+vi.mock("../../routing/session-key.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../routing/session-key.js")>();
+  return {
+    ...actual,
+    normalizeMainKey: vi.fn().mockReturnValue("main"),
+  };
+});
 
 vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: vi.fn().mockReturnValue(false),
@@ -206,6 +215,25 @@ describe("runPreparedReply media-only handling", () => {
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     });
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
+  it("injects the pending restart confirmation hint when the session is armed", async () => {
+    const pending = createPendingRestartConfirmation({ now: Date.now() - 1_000 });
+    await runPreparedReply(
+      baseParams({
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: pending.requestedAt + 500,
+          pendingRestartConfirmation: pending,
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.extraSystemPrompt).toContain(
+      "A pending restart confirmation exists for this session.",
+    );
+    expect(call?.followupRun.run.extraSystemPrompt).toContain("current user turn clearly confirms");
   });
 
   it("omits auth key labels from /new and /reset confirmation messages", async () => {

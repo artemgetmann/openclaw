@@ -2,9 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import {
+  createPendingRestartConfirmation,
+  loadSessionStore,
+  saveSessionStore,
+  type SessionEntry,
+} from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createGatewayTool } from "./tools/gateway-tool.js";
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(async (method: string) => {
@@ -37,16 +43,30 @@ vi.mock("./tools/gateway.js", () => ({
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
-function requireGatewayTool(agentSessionKey?: string) {
-  const tool = createOpenClawTools({
+function requireGatewayTool(agentSessionKey?: string, config?: OpenClawConfig) {
+  return createGatewayTool({
     ...(agentSessionKey ? { agentSessionKey } : {}),
-    config: { commands: { restart: true } },
-  }).find((candidate) => candidate.name === "gateway");
-  expect(tool).toBeDefined();
-  if (!tool) {
-    throw new Error("missing gateway tool");
-  }
-  return tool;
+    config: config ?? { commands: { restart: true } },
+  });
+}
+
+async function createSessionStoreFixture(params?: {
+  sessionKey?: string;
+  entry?: SessionEntry;
+}): Promise<{ storePath: string; sessionKey: string }> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-sessions-"));
+  const storePath = path.join(root, "sessions.json");
+  const sessionKey = params?.sessionKey ?? "agent:main:telegram:dm:+15555550123";
+  const entry: SessionEntry =
+    params?.entry ??
+    ({
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    } satisfies SessionEntry);
+  await saveSessionStore(storePath, {
+    [sessionKey]: entry,
+  });
+  return { storePath, sessionKey };
 }
 
 function expectConfigMutationCall(params: {
@@ -124,12 +144,13 @@ describe("gateway tool", () => {
   it("passes config.apply through gateway call", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    const tool = requireGatewayTool(sessionKey);
+    const tool = requireGatewayTool();
 
     const raw = '{\n  agents: { defaults: { workspace: "~/openclaw" } }\n}\n';
     await tool.execute("call2", {
       action: "config.apply",
       raw,
+      sessionKey,
     });
 
     expectConfigMutationCall({
@@ -143,12 +164,13 @@ describe("gateway tool", () => {
   it("passes config.patch through gateway call", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    const tool = requireGatewayTool(sessionKey);
+    const tool = requireGatewayTool();
 
     const raw = '{\n  channels: { telegram: { groups: { "*": { requireMention: false } } } }\n}\n';
     await tool.execute("call4", {
       action: "config.patch",
       raw,
+      sessionKey,
     });
 
     expectConfigMutationCall({
@@ -162,11 +184,12 @@ describe("gateway tool", () => {
   it("passes update.run through gateway call", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    const tool = requireGatewayTool(sessionKey);
+    const tool = requireGatewayTool();
 
     await tool.execute("call3", {
       action: "update.run",
       note: "test update",
+      sessionKey,
     });
 
     expect(callGatewayTool).toHaveBeenCalledWith(
@@ -218,5 +241,118 @@ describe("gateway tool", () => {
     const schema = (result.details as { result?: { schema?: { properties?: unknown } } }).result
       ?.schema;
     expect(schema?.properties).toBeUndefined();
+  });
+
+  it("arms a pending restart confirmation for the current live chat session", async () => {
+    const { storePath, sessionKey } = await createSessionStoreFixture();
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: storePath },
+    });
+
+    const result = await tool.execute("confirm1", {
+      action: "restart.request_confirmation",
+    });
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      sessionKey,
+    });
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[sessionKey]?.pendingRestartConfirmation).toMatchObject({
+      scope: "gateway-restart-capable",
+    });
+  });
+
+  it("arms restart confirmation in the agent-specific session store", async () => {
+    const sessionKey = "agent:atlas:telegram:dm:+15555550123";
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-agent-store-"));
+    const agentStorePath = path.join(root, "atlas", "sessions.json");
+    await saveSessionStore(agentStorePath, {
+      [sessionKey]: {
+        sessionId: "session-atlas-1",
+        updatedAt: Date.now(),
+      },
+    });
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: path.join(root, "{agentId}", "sessions.json") },
+    });
+
+    await tool.execute("confirm-agent-store", {
+      action: "restart.request_confirmation",
+    });
+
+    const agentScopedStore = loadSessionStore(agentStorePath, { skipCache: true });
+    expect(agentScopedStore[sessionKey]?.pendingRestartConfirmation).toMatchObject({
+      scope: "gateway-restart-capable",
+    });
+  });
+
+  it("blocks restart-capable actions without a pending confirmation", async () => {
+    const { storePath, sessionKey } = await createSessionStoreFixture();
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: storePath },
+    });
+
+    await expect(
+      tool.execute("confirm2", {
+        action: "config.patch",
+        raw: '{\n  gateway: { logLevel: "debug" }\n}\n',
+      }),
+    ).rejects.toThrow("Restart confirmation required for live chat sessions");
+  });
+
+  it("consumes a valid confirmation on the next user turn for config.patch", async () => {
+    const pending = createPendingRestartConfirmation({ now: Date.now() - 1_000 });
+    const { storePath, sessionKey } = await createSessionStoreFixture({
+      entry: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt + 1_000,
+        pendingRestartConfirmation: pending,
+      },
+    });
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: storePath },
+    });
+
+    await tool.execute("confirm3", {
+      action: "config.patch",
+      raw: '{\n  gateway: { logLevel: "debug" }\n}\n',
+    });
+
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.objectContaining({
+        sessionKey,
+      }),
+    );
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[sessionKey]?.pendingRestartConfirmation).toBeUndefined();
+  });
+
+  it("does not allow consuming the confirmation in the same turn it was armed", async () => {
+    const pending = createPendingRestartConfirmation({ now: Date.now() });
+    const { storePath, sessionKey } = await createSessionStoreFixture({
+      entry: {
+        sessionId: "session-1",
+        updatedAt: pending.requestedAt,
+        pendingRestartConfirmation: pending,
+      },
+    });
+    const tool = requireGatewayTool(sessionKey, {
+      commands: { restart: true },
+      session: { store: storePath },
+    });
+
+    await expect(
+      tool.execute("confirm4", {
+        action: "update.run",
+      }),
+    ).rejects.toThrow("cannot consume it in the same turn");
   });
 });

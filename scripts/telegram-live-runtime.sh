@@ -660,6 +660,7 @@ prepare_isolated_runtime_config() {
     HELPER_MODULE="$HELPER_MODULE" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -677,7 +678,9 @@ if (!runtimeConfigPath || !assignedToken || !Number.isFinite(runtimePort) || run
   throw new Error("Missing runtime config path, assigned token, or runtime port.");
 }
 
-const { buildTelegramLiveRuntimeConfig } = await import(pathToFileURL(helperPath).href);
+const { buildTelegramLiveRuntimeConfig, isLocalCodexAuthAvailable } = await import(
+  pathToFileURL(helperPath).href
+);
 
 let config = {};
 if (basePath && fs.existsSync(basePath)) {
@@ -690,11 +693,28 @@ if (basePath && fs.existsSync(basePath)) {
     // Fall back to a minimal config if base config is absent/invalid.
   }
 }
+let gatewayAuthToken = "";
+if (fs.existsSync(runtimeConfigPath)) {
+  try {
+    const existing = JSON.parse(fs.readFileSync(runtimeConfigPath, "utf8"));
+    const token = existing?.gateway?.auth?.token;
+    if (typeof token === "string" && token.trim()) {
+      gatewayAuthToken = token.trim();
+    }
+  } catch {
+    // Ignore corrupt prior runtime config; a fresh isolated token is safer.
+  }
+}
+if (!gatewayAuthToken) {
+  gatewayAuthToken = crypto.randomBytes(32).toString("base64url");
+}
 config = buildTelegramLiveRuntimeConfig({
   acpValidation,
   baseConfig: config,
   assignedToken,
+  gatewayAuthToken,
   preferredModel,
+  preferCodexAuth: isLocalCodexAuthAvailable(),
   runtimePort,
   worktreePath: process.cwd(),
   workspaceDir,
@@ -774,7 +794,7 @@ if (!runtimeConfigPath || !runtimeStateDir || !helperPath || !worktreePath) {
 const { deriveWorktreeTesterBaseline, resolveTesterBaselineAgentIds } = await import(
   pathToFileURL(helperPath).href
 );
-const { pruneTesterRuntimeAuthStore } = await import(
+const { bootstrapTelegramLiveCodexAuthStore, pruneTesterRuntimeAuthStore } = await import(
   pathToFileURL(path.join(path.dirname(helperPath), "telegram-live-runtime-helpers.mjs")).href
 );
 
@@ -819,8 +839,17 @@ for (const agentId of agentIds) {
   );
   const targetAuthPath = path.join(runtimeStateDir, "agents", agentId, "agent", "auth-profiles.json");
   const resolvedSourcePath = fs.existsSync(sourceAuthPath) ? sourceAuthPath : fallbackAuthPath;
+  const needsCodexAuth = preferredModel.trim().toLowerCase().startsWith("openai-codex/");
 
   if (!fs.existsSync(resolvedSourcePath)) {
+    if (needsCodexAuth) {
+      const bootstrap = bootstrapTelegramLiveCodexAuthStore({ runtimeStateDir, agentId });
+      if (!bootstrap?.ok) {
+        throw new Error(
+          `Codex auth bootstrap failed for ${agentId}: ${bootstrap?.reason ?? "unknown"}`,
+        );
+      }
+    }
     continue;
   }
 
@@ -838,6 +867,16 @@ for (const agentId of agentIds) {
     store: sourceStore,
     preferredModel,
   });
+
+  if (needsCodexAuth && Object.keys(runtimeStore.profiles ?? {}).length === 0) {
+    const bootstrap = bootstrapTelegramLiveCodexAuthStore({ runtimeStateDir, agentId });
+    if (!bootstrap?.ok) {
+      throw new Error(
+        `Codex auth bootstrap failed for ${agentId}: ${bootstrap?.reason ?? "unknown"}`,
+      );
+    }
+    continue;
+  }
 
   fs.mkdirSync(path.dirname(targetAuthPath), { recursive: true });
   fs.writeFileSync(targetAuthPath, `${JSON.stringify(runtimeStore, null, 2)}\n`, "utf8");

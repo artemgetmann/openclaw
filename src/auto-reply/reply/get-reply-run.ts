@@ -8,8 +8,11 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
+import { buildPendingRestartConfirmationPromptHint } from "../../agents/system-prompt.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  expirePendingRestartConfirmation,
+  readPendingRestartConfirmation,
   resolveGroupSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -275,12 +278,28 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
+  if (sessionEntry?.pendingRestartConfirmation) {
+    const nextSessionEntry = expirePendingRestartConfirmation(sessionEntry);
+    if (nextSessionEntry !== sessionEntry) {
+      sessionEntry = nextSessionEntry;
+      if (sessionStore && sessionKey) {
+        sessionStore[sessionKey] = nextSessionEntry;
+      }
+      if (storePath && sessionKey) {
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = nextSessionEntry;
+        });
+      }
+    }
+  }
+  const pendingRestartConfirmation = readPendingRestartConfirmation(sessionEntry);
   const extraSystemPromptParts = [
     inboundMetaPrompt,
     permissionModePrompt,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
+    pendingRestartConfirmation ? buildPendingRestartConfirmationPromptHint() : undefined,
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).

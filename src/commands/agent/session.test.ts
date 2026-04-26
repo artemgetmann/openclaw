@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -22,7 +25,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
 }));
 
-const { resolveSession, resolveSessionKeyForRequest } = await import("./session.js");
+const { expireResolvedPendingRestartConfirmation, resolveSession, resolveSessionKeyForRequest } =
+  await import("./session.js");
 
 describe("resolveSessionKeyForRequest", () => {
   const MAIN_STORE_PATH = "/tmp/main-store.json";
@@ -230,5 +234,45 @@ describe("resolveSession", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe("daily-session");
+  });
+});
+
+describe("expireResolvedPendingRestartConfirmation", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("clears expired restart confirmations from memory and disk", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-26T10:40:00.000Z"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-session-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const sessionStore = {
+      [sessionKey]: {
+        sessionId: "restart-session",
+        updatedAt: Date.now(),
+        pendingRestartConfirmation: {
+          scope: "gateway-restart-capable" as const,
+          requestedAt: 1_000,
+          expiresAt: 2_000,
+        },
+      },
+    };
+    fs.writeFileSync(storePath, `${JSON.stringify(sessionStore, null, 2)}\n`, "utf8");
+
+    const next = await expireResolvedPendingRestartConfirmation({
+      sessionEntry: sessionStore[sessionKey],
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    const saved = JSON.parse(fs.readFileSync(storePath, "utf8")) as typeof sessionStore;
+    expect(next?.pendingRestartConfirmation).toBeUndefined();
+    expect(sessionStore[sessionKey]?.pendingRestartConfirmation).toBeUndefined();
+    expect(saved[sessionKey]?.pendingRestartConfirmation).toBeUndefined();
+
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

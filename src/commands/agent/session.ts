@@ -11,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   evaluateSessionFreshness,
+  expirePendingRestartConfirmation,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveChannelResetConfig,
@@ -19,6 +20,7 @@ import {
   resolveSessionResetType,
   resolveSessionKey,
   resolveStorePath,
+  updateSessionStore,
   type SessionEntry,
 } from "../../config/sessions.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -169,4 +171,30 @@ export function resolveSession(opts: {
     persistedThinking,
     persistedVerbose,
   };
+}
+
+export async function expireResolvedPendingRestartConfirmation(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath: string;
+}): Promise<SessionEntry | undefined> {
+  const entry = params.sessionEntry;
+  if (!entry?.pendingRestartConfirmation) {
+    return entry;
+  }
+
+  const nextEntry = expirePendingRestartConfirmation(entry);
+  if (nextEntry === entry) {
+    return entry;
+  }
+
+  if (params.sessionStore && params.sessionKey) {
+    params.sessionStore[params.sessionKey] = nextEntry;
+    await updateSessionStore(params.storePath, (store) => {
+      store[params.sessionKey as string] = nextEntry;
+    });
+  }
+
+  return nextEntry;
 }

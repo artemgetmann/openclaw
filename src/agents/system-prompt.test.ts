@@ -3,7 +3,11 @@ import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
-import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
+import {
+  buildAgentSystemPrompt,
+  buildPendingRestartConfirmationPromptHint,
+  buildRuntimeLine,
+} from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -746,6 +750,30 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+  });
+
+  it("guides restart confirmation via session-scoped pending state", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["gateway"],
+    });
+
+    expect(prompt).toContain(
+      "This will interrupt other tasks that you have running in other chats. Restart now?",
+    );
+    expect(prompt).toContain("record the pending confirmation with the gateway tool");
+    expect(prompt).toContain("Only proceed on a later user turn");
+    expect(prompt).toContain("`/restart` remains the escape hatch");
+  });
+});
+
+describe("buildPendingRestartConfirmationPromptHint", () => {
+  it("tells the model to require a clear confirmation on the current user turn", () => {
+    const hint = buildPendingRestartConfirmationPromptHint();
+
+    expect(hint).toContain("A pending restart confirmation exists for this session.");
+    expect(hint).toContain("current user turn clearly confirms");
+    expect(hint).toContain("Do not treat your own prior message");
   });
 });
 

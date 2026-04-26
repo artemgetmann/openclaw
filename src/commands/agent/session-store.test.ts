@@ -124,4 +124,52 @@ describe("updateSessionStoreAfterAgentRun", () => {
       "once",
     );
   });
+
+  it("does not reintroduce a consumed restart confirmation from stale memory", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:main:restart:${randomUUID()}`;
+    const sessionId = randomUUID();
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ [sessionKey]: { sessionId, updatedAt: Date.now() } }, null, 2),
+      "utf8",
+    );
+
+    const staleInMemory: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        pendingRestartConfirmation: {
+          scope: "gateway-restart-capable",
+          requestedAt: Date.now(),
+          expiresAt: Date.now() + 300_000,
+        },
+      },
+    };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore: staleInMemory,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.3-codex",
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-5.3-codex",
+          },
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.pendingRestartConfirmation).toBeUndefined();
+    expect(staleInMemory[sessionKey]?.pendingRestartConfirmation).toBeUndefined();
+  });
 });

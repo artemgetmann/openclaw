@@ -96,7 +96,7 @@ import { resolveMessageChannel } from "../utils/message-channel.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
-import { resolveSession } from "./agent/session.js";
+import { expireResolvedPendingRestartConfirmation, resolveSession } from "./agent/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./agent/types.js";
 
 type PersistSessionEntryParams = {
@@ -528,7 +528,9 @@ async function prepareAgentCommandExecution(
     throw new Error("Message (--message) is required");
   }
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
-    throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
+    throw new Error(
+      "Pass --to <E.164>, --session-key, --session-id, or --agent to choose a session",
+    );
   }
 
   const loadedRaw = loadConfig();
@@ -632,13 +634,18 @@ async function prepareAgentCommandExecution(
   const {
     sessionId,
     sessionKey,
-    sessionEntry: sessionEntryRaw,
     sessionStore,
     storePath,
     isNewSession,
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
+  const sessionEntryRaw = await expireResolvedPendingRestartConfirmation({
+    sessionEntry: sessionResolution.sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+  });
   const isGroupSession =
     sessionEntryRaw?.chatType === "group" || sessionEntryRaw?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(cfg.session?.mainKey);
