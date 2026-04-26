@@ -43,8 +43,8 @@ enum ConsumerBootstrap {
     private static let consumerSeededModels: [(ref: String, alias: String)] = [
         ("openai-codex/gpt-5.5", "GPT"),
         ("openai-codex/gpt-5.4", "GPT 5.4"),
-        ("openai-codex/gpt-5.3-codex", "Codex 5.3"),
-        ("openai-codex/gpt-5.3-codex-spark", "Codex Spark"),
+        ("openai-codex/gpt-5.4-mini", "GPT 5.4 Mini"),
+        ("openai-codex/gpt-5.3-codex-spark", "GPT 5.3 Codex Spark"),
         ("anthropic/claude-sonnet-4-6", "Sonnet"),
         ("anthropic/claude-opus-4-6", "Opus"),
         ("anthropic/claude-haiku-4-5", "Haiku"),

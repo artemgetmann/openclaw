@@ -647,13 +647,16 @@ describe("resolveModel", () => {
     });
   });
 
-  it("builds an openai-codex fallback for gpt-5.3-codex", () => {
+  it("builds an openai-codex fallback for gpt-5.4-mini", () => {
     mockOpenAICodexTemplateModel();
 
-    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
+    const result = resolveModel("openai-codex", "gpt-5.4-mini", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"),
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
   });
 
   it("builds an openai-codex fallback for gpt-5.4", () => {
@@ -897,6 +900,30 @@ describe("resolveModel", () => {
   it("keeps unknown-model errors for non-gpt-5 openai-codex ids", () => {
     expectUnknownModelError("openai-codex", "gpt-4.1-mini");
   });
+
+  it.each(["gpt-5.3-codex", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-codex-max"])(
+    "suppresses stale openai-codex %s instead of falling through provider fallback",
+    (modelId) => {
+      const cfg = {
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://chatgpt.com/backend-api",
+              api: "openai-codex-responses",
+              models: [{ ...makeModel("gpt-5.2-codex"), api: "openai-codex-responses" }],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveModel("openai-codex", modelId, "/tmp/agent", cfg);
+
+      expect(result.model).toBeUndefined();
+      expect(result.error).toBe(
+        `Unknown model: openai-codex/${modelId}. Use openai-codex/gpt-5.5.`,
+      );
+    },
+  );
 
   it("rejects direct openai gpt-5.3-codex-spark with a codex-only hint", () => {
     const result = resolveModel("openai", "gpt-5.3-codex-spark", "/tmp/agent");

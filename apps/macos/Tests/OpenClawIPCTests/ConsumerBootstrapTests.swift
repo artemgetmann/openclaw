@@ -26,7 +26,7 @@ struct ConsumerBootstrapTests {
             let allowlistedModels = agentDefaults?["models"] as? [String: Any]
             let consumerModel = allowlistedModels?["openai-codex/gpt-5.5"] as? [String: Any]
             let codex54 = allowlistedModels?["openai-codex/gpt-5.4"] as? [String: Any]
-            let codex53 = allowlistedModels?["openai-codex/gpt-5.3-codex"] as? [String: Any]
+            let codex54Mini = allowlistedModels?["openai-codex/gpt-5.4-mini"] as? [String: Any]
             let codexSpark = allowlistedModels?["openai-codex/gpt-5.3-codex-spark"] as? [String: Any]
             let sonnet = allowlistedModels?["anthropic/claude-sonnet-4-6"] as? [String: Any]
             let opus = allowlistedModels?["anthropic/claude-opus-4-6"] as? [String: Any]
@@ -72,8 +72,8 @@ struct ConsumerBootstrapTests {
             #expect(agentDefaults?["thinkingDefault"] as? String == "adaptive")
             #expect(consumerModel?["alias"] as? String == "GPT")
             #expect(codex54?["alias"] as? String == "GPT 5.4")
-            #expect(codex53?["alias"] as? String == "Codex 5.3")
-            #expect(codexSpark?["alias"] as? String == "Codex Spark")
+            #expect(codex54Mini?["alias"] as? String == "GPT 5.4 Mini")
+            #expect(codexSpark?["alias"] as? String == "GPT 5.3 Codex Spark")
             #expect(sonnet?["alias"] as? String == "Sonnet")
             #expect(opus?["alias"] as? String == "Opus")
             #expect(haiku?["alias"] as? String == "Haiku")
