@@ -113,6 +113,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         primaryEnv: s.primaryEnv,
         homepage: s.homepage,
         missing: s.missing,
+        shadowedBundledSkill: s.shadowedBundledSkill,
       })),
     });
     return JSON.stringify(jsonReport, null, 2);
@@ -208,6 +209,19 @@ export function formatSkillInfo(
   if (skill.primaryEnv) {
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
   }
+  if (skill.shadowedBundledSkill) {
+    lines.push("");
+    lines.push(theme.heading("Shadow warning:"));
+    lines.push(
+      `  ${theme.warn("!")} This ${skill.source} skill shadows a bundled skill with different contents.`,
+    );
+    lines.push(
+      `${theme.muted("  Active:")} ${shortenHomePath(skill.shadowedBundledSkill.activePath)}`,
+    );
+    lines.push(
+      `${theme.muted("  Bundled:")} ${shortenHomePath(skill.shadowedBundledSkill.bundledPath)}`,
+    );
+  }
 
   const hasRequirements =
     skill.requirements.bins.length > 0 ||
@@ -275,6 +289,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   const missingReqs = report.skills.filter(
     (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
   );
+  const shadowedBundledSkills = report.skills.filter((s) => s.shadowedBundledSkill);
 
   if (opts.json) {
     return JSON.stringify(
@@ -285,6 +300,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           disabled: disabled.length,
           blocked: blocked.length,
           missingRequirements: missingReqs.length,
+          shadowedBundledSkills: shadowedBundledSkills.length,
         },
         eligible: eligible.map((s) => s.name),
         disabled: disabled.map((s) => s.name),
@@ -293,6 +309,10 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           name: s.name,
           missing: s.missing,
           install: s.install,
+        })),
+        shadowedBundledSkills: shadowedBundledSkills.map((s) => ({
+          name: s.name,
+          diagnostic: s.shadowedBundledSkill,
         })),
       }),
       null,
@@ -308,6 +328,9 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   lines.push(`${theme.warn("⏸")} ${theme.muted("Disabled:")} ${disabled.length}`);
   lines.push(`${theme.warn("🚫")} ${theme.muted("Blocked by allowlist:")} ${blocked.length}`);
   lines.push(`${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`);
+  lines.push(
+    `${theme.warn("!")} ${theme.muted("Shadowed bundled skills:")} ${shadowedBundledSkills.length}`,
+  );
 
   if (eligible.length > 0) {
     lines.push("");
@@ -325,6 +348,17 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
       const emoji = normalizeSkillEmoji(skill.emoji);
       const missing = formatSkillMissingSummary(skill);
       lines.push(`  ${emoji} ${skill.name} ${theme.muted(`(${missing})`)}`);
+    }
+  }
+
+  if (shadowedBundledSkills.length > 0) {
+    lines.push("");
+    lines.push(theme.heading("Shadowed bundled skills:"));
+    for (const skill of shadowedBundledSkills) {
+      const emoji = normalizeSkillEmoji(skill.emoji);
+      lines.push(
+        `  ${emoji} ${skill.name} ${theme.muted(`(${skill.source}, active: ${shortenHomePath(skill.shadowedBundledSkill?.activePath ?? "")})`)}`,
+      );
     }
   }
 

@@ -47,6 +47,11 @@ type LiveStatus = {
   connected: boolean;
   logTail: string[];
   message: string;
+  stoppedPid?: number;
+  stopSignal?: "SIGINT" | "SIGKILL";
+  forcedStop?: boolean;
+  pidFileRemoved?: boolean;
+  stopReason?: "no_pid_file" | "not_running" | "stopped" | "forced_stop" | "pid_command_mismatch";
 };
 
 function usage() {
@@ -363,19 +368,52 @@ async function ensureOwner(flags: Flags): Promise<LiveStatus> {
 async function stopOwner(flags: Flags): Promise<LiveStatus> {
   const files = resolveOwnerFiles(flags.storeDir);
   const pidFile = await readPidFile(files.pidPath);
-  if (pidFile?.pid && processExists(pidFile.pid)) {
-    process.kill(pidFile.pid, "SIGINT");
+  const ownerPid = pidFile?.pid;
+  let stoppedPid: number | undefined;
+  let stopSignal: LiveStatus["stopSignal"];
+  let forcedStop = false;
+  let stopReason: LiveStatus["stopReason"] = "no_pid_file";
+
+  if (ownerPid && processExists(ownerPid)) {
+    const matchesExpected = await commandMatchesExpected(ownerPid);
+    if (!matchesExpected) {
+      await fsp.rm(files.pidPath, { force: true });
+      const status = await collectStatus(flags);
+      status.pidFileRemoved = true;
+      status.stopReason = "pid_command_mismatch";
+      status.message =
+        "OpenClaw cleared a stale wacli owner PID file without signaling the non-matching process.";
+      return status;
+    }
+
+    stoppedPid = ownerPid;
+    stopSignal = "SIGINT";
+    process.kill(ownerPid, "SIGINT");
     const deadline = Date.now() + flags.graceMs;
-    while (processExists(pidFile.pid) && Date.now() < deadline) {
+    while (processExists(ownerPid) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    if (processExists(pidFile.pid)) {
-      process.kill(pidFile.pid, "SIGKILL");
+    if (processExists(ownerPid)) {
+      process.kill(ownerPid, "SIGKILL");
+      stopSignal = "SIGKILL";
+      forcedStop = true;
     }
+    stopReason = forcedStop ? "forced_stop" : "stopped";
+  } else if (ownerPid) {
+    stopReason = "not_running";
   }
   await fsp.rm(files.pidPath, { force: true });
   const status = await collectStatus(flags);
-  status.message = "OpenClaw stopped the recorded wacli sync owner.";
+  status.stoppedPid = stoppedPid;
+  status.stopSignal = stopSignal;
+  status.forcedStop = forcedStop;
+  status.pidFileRemoved = true;
+  status.stopReason = stopReason;
+  status.message = forcedStop
+    ? "OpenClaw force-stopped the recorded wacli sync owner after the graceful pause timed out."
+    : stoppedPid
+      ? "OpenClaw paused the recorded wacli sync owner."
+      : "OpenClaw cleared the recorded wacli sync owner state.";
   return status;
 }
 
@@ -398,6 +436,18 @@ function emit(result: LiveStatus, asJson: boolean) {
   }
   if (result.lockInfo) {
     console.log(`lock_info=${result.lockInfo.replace(/\n/g, " | ")}`);
+  }
+  if (result.stopReason) {
+    console.log(`stop_reason=${result.stopReason}`);
+  }
+  if (result.stoppedPid) {
+    console.log(`stopped_pid=${String(result.stoppedPid)}`);
+  }
+  if (result.stopSignal) {
+    console.log(`stop_signal=${result.stopSignal}`);
+  }
+  if (result.forcedStop) {
+    console.log("forced_stop=true");
   }
 }
 
