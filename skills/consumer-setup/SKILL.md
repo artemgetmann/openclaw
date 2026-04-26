@@ -91,28 +91,63 @@ explicitly ask for the CLI path.
   status, because it can misreport `CONNECTED false` while a healthy sync owner
   holds the lock.
 
-### Telegram-as-me
+### Telegram User
 
-- Missing states usually look like:
-  `openclaw telegram-user status --json` returning `missing_credentials`,
-  `missing_session`, `awaiting_code`, `awaiting_password`, or `needs_reauth`.
-- Tell the user Telegram-as-me is not connected on this Mac yet.
-- Explain the split clearly: this path uses the user's real Telegram account.
-  It is not the normal Telegram bot channel and it does not use BotFather.
-- For `missing_credentials`, explain that this Mac still needs the user's
-  Telegram API ID and API hash from `my.telegram.org/apps`.
-- For `missing_session`, explain that the API credentials exist but the real
-  account has not been logged in on this Mac yet.
-- For `awaiting_code`, ask only for the OTP that Telegram just sent.
-- For `awaiting_password`, explain that Telegram 2FA is still required and
-  prefer a local interactive prompt over asking the user to paste that password
-  into chat.
-- For `needs_reauth`, explain that the saved Telegram-as-me session is no
-  longer valid and needs a fresh login on this Mac.
-- Prefer product-language guidance such as "I can help connect your real
-  Telegram account now" over dumping raw login commands into chat.
-- Verify with the cheapest read-only check first:
-  `openclaw telegram-user status --json`.
+- First separate the two Telegram product surfaces:
+  - The Telegram channel is the live bot transport where users talk to an
+    OpenClaw bot account.
+  - `telegram-user` is the local Mac tool for reading, sending, replying, and
+    waiting as the user's real Telegram account.
+- Use this setup guidance only for Telegram-as-me requests such as "read my
+  Telegram messages" or "send this to someone from my Telegram account." Do not
+  use it for BotFather, group privacy mode, or normal bot-channel setup.
+- Start with the cheapest truthful check: `openclaw telegram-user status --json`.
+- If status is `missing_credentials`, say Telegram-as-me is not connected yet
+  because this Mac still needs the user's Telegram API credentials. Explain that
+  Telegram requires the user to create an app at `my.telegram.org/apps` and
+  provide the resulting API ID and API hash before OpenClaw can act through
+  their account.
+- Offer two setup paths in product language: "I can open the browser and help
+  you create the Telegram app now, or I can give you the steps to do it
+  yourself."
+- Ask for explicit approval before starting setup because this connects
+  OpenClaw to the user's real Telegram identity and will allow read/send actions
+  after login.
+- If the user approves browser-assisted setup, open `https://my.telegram.org/apps`
+  in the browser when browser control is available. The model may help navigate
+  the Telegram app page and fill ordinary app fields after the user approves,
+  but the user must complete Telegram sign-in, OTP, 2FA, and any sensitive
+  account approval themselves. Once the app page shows API credentials, ask the
+  user to confirm that OpenClaw may use the API ID/API hash for Telegram-as-me
+  setup. If browser control is unavailable, say that plainly and switch to
+  concise self-serve steps.
+- If the user approves setup, ask for only the minimum required info in order:
+  the phone number, then the API ID/API hash if missing, then the OTP Telegram
+  sends during login. If Telegram 2FA is enabled, explain that the user must
+  complete that secure step too.
+- Do not ask the user to paste the Telegram account password into chat. If 2FA
+  is required, prefer the product's secure prompt path; otherwise explain that
+  password entry must happen locally and should not be logged or echoed.
+- If status is `missing_session`, say Telegram-as-me has credentials but is not
+  logged in yet. Offer to connect it now and start
+  `openclaw telegram-user login --phone <phone> --json` only after the user
+  confirms.
+- If status is `awaiting_code`, ask for the Telegram OTP that was just sent to
+  their Telegram app/SMS, then submit it with the existing login flow.
+- If status is `awaiting_password`, explain that Telegram 2FA is still required
+  before OpenClaw can use the real-account session.
+- If status is `needs_reauth`, say the saved Telegram session is no longer
+  accepted and offer to reconnect it.
+- Once setup succeeds, verify with a read-only check before any write action:
+  `openclaw telegram-user status --json`, then preferably
+  `openclaw telegram-user inbox --unread --dm-only --limit 5 --json`.
+- Before sending messages, require an explicit recipient and exact message text.
+  Confirm the recipient when the target is ambiguous.
+- Do not expose Telegram API hash, session files, OTPs, 2FA secrets, or raw
+  backend logs in chat.
+- If the user explicitly asks for the terminal path, it is fine to show the
+  `telegram-user` CLI commands from the `telegram-user` skill. Otherwise keep
+  the flow in product language and drive the setup step by step.
 - After verification succeeds, continue the user's original Telegram-as-me task
   instead of stopping at "setup is done".
 
