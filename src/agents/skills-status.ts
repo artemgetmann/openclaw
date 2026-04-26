@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
@@ -47,12 +49,21 @@ export type SkillStatusEntry = {
   missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
   install: SkillInstallOption[];
+  shadowedBundledSkill?: SkillShadowDiagnostic;
 };
 
 export type SkillStatusReport = {
   workspaceDir: string;
   managedSkillsDir: string;
   skills: SkillStatusEntry[];
+};
+
+export type SkillShadowDiagnostic = {
+  kind: "bundled-shadow";
+  source: string;
+  activePath: string;
+  bundledPath: string;
+  reason: string;
 };
 
 function resolveSkillKey(entry: SkillEntry): string {
@@ -172,7 +183,7 @@ function buildSkillStatus(
   config?: OpenClawConfig,
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
-  bundledNames?: Set<string>,
+  bundledContext?: { dir?: string; names: Set<string> },
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
@@ -188,8 +199,8 @@ function buildSkillStatus(
     );
   const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
   const bundled =
-    bundledNames && bundledNames.size > 0
-      ? bundledNames.has(entry.skill.name)
+    bundledContext?.names && bundledContext.names.size > 0
+      ? bundledContext.names.has(entry.skill.name)
       : entry.skill.source === "openclaw-bundled";
   const hasLocalBin = (bin: string) => hasRelativeSkillBin(entry, bin) || hasBinary(bin);
 
@@ -223,6 +234,99 @@ function buildSkillStatus(
     missing,
     configChecks,
     install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
+    shadowedBundledSkill: resolveShadowedBundledSkill(entry, bundledContext),
+  };
+}
+
+const SHADOW_WARNING_SOURCES = new Set([
+  "openclaw-workspace",
+  "openclaw-managed",
+  "agents-skills-personal",
+  "agents-skills-project",
+  "openclaw-extra",
+]);
+
+function safeRealpathSync(filePath: string): string {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
+function hashSkillDir(dir: string): string | undefined {
+  const hash = crypto.createHash("sha256");
+  let fileCount = 0;
+  const maxFiles = 200;
+  const maxBytes = 512 * 1024;
+
+  const visit = (current: string, relativeRoot = "") => {
+    const entries = fs
+      .readdirSync(current, { withFileTypes: true })
+      .filter((entry) => !entry.name.startsWith(".") && entry.name !== "node_modules")
+      .toSorted((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (fileCount >= maxFiles) {
+        return;
+      }
+      const fullPath = path.join(current, entry.name);
+      const relativePath = path.join(relativeRoot, entry.name);
+      if (entry.isDirectory()) {
+        visit(fullPath, relativePath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      const stat = fs.statSync(fullPath);
+      if (stat.size > maxBytes) {
+        continue;
+      }
+      fileCount += 1;
+      hash.update(relativePath);
+      hash.update("\0");
+      hash.update(fs.readFileSync(fullPath));
+      hash.update("\0");
+    }
+  };
+
+  try {
+    visit(dir);
+    return hash.digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveShadowedBundledSkill(
+  entry: SkillEntry,
+  bundledContext?: { dir?: string; names: Set<string> },
+): SkillShadowDiagnostic | undefined {
+  if (!bundledContext?.dir || !bundledContext.names.has(entry.skill.name)) {
+    return undefined;
+  }
+  if (!SHADOW_WARNING_SOURCES.has(entry.skill.source)) {
+    return undefined;
+  }
+
+  const activePath = safeRealpathSync(entry.skill.baseDir);
+  const bundledPath = safeRealpathSync(path.join(bundledContext.dir, entry.skill.name));
+  if (activePath === bundledPath) {
+    return undefined;
+  }
+
+  const activeHash = hashSkillDir(activePath);
+  const bundledHash = hashSkillDir(bundledPath);
+  if (activeHash && bundledHash && activeHash === bundledHash) {
+    return undefined;
+  }
+
+  return {
+    kind: "bundled-shadow",
+    source: entry.skill.source,
+    activePath,
+    bundledPath,
+    reason: "Active non-bundled skill shadows bundled skill with different contents.",
   };
 }
 
@@ -249,7 +353,7 @@ export function buildWorkspaceSkillStatus(
     workspaceDir,
     managedSkillsDir,
     skills: skillEntries.map((entry) =>
-      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility, bundledContext.names),
+      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility, bundledContext),
     ),
   };
 }
