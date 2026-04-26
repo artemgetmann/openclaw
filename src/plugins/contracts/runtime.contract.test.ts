@@ -308,14 +308,14 @@ describe("provider runtime contract", () => {
   });
 
   describe("openai", () => {
-    it("owns openai gpt-5.4 forward-compat resolution", () => {
+    it("owns openai gpt-5.5 forward-compat resolution", () => {
       const provider = requireProvider("openai");
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
-        modelId: "gpt-5.4-pro",
+        modelId: "gpt-5.5",
         modelRegistry: {
           find: (_provider: string, id: string) =>
-            id === "gpt-5.2-pro"
+            id === "gpt-5.2"
               ? createModel({
                   id,
                   provider: "openai",
@@ -327,7 +327,7 @@ describe("provider runtime contract", () => {
       });
 
       expect(model).toMatchObject({
-        id: "gpt-5.4-pro",
+        id: "gpt-5.5",
         provider: "openai",
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
@@ -379,7 +379,7 @@ describe("provider runtime contract", () => {
       const provider = requireProvider("openai-codex");
       const model = provider.resolveDynamicModel?.({
         provider: "openai-codex",
-        modelId: "gpt-5.4",
+        modelId: "gpt-5.5",
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.2-codex"
@@ -394,10 +394,10 @@ describe("provider runtime contract", () => {
       });
 
       expect(model).toMatchObject({
-        id: "gpt-5.4",
+        id: "gpt-5.5",
         provider: "openai-codex",
         api: "openai-codex-responses",
-        contextWindow: 1_050_000,
+        contextWindow: 400_000,
         maxTokens: 128_000,
       });
     });
