@@ -84,7 +84,6 @@ describe("consumer model picker", () => {
     expect(result.options.map((entry) => entry.id)).toEqual([
       "openai-codex/gpt-5.5",
       "openai-codex/gpt-5.4",
-      "openai-codex/gpt-5.3-codex",
       "openai-codex/gpt-5.3-codex-spark",
       "openai-codex/gpt-5.4-mini",
     ]);
@@ -136,19 +135,20 @@ describe("consumer model picker", () => {
     const result = await listConsumerModelOptions({
       config: buildConfigWithSeededModels("openai-codex/gpt-5.5", [
         "openai-codex/gpt-5.5",
-        "openai-codex/gpt-5.3-codex",
+        "openai-codex/gpt-5.4-mini",
       ]),
     });
 
     expect(result.options.map((entry) => entry.id)).toEqual([
       "openai-codex/gpt-5.5",
-      "openai-codex/gpt-5.3-codex",
+      "openai-codex/gpt-5.4-mini",
     ]);
   });
 
-  it("hides stale 5.1 mini and max entries even when an older config seeded them", async () => {
+  it("hides stale Codex rows even when an older config seeded them", async () => {
     catalogEntries = [
       { provider: "openai-codex", id: "gpt-5.5" },
+      { provider: "openai-codex", id: "gpt-5.3-codex" },
       { provider: "openai-codex", id: "gpt-5.1-codex-mini" },
       { provider: "openai-codex", id: "gpt-5.1-codex-max" },
     ];
@@ -156,6 +156,7 @@ describe("consumer model picker", () => {
     const result = await listConsumerModelOptions({
       config: buildConfigWithSeededModels("openai-codex/gpt-5.5", [
         "openai-codex/gpt-5.5",
+        "openai-codex/gpt-5.3-codex",
         "openai-codex/gpt-5.1-codex-mini",
         "openai-codex/gpt-5.1-codex-max",
       ]),
@@ -185,27 +186,27 @@ describe("consumer model picker", () => {
     catalogEntries = [
       { provider: "openai-codex", id: "gpt-5.5" },
       { provider: "openai-codex", id: "gpt-5.4" },
-      { provider: "openai-codex", id: "gpt-5.3-codex" },
+      { provider: "openai-codex", id: "gpt-5.4-mini" },
       { provider: "openai-codex", id: "gpt-5.1-codex" },
       { provider: "openai", id: "gpt-5.4" },
     ];
 
     let current = buildConfig("openai-codex/gpt-5.5");
     const result = await applyConsumerModel({
-      model: "openai-codex/gpt-5.3-codex",
+      model: "openai-codex/gpt-5.4-mini",
       config: current,
       updateConfigFn: async (mutator) => {
         current = mutator(current);
         return current;
       },
-      resolveReadiness: async () => readyReadiness("openai-codex/gpt-5.3-codex"),
+      resolveReadiness: async () => readyReadiness("openai-codex/gpt-5.4-mini"),
     });
 
-    expect(result.defaultModel).toBe("openai-codex/gpt-5.3-codex");
-    expect(result.readiness.defaultModel).toBe("openai-codex/gpt-5.3-codex");
+    expect(result.defaultModel).toBe("openai-codex/gpt-5.4-mini");
+    expect(result.readiness.defaultModel).toBe("openai-codex/gpt-5.4-mini");
     expect(current.agents?.defaults?.model).toMatchObject({
-      primary: "openai-codex/gpt-5.3-codex",
+      primary: "openai-codex/gpt-5.4-mini",
     });
-    expect(current.agents?.defaults?.models?.["openai-codex/gpt-5.3-codex"]).toEqual({});
+    expect(current.agents?.defaults?.models?.["openai-codex/gpt-5.4-mini"]).toEqual({});
   });
 });

@@ -56,20 +56,14 @@ const CONSUMER_MODEL_SHORTLIST: readonly ConsumerModelDefinition[] = [
     family: "openai-codex",
   },
   {
-    id: "openai-codex/gpt-5.3-codex",
-    title: "GPT-5.3-Codex",
-    detail: "Codex-focused model for coding-heavy work.",
-    family: "openai-codex",
-  },
-  {
     id: "openai-codex/gpt-5.3-codex-spark",
-    title: "GPT-5.3-Codex-Spark",
+    title: "GPT-5.3 Codex Spark",
     detail: "Faster Codex variant when the OAuth catalog exposes Spark.",
     family: "openai-codex",
   },
   {
     id: "openai-codex/gpt-5.4-mini",
-    title: "GPT-5.4-Mini",
+    title: "GPT-5.4 Mini",
     detail: "Smaller Codex option, shown only when the runtime catalog exposes it.",
     family: "openai-codex",
   },

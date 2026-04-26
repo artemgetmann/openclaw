@@ -122,8 +122,8 @@ private func curatedModelsPayload(
     options: [ConsumerSelectableModel] = [
         .init(id: "openai-codex/gpt-5.5", title: "GPT-5.5", detail: "Primary ChatGPT / Codex path for consumer managed AI."),
         .init(id: "openai-codex/gpt-5.4", title: "GPT-5.4", detail: "Practical Codex fallback when GPT-5.5 is not available."),
-        .init(id: "openai-codex/gpt-5.3-codex", title: "Codex 5.3", detail: "Codex-focused model for coding-heavy work."),
-        .init(id: "openai-codex/gpt-5.3-codex-spark", title: "GPT-5.3-Codex-Spark", detail: "Faster Codex variant when the OAuth catalog exposes Spark."),
+        .init(id: "openai-codex/gpt-5.4-mini", title: "GPT-5.4 Mini", detail: "Smaller Codex option, shown only when the runtime catalog exposes it."),
+        .init(id: "openai-codex/gpt-5.3-codex-spark", title: "GPT-5.3 Codex Spark", detail: "Faster Codex variant when the OAuth catalog exposes Spark."),
     ]) -> ConsumerModelsModelListPayload
 {
     ConsumerModelsModelListPayload(
@@ -164,7 +164,7 @@ struct ConsumerSetupReadinessTests {
         #expect(model.modelOptions.map(\.id) == [
             "openai-codex/gpt-5.5",
             "openai-codex/gpt-5.4",
-            "openai-codex/gpt-5.3-codex",
+            "openai-codex/gpt-5.4-mini",
             "openai-codex/gpt-5.3-codex-spark",
         ])
         #expect(model.selectedModelId == "openai-codex/gpt-5.5")
@@ -374,7 +374,7 @@ struct ConsumerSetupReadinessTests {
                     currentModel: "openai/gpt-5.4",
                     options: [
                         .init(id: "openai/gpt-5.4", title: "GPT-5.4 (API)", detail: "Direct OpenAI API path when you are using an API key."),
-                        .init(id: "openai-codex/gpt-5.3-codex", title: "Codex 5.3", detail: "Codex-focused model for coding-heavy work."),
+                        .init(id: "openai-codex/gpt-5.4-mini", title: "GPT-5.4 Mini", detail: "Smaller Codex option, shown only when the runtime catalog exposes it."),
                     ])
             })
 
@@ -388,7 +388,7 @@ struct ConsumerSetupReadinessTests {
         #expect(model.statusLine == "AI ready on openai/gpt-5.4.")
         #expect(model.authNotes == ["Saved local tester credential."])
         #expect(model.draftSecret.isEmpty)
-        #expect(model.modelOptions.map(\.id) == ["openai/gpt-5.4", "openai-codex/gpt-5.3-codex"])
+        #expect(model.modelOptions.map(\.id) == ["openai/gpt-5.4", "openai-codex/gpt-5.4-mini"])
         #expect(model.selectedModelId == "openai/gpt-5.4")
     }
 
@@ -643,29 +643,29 @@ struct ConsumerSetupReadinessTests {
                     ? readyReadinessPayload()
                     : ConsumerModelsReadinessPayload(
                         status: "ready",
-                        defaultModel: "openai-codex/gpt-5.3-codex",
-                        summary: "AI ready on openai-codex/gpt-5.3-codex.",
+                        defaultModel: "openai-codex/gpt-5.4-mini",
+                        summary: "AI ready on openai-codex/gpt-5.4-mini.",
                         reasonCodes: [])
             },
             listModels: {
                 selectedModels.value == 0
                     ? curatedModelsPayload()
-                    : curatedModelsPayload(currentModel: "openai-codex/gpt-5.3-codex")
+                    : curatedModelsPayload(currentModel: "openai-codex/gpt-5.4-mini")
             },
             applyModel: { modelId in
-                #expect(modelId == "openai-codex/gpt-5.3-codex")
+                #expect(modelId == "openai-codex/gpt-5.4-mini")
                 selectedModels.value += 1
                 return ConsumerModelsSetPayload(ok: true, model: modelId)
             })
 
         await model.refresh()
-        model.selectedModelId = "openai-codex/gpt-5.3-codex"
+        model.selectedModelId = "openai-codex/gpt-5.4-mini"
         await model.submitSelectedModel()
 
         #expect(selectedModels.value == 1)
-        #expect(model.phase == .ready("openai-codex/gpt-5.3-codex"))
-        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.3-codex.")
-        #expect(model.activeModelId == "openai-codex/gpt-5.3-codex")
+        #expect(model.phase == .ready("openai-codex/gpt-5.4-mini"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.4-mini.")
+        #expect(model.activeModelId == "openai-codex/gpt-5.4-mini")
     }
 
     @Test func `consumer model clears stale ready state when model save races gateway restart`() async {
@@ -686,7 +686,7 @@ struct ConsumerSetupReadinessTests {
             })
 
         await model.refresh()
-        model.selectedModelId = "openai-codex/gpt-5.3-codex"
+        model.selectedModelId = "openai-codex/gpt-5.4-mini"
         await model.submitSelectedModel()
 
         #expect(probeCalls.value == 2)

@@ -25,32 +25,47 @@ import {
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+const OPENAI_CODEX_GPT_55_MODEL_ID = "gpt-5.5";
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_CODEX_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
+const OPENAI_CODEX_GPT_55_CONTEXT_TOKENS = 400_000;
 const OPENAI_CODEX_GPT_54_CONTEXT_TOKENS = 1_050_000;
+const OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
+const OPENAI_CODEX_GPT_55_TEMPLATE_MODEL_IDS = [
+  "gpt-5.4",
+  "gpt-5.3-codex",
+  "gpt-5.2-codex",
+] as const;
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
+const OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS = ["gpt-5.4", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
-const OPENAI_CODEX_DEFAULT_MODEL = `${PROVIDER_ID}/${OPENAI_CODEX_GPT_54_MODEL_ID}`;
-const OPENAI_CODEX_XHIGH_MODEL_IDS = [
-  OPENAI_CODEX_GPT_54_MODEL_ID,
+const OPENAI_CODEX_GPT_51_CODEX_MODEL_ID = "gpt-5.1-codex";
+const OPENAI_CODEX_SUPPRESSED_MODEL_IDS = new Set([
   OPENAI_CODEX_GPT_53_MODEL_ID,
-  OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
-  "gpt-5.2-codex",
-  "gpt-5.1-codex",
-] as const;
-const OPENAI_CODEX_MODERN_MODEL_IDS = [
-  OPENAI_CODEX_GPT_54_MODEL_ID,
-  "gpt-5.2",
-  "gpt-5.2-codex",
-  OPENAI_CODEX_GPT_53_MODEL_ID,
-  OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
-  "gpt-5.1-codex",
+  OPENAI_CODEX_GPT_51_CODEX_MODEL_ID,
   "gpt-5.1-codex-mini",
   "gpt-5.1-codex-max",
+]);
+const OPENAI_CODEX_DEFAULT_MODEL = `${PROVIDER_ID}/${OPENAI_CODEX_GPT_55_MODEL_ID}`;
+const OPENAI_CODEX_XHIGH_MODEL_IDS = [
+  OPENAI_CODEX_GPT_55_MODEL_ID,
+  OPENAI_CODEX_GPT_54_MODEL_ID,
+  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+  OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+  "gpt-5.2-codex",
+] as const;
+const OPENAI_CODEX_MODERN_MODEL_IDS = [
+  OPENAI_CODEX_GPT_55_MODEL_ID,
+  OPENAI_CODEX_GPT_54_MODEL_ID,
+  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+  "gpt-5.2",
+  "gpt-5.2-codex",
+  OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
 
 function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
@@ -88,7 +103,31 @@ function resolveCodexForwardCompatModel(
 
   let templateIds: readonly string[];
   let patch: Partial<ProviderRuntimeModel> | undefined;
-  if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
+  if (lower === OPENAI_CODEX_GPT_55_MODEL_ID) {
+    templateIds = OPENAI_CODEX_GPT_55_TEMPLATE_MODEL_IDS;
+    patch = {
+      api: "openai-codex-responses",
+      provider: PROVIDER_ID,
+      baseUrl: OPENAI_CODEX_BASE_URL,
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: OPENAI_CODEX_GPT_55_CONTEXT_TOKENS,
+      maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
+    };
+  } else if (lower === OPENAI_CODEX_GPT_54_MINI_MODEL_ID) {
+    templateIds = OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS;
+    patch = {
+      api: "openai-codex-responses",
+      provider: PROVIDER_ID,
+      baseUrl: OPENAI_CODEX_BASE_URL,
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS,
+      maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
+    };
+  } else if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
     templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
     patch = {
       contextWindow: OPENAI_CODEX_GPT_54_CONTEXT_TOKENS,
@@ -254,11 +293,34 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     fetchUsageSnapshot: async (ctx) =>
       await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn),
     refreshOAuth: async (cred) => await refreshOpenAICodexOAuthCredential(cred),
+    suppressBuiltInModel: ({ provider, modelId }) => {
+      const normalizedModelId = modelId.trim().toLowerCase();
+      if (
+        normalizeProviderId(provider) !== PROVIDER_ID ||
+        !OPENAI_CODEX_SUPPRESSED_MODEL_IDS.has(normalizedModelId)
+      ) {
+        return undefined;
+      }
+      return {
+        suppress: true,
+        errorMessage: `Unknown model: ${PROVIDER_ID}/${normalizedModelId}. Use ${OPENAI_CODEX_DEFAULT_MODEL}.`,
+      };
+    },
     augmentModelCatalog: (ctx) => {
+      const gpt55Template = findCatalogTemplate({
+        entries: ctx.entries,
+        providerId: PROVIDER_ID,
+        templateIds: OPENAI_CODEX_GPT_55_TEMPLATE_MODEL_IDS,
+      });
       const gpt54Template = findCatalogTemplate({
         entries: ctx.entries,
         providerId: PROVIDER_ID,
         templateIds: OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
+      });
+      const gpt54MiniTemplate = findCatalogTemplate({
+        entries: ctx.entries,
+        providerId: PROVIDER_ID,
+        templateIds: OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS,
       });
       const sparkTemplate = findCatalogTemplate({
         entries: ctx.entries,
@@ -266,18 +328,32 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         templateIds: [OPENAI_CODEX_GPT_53_MODEL_ID, ...OPENAI_CODEX_TEMPLATE_MODEL_IDS],
       });
       return [
+        gpt55Template
+          ? {
+              ...gpt55Template,
+              id: OPENAI_CODEX_GPT_55_MODEL_ID,
+              name: "GPT-5.5",
+            }
+          : undefined,
         gpt54Template
           ? {
               ...gpt54Template,
               id: OPENAI_CODEX_GPT_54_MODEL_ID,
-              name: OPENAI_CODEX_GPT_54_MODEL_ID,
+              name: "GPT-5.4",
+            }
+          : undefined,
+        gpt54MiniTemplate
+          ? {
+              ...gpt54MiniTemplate,
+              id: OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+              name: "GPT-5.4 Mini",
             }
           : undefined,
         sparkTemplate
           ? {
               ...sparkTemplate,
               id: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
-              name: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+              name: "GPT-5.3 Codex Spark",
             }
           : undefined,
       ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
