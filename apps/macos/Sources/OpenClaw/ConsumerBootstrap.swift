@@ -35,14 +35,16 @@ enum ConsumerBootstrap {
     // Consumer bootstrap should never inherit the repo-wide Anthropic fallback.
     // This branch ships an app-owned local runtime with Codex auth seeded under
     // the consumer agent directory, so default to the matching provider/model.
-    private static let consumerDefaultModelRef = "openai-codex/gpt-5.4"
+    private static let consumerDefaultModelRef = "openai-codex/gpt-5.5"
     private static let consumerDefaultModelAlias = "GPT"
     private static let consumerDefaultImageGenerationModelRef = "openai/gpt-image-2"
     // Keep a tiny but real starter catalog on disk so the consumer picker stays
     // stable even if one provider catalog call is temporarily incomplete.
     private static let consumerSeededModels: [(ref: String, alias: String)] = [
-        ("openai-codex/gpt-5.4", "GPT"),
+        ("openai-codex/gpt-5.5", "GPT"),
+        ("openai-codex/gpt-5.4", "GPT 5.4"),
         ("openai-codex/gpt-5.3-codex", "Codex 5.3"),
+        ("openai-codex/gpt-5.3-codex-spark", "Codex Spark"),
         ("anthropic/claude-sonnet-4-6", "Sonnet"),
         ("anthropic/claude-opus-4-6", "Opus"),
         ("anthropic/claude-haiku-4-5", "Haiku"),

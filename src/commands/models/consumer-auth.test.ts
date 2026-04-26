@@ -403,7 +403,7 @@ describe("consumer auth", () => {
               },
             },
           ],
-          defaultModel: "openai-codex/gpt-5.4",
+          defaultModel: "openai-codex/gpt-5.5",
           notes: ["Opened the ChatGPT sign-in flow."],
         });
       const providers = [
@@ -420,7 +420,7 @@ describe("consumer auth", () => {
         optionId: "openai-codex-oauth",
         providers,
         runtime,
-        resolveReadiness: async () => readyReadiness("openai-codex/gpt-5.4"),
+        resolveReadiness: async () => readyReadiness("openai-codex/gpt-5.5"),
       });
 
       expect(run).toHaveBeenCalledTimes(2);
@@ -451,7 +451,7 @@ describe("consumer auth", () => {
           optionId: "openai-codex-oauth",
           providers,
           runtime,
-          resolveReadiness: async () => readyReadiness("openai-codex/gpt-5.4"),
+          resolveReadiness: async () => readyReadiness("openai-codex/gpt-5.5"),
         }),
       ).rejects.toThrow("Local callback did not complete on 127.0.0.1:1455.");
 

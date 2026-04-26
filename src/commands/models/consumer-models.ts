@@ -44,9 +44,15 @@ export type ApplyConsumerModelResult = {
 
 const CONSUMER_MODEL_SHORTLIST: readonly ConsumerModelDefinition[] = [
   {
+    id: "openai-codex/gpt-5.5",
+    title: "GPT-5.5",
+    detail: "Primary ChatGPT / Codex path for consumer managed AI.",
+    family: "openai-codex",
+  },
+  {
     id: "openai-codex/gpt-5.4",
     title: "GPT-5.4",
-    detail: "Default ChatGPT / Codex path for early testers.",
+    detail: "Practical Codex fallback when GPT-5.5 is not available.",
     family: "openai-codex",
   },
   {
@@ -62,27 +68,15 @@ const CONSUMER_MODEL_SHORTLIST: readonly ConsumerModelDefinition[] = [
     family: "openai-codex",
   },
   {
-    id: "openai-codex/gpt-5.1-codex",
-    title: "GPT-5.1-Codex",
-    detail: "Older Codex option kept for runtimes that still expose the 5.1 track.",
-    family: "openai-codex",
-  },
-  {
-    id: "openai-codex/gpt-5.1-codex-mini",
-    title: "GPT-5.1-Codex-Mini",
-    detail: "Smaller Codex option, shown only when the runtime catalog actually exposes it.",
+    id: "openai-codex/gpt-5.4-mini",
+    title: "GPT-5.4-Mini",
+    detail: "Smaller Codex option, shown only when the runtime catalog exposes it.",
     family: "openai-codex",
   },
   {
     id: "openai/gpt-5.4",
     title: "GPT-5.4",
     detail: "Direct OpenAI API path when you are using an API key.",
-    family: "openai",
-  },
-  {
-    id: "openai/gpt-5.4-pro",
-    title: "GPT-5.4 Pro",
-    detail: "Higher-capability OpenAI API option when you want the strongest direct model.",
     family: "openai",
   },
   {
