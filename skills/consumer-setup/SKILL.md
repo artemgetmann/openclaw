@@ -150,10 +150,13 @@ explicitly ask for the CLI path.
   OpenClaw to the user's real Telegram identity and will allow read/send actions
   after login.
 - If the user approves browser-assisted setup, open `https://my.telegram.org/apps`
-  in the browser when browser control is available, tell the user to sign in and
-  create/select an app there, then ask only for the API ID/API hash values
-  needed by OpenClaw. If browser control is unavailable, say that plainly and
-  switch to concise self-serve steps.
+  in the browser when browser control is available. The model may help navigate
+  the Telegram app page and fill ordinary app fields after the user approves,
+  but the user must complete Telegram sign-in, OTP, 2FA, and any sensitive
+  account approval themselves. Once the app page shows API credentials, ask the
+  user to confirm that OpenClaw may use the API ID/API hash for Telegram-as-me
+  setup. If browser control is unavailable, say that plainly and switch to
+  concise self-serve steps.
 - If the user approves setup, ask for only the minimum required info in order:
   the phone number, then the API ID/API hash if missing, then the OTP Telegram
   sends during login. If Telegram 2FA is enabled, explain that the user must
