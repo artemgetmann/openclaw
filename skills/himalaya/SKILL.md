@@ -1,7 +1,6 @@
 ---
 name: himalaya
 description: "Use for generic email tasks on configured IMAP/SMTP accounts: list, read, search, draft, reply, forward, send, and organize mail from the terminal. Prefer this when the user asks for email help without specifically needing Gmail or Google Workspace tools."
-homepage: https://github.com/pimalaya/himalaya
 metadata:
   {
     "openclaw":

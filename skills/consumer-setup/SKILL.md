@@ -1,6 +1,6 @@
 ---
 name: consumer-setup
-description: Use when a consumer-facing skill or integration exists but is blocked by missing account connection, permissions, configuration, local dependency setup, OAuth, QR pairing, or API credentials, and the user needs guided product-language setup instead of raw CLI instructions.
+description: Use when the user asks to use a consumer integration that is not set up yet: WhatsApp messaging/search (`wacli`), non-Google email over IMAP/SMTP (`himalaya`), Google Gmail/Calendar/Drive/Docs/Sheets/Contacts (`gog`), Apple Notes, Apple Reminders, or Google Maps/Places search (`goplaces`). Route here only when the right integration exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
