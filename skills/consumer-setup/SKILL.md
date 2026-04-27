@@ -1,7 +1,6 @@
 ---
 name: consumer-setup
-description: Route here when a consumer skill is installed but blocked on account connection, permissions, configuration, or credentials, and the user needs setup help instead of raw CLI steps.
-homepage: https://docs.openclaw.ai/platforms/macos
+description: Use when the user asks to use a consumer integration that is not set up yet: WhatsApp messaging/search (`wacli`), non-Google email over IMAP/SMTP (`himalaya`), Google Gmail/Calendar/Drive/Docs/Sheets/Contacts (`gog`), Apple Notes, Apple Reminders, or Google Maps/Places search (`goplaces`). Route here only when the right integration exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
@@ -13,8 +12,10 @@ but that surface is not usable yet because setup is missing.
 Route here when:
 
 - the requested skill exists, but the account is not connected yet
-- the user still needs to approve permissions, sign in, or finish OAuth
-- required configuration, secrets, or API credentials are missing
+- the user still needs to approve permissions, sign in, finish OAuth, or scan a
+  QR code
+- required configuration, local dependencies, secrets, or API credentials are
+  missing
 - the right response is setup guidance in product language, not a raw CLI dump
 
 Do not route here when:
