@@ -1,7 +1,6 @@
 ---
 name: consumer-setup
-description: Use when the right consumer-facing skill is installed but blocked on account connection, permissions, login, OAuth, or local setup, and the next turn should guide setup instead of attempting the task or dumping raw CLI steps.
-homepage: https://docs.openclaw.ai/platforms/macos
+description: Use when the user asks to use a consumer integration that is not set up yet: WhatsApp messaging/search (`wacli`), non-Google email over IMAP/SMTP (`himalaya`), Google Gmail/Calendar/Drive/Docs/Sheets/Contacts (`gog`), Apple Notes, Apple Reminders, or Google Maps/Places search (`goplaces`). Route here only when the right integration exists but is blocked by missing login, OAuth, QR pairing, permissions, local dependency setup, configuration, or API credentials, and the response should guide setup in product language instead of dumping CLI commands.
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
@@ -9,14 +8,15 @@ metadata: { "openclaw": { "emoji": "🧰" } }
 
 Use this skill when another consumer-facing skill is the correct match for the
 user's request, but that skill cannot proceed yet because the account,
-permissions, OAuth session, local login, or product-side configuration is not
-ready.
+permissions, OAuth session, QR pairing, local dependency, API credential, or
+product-side configuration is not ready.
 
 Trigger it for requests like:
 
 - "read my email" when mail is not connected yet
 - "check my calendar" when Google auth is missing
 - "send a Telegram message as me" when Telegram-as-me still needs login
+- "send a WhatsApp message" when QR pairing or live sync is not ready
 - "create a reminder" when macOS access has not been granted yet
 
 Do not use it when the underlying skill is already connected and ready, or when
@@ -27,8 +27,8 @@ the problem is normal task execution rather than setup.
 - Explain the missing setup in plain product language, not raw CLI noise.
 - Offer to help complete setup now.
 - Ask only for the information, approval, or login step the user must provide.
-- Prefer GUI or browser-assisted setup when that will be clearer than sending
-  the user to a terminal.
+- Prefer GUI, browser-assisted, or QR-based setup when that will be clearer than
+  sending the user to a terminal.
 - Do not expose secrets in chat, logs, or pasted commands.
 - Distinguish missing user setup from missing product/runtime setup.
 - Once setup finishes, verify the skill with the cheapest read-only check before

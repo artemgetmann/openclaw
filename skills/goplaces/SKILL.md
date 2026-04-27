@@ -50,3 +50,9 @@ Notes
 - `--no-color` or `NO_COLOR` disables ANSI color.
 - Price levels: 0..4 (free → very expensive).
 - Type filter sends only the first `--type` value (API accepts one).
+
+Setup Routing
+
+- If `GOOGLE_PLACES_API_KEY` is missing, use the shared `consumer-setup`
+  skill instead of pretending place search is ready.
+- Distinguish missing user/API setup from a product-side missing secret.

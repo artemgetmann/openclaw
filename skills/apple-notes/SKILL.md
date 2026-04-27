@@ -75,3 +75,10 @@ Notes
 - macOS-only.
 - Requires Apple Notes.app to be accessible.
 - For automation, grant permissions in System Settings > Privacy & Security > Automation.
+
+Setup Routing
+
+- If `memo` is missing or Notes automation permission is blocked, use the
+  shared `consumer-setup` skill.
+- Once access is granted, verify with a read-only list or search call before
+  creating, editing, or deleting notes.
