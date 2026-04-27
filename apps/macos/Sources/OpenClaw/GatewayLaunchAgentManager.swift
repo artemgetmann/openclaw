@@ -250,7 +250,7 @@ extension GatewayLaunchAgentManager {
         case .restart:
             // If the service is already registered and loaded, reinstalling it is needlessly
             // destructive: launchd will terminate the running gateway and we briefly lose the
-            // listener on 19001. Prefer an in-place restart.
+            // listener on the canonical or isolated lane port. Prefer an in-place restart.
             return .restart
         case .start:
             // A plist already exists under the consumer label. Try a normal start first so we

@@ -114,9 +114,8 @@ oc-consumer-task <task-name>
 
 # Test consumer build without touching live bot
 pnpm install && pnpm build
-OPENCLAW_HOME=/tmp/openclaw-consumer \
-OPENCLAW_PROFILE=consumer-test \
-pnpm openclaw gateway --port 19001 --bind loopback
+OPENCLAW_CONSUMER_INSTANCE_ID=consumer-test \
+pnpm openclaw gateway --bind loopback
 
 # Upstream intake is selective, never a blind merge
 # See docs/agent-guides/fork-maintenance.md
@@ -136,7 +135,7 @@ Your personal bot stays on `main`. `codex/consumer-openclaw-project` is the prod
 
 All three must be true:
 
-1. ✅ Consumer branch exists and runs independently on port 19001
+1. ✅ Default app uses canonical `ai.openclaw.gateway` on port `18789`; named consumer/tester/worktree instances stay isolated on hashed ports
 2. ✅ Browser spike has a clear winner with benchmark data
 3. ✅ At least one killer task (flight search from Telegram) works end-to-end
 
@@ -194,7 +193,7 @@ A markdown doc: `browser-spike-results.md` with:
 
 - [ ] Create `consumer` branch from `main`
 - [ ] Strip/simplify desktop app UI (if touching it this week — may defer)
-- [ ] Set up isolated test profile (port 19001, separate OPENCLAW_HOME)
+- [ ] Set up isolated test instance (`OPENCLAW_CONSUMER_INSTANCE_ID=<id>`, separate app-owned state, hashed gateway port)
 - [ ] Verify Telegram bot works on consumer build
 - [ ] Verify logging works and is easily viewable (`openclaw logs --follow`)
 - [ ] Integrate winning browser approach from spike

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
 
 export const CONSUMER_RUNTIME_ROOT_NAME = "OpenClaw" as const;
 export const CONSUMER_STATE_DIR_NAME = ".openclaw" as const;
@@ -9,8 +9,9 @@ export const CONSUMER_WORKSPACE_DIR_NAME = "workspace" as const;
 export const CONSUMER_LOG_DIR_NAME = "logs" as const;
 export const CONSUMER_PROFILE_PREFIX = "consumer" as const;
 export const CONSUMER_LAUNCHD_LABEL_PREFIX = "ai.openclaw.consumer" as const;
+export const CANONICAL_GATEWAY_LAUNCHD_LABEL = "ai.openclaw.gateway" as const;
 export const CONSUMER_GATEWAY_BIND = "loopback" as const;
-export const CONSUMER_SHARED_GATEWAY_PORT = 19001 as const;
+export const CANONICAL_GATEWAY_PORT = 18789 as const;
 export const CONSUMER_GATEWAY_PORT_MIN = 20000 as const;
 export const CONSUMER_GATEWAY_PORT_SPAN = 20000 as const;
 
@@ -53,14 +54,23 @@ export function inferConsumerRuntimeIdFromCheckout(params: {
   return normalizeConsumerRuntimeId(path.basename(params.rootDir));
 }
 
-export function resolveConsumerRuntimeIdentity(params: {
-  instanceId?: string | null;
-  homeDir?: string;
-} = {}): ConsumerRuntimeIdentity {
+export function resolveConsumerRuntimeIdentity(
+  params: {
+    instanceId?: string | null;
+    homeDir?: string;
+  } = {},
+): ConsumerRuntimeIdentity {
   const normalizedId = normalizeConsumerRuntimeId(params.instanceId);
   const homeDir = params.homeDir ?? os.homedir();
   const runtimeRoot = normalizedId
-    ? path.join(homeDir, "Library", "Application Support", CONSUMER_RUNTIME_ROOT_NAME, "instances", normalizedId)
+    ? path.join(
+        homeDir,
+        "Library",
+        "Application Support",
+        CONSUMER_RUNTIME_ROOT_NAME,
+        "instances",
+        normalizedId,
+      )
     : path.join(homeDir, "Library", "Application Support", CONSUMER_RUNTIME_ROOT_NAME);
   const stateDir = path.join(runtimeRoot, CONSUMER_STATE_DIR_NAME);
 
@@ -77,11 +87,14 @@ export function resolveConsumerRuntimeIdentity(params: {
       : CONSUMER_LAUNCHD_LABEL_PREFIX,
     gatewayLaunchdLabel: normalizedId
       ? `${CONSUMER_LAUNCHD_LABEL_PREFIX}.${normalizedId}.gateway`
-      : `${CONSUMER_LAUNCHD_LABEL_PREFIX}.gateway`,
+      : CANONICAL_GATEWAY_LAUNCHD_LABEL,
     defaultsPrefix: normalizedId
       ? `openclaw.consumer.instances.${normalizedId}`
       : "openclaw.consumer",
-    gatewayPort: normalizedId ? hashConsumerGatewayPort(normalizedId) : CONSUMER_SHARED_GATEWAY_PORT,
+    // No instance id means "the one real local OpenClaw app", so it must use
+    // the canonical gateway identity that the rest of the product already
+    // expects. Named consumer/tester/worktree lanes remain isolated below.
+    gatewayPort: normalizedId ? hashConsumerGatewayPort(normalizedId) : CANONICAL_GATEWAY_PORT,
     gatewayBind: CONSUMER_GATEWAY_BIND,
   };
 }

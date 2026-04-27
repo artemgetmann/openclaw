@@ -154,7 +154,7 @@ const path = require("node:path");
 const cp = require("node:child_process");
 
 const currentInstanceId = process.env.CURRENT_INSTANCE_ID ?? "default";
-const currentLabel = process.env.CURRENT_LABEL ?? "ai.openclaw.consumer.gateway";
+const currentLabel = process.env.CURRENT_LABEL ?? "ai.openclaw.gateway";
 const uid = typeof process.getuid === "function" ? process.getuid() : null;
 const baseRoots = [
   path.join(os.homedir(), "Library", "Application Support", "OpenClaw"),
@@ -183,7 +183,7 @@ function tokenFingerprint(token) {
 
 function labelFor(instanceId) {
   return instanceId === "default"
-    ? "ai.openclaw.consumer.gateway"
+    ? "ai.openclaw.gateway"
     : `ai.openclaw.consumer.${instanceId}.gateway`;
 }
 

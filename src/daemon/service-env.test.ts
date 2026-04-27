@@ -327,6 +327,30 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
+  it("canonicalizes the default consumer app to the shared gateway identity", () => {
+    const identity = resolveConsumerRuntimeIdentity({
+      homeDir: "/Users/test",
+    });
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_PROFILE: "consumer",
+      },
+      port: identity.gatewayPort,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_CONSUMER_INSTANCE_ID).toBeUndefined();
+    expect(env.OPENCLAW_PROFILE).toBe("consumer");
+    expect(env.OPENCLAW_HOME).toBe(identity.runtimeRoot);
+    expect(env.OPENCLAW_STATE_DIR).toBe(identity.stateDir);
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(identity.configPath);
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("18789");
+    expect(env.OPENCLAW_GATEWAY_BIND).toBe("loopback");
+    expect(env.OPENCLAW_LOG_DIR).toBe(identity.logDir);
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
+  });
+
   it("canonicalizes consumer lane identity for service installs", () => {
     const identity = resolveConsumerRuntimeIdentity({
       homeDir: "/Users/test",

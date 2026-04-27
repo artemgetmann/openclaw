@@ -53,12 +53,18 @@ This keeps the final packaged artifact in `dist/`, but skips the repeated
 dependency reinstall, JS build, and Control UI build that are usually unrelated
 to a native-app relaunch loop.
 
-This consumer flavor defaults to its own runtime identity:
+The no-instance consumer flavor is the single local OpenClaw app runtime:
 
 - bundle identifier: `ai.openclaw.consumer.mac.*`
-- state dir: `~/Library/Application Support/OpenClaw Consumer/.openclaw`
-- local gateway port: `19001`
-- launch labels: `ai.openclaw.consumer.*`
+- state dir: `~/Library/Application Support/OpenClaw/.openclaw`
+- local gateway port: `18789`
+- gateway launch label: `ai.openclaw.gateway`
+
+Named consumer/tester/worktree instances still stay isolated:
+
+- state dir: `~/Library/Application Support/OpenClaw/instances/<id>/.openclaw`
+- local gateway port: hashed in the `20000..39999` range
+- gateway launch label: `ai.openclaw.consumer.<id>.gateway`
 
 If `verify-consumer-mac-app.sh` passes but `spctl` still rejects the app, that
 means the bundle assembly is fine and the remaining friction is distribution

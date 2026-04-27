@@ -1,7 +1,6 @@
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-
 import {
   inferConsumerRuntimeIdFromCheckout,
   normalizeConsumerRuntimeId,
@@ -42,9 +41,9 @@ describe("consumer/runtime-identity", () => {
       logDir: "/Users/tester/Library/Application Support/OpenClaw/.openclaw/logs",
       profile: "consumer",
       launchdLabel: "ai.openclaw.consumer",
-      gatewayLaunchdLabel: "ai.openclaw.consumer.gateway",
+      gatewayLaunchdLabel: "ai.openclaw.gateway",
       defaultsPrefix: "openclaw.consumer",
-      gatewayPort: 19001,
+      gatewayPort: 18789,
       gatewayBind: "loopback",
     });
   });
@@ -57,8 +56,7 @@ describe("consumer/runtime-identity", () => {
 
     expect(identity).toEqual({
       normalizedId: "main-durable-lane",
-      runtimeRoot:
-        "/Users/tester/Library/Application Support/OpenClaw/instances/main-durable-lane",
+      runtimeRoot: "/Users/tester/Library/Application Support/OpenClaw/instances/main-durable-lane",
       stateDir:
         "/Users/tester/Library/Application Support/OpenClaw/instances/main-durable-lane/.openclaw",
       configPath:
@@ -79,14 +77,7 @@ describe("consumer/runtime-identity", () => {
   it("uses the current home directory by default", () => {
     const identity = resolveConsumerRuntimeIdentity({ instanceId: "lane" });
     expect(identity.runtimeRoot).toBe(
-      path.join(
-        os.homedir(),
-        "Library",
-        "Application Support",
-        "OpenClaw",
-        "instances",
-        "lane",
-      ),
+      path.join(os.homedir(), "Library", "Application Support", "OpenClaw", "instances", "lane"),
     );
   });
 });

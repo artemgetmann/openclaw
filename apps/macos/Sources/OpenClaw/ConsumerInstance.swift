@@ -6,7 +6,7 @@ struct ConsumerInstance: Equatable {
 
     private static let runtimeHomeName = "OpenClaw"
     private static let defaultProfile = "consumer"
-    private static let defaultGatewayPort = 19001
+    private static let defaultGatewayPort = 18_789
     private static let gatewayPortRangeStart = 20_000
     private static let gatewayPortRangeSize = 20_000
 
@@ -94,7 +94,7 @@ struct ConsumerInstance: Equatable {
 
     var gatewayLaunchdLabel: String {
         guard let id = self.id else {
-            return "ai.openclaw.consumer.gateway"
+            return "ai.openclaw.gateway"
         }
         return "ai.openclaw.consumer.\(id).gateway"
     }

@@ -145,21 +145,20 @@ consumer_instance_gateway_launchd_label() {
 
 consumer_instance_apply_runtime_env() {
   local normalized="${1:-}"
-  if [[ -z "$normalized" ]]; then
-    return 0
-  fi
 
   local state_dir
   state_dir="$(consumer_instance_state_dir "$normalized")"
   local runtime_root
   runtime_root="$(consumer_instance_runtime_root "$normalized")"
 
-  # Consumer lanes must derive runtime ownership from the instance id alone.
-  # If a caller leaves stale OPENCLAW_* overrides in the shell, commands like
-  # `browser profiles` can drift onto the wrong gateway while status still
-  # reports the LaunchAgent for this lane. Pin every runtime selector here so
-  # the wrapper, service install, and status flow all share one source of truth.
-  export OPENCLAW_CONSUMER_INSTANCE_ID="$normalized"
+  # Consumer runtime ownership must come from this shared identity contract.
+  # The empty id is intentional: it means the single canonical local app runtime
+  # on ai.openclaw.gateway:18789, not a separate consumer-specific gateway.
+  if [[ -n "$normalized" ]]; then
+    export OPENCLAW_CONSUMER_INSTANCE_ID="$normalized"
+  else
+    unset OPENCLAW_CONSUMER_INSTANCE_ID
+  fi
   export OPENCLAW_PROFILE="$(consumer_instance_profile "$normalized")"
   export OPENCLAW_HOME="$runtime_root"
   export OPENCLAW_STATE_DIR="$state_dir"

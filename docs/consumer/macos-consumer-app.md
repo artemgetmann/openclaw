@@ -10,16 +10,20 @@ The consumer macOS app is the simplified local controller for the OpenClaw consu
 
 ## Isolation model
 
-The consumer build is a separate app/runtime identity, not a separate repository.
+The default consumer build is the single local OpenClaw app runtime, not a separate repository.
 
 - App identity: separate bundle identifier and app variant metadata
-- State directory: `~/Library/Application Support/OpenClaw Consumer/.openclaw`
+- State directory: `~/Library/Application Support/OpenClaw/.openclaw`
 - Legacy fallback: `~/.openclaw-consumer` is still read if it already exists from an older local test setup
-- Local gateway port: `19001`
-- Launch labels: `ai.openclaw.consumer.mac` and `ai.openclaw.consumer.gateway`
+- Local gateway port: `18789`
+- Gateway launch label: `ai.openclaw.gateway`
 - Logs: `/tmp/openclaw-consumer`
 
-This keeps consumer testing from silently reusing the founder runtime.
+Named consumer/tester/worktree instances still use `OPENCLAW_CONSUMER_INSTANCE_ID`,
+`~/Library/Application Support/OpenClaw/instances/<id>/.openclaw`,
+`ai.openclaw.consumer.<id>.gateway`, and a hashed port in the `20000..39999`
+range. That keeps parallel testing isolated without making the default app look
+like a second product runtime.
 
 ## Default UX
 

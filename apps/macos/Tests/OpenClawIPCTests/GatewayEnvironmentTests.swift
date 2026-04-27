@@ -49,7 +49,7 @@ struct GatewayEnvironmentTests {
         }
     }
 
-    @Test func `consumer flavor defaults to isolated gateway port`() async {
+    @Test func `consumer flavor defaults to canonical gateway port`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(
             env: [
@@ -58,7 +58,7 @@ struct GatewayEnvironmentTests {
             ],
             defaults: ["gatewayPort": nil])
         {
-            #expect(GatewayEnvironment.gatewayPort() == 19001)
+            #expect(GatewayEnvironment.gatewayPort() == 18789)
         }
     }
 
