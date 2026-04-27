@@ -1,0 +1,41 @@
+# OpenClaw Main / Consumer Divergence Tracker
+
+Operational tracker for the remaining main/consumer consolidation debt.
+This is intentionally blunt: if a slice landed, it says so. If it did not, it
+stays pending.
+
+Legend:
+
+- `Completed`: shared-core consolidation slice landed
+- `Mostly completed`: core convergence landed, but overlay follow-through is still pending
+- `Pending`: still real divergence debt
+
+| Category | Status | Current Home | Target Home | Classification | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Runtime identity / paths | Completed | `apps/macos/Sources/OpenClaw/AppFlavor.swift`, `OpenClawPaths.swift`, `ConsumerInstance.swift`, `ConsumerRuntime.swift`, `src/consumer/runtime-identity.ts`, `scripts/consumer-runtime-identity.ts`, `scripts/lib/consumer-instance.sh` | Shared runtime contract consumed by Swift + TS + shell | shared core | Landed. Treat state root, config/workspace/log paths, defaults prefix, launch labels, runtime root, and consumer port math as shared-core behavior now. Bundle/app branding stays in overlay packaging work. |
+| Gateway ownership / port isolation | Completed | `src/cli/daemon-cli/*`, `src/infra/restart*`, `src/infra/ports*`, `scripts/restart-local-gateway.sh`, `scripts/gateway-watchdog.sh` | Shared gateway ownership model in core runtime | shared core | Landed. Isolation now runs through explicit runtime identity inputs. The daemon `status` / `doctor` identity UX cleanup belongs here with the shared runtime/service slice, not as a separate branch concern. |
+| Launch / service install behavior | Completed | `src/cli/daemon-cli/install.ts`, `src/commands/daemon-install-helpers.ts`, `src/infra/restart-trigger.ts`, `src/infra/supervisor-markers.ts` | Shared service install/restart flow with overlay-fed identity values | shared core | Landed. Shared-service takeover is guarded and service semantics are no longer supposed to fork by branch. |
+| Telegram setup state machine | Mostly completed | `apps/macos/Sources/OpenClaw/ChannelsStore+TelegramSetup.swift`, `ChannelsStore+ConsumerTelegramState.swift`, `TelegramSetupVerifier.swift` | Shared onboarding core, then overlay copy/entrypoints | shared core | The Telegram semantic/state-machine slices landed. Core setup behavior is largely converged, but overlay presentation still needs to stay cleanly separated. |
+| Telegram onboarding card / first-run guidance | Pending | `apps/macos/Sources/OpenClaw/ConsumerTelegramSetupCard.swift`, related onboarding copy in `docs/consumer/openclaw-consumer-execution-spec.md` | Consumer overlay UX | product overlay | Keep this explicitly consumer-owned. Do not claim this is done just because the shared Telegram setup semantics improved. |
+| Skill catalog / status plumbing | Completed | `src/agents/skills/config.ts`, `src/agents/skills.ts`, `src/agents/skills-status.ts`, `src/gateway/server-methods/skills.ts` | Shared skill core | shared core | Landed. Shared evaluator now owns enabled/disabled, requirement satisfaction, bundled allowlist blocking, and eligibility decisions. |
+| Skill defaults / visibility | Pending | `apps/macos/Sources/OpenClaw/SkillsSettings.swift` | Consumer overlay defaults | product overlay | Curated defaults still need a cleaner overlay contract instead of scattered branch behavior. |
+| Single macOS app default surface | Completed | `apps/macos/Sources/OpenClaw/AppFlavor.swift`, `SettingsRootView.swift`, `GeneralSettings.swift`, `MenuContentView.swift`, `AboutSettings.swift`, `apps/macos/Sources/OpenClaw/Resources/Info.plist` | One default `OpenClaw` app; Advanced reveals operator controls | product default | Landed. The consumer-style surface is now the default `OpenClaw` app behavior. `APP_VARIANT=standard` is explicit old shared-main compatibility, not the product direction. |
+| Packaging / distribution scripts | Mostly completed | `scripts/package-mac-app.sh`, `scripts/package-mac-dist.sh`, `scripts/restart-mac.sh`, `scripts/package-consumer-mac-app.sh`, `scripts/open-consumer-mac-app.sh`, `scripts/verify-consumer-mac-app.sh` | Primary `OpenClaw.app` packaging with isolated test-lane wrappers only where needed | temporary compatibility debt | Primary packaging now outputs `OpenClaw.app` in simple product mode. Shared-main restart explicitly opts into `APP_VARIANT=standard`. Consumer wrappers remain for isolated lanes and should be slimmed/renamed after runtime migration. |
+| Runtime migration to app-owned root | Mostly completed | `RuntimeIdentity.swift`, `ConsumerInstance.swift`, `OpenClawPaths.swift`, `src/consumer/runtime-identity.ts`, `scripts/lib/consumer-instance.sh`, `scripts/migrate-openclaw-runtime-to-app-support.sh`, runtime docs | Default app-owned runtime with explicit copy-first cutover | temporary compatibility debt | Default product paths now use `~/Library/Application Support/OpenClaw/.openclaw`. Copying from `~/.openclaw` is explicit, never automatic on normal app startup, and never deletes the source. The remaining step is running the real migration and proving the daily bot works from the new root. |
+| App bundle identity / branding | Mostly completed | `apps/macos/Sources/OpenClaw/Resources/Info.plist`, package scripts | Single `OpenClaw` product identity | product default | The product name is now `OpenClaw` for the default app. Jarvis/rebrand is intentionally parked. |
+| Workflow / branch model | Pending | `CONSUMER.md`, `docs/agent-guides/workflow.md`, `docs/agent-guides/fork-maintenance.md` | Canonical transition docs in root guidance + `docs/consumer/*` | temporary branch debt | Still too much transition debt. The code has moved faster than the docs. |
+| Docs / source-of-truth split | Pending | `docs/consumer/openclaw-consumer-execution-spec.md`, `docs/consumer/openclaw-main-consumer-consolidation-plan.md`, `docs/consumer/openclaw-consumer-brutal-execution-board.md` | One thinner strategy set after code convergence | temporary branch debt | This tracker and the plan now reflect landed status honestly, but the overall doc set is still heavier than the end state. |
+
+## Queue Now
+
+1. Run and validate the real `~/.openclaw` copy into the app-owned runtime root.
+2. Collapse or rename remaining consumer-only packaging wrappers.
+3. Finish the overlay/defaults contract.
+4. Shrink branch/docs debt last.
+
+## Things We Should Stop Saying
+
+- Stop treating runtime identity / gateway ownership / service install as open design work. Those slices landed.
+- Stop talking as if the future is two apps: `OpenClaw` and `OpenClaw Consumer`. The future is one `OpenClaw` app.
+- Stop implying Telegram setup is fully done. The semantics are mostly there; the consumer-first UX layer still is not.
+- Stop counting docs cleanup as code progress. It is housekeeping unless a real slice landed first.

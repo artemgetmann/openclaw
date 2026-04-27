@@ -191,4 +191,38 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(sleep).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
   });
+
+  it("prints the normalized consumer LaunchAgent label in macOS stop guidance", async () => {
+    setPlatform("darwin");
+    const originalProfile = process.env.OPENCLAW_PROFILE;
+    process.env.OPENCLAW_PROFILE = "consumer-Foo__Bar";
+
+    try {
+      await maybeRepairGatewayDaemon({
+        cfg: { gateway: {} },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        prompter: createPrompter(() => false),
+        options: { deep: false },
+        gatewayDetailsMessage: "details",
+        healthOk: false,
+      });
+    } finally {
+      if (originalProfile === undefined) {
+        delete process.env.OPENCLAW_PROFILE;
+      } else {
+        process.env.OPENCLAW_PROFILE = originalProfile;
+      }
+    }
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'launchctl bootout gui/$UID/ai.openclaw.consumer.foo-bar.gateway',
+      ),
+      "Gateway",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining('openclaw --profile consumer-foo-bar gateway stop'),
+      "Gateway",
+    );
+  });
 });

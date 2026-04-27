@@ -256,6 +256,35 @@ describe("printDaemonStatus", () => {
     );
   });
 
+  it("prints cached LaunchAgent cleanup hints with the normalized consumer identity", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { cachedLabel: true },
+          command: {
+            programArguments: ["openclaw", "gateway"],
+            environment: {
+              OPENCLAW_PROFILE: "consumer-Foo__Bar",
+            },
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("launchctl bootout gui/$UID/ai.openclaw.consumer.foo-bar.gateway"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw --profile consumer-foo-bar gateway install"),
+    );
+  });
+
   it("keeps the runtime fingerprint in json mode", () => {
     const status: DaemonStatus = {
       runtimeFingerprint: {

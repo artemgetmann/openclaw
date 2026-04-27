@@ -1,61 +1,59 @@
 #!/usr/bin/env bash
 
 # Shared consumer-instance derivation for local packaging/launch scripts.
-# Keep this logic aligned with apps/macos/Sources/OpenClaw/ConsumerInstance.swift.
+# Runtime identity math now lives in TypeScript so shell, tests, and future
+# call sites all read the same contract instead of quietly drifting apart.
+
+consumer_instance_repo_root() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  cd "${script_dir}/../.." && pwd
+}
+
+consumer_instance_contract() {
+  local repo_root
+  repo_root="$(consumer_instance_repo_root)"
+  node --import tsx "${repo_root}/scripts/consumer-runtime-identity.ts" "$@"
+}
+
+consumer_instance_identity_field() {
+  local field="$1"
+  shift
+
+  local home_dir="${HOME}"
+  local normalized=""
+  if [[ $# -ge 2 ]]; then
+    home_dir="${1:-$HOME}"
+    normalized="${2:-}"
+  else
+    normalized="${1:-}"
+  fi
+
+  consumer_instance_contract field --field "$field" --home "$home_dir" --instance "$normalized"
+}
 
 consumer_instance_normalize_id() {
   local raw="${1:-}"
-  node -e '
-    const raw = (process.argv[1] ?? "").trim().toLowerCase();
-    if (!raw) process.exit(0);
-    const normalized = raw
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-+|-+$/g, "");
-    if (normalized) process.stdout.write(normalized);
-  ' -- "$raw"
+  consumer_instance_contract normalize "$raw"
 }
 
 consumer_instance_default_id_for_checkout() {
   local root_dir="$1"
-  local absolute_git_dir=""
-  local inferred=""
-
-  absolute_git_dir="$(git -C "$root_dir" rev-parse --absolute-git-dir 2>/dev/null || true)"
-  if [[ "$absolute_git_dir" == *"/worktrees/"* ]]; then
-    inferred="$(basename "$root_dir")"
-    consumer_instance_normalize_id "$inferred"
-    return
-  fi
-
-  printf ''
+  consumer_instance_contract default-id --root "$root_dir"
 }
 
 consumer_instance_gateway_port() {
   local normalized="${1:-}"
-  if [[ -z "$normalized" ]]; then
-    printf '19001'
-    return
-  fi
-
-  node -e '
-    const text = process.argv[1];
-    let hash = 0x811c9dc5;
-    for (const byte of Buffer.from(text, "utf8")) {
-      hash ^= byte;
-      hash = Math.imul(hash, 0x01000193) >>> 0;
-    }
-    process.stdout.write(String(20000 + (hash % 20000)));
-  ' -- "$normalized"
+  consumer_instance_identity_field gatewayPort "$normalized"
 }
 
 consumer_instance_app_name() {
   local normalized="${1:-}"
   if [[ -z "$normalized" ]]; then
-    printf 'OpenClaw Consumer'
+    printf 'OpenClaw'
     return
   fi
-  printf 'OpenClaw Consumer (%s)' "$normalized"
+  printf 'OpenClaw (%s)' "$normalized"
 }
 
 consumer_instance_stable_tcc_identity_enabled() {
@@ -77,7 +75,7 @@ consumer_instance_display_name() {
   # packaged app identity to collapse back to the stable debug app when local QA
   # explicitly opts in to that mode.
   if consumer_instance_stable_tcc_identity_enabled; then
-    printf 'OpenClaw Consumer'
+    printf 'OpenClaw'
     return
   fi
   consumer_instance_app_name "$normalized"
@@ -114,100 +112,35 @@ consumer_instance_app_path() {
 }
 
 consumer_instance_runtime_root() {
-  local home_dir="${HOME}"
-  local normalized=""
-
-  # Accept both the legacy single-argument form and the new explicit-home
-  # form so older call sites keep working while the verifier can inspect
-  # a specific user's runtime tree.
-  if [[ $# -ge 2 ]]; then
-    home_dir="${1:-$HOME}"
-    normalized="${2:-}"
-  else
-    normalized="${1:-}"
-  fi
-
-  local runtime_root="${home_dir}/Library/Application Support/OpenClaw Consumer"
-  if [[ -z "$normalized" ]]; then
-    printf '%s' "$runtime_root"
-    return
-  fi
-  printf '%s/instances/%s' "$runtime_root" "$normalized"
+  consumer_instance_identity_field runtimeRoot "$@"
 }
 
 consumer_instance_state_dir() {
-  local home_dir="${HOME}"
-  local normalized=""
-  if [[ $# -ge 2 ]]; then
-    home_dir="${1:-$HOME}"
-    normalized="${2:-}"
-  else
-    normalized="${1:-}"
-  fi
-  printf '%s/.openclaw' "$(consumer_instance_runtime_root "$home_dir" "$normalized")"
+  consumer_instance_identity_field stateDir "$@"
 }
 
 consumer_instance_config_path() {
-  local home_dir="${HOME}"
-  local normalized=""
-  if [[ $# -ge 2 ]]; then
-    home_dir="${1:-$HOME}"
-    normalized="${2:-}"
-  else
-    normalized="${1:-}"
-  fi
-  printf '%s/openclaw.json' "$(consumer_instance_state_dir "$home_dir" "$normalized")"
+  consumer_instance_identity_field configPath "$@"
 }
 
 consumer_instance_workspace_path() {
-  local home_dir="${HOME}"
-  local normalized=""
-  if [[ $# -ge 2 ]]; then
-    home_dir="${1:-$HOME}"
-    normalized="${2:-}"
-  else
-    normalized="${1:-}"
-  fi
-  printf '%s/workspace' "$(consumer_instance_state_dir "$home_dir" "$normalized")"
+  consumer_instance_identity_field workspacePath "$@"
 }
 
 consumer_instance_logs_path() {
-  local home_dir="${HOME}"
-  local normalized=""
-  if [[ $# -ge 2 ]]; then
-    home_dir="${1:-$HOME}"
-    normalized="${2:-}"
-  else
-    normalized="${1:-}"
-  fi
-  printf '%s/logs' "$(consumer_instance_state_dir "$home_dir" "$normalized")"
+  consumer_instance_identity_field logDir "$@"
 }
 
 consumer_instance_profile() {
-  local normalized="${1:-}"
-  if [[ -z "$normalized" ]]; then
-    printf 'consumer'
-    return
-  fi
-  printf 'consumer-%s' "$normalized"
+  consumer_instance_identity_field profile "$1"
 }
 
 consumer_instance_launchd_label() {
-  local normalized="${1:-}"
-  if [[ -z "$normalized" ]]; then
-    printf 'ai.openclaw.consumer'
-    return
-  fi
-  printf 'ai.openclaw.consumer.%s' "$normalized"
+  consumer_instance_identity_field launchdLabel "$1"
 }
 
 consumer_instance_gateway_launchd_label() {
-  local normalized="${1:-}"
-  if [[ -z "$normalized" ]]; then
-    printf 'ai.openclaw.consumer.gateway'
-    return
-  fi
-  printf 'ai.openclaw.consumer.%s.gateway' "$normalized"
+  consumer_instance_identity_field gatewayLaunchdLabel "$1"
 }
 
 consumer_instance_apply_runtime_env() {
@@ -218,6 +151,8 @@ consumer_instance_apply_runtime_env() {
 
   local state_dir
   state_dir="$(consumer_instance_state_dir "$normalized")"
+  local runtime_root
+  runtime_root="$(consumer_instance_runtime_root "$normalized")"
 
   # Consumer lanes must derive runtime ownership from the instance id alone.
   # If a caller leaves stale OPENCLAW_* overrides in the shell, commands like
@@ -226,12 +161,12 @@ consumer_instance_apply_runtime_env() {
   # the wrapper, service install, and status flow all share one source of truth.
   export OPENCLAW_CONSUMER_INSTANCE_ID="$normalized"
   export OPENCLAW_PROFILE="$(consumer_instance_profile "$normalized")"
-  export OPENCLAW_HOME="$state_dir"
+  export OPENCLAW_HOME="$runtime_root"
   export OPENCLAW_STATE_DIR="$state_dir"
   export OPENCLAW_CONFIG_PATH="$(consumer_instance_config_path "$normalized")"
   export OPENCLAW_GATEWAY_PORT="$(consumer_instance_gateway_port "$normalized")"
-  export OPENCLAW_GATEWAY_BIND="loopback"
-  export OPENCLAW_LOG_DIR="${state_dir}/logs"
+  export OPENCLAW_GATEWAY_BIND="$(consumer_instance_identity_field gatewayBind "$normalized")"
+  export OPENCLAW_LOG_DIR="$(consumer_instance_logs_path "$normalized")"
   export OPENCLAW_LAUNCHD_LABEL="$(consumer_instance_gateway_launchd_label "$normalized")"
 }
 

@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { resolveConsumerRuntimeIdentity } from "../../consumer/runtime-identity.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
 vi.mock("node:child_process", () => ({
@@ -181,6 +182,20 @@ describe("restart-helper", () => {
         OPENCLAW_PROFILE: "staging",
       });
       expect(content).toContain("gui/502/ai.openclaw.staging");
+      await cleanupScript(scriptPath);
+    });
+
+    it("uses the consumer runtime contract for consumer lane launchd labels", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 503;
+      const identity = resolveConsumerRuntimeIdentity({
+        instanceId: "main-durable-lane",
+      });
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "consumer-main-durable-lane",
+      });
+      expect(content).toContain(`gui/503/${identity.gatewayLaunchdLabel}`);
       await cleanupScript(scriptPath);
     });
 

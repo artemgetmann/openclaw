@@ -4,7 +4,7 @@ struct ConsumerInstance: Equatable {
     static let envKey = "OPENCLAW_CONSUMER_INSTANCE_ID"
     static let infoPlistKey = "OpenClawConsumerInstanceID"
 
-    private static let runtimeHomeName = "OpenClaw Consumer"
+    private static let runtimeHomeName = "OpenClaw"
     private static let defaultProfile = "consumer"
     private static let defaultGatewayPort = 19001
     private static let gatewayPortRangeStart = 20_000
@@ -40,7 +40,7 @@ struct ConsumerInstance: Equatable {
     }
 
     var runtimeRootURL: URL {
-        let base = FileManager().homeDirectoryForCurrentUser
+        let base = OpenClawHome.currentURL
             .appendingPathComponent("Library/Application Support/\(Self.runtimeHomeName)", isDirectory: true)
         guard let id = self.id else {
             return base
@@ -115,9 +115,9 @@ struct ConsumerInstance: Equatable {
 
     var debugAppName: String {
         guard let id = self.id else {
-            return "OpenClaw Consumer"
+            return "OpenClaw"
         }
-        return "OpenClaw Consumer (\(id))"
+        return "OpenClaw (\(id))"
     }
 
     var debugBundleIdentifier: String {
@@ -129,6 +129,28 @@ struct ConsumerInstance: Equatable {
 
     var installPrefixURL: URL {
         self.stateDirURL
+    }
+
+    var runtimeIdentity: RuntimeIdentity {
+        // Keep every consumer-owned runtime selector in one contract so Swift
+        // callers stop recomputing slightly different answers for paths, ports,
+        // labels, and defaults-suite keys.
+        RuntimeIdentity(
+            appName: self.debugAppName,
+            defaultsPrefix: self.defaultsPrefix,
+            stableSuiteName: self.stableSuiteName,
+            appLaunchdLabel: self.appLaunchdLabel,
+            gatewayLaunchdLabel: self.gatewayLaunchdLabel,
+            runtimeRootURL: self.runtimeRootURL,
+            stateDirURL: self.stateDirURL,
+            configURL: self.configURL,
+            workspaceURL: self.workspaceURL,
+            logsDirURL: self.logsDirURL,
+            installPrefixURL: self.installPrefixURL,
+            profile: self.profile,
+            gatewayPort: self.gatewayPort,
+            gatewayBind: self.gatewayBind,
+            defaultLogDirName: "openclaw-consumer")
     }
 
     static func normalizedInstanceID(_ raw: String?) -> String? {

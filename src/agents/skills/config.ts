@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig, SkillConfig } from "../../config/config.js";
+import { evaluateEntryRequirementsForCurrentPlatform } from "../../shared/entry-status.js";
 import {
-  evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
   resolveConfigPath,
@@ -93,38 +93,85 @@ function hasRelativeSkillBin(entry: SkillEntry, bin: string): boolean {
   }
 }
 
+function resolveSkillHasLocalBin(entry: SkillEntry): (bin: string) => boolean {
+  return (bin) => hasRelativeSkillBin(entry, bin) || hasBinary(bin);
+}
+
+type SkillEntryEvaluation = {
+  skillKey: string;
+  skillConfig?: SkillConfig;
+  disabled: boolean;
+  blockedByAllowlist: boolean;
+  emoji?: string;
+  homepage?: string;
+  requirements: {
+    bins: string[];
+    anyBins: string[];
+    env: string[];
+    config: string[];
+    os: string[];
+  };
+  missing: {
+    bins: string[];
+    anyBins: string[];
+    env: string[];
+    config: string[];
+    os: string[];
+  };
+  configChecks: ReturnType<typeof evaluateEntryRequirementsForCurrentPlatform>["configChecks"];
+  requirementsSatisfied: boolean;
+  eligible: boolean;
+};
+
+export function evaluateSkillEntry(params: {
+  entry: SkillEntry;
+  config?: OpenClawConfig;
+  eligibility?: SkillEligibilityContext;
+}): SkillEntryEvaluation {
+  const { entry, config, eligibility } = params;
+  const skillKey = resolveSkillKey(entry.skill, entry);
+  const skillConfig = resolveSkillConfig(config, skillKey);
+  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
+  const disabled = skillConfig?.enabled === false;
+  const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
+
+  // Shared-core decides whether a skill is usable at all. Overlay-owned defaults
+  // and visibility can still sit on top, but they should not fork this semantic
+  // evaluation or status/prompt drift comes back immediately.
+  const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
+    evaluateEntryRequirementsForCurrentPlatform({
+      always: entry.metadata?.always === true,
+      entry,
+      hasLocalBin: resolveSkillHasLocalBin(entry),
+      remote: eligibility?.remote,
+      isEnvSatisfied: (envName) =>
+        Boolean(
+          process.env[envName] ||
+            skillConfig?.env?.[envName] ||
+            (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+        ),
+      isConfigSatisfied: (configPath) => isConfigPathTruthy(config, configPath),
+    });
+
+  return {
+    skillKey,
+    skillConfig,
+    disabled,
+    blockedByAllowlist,
+    emoji,
+    homepage,
+    requirements: required,
+    missing,
+    configChecks,
+    requirementsSatisfied,
+    eligible: !disabled && !blockedByAllowlist && requirementsSatisfied,
+  };
+}
+
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: OpenClawConfig;
   eligibility?: SkillEligibilityContext;
 }): boolean {
-  const { entry, config, eligibility } = params;
-  const skillKey = resolveSkillKey(entry.skill, entry);
-  const skillConfig = resolveSkillConfig(config, skillKey);
-  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
-
-  if (skillConfig?.enabled === false) {
-    return false;
-  }
-  if (!isBundledSkillAllowed(entry, allowBundled)) {
-    return false;
-  }
-  return evaluateRuntimeEligibility({
-    os: entry.metadata?.os,
-    remotePlatforms: eligibility?.remote?.platforms,
-    always: entry.metadata?.always,
-    requires: entry.metadata?.requires,
-    // Workspace skills often declare helper scripts like "./scripts/foo.sh" in
-    // requires.bins. Those are local artifacts, not PATH binaries.
-    hasBin: (bin) => hasRelativeSkillBin(entry, bin) || hasBinary(bin),
-    hasRemoteBin: eligibility?.remote?.hasBin,
-    hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
-    hasEnv: (envName) =>
-      Boolean(
-        process.env[envName] ||
-        skillConfig?.env?.[envName] ||
-        (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-      ),
-    isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
-  });
+  return evaluateSkillEntry(params).eligible;
 }

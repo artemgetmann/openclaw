@@ -4,6 +4,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { resolveGatewayRuntimeIdentityEnv } from "../daemon/service-env.js";
 import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import { buildPlatformRuntimeLogHints } from "../daemon/runtime-hints.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
@@ -35,6 +36,7 @@ export function buildGatewayRuntimeHints(
   }
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(env);
   const fileLog = (() => {
     try {
       return getResolvedLoggerSettings().file;
@@ -50,14 +52,20 @@ export function buildGatewayRuntimeHints(
     return hints;
   }
   if (runtime.cachedLabel && platform === "darwin") {
-    const label = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+    // Consumer lanes should print the normalized daemon identity so the
+    // bootout/install hint matches the actual LaunchAgent label in use.
+    const label =
+      daemonEnv.OPENCLAW_LAUNCHD_LABEL?.trim() ||
+      resolveGatewayLaunchAgentLabel(daemonEnv.OPENCLAW_PROFILE);
     hints.push(
       `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${label}`,
     );
-    hints.push(`Then reinstall: ${formatCliCommand("openclaw gateway install", env)}`);
+    hints.push(`Then reinstall: ${formatCliCommand("openclaw gateway install", daemonEnv)}`);
   }
   if (runtime.missingUnit) {
-    hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
+    hints.push(
+      `Service not installed. Run: ${formatCliCommand("openclaw gateway install", daemonEnv)}`,
+    );
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }
@@ -71,9 +79,9 @@ export function buildGatewayRuntimeHints(
     hints.push(
       ...buildPlatformRuntimeLogHints({
         platform,
-        env,
-        systemdServiceName: resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE),
-        windowsTaskName: resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE),
+        env: daemonEnv,
+        systemdServiceName: resolveGatewaySystemdServiceName(daemonEnv.OPENCLAW_PROFILE),
+        windowsTaskName: resolveGatewayWindowsTaskName(daemonEnv.OPENCLAW_PROFILE),
       }),
     );
   }

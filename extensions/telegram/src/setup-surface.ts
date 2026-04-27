@@ -9,8 +9,7 @@ import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wiz
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { inspectTelegramAccount } from "./account-inspect.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramAccount } from "./accounts.js";
 import {
   parseTelegramAllowFromId,
   promptTelegramAllowFromForAccount,
@@ -19,6 +18,7 @@ import {
   TELEGRAM_USER_ID_HELP_LINES,
   telegramSetupAdapter,
 } from "./setup-core.js";
+import { resolveTelegramSetupConfigured } from "./setup-state.js";
 
 const channel = "telegram" as const;
 
@@ -46,11 +46,8 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "recommended · newcomer-friendly",
     configuredScore: 1,
     unconfiguredScore: 10,
-    resolveConfigured: ({ cfg }) =>
-      listTelegramAccountIds(cfg).some((accountId) => {
-        const account = inspectTelegramAccount({ cfg, accountId });
-        return account.configured;
-      }),
+    // UX copy stays here; setup-state owns whether Telegram is actually usable.
+    resolveConfigured: ({ cfg }) => resolveTelegramSetupConfigured(cfg),
   },
   credentials: [
     {

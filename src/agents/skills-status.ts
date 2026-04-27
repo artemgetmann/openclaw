@@ -1,15 +1,11 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
+  evaluateSkillEntry,
   hasBinary,
-  isBundledSkillAllowed,
-  isConfigPathTruthy,
   loadWorkspaceSkillEntries,
-  resolveBundledAllowlist,
-  resolveSkillConfig,
   resolveSkillsInstallPreferences,
   type SkillEntry,
   type SkillEligibilityContext,
@@ -174,33 +170,11 @@ function buildSkillStatus(
   bundledNames?: Set<string>,
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
-  const skillConfig = resolveSkillConfig(config, skillKey);
-  const disabled = skillConfig?.enabled === false;
-  const allowBundled = resolveBundledAllowlist(config);
-  const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
-  const always = entry.metadata?.always === true;
-  const isEnvSatisfied = (envName: string) =>
-    Boolean(
-      process.env[envName] ||
-      skillConfig?.env?.[envName] ||
-      (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-    );
-  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
   const bundled =
     bundledNames && bundledNames.size > 0
       ? bundledNames.has(entry.skill.name)
       : entry.skill.source === "openclaw-bundled";
-
-  const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
-    evaluateEntryRequirementsForCurrentPlatform({
-      always,
-      entry,
-      hasLocalBin: hasBinary,
-      remote: eligibility?.remote,
-      isEnvSatisfied,
-      isConfigSatisfied,
-    });
-  const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
+  const evaluation = evaluateSkillEntry({ entry, config, eligibility });
 
   return {
     name: entry.skill.name,
@@ -211,15 +185,15 @@ function buildSkillStatus(
     baseDir: entry.skill.baseDir,
     skillKey,
     primaryEnv: entry.metadata?.primaryEnv,
-    emoji,
-    homepage,
-    always,
-    disabled,
-    blockedByAllowlist,
-    eligible,
-    requirements: required,
-    missing,
-    configChecks,
+    emoji: evaluation.emoji,
+    homepage: evaluation.homepage,
+    always: entry.metadata?.always === true,
+    disabled: evaluation.disabled,
+    blockedByAllowlist: evaluation.blockedByAllowlist,
+    eligible: evaluation.eligible,
+    requirements: evaluation.requirements,
+    missing: evaluation.missing,
+    configChecks: evaluation.configChecks,
     install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
   };
 }

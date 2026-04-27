@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveConsumerRuntimeIdentity } from "../consumer/runtime-identity.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildMinimalServicePath,
@@ -324,6 +325,31 @@ describe("buildServiceEnvironment", () => {
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
     }
+  });
+
+  it("canonicalizes consumer lane identity for service installs", () => {
+    const identity = resolveConsumerRuntimeIdentity({
+      homeDir: "/Users/test",
+      instanceId: "main-durable-lane",
+    });
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_PROFILE: "consumer-main-durable-lane",
+      },
+      port: identity.gatewayPort,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_CONSUMER_INSTANCE_ID).toBe("main-durable-lane");
+    expect(env.OPENCLAW_PROFILE).toBe(identity.profile);
+    expect(env.OPENCLAW_HOME).toBe(identity.runtimeRoot);
+    expect(env.OPENCLAW_STATE_DIR).toBe(identity.stateDir);
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(identity.configPath);
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe(String(identity.gatewayPort));
+    expect(env.OPENCLAW_GATEWAY_BIND).toBe(identity.gatewayBind);
+    expect(env.OPENCLAW_LOG_DIR).toBe(identity.logDir);
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe(identity.gatewayLaunchdLabel);
   });
 
   it("forwards proxy environment variables for launchd/systemd runtime", () => {

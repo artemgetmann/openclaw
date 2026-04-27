@@ -8,6 +8,7 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
+import { resolveGatewayRuntimeIdentityEnv } from "../daemon/service-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
@@ -328,11 +329,12 @@ export function isLocalRestartScriptAvailable(): boolean {
 }
 
 function resolveCurrentLaunchdLabel(env: NodeJS.ProcessEnv = process.env): string {
-  const configuredLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(env);
+  const configuredLabel = daemonEnv.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (configuredLabel) {
     return configuredLabel;
   }
-  return resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+  return resolveGatewayLaunchAgentLabel(daemonEnv.OPENCLAW_PROFILE);
 }
 
 export function isCanonicalSharedMainLaunchdRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -354,6 +356,7 @@ function triggerDetachedLocalRestartScript(scriptPath: string): {
   command: string;
   detail?: string;
 } {
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   const command = `OPENCLAW_RESTART_DETACHED=1 /bin/bash ${scriptPath}`;
   try {
     // Run restart work in a detached helper so the active gateway request can
@@ -362,7 +365,7 @@ function triggerDetachedLocalRestartScript(scriptPath: string): {
       detached: true,
       stdio: "ignore",
       env: {
-        ...process.env,
+        ...daemonEnv,
         OPENCLAW_RESTART_DETACHED: "1",
       },
     });
@@ -383,6 +386,7 @@ function triggerDetachedLocalRestartScript(scriptPath: string): {
 }
 
 export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): RestartAttempt {
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
@@ -391,10 +395,7 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
 
   const tried: string[] = [];
   if (process.platform === "linux") {
-    const unit = normalizeSystemdUnit(
-      process.env.OPENCLAW_SYSTEMD_UNIT,
-      process.env.OPENCLAW_PROFILE,
-    );
+    const unit = normalizeSystemdUnit(daemonEnv.OPENCLAW_SYSTEMD_UNIT, daemonEnv.OPENCLAW_PROFILE);
     const userArgs = ["--user", "restart", unit];
     tried.push(`systemctl ${userArgs.join(" ")}`);
     const userRestart = spawnSync("systemctl", userArgs, {
@@ -421,7 +422,7 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   }
 
   if (process.platform === "win32") {
-    return relaunchGatewayScheduledTask(process.env);
+    return relaunchGatewayScheduledTask(daemonEnv as NodeJS.ProcessEnv);
   }
 
   if (process.platform !== "darwin") {
@@ -432,9 +433,7 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
     };
   }
 
-  const label =
-    process.env.OPENCLAW_LAUNCHD_LABEL ||
-    resolveGatewayLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
+  const label = daemonEnv.OPENCLAW_LAUNCHD_LABEL || resolveGatewayLaunchAgentLabel(daemonEnv.OPENCLAW_PROFILE);
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
   const target = `${domain}/${label}`;
@@ -472,7 +471,7 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   // kickstart fails when the service was previously booted out (deregistered from launchd).
   // Fall back to bootstrap (re-register from plist) + kickstart.
   // Use env HOME to match how launchd.ts resolves the plist install path.
-  const home = process.env.HOME?.trim() || os.homedir();
+  const home = daemonEnv.HOME?.trim() || os.homedir();
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   const bootstrapArgs = ["bootstrap", domain, plistPath];
   tried.push(`launchctl ${bootstrapArgs.join(" ")}`);

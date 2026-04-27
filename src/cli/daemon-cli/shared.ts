@@ -1,4 +1,5 @@
 import { resolveIsNixMode } from "../../config/paths.js";
+import { resolveGatewayRuntimeIdentityEnv } from "../../daemon/service-env.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -105,10 +106,15 @@ export function pickProbeHostForBind(
 }
 
 const SAFE_DAEMON_ENV_KEYS = [
+  "OPENCLAW_CONSUMER_INSTANCE_ID",
+  "OPENCLAW_HOME",
+  "OPENCLAW_LOG_DIR",
   "OPENCLAW_PROFILE",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_PORT",
+  "OPENCLAW_GATEWAY_BIND",
+  "OPENCLAW_LAUNCHD_LABEL",
   "OPENCLAW_NIX_MODE",
 ];
 
@@ -180,11 +186,12 @@ export function renderRuntimeHints(
 }
 
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  const profile = env.OPENCLAW_PROFILE;
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(env);
+  const profile = daemonEnv.OPENCLAW_PROFILE;
   return buildPlatformServiceStartHints({
-    installCommand: formatCliCommand("openclaw gateway install", env),
-    startCommand: formatCliCommand("openclaw gateway", env),
-    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveGatewayLaunchAgentLabel(profile)}.plist`,
+    installCommand: formatCliCommand("openclaw gateway install", daemonEnv),
+    startCommand: formatCliCommand("openclaw gateway", daemonEnv),
+    launchAgentPlistPath: `~/Library/LaunchAgents/${daemonEnv.OPENCLAW_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(profile)}.plist`,
     systemdServiceName: resolveGatewaySystemdServiceName(profile),
     windowsTaskName: resolveGatewayWindowsTaskName(profile),
   });

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveConsumerRuntimeIdentity } from "../consumer/runtime-identity.js";
 import { captureFullEnv } from "../test-utils/env.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
@@ -184,6 +185,55 @@ describe("triggerOpenClawRestart local script mode", () => {
       expect(spawnSyncMock).not.toHaveBeenCalled();
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats consumer lane profiles as safe lane-local launchd runtimes", async () => {
+    setPlatform("darwin");
+    delete process.env.VITEST;
+    delete process.env.NODE_ENV;
+    process.env.OPENCLAW_PROFILE = "consumer-main-durable-lane";
+
+    const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-script-"));
+    const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
+    const identity = resolveConsumerRuntimeIdentity({
+      instanceId: "main-durable-lane",
+    });
+    await fs.writeFile(scriptPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+    process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = scriptPath;
+
+    try {
+      expect(isCanonicalSharedMainLaunchdRuntime()).toBe(false);
+      expect(isSafeLocalRestartScriptAvailable()).toBe(true);
+
+      spawnSyncMock.mockReturnValue({
+        error: undefined,
+        status: 0,
+        stdout: "",
+        stderr: "",
+      });
+
+      const result = triggerOpenClawRestart({ preferLocalScript: false });
+      expect(result).toMatchObject({
+        ok: true,
+        method: "launchctl",
+      });
+      expect(spawnSyncMock).toHaveBeenCalledWith(
+        "launchctl",
+        expect.arrayContaining([
+          "kickstart",
+          "-k",
+          expect.stringMatching(
+            new RegExp(`^gui/\\d+/${identity.gatewayLaunchdLabel.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}$`),
+          ),
+        ]),
+        expect.objectContaining({
+          encoding: "utf8",
+          timeout: 2000,
+        }),
+      );
+    } finally {
+      await fs.rm(scriptDir, { recursive: true, force: true });
     }
   });
 

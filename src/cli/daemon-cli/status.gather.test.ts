@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveConsumerRuntimeIdentity } from "../../consumer/runtime-identity.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
@@ -148,6 +149,11 @@ describe("gatherDaemonStatus", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv([
+      "HOME",
+      "OPENCLAW_CONSUMER_INSTANCE_ID",
+      "OPENCLAW_HOME",
+      "OPENCLAW_LAUNCHD_LABEL",
+      "OPENCLAW_PROFILE",
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_TOKEN",
@@ -157,6 +163,10 @@ describe("gatherDaemonStatus", () => {
     ]);
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-cli";
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli/openclaw.json";
+    delete process.env.OPENCLAW_CONSUMER_INSTANCE_ID;
+    delete process.env.OPENCLAW_HOME;
+    delete process.env.OPENCLAW_LAUNCHD_LABEL;
+    delete process.env.OPENCLAW_PROFILE;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.DAEMON_GATEWAY_TOKEN;
@@ -217,6 +227,32 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
+  });
+
+  it("reads status through the canonical consumer lane service identity", async () => {
+    const identity = resolveConsumerRuntimeIdentity({
+      instanceId: "main-durable-lane",
+    });
+    process.env.OPENCLAW_PROFILE = "consumer-main-durable-lane";
+    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(serviceReadCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_CONSUMER_INSTANCE_ID: "main-durable-lane",
+        OPENCLAW_PROFILE: identity.profile,
+        OPENCLAW_STATE_DIR: identity.stateDir,
+        OPENCLAW_CONFIG_PATH: identity.configPath,
+        OPENCLAW_GATEWAY_PORT: String(identity.gatewayPort),
+        OPENCLAW_LAUNCHD_LABEL: identity.gatewayLaunchdLabel,
+      }),
+    );
   });
 
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {

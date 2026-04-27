@@ -165,6 +165,30 @@ struct SettingsViewSmokeTests {
         #expect(tabs.contains(.debug))
     }
 
+    @Test func `default OpenClaw settings use simple tabs before advanced is enabled`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": nil]) {
+            let tabs = SettingsRootView.visibleTabs(
+                isConsumer: AppFlavor.current.isConsumer,
+                showAdvancedSettings: false,
+                debugPaneEnabled: true)
+            #expect(AppFlavor.current.appName == "OpenClaw")
+            #expect(tabs == [.general, .permissions, .about])
+        }
+    }
+
+    @Test func `standard compatibility settings expose operator tabs`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "standard"]) {
+            let tabs = SettingsRootView.visibleTabs(
+                isConsumer: AppFlavor.current.isConsumer,
+                showAdvancedSettings: false,
+                debugPaneEnabled: true)
+            #expect(AppFlavor.current.appName == "OpenClaw")
+            #expect(tabs.contains(.channels))
+            #expect(tabs.contains(.skills))
+            #expect(tabs.contains(.debug))
+        }
+    }
+
     @Test func `about settings builds body`() {
         let view = AboutSettings(updater: nil)
         _ = view.body

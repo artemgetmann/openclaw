@@ -171,7 +171,7 @@ struct AboutSettings: View {
 
     private var footer: String {
         if self.isConsumer {
-            return "OpenClaw Consumer for macOS"
+            return "OpenClaw for macOS"
         }
         return "© 2025 Peter Steinberger — MIT License."
     }

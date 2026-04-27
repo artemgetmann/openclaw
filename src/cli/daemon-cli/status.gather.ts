@@ -14,6 +14,7 @@ import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import { findExtraGatewayServices } from "../../daemon/inspect.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { auditGatewayServiceConfig } from "../../daemon/service-audit.js";
+import { resolveGatewayRuntimeIdentityEnv } from "../../daemon/service-env.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isGatewaySecretRefUnavailableError, trimToUndefined } from "../../gateway/credentials.js";
@@ -158,17 +159,18 @@ function parseGatewaySecretRefPathFromError(error: unknown): string | null {
 async function loadDaemonConfigContext(
   serviceEnv?: Record<string, string>,
 ): Promise<DaemonConfigContext> {
+  const cliEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   const mergedDaemonEnv = {
-    ...(process.env as Record<string, string | undefined>),
+    ...cliEnv,
     ...(serviceEnv ?? undefined),
   } satisfies Record<string, string | undefined>;
 
-  const cliStateDir = resolveStateDir(process.env);
+  const cliStateDir = resolveStateDir(cliEnv as NodeJS.ProcessEnv);
   const daemonStateDir = resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv);
-  const cliConfigPath = resolveConfigPath(process.env, cliStateDir);
+  const cliConfigPath = resolveConfigPath(cliEnv as NodeJS.ProcessEnv, cliStateDir);
   const daemonConfigPath = resolveConfigPath(mergedDaemonEnv as NodeJS.ProcessEnv, daemonStateDir);
 
-  const cliIO = createConfigIO({ env: process.env, configPath: cliConfigPath });
+  const cliIO = createConfigIO({ env: cliEnv, configPath: cliConfigPath });
   const daemonIO = createConfigIO({
     env: mergedDaemonEnv,
     configPath: daemonConfigPath,
@@ -246,7 +248,10 @@ async function resolveGatewayStatusSummary(params: {
       ...(probeNote ? { probeNote } : {}),
     },
     daemonPort,
-    cliPort: resolveGatewayPort(params.cliCfg, process.env),
+    cliPort: resolveGatewayPort(
+      params.cliCfg,
+      resolveGatewayRuntimeIdentityEnv(process.env) as NodeJS.ProcessEnv,
+    ),
     probeUrlOverride,
   };
 }
@@ -289,19 +294,20 @@ export async function gatherDaemonStatus(
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
   const service = resolveGatewayService();
-  const command = await service.readCommand(process.env).catch(() => null);
+  const cliEnv = resolveGatewayRuntimeIdentityEnv(process.env);
+  const command = await service.readCommand(cliEnv as NodeJS.ProcessEnv).catch(() => null);
   const serviceEnv = command?.environment
     ? ({
-        ...process.env,
+        ...cliEnv,
         ...command.environment,
       } satisfies NodeJS.ProcessEnv)
-    : process.env;
+    : (cliEnv as NodeJS.ProcessEnv);
   const [loaded, runtime] = await Promise.all([
     service.isLoaded({ env: serviceEnv }).catch(() => false),
     service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
   ]);
   const configAudit = await auditGatewayServiceConfig({
-    env: process.env,
+    env: cliEnv as NodeJS.ProcessEnv,
     command,
   });
   const {

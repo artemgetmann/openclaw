@@ -17,10 +17,8 @@ import {
   getChatChannelMeta,
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
-  normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
-  resolveConfiguredFromCredentialStatuses,
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
   TelegramConfigSchema,
@@ -57,6 +55,10 @@ import type { TelegramProbe } from "./probe.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { sendTypingTelegram } from "./send.js";
 import { telegramSetupAdapter } from "./setup-core.js";
+import {
+  resolveTelegramAccountSetupStatus,
+  resolveTelegramAccountSetupUnconfiguredReason,
+} from "./setup-state.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
@@ -70,40 +72,6 @@ const meta = getChatChannelMeta("telegram");
 function maskTelegramTokenFingerprint(token: string): string {
   // Keep bot identity debuggable without ever printing the raw token.
   return createHash("sha256").update(token).digest("hex").slice(0, 12);
-}
-
-function findTelegramTokenOwnerAccountId(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-}): string | null {
-  const normalizedAccountId = normalizeAccountId(params.accountId);
-  const tokenOwners = new Map<string, string>();
-  for (const id of listTelegramAccountIds(params.cfg)) {
-    const account = inspectTelegramAccount({ cfg: params.cfg, accountId: id });
-    const token = (account.token ?? "").trim();
-    if (!token) {
-      continue;
-    }
-    const ownerAccountId = tokenOwners.get(token);
-    if (!ownerAccountId) {
-      tokenOwners.set(token, account.accountId);
-      continue;
-    }
-    if (account.accountId === normalizedAccountId) {
-      return ownerAccountId;
-    }
-  }
-  return null;
-}
-
-function formatDuplicateTelegramTokenReason(params: {
-  accountId: string;
-  ownerAccountId: string;
-}): string {
-  return (
-    `Duplicate Telegram bot token: account "${params.accountId}" shares a token with ` +
-    `account "${params.ownerAccountId}". Keep one owner account per bot token.`
-  );
 }
 
 type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
@@ -419,32 +387,14 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
   configSchema: buildChannelConfigSchema(TelegramConfigSchema),
   config: {
     ...telegramConfigBase,
-    isConfigured: (account, cfg) => {
-      if (!account.token?.trim()) {
-        return false;
-      }
-      return !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId });
-    },
-    unconfiguredReason: (account, cfg) => {
-      if (!account.token?.trim()) {
-        return "not configured";
-      }
-      const ownerAccountId = findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId });
-      if (!ownerAccountId) {
-        return "not configured";
-      }
-      return formatDuplicateTelegramTokenReason({
-        accountId: account.accountId,
-        ownerAccountId,
-      });
-    },
+    isConfigured: (account, cfg) => resolveTelegramAccountSetupStatus({ cfg, account }).ready,
+    unconfiguredReason: (account, cfg) =>
+      resolveTelegramAccountSetupUnconfiguredReason({ cfg, account }),
     describeAccount: (account, cfg) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured:
-        Boolean(account.token?.trim()) &&
-        !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
+      configured: resolveTelegramAccountSetupStatus({ cfg, account }).ready,
       tokenSource: account.tokenSource,
     }),
     ...telegramConfigAccessors,
@@ -765,19 +715,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       return { ...audit, unresolvedGroups, hasWildcardUnmentionedGroups };
     },
     buildAccountSnapshot: ({ account, cfg, runtime, probe, audit }) => {
-      const configuredFromStatus = resolveConfiguredFromCredentialStatuses(account);
-      const ownerAccountId = findTelegramTokenOwnerAccountId({
-        cfg,
-        accountId: account.accountId,
-      });
-      const duplicateTokenReason = ownerAccountId
-        ? formatDuplicateTelegramTokenReason({
-            accountId: account.accountId,
-            ownerAccountId,
-          })
-        : null;
-      const configured =
-        (configuredFromStatus ?? Boolean(account.token?.trim())) && !ownerAccountId;
+      const setupStatus = resolveTelegramAccountSetupStatus({ cfg, account });
+      // Snapshot fields stay presentation-agnostic. setup-state owns the
+      // semantic difference between configured credentials, ready accounts,
+      // and setup-blocked accounts such as duplicate-token collisions.
+      const configured = setupStatus.ready;
       // Surface mention/privacy hints from the same effective per-account
       // groups config that the runtime actually uses.
       const groups = account.config.groups;
@@ -795,7 +737,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         running: runtime?.running ?? false,
         lastStartAt: runtime?.lastStartAt ?? null,
         lastStopAt: runtime?.lastStopAt ?? null,
-        lastError: runtime?.lastError ?? duplicateTokenReason,
+        lastError: runtime?.lastError ?? setupStatus.blockedReason,
         mode: runtime?.mode ?? (account.config.webhookUrl ? "webhook" : "polling"),
         probe,
         audit,
@@ -808,15 +750,12 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
-      const ownerAccountId = findTelegramTokenOwnerAccountId({
+      const setupStatus = resolveTelegramAccountSetupStatus({
         cfg: ctx.cfg,
-        accountId: account.accountId,
+        account,
       });
-      if (ownerAccountId) {
-        const reason = formatDuplicateTelegramTokenReason({
-          accountId: account.accountId,
-          ownerAccountId,
-        });
+      if (setupStatus.blockedReason) {
+        const reason = setupStatus.blockedReason;
         ctx.log?.error?.(`[${account.accountId}] ${reason}`);
         throw new Error(reason);
       }

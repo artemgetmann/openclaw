@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
@@ -153,5 +156,41 @@ describe("buildWorkspaceSkillStatus", () => {
     } else {
       expect(skill?.install).toEqual([]);
     }
+  });
+
+  it("treats relative helper bins as satisfied in status output", async () => {
+    const skillRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skill-status-"));
+    const helperDir = path.join(skillRoot, "scripts");
+    const helperBin = path.join(helperDir, "helper.sh");
+    fs.mkdirSync(helperDir, { recursive: true });
+    fs.writeFileSync(helperBin, "#!/bin/sh\nexit 0\n", "utf8");
+
+    const entry: SkillEntry = {
+      skill: {
+        name: "relative-bin-skill",
+        description: "Uses a workspace helper",
+        source: "openclaw-workspace",
+        filePath: path.join(skillRoot, "SKILL.md"),
+        baseDir: skillRoot,
+        disableModelInvocation: false,
+      },
+      frontmatter: {},
+      metadata: {
+        requires: {
+          bins: ["./scripts/helper.sh"],
+        },
+      },
+    };
+
+    const report = withEnv({ PATH: "" }, () =>
+      buildWorkspaceSkillStatus("/tmp/ws", {
+        entries: [entry],
+      }),
+    );
+    const skill = report.skills.find((reportEntry) => reportEntry.name === "relative-bin-skill");
+
+    expect(skill).toBeDefined();
+    expect(skill?.eligible).toBe(true);
+    expect(skill?.missing.bins).toEqual([]);
   });
 });

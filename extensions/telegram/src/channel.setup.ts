@@ -6,7 +6,6 @@ import {
 import {
   buildChannelConfigSchema,
   getChatChannelMeta,
-  normalizeAccountId,
   TelegramConfigSchema,
   type ChannelPlugin,
   type OpenClawConfig,
@@ -20,41 +19,11 @@ import {
 } from "./accounts.js";
 import type { TelegramProbe } from "./probe.js";
 import { telegramSetupAdapter } from "./setup-core.js";
+import {
+  resolveTelegramAccountSetupStatus,
+  resolveTelegramAccountSetupUnconfiguredReason,
+} from "./setup-state.js";
 import { telegramSetupWizard } from "./setup-surface.js";
-
-function findTelegramTokenOwnerAccountId(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-}): string | null {
-  const normalizedAccountId = normalizeAccountId(params.accountId);
-  const tokenOwners = new Map<string, string>();
-  for (const id of listTelegramAccountIds(params.cfg)) {
-    const account = inspectTelegramAccount({ cfg: params.cfg, accountId: id });
-    const token = (account.token ?? "").trim();
-    if (!token) {
-      continue;
-    }
-    const ownerAccountId = tokenOwners.get(token);
-    if (!ownerAccountId) {
-      tokenOwners.set(token, account.accountId);
-      continue;
-    }
-    if (account.accountId === normalizedAccountId) {
-      return ownerAccountId;
-    }
-  }
-  return null;
-}
-
-function formatDuplicateTelegramTokenReason(params: {
-  accountId: string;
-  ownerAccountId: string;
-}): string {
-  return (
-    `Duplicate Telegram bot token: account "${params.accountId}" shares a token with ` +
-    `account "${params.ownerAccountId}". Keep one owner account per bot token.`
-  );
-}
 
 const telegramConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveTelegramAccount({ cfg, accountId }),
@@ -93,32 +62,14 @@ export const telegramSetupPlugin: ChannelPlugin<ResolvedTelegramAccount, Telegra
   configSchema: buildChannelConfigSchema(TelegramConfigSchema),
   config: {
     ...telegramConfigBase,
-    isConfigured: (account, cfg) => {
-      if (!account.token?.trim()) {
-        return false;
-      }
-      return !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId });
-    },
-    unconfiguredReason: (account, cfg) => {
-      if (!account.token?.trim()) {
-        return "not configured";
-      }
-      const ownerAccountId = findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId });
-      if (!ownerAccountId) {
-        return "not configured";
-      }
-      return formatDuplicateTelegramTokenReason({
-        accountId: account.accountId,
-        ownerAccountId,
-      });
-    },
+    isConfigured: (account, cfg) => resolveTelegramAccountSetupStatus({ cfg, account }).ready,
+    unconfiguredReason: (account, cfg) =>
+      resolveTelegramAccountSetupUnconfiguredReason({ cfg, account }),
     describeAccount: (account, cfg) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured:
-        Boolean(account.token?.trim()) &&
-        !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
+      configured: resolveTelegramAccountSetupStatus({ cfg, account }).ready,
       tokenSource: account.tokenSource,
     }),
     ...telegramConfigAccessors,

@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveConsumerRuntimeIdentity } from "../../consumer/runtime-identity.js";
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
@@ -75,6 +76,27 @@ describe("runServiceRestart token drift", () => {
     expect(payload.warnings).toEqual(
       expect.arrayContaining([expect.stringContaining("gateway install --force")]),
     );
+  });
+
+  it("restarts the canonical consumer lane service identity instead of the raw profile label", async () => {
+    const identity = resolveConsumerRuntimeIdentity({
+      instanceId: "main-durable-lane",
+    });
+    vi.stubEnv("OPENCLAW_PROFILE", "consumer-main-durable-lane");
+
+    await runServiceRestart(createServiceRunArgs(true));
+
+    expect(service.restart).toHaveBeenCalledWith({
+      env: expect.objectContaining({
+        OPENCLAW_CONSUMER_INSTANCE_ID: "main-durable-lane",
+        OPENCLAW_PROFILE: identity.profile,
+        OPENCLAW_STATE_DIR: identity.stateDir,
+        OPENCLAW_CONFIG_PATH: identity.configPath,
+        OPENCLAW_GATEWAY_PORT: String(identity.gatewayPort),
+        OPENCLAW_LAUNCHD_LABEL: identity.gatewayLaunchdLabel,
+      }),
+      stdout: expect.anything(),
+    });
   });
 
   it("compares restart drift against config token even when caller env is set", async () => {
