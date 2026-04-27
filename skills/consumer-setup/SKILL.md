@@ -1,7 +1,6 @@
 ---
 name: consumer-setup
-description: Route here when a consumer skill is installed but blocked on account connection, permissions, configuration, or credentials, and the user needs setup help instead of raw CLI steps.
-homepage: https://docs.openclaw.ai/platforms/macos
+description: Use when a consumer-facing skill or integration exists but is blocked by missing account connection, permissions, configuration, local dependency setup, OAuth, QR pairing, or API credentials, and the user needs guided product-language setup instead of raw CLI instructions.
 metadata: { "openclaw": { "emoji": "🧰" } }
 ---
 
@@ -13,8 +12,10 @@ but that surface is not usable yet because setup is missing.
 Route here when:
 
 - the requested skill exists, but the account is not connected yet
-- the user still needs to approve permissions, sign in, or finish OAuth
-- required configuration, secrets, or API credentials are missing
+- the user still needs to approve permissions, sign in, finish OAuth, or scan a
+  QR code
+- required configuration, local dependencies, secrets, or API credentials are
+  missing
 - the right response is setup guidance in product language, not a raw CLI dump
 
 Do not route here when:
