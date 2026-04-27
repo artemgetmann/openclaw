@@ -1,6 +1,7 @@
 ---
 name: gog
 description: Use for Google Workspace requests tied to Gmail, Google Calendar, Drive, Docs, Sheets, or Contacts, especially when the user explicitly mentions Google or needs cross-surface Google account access. Prefer this over generic email skills when the task is clearly in the Google ecosystem.
+homepage: https://gogcli.sh
 metadata:
   {
     "openclaw":
