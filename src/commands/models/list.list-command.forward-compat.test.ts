@@ -12,6 +12,12 @@ const OPENAI_CODEX_MODEL = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
+const OPENAI_CODEX_55_MODEL = {
+  ...OPENAI_CODEX_MODEL,
+  id: "gpt-5.5",
+  name: "GPT-5.5",
+};
+
 const OPENAI_CODEX_53_MODEL = {
   ...OPENAI_CODEX_MODEL,
   id: "gpt-5.3-codex",
@@ -187,6 +193,37 @@ describe("modelsListCommand forward-compat", () => {
       expect(codex?.tags).not.toContain("missing");
     });
 
+    it("does not mark configured codex gpt-5.5 as missing when forward-compat can build a fallback", async () => {
+      mocks.loadConfig.mockReturnValueOnce({
+        agents: { defaults: { model: { primary: "openai-codex/gpt-5.5" } } },
+        models: { providers: {} },
+      });
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({
+        entries: [
+          {
+            key: "openai-codex/gpt-5.5",
+            ref: { provider: "openai-codex", model: "gpt-5.5" },
+            tags: new Set(["configured"]),
+            aliases: [],
+          },
+        ],
+      });
+      mocks.resolveModelWithRegistry.mockReturnValueOnce({ ...OPENAI_CODEX_55_MODEL });
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true }, runtime as never);
+
+      expect(mocks.printModelTable).toHaveBeenCalled();
+      const codex = lastPrintedRows<{
+        key: string;
+        missing: boolean;
+        tags: string[];
+      }>().find((row) => row.key === "openai-codex/gpt-5.5");
+      expect(codex).toBeTruthy();
+      expect(codex?.missing).toBe(false);
+      expect(codex?.tags).not.toContain("missing");
+    });
+
     it("passes source config to model registry loading for persistence safety", async () => {
       const runtime = createRuntime();
 
@@ -277,7 +314,7 @@ describe("modelsListCommand forward-compat", () => {
   });
 
   describe("--all catalog supplementation", () => {
-    it("includes synthetic codex gpt-5.4 in --all output when catalog supports it", async () => {
+    it("includes synthetic codex gpt-5.5 and gpt-5.4 in --all output", async () => {
       mockDiscoveredCodex53Registry();
       mocks.loadModelCatalog.mockResolvedValueOnce([
         {
@@ -308,6 +345,9 @@ describe("modelsListCommand forward-compat", () => {
           if (modelId === "gpt-5.3-codex") {
             return { ...OPENAI_CODEX_53_MODEL };
           }
+          if (modelId === "gpt-5.5") {
+            return { ...OPENAI_CODEX_55_MODEL };
+          }
           if (modelId === "gpt-5.4") {
             return { ...OPENAI_CODEX_MODEL };
           }
@@ -318,6 +358,10 @@ describe("modelsListCommand forward-compat", () => {
       expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
         expect.objectContaining({
           key: "openai-codex/gpt-5.3-codex",
+        }),
+        expect.objectContaining({
+          key: "openai-codex/gpt-5.5",
+          available: true,
         }),
         expect.objectContaining({
           key: "openai-codex/gpt-5.4",
