@@ -76,7 +76,16 @@ fi
 
 mkdir -p "$DEST"
 
-RSYNC_ARGS=(-aE --ignore-existing)
+# Runtime roots can contain live sockets, AppleDouble sidecars, and old git
+# metadata from development-era state. Those are not useful app runtime data and
+# can make Apple's older rsync fail mid-copy.
+RSYNC_ARGS=(
+  -a
+  --ignore-existing
+  --exclude '/exec-approvals.sock'
+  --exclude '/.git/'
+  --exclude '._*'
+)
 if [[ "$DRY_RUN" == "1" ]]; then
   RSYNC_ARGS+=(--dry-run --itemize-changes)
 fi

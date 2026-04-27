@@ -12,6 +12,16 @@ tool="$1"
 shift
 
 if [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]] && command -v pnpm >/dev/null 2>&1; then
+  if [[ ! -d "$ROOT_DIR/node_modules" ]]; then
+    echo "Skipping pre-commit $tool: dependencies are not installed. Run pnpm install to enable this check." >&2
+    exit 0
+  fi
+
+  if [[ ! -x "$ROOT_DIR/node_modules/.bin/$tool" ]]; then
+    echo "Missing pre-commit tool: $tool. Run pnpm install to restore local tool links." >&2
+    exit 1
+  fi
+
   exec pnpm exec "$tool" "$@"
 fi
 
