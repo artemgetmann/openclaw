@@ -1,7 +1,6 @@
 ---
 name: apple-notes
 description: Manage Apple Notes via the `memo` CLI on macOS (create, view, edit, delete, search, move, and export notes). Use when a user asks OpenClaw to add a note, list notes, search notes, or manage note folders.
-homepage: https://github.com/antoniorodr/memo
 metadata:
   {
     "openclaw":
@@ -75,3 +74,10 @@ Notes
 - macOS-only.
 - Requires Apple Notes.app to be accessible.
 - For automation, grant permissions in System Settings > Privacy & Security > Automation.
+
+Setup Routing
+
+- If `memo` is missing or Notes automation permission is blocked, use the
+  shared `consumer-setup` skill.
+- Once access is granted, verify with a read-only list or search call before
+  creating, editing, or deleting notes.

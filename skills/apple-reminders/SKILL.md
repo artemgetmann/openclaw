@@ -1,7 +1,6 @@
 ---
 name: apple-reminders
 description: Manage Apple Reminders via remindctl CLI (list, add, edit, complete, delete). Supports lists, date filters, and JSON/plain output.
-homepage: https://github.com/steipete/remindctl
 metadata:
   {
     "openclaw":
@@ -116,3 +115,10 @@ User: "Remind me to check on the deploy in 2 hours"
 
 - Apple Reminders → use this skill
 - OpenClaw alert → use `cron` tool with systemEvent
+
+## Setup Routing
+
+- If `remindctl` is missing or Reminders access is not authorized yet, use the
+  shared `consumer-setup` skill.
+- Once setup is complete, verify with `remindctl status` or a read-only list
+  call before creating reminders.
