@@ -79,6 +79,30 @@ struct GatewayLaunchAgentManagerTests {
         #expect(calls == [["install", "--force", "--allow-shared-service-takeover", "--port", "18789", "--runtime", "node"]])
     }
 
+    @MainActor
+    @Test func `daemon command environment marks app support config as canonical owner`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": home.path,
+        ]) {
+            let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
+                base: [:],
+                projectRootHint: nil)
+            let expectedConfig = home
+                .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw/openclaw.json")
+                .path
+
+            #expect(env["OPENCLAW_CONFIG_PATH"] == expectedConfig)
+            #expect(env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] == expectedConfig)
+        }
+    }
+
     @Test func `real launchd install stays pinned to canonical repo and restart preserves entrypoint`() async throws {
         #if os(macOS)
         guard await self.canRunLaunchdIntegration() else { return }
@@ -108,6 +132,7 @@ struct GatewayLaunchAgentManagerTests {
                 "OPENCLAW_LAUNCHD_LABEL": label,
                 "OPENCLAW_STATE_DIR": stateDir.path,
                 "OPENCLAW_CONFIG_PATH": configPath,
+                "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": configPath,
                 "OPENCLAW_GATEWAY_PORT": "\(port)",
             ],
             defaults: [
@@ -130,6 +155,7 @@ struct GatewayLaunchAgentManagerTests {
                     #expect(before.programArguments[1] == expectedEntrypoint)
                     #expect(before.programArguments[2] == "gateway")
                 }
+                #expect(before.environment["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] == configPath)
 
                 let beforePid = try await self.waitForRunningLaunchdPid(label: label)
                 let restartError = await GatewayLaunchAgentManager.restartOrStart(

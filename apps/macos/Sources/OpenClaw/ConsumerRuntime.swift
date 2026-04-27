@@ -74,6 +74,7 @@ enum ConsumerRuntime {
         self.setEnv("OPENCLAW_HOME", value: identity.runtimeRootURL.path)
         self.setEnv("OPENCLAW_STATE_DIR", value: identity.stateDirURL.path)
         self.setEnv("OPENCLAW_CONFIG_PATH", value: identity.configURL.path)
+        self.setEnv("OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH", value: identity.configURL.path)
         self.setEnv("OPENCLAW_GATEWAY_PORT", value: String(identity.gatewayPort))
         self.setEnv("OPENCLAW_GATEWAY_BIND", value: identity.gatewayBind)
         self.setEnv("OPENCLAW_LOG_DIR", value: identity.logsDirURL.path)

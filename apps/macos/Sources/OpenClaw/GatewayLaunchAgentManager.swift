@@ -373,6 +373,7 @@ extension GatewayLaunchAgentManager {
         env["OPENCLAW_HOME"] = identity.runtimeRootURL.path
         env["OPENCLAW_STATE_DIR"] = identity.stateDirURL.path
         env["OPENCLAW_CONFIG_PATH"] = identity.configURL.path
+        env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] = identity.configURL.path
         env["OPENCLAW_GATEWAY_PORT"] = "\(identity.gatewayPort)"
         env["OPENCLAW_GATEWAY_BIND"] = identity.gatewayBind
         env["OPENCLAW_LOG_DIR"] = identity.logsDirURL.path
