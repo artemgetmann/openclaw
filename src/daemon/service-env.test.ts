@@ -349,6 +349,28 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_BIND).toBe("loopback");
     expect(env.OPENCLAW_LOG_DIR).toBe(identity.logDir);
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
+    expect(env.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH).toBe(identity.configPath);
+  });
+
+  it("persists explicit canonical config and main repo into default shared gateway env", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_STATE_DIR: "/Users/test/Library/Application Support/OpenClaw/.openclaw",
+        OPENCLAW_CONFIG_PATH:
+          "/Users/test/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+        OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH:
+          "/Users/test/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+        OPENCLAW_MAIN_REPO: "/Users/test/Programming_Projects/openclaw",
+      },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH).toBe(
+      "/Users/test/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+    );
+    expect(env.OPENCLAW_MAIN_REPO).toBe("/Users/test/Programming_Projects/openclaw");
   });
 
   it("canonicalizes consumer lane identity for service installs", () => {
@@ -374,6 +396,7 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_BIND).toBe(identity.gatewayBind);
     expect(env.OPENCLAW_LOG_DIR).toBe(identity.logDir);
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe(identity.gatewayLaunchdLabel);
+    expect(env.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH).toBeUndefined();
   });
 
   it("forwards proxy environment variables for launchd/systemd runtime", () => {

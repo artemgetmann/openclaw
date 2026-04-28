@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -162,8 +163,12 @@ function buildProtectedTelegramTokenConflictMessage(params: {
   tokens: string[];
   protectedBy: string;
 }): string {
+  const fingerprints = params.tokens.map((token) =>
+    createHash("sha256").update(token).digest("hex").slice(0, 12),
+  );
   return [
-    `Refusing to start gateway with Telegram bot token(s) actively owned by the canonical shared gateway: ${params.tokens.join(", ")}.`,
+    `Refusing to start gateway with ${params.tokens.length} Telegram bot token(s) actively owned by the canonical shared gateway.`,
+    `Token fingerprints: ${fingerprints.join(", ")}.`,
     `Config path: ${params.configPath}`,
     `Protected by: ${params.protectedBy}`,
     "Use dedicated tester bot tokens for this runtime, or stop the canonical shared gateway before borrowing one of its configured bots.",

@@ -25,6 +25,7 @@ vi.mock("../daemon/program-args.js", () => ({
 
 vi.mock("../daemon/service-env.js", () => ({
   buildServiceEnvironment: mocks.buildServiceEnvironment,
+  resolveGatewayRuntimeIdentityEnv: (env: Record<string, string | undefined>) => ({ ...env }),
 }));
 
 import {
@@ -239,6 +240,53 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.HOME).toBe("/Users/service");
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
     expect(plan.environment.OPENCLAW_PORT).not.toBe("9999");
+  });
+
+  it("fills canonical shared gateway markers from the default service install plan", async () => {
+    mockNodeGatewayPlanFixture({
+      workingDirectory: undefined,
+      serviceEnvironment: {
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_CONFIG_PATH:
+          "/Users/me/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+      },
+    });
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["/opt/node", "/Users/me/Programming_Projects/openclaw/dist/index.js"],
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 18789,
+      runtime: "node",
+    });
+
+    expect(plan.environment.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH).toBe(
+      "/Users/me/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+    );
+    expect(plan.environment.OPENCLAW_MAIN_REPO).toBe("/Users/me/Programming_Projects/openclaw");
+  });
+
+  it("does not assign canonical shared gateway markers to isolated profile services", async () => {
+    mockNodeGatewayPlanFixture({
+      workingDirectory: undefined,
+      serviceEnvironment: {
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.tester",
+        OPENCLAW_CONFIG_PATH: "/tmp/tester/openclaw.json",
+      },
+    });
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["/opt/node", "/Users/me/openclaw/dist/index.js"],
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 19001,
+      runtime: "node",
+    });
+
+    expect(plan.environment.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH).toBeUndefined();
+    expect(plan.environment.OPENCLAW_MAIN_REPO).toBeUndefined();
   });
 
   it("merges env-backed auth-profile refs into the service environment", async () => {

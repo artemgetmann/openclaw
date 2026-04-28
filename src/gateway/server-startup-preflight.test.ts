@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -183,6 +184,14 @@ describe("runGatewayStartupConfigPreflight", () => {
         },
       }),
     );
+    const mainTokenFingerprint = createHash("sha256")
+      .update("main-token")
+      .digest("hex")
+      .slice(0, 12);
+    const financeTokenFingerprint = createHash("sha256")
+      .update("finance-token")
+      .digest("hex")
+      .slice(0, 12);
 
     await expect(
       runGatewayStartupConfigPreflight({
@@ -200,10 +209,24 @@ describe("runGatewayStartupConfigPreflight", () => {
       expect.objectContaining<Partial<GatewayStartupPreflightError>>({
         phase: "config_validation",
         message: expect.stringContaining(
-          "Refusing to start gateway with Telegram bot token(s) actively owned by the canonical shared gateway: main-token, finance-token.",
+          `Token fingerprints: ${mainTokenFingerprint}, ${financeTokenFingerprint}.`,
         ),
       }),
     );
+
+    await expect(
+      runGatewayStartupConfigPreflight({
+        readSnapshot,
+        writeConfig: vi.fn(),
+        log: { info: vi.fn(), warn: vi.fn() },
+        isNixMode: false,
+        env: {
+          HOME: home,
+          OPENCLAW_MAIN_REPO: canonicalMainRepo,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        },
+      }),
+    ).rejects.not.toThrow(/main-token|finance-token/);
   });
 });
 
