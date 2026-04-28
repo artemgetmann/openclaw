@@ -4,7 +4,12 @@ import {
 } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+import {
+  GATEWAY_LAUNCH_AGENT_LABEL,
+  GATEWAY_SYSTEMD_SERVICE_NAME,
+  GATEWAY_WINDOWS_TASK_NAME,
+  resolveGatewayLaunchAgentLabel,
+} from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import {
   buildServiceEnvironment,
@@ -24,6 +29,37 @@ export type GatewayInstallPlan = {
   workingDirectory?: string;
   environment: Record<string, string | undefined>;
 };
+
+function isDefaultSharedGatewayServiceEnv(
+  environment: Record<string, string | undefined>,
+): boolean {
+  return (
+    environment.OPENCLAW_LAUNCHD_LABEL === GATEWAY_LAUNCH_AGENT_LABEL ||
+    environment.OPENCLAW_SYSTEMD_UNIT === `${GATEWAY_SYSTEMD_SERVICE_NAME}.service` ||
+    environment.OPENCLAW_WINDOWS_TASK_NAME === GATEWAY_WINDOWS_TASK_NAME
+  );
+}
+
+function resolveRepoRootFromGatewayProgram(params: {
+  programArguments: string[];
+  workingDirectory?: string;
+}): string | undefined {
+  if (params.workingDirectory?.trim()) {
+    return params.workingDirectory.trim();
+  }
+
+  // Repo-backed installs run the built CLI as <repo>/dist/index.js. Persisting
+  // the repo root lets runtime ownership checks distinguish canonical main from
+  // a random package/global install without depending on the caller's shell env.
+  for (const arg of params.programArguments) {
+    const match = /^(.*)[/\\]dist[/\\][^/\\]+\.m?js$/.exec(arg);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return undefined;
+}
 
 function collectAuthProfileServiceEnvVars(params: {
   env: Record<string, string | undefined>;
@@ -92,6 +128,14 @@ export async function buildGatewayInstallPlan(params: {
           resolveGatewayLaunchAgentLabel(daemonEnv.OPENCLAW_PROFILE)
         : undefined,
   });
+  if (isDefaultSharedGatewayServiceEnv(serviceEnvironment)) {
+    serviceEnvironment.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH ??=
+      serviceEnvironment.OPENCLAW_CONFIG_PATH;
+    serviceEnvironment.OPENCLAW_MAIN_REPO ??= resolveRepoRootFromGatewayProgram({
+      programArguments,
+      workingDirectory,
+    });
+  }
 
   // Persist only daemon-owned env here. config.env is loaded again at runtime via
   // loadConfig(), so snapshotting it into launchd/systemd would let stale secrets

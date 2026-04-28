@@ -8,6 +8,7 @@ import {
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
+  GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SERVICE_MARKER,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -34,6 +35,8 @@ type BuildServicePathOptions = MinimalServicePathOptions & {
 type SharedServiceEnvironmentFields = {
   stateDir: string | undefined;
   configPath: string | undefined;
+  canonicalSharedGatewayConfigPath: string | undefined;
+  mainRepo: string | undefined;
   tmpDir: string;
   minimalPath: string | undefined;
   proxyEnv: Record<string, string | undefined>;
@@ -372,6 +375,8 @@ function buildCommonServiceEnvironment(
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
     OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
+    OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH: sharedEnv.canonicalSharedGatewayConfigPath,
+    OPENCLAW_MAIN_REPO: sharedEnv.mainRepo,
   };
   if (sharedEnv.minimalPath) {
     serviceEnv.PATH = sharedEnv.minimalPath;
@@ -385,6 +390,18 @@ function resolveSharedServiceEnvironmentFields(
 ): SharedServiceEnvironmentFields {
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
+  const launchdLabel =
+    env.OPENCLAW_LAUNCHD_LABEL?.trim() ||
+    (platform === "darwin" ? resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE) : "");
+  const defaultSharedGateway = launchdLabel === GATEWAY_LAUNCH_AGENT_LABEL;
+  // The canonical shared gateway protects the config it owns. Persisting this
+  // path into launchd/systemd avoids runtime fallback to legacy ~/.openclaw when
+  // the installed service was intentionally pointed at an app-owned config.
+  const canonicalSharedGatewayConfigPath =
+    env.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH?.trim() ||
+    env.OPENCLAW_SHARED_GATEWAY_CONFIG_PATH?.trim() ||
+    (defaultSharedGateway ? configPath : undefined);
+  const mainRepo = env.OPENCLAW_MAIN_REPO?.trim() || undefined;
   // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
   const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
   const proxyEnv = readServiceProxyEnvironment(env);
@@ -397,6 +414,8 @@ function resolveSharedServiceEnvironmentFields(
   return {
     stateDir,
     configPath,
+    canonicalSharedGatewayConfigPath,
+    mainRepo,
     tmpDir,
     // On Windows, Scheduled Tasks should inherit the current task PATH instead of
     // freezing the install-time snapshot into gateway.cmd/node-host.cmd.
