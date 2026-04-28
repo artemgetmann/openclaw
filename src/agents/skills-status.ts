@@ -241,7 +241,6 @@ function buildSkillStatus(
 const SHADOW_WARNING_SOURCES = new Set([
   "openclaw-workspace",
   "openclaw-managed",
-  "agents-skills-personal",
   "agents-skills-project",
   "openclaw-extra",
 ]);
