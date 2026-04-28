@@ -429,6 +429,8 @@ NODE
 
 BASELINE_STATE_DIR=""
 BASELINE_CONFIG_PATH=""
+BASELINE_META_PATH=""
+BASELINE_STRIPPED_NAMED_TELEGRAM_ACCOUNTS="none"
 BASELINE_BOOTSTRAP_STATUS="disabled"
 if [[ -f "$BASELINE_BOOTSTRAP_SCRIPT" ]]; then
   if ! BASELINE_BOOTSTRAP_OUTPUT="$(bash "$BASELINE_BOOTSTRAP_SCRIPT" --root "$WORKTREE_PATH")"; then
@@ -438,6 +440,8 @@ if [[ -f "$BASELINE_BOOTSTRAP_SCRIPT" ]]; then
   BASELINE_BOOTSTRAP_STATUS="ok"
   BASELINE_STATE_DIR="$(printf '%s\n' "$BASELINE_BOOTSTRAP_OUTPUT" | sed -n 's/^baseline_state_dir=//p' | tail -n 1)"
   BASELINE_CONFIG_PATH="$(printf '%s\n' "$BASELINE_BOOTSTRAP_OUTPUT" | sed -n 's/^baseline_config_path=//p' | tail -n 1)"
+  BASELINE_META_PATH="$(printf '%s\n' "$BASELINE_BOOTSTRAP_OUTPUT" | sed -n 's/^baseline_meta_path=//p' | tail -n 1)"
+  BASELINE_STRIPPED_NAMED_TELEGRAM_ACCOUNTS="$(printf '%s\n' "$BASELINE_BOOTSTRAP_OUTPUT" | sed -n 's/^baseline_stripped_named_telegram_accounts=//p' | tail -n 1)"
 else
   echo "warning: tester baseline bootstrap helper missing; falling back to legacy lane state path" >&2
 fi
@@ -540,6 +544,8 @@ echo "dev_port=${DEV_PORT}"
 echo "baseline_bootstrap=${BASELINE_BOOTSTRAP_STATUS}"
 echo "baseline_state_dir=${BASELINE_STATE_DIR}"
 echo "baseline_config_path=${BASELINE_CONFIG_PATH}"
+echo "baseline_meta_path=${BASELINE_META_PATH}"
+echo "baseline_stripped_named_telegram_accounts=${BASELINE_STRIPPED_NAMED_TELEGRAM_ACCOUNTS}"
 echo "telegram_bootstrap=${TELEGRAM_BOOTSTRAP_STATUS}"
 echo "bootstrap_runtime=${BOOTSTRAP_RUNTIME_STATUS}"
 if [[ "$NO_BOOTSTRAP" != "1" ]]; then

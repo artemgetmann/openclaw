@@ -35,6 +35,12 @@ and more reliable default.
   - Copy `.env.bots` from the main checkout if needed
   - Run `bash scripts/assign-bot.sh`
 - Each worktree gets its own test bot. Do not reuse production tokens.
+- Worktree tester baselines strip inherited Telegram secrets on purpose. If the
+  source config had named Telegram accounts, the bootstrap writes non-secret
+  strip metadata to the baseline `auth-sync.json`, and
+  `bash scripts/telegram-live-preflight.sh` prints the affected account ids.
+  Refresh those named accounts with their own `tokenFile`/`botToken`, or disable
+  them, before testing named-account bots.
 
 ## Common tools
 

@@ -255,6 +255,39 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
+  it("adopts the loaded canonical consumer service env when no runtime selector was requested", async () => {
+    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_PROFILE;
+    delete process.env.OPENCLAW_LAUNCHD_LABEL;
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_PROFILE: "consumer",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_STATE_DIR: "/Users/test/Library/Application Support/OpenClaw/.openclaw",
+        OPENCLAW_CONFIG_PATH:
+          "/Users/test/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      },
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.config?.cli.path).toBe(
+      "/Users/test/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+    );
+    expect(status.config?.daemon?.path).toBe(
+      "/Users/test/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+    );
+    expect(status.config?.mismatch).toBeUndefined();
+    expect(status.portMismatch).toBeUndefined();
+  });
+
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
     const status = await gatherDaemonStatus({
       rpc: { url: "wss://override.example:18790" },

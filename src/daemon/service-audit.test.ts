@@ -145,6 +145,41 @@ describe("auditGatewayServiceConfig", () => {
     });
     expectTokenAudit(audit, { embedded: false, mismatch: false });
   });
+
+  it("flags app-owned runtime identity drift in the installed service env", async () => {
+    const env = {
+      HOME: "/Users/test",
+      OPENCLAW_HOME: "/Users/test/Library/Application Support/OpenClaw",
+      OPENCLAW_STATE_DIR: "/Users/test/Library/Application Support/OpenClaw/.openclaw",
+      OPENCLAW_CONFIG_PATH:
+        "/Users/test/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+      OPENCLAW_LOG_DIR: "/Users/test/Library/Application Support/OpenClaw/.openclaw/logs",
+      OPENCLAW_PROFILE: "consumer",
+      OPENCLAW_GATEWAY_PORT: "18789",
+      OPENCLAW_GATEWAY_BIND: "loopback",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+    };
+    const audit = await auditGatewayServiceConfig({
+      env,
+      platform: "darwin",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway", "--port", "18789"],
+        environment: {
+          HOME: "/Users/test",
+          PATH: buildMinimalServicePath({ platform: "darwin", env }),
+          OPENCLAW_GATEWAY_PORT: "18789",
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        },
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayRuntimeIdentityMismatch,
+    );
+    expect(issue?.message).toContain("runtime identity");
+    expect(issue?.detail).toContain("OPENCLAW_STATE_DIR");
+    expect(issue?.detail).toContain("OPENCLAW_CONFIG_PATH");
+  });
 });
 
 describe("checkTokenDrift", () => {

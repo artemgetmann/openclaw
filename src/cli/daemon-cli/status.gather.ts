@@ -93,6 +93,16 @@ type ResolvedGatewayStatus = {
   probeUrlOverride: string | null;
 };
 
+const RUNTIME_SELECTOR_ENV_KEYS = [
+  "OPENCLAW_CONSUMER_INSTANCE_ID",
+  "OPENCLAW_HOME",
+  "OPENCLAW_LAUNCHD_LABEL",
+  "OPENCLAW_PROFILE",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_GATEWAY_PORT",
+] as const;
+
 export type DaemonStatus = {
   runtimeFingerprint?: RuntimeFingerprint;
   service: {
@@ -152,14 +162,38 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
   return true;
 }
 
+function hasExplicitRuntimeSelector(env: Record<string, string | undefined>): boolean {
+  return RUNTIME_SELECTOR_ENV_KEYS.some((key) => Boolean(env[key]?.trim()));
+}
+
+function shouldAdoptCanonicalConsumerServiceEnv(params: {
+  rawEnv: Record<string, string | undefined>;
+  serviceEnv?: Record<string, string>;
+}): boolean {
+  if (hasExplicitRuntimeSelector(params.rawEnv)) {
+    return false;
+  }
+  const serviceEnv = params.serviceEnv;
+  if (!serviceEnv) {
+    return false;
+  }
+  return (
+    serviceEnv.OPENCLAW_PROFILE?.trim() === "consumer" &&
+    serviceEnv.OPENCLAW_LAUNCHD_LABEL?.trim() === "ai.openclaw.gateway" &&
+    Boolean(serviceEnv.OPENCLAW_STATE_DIR?.trim()) &&
+    Boolean(serviceEnv.OPENCLAW_CONFIG_PATH?.trim())
+  );
+}
+
 function parseGatewaySecretRefPathFromError(error: unknown): string | null {
   return isGatewaySecretRefUnavailableError(error) ? error.path : null;
 }
 
 async function loadDaemonConfigContext(
+  cliEnvInput: Record<string, string | undefined>,
   serviceEnv?: Record<string, string>,
 ): Promise<DaemonConfigContext> {
-  const cliEnv = resolveGatewayRuntimeIdentityEnv(process.env);
+  const cliEnv = cliEnvInput;
   const mergedDaemonEnv = {
     ...cliEnv,
     ...(serviceEnv ?? undefined),
@@ -294,8 +328,18 @@ export async function gatherDaemonStatus(
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
   const service = resolveGatewayService();
-  const cliEnv = resolveGatewayRuntimeIdentityEnv(process.env);
-  const command = await service.readCommand(cliEnv as NodeJS.ProcessEnv).catch(() => null);
+  const rawEnv = process.env as Record<string, string | undefined>;
+  const shellCliEnv = resolveGatewayRuntimeIdentityEnv(rawEnv);
+  const command = await service.readCommand(shellCliEnv as NodeJS.ProcessEnv).catch(() => null);
+  const cliEnv = shouldAdoptCanonicalConsumerServiceEnv({
+    rawEnv,
+    serviceEnv: command?.environment,
+  })
+    ? ({
+        ...shellCliEnv,
+        ...command?.environment,
+      } satisfies Record<string, string | undefined>)
+    : shellCliEnv;
   const serviceEnv = command?.environment
     ? ({
         ...cliEnv,
@@ -319,7 +363,7 @@ export async function gatherDaemonStatus(
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch,
-  } = await loadDaemonConfigContext(command?.environment);
+  } = await loadDaemonConfigContext(cliEnv, command?.environment);
   const { gateway, daemonPort, cliPort, probeUrlOverride } = await resolveGatewayStatusSummary({
     cliCfg,
     daemonCfg,
