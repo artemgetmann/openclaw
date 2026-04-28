@@ -480,11 +480,6 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
-  const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
-  const personalAgentsSkills = loadSkills({
-    dir: personalAgentsSkillsDir,
-    source: "agents-skills-personal",
-  });
   const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
   const projectAgentsSkills = loadSkills({
     dir: projectAgentsSkillsDir,
@@ -496,7 +491,10 @@ function loadSkillEntries(
   });
 
   const merged = new Map<string, Skill>();
-  // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
+  // Precedence: extra < bundled < managed < agents-skills-project < workspace.
+  // Personal cross-agent skills should be exposed through the managed skills
+  // root, usually by symlinking ~/.openclaw/skills to ~/.agents/skills. Keeping
+  // one canonical filesystem root avoids hidden second-path behavior.
   for (const skill of extraSkills) {
     merged.set(skill.name, skill);
   }
@@ -504,9 +502,6 @@ function loadSkillEntries(
     merged.set(skill.name, skill);
   }
   for (const skill of managedSkills) {
-    merged.set(skill.name, skill);
-  }
-  for (const skill of personalAgentsSkills) {
     merged.set(skill.name, skill);
   }
   for (const skill of projectAgentsSkills) {

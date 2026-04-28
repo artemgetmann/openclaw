@@ -8,7 +8,7 @@ title: "Skills"
 
 # Skills (OpenClaw)
 
-OpenClaw uses **[AgentSkills](https://agentskills.io)-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. OpenClaw loads **bundled skills** plus optional local and shared-user skill roots, and filters them at load time based on environment, config, and binary presence.
+OpenClaw uses **[AgentSkills](https://agentskills.io)-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. OpenClaw loads **bundled skills** plus optional local skill roots, and filters them at load time based on environment, config, and binary presence.
 
 ## Locations and precedence
 
@@ -17,27 +17,28 @@ Skills are loaded from these places:
 1. **Bundled skills**: shipped with the install (npm package or OpenClaw.app)
 2. **Extra skill roots**: directories from `skills.load.extraDirs`
 3. **Managed/local skills**: `~/.openclaw/skills`
-4. **Shared user skills**: `~/.agents/skills`
-5. **Project agent skills**: `<workspace>/.agents/skills`
-6. **Workspace skills**: `<workspace>/skills`
+4. **Project agent skills**: `<workspace>/.agents/skills`
+5. **Workspace skills**: `<workspace>/skills`
 
 If a skill name conflicts, precedence is:
 
-`<workspace>/skills` (highest) → `<workspace>/.agents/skills` → `~/.agents/skills` → `~/.openclaw/skills` → bundled skills → `skills.load.extraDirs` (lowest)
+`<workspace>/skills` (highest) → `<workspace>/.agents/skills` → `~/.openclaw/skills` → bundled skills → `skills.load.extraDirs` (lowest)
 
-`~/.agents/skills` is the preferred home for personal skills shared between
-OpenClaw, Codex, Claude Code, and other agents. Keep real skill folders there
-instead of relying on symlinks inside `<workspace>/skills`; workspace symlinks
-that resolve outside the workspace root are blocked by design.
+For personal cross-agent skills, use `~/.agents/skills` as the canonical
+filesystem root and symlink `~/.openclaw/skills` to it. That keeps OpenClaw,
+Codex, Claude Code, and other agents on the same skill directory without adding
+a second OpenClaw-only discovery path. Workspace symlinks that resolve outside
+the workspace root are blocked by design.
 
 ## Per-agent vs shared skills
 
 In **multi-agent** setups, each agent has its own workspace. That means:
 
 - **Per-agent skills** live in `<workspace>/skills` for that agent only.
-- **Shared personal skills** live in `~/.agents/skills` and are visible to
-  **all agents** on the same machine.
-- **Managed/local overrides** can live in `~/.openclaw/skills`.
+- **Shared personal skills** live in `~/.agents/skills`; symlink
+  `~/.openclaw/skills` to that directory to expose them to OpenClaw.
+- **Managed/local overrides** can live in `~/.openclaw/skills` if you are not
+  using the shared symlink.
 - **Shared folders** can also be added via `skills.load.extraDirs` (lowest
   precedence) if you want a common third-party skills pack used by multiple agents.
 
