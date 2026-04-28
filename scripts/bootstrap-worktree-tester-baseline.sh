@@ -80,7 +80,7 @@ if (!helperPath || !targetRoot) {
 const {
   deriveWorktreeTesterBaseline,
   resolveTesterBaselineAgentIds,
-  sanitizeInheritedTesterConfig,
+  sanitizeInheritedTesterConfigWithMetadata,
   sha256File,
 } = await import(pathToFileURL(helperPath).href);
 
@@ -103,7 +103,8 @@ if (sourceConfigPath && fs.existsSync(sourceConfigPath)) {
   }
 }
 
-const sanitizedConfig = sanitizeInheritedTesterConfig(sourceConfig);
+const { config: sanitizedConfig, metadata: sanitizationMetadata } =
+  sanitizeInheritedTesterConfigWithMetadata(sourceConfig);
 fs.writeFileSync(baseline.configPath, `${JSON.stringify(sanitizedConfig, null, 2)}\n`, "utf8");
 fs.chmodSync(baseline.configPath, 0o600);
 
@@ -145,6 +146,7 @@ const meta = {
   configHash: sha256File(baseline.configPath),
   syncedAt: new Date().toISOString(),
   syncedAgents,
+  sanitization: sanitizationMetadata,
 };
 fs.writeFileSync(baseline.metaPath, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
 fs.chmodSync(baseline.metaPath, 0o600);
@@ -155,6 +157,11 @@ console.log(`baseline_config_path=${baseline.configPath}`);
 console.log(`baseline_source_config=${sourceConfigPresent ? sourceConfigPath : "missing"}`);
 console.log(`baseline_synced_agents=${syncedAgents.map((entry) => entry.agentId).join(",") || "none"}`);
 console.log(`baseline_meta_path=${baseline.metaPath}`);
+console.log(
+  `baseline_stripped_named_telegram_accounts=${
+    sanitizationMetadata.strippedNamedTelegramAccounts.join(",") || "none"
+  }`,
+);
 NODE
 )"
 

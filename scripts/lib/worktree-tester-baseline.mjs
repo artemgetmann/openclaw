@@ -101,15 +101,35 @@ export function deriveWorktreeTesterBaseline(params) {
 }
 
 export function sanitizeInheritedTesterConfig(baseConfig) {
+  return sanitizeInheritedTesterConfigWithMetadata(baseConfig).config;
+}
+
+export function sanitizeInheritedTesterConfigWithMetadata(baseConfig) {
   const config = baseConfig && typeof baseConfig === "object" ? structuredClone(baseConfig) : {};
   const channels = config.channels && typeof config.channels === "object" ? config.channels : {};
   const telegram =
     channels.telegram && typeof channels.telegram === "object" ? { ...channels.telegram } : null;
+  const strippedTelegramCredentials = [];
 
   if (telegram) {
     // Tester lanes inherit provider/model config, not ownership of the shared
     // Telegram bot credentials from the sacred runtime.
-    delete telegram.botToken;
+    if (typeof telegram.botToken === "string" && telegram.botToken.trim()) {
+      strippedTelegramCredentials.push({
+        accountId: "default",
+        accountKind: "default",
+        sourceKind: "botToken",
+      });
+      delete telegram.botToken;
+    }
+    if (typeof telegram.tokenFile === "string" && telegram.tokenFile.trim()) {
+      strippedTelegramCredentials.push({
+        accountId: "default",
+        accountKind: "default",
+        sourceKind: "tokenFile",
+      });
+      delete telegram.tokenFile;
+    }
     const accounts =
       telegram.accounts && typeof telegram.accounts === "object" ? { ...telegram.accounts } : null;
     if (accounts) {
@@ -118,7 +138,22 @@ export function sanitizeInheritedTesterConfig(baseConfig) {
           continue;
         }
         const next = { ...entry };
-        delete next.botToken;
+        if (typeof next.botToken === "string" && next.botToken.trim()) {
+          strippedTelegramCredentials.push({
+            accountId,
+            accountKind: accountId === "default" ? "default" : "named",
+            sourceKind: "botToken",
+          });
+          delete next.botToken;
+        }
+        if (typeof next.tokenFile === "string" && next.tokenFile.trim()) {
+          strippedTelegramCredentials.push({
+            accountId,
+            accountKind: accountId === "default" ? "default" : "named",
+            sourceKind: "tokenFile",
+          });
+          delete next.tokenFile;
+        }
         accounts[accountId] = next;
       }
       telegram.accounts = accounts;
@@ -130,7 +165,19 @@ export function sanitizeInheritedTesterConfig(baseConfig) {
   }
 
   scrubInheritedOpenAiSecrets(config);
-  return config;
+  return {
+    config,
+    metadata: {
+      strippedTelegramCredentials,
+      strippedNamedTelegramAccounts: [
+        ...new Set(
+          strippedTelegramCredentials
+            .filter((entry) => entry.accountKind === "named")
+            .map((entry) => entry.accountId),
+        ),
+      ],
+    },
+  };
 }
 
 export function resolveTesterBaselineAgentIds(baseConfig) {

@@ -15,6 +15,7 @@ read -r -d '' MODELS_JSON <<'JSON' || true
   "anthropic/claude-opus-4-6": { "alias": "Opus" },
   "anthropic/claude-sonnet-4-6": { "alias": "Sonnet" },
   "anthropic/claude-haiku-4-5": { "alias": "Haiku" },
+  "openai-codex/gpt-5.5": { "alias": "Codex 5.5" },
   "openai-codex/gpt-5.4": { "alias": "Codex 5.4" },
   "openai-codex/gpt-5.3-codex": { "alias": "Codex 5.3" },
   "openai-codex/gpt-5.3-codex-spark": { "alias": "Codex Spark" },

@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HELPER_MODULE="${SCRIPT_DIR}/lib/telegram-live-runtime-helpers.mjs"
+BASELINE_HELPER_MODULE="${SCRIPT_DIR}/lib/worktree-tester-baseline.mjs"
 
 WORKTREE="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
 if [[ -d "$WORKTREE" ]]; then
@@ -19,6 +20,10 @@ RUNTIME_WORKTREE=""
 RUNTIME_OWNERSHIP="fail"
 RUNTIME_CONFIG_PRESENT="no"
 RUNTIME_CONFIG_TOKEN_PRESENT="no"
+BASELINE_META_PATH=""
+NAMED_TELEGRAM_CREDENTIALS_STRIPPED="no"
+STRIPPED_NAMED_TELEGRAM_ACCOUNTS="none"
+STRIPPED_NAMED_TELEGRAM_SOURCES="none"
 TOKEN_PRESENT="no"
 TOKEN_FINGERPRINT="none"
 TOKEN_CLAIM_COUNT=0
@@ -183,6 +188,73 @@ NODE
   fi
 }
 
+inspect_baseline_sanitization_metadata() {
+  if [[ ! -f "$BASELINE_HELPER_MODULE" ]]; then
+    return
+  fi
+
+  local metadata_lines=""
+  metadata_lines="$(
+    WORKTREE_PATH="$WORKTREE" BASELINE_HELPER_MODULE="$BASELINE_HELPER_MODULE" node --input-type=module - <<'NODE'
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const helperPath = process.env.BASELINE_HELPER_MODULE;
+const worktreePath = process.env.WORKTREE_PATH;
+if (!helperPath || !worktreePath) {
+  process.exit(0);
+}
+
+const { deriveWorktreeTesterBaseline } = await import(pathToFileURL(helperPath).href);
+const baseline = deriveWorktreeTesterBaseline({ worktreePath });
+let meta = {};
+if (fs.existsSync(baseline.metaPath)) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(baseline.metaPath, "utf8"));
+    if (parsed && typeof parsed === "object") {
+      meta = parsed;
+    }
+  } catch {
+    meta = {};
+  }
+}
+
+const stripped = Array.isArray(meta?.sanitization?.strippedTelegramCredentials)
+  ? meta.sanitization.strippedTelegramCredentials
+  : [];
+const named = stripped.filter((entry) => entry?.accountKind === "named");
+const accounts = [
+  ...new Set(named.map((entry) => String(entry.accountId || "").trim()).filter(Boolean)),
+];
+const sources = [
+  ...new Set(
+    named
+      .map((entry) => {
+        const accountId = String(entry.accountId || "").trim();
+        const sourceKind = String(entry.sourceKind || "").trim();
+        return accountId && sourceKind ? `${accountId}:${sourceKind}` : "";
+      })
+      .filter(Boolean),
+  ),
+];
+
+process.stdout.write(`${baseline.metaPath}\n`);
+process.stdout.write(`${accounts.length > 0 ? "yes" : "no"}\n`);
+process.stdout.write(`${accounts.join(",") || "none"}\n`);
+process.stdout.write(`${sources.join(",") || "none"}\n`);
+NODE
+  )" || true
+
+  if [[ -z "$metadata_lines" ]]; then
+    return
+  fi
+
+  BASELINE_META_PATH="$(printf '%s\n' "$metadata_lines" | sed -n '1p')"
+  NAMED_TELEGRAM_CREDENTIALS_STRIPPED="$(printf '%s\n' "$metadata_lines" | sed -n '2p')"
+  STRIPPED_NAMED_TELEGRAM_ACCOUNTS="$(printf '%s\n' "$metadata_lines" | sed -n '3p')"
+  STRIPPED_NAMED_TELEGRAM_SOURCES="$(printf '%s\n' "$metadata_lines" | sed -n '4p')"
+}
+
 resolve_token_claim() {
   local env_local="${REPO_ROOT}/.env.local"
   local token=""
@@ -252,6 +324,7 @@ PY
 resolve_profile
 resolve_runtime_owner
 inspect_runtime_config
+inspect_baseline_sanitization_metadata
 resolve_token_claim
 
 if [[ -z "${BRANCH}" || "${BRANCH}" == "HEAD" ]]; then
@@ -276,6 +349,10 @@ echo "runtime_ownership=${RUNTIME_OWNERSHIP}"
 echo "runtime_config_path=${RUNTIME_CONFIG_PATH}"
 echo "runtime_config_present=${RUNTIME_CONFIG_PRESENT}"
 echo "runtime_config_token_present=${RUNTIME_CONFIG_TOKEN_PRESENT}"
+echo "baseline_meta_path=${BASELINE_META_PATH}"
+echo "named_telegram_credentials_stripped=${NAMED_TELEGRAM_CREDENTIALS_STRIPPED}"
+echo "stripped_named_telegram_accounts=${STRIPPED_NAMED_TELEGRAM_ACCOUNTS}"
+echo "stripped_named_telegram_sources=${STRIPPED_NAMED_TELEGRAM_SOURCES}"
 echo "token_present=${TOKEN_PRESENT}"
 echo "token_fingerprint=${TOKEN_FINGERPRINT}"
 echo "token_claim_count=${TOKEN_CLAIM_COUNT}"
@@ -283,6 +360,9 @@ echo "assigned_bot_id=${ASSIGNED_BOT_ID}"
 echo "assigned_bot_username=${ASSIGNED_BOT_USERNAME}"
 echo "assigned_bot_name=${ASSIGNED_BOT_NAME}"
 echo "next_action=bash scripts/telegram-live-runtime.sh ensure"
+if [[ "${NAMED_TELEGRAM_CREDENTIALS_STRIPPED}" == "yes" ]]; then
+  echo "named_telegram_next_action=refresh tokenFile/botToken for listed named accounts or disable them before testing named-account bots"
+fi
 
 if [[ "${FAIL}" -ne 0 ]]; then
   exit 1
