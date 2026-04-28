@@ -37,6 +37,7 @@ struct GatewayEnvironmentTests {
             env: [
                 "OPENCLAW_CONFIG_PATH": configPath,
                 "OPENCLAW_APP_VARIANT": "standard",
+                "OPENCLAW_GATEWAY_PORT": nil,
             ],
             defaults: ["gatewayPort": nil])
         {
@@ -49,16 +50,17 @@ struct GatewayEnvironmentTests {
         }
     }
 
-    @Test func `consumer flavor defaults to isolated gateway port`() async {
+    @Test func `consumer flavor defaults to canonical gateway port`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(
             env: [
                 "OPENCLAW_CONFIG_PATH": configPath,
                 "OPENCLAW_APP_VARIANT": "consumer",
+                "OPENCLAW_GATEWAY_PORT": nil,
             ],
             defaults: ["gatewayPort": nil])
         {
-            #expect(GatewayEnvironment.gatewayPort() == 19001)
+            #expect(GatewayEnvironment.gatewayPort() == 18789)
         }
     }
 

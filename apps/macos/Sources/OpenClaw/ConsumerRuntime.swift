@@ -4,80 +4,83 @@ import Foundation
 enum ConsumerRuntime {
     static let imageBackend = "sips"
 
-    private static var instance: ConsumerInstance {
+    private static var identity: RuntimeIdentity {
         .current
     }
 
     static var runtimeRootURL: URL {
-        self.instance.runtimeRootURL
+        self.identity.runtimeRootURL
     }
 
     static var stateDirURL: URL {
-        self.instance.stateDirURL
+        self.identity.stateDirURL
     }
 
     static var configURL: URL {
-        self.instance.configURL
+        self.identity.configURL
     }
 
     static var workspaceURL: URL {
-        self.instance.workspaceURL
+        self.identity.workspaceURL
     }
 
     static var logsDirURL: URL {
-        self.instance.logsDirURL
+        self.identity.logsDirURL
     }
 
     static var runtimeHomeName: String {
-        self.instance.runtimeHomeName
+        ConsumerInstance.current.runtimeHomeName
     }
 
     static var profile: String {
-        self.instance.profile
+        self.identity.profile ?? "default"
     }
 
     static var gatewayPort: Int {
-        self.instance.gatewayPort
+        self.identity.gatewayPort
     }
 
     static var gatewayBind: String {
-        self.instance.gatewayBind
+        self.identity.gatewayBind
     }
 
     static var launchdLabel: String {
-        self.instance.appLaunchdLabel
+        self.identity.appLaunchdLabel
     }
 
     static var gatewayLaunchdLabel: String {
-        self.instance.gatewayLaunchdLabel
+        self.identity.gatewayLaunchdLabel
     }
 
     static var appLaunchAgentPlistURL: URL {
-        FileManager().homeDirectoryForCurrentUser
+        OpenClawHome.currentURL
             .appendingPathComponent("Library/LaunchAgents/\(self.launchdLabel).plist")
     }
 
     static var gatewayLaunchAgentPlistURL: URL {
-        FileManager().homeDirectoryForCurrentUser
+        OpenClawHome.currentURL
             .appendingPathComponent("Library/LaunchAgents/\(self.gatewayLaunchdLabel).plist")
     }
 
     static var installPrefixURL: URL {
-        self.instance.installPrefixURL
+        self.identity.installPrefixURL
     }
 
     static func bootstrapProcessEnvironment() {
-        let instance = self.instance
+        let identity = self.identity
+        let instance = ConsumerInstance.current
+        OpenClawPaths.migrateConsumerRuntimeIfNeeded(identity: identity, instanceID: instance.id)
         // Keep the app, launch agents, and any child CLI processes pointed at the
         // consumer-owned runtime before any config/state loaders spin up.
-        self.setEnv("OPENCLAW_PROFILE", value: instance.profile)
-        self.setEnv("OPENCLAW_HOME", value: instance.runtimeRootURL.path)
-        self.setEnv("OPENCLAW_STATE_DIR", value: instance.stateDirURL.path)
-        self.setEnv("OPENCLAW_CONFIG_PATH", value: instance.configURL.path)
-        self.setEnv("OPENCLAW_GATEWAY_PORT", value: String(instance.gatewayPort))
-        self.setEnv("OPENCLAW_GATEWAY_BIND", value: instance.gatewayBind)
-        self.setEnv("OPENCLAW_LOG_DIR", value: instance.logsDirURL.path)
-        self.setEnv("OPENCLAW_LAUNCHD_LABEL", value: instance.gatewayLaunchdLabel)
+        self.setEnv("OPENCLAW_PROFILE", value: identity.profile ?? "default")
+        self.setEnv("OPENCLAW_HOME", value: identity.runtimeRootURL.path)
+        self.setEnv("OPENCLAW_STATE_DIR", value: identity.stateDirURL.path)
+        self.setEnv("OPENCLAW_CONFIG_PATH", value: identity.configURL.path)
+        self.setEnv("OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH", value: identity.configURL.path)
+        self.setEnv("OPENCLAW_GATEWAY_PORT", value: String(identity.gatewayPort))
+        self.setEnv("OPENCLAW_GATEWAY_BIND", value: identity.gatewayBind)
+        self.setEnv("OPENCLAW_LOG_DIR", value: identity.logsDirURL.path)
+        self.setEnv("OPENCLAW_LAUNCHD_LABEL", value: identity.gatewayLaunchdLabel)
         self.setDefaultEnv("OPENCLAW_IMAGE_BACKEND", value: self.imageBackend)
         if let id = instance.id {
             self.setEnv(ConsumerInstance.envKey, value: id)

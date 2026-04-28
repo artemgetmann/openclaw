@@ -12,6 +12,7 @@ import {
   launchAgentPlistExists,
   repairLaunchAgentBootstrap,
 } from "../daemon/launchd.js";
+import { resolveGatewayRuntimeIdentityEnv } from "../daemon/service-env.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
@@ -249,9 +250,12 @@ export async function maybeRepairGatewayDaemon(params: {
   }
 
   if (process.platform === "darwin") {
-    const label = resolveGatewayLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
+    const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
+    const label =
+      daemonEnv.OPENCLAW_LAUNCHD_LABEL?.trim() ||
+      resolveGatewayLaunchAgentLabel(daemonEnv.OPENCLAW_PROFILE);
     note(
-      `LaunchAgent loaded; stopping requires "${formatCliCommand("openclaw gateway stop")}" or launchctl bootout gui/$UID/${label}.`,
+      `LaunchAgent loaded; stopping requires "${formatCliCommand("openclaw gateway stop", daemonEnv)}" or launchctl bootout gui/$UID/${label}.`,
       "Gateway",
     );
   }

@@ -3,6 +3,7 @@ import { readBestEffortConfig, readConfigFileSnapshot } from "../../config/confi
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
+import { resolveGatewayRuntimeIdentityEnv } from "../../daemon/service-env.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
 import { describeGatewayServiceRestart } from "../../daemon/service.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -103,8 +104,9 @@ async function resolveServiceLoadedOrFail(params: {
   service: GatewayService;
   fail: ReturnType<typeof createActionIO>["fail"];
 }): Promise<boolean | null> {
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   try {
-    return await params.service.isLoaded({ env: process.env });
+    return await params.service.isLoaded({ env: daemonEnv });
   } catch (err) {
     params.fail(`${params.serviceNoun} service check failed: ${String(err)}`);
     return null;
@@ -143,27 +145,28 @@ export async function runServiceUninstall(params: {
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "uninstall", json });
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
 
-  if (resolveIsNixMode(process.env)) {
+  if (resolveIsNixMode(daemonEnv as NodeJS.ProcessEnv)) {
     fail("Nix mode detected; service uninstall is disabled.");
     return;
   }
 
   let loaded = false;
   try {
-    loaded = await params.service.isLoaded({ env: process.env });
+    loaded = await params.service.isLoaded({ env: daemonEnv });
   } catch {
     loaded = false;
   }
   if (loaded && params.stopBeforeUninstall) {
     try {
-      await params.service.stop({ env: process.env, stdout });
+      await params.service.stop({ env: daemonEnv, stdout });
     } catch {
       // Best-effort stop; final loaded check gates success when enabled.
     }
   }
   try {
-    await params.service.uninstall({ env: process.env, stdout });
+    await params.service.uninstall({ env: daemonEnv, stdout });
   } catch (err) {
     fail(`${params.serviceNoun} uninstall failed: ${String(err)}`);
     return;
@@ -171,7 +174,7 @@ export async function runServiceUninstall(params: {
 
   loaded = false;
   try {
-    loaded = await params.service.isLoaded({ env: process.env });
+    loaded = await params.service.isLoaded({ env: daemonEnv });
   } catch {
     loaded = false;
   }
@@ -194,6 +197,7 @@ export async function runServiceStart(params: {
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "start", json });
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
 
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
@@ -226,7 +230,7 @@ export async function runServiceStart(params: {
   }
 
   try {
-    const restartResult = await params.service.restart({ env: process.env, stdout });
+    const restartResult = await params.service.restart({ env: daemonEnv, stdout });
     const restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
     if (restartStatus.scheduled) {
       emit({
@@ -248,7 +252,7 @@ export async function runServiceStart(params: {
 
   let started = true;
   try {
-    started = await params.service.isLoaded({ env: process.env });
+    started = await params.service.isLoaded({ env: daemonEnv });
   } catch {
     started = true;
   }
@@ -338,6 +342,7 @@ export async function runServiceRestart(params: {
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   const warnings: string[] = [];
   let handledNotLoaded: NotLoadedActionResult | null = null;
   const emitScheduledRestart = (
@@ -404,10 +409,13 @@ export async function runServiceRestart(params: {
   if (loaded && params.checkTokenDrift) {
     // Check for token drift before restart (service token vs config token)
     try {
-      const command = await params.service.readCommand(process.env);
+      const command = await params.service.readCommand(daemonEnv as NodeJS.ProcessEnv);
       const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
       const cfg = await readBestEffortConfig();
-      const configToken = resolveGatewayTokenForDriftCheck({ cfg, env: process.env });
+      const configToken = resolveGatewayTokenForDriftCheck({
+        cfg,
+        env: daemonEnv as NodeJS.ProcessEnv,
+      });
       const driftIssue = checkTokenDrift({ serviceToken, configToken });
       if (driftIssue) {
         const warning = driftIssue.detail
@@ -436,7 +444,7 @@ export async function runServiceRestart(params: {
   try {
     let restartResult: GatewayServiceRestartResult = { outcome: "completed" };
     if (loaded) {
-      restartResult = await params.service.restart({ env: process.env, stdout });
+      restartResult = await params.service.restart({ env: daemonEnv, stdout });
     }
     let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
     if (restartStatus.scheduled) {
@@ -454,7 +462,7 @@ export async function runServiceRestart(params: {
     let restarted = loaded;
     if (loaded || handledNotLoaded?.serviceLoaded === true) {
       try {
-        restarted = await params.service.isLoaded({ env: process.env });
+        restarted = await params.service.isLoaded({ env: daemonEnv });
       } catch {
         restarted = handledNotLoaded?.serviceLoaded ?? true;
       }

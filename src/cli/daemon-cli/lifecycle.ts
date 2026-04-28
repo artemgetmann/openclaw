@@ -3,6 +3,7 @@ import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../../commands/daemon-runtime.js
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { resolveGatewayRuntimeIdentityEnv } from "../../daemon/service-env.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
@@ -36,10 +37,11 @@ const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 
 async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
-  const command = await service.readCommand(process.env).catch(() => null);
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
+  const command = await service.readCommand(daemonEnv as NodeJS.ProcessEnv).catch(() => null);
   const serviceEnv = command?.environment ?? undefined;
   const mergedEnv = {
-    ...(process.env as Record<string, string | undefined>),
+    ...daemonEnv,
     ...(serviceEnv ?? undefined),
   } as NodeJS.ProcessEnv;
 
@@ -48,9 +50,10 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
 }
 
 function resolveGatewayPortFallback(): Promise<number> {
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   return readBestEffortConfig()
-    .then((cfg) => resolveGatewayPort(cfg, process.env))
-    .catch(() => resolveGatewayPort(undefined, process.env));
+    .then((cfg) => resolveGatewayPort(cfg, daemonEnv as NodeJS.ProcessEnv))
+    .catch(() => resolveGatewayPort(undefined, daemonEnv as NodeJS.ProcessEnv));
 }
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
@@ -124,12 +127,13 @@ async function installGatewayServiceForRestart(params: {
   message: string;
   serviceLoaded: true;
 } | null> {
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   const cfg = await readBestEffortConfig();
-  const port = resolveGatewayPort(cfg);
+  const port = resolveGatewayPort(cfg, daemonEnv as NodeJS.ProcessEnv);
   const runtime = DEFAULT_GATEWAY_DAEMON_RUNTIME;
   const service = resolveGatewayService();
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
+    env: daemonEnv,
     port,
     runtime,
     warn: (message) => {
@@ -143,7 +147,7 @@ async function installGatewayServiceForRestart(params: {
   });
 
   const ownershipConflict = await detectSharedGatewayInstallOwnershipConflict({
-    env: process.env,
+    env: daemonEnv,
     service,
     programArguments,
     workingDirectory,
@@ -156,7 +160,7 @@ async function installGatewayServiceForRestart(params: {
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    env: process.env,
+    env: daemonEnv,
     autoGenerateWhenMissing: true,
     persistGeneratedToken: true,
   });
@@ -173,7 +177,7 @@ async function installGatewayServiceForRestart(params: {
   }
 
   await service.install({
-    env: process.env,
+    env: daemonEnv,
     stdout: params.stdout,
     programArguments,
     workingDirectory,

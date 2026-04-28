@@ -105,7 +105,178 @@ struct OpenClawConfigFileTests {
             "OPENCLAW_APP_VARIANT": "consumer",
         ]) {
             let path = OpenClawConfigFile.stateDirURL().path
-            #expect(path.contains("Library/Application Support/OpenClaw Consumer/.openclaw"))
+            #expect(path.contains("Library/Application Support/OpenClaw/.openclaw"))
+        }
+    }
+
+    @Test
+    func `default app flavor uses simple runtime while standard keeps legacy dot dir`() async {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_APP_VARIANT": nil,
+        ]) {
+            #expect(AppFlavor.current == .consumer)
+            #expect(AppFlavor.current.appName == "OpenClaw")
+            #expect(OpenClawConfigFile.stateDirURL().path.contains("Library/Application Support/OpenClaw/.openclaw"))
+        }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_APP_VARIANT": "standard",
+        ]) {
+            #expect(AppFlavor.current == .standard)
+            #expect(OpenClawConfigFile.stateDirURL().path.hasSuffix("/.openclaw"))
+            #expect(!OpenClawConfigFile.stateDirURL().path.contains("Library/Application Support"))
+        }
+    }
+
+    @Test
+    func `consumer runtime does not copy legacy data unless migration is requested`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let legacyState = home.appendingPathComponent(".openclaw", isDirectory: true)
+        let destinationState = home
+            .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        try FileManager().createDirectory(at: legacyState, withIntermediateDirectories: true)
+        try #"{"source":"legacy-dotdir"}"#.write(
+            to: legacyState.appendingPathComponent("openclaw.json"),
+            atomically: true,
+            encoding: .utf8)
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_APP_VARIANT": nil,
+            "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
+            "OPENCLAW_MIGRATE_APP_RUNTIME": nil,
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": home.path,
+        ]) {
+            #expect(OpenClawConfigFile.stateDirURL().path == destinationState.path)
+            #expect(!FileManager().fileExists(atPath: destinationState.appendingPathComponent("openclaw.json").path))
+        }
+    }
+
+    @Test
+    func `consumer runtime copies legacy dotdir config when migration is requested`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let legacyState = home.appendingPathComponent(".openclaw", isDirectory: true)
+        let destinationState = home
+            .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        try FileManager().createDirectory(at: legacyState, withIntermediateDirectories: true)
+        try #"{"source":"legacy-dotdir"}"#.write(
+            to: legacyState.appendingPathComponent("openclaw.json"),
+            atomically: true,
+            encoding: .utf8)
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
+            "OPENCLAW_MIGRATE_APP_RUNTIME": "1",
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": home.path,
+        ]) {
+            OpenClawPaths.migrateConsumerRuntimeIfNeeded(
+                identity: RuntimeIdentity.current,
+                instanceID: ConsumerInstance.current.id)
+            #expect(OpenClawConfigFile.stateDirURL().path == destinationState.path)
+            let migrated = try String(
+                contentsOf: destinationState.appendingPathComponent("openclaw.json"),
+                encoding: .utf8)
+            #expect(migrated.contains("legacy-dotdir"))
+            #expect(FileManager().fileExists(atPath: legacyState.appendingPathComponent("openclaw.json").path))
+        }
+    }
+
+    @Test
+    func `consumer runtime prefers legacy main dotdir over previous consumer config`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let legacyState = home.appendingPathComponent(".openclaw", isDirectory: true)
+        let previousState = home
+            .appendingPathComponent("Library/Application Support/OpenClaw Consumer/.openclaw", isDirectory: true)
+        let destinationState = home
+            .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        try FileManager().createDirectory(at: legacyState, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: previousState, withIntermediateDirectories: true)
+        try #"{"source":"legacy-main"}"#.write(
+            to: legacyState.appendingPathComponent("openclaw.json"),
+            atomically: true,
+            encoding: .utf8)
+        try #"{"source":"previous-consumer"}"#.write(
+            to: previousState.appendingPathComponent("openclaw.json"),
+            atomically: true,
+            encoding: .utf8)
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
+            "OPENCLAW_MIGRATE_APP_RUNTIME": "1",
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": home.path,
+        ]) {
+            OpenClawPaths.migrateConsumerRuntimeIfNeeded(
+                identity: RuntimeIdentity.current,
+                instanceID: ConsumerInstance.current.id)
+            #expect(OpenClawConfigFile.stateDirURL().path == destinationState.path)
+            let migrated = try String(
+                contentsOf: destinationState.appendingPathComponent("openclaw.json"),
+                encoding: .utf8)
+            #expect(migrated.contains("legacy-main"))
+            #expect(!migrated.contains("previous-consumer"))
+        }
+    }
+
+    @Test
+    func `consumer runtime does not clobber existing OpenClaw config during migration`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let legacyState = home.appendingPathComponent(".openclaw", isDirectory: true)
+        let destinationState = home
+            .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        try FileManager().createDirectory(at: legacyState, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: destinationState, withIntermediateDirectories: true)
+        try #"{"source":"legacy"}"#.write(
+            to: legacyState.appendingPathComponent("openclaw.json"),
+            atomically: true,
+            encoding: .utf8)
+        try #"{"source":"new"}"#.write(
+            to: destinationState.appendingPathComponent("openclaw.json"),
+            atomically: true,
+            encoding: .utf8)
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
+            "OPENCLAW_MIGRATE_APP_RUNTIME": "1",
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": home.path,
+        ]) {
+            OpenClawPaths.migrateConsumerRuntimeIfNeeded(
+                identity: RuntimeIdentity.current,
+                instanceID: ConsumerInstance.current.id)
+            #expect(OpenClawConfigFile.stateDirURL().path == destinationState.path)
+            let config = try String(
+                contentsOf: destinationState.appendingPathComponent("openclaw.json"),
+                encoding: .utf8)
+            #expect(config.contains(#""source":"new""#))
         }
     }
 

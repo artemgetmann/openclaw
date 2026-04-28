@@ -5,6 +5,7 @@ import {
 } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { resolveGatewayRuntimeIdentityEnv } from "../../daemon/service-env.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -20,6 +21,7 @@ import type { DaemonInstallOptions } from "./types.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
@@ -30,7 +32,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail("Invalid port");
     return;
   }
-  const port = portOverride ?? resolveGatewayPort(cfg);
+  const port = portOverride ?? resolveGatewayPort(cfg, daemonEnv);
   if (!Number.isFinite(port) || port <= 0) {
     fail("Invalid port");
     return;
@@ -43,7 +45,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const service = resolveGatewayService();
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
+    env: daemonEnv,
     port,
     runtime: runtimeRaw,
     warn: (message) => {
@@ -57,7 +59,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   });
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ env: process.env });
+    loaded = await service.isLoaded({ env: daemonEnv });
   } catch (err) {
     if (isNonFatalSystemdInstallProbeError(err)) {
       loaded = false;
@@ -77,7 +79,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       if (!json) {
         defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
         defaultRuntime.log(
-          `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
+          `Reinstall with: ${formatCliCommand("openclaw gateway install --force", daemonEnv)}`,
         );
       }
       return;
@@ -85,7 +87,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   const ownershipConflict = await detectSharedGatewayInstallOwnershipConflict({
-    env: process.env,
+    env: daemonEnv,
     service,
     allowSharedServiceTakeover: opts.allowSharedServiceTakeover,
     programArguments,
@@ -99,7 +101,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    env: process.env,
+    env: daemonEnv,
     explicitToken: opts.token,
     autoGenerateWhenMissing: true,
     persistGeneratedToken: true,
@@ -124,7 +126,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail,
     install: async () => {
       await service.install({
-        env: process.env,
+        env: daemonEnv,
         stdout,
         programArguments,
         workingDirectory,

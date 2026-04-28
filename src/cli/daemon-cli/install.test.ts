@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveConsumerRuntimeIdentity } from "../../consumer/runtime-identity.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import type { DaemonActionResponse } from "./response.js";
 
@@ -262,6 +263,33 @@ describe("runDaemonInstall", () => {
         warning.includes("gateway.auth.token is SecretRef-managed"),
       ),
     ).toBe(true);
+  });
+
+  it("normalizes consumer lane identity before installing the service", async () => {
+    const identity = resolveConsumerRuntimeIdentity({
+      instanceId: "main-durable-lane",
+    });
+    process.env.OPENCLAW_PROFILE = "consumer-main-durable-lane";
+
+    await runDaemonInstall({ json: true });
+
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_CONSUMER_INSTANCE_ID: "main-durable-lane",
+          OPENCLAW_PROFILE: identity.profile,
+          OPENCLAW_STATE_DIR: identity.stateDir,
+          OPENCLAW_CONFIG_PATH: identity.configPath,
+          OPENCLAW_GATEWAY_PORT: String(identity.gatewayPort),
+          OPENCLAW_LAUNCHD_LABEL: identity.gatewayLaunchdLabel,
+        }),
+      }),
+    );
+    expect(service.isLoaded).toHaveBeenCalledWith({
+      env: expect.objectContaining({
+        OPENCLAW_LAUNCHD_LABEL: identity.gatewayLaunchdLabel,
+      }),
+    });
   });
 
   it("does not treat env-template gateway.auth.token as plaintext during install", async () => {

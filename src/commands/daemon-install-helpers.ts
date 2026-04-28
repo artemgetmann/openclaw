@@ -6,7 +6,10 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import { buildServiceEnvironment } from "../daemon/service-env.js";
+import {
+  buildServiceEnvironment,
+  resolveGatewayRuntimeIdentityEnv,
+} from "../daemon/service-env.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -60,8 +63,9 @@ export async function buildGatewayInstallPlan(params: {
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): Promise<GatewayInstallPlan> {
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(params.env);
   const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
-    env: params.env,
+    env: daemonEnv,
     runtime: params.runtime,
     devMode: params.devMode,
     nodePath: params.nodePath,
@@ -73,18 +77,19 @@ export async function buildGatewayInstallPlan(params: {
     nodePath,
   });
   await emitDaemonInstallRuntimeWarning({
-    env: params.env,
+    env: daemonEnv,
     runtime: params.runtime,
     programArguments,
     warn: params.warn,
     title: "Gateway runtime",
   });
   const serviceEnvironment = buildServiceEnvironment({
-    env: params.env,
+    env: daemonEnv,
     port: params.port,
     launchdLabel:
       process.platform === "darwin"
-        ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
+        ? daemonEnv.OPENCLAW_LAUNCHD_LABEL?.trim() ||
+          resolveGatewayLaunchAgentLabel(daemonEnv.OPENCLAW_PROFILE)
         : undefined,
   });
 

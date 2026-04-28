@@ -41,7 +41,29 @@ struct GatewayLaunchAgentManagerTests {
         #expect(snapshot.bind == nil)
     }
 
-    @Test func `restart or start preserves existing launch agent install`() async {
+    @Test func `restart or start reinstalls loaded service when entrypoint cannot be verified`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-root-\(UUID().uuidString)", isDirectory: true)
+        let entrypoint = root.appendingPathComponent("dist/index.js")
+        let plistURL = home
+            .appendingPathComponent("Library/LaunchAgents/ai.openclaw.gateway.plist")
+        try FileManager().createDirectory(at: entrypoint.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: entrypoint)
+        try Data().write(to: root.appendingPathComponent("package.json"))
+        try Data().write(to: root.appendingPathComponent("openclaw.mjs"))
+        let plist: [String: Any] = [
+            "ProgramArguments": ["/usr/bin/node", entrypoint.path, "gateway", "--port", "18789"],
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: plistURL, options: [.atomic])
+        defer {
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: root)
+        }
+
         var calls: [[String]] = []
         GatewayLaunchAgentManager._setTestingHooks(
             launchAgentWriteDisabled: { false },
@@ -52,12 +74,30 @@ struct GatewayLaunchAgentManagerTests {
             })
         defer { GatewayLaunchAgentManager._clearTestingHooks() }
 
-        let error = await GatewayLaunchAgentManager.restartOrStart(
-            bundlePath: "/Applications/OpenClaw.app",
-            port: 18789)
+        let error = try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": root.path,
+            ])
+        {
+            await GatewayLaunchAgentManager.restartOrStart(
+                bundlePath: "/Applications/OpenClaw.app",
+                port: 18789)
+        }
 
         #expect(error == nil)
-        #expect(calls == [["restart"]])
+        #expect(calls == [[
+            "install",
+            "--force",
+            "--allow-shared-service-takeover",
+            "--port",
+            "18789",
+            "--runtime",
+            "node",
+        ]])
     }
 
     @Test func `restart or start installs only when no launch agent exists`() async {
@@ -110,6 +150,30 @@ struct GatewayLaunchAgentManagerTests {
         }
     }
 
+    @MainActor
+    @Test func `daemon command environment marks app support config as canonical owner`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": home.path,
+        ]) {
+            let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
+                base: [:],
+                projectRootHint: nil)
+            let expectedConfig = home
+                .appendingPathComponent("Library/Application Support/OpenClaw/.openclaw/openclaw.json")
+                .path
+
+            #expect(env["OPENCLAW_CONFIG_PATH"] == expectedConfig)
+            #expect(env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] == expectedConfig)
+        }
+    }
+
     @Test func `real launchd install stays pinned to canonical repo and restart preserves entrypoint`() async throws {
         #if os(macOS)
         guard await self.canRunLaunchdIntegration() else { return }
@@ -120,6 +184,10 @@ struct GatewayLaunchAgentManagerTests {
 
         let repoRoot = self.repoRoot()
         let canonicalRoot = CommandResolver.canonicalGatewayProjectRoot(projectRoot: repoRoot)
+        guard !repoRoot.path.contains("/.codex/worktrees/"),
+              !repoRoot.path.contains("/.worktrees/")
+        else { return }
+        guard canonicalRoot.standardizedFileURL == repoRoot.standardizedFileURL else { return }
         let expectedEntrypoint = try #require(CommandResolver.gatewayEntrypoint(in: canonicalRoot))
         let port = Int.random(in: 22000..<32000)
         let plistURL = FileManager().homeDirectoryForCurrentUser
@@ -139,6 +207,7 @@ struct GatewayLaunchAgentManagerTests {
                 "OPENCLAW_LAUNCHD_LABEL": label,
                 "OPENCLAW_STATE_DIR": stateDir.path,
                 "OPENCLAW_CONFIG_PATH": configPath,
+                "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": configPath,
                 "OPENCLAW_GATEWAY_PORT": "\(port)",
             ],
             defaults: [
@@ -160,6 +229,7 @@ struct GatewayLaunchAgentManagerTests {
                         #expect(before.programArguments[1] == expectedEntrypoint)
                         #expect(before.programArguments[2] == "gateway")
                     }
+                    #expect(before.environment["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] == configPath)
 
                     let beforePid = try await self.waitForRunningLaunchdPid(label: label)
                     let restartError = await GatewayLaunchAgentManager.restartOrStart(

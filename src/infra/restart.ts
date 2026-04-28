@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import {
+  GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
@@ -11,6 +12,7 @@ import {
   isCurrentProcessLaunchdServiceLabel,
   scheduleDetachedLaunchdRestartHandoff,
 } from "../daemon/launchd-restart-handoff.js";
+import { resolveGatewayRuntimeIdentityEnv } from "../daemon/service-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
@@ -330,7 +332,26 @@ export function isLocalRestartScriptAvailable(): boolean {
   return resolveLocalRestartScriptPath() !== null;
 }
 
+function resolveCurrentLaunchdLabel(env: NodeJS.ProcessEnv = process.env): string {
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(env);
+  const configuredLabel = daemonEnv.OPENCLAW_LAUNCHD_LABEL?.trim();
+  if (configuredLabel) {
+    return configuredLabel;
+  }
+  return resolveGatewayLaunchAgentLabel(daemonEnv.OPENCLAW_PROFILE);
+}
+
+export function isCanonicalSharedMainLaunchdRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  // The detached helper reinstalls and boots out a lane-local launch agent.
+  // That is safe for isolated profiles, but it is not safe for the canonical
+  // shared main service because it can tear down ai.openclaw.gateway in-place.
+  return resolveCurrentLaunchdLabel(env) === GATEWAY_LAUNCH_AGENT_LABEL;
+}
+
 export function isSafeLocalRestartScriptAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (isCanonicalSharedMainLaunchdRuntime(env)) {
+    return false;
+  }
   const label =
     env.OPENCLAW_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
   if (isCurrentProcessLaunchdServiceLabel(label)) {
@@ -344,6 +365,7 @@ function triggerDetachedLocalRestartScript(scriptPath: string): {
   command: string;
   detail?: string;
 } {
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   const command = `OPENCLAW_RESTART_DETACHED=1 /bin/bash ${scriptPath}`;
   try {
     // Run restart work in a detached helper so the active gateway request can
@@ -352,7 +374,7 @@ function triggerDetachedLocalRestartScript(scriptPath: string): {
       detached: true,
       stdio: "ignore",
       env: {
-        ...process.env,
+        ...daemonEnv,
         OPENCLAW_RESTART_DETACHED: "1",
       },
     });
@@ -398,6 +420,7 @@ function triggerDetachedLaunchdRestartHandoff(label: string): {
 }
 
 export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): RestartAttempt {
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(process.env);
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
@@ -406,10 +429,7 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
 
   const tried: string[] = [];
   if (process.platform === "linux") {
-    const unit = normalizeSystemdUnit(
-      process.env.OPENCLAW_SYSTEMD_UNIT,
-      process.env.OPENCLAW_PROFILE,
-    );
+    const unit = normalizeSystemdUnit(daemonEnv.OPENCLAW_SYSTEMD_UNIT, daemonEnv.OPENCLAW_PROFILE);
     const userArgs = ["--user", "restart", unit];
     tried.push(`systemctl ${userArgs.join(" ")}`);
     const userRestart = spawnSync("systemctl", userArgs, {
@@ -436,7 +456,7 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   }
 
   if (process.platform === "win32") {
-    return relaunchGatewayScheduledTask(process.env);
+    return relaunchGatewayScheduledTask(daemonEnv as NodeJS.ProcessEnv);
   }
 
   if (process.platform !== "darwin") {
@@ -448,8 +468,7 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   }
 
   const label =
-    process.env.OPENCLAW_LAUNCHD_LABEL ||
-    resolveGatewayLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
+    daemonEnv.OPENCLAW_LAUNCHD_LABEL || resolveGatewayLaunchAgentLabel(daemonEnv.OPENCLAW_PROFILE);
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
   const target = `${domain}/${label}`;
@@ -473,7 +492,11 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
       localScriptFailure = handoffRestart.detail;
     }
 
-    const localRestartScriptPath = resolveLocalRestartScriptPath();
+    const localRestartScriptPath = isCanonicalSharedMainLaunchdRuntime(
+      daemonEnv as NodeJS.ProcessEnv,
+    )
+      ? null
+      : resolveLocalRestartScriptPath();
     if (localRestartScriptPath) {
       const scriptRestart = triggerDetachedLocalRestartScript(localRestartScriptPath);
       tried.push(`local-restart-script ${scriptRestart.command}`);
@@ -502,7 +525,7 @@ export function triggerOpenClawRestart(opts?: { preferLocalScript?: boolean }): 
   // kickstart fails when the service was previously booted out (deregistered from launchd).
   // Fall back to bootstrap (re-register from plist) + kickstart.
   // Use env HOME to match how launchd.ts resolves the plist install path.
-  const home = process.env.HOME?.trim() || os.homedir();
+  const home = daemonEnv.HOME?.trim() || os.homedir();
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   const bootstrapArgs = ["bootstrap", domain, plistPath];
   tried.push(`launchctl ${bootstrapArgs.join(" ")}`);
