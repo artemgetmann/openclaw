@@ -43,6 +43,9 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
 - `allowBundled`: optional allowlist for **bundled** skills only. When set, only
   bundled skills in the list are eligible (managed/workspace skills unaffected).
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
+  For personal skills shared across agents, keep the real folders in
+  `~/.agents/skills` and symlink the active OpenClaw managed root
+  (`$OPENCLAW_STATE_DIR/skills`) to that directory.
 - `load.watch`: watch skill folders and refresh the skills snapshot (default: true).
 - `load.watchDebounceMs`: debounce for skill watcher events in milliseconds (default: 250).
 - `install.preferBrew`: prefer brew installers when available (default: true).
@@ -63,6 +66,12 @@ Per-skill fields:
 - Keys under `entries` map to the skill name by default. If a skill defines
   `metadata.openclaw.skillKey`, use that key instead.
 - Changes to skills are picked up on the next agent turn when the watcher is enabled.
+- Workspace skill symlinks that resolve outside the workspace root are blocked
+  for safety. If you want OpenClaw, Codex, and Claude Code to share skills, keep
+  the real folders under `~/.agents/skills` and symlink each tool's skills root
+  to that directory. For OpenClaw, that means `~/.openclaw/skills` for the
+  legacy runtime or `~/Library/Application Support/OpenClaw/.openclaw/skills`
+  for the app-owned runtime.
 
 ### Sandboxed skills + env vars
 
