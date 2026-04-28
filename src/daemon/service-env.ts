@@ -1,5 +1,10 @@
 import os from "node:os";
 import path from "node:path";
+import {
+  CONSUMER_PROFILE_PREFIX,
+  normalizeConsumerRuntimeId,
+  resolveConsumerRuntimeIdentity,
+} from "../consumer/runtime-identity.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -35,6 +40,58 @@ type SharedServiceEnvironmentFields = {
   nodeCaCerts: string | undefined;
   nodeUseSystemCa: string | undefined;
 };
+
+function resolveConsumerGatewayIdentityInput(
+  env: Record<string, string | undefined>,
+): string | null | undefined {
+  const explicitInstance = normalizeConsumerRuntimeId(env.OPENCLAW_CONSUMER_INSTANCE_ID);
+  if (explicitInstance) {
+    return explicitInstance;
+  }
+
+  const rawProfile = env.OPENCLAW_PROFILE?.trim().toLowerCase();
+  if (!rawProfile) {
+    return undefined;
+  }
+  if (rawProfile === CONSUMER_PROFILE_PREFIX) {
+    return "";
+  }
+  if (!rawProfile.startsWith(`${CONSUMER_PROFILE_PREFIX}-`)) {
+    return undefined;
+  }
+
+  // Consumer lanes derive every runtime selector from the instance id so a
+  // stale launchd label, port, or state dir cannot point status/restart/install
+  // at a different consumer runtime than the profile implies.
+  return normalizeConsumerRuntimeId(rawProfile.slice(CONSUMER_PROFILE_PREFIX.length + 1));
+}
+
+export function resolveGatewayRuntimeIdentityEnv(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  const consumerInstanceId = resolveConsumerGatewayIdentityInput(env);
+  if (consumerInstanceId === undefined) {
+    return { ...env };
+  }
+
+  const identity = resolveConsumerRuntimeIdentity({
+    homeDir: env.HOME?.trim() || process.env.HOME?.trim() || os.homedir(),
+    instanceId: consumerInstanceId,
+  });
+
+  return {
+    ...env,
+    OPENCLAW_CONSUMER_INSTANCE_ID: identity.normalizedId || undefined,
+    OPENCLAW_PROFILE: identity.profile,
+    OPENCLAW_HOME: identity.runtimeRoot,
+    OPENCLAW_STATE_DIR: identity.stateDir,
+    OPENCLAW_CONFIG_PATH: identity.configPath,
+    OPENCLAW_GATEWAY_PORT: String(identity.gatewayPort),
+    OPENCLAW_GATEWAY_BIND: identity.gatewayBind,
+    OPENCLAW_LOG_DIR: identity.logDir,
+    OPENCLAW_LAUNCHD_LABEL: identity.gatewayLaunchdLabel,
+  };
+}
 
 const SERVICE_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -248,17 +305,24 @@ export function buildServiceEnvironment(params: {
   launchdLabel?: string;
   platform?: NodeJS.Platform;
 }): Record<string, string | undefined> {
-  const { env, port, launchdLabel } = params;
+  const env = resolveGatewayRuntimeIdentityEnv(params.env);
+  const { port, launchdLabel } = params;
   const platform = params.platform ?? process.platform;
   const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
   const profile = env.OPENCLAW_PROFILE;
   const resolvedLaunchdLabel =
-    launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
+    launchdLabel ||
+    env.OPENCLAW_LAUNCHD_LABEL?.trim() ||
+    (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
+    OPENCLAW_CONSUMER_INSTANCE_ID: env.OPENCLAW_CONSUMER_INSTANCE_ID,
+    OPENCLAW_HOME: env.OPENCLAW_HOME,
+    OPENCLAW_LOG_DIR: env.OPENCLAW_LOG_DIR,
     OPENCLAW_PROFILE: profile,
     OPENCLAW_GATEWAY_PORT: String(port),
+    OPENCLAW_GATEWAY_BIND: env.OPENCLAW_GATEWAY_BIND,
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
     OPENCLAW_SYSTEMD_UNIT: systemdUnit,
     OPENCLAW_WINDOWS_TASK_NAME: resolveGatewayWindowsTaskName(profile),

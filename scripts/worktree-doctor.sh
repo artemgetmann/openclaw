@@ -145,9 +145,12 @@ const path = require("node:path");
 const cp = require("node:child_process");
 
 const currentInstanceId = process.env.CURRENT_INSTANCE_ID ?? "default";
-const currentLabel = process.env.CURRENT_LABEL ?? "ai.openclaw.consumer.gateway";
+const currentLabel = process.env.CURRENT_LABEL ?? "ai.openclaw.gateway";
 const uid = typeof process.getuid === "function" ? process.getuid() : null;
-const baseRoot = path.join(os.homedir(), "Library", "Application Support", "OpenClaw Consumer");
+const baseRoots = [
+  path.join(os.homedir(), "Library", "Application Support", "OpenClaw"),
+  path.join(os.homedir(), "Library", "Application Support", "OpenClaw Consumer"),
+];
 const configs = [];
 
 function launchdLoaded(label) {
@@ -171,7 +174,7 @@ function tokenFingerprint(token) {
 
 function labelFor(instanceId) {
   return instanceId === "default"
-    ? "ai.openclaw.consumer.gateway"
+    ? "ai.openclaw.gateway"
     : `ai.openclaw.consumer.${instanceId}.gateway`;
 }
 
@@ -210,13 +213,15 @@ function collect(instanceId, configPath) {
   }
 }
 
-collect("default", path.join(baseRoot, ".openclaw", "openclaw.json"));
+for (const baseRoot of baseRoots) {
+  collect("default", path.join(baseRoot, ".openclaw", "openclaw.json"));
 
-const instancesRoot = path.join(baseRoot, "instances");
-if (fs.existsSync(instancesRoot)) {
-  for (const entry of fs.readdirSync(instancesRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    collect(entry.name, path.join(instancesRoot, entry.name, ".openclaw", "openclaw.json"));
+  const instancesRoot = path.join(baseRoot, "instances");
+  if (fs.existsSync(instancesRoot)) {
+    for (const entry of fs.readdirSync(instancesRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      collect(entry.name, path.join(instancesRoot, entry.name, ".openclaw", "openclaw.json"));
+    }
   }
 }
 

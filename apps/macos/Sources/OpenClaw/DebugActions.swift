@@ -3,9 +3,9 @@ import Foundation
 import SwiftUI
 
 enum DebugActions {
-    private static var verboseDefaultsKey: String { "\(AppFlavor.current.defaultsPrefix).debug.verboseMain" }
+    private static var verboseDefaultsKey: String { "\(RuntimeIdentity.current.defaultsPrefix).debug.verboseMain" }
     private static let sessionMenuLimit = 12
-    private static var onboardingSeenKey: String { "\(AppFlavor.current.defaultsPrefix).onboardingSeen" }
+    private static var onboardingSeenKey: String { "\(RuntimeIdentity.current.defaultsPrefix).onboardingSeen" }
 
     @MainActor
     static func openAgentEventsWindow() {

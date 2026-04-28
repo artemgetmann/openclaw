@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { GATEWAY_LAUNCH_AGENT_LABEL, normalizeGatewayProfile } from "../../daemon/constants.js";
+import { resolveGatewayRuntimeIdentityEnv } from "../../daemon/service-env.js";
 import type {
   GatewayService,
   GatewayServiceCommandConfig,
@@ -72,19 +73,21 @@ function buildOwnershipSnapshot(args: {
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
 }): GatewayInstallOwnershipSnapshot {
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(args.environment ?? {});
   return {
     entrypoint: resolveGatewayEntrypoint(args.programArguments),
     workingDirectory: normalizeWorkingDirectory(args.workingDirectory),
-    daemonEnv: filterDaemonEnv(args.environment as Record<string, string> | undefined),
+    daemonEnv: filterDaemonEnv(daemonEnv as Record<string, string>),
     port: parsePortFromArgs(args.programArguments),
   };
 }
 
 function isDefaultSharedGatewayInstallTarget(env: GatewayServiceEnv): boolean {
-  if (normalizeGatewayProfile(env.OPENCLAW_PROFILE)) {
+  const daemonEnv = resolveGatewayRuntimeIdentityEnv(env);
+  if (normalizeGatewayProfile(daemonEnv.OPENCLAW_PROFILE)) {
     return false;
   }
-  const launchdLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const launchdLabel = daemonEnv.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (
     process.platform === "darwin" &&
     launchdLabel &&

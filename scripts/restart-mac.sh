@@ -305,8 +305,10 @@ elif [ "$SIGN" -eq 1 ]; then
   unset SIGN_IDENTITY
 fi
 
-# 3) Package app (no embedded gateway).
-run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} '${ROOT_DIR}/scripts/package-mac-app.sh'"
+# 3) Package app (no embedded gateway). Shared-main restarts must stay on the
+# legacy runtime identity explicitly; normal packaging now defaults to the
+# simple OpenClaw product lane.
+run_step "package app" bash -lc "cd '${ROOT_DIR}' && APP_VARIANT=standard SKIP_TSC=${SKIP_TSC:-1} '${ROOT_DIR}/scripts/package-mac-app.sh'"
 
 choose_app_bundle() {
   if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then

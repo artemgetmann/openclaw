@@ -5,8 +5,9 @@ enum AppFlavor: String {
     case consumer
 
     static var current: AppFlavor {
-        // Resolve the flavor in override order so packaging/tests can force consumer mode
-        // without relying on the final signed bundle metadata being present.
+        // Resolve the flavor in override order so packaging/tests can force
+        // either the product default or the legacy shared-main compatibility
+        // runtime without relying on final signed bundle metadata being present.
         if let env = ProcessInfo.processInfo.environment["OPENCLAW_APP_VARIANT"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased(),
@@ -26,7 +27,10 @@ enum AppFlavor: String {
             return .consumer
         }
 
-        return .standard
+        // Product default: one OpenClaw app with the simplified operator UX.
+        // The old ~/.openclaw shared-main runtime is still available through an
+        // explicit "standard" variant for dev/runtime compatibility lanes.
+        return .consumer
     }
 
     var isConsumer: Bool {
@@ -38,61 +42,7 @@ enum AppFlavor: String {
         case .standard:
             "OpenClaw"
         case .consumer:
-            "OpenClaw Consumer"
-        }
-    }
-
-    var defaultsPrefix: String {
-        switch self {
-        case .standard:
-            "openclaw"
-        case .consumer:
-            "openclaw.consumer"
-        }
-    }
-
-    var stableSuiteName: String {
-        switch self {
-        case .standard:
-            "ai.openclaw.mac"
-        case .consumer:
-            "ai.openclaw.consumer.mac"
-        }
-    }
-
-    var gatewayLaunchLabel: String {
-        switch self {
-        case .standard:
-            "ai.openclaw.gateway"
-        case .consumer:
-            "ai.openclaw.consumer.gateway"
-        }
-    }
-
-    var defaultStateDirName: String {
-        switch self {
-        case .standard:
-            ".openclaw"
-        case .consumer:
-            ".openclaw-consumer"
-        }
-    }
-
-    var defaultGatewayPort: Int {
-        switch self {
-        case .standard:
-            18789
-        case .consumer:
-            19001
-        }
-    }
-
-    var defaultLogDirName: String {
-        switch self {
-        case .standard:
-            "openclaw"
-        case .consumer:
-            "openclaw-consumer"
+            "OpenClaw"
         }
     }
 }

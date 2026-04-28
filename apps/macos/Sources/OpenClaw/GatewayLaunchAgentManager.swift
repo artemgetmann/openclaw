@@ -256,7 +256,7 @@ extension GatewayLaunchAgentManager {
         case .restart:
             // If the service is already registered and loaded, reinstalling it is needlessly
             // destructive: launchd will terminate the running gateway and we briefly lose the
-            // listener on 19001. Prefer an in-place restart.
+            // listener on the canonical or isolated lane port. Prefer an in-place restart.
             return .restart
         case .start:
             // A plist already exists under the consumer label. Try a normal start first so we
@@ -371,16 +371,18 @@ extension GatewayLaunchAgentManager {
         base: [String: String],
         projectRootHint: String?) -> [String: String]
     {
+        let identity = RuntimeIdentity.current
         let instance = ConsumerInstance.current
         var env = base
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
-        env["OPENCLAW_PROFILE"] = instance.profile
-        env["OPENCLAW_HOME"] = instance.runtimeRootURL.path
-        env["OPENCLAW_STATE_DIR"] = instance.stateDirURL.path
-        env["OPENCLAW_CONFIG_PATH"] = instance.configURL.path
-        env["OPENCLAW_GATEWAY_PORT"] = "\(instance.gatewayPort)"
-        env["OPENCLAW_GATEWAY_BIND"] = instance.gatewayBind
-        env["OPENCLAW_LOG_DIR"] = instance.logsDirURL.path
+        env["OPENCLAW_PROFILE"] = identity.profile ?? "default"
+        env["OPENCLAW_HOME"] = identity.runtimeRootURL.path
+        env["OPENCLAW_STATE_DIR"] = identity.stateDirURL.path
+        env["OPENCLAW_CONFIG_PATH"] = identity.configURL.path
+        env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] = identity.configURL.path
+        env["OPENCLAW_GATEWAY_PORT"] = "\(identity.gatewayPort)"
+        env["OPENCLAW_GATEWAY_BIND"] = identity.gatewayBind
+        env["OPENCLAW_LOG_DIR"] = identity.logsDirURL.path
         env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] = "1"
         // Packaged consumer runs through Bun on macOS; default to sips unless
         // the caller intentionally asks for the sharp backend.
@@ -395,7 +397,7 @@ extension GatewayLaunchAgentManager {
         // Keep every child CLI command pinned to the dedicated consumer gateway lane.
         // The app and gateway intentionally use different launchd labels, and the explicit
         // env keeps status/install/restart commands from drifting across authorities.
-        env["OPENCLAW_LAUNCHD_LABEL"] = instance.gatewayLaunchdLabel
+        env["OPENCLAW_LAUNCHD_LABEL"] = identity.gatewayLaunchdLabel
         if let projectRootHint, !projectRootHint.isEmpty {
             env["OPENCLAW_FORK_ROOT"] = projectRootHint
         }

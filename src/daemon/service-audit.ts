@@ -41,6 +41,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayRuntimeBun: "gateway-runtime-bun",
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
+  gatewayRuntimeIdentityMismatch: "gateway-runtime-identity-mismatch",
   gatewayTokenDrift: "gateway-token-drift",
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
@@ -203,6 +204,51 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
       level: "aggressive",
     });
   }
+}
+
+function auditGatewayRuntimeIdentity(
+  command: GatewayServiceCommand,
+  issues: ServiceConfigIssue[],
+  env: Record<string, string | undefined>,
+) {
+  if (!command?.environment) {
+    return;
+  }
+
+  const keys = [
+    "OPENCLAW_HOME",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_LOG_DIR",
+    "OPENCLAW_PROFILE",
+    "OPENCLAW_GATEWAY_PORT",
+    "OPENCLAW_GATEWAY_BIND",
+    "OPENCLAW_LAUNCHD_LABEL",
+  ] as const;
+  const mismatches: string[] = [];
+
+  for (const key of keys) {
+    const expected = env[key]?.trim();
+    if (!expected) {
+      continue;
+    }
+    const actual = command.environment[key]?.trim();
+    if (actual === expected) {
+      continue;
+    }
+    mismatches.push(`${key}: expected ${expected}, got ${actual || "missing"}`);
+  }
+
+  if (mismatches.length === 0) {
+    return;
+  }
+
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayRuntimeIdentityMismatch,
+    message: "Gateway service runtime identity does not match this CLI/runtime lane.",
+    detail: mismatches.join("; "),
+    level: "aggressive",
+  });
 }
 
 function auditGatewayToken(
@@ -409,6 +455,7 @@ export async function auditGatewayServiceConfig(params: {
   const platform = params.platform ?? process.platform;
 
   auditGatewayCommand(params.command?.programArguments, issues);
+  auditGatewayRuntimeIdentity(params.command, issues, params.env);
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayServicePath(params.command, issues, params.env, platform);
   await auditGatewayRuntime(params.env, params.command, issues, platform);
