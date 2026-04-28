@@ -145,8 +145,13 @@ describe("new worktree tester baseline bootstrap", () => {
         telegram: {
           enabled: true,
           botToken: "prod-token",
+          tokenFile: "/run/secrets/prod-telegram-token",
           accounts: {
-            tester: { botToken: "test-account-token", enabled: true },
+            tester: {
+              botToken: "test-account-token",
+              tokenFile: "/run/secrets/tester-telegram-token",
+              enabled: true,
+            },
           },
         },
       },
@@ -220,10 +225,13 @@ describe("new worktree tester baseline bootstrap", () => {
     const worktreePath = output.match(/^worktree=(.+)$/m)?.[1];
     const baselineStateDir = output.match(/^baseline_state_dir=(.+)$/m)?.[1];
     const baselineConfigPath = output.match(/^baseline_config_path=(.+)$/m)?.[1];
+    const baselineMetaPath = output.match(/^baseline_meta_path=(.+)$/m)?.[1];
     expect(output).toContain("baseline_bootstrap=ok");
+    expect(output).toContain("baseline_stripped_named_telegram_accounts=tester");
     expect(worktreePath).toBeTruthy();
     expect(baselineStateDir).toContain(path.join(homeDir, ".openclaw", "worktree-runtimes"));
     expect(baselineConfigPath).toBe(path.join(baselineStateDir!, "openclaw.json"));
+    expect(baselineMetaPath).toBe(path.join(baselineStateDir!, "auth-sync.json"));
 
     const devEnv = readFileSync(path.join(worktreePath!, ".dev-launch.env"), "utf8");
     expect(devEnv).toContain(`OPENCLAW_STATE_DIR=${baselineStateDir}`);
@@ -233,7 +241,9 @@ describe("new worktree tester baseline bootstrap", () => {
     expect(inheritedConfig.models.providers.openai.baseUrl).toBe("https://api.openai.com/v1");
     expect(inheritedConfig.models.providers.openai.apiKey).toBeUndefined();
     expect(inheritedConfig.channels.telegram.botToken).toBeUndefined();
+    expect(inheritedConfig.channels.telegram.tokenFile).toBeUndefined();
     expect(inheritedConfig.channels.telegram.accounts.tester.botToken).toBeUndefined();
+    expect(inheritedConfig.channels.telegram.accounts.tester.tokenFile).toBeUndefined();
     expect(inheritedConfig.env.OPENAI_API_KEY).toBeUndefined();
     expect(inheritedConfig.env.OPENCLAW_CONSUMER_OPENAI_API_KEY).toBeUndefined();
     expect(inheritedConfig.env.vars.OPENAI_API_KEY).toBeUndefined();
@@ -249,6 +259,20 @@ describe("new worktree tester baseline bootstrap", () => {
       "auth-profiles.json",
     );
     expect(JSON.parse(readFileSync(inheritedAuthPath, "utf8"))).toEqual(sourceAuth);
+
+    const baselineMeta = JSON.parse(readFileSync(baselineMetaPath!, "utf8"));
+    expect(baselineMeta.sanitization.strippedNamedTelegramAccounts).toEqual(["tester"]);
+    expect(baselineMeta.sanitization.strippedTelegramCredentials).toEqual(
+      expect.arrayContaining([
+        { accountId: "default", accountKind: "default", sourceKind: "botToken" },
+        { accountId: "default", accountKind: "default", sourceKind: "tokenFile" },
+        { accountId: "tester", accountKind: "named", sourceKind: "botToken" },
+        { accountId: "tester", accountKind: "named", sourceKind: "tokenFile" },
+      ]),
+    );
+    expect(JSON.stringify(baselineMeta)).not.toContain("prod-token");
+    expect(JSON.stringify(baselineMeta)).not.toContain("test-account-token");
+    expect(JSON.stringify(baselineMeta)).not.toContain("/run/secrets/tester-telegram-token");
 
     expect(JSON.parse(readFileSync(sourceConfigPath, "utf8"))).toEqual(sourceConfig);
     expect(
