@@ -215,16 +215,26 @@ xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 sign_item() {
   local target="$1"
   local entitlements="$2"
+  # codesign --force can still hit an opaque Code Signing subsystem failure
+  # when replacing a stale signature on a freshly lipo-created universal
+  # binary. Removing the old signature first makes the operation repeatable.
+  codesign --remove-signature "$target" 2>/dev/null || true
   codesign --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --entitlements "$entitlements" --sign "$IDENTITY" "$target"
 }
 
 sign_plain_item() {
   local target="$1"
+  # Keep repeated packaging runs deterministic when an embedded helper or
+  # framework already carries a signature from a prior failed attempt.
+  codesign --remove-signature "$target" 2>/dev/null || true
   codesign --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --sign "$IDENTITY" "$target"
 }
 
 sign_runtime_node_item() {
   local target="$1"
+  # Runtime payload binaries are copied from staged artifacts and may already
+  # be signed; strip that signature before applying the app's identity.
+  codesign --remove-signature "$target" 2>/dev/null || true
   codesign --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --entitlements "$ENT_TMP_RUNTIME" --sign "$IDENTITY" "$target"
 }
 
