@@ -115,6 +115,75 @@ struct GatewayLaunchAgentManagerTests {
         #expect(calls.isEmpty)
     }
 
+    @Test func `consumer stop preserves loaded matching shared gateway`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-root-\(UUID().uuidString)", isDirectory: true)
+        let entrypoint = root.appendingPathComponent("dist/index.js")
+        let plistURL = home
+            .appendingPathComponent("Library/LaunchAgents/ai.openclaw.gateway.plist")
+        try FileManager().createDirectory(at: entrypoint.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: entrypoint)
+        try Data().write(to: root.appendingPathComponent("package.json"))
+        try Data().write(to: root.appendingPathComponent("openclaw.mjs"))
+        defer {
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: root)
+        }
+
+        var calls: [[String]] = []
+        GatewayLaunchAgentManager._setTestingHooks(
+            launchAgentWriteDisabled: { false },
+            readDaemonLoaded: { true },
+            runDaemonCommand: { args, _, _ in
+                calls.append(args)
+                return nil
+            })
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+
+        let error = try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": root.path,
+            ])
+        {
+            let identity = RuntimeIdentity.current
+            let plist: [String: Any] = [
+                "ProgramArguments": [
+                    "/usr/bin/node",
+                    entrypoint.path,
+                    "gateway",
+                    "--port",
+                    "\(identity.gatewayPort)",
+                    "--bind",
+                    identity.gatewayBind,
+                ],
+                "EnvironmentVariables": [
+                    "OPENCLAW_HOME": identity.runtimeRootURL.path,
+                    "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
+                    "OPENCLAW_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                ],
+            ]
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: plistURL, options: [.atomic])
+
+            return await GatewayLaunchAgentManager.set(
+                enabled: false,
+                bundlePath: "/Applications/OpenClaw Consumer.app",
+                port: identity.gatewayPort)
+        }
+
+        #expect(error == nil)
+        #expect(calls.isEmpty)
+    }
+
     @Test func `restart or start reinstalls loaded service when entrypoint cannot be verified`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
