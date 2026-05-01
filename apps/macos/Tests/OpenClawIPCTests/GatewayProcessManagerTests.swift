@@ -39,4 +39,5 @@ struct GatewayProcessManagerTests {
         #expect(ready)
         #expect(manager.lastFailureReason == nil)
     }
+
 }

@@ -202,6 +202,23 @@ enum GatewayLaunchAgentManager {
             actualEntrypoint). Restart the consumer gateway from this build before capturing the first DM.
         """
     }
+
+    static func launchAgentMatchesCurrentRuntime(snapshot: LaunchAgentPlistSnapshot? = nil) -> Bool {
+        guard let snapshot = snapshot ?? self.launchdConfigSnapshot() else { return false }
+        let identity = RuntimeIdentity.current
+        let env = snapshot.environment
+
+        // The packaged app may use a bundled Node while an existing canonical gateway
+        // was started with Homebrew Node. Node path is not ownership. Runtime/config
+        // paths are ownership, so only attach when the launchd job is already pinned
+        // to the same state root and config file this app would manage.
+        return snapshot.port == identity.gatewayPort &&
+            (snapshot.bind ?? identity.gatewayBind).lowercased() == identity.gatewayBind.lowercased() &&
+            env["OPENCLAW_HOME"] == identity.runtimeRootURL.path &&
+            env["OPENCLAW_STATE_DIR"] == identity.stateDirURL.path &&
+            env["OPENCLAW_CONFIG_PATH"] == identity.configURL.path &&
+            env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] == identity.configURL.path
+    }
 }
 
 extension GatewayLaunchAgentManager {
