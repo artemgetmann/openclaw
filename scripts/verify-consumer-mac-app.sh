@@ -2,7 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/validated-node.sh"
+openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+source "$ROOT_DIR/scripts/lib/openclaw-runtime-payloads.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
@@ -42,13 +45,28 @@ while [[ $# -gt 0 ]]; do
 done
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
-EXPECTED_NAME="$(consumer_instance_display_name "$NORMALIZED_INSTANCE_ID")"
+# Release bridge builds from main still ship as "OpenClaw Consumer.app".
+# Keep the verifier reusable by allowing the dist wrapper to pin the visible
+# name without changing the shared runtime-identity contract.
+EXPECTED_NAME="${APP_NAME:-$(consumer_instance_display_name "$NORMALIZED_INSTANCE_ID")}"
+# Allow release/distribution callers to override the debug bundle id while still
+# reusing the same consumer-identity verifier.
 EXPECTED_BUNDLE_ID="${BUNDLE_ID:-$(consumer_instance_bundle_id "$NORMALIZED_INSTANCE_ID")}"
 EXPECTED_VARIANT="consumer"
 EXPECTED_URL_SCHEME="openclaw-consumer"
 EXPECTED_GATEWAY_PORT="$(consumer_instance_gateway_port "$NORMALIZED_INSTANCE_ID")"
 APP_PATH="${APP_PATH:-$(consumer_instance_app_path "$ROOT_DIR" "$NORMALIZED_INSTANCE_ID")}"
 INFO_PLIST="$APP_PATH/Contents/Info.plist"
+REQUIRED_WORKSPACE_TEMPLATES=(
+  "AGENTS.md"
+  "SOUL.md"
+  "TOOLS.md"
+  "IDENTITY.md"
+  "USER.md"
+  "HEARTBEAT.md"
+  "BOOTSTRAP.md"
+  "MEMORY.md"
+)
 
 if [[ ! -f "$INFO_PLIST" ]]; then
   echo "ERROR: consumer app bundle not found: $APP_PATH" >&2
@@ -58,6 +76,46 @@ fi
 plist_print() {
   local key="$1"
   /usr/libexec/PlistBuddy -c "Print :$key" "$INFO_PLIST"
+}
+
+team_id_for() {
+  codesign -dv --verbose=4 "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -n 1
+}
+
+runtime_node_entitlement_value() {
+  local runtime_node="$1"
+  local entitlement_key="$2"
+  local entitlements_file
+  local entitlement_value=""
+
+  entitlements_file="$(mktemp)"
+  if ! codesign -d --entitlements :- "$runtime_node" >"$entitlements_file" 2>/dev/null; then
+    rm -f "$entitlements_file"
+    return 1
+  fi
+
+  entitlement_value="$(/usr/libexec/PlistBuddy -c "Print :${entitlement_key}" "$entitlements_file" 2>/dev/null || true)"
+  rm -f "$entitlements_file"
+  printf '%s\n' "$entitlement_value"
+}
+
+assert_required_templates() {
+  local template_dir="$1"
+  local context_label="$2"
+  local template_name=""
+
+  if [[ ! -d "$template_dir" ]]; then
+    echo "ERROR: ${context_label} directory missing: $template_dir" >&2
+    exit 1
+  fi
+
+  for template_name in "${REQUIRED_WORKSPACE_TEMPLATES[@]}"; do
+    if [[ ! -f "$template_dir/$template_name" ]]; then
+      echo "ERROR: ${context_label} missing required template '$template_name'" >&2
+      echo "Expected directory: $template_dir" >&2
+      exit 1
+    fi
+  done
 }
 
 actual_name="$(plist_print CFBundleDisplayName)"
@@ -73,9 +131,25 @@ sparkle_feed_url="$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$INFO_PLIST" 
 sparkle_public_ed_key="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$INFO_PLIST" 2>/dev/null || true)"
 sparkle_auto_checks="$(/usr/libexec/PlistBuddy -c "Print :SUEnableAutomaticChecks" "$INFO_PLIST" 2>/dev/null || true)"
 
+if [[ -n "$actual_instance_id" ]]; then
+  normalized_actual_instance_id="$(consumer_instance_normalize_id "$actual_instance_id")"
+  if [[ "$actual_instance_id" != "$normalized_actual_instance_id" ]]; then
+    echo "ERROR: expected consumer instance id to be normalized, got '$actual_instance_id'" >&2
+    exit 1
+  fi
+fi
+
 if [[ "$actual_name" != "$EXPECTED_NAME" ]]; then
   echo "ERROR: expected consumer display name '$EXPECTED_NAME', got '$actual_name'" >&2
   exit 1
+fi
+
+EFFECTIVE_INSTANCE_ID="${NORMALIZED_INSTANCE_ID:-$actual_instance_id}"
+
+if [[ -z "${BUNDLE_ID:-}" ]]; then
+  # When the caller does not supply an explicit bundle override, the bundle id
+  # must still match the lane identity embedded in the app bundle itself.
+  EXPECTED_BUNDLE_ID="$(consumer_instance_bundle_id "$EFFECTIVE_INSTANCE_ID")"
 fi
 
 if [[ "$actual_bundle_id" != "$EXPECTED_BUNDLE_ID" ]]; then
@@ -88,15 +162,15 @@ if [[ "$actual_variant" != "$EXPECTED_VARIANT" ]]; then
   exit 1
 fi
 
-if [[ "$actual_instance_id" != "${NORMALIZED_INSTANCE_ID}" ]]; then
-  echo "ERROR: expected consumer instance id '${NORMALIZED_INSTANCE_ID}', got '${actual_instance_id}'" >&2
-  exit 1
-fi
-
 if [[ "$actual_url_scheme" != "$EXPECTED_URL_SCHEME" ]]; then
   echo "ERROR: expected URL scheme '$EXPECTED_URL_SCHEME', got '$actual_url_scheme'" >&2
   exit 1
 fi
+
+assert_required_templates "$APP_PATH/Contents/Resources/templates" "app resource templates"
+assert_required_templates \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/docs/reference/templates" \
+  "bundled runtime workspace templates"
 
 sparkle_mode="disabled"
 if [[ -n "$sparkle_feed_url" ]]; then
@@ -107,13 +181,68 @@ if [[ -n "$sparkle_feed_url" ]]; then
   fi
 fi
 
-codesign --verify --deep --strict "$APP_PATH" >/dev/null
-
 codesign_details="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)"
 signing_authority="$(printf '%s\n' "$codesign_details" | sed -n 's/^Authority=//p' | head -n 1)"
 team_identifier="$(printf '%s\n' "$codesign_details" | sed -n 's/^TeamIdentifier=//p' | head -n 1)"
 format_line="$(printf '%s\n' "$codesign_details" | sed -n 's/^Format=//p' | head -n 1)"
 
+while IFS= read -r -d '' runtime_node; do
+  if ! openclaw_file_is_macho "$runtime_node"; then
+    echo "ERROR: runtime node binary is not Mach-O: $runtime_node" >&2
+    exit 1
+  fi
+
+  if ! codesign --verify --strict "$runtime_node" >/dev/null; then
+    echo "ERROR: runtime node binary failed codesign verification: $runtime_node" >&2
+    exit 1
+  fi
+
+  runtime_allow_jit="$(runtime_node_entitlement_value "$runtime_node" "com.apple.security.cs.allow-jit" || true)"
+  runtime_allow_unsigned_exec="$(runtime_node_entitlement_value "$runtime_node" "com.apple.security.cs.allow-unsigned-executable-memory" || true)"
+  if [[ "$runtime_allow_jit" != "true" || "$runtime_allow_unsigned_exec" != "true" ]]; then
+    echo "ERROR: runtime node binary is missing required JIT entitlements: $runtime_node" >&2
+    echo "Expected: com.apple.security.cs.allow-jit=true and com.apple.security.cs.allow-unsigned-executable-memory=true" >&2
+    exit 1
+  fi
+
+  runtime_team_identifier="$(team_id_for "$runtime_node")"
+  if [[ -n "$team_identifier" && "$runtime_team_identifier" != "$team_identifier" ]]; then
+    echo "ERROR: runtime node binary Team ID mismatch: $runtime_node" >&2
+    echo "Expected: $team_identifier" >&2
+    echo "Actual: ${runtime_team_identifier:-<missing>}" >&2
+    exit 1
+  fi
+done < <(openclaw_runtime_node_binary_files "$APP_PATH")
+
+while IFS= read -r -d '' runtime_file; do
+  if openclaw_runtime_node_should_be_macho "$runtime_file" && ! openclaw_file_is_macho "$runtime_file"; then
+    echo "ERROR: runtime addon is not Mach-O: $runtime_file" >&2
+    exit 1
+  fi
+
+  if openclaw_file_is_macho "$runtime_file"; then
+    if ! codesign --verify --strict "$runtime_file" >/dev/null; then
+      echo "ERROR: runtime payload failed codesign verification: $runtime_file" >&2
+      exit 1
+    fi
+
+    # Release builds need the bundled runtime payloads to come from the same
+    # signing team as the app shell. A separately signed addon can still look
+    # "valid" in isolation while Gatekeeper/runtime library validation blocks it.
+    runtime_team_identifier="$(team_id_for "$runtime_file")"
+    if [[ -n "$team_identifier" && "$runtime_team_identifier" != "$team_identifier" ]]; then
+      echo "ERROR: runtime payload Team ID mismatch: $runtime_file" >&2
+      echo "Expected: $team_identifier" >&2
+      echo "Actual: ${runtime_team_identifier:-<missing>}" >&2
+      exit 1
+    fi
+  fi
+done < <(openclaw_runtime_payload_files "$APP_PATH")
+
+codesign --verify --deep --strict "$APP_PATH" >/dev/null
+
+# Gatekeeper verdict is useful demo-distribution signal, but a local Apple
+# Development build should still count as a valid bundle assembly result.
 set +e
 spctl_output="$(
   /usr/sbin/spctl -a -vv "$APP_PATH" 2>&1
@@ -130,20 +259,20 @@ if [[ $spctl_status -ne 0 ]]; then
   fi
 fi
 
-runtime_root="$(consumer_instance_runtime_root "$HOME" "$NORMALIZED_INSTANCE_ID")"
-state_dir="$(consumer_instance_state_dir "$HOME" "$NORMALIZED_INSTANCE_ID")"
-config_path="$(consumer_instance_config_path "$HOME" "$NORMALIZED_INSTANCE_ID")"
-workspace_path="$(consumer_instance_workspace_path "$HOME" "$NORMALIZED_INSTANCE_ID")"
-logs_path="$(consumer_instance_logs_path "$HOME" "$NORMALIZED_INSTANCE_ID")"
-app_launchd_label="$(consumer_instance_launchd_label "$NORMALIZED_INSTANCE_ID")"
-gateway_launchd_label="$(consumer_instance_gateway_launchd_label "$NORMALIZED_INSTANCE_ID")"
+runtime_root="$(consumer_instance_runtime_root "$HOME" "$EFFECTIVE_INSTANCE_ID")"
+state_dir="$(consumer_instance_state_dir "$HOME" "$EFFECTIVE_INSTANCE_ID")"
+config_path="$(consumer_instance_config_path "$HOME" "$EFFECTIVE_INSTANCE_ID")"
+workspace_path="$(consumer_instance_workspace_path "$HOME" "$EFFECTIVE_INSTANCE_ID")"
+logs_path="$(consumer_instance_logs_path "$HOME" "$EFFECTIVE_INSTANCE_ID")"
+app_launchd_label="$(consumer_instance_launchd_label "$EFFECTIVE_INSTANCE_ID")"
+gateway_launchd_label="$(consumer_instance_gateway_launchd_label "$EFFECTIVE_INSTANCE_ID")"
 
 echo "Consumer app verification passed:"
 echo "  path=$APP_PATH"
 echo "  display_name=$actual_name"
 echo "  bundle_id=$actual_bundle_id"
 echo "  variant=$actual_variant"
-echo "  instance_id=${NORMALIZED_INSTANCE_ID:-default}"
+echo "  instance_id=${EFFECTIVE_INSTANCE_ID:-default}"
 echo "  url_scheme=$actual_url_scheme"
 echo "  version=$actual_version"
 echo "  build=$actual_build"
