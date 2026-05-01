@@ -86,6 +86,8 @@ struct OnboardingView: View {
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var browserSetup = BrowserSetupModel()
     @State var modelSetup = ConsumerModelSetupModel()
+    @State var channelsStore = ChannelsStore.shared
+    @State var setupResume = ConsumerSetupResumeModel()
     @State var onboardingSkillsModel = SkillsSettingsModel()
     @State var onboardingWizard = OnboardingWizardModel()
     @State var didLoadOnboardingSkills = false
@@ -198,6 +200,17 @@ struct OnboardingView: View {
             !self.modelSetup.isComplete
     }
 
+    var isTelegramSetupBlocking: Bool {
+        AppFlavor.current.isConsumer &&
+            self.pageCount == 1 &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
+            self.browserSetup.isComplete &&
+            self.areCorePermissionsGranted &&
+            self.modelSetup.isComplete &&
+            !self.channelsStore.consumerTelegramReadyForFirstTask()
+    }
+
     var areCorePermissionsGranted: Bool {
         ConsumerPermissionCatalog.coreCapabilities.allSatisfy { capability in
             self.permissionMonitor.status[capability] == true
@@ -220,7 +233,8 @@ struct OnboardingView: View {
             self.state.connectionMode == .local &&
             self.browserSetup.isComplete &&
             self.areCorePermissionsGranted &&
-            self.modelSetup.isComplete
+            self.modelSetup.isComplete &&
+            self.channelsStore.consumerTelegramReadyForFirstTask()
     }
 
     var canAdvance: Bool {
@@ -228,7 +242,8 @@ struct OnboardingView: View {
             !self.isConsumerInlineSetupBlocking &&
             !self.isBrowserSetupBlocking &&
             !self.isModelSetupBlocking &&
-            !self.isCorePermissionsBlocking
+            !self.isCorePermissionsBlocking &&
+            !self.isTelegramSetupBlocking
     }
 
     var devLinkCommand: String {

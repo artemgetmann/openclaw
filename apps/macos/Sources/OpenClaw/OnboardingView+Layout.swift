@@ -67,6 +67,9 @@ extension OnboardingView {
                 // user presses the first button so the reduced page order stays stable.
                 self.selectLocalGateway()
             }
+            if !(await self.attemptConsumerSetupResume()) {
+                await self.loadConsumerTelegramSetupStateIfNeeded()
+            }
         }
     }
 

@@ -289,6 +289,18 @@ final class BrowserSetupModel {
     }
 
     func refresh() async {
+        await self.refresh(requiresRestoredSelectionConfirmation: self.restoredSelectionRequiresConfirmation)
+    }
+
+    func refreshForSetupResume() async {
+        // Update-resume checks need to prove the restored browser profile is
+        // actually usable. The normal onboarding path deliberately pauses on a
+        // confirmation card, but that would force healthy existing users through
+        // setup again after every onboarding-version bump.
+        await self.refresh(requiresRestoredSelectionConfirmation: false)
+    }
+
+    private func refresh(requiresRestoredSelectionConfirmation: Bool) async {
         self.phase = .checking
         self.statusLine = "Checking Chrome on this Mac…"
 
@@ -318,7 +330,7 @@ final class BrowserSetupModel {
             // Onboarding should acknowledge prior Chrome choices explicitly so the
             // user sees a real browser step even when this Mac already has enough
             // state to prefill it. Settings keeps the faster auto-ready behavior.
-            if self.restoredSelectionRequiresConfirmation {
+            if requiresRestoredSelectionConfirmation {
                 self.phase = .confirm(selected)
                 self.statusLine = "We found your Chrome profile."
                 self.lastAutoRecoveryFailureMessage = nil
