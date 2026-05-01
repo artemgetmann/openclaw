@@ -23,14 +23,17 @@ The source can be public. The hosted environment cannot be.
 ## Endpoints
 
 - `GET /healthz` - public health check with provider presence booleans only.
-- `POST /v1/device/register` - registers or refreshes a device contract.
-- `POST /v1/license/status` - returns trial/license status for a device.
+- `POST /v1/device/register` - creates or reuses a durable device/license row.
+- `POST /v1/license/status` - returns persisted trial/license status for a device.
+- `POST /v1/admin/devices/{device_id}/license` - manual beta support override.
 - `POST /v1/managed/utilities/{utility}` - placeholder for future managed operations.
 
 ## Environment
 
 - `JARVIS_BACKEND_ENV` - defaults to `development`.
 - `JARVIS_BACKEND_API_TOKEN` - bearer token for protected endpoints.
+- `JARVIS_BACKEND_DB_PATH` - SQLite database path, defaults to
+  `data/jarvis-backend.sqlite3`.
 - `JARVIS_TRIAL_DAYS` - defaults to `14`.
 - `JARVIS_OFFLINE_GRACE_DAYS` - defaults to `3`.
 - `OPENAI_API_KEY` - optional managed provider key.
@@ -39,6 +42,11 @@ The source can be public. The hosted environment cannot be.
 In production, protected endpoints refuse requests if
 `JARVIS_BACKEND_API_TOKEN` is missing. In development, the token is optional so
 local contract tests can run without secrets.
+
+Device/license state is stored in SQLite. Repeated registration reuses the
+original trial start/end dates instead of resetting the trial. On Render, point
+`JARVIS_BACKEND_DB_PATH` at a mounted persistent disk path before using this for
+real beta users.
 
 ## Render Deployment
 
