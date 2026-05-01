@@ -62,9 +62,35 @@ extension OnboardingView {
     }
 
     func finish() {
+        self.markOnboardingComplete()
+        OnboardingController.shared.close()
+    }
+
+    func markOnboardingComplete() {
         UserDefaults.standard.set(true, forKey: onboardingSeenKey)
         UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
+        AppStateStore.shared.onboardingSeen = true
+    }
+
+    func attemptConsumerSetupResume() async -> Bool {
+        guard AppFlavor.current.isConsumer else { return false }
+        guard self.state.connectionMode == .local else { return false }
+        let decision = await self.setupResume.evaluate(
+            browserSetup: self.browserSetup,
+            modelSetup: self.modelSetup,
+            channelsStore: self.channelsStore,
+            corePermissionsGranted: self.areCorePermissionsGranted)
+        guard decision == .complete else { return false }
+        self.markOnboardingComplete()
         OnboardingController.shared.close()
+        return true
+    }
+
+    func loadConsumerTelegramSetupStateIfNeeded() async {
+        guard AppFlavor.current.isConsumer else { return }
+        guard self.state.connectionMode == .local else { return }
+        await self.channelsStore.restoreConfigDraftFromCurrentSource()
+        await self.channelsStore.refresh(probe: true)
     }
 
     func copyToPasteboard(_ text: String) {

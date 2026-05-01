@@ -113,6 +113,39 @@ extension ChannelsStore {
         return true
     }
 
+    @discardableResult
+    func completeConsumerTelegramFirstTaskVerificationForResumeIfSafe() -> Bool {
+        guard self.consumerTelegramLooksLive() else { return false }
+        guard self.consumerTelegramConfiguredBotId() != nil else { return false }
+        guard !self.consumerTelegramFirstTaskVerified else { return true }
+
+        // Existing users may have a healthy bot and a locked sender from before
+        // the local first-task marker existed. Promote only when live runtime
+        // state plus sender/account evidence proves this is an already-used bot,
+        // not a half-pasted BotFather token.
+        let fallback = self.consumerTelegramConfigFallback()
+        let account = self.consumerTelegramPrimaryAccount()
+        let hasSenderEvidence =
+            fallback.lockedSenderId != nil ||
+            self.telegramSetupFirstSenderId != nil ||
+            account?.allowFrom?.isEmpty == false
+        let hasActivityEvidence =
+            self.consumerTelegramLatestInboundAt() != nil ||
+            self.consumerTelegramLatestOutboundAt() != nil
+        guard hasSenderEvidence || hasActivityEvidence else { return false }
+
+        self.markConsumerTelegramFirstTaskVerified()
+        self.telegramSetupWaitingForDM = false
+        self.telegramSetupPhase = .idle
+        if self.telegramSetupFirstSenderId == nil {
+            self.telegramSetupFirstSenderId = fallback.lockedSenderId ?? account?.allowFrom?.first
+        }
+        self.telegramSetupStatus = self.consumerTelegramBotUsername().map {
+            "Telegram bot is live as @\($0). First task verified from existing setup."
+        } ?? "Telegram bot is live. First task verified from existing setup."
+        return true
+    }
+
     func consumerTelegramConflictMessage(_ raw: String?) -> String? {
         guard AppFlavor.current.isConsumer else { return nil }
         let normalized = raw?

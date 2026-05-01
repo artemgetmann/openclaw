@@ -95,7 +95,7 @@ extension OnboardingView {
                                         systemImage: "lock.shield")
                                     self.featureRow(
                                         title: "Verify Telegram",
-                                        subtitle: "Handled by the Telegram setup lane after this browser/model slice lands.",
+                                        subtitle: "Confirm the bot by completing one real task from this Mac.",
                                         systemImage: "paperplane")
                                 }
                             }
@@ -113,7 +113,7 @@ extension OnboardingView {
             VStack(spacing: 22) {
                 Text("Set up OpenClaw")
                     .font(.largeTitle.weight(.semibold))
-                Text("Connect Chrome first, then confirm Mac permissions and AI access. Telegram setup is intentionally left for the parallel Telegram slice.")
+                Text("Connect Chrome first, then confirm Mac permissions, AI access, and Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -138,17 +138,13 @@ extension OnboardingView {
 
                         ConsumerModelSetupCardContent(model: self.modelSetup)
 
-                        Divider()
-                            .padding(.vertical, 6)
+                        if self.modelSetup.isComplete {
+                            Divider()
+                                .padding(.vertical, 6)
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Telegram setup lands next")
-                                .font(.headline)
-                            Text(
-                                "This slice stops before Telegram on purpose. The Telegram lane will own first-task verification and setup replay.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                            ConsumerTelegramSetupCardContent(
+                                store: self.channelsStore,
+                                presentation: .onboarding)
                         }
                     } else {
                         Divider()
