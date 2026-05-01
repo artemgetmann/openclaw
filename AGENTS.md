@@ -8,20 +8,22 @@
 
 - Treat this checkout as the consumer-product fork unless the user says otherwise.
 - Do not assume upstream `openclaw/openclaw` workflow by default.
-- Do not recreate or target a `consumer` branch for new work. Use `codex/consumer-openclaw-project`.
-- If the user says "consumer branch", interpret that as `codex/consumer-openclaw-project` unless they explicitly say they mean the legacy `consumer` branch.
+- Main/consumer consolidation has landed. New consumer-product work targets this repo's `main`.
+- Do not recreate or target a `consumer` branch for new work.
+- Do not target `codex/consumer-openclaw-project` for new work unless the user explicitly declares an emergency backport.
+- If the user says "consumer branch", ask whether they mean the legacy fallback before doing work there.
 - Never merge `upstream/main` into fork branches. Upstream intake is selective only.
 - PR targets:
-  - Consumer-product work: `codex/consumer-openclaw-project`
+  - Consumer-product work: this repo's `main`
   - General fork work: this repo's `main`
   - Upstream work: `https://github.com/openclaw/openclaw` only when the user explicitly asks for upstream PR or review flow
-- `consumer` is a legacy branch. Do not target new PRs there unless the user explicitly asks.
+- `consumer` and `codex/consumer-openclaw-project` are legacy/emergency fallback branches. Do not target new PRs there unless the user explicitly asks.
 
 ## Always-on rules
 
 - In chat replies, use repo-root-relative file references only.
 - Read `SECURITY.md` before any security triage, advisory work, or severity decision.
-- Before creating, moving, or cleaning up worktrees, read `docs/agent-guides/workflow.md`. Default workflow is now two sacred home clones: `~/Programming_Projects/openclaw` on `main` and `~/Programming_Projects/openclaw-consumer` on `codex/consumer-openclaw-project`. Those homes are pull-only runtime anchors. All implementation work happens in temporary worktrees created from the correct sacred home clone, and default task spawn should create that temp worktree immediately.
+- Before creating, moving, or cleaning up worktrees, read `docs/agent-guides/workflow.md`. Default workflow is now the sacred home clone `~/Programming_Projects/openclaw` on `main`; `~/Programming_Projects/openclaw-consumer` is legacy/emergency fallback only. The home clone is a pull-only runtime anchor. All implementation work happens in temporary worktrees created from the correct sacred home clone, and default task spawn should create that temp worktree immediately.
 - Before touching gateway runtime ownership, worktree bot validation, or LaunchAgent behavior, read `docs/agent-guides/workflow.md` and `docs/agent-guides/runtime-ops.md`.
 - For consumer macOS packaging/relaunch iteration, prefer `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>` and the notes in `apps/macos/README.md` instead of rediscovering the warm-path flags by hand.
 - Use `docs/agent-guides/workflow.md` as the source of truth for the two-clone model, migration path, feature-branch rule, and draft-PR workflow. Do not rely on memory for branch/home-clone conventions.
@@ -42,6 +44,8 @@
 
 - Product context and current priorities:
   - `CONSUMER.md`
+  - `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
+  - `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
   - `docs/consumer/openclaw-consumer-execution-spec.md`
 - Branching, PR targets, commits, GitHub footguns:
   - `docs/agent-guides/workflow.md`

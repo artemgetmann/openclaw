@@ -3,23 +3,24 @@
 ## Branch and PR targets
 
 - Default to this fork, not upstream.
-- Consumer-product work targets `codex/consumer-openclaw-project`.
-- General fork work that is not consumer-product work targets this repo's `main`.
+- Consumer-product work targets this repo's `main`.
+- General fork work also targets this repo's `main`.
 - Use upstream `https://github.com/openclaw/openclaw` only when the user explicitly asks for upstream review, triage, or PR flow.
 - `consumer` is legacy. Do not target new PRs there unless the user explicitly asks.
-- Do not recreate `consumer` for new work. The active product branch is `codex/consumer-openclaw-project`.
-- If the user says "consumer branch", interpret that as `codex/consumer-openclaw-project` unless they explicitly say they want the legacy `consumer` branch.
+- `codex/consumer-openclaw-project` is legacy/emergency fallback. Do not target new PRs there unless the user explicitly declares an emergency backport.
+- Do not recreate `consumer` for new work.
+- If the user says "consumer branch", clarify whether they mean the legacy fallback before doing work there.
 - Never run `git merge upstream/main` on this fork. Port upstream changes selectively via `main`.
 
 ## Two-clone default
 
 - Default model:
   - `~/Programming_Projects/openclaw` is the sacred runtime home clone for fork `main`
-  - `~/Programming_Projects/openclaw-consumer` is the sacred runtime home clone for `codex/consumer-openclaw-project`
+  - `~/Programming_Projects/openclaw-consumer` is legacy/emergency fallback only
 - Those sacred home clones replace durable worktrees as the default branch homes.
 - Sacred home clones are pull-only runtime anchors:
   - they stay on their base branch
-  - they are the only approved source checkouts for creating new temp worktrees
+  - `~/Programming_Projects/openclaw` is the approved source checkout for new temp worktrees
   - agents do not do feature work directly in either sacred home clone, even on a feature branch
 - Direct commits stay blocked on the protected base branches:
   - `main`
@@ -68,14 +69,15 @@
 ## Daily agent sequence
 
 1. Start the task with `oc-main-task <feature-name>` or `oc-consumer-task <feature-name>`.
-2. Let that wrapper fast-forward the correct sacred home clone, create the temp worktree, and drop you into it.
-3. Code inside that temp worktree only.
-4. Open or update a draft PR early.
-5. Validate in the temp worktree.
-6. Mark the PR ready when validation is complete.
-7. Merge if the task and policy allow it.
-8. Remove the merged temp worktree with `bash scripts/gc-worktrees.sh --auto --base-branch <base>` or let the scheduled GC clean it up.
-9. Keep the sacred home clone on its base branch and fast-forward it again before the next task.
+2. Use `oc-main-task` for new consumer-product work. Use `oc-consumer-task` only for explicit emergency fallback/backport work.
+3. Let that wrapper fast-forward the correct sacred home clone, create the temp worktree, and drop you into it.
+4. Code inside that temp worktree only.
+5. Open or update a draft PR early.
+6. Validate in the temp worktree.
+7. Mark the PR ready when validation is complete.
+8. Merge if the task and policy allow it.
+9. Remove the merged temp worktree with `bash scripts/gc-worktrees.sh --auto --base-branch <base>` or let the scheduled GC clean it up.
+10. Keep the sacred home clone on its base branch and fast-forward it again before the next task.
 
 ## Temporary worktrees
 
@@ -101,19 +103,20 @@
 - Legacy durable worktrees may still exist during migration. Do not retire them in-place during this change. Cleanup belongs to a later explicit pass.
 - After merge, clean the finished temp worktree:
   - manual pass: `bash scripts/gc-worktrees.sh --auto --base-branch main`
-  - consumer pass: `bash scripts/gc-worktrees.sh --auto --base-branch codex/consumer-openclaw-project`
+  - legacy consumer fallback pass: `bash scripts/gc-worktrees.sh --auto --base-branch codex/consumer-openclaw-project`
   - background cleanup: `bash scripts/install-worktree-gc.sh install`
 - For recovery and vanished-worktree triage, use `docs/debug/worktree-branch-survival.md`.
 
 ## Migration path
 
 1. Keep the existing durable worktrees for now. Do not delete them as part of this rollout.
-2. Ensure the two home clones exist at `~/Programming_Projects/openclaw` and `~/Programming_Projects/openclaw-consumer`.
-3. Source `scripts/shell-helpers/home-clone-helpers.sh` and start entering clones through `oc-main` / `oc-consumer`.
-4. Stop treating durable worktrees as the default branch homes.
-5. For new work, create temp worktrees from the correct sacred home clone instead of branching directly inside the home clone.
-6. Treat the sacred home clone as pull-only runtime state, not as a coding surface.
-7. After the team has migrated, do a separate cleanup pass for old durable worktrees.
+2. Ensure the main home clone exists at `~/Programming_Projects/openclaw`.
+3. Keep `~/Programming_Projects/openclaw-consumer` only as legacy/emergency fallback until retirement is complete.
+4. Source `scripts/shell-helpers/home-clone-helpers.sh` and start new work through `oc-main` / `oc-main-task`.
+5. Stop treating durable worktrees as the default branch homes.
+6. For new work, create temp worktrees from the main sacred home clone instead of branching directly inside the home clone.
+7. Treat the sacred home clone as pull-only runtime state, not as a coding surface.
+8. After the team has migrated, do a separate cleanup pass for old durable worktrees.
 
 ## GitHub footguns
 
