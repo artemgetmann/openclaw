@@ -94,6 +94,20 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
   - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
 
+### E2E: Telegram extension media harness
+
+- Command: `pnpm test:telegram:e2e`
+- Config: `vitest.telegram-e2e.config.ts`
+- Files: `extensions/telegram/src/*.e2e.test.ts`
+- Runtime defaults:
+  - Uses Vitest `forks` with one worker to avoid cross-file media harness state.
+  - Accepts file arguments for narrower runs, for example `pnpm test:telegram:e2e extensions/telegram/src/bot.media.downloads-media-file-path-no-file-download.e2e.test.ts`.
+- Scope:
+  - Telegram extension E2E harness coverage that is too stateful for the regular extension/channel suites.
+- Expectations:
+  - No real Telegram credentials required.
+  - Opt-in only; not part of the default `pnpm test:e2e` run.
+
 ### Live (real providers + real models)
 
 - Command: `pnpm test:live`

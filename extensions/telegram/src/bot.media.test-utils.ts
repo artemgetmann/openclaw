@@ -107,6 +107,32 @@ beforeAll(async () => {
   replySpyRef = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
 }, TELEGRAM_BOT_IMPORT_TIMEOUT_MS);
 
+vi.mock("../../../src/agents/model-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/agents/model-catalog.js")>();
+  return {
+    ...actual,
+    loadModelCatalog: vi.fn(async () => [
+      {
+        id: "text-only-test-model",
+        name: "Text-only test model",
+        provider: "openai",
+        input: ["text"],
+      },
+    ]),
+  };
+});
+
+vi.mock("../../../src/agents/model-selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/agents/model-selection.js")>();
+  return {
+    ...actual,
+    resolveDefaultModelForAgent: vi.fn(() => ({
+      provider: "openai",
+      model: "text-only-test-model",
+    })),
+  };
+});
+
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: (...args: unknown[]) => cacheStickerSpy(...args),
   getCachedSticker: (...args: unknown[]) => getCachedStickerSpy(...args),
