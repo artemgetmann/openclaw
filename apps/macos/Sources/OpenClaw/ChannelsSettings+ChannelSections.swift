@@ -87,6 +87,24 @@ extension ChannelsSettings {
         }
     }
 
+    var telegramSetupSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            self.formSection(
+                self.store.consumerTelegramReadyForFirstTask() ? "Connected bot" : "One-time setup")
+            {
+                ConsumerTelegramSetupCardContent(store: self.store, presentation: .settings)
+            }
+        }
+    }
+
+    var consumerTelegramLiveSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            self.formSection("Connected bot") {
+                ConsumerTelegramSetupCardContent(store: self.store, presentation: .settings)
+            }
+        }
+    }
+
     func genericChannelSection(_ channel: ChannelItem) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             self.configEditorSection(channelId: channel.id)
