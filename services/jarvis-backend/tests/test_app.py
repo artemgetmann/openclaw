@@ -95,7 +95,7 @@ def test_license_status_uses_existing_trial_record(monkeypatch):
 
 
 def test_admin_license_update_marks_device_licensed_and_expired(monkeypatch):
-    monkeypatch.setenv("JARVIS_BACKEND_ENV", "production")
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
     reset_settings()
     client = TestClient(app)
@@ -124,6 +124,55 @@ def test_admin_license_update_marks_device_licensed_and_expired(monkeypatch):
     assert expired.json()["state"] == "expired"
 
 
+def test_development_uses_local_sqlite_without_neon(monkeypatch, tmp_path):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.delenv("NEON_DATABASE_URL", raising=False)
+    local_db = tmp_path / "explicit-local.sqlite3"
+    monkeypatch.setenv("JARVIS_BACKEND_DB_PATH", str(local_db))
+    reset_settings()
+
+    response = TestClient(app).post(
+        "/v1/device/register",
+        json={"device_id": "device-local", "app_version": "0.1.0", "platform": "macos"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["license"]["state"] == "trial_active"
+    assert local_db.exists()
+
+
+def test_production_without_neon_keeps_healthz_up_but_fails_persistence(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "production")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.delenv("NEON_DATABASE_URL", raising=False)
+    reset_settings()
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer server-token"}
+
+    health = client.get("/healthz")
+    register = client.post(
+        "/v1/device/register",
+        json={"device_id": "device-prod", "app_version": "0.1.0", "platform": "macos"},
+        headers=headers,
+    )
+    license_status = client.post(
+        "/v1/license/status",
+        json={"deviceId": "device-prod", "appVersion": "0.1.0"},
+        headers=headers,
+    )
+    admin = client.post(
+        "/v1/admin/devices/device-prod/license",
+        json={"state": "licensed"},
+        headers=headers,
+    )
+
+    assert health.status_code == 200
+    assert register.status_code == 503
+    assert license_status.status_code == 503
+    assert admin.status_code == 503
+    assert register.json()["detail"] == "NEON_DATABASE_URL is required for production persistence"
+
+
 def test_production_requires_configured_backend_token(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "production")
     monkeypatch.delenv("JARVIS_BACKEND_API_TOKEN", raising=False)
@@ -135,7 +184,7 @@ def test_production_requires_configured_backend_token(monkeypatch):
 
 
 def test_configured_backend_token_is_required(monkeypatch):
-    monkeypatch.setenv("JARVIS_BACKEND_ENV", "production")
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
     reset_settings()
 
@@ -175,6 +224,7 @@ def teardown_function():
         "JARVIS_BACKEND_API_TOKEN",
         "JARVIS_BACKEND_DB_PATH",
         "JARVIS_TRIAL_DAYS",
+        "NEON_DATABASE_URL",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
     ):
