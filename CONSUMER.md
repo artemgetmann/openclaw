@@ -10,12 +10,13 @@ Read this before doing consumer-product work in this repo.
 
 ## Branch targets
 
-- Consumer-product integration branch: `codex/consumer-openclaw-project`
+- Consumer-product work now targets this repo's `main`.
+- Legacy/emergency fallback branch: `codex/consumer-openclaw-project`
 - Legacy branch: `consumer`
-- General fork work that is not consumer-product work can still target this repo's `main`
 - Only use upstream `openclaw/openclaw` PR flow when the user explicitly asks
-- Do not recreate `consumer` for new work. It is legacy-only.
-- If the user says "consumer branch", treat that as `codex/consumer-openclaw-project` unless they explicitly ask for the legacy `consumer` branch.
+- Do not recreate or target `consumer` for new work. It is legacy-only.
+- Do not target `codex/consumer-openclaw-project` unless the user explicitly declares an emergency backport.
+- If the user says "consumer branch", clarify whether they mean the legacy fallback before doing work there.
 - Never merge `upstream/main` into this fork. Upstream changes come in through selective intake.
 
 ## Product contract
@@ -32,6 +33,9 @@ Read this before doing consumer-product work in this repo.
 
 ## Load the right doc for the task
 
+- Main/consumer consolidation and retirement:
+  - `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
+  - `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
 - Full execution plan:
   - `docs/consumer/openclaw-consumer-execution-spec.md`
 - Sprint kickoff prompt:
@@ -49,6 +53,6 @@ Read this before doing consumer-product work in this repo.
 
 ## Operating reminders
 
-- Do not point new consumer-product PRs at `consumer` unless the user explicitly asks
+- Do not point new consumer-product PRs at `consumer` or `codex/consumer-openclaw-project` unless the user explicitly asks for an emergency backport
 - Do not assume upstream workflow is relevant just because the fork originated there
 - If a startup doc grows into a wiki again, cut it down and move the bulk into `docs/consumer/*`
