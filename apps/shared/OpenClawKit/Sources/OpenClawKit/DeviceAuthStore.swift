@@ -22,8 +22,12 @@ private struct DeviceAuthStoreFile: Codable {
 
 public enum DeviceAuthStore {
     private static let fileName = "device-auth.json"
+    private static let lock = NSLock()
 
     public static func loadToken(deviceId: String, role: String) -> DeviceAuthEntry? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+
         guard let store = readStore(), store.deviceId == deviceId else { return nil }
         let role = normalizeRole(role)
         return store.tokens[role]
@@ -35,6 +39,9 @@ public enum DeviceAuthStore {
         token: String,
         scopes: [String] = []
     ) -> DeviceAuthEntry {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+
         let normalizedRole = normalizeRole(role)
         var next = readStore()
         if next?.deviceId != deviceId {
@@ -57,6 +64,9 @@ public enum DeviceAuthStore {
     }
 
     public static func clearToken(deviceId: String, role: String) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+
         guard var store = readStore(), store.deviceId == deviceId else { return }
         let normalizedRole = normalizeRole(role)
         guard store.tokens[normalizedRole] != nil else { return }
