@@ -3,6 +3,13 @@ import Foundation
 
 enum ConsumerRuntime {
     static let imageBackend = "sips"
+    private static let toolIsolationEnvironmentKeys = [
+        "HIMALAYA_CONFIG",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "GOG_KEYRING_PASSWORD",
+        "OPENCLAW_SERVICE_PATH_PREFIX",
+    ]
 
     private static var identity: RuntimeIdentity {
         .current
@@ -95,6 +102,27 @@ enum ConsumerRuntime {
             // Seed the worktree root explicitly so child commands do not fall back to
             // whatever founder checkout happened to export `openclaw` first.
             self.setEnv("OPENCLAW_FORK_ROOT", value: projectRoot)
+        }
+        // Packaged first-run must repair the app-owned helper/runtime before
+        // any PATH-sensitive gateway or setup checks run.
+        ConsumerBundledRuntime.bootstrapIfNeeded()
+        ConsumerBootstrap.bootstrapIfNeeded()
+    }
+
+    static func applyInheritedToolIsolationEnvironment(
+        to env: inout [String: String],
+        base: [String: String] = ProcessInfo.processInfo.environment)
+    {
+        // Preserve only explicit cleanroom/tool-path variables across launchd
+        // restarts. This keeps packaged setup tools lane-local without copying
+        // arbitrary shell state into the supervised app/gateway.
+        for key in self.toolIsolationEnvironmentKeys {
+            let value = base[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !value.isEmpty else {
+                env.removeValue(forKey: key)
+                continue
+            }
+            env[key] = value
         }
     }
 

@@ -1,0 +1,170 @@
+import Foundation
+import Testing
+@testable import OpenClaw
+
+@Suite(.serialized)
+struct ConsumerBundledRuntimeTests {
+    private static let requiredWorkspaceTemplateNames = [
+        "AGENTS.md",
+        "SOUL.md",
+        "TOOLS.md",
+        "IDENTITY.md",
+        "USER.md",
+        "HEARTBEAT.md",
+        "BOOTSTRAP.md",
+        "MEMORY.md",
+    ]
+
+    @Test func `seeding writes bundled runtime into app prefix and is idempotent`() throws {
+        let resourceRoot = try makeTempDirForTests()
+        let installPrefix = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
+        let fm = FileManager.default
+
+        try fm.createDirectory(
+            at: resourceRoot.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true),
+            withIntermediateDirectories: true)
+        let bundledRoot = resourceRoot.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true)
+        try self.writeBundledWorkspaceTemplates(into: bundledRoot)
+        let manifest = ConsumerBundledRuntime.Manifest(
+            format: 1,
+            bundleVersion: "123",
+            gitCommit: "abc123",
+            nodeVersion: "22.22.1",
+            uvVersion: "0.9.21")
+        try BundledRuntimeFixtureHelper.writeMinimalBundledRuntime(
+            into: bundledRoot,
+            manifest: manifest,
+            fileManager: fm)
+
+        let seeded = try ConsumerBundledRuntime.seedIfNeeded(from: bundledRoot, into: installPrefix, fileManager: fm)
+        #expect(seeded == .seeded)
+        #expect(fm.isExecutableFile(atPath: installPrefix.appendingPathComponent("bin/openclaw").path))
+        #expect(fm.isExecutableFile(atPath: installPrefix.appendingPathComponent("tools/node/bin/node").path))
+        #expect(fm.isExecutableFile(atPath: installPrefix.appendingPathComponent("tools/uv/bin/uv").path))
+        #expect(fm.isReadableFile(atPath: installPrefix.appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
+        #expect(fm.isReadableFile(atPath: installPrefix.appendingPathComponent("lib/openclaw-bundled/node_modules/chalk/package.json").path))
+        self.assertInstalledWorkspaceTemplates(at: installPrefix, fileManager: fm)
+
+        let ready = try ConsumerBundledRuntime.seedIfNeeded(from: bundledRoot, into: installPrefix, fileManager: fm)
+        #expect(ready == .ready)
+    }
+
+    @Test @MainActor func `bootstrap seeds bundled runtime when product bundle resources are available`() async throws {
+        let instanceID = "consumer-bundled-runtime-hardening"
+        let homeURL = try makeTempDirForTests()
+        let bundleRoot = try makeTempDirForTests()
+        let fm = FileManager.default
+        let bundle = try makeTempBundle(
+            resourceRoot: bundleRoot,
+            bundleIdentifier: "ai.openclaw.consumer.mac.debug.bundle-seed-\(UUID().uuidString)")
+        guard let bundleResourcesURL = bundle.resourceURL else {
+            throw NSError(
+                domain: "ConsumerBundledRuntimeTests",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Temp bundle missing resource URL"])
+        }
+
+        try fm.createDirectory(
+            at: bundleResourcesURL.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true),
+            withIntermediateDirectories: true)
+        let bundledRoot = bundleResourcesURL.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true)
+        try self.writeBundledWorkspaceTemplates(into: bundledRoot)
+
+        let manifest = ConsumerBundledRuntime.Manifest(
+            format: 1,
+            bundleVersion: "123",
+            gitCommit: "abc123",
+            nodeVersion: "22.22.1",
+            uvVersion: "0.9.21")
+        try BundledRuntimeFixtureHelper.writeMinimalBundledRuntime(
+            into: bundledRoot,
+            manifest: manifest,
+            fileManager: fm)
+
+        defer {
+            try? fm.removeItem(at: homeURL)
+            try? fm.removeItem(at: bundleRoot)
+        }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                ConsumerInstance.envKey: instanceID,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": homeURL.path,
+                "OPENCLAW_APP_VARIANT": "consumer",
+                "OPENCLAW_HOME": nil,
+                "OPENCLAW_STATE_DIR": nil,
+                "OPENCLAW_CONFIG_PATH": nil,
+                "OPENCLAW_GATEWAY_PORT": nil,
+                "OPENCLAW_GATEWAY_BIND": nil,
+                "OPENCLAW_LOG_DIR": nil,
+                "OPENCLAW_LAUNCHD_LABEL": nil,
+            ],
+            defaults: ["gatewayPort": nil])
+        {
+            ConsumerBundledRuntime.bootstrapIfNeeded(bundle: bundle, fileManager: fm)
+
+            #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("bin/openclaw").path))
+            #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/node/bin/node").path))
+            #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/uv/bin/uv").path))
+            #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
+            self.assertInstalledWorkspaceTemplates(
+                at: ConsumerRuntime.installPrefixURL,
+                fileManager: FileManager.default)
+        }
+    }
+
+    private func writeBundledWorkspaceTemplates(into bundledRoot: URL) throws {
+        let templatesRoot = bundledRoot
+            .appendingPathComponent("openclaw", isDirectory: true)
+            .appendingPathComponent("docs", isDirectory: true)
+            .appendingPathComponent("reference", isDirectory: true)
+            .appendingPathComponent("templates", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: templatesRoot, withIntermediateDirectories: true)
+        for name in Self.requiredWorkspaceTemplateNames {
+            let fileURL = templatesRoot.appendingPathComponent(name)
+            try "# \(name)\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func assertInstalledWorkspaceTemplates(at installPrefix: URL, fileManager: FileManager) {
+        let templatesRoot = installPrefix
+            .appendingPathComponent("lib", isDirectory: true)
+            .appendingPathComponent("openclaw-bundled", isDirectory: true)
+            .appendingPathComponent("docs", isDirectory: true)
+            .appendingPathComponent("reference", isDirectory: true)
+            .appendingPathComponent("templates", isDirectory: true)
+
+        for name in Self.requiredWorkspaceTemplateNames {
+            let templateURL = templatesRoot.appendingPathComponent(name)
+            #expect(fileManager.fileExists(atPath: templateURL.path))
+            #expect(fileManager.isReadableFile(atPath: templateURL.path))
+        }
+    }
+
+    private func makeTempBundle(resourceRoot: URL, bundleIdentifier: String) throws -> Bundle {
+        let bundleURL = resourceRoot.appendingPathComponent("TempConsumerBundle.bundle", isDirectory: true)
+        let contentsURL = bundleURL.appendingPathComponent("Contents", isDirectory: true)
+        let resourcesURL = contentsURL.appendingPathComponent("Resources", isDirectory: true)
+        let plistURL = contentsURL.appendingPathComponent("Info.plist")
+        let fm = FileManager.default
+        try fm.createDirectory(at: resourcesURL, withIntermediateDirectories: true)
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": bundleIdentifier,
+            "CFBundleName": "TempConsumerBundle",
+            "CFBundlePackageType": "BNDL",
+            "CFBundleVersion": "1",
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: plistURL)
+
+        guard let bundle = Bundle(path: bundleURL.path) else {
+            throw NSError(
+                domain: "ConsumerBundledRuntimeTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Could not load temp bundle at \(bundleURL.path)"])
+        }
+        return bundle
+    }
+}

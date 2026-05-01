@@ -15,6 +15,7 @@ set -euo pipefail
 #   DMG_APP_POS            default: "125 160"
 #   DMG_APPS_POS           default: "375 160"
 #   SKIP_DMG_STYLE=1       skip Finder styling
+#   DMG_CREATE_HEADROOM_MB extra writable-image headroom before shrink (default: 512)
 #   DMG_EXTRA_SECTORS      extra sectors to keep when shrinking RW image (default: 2048)
 
 APP_PATH="${1:-}"
@@ -45,6 +46,7 @@ DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 900 420}"
 DMG_ICON_SIZE="${DMG_ICON_SIZE:-128}"
 DMG_APP_POS="${DMG_APP_POS:-125 160}"
 DMG_APPS_POS="${DMG_APPS_POS:-375 160}"
+DMG_CREATE_HEADROOM_MB="${DMG_CREATE_HEADROOM_MB:-512}"
 DMG_EXTRA_SECTORS="${DMG_EXTRA_SECTORS:-2048}"
 
 to_applescript_list4() {
@@ -78,7 +80,11 @@ cp -R "$APP_PATH" "$DMG_TEMP/"
 ln -s /Applications "$DMG_TEMP/Applications"
 
 APP_SIZE_MB=$(du -sm "$APP_PATH" | awk '{print $1}')
-DMG_SIZE_MB=$((APP_SIZE_MB + 80))
+if [[ ! "$DMG_CREATE_HEADROOM_MB" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: DMG_CREATE_HEADROOM_MB must be numeric, got: $DMG_CREATE_HEADROOM_MB" >&2
+  exit 1
+fi
+DMG_SIZE_MB=$((APP_SIZE_MB + DMG_CREATE_HEADROOM_MB))
 
 DMG_RW_PATH="${OUT_PATH%.dmg}-rw.dmg"
 rm -f "$DMG_RW_PATH" "$OUT_PATH"

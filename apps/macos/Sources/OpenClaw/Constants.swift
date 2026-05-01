@@ -42,6 +42,8 @@ var peekabooBridgeEnabledKey: String { "\(defaultsPrefix).peekabooBridgeEnabled"
 var deepLinkKeyKey: String { "\(defaultsPrefix).deepLinkKey" }
 var modelCatalogPathKey: String { "\(defaultsPrefix).modelCatalogPath" }
 var modelCatalogReloadKey: String { "\(defaultsPrefix).modelCatalogReload" }
+var browserSelectedChromeProfileIDKey: String { "\(defaultsPrefix).browser.selectedChromeProfileID" }
+var browserSelectedChromeProfileNameKey: String { "\(defaultsPrefix).browser.selectedChromeProfileName" }
 var cliInstallPromptedVersionKey: String { "\(defaultsPrefix).cliInstallPromptedVersion" }
 var heartbeatsEnabledKey: String { "\(defaultsPrefix).heartbeatsEnabled" }
 var debugPaneEnabledKey: String { "\(defaultsPrefix).debugPaneEnabled" }

@@ -100,14 +100,25 @@ enum CommandResolver {
     }
 
     static func preferredPaths() -> [String] {
+        let env = ProcessInfo.processInfo.environment
         let current = ProcessInfo.processInfo.environment["PATH"]?
             .split(separator: ":").map(String.init) ?? []
         let home = FileManager().homeDirectoryForCurrentUser
         let projectRoot = self.projectRoot()
-        return self.preferredPaths(home: home, current: current, projectRoot: projectRoot)
+        return self.preferredPaths(
+            home: home,
+            current: current,
+            projectRoot: projectRoot,
+            servicePathPrefix: self.servicePathPrefixDirs(from: env))
     }
 
-    static func preferredPaths(home: URL, current: [String], projectRoot: URL) -> [String] {
+    static func preferredPaths(
+        home: URL,
+        current: [String],
+        projectRoot: URL,
+        servicePathPrefix: [String] = [])
+        -> [String]
+    {
         var extras = [
             home.appendingPathComponent("Library/pnpm").path,
             "/opt/homebrew/bin",
@@ -115,33 +126,66 @@ enum CommandResolver {
             "/usr/bin",
             "/bin",
         ]
+        if !servicePathPrefix.isEmpty {
+            extras.insert(contentsOf: servicePathPrefix, at: 0)
+        }
         #if DEBUG
         // Dev-only convenience. Avoid project-local PATH hijacking in release builds.
-        extras.insert(projectRoot.appendingPathComponent("node_modules/.bin").path, at: 0)
+        extras.insert(projectRoot.appendingPathComponent("node_modules/.bin").path, at: servicePathPrefix.count)
         #endif
         let openclawPaths = self.openclawManagedPaths(home: home)
+        let openclawInsertionIndex = servicePathPrefix.count + 1
         if !openclawPaths.isEmpty {
-            extras.insert(contentsOf: openclawPaths, at: 1)
+            extras.insert(contentsOf: openclawPaths, at: openclawInsertionIndex)
         }
-        extras.insert(contentsOf: self.nodeManagerBinPaths(home: home), at: 1 + openclawPaths.count)
+        extras.insert(
+            contentsOf: self.nodeManagerBinPaths(home: home),
+            at: openclawInsertionIndex + openclawPaths.count)
         var seen = Set<String>()
         // Preserve order while stripping duplicates so PATH lookups remain deterministic.
         return (extras + current).filter { seen.insert($0).inserted }
     }
 
+    private static func servicePathPrefixDirs(from env: [String: String]) -> [String] {
+        env["OPENCLAW_SERVICE_PATH_PREFIX"]?
+            .split(separator: ":")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty } ?? []
+    }
+
     private static func openclawManagedPaths(home: URL) -> [String] {
-        let bases = [
-            home.appendingPathComponent(".openclaw"),
-        ]
+        var bases: [URL] = []
+        if AppFlavor.current.isConsumer {
+            bases.append(ConsumerRuntime.installPrefixURL)
+        }
+        if let rawStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawStateDir.isEmpty
+        {
+            bases.append(URL(fileURLWithPath: rawStateDir, isDirectory: true))
+        }
+        bases.append(home.appendingPathComponent(".openclaw"))
         var paths: [String] = []
+        var seen = Set<String>()
         for base in bases {
             let bin = base.appendingPathComponent("bin")
             let nodeBin = base.appendingPathComponent("tools/node/bin")
-            if FileManager().fileExists(atPath: bin.path) {
-                paths.append(bin.path)
+            let uvBin = base.appendingPathComponent("tools/uv/bin")
+            let includeConsumerPrefix = AppFlavor.current.isConsumer && base.path == ConsumerRuntime.installPrefixURL.path
+            if includeConsumerPrefix || FileManager().fileExists(atPath: bin.path) {
+                if seen.insert(bin.path).inserted {
+                    paths.append(bin.path)
+                }
             }
-            if FileManager().fileExists(atPath: nodeBin.path) {
-                paths.append(nodeBin.path)
+            if includeConsumerPrefix || FileManager().fileExists(atPath: nodeBin.path) {
+                if seen.insert(nodeBin.path).inserted {
+                    paths.append(nodeBin.path)
+                }
+            }
+            if includeConsumerPrefix || FileManager().fileExists(atPath: uvBin.path) {
+                if seen.insert(uvBin.path).inserted {
+                    paths.append(uvBin.path)
+                }
             }
         }
         return paths
