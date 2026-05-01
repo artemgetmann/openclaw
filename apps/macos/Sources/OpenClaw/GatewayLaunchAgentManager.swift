@@ -35,6 +35,7 @@ enum GatewayLaunchAgentManager {
     }
 
     enum DesiredAction: Equatable {
+        case noop
         case install
         case start
         case restart
@@ -124,6 +125,8 @@ enum GatewayLaunchAgentManager {
             self.logger
                 .info("launchd enable requested action=\(String(describing: action), privacy: .public) port=\(port)")
             switch action {
+            case .noop:
+                return nil
             case .restart:
                 if let error = await self.runServiceBringupCommand(["restart"], timeout: 20) {
                     self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
@@ -158,7 +161,7 @@ enum GatewayLaunchAgentManager {
 
     static func restartOrStart(bundlePath: String, port: Int) async -> String? {
         _ = bundlePath
-        return await self.set(enabled: true, bundlePath: bundlePath, port: port)
+        return await self.restartOrStartLoadedGateway(port: port)
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
@@ -270,10 +273,12 @@ extension GatewayLaunchAgentManager {
             hasPlist: snapshot != nil,
             launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
         switch action {
+        case .noop:
+            // A normal enable request means "make sure the service exists". If the
+            // matching service is already loaded, do nothing so delayed startup
+            // paths cannot bounce a healthy shared gateway.
+            return .noop
         case .restart:
-            // If the service is already registered and loaded, reinstalling it is needlessly
-            // destructive: launchd will terminate the running gateway and we briefly lose the
-            // listener on the canonical or isolated lane port. Prefer an in-place restart.
             return .restart
         case .start:
             // A plist already exists under the consumer label. Try a normal start first so we
@@ -282,6 +287,36 @@ extension GatewayLaunchAgentManager {
         case .install, .stop, .uninstall:
             return .install
         }
+    }
+
+    private static func restartOrStartLoadedGateway(port: Int) async -> String? {
+        let loaded = await self.readDaemonLoaded()
+        let snapshot = self.launchdConfigSnapshot()
+        let launchAgentMatchesCurrentEntrypoint = self.launchAgentMatchesCurrentEntrypoint(snapshot: snapshot)
+        let action = self.computeDesiredRestartAction(
+            loaded: loaded,
+            hasPlist: snapshot != nil,
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
+        self.logger
+            .info("launchd restart requested action=\(String(describing: action), privacy: .public) port=\(port)")
+        switch action {
+        case .restart:
+            if let error = await self.runServiceBringupCommand(["restart"], timeout: 20) {
+                self.logger.warning("launchd restart failed; falling back to install: \(error, privacy: .public)")
+            } else {
+                return nil
+            }
+        case .start:
+            if let error = await self.runServiceBringupCommand(["start"], timeout: 20) {
+                self.logger.warning("launchd start failed; falling back to install: \(error, privacy: .public)")
+            } else {
+                return nil
+            }
+        case .noop, .install, .stop, .uninstall:
+            break
+        }
+
+        return await self.install(port: port)
     }
 
     private static func install(port: Int) async -> String? {
@@ -430,6 +465,18 @@ extension GatewayLaunchAgentManager {
     /// Keep the decision logic in a non-DEBUG helper so release packaging can reuse the
     /// same branch selection that tests assert against.
     private static func computeDesiredEnableAction(
+        loaded: Bool?,
+        hasPlist: Bool,
+        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
+    {
+        if hasPlist, !launchAgentMatchesCurrentEntrypoint { return .install }
+        if loaded == true { return .noop }
+        if loaded == false, hasPlist { return .start }
+        if loaded == nil, hasPlist { return .start }
+        return .install
+    }
+
+    private static func computeDesiredRestartAction(
         loaded: Bool?,
         hasPlist: Bool,
         launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
