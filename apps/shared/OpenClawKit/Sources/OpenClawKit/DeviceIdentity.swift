@@ -45,8 +45,13 @@ enum DeviceIdentityPaths {
 public enum DeviceIdentityStore {
     private static let fileName = "device.json"
     private static let authFileName = "device-auth.json"
+    private static let lock = NSLock()
 
     public static func loadOrCreate() -> DeviceIdentity {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+
+        _ = self.migrateLegacyAppSupportIdentityIfNeededLocked()
         let url = self.fileURL()
         if let data = try? Data(contentsOf: url),
            let decoded = try? JSONDecoder().decode(DeviceIdentity.self, from: data),
@@ -62,6 +67,13 @@ public enum DeviceIdentityStore {
 
     @discardableResult
     public static func migrateLegacyAppSupportIdentityIfNeeded() -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+
+        return self.migrateLegacyAppSupportIdentityIfNeededLocked()
+    }
+
+    private static func migrateLegacyAppSupportIdentityIfNeededLocked() -> Bool {
         let stateDir = DeviceIdentityPaths.stateDirURL().standardizedFileURL
         guard stateDir.lastPathComponent == ".openclaw" else { return false }
 
