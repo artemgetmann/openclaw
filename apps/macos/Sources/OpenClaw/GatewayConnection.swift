@@ -176,6 +176,9 @@ actor GatewayConnection {
             if error is GatewayResponseError || error is GatewayDecodingError {
                 throw error
             }
+            if error is GatewayConnectAuthError {
+                throw error
+            }
 
             // Auto-recover in local mode by spawning/attaching a gateway and retrying a few times.
             // Canvas interactions should "just work" even if the local gateway isn't running yet.
