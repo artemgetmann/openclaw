@@ -53,6 +53,7 @@ fi
 CLI_ARCHIVE_STAGED=""
 CLI_ARCHIVE_STAGE_DIR=""
 OPENCLAW_CONSUMER_FAST_PACKAGING="${OPENCLAW_CONSUMER_FAST_PACKAGING:-0}"
+OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS="${OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS:-0}"
 PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
 BUNDLED_RUNTIME_CACHE_ROOT="${OPENCLAW_CONSUMER_RUNTIME_CACHE_ROOT:-$ROOT_DIR/.cache/consumer-runtime-packages}"
 CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
@@ -78,6 +79,11 @@ consumer_packaging_env_candidates() {
 
 load_consumer_packaging_env() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+  if [[ "$OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS" != "1" ]]; then
+    # Public packages are BYOK/managed-backend only. Loading founder provider
+    # keys here would make it too easy to ship a bundle with extractable keys.
     return 0
   fi
 
@@ -169,6 +175,9 @@ consumer_require_bundled_speech_key() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
     return 0
   fi
+  if [[ "$OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS" != "1" ]]; then
+    return 0
+  fi
 
   # Fail before the expensive build when the dedicated speech key is missing.
   # Consumer packaging used to fall back to generic founder OPENAI_API_KEY
@@ -191,6 +200,9 @@ consumer_require_bundled_speech_key
 
 consumer_require_bundled_gemini_key() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+  if [[ "$OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS" != "1" ]]; then
     return 0
   fi
 
@@ -968,7 +980,7 @@ if [[ "$APP_VARIANT" == "consumer" ]]; then
   CONSUMER_SEEDED_DEFAULTS_PATH="$APP_ROOT/Contents/Resources/consumer-seeded-defaults.json"
   "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" \
     "$CONSUMER_SEEDED_DEFAULTS_PATH"
-  if ! grep -q '"OPENCLAW_CONSUMER_OPENAI_API_KEY"' "$CONSUMER_SEEDED_DEFAULTS_PATH"; then
+  if [[ "$OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS" == "1" ]] && ! grep -q '"OPENCLAW_CONSUMER_OPENAI_API_KEY"' "$CONSUMER_SEEDED_DEFAULTS_PATH"; then
     echo "ERROR: consumer bundle is missing OPENCLAW_CONSUMER_OPENAI_API_KEY." >&2
     echo "Packaging must use the dedicated consumer speech-transcription key; generic OPENAI_API_KEY fallback is intentionally not accepted." >&2
     echo "Set OPENCLAW_CONSUMER_OPENAI_API_KEY before packaging, or ship without bundled voice and rely on the blocked readiness/setup path explicitly." >&2
