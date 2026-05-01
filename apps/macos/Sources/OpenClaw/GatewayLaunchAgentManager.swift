@@ -146,6 +146,11 @@ enum GatewayLaunchAgentManager {
             return await self.install(port: port)
         }
 
+        if await self.shouldPreserveLoadedConsumerGatewayOnStop() {
+            self.logger.info("launchd stop skipped; consumer app is attached to canonical shared gateway")
+            return nil
+        }
+
         self.logger.info("launchd stop requested via CLI")
         return await self.runDaemonCommand(["stop"], timeout: 20)
     }
@@ -221,6 +226,12 @@ enum GatewayLaunchAgentManager {
             env["OPENCLAW_STATE_DIR"] == identity.stateDirURL.path &&
             env["OPENCLAW_CONFIG_PATH"] == identity.configURL.path &&
             env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] == identity.configURL.path
+    }
+
+    private static func shouldPreserveLoadedConsumerGatewayOnStop() async -> Bool {
+        guard AppFlavor.current.isConsumer else { return false }
+        guard await self.isLoaded() else { return false }
+        return self.launchAgentMatchesCurrentRuntime()
     }
 }
 

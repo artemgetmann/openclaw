@@ -5,6 +5,38 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct ConsumerSetupResumeTests {
+    @Test func `preflight suppresses onboarding for existing usable setup`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let defaults = Self.makeDefaults()
+            let profile = Self.profile()
+            defaults.set(profile.directoryName, forKey: browserSelectedChromeProfileIDKey)
+
+            let completed = ConsumerSetupResumePreflight.completeIfExistingSetupLooksUsable(
+                defaults: defaults,
+                root: Self.usableSetupRoot(),
+                configExists: { true })
+
+            #expect(completed)
+            #expect(defaults.bool(forKey: onboardingSeenKey))
+            #expect(defaults.integer(forKey: onboardingVersionKey) == currentOnboardingVersion)
+        }
+    }
+
+    @Test func `preflight does not skip fresh incomplete setup`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let defaults = Self.makeDefaults()
+            let completed = ConsumerSetupResumePreflight.completeIfExistingSetupLooksUsable(
+                defaults: defaults,
+                root: [
+                    "gateway": ["mode": "local"],
+                ],
+                configExists: { true })
+
+            #expect(!completed)
+            #expect(!defaults.bool(forKey: onboardingSeenKey))
+        }
+    }
+
     @Test func `fresh install does not auto skip setup`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             let model = ConsumerSetupResumeModel(configExists: { false })
@@ -212,6 +244,26 @@ struct ConsumerSetupResumeTests {
             options: [
                 .init(id: "openai-codex/gpt-5.5", title: "GPT-5.5", detail: "Primary ChatGPT / Codex path."),
             ])
+    }
+
+    private nonisolated static func usableSetupRoot() -> [String: Any] {
+        [
+            "gateway": ["mode": "local"],
+            "agents": [
+                "defaults": [
+                    "model": [
+                        "primary": "openai-codex/gpt-5.5",
+                    ],
+                ],
+            ],
+            "channels": [
+                "telegram": [
+                    "enabled": true,
+                    "botToken": "123456:abc",
+                    "allowFrom": ["42"],
+                ],
+            ],
+        ]
     }
 }
 

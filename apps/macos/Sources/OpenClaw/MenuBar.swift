@@ -247,6 +247,7 @@ private final class StatusItemMouseHandlerView: NSView {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "app.delegate")
     private var state: AppState?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     let updaterController: UpdaterProviding = makeUpdaterController()
@@ -314,6 +315,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func scheduleFirstRunOnboardingIfNeeded() {
+        if ConsumerSetupResumePreflight.completeIfExistingSetupLooksUsable() {
+            Self.logger.info("consumer setup resume preflight completed; onboarding suppressed")
+            return
+        }
+
         let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
