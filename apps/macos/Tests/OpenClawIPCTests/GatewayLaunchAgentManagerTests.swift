@@ -47,17 +47,21 @@ struct GatewayLaunchAgentManagerTests {
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-root-\(UUID().uuidString)", isDirectory: true)
-        let entrypoint = root.appendingPathComponent("dist/index.js")
+        let installedRoot = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-installed-\(UUID().uuidString)", isDirectory: true)
+        let entrypoint = installedRoot.appendingPathComponent("dist/index.js")
         let plistURL = home
             .appendingPathComponent("Library/LaunchAgents/ai.openclaw.gateway.plist")
         try FileManager().createDirectory(at: entrypoint.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager().createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
         try Data().write(to: entrypoint)
         try Data().write(to: root.appendingPathComponent("package.json"))
         try Data().write(to: root.appendingPathComponent("openclaw.mjs"))
         defer {
             try? FileManager().removeItem(at: home)
             try? FileManager().removeItem(at: root)
+            try? FileManager().removeItem(at: installedRoot)
         }
 
         var calls: [[String]] = []
