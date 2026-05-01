@@ -3,10 +3,21 @@ import Testing
 @testable import OpenClaw
 
 @Suite(.serialized) struct ConsumerRuntimeTests {
-    @Test func `consumer bootstrap defaults image backend to sips`() async {
+    @Test func `consumer bootstrap defaults image backend to sips`() async throws {
+        let homeURL = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: homeURL) }
         await TestIsolation.withIsolatedState(env: [
             ConsumerInstance.envKey: nil,
             "OPENCLAW_IMAGE_BACKEND": nil,
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": homeURL.path,
+            "OPENCLAW_HOME": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_GATEWAY_PORT": nil,
+            "OPENCLAW_GATEWAY_BIND": nil,
+            "OPENCLAW_LOG_DIR": nil,
+            "OPENCLAW_LAUNCHD_LABEL": nil,
         ]) {
             ConsumerRuntime.bootstrapProcessEnvironment()
 
@@ -14,14 +25,53 @@ import Testing
         }
     }
 
-    @Test func `consumer bootstrap preserves explicit image backend override`() async {
+    @Test func `consumer bootstrap preserves explicit image backend override`() async throws {
+        let homeURL = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: homeURL) }
         await TestIsolation.withIsolatedState(env: [
             ConsumerInstance.envKey: nil,
             "OPENCLAW_IMAGE_BACKEND": "sharp",
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": homeURL.path,
+            "OPENCLAW_HOME": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_GATEWAY_PORT": nil,
+            "OPENCLAW_GATEWAY_BIND": nil,
+            "OPENCLAW_LOG_DIR": nil,
+            "OPENCLAW_LAUNCHD_LABEL": nil,
         ]) {
             ConsumerRuntime.bootstrapProcessEnvironment()
 
             #expect(OpenClawEnv.path("OPENCLAW_IMAGE_BACKEND") == "sharp")
+        }
+    }
+
+    @Test func `consumer bootstrap writes main identity gateway defaults`() async throws {
+        let homeURL = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        try await TestIsolation.withIsolatedState(env: [
+            ConsumerInstance.envKey: nil,
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": homeURL.path,
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_HOME": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_GATEWAY_PORT": nil,
+            "OPENCLAW_GATEWAY_BIND": nil,
+            "OPENCLAW_LOG_DIR": nil,
+            "OPENCLAW_LAUNCHD_LABEL": nil,
+        ]) {
+            ConsumerRuntime.bootstrapProcessEnvironment()
+
+            let data = try Data(contentsOf: ConsumerRuntime.configURL)
+            let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let gateway = object?["gateway"] as? [String: Any]
+            #expect(gateway?["mode"] as? String == "local")
+            #expect(gateway?["port"] as? Int == 18_789)
+            #expect(gateway?["bind"] as? String == "loopback")
+            #expect(OpenClawEnv.path("OPENCLAW_LAUNCHD_LABEL") == "ai.openclaw.gateway")
         }
     }
 }

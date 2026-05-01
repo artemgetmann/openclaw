@@ -28,11 +28,25 @@ enum LaunchAgentManager {
     static func launchAgentEnvironment(
         base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String]
     {
-        [
+        var env = [
             "PATH": CommandResolver.preferredPaths().joined(separator: ":"),
+            "OPENCLAW_PROFILE": ConsumerRuntime.profile,
+            "OPENCLAW_HOME": ConsumerRuntime.runtimeRootURL.path,
+            "OPENCLAW_STATE_DIR": ConsumerRuntime.stateDirURL.path,
+            "OPENCLAW_CONFIG_PATH": ConsumerRuntime.configURL.path,
+            "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": ConsumerRuntime.configURL.path,
+            "OPENCLAW_GATEWAY_PORT": ConsumerRuntime.gatewayPort.description,
+            "OPENCLAW_GATEWAY_BIND": ConsumerRuntime.gatewayBind,
+            "OPENCLAW_LOG_DIR": ConsumerRuntime.logsDirURL.path,
+            "OPENCLAW_LAUNCHD_LABEL": ConsumerRuntime.gatewayLaunchdLabel,
             "OPENCLAW_IMAGE_BACKEND": base["OPENCLAW_IMAGE_BACKEND"]?
                 .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? ConsumerRuntime.imageBackend,
         ]
+        if let id = ConsumerInstance.current.id {
+            env[ConsumerInstance.envKey] = id
+        }
+        ConsumerRuntime.applyInheritedToolIsolationEnvironment(to: &env, base: base)
+        return env
     }
 
     private static func writePlist(bundlePath: String) {
