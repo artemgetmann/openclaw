@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OpenClawKit
 
 enum ConsumerRuntime {
     static let imageBackend = "sips"
@@ -103,6 +104,7 @@ enum ConsumerRuntime {
             // whatever founder checkout happened to export `openclaw` first.
             self.setEnv("OPENCLAW_FORK_ROOT", value: projectRoot)
         }
+        _ = DeviceIdentityStore.migrateLegacyAppSupportIdentityIfNeeded()
         // Packaged first-run must repair the app-owned helper/runtime before
         // any PATH-sensitive gateway or setup checks run.
         ConsumerBundledRuntime.bootstrapIfNeeded()
