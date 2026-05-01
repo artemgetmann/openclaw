@@ -15,6 +15,8 @@ struct GeneralSettings: View {
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
+    @State private var browserSetup = BrowserSetupModel()
+    @State private var modelSetup = ConsumerModelSetupModel()
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -86,6 +88,14 @@ struct GeneralSettings: View {
                         binding: self.$state.debugPaneEnabled)
 
                     if self.isConsumer {
+                        self.browserSection
+                    }
+
+                    if self.isConsumer {
+                        self.modelSection
+                    }
+
+                    if self.isConsumer {
                         SettingsToggleRow(
                             title: "Show advanced settings",
                             subtitle: "Reveal the full operator controls without removing them from the app.",
@@ -133,6 +143,9 @@ struct GeneralSettings: View {
                         subtitle: "Pause to stop your AI operator on this Mac.",
                         binding: self.activeBinding)
 
+                    self.browserSection
+                    self.modelSection
+
                     SettingsToggleRow(
                         title: "Launch at login",
                         subtitle: "Automatically start OpenClaw after you sign in.",
@@ -159,6 +172,47 @@ struct GeneralSettings: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 22)
             .padding(.bottom, 16)
+        }
+    }
+
+    private var browserSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Browser")
+                .font(.title3.weight(.semibold))
+            Text("OpenClaw uses your live Chrome session for logged-in sites and keeps its own browser lane available for clean public-site tasks.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 12) {
+                BrowserSetupCardContent(model: self.browserSetup, presentation: .settings)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor)))
+        }
+        .task {
+            await self.browserSetup.refreshIfNeeded()
+        }
+    }
+
+    private var modelSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("AI access")
+                .font(.title3.weight(.semibold))
+            Text("OpenAI is the default self-serve path here. Claude login, setup-token, and API-key access stay available when this runtime supports them.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 12) {
+                ConsumerModelSetupCardContent(model: self.modelSetup)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor)))
         }
     }
 
