@@ -27,15 +27,12 @@ extension ChannelsStore {
                 method: .configGet,
                 params: nil,
                 timeoutMs: 10000)
-            self.configStatus = snap.valid == false
-                ? "Config invalid; fix it in ~/.openclaw/openclaw.json."
-                : nil
-            self.configRoot = snap.config?.mapValues { $0.foundationValue } ?? [:]
-            self.configDraft = cloneConfigValue(self.configRoot) as? [String: Any] ?? self.configRoot
-            self.configDirty = false
-            self.configLoaded = true
-
-            self.applyUIConfig(snap)
+            let root = snap.config?.mapValues { $0.foundationValue } ?? [:]
+            self.applyLoadedConfigRoot(
+                root,
+                status: snap.valid == false
+                    ? "Config invalid; fix it in ~/.openclaw/openclaw.json."
+                    : nil)
         } catch {
             self.configStatus = error.localizedDescription
         }
@@ -43,8 +40,66 @@ extension ChannelsStore {
 
     private func applyUIConfig(_ snap: ConfigSnapshot) {
         let ui = snap.config?["ui"]?.dictionaryValue
-        let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.applyUIConfig(root: ui?.mapValues { $0.foundationValue } ?? [:], isUIBranch: true)
+    }
+
+    private func applyUIConfig(root: [String: Any], isUIBranch: Bool = false) {
+        let ui: [String: Any]?
+        if isUIBranch {
+            ui = root
+        } else {
+            ui = root["ui"] as? [String: Any]
+        }
+        let rawSeam = (ui?["seamColor"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
+    }
+
+    private func applyLoadedConfigRoot(_ root: [String: Any], status: String? = nil) {
+        self.configStatus = status
+        self.configRoot = root
+        self.configDraft = cloneConfigValue(root) as? [String: Any] ?? root
+        self.configDirty = false
+        self.configLoaded = true
+        self.applyUIConfig(root: root)
+        self.syncConsumerTelegramSetupFields(from: root)
+    }
+
+    private func syncConsumerTelegramSetupFields(from root: [String: Any]) {
+        guard AppFlavor.current.isConsumer else { return }
+
+        let telegram = ((root["channels"] as? [String: Any])?["telegram"] as? [String: Any]) ?? [:]
+        let configuredToken = self.consumerConfiguredTelegramToken(in: telegram)
+
+        // The setup field should mirror the actual config on disk. Keeping a stale
+        // in-memory token visible can make users verify or re-save the wrong bot.
+        if !configuredToken.isEmpty {
+            self.telegramSetupToken = configuredToken
+            return
+        }
+
+        if !self.telegramBusy, self.telegramSetupPhase == .idle {
+            self.telegramSetupToken = ""
+        }
+    }
+
+    func restoreConfigDraftFromCurrentSource() async {
+        // Real local Consumer setup must merge onto the app-owned config file.
+        // The gateway snapshot can be redacted, and saving that back would corrupt
+        // secrets such as gateway auth or channel tokens.
+        var root: [String: Any]
+        if AppFlavor.current.isConsumer,
+           !self.isPreview,
+           AppStateStore.shared.connectionMode != .remote
+        {
+            root = OpenClawConfigFile.loadDict()
+        } else {
+            root = await ConfigStore.load()
+        }
+        if root.isEmpty {
+            root = OpenClawConfigFile.loadDict()
+        }
+        self.applyLoadedConfigRoot(root)
     }
 
     func channelConfigSchema(for channelId: String) -> ConfigSchemaNode? {
@@ -71,14 +126,32 @@ extension ChannelsStore {
         self.configDirty = true
     }
 
+    @discardableResult
+    func saveConfigDraftOrThrow() async throws -> [String: Any] {
+        try await ConfigStore.save(self.configDraft)
+        let refreshed = await ConfigStore.load()
+        self.applyLoadedConfigRoot(refreshed)
+        return refreshed
+    }
+
+    @discardableResult
+    func saveConfigDraftLocallyAndRefresh() async -> [String: Any] {
+        // Telegram setup can rotate local auth while the gateway is reloading.
+        // Write the app-owned config file directly; the setup flow owns reconnect
+        // timing so it does not race a stale websocket against fresh credentials.
+        OpenClawConfigFile.saveDict(self.configDraft)
+        let refreshed = OpenClawConfigFile.loadDict()
+        self.applyLoadedConfigRoot(refreshed)
+        return refreshed
+    }
+
     func saveConfigDraft() async {
         guard !self.isSavingConfig else { return }
         self.isSavingConfig = true
         defer { self.isSavingConfig = false }
 
         do {
-            try await ConfigStore.save(self.configDraft)
-            await self.loadConfig()
+            _ = try await self.saveConfigDraftOrThrow()
         } catch {
             self.configStatus = error.localizedDescription
         }
@@ -88,6 +161,14 @@ extension ChannelsStore {
         await self.loadConfig()
     }
 }
+
+#if DEBUG
+extension ChannelsStore {
+    func _testApplyLoadedConfigRoot(_ root: [String: Any], status: String? = nil) {
+        self.applyLoadedConfigRoot(root, status: status)
+    }
+}
+#endif
 
 private func valueAtPath(_ root: Any, path: ConfigPath) -> Any? {
     var current: Any? = root

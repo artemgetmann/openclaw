@@ -37,6 +37,7 @@ extension ChannelsStore {
                 params: params,
                 timeoutMs: 12000)
             self.snapshot = snap
+            self.reconcileTelegramSetupProgress(with: snap)
             self.lastSuccess = Date()
             self.lastError = nil
         } catch {
@@ -137,6 +138,7 @@ extension ChannelsStore {
                     ? "Telegram token cleared."
                     : "No Telegram token configured."
             }
+            self.clearConsumerTelegramFirstTaskVerified()
             await self.loadConfig()
         } catch {
             self.configStatus = error.localizedDescription
@@ -144,6 +146,59 @@ extension ChannelsStore {
         await self.refresh(probe: true)
     }
 }
+
+extension ChannelsStore {
+    private func reconcileTelegramSetupProgress(with snap: ChannelsStatusSnapshot) {
+        guard AppFlavor.current.isConsumer else { return }
+        guard let status = snap.decodeChannel("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
+        else { return }
+
+        let probeOK = status.probe?.ok == true
+        let botRunning = status.running || probeOK
+        guard status.configured, botRunning else { return }
+
+        // Once Telegram is configured and healthy, clear transient setup phases.
+        // The config/probe snapshot is now the source of truth; stale "waiting" or
+        // "saving" labels would make an already-live bot look stuck.
+        self.telegramSetupWaitingForDM = false
+        self.telegramSetupPhase = .idle
+
+        if let username = status.probe?.bot?.username, !username.isEmpty {
+            self.telegramSetupBotUsername = username
+            UserDefaults.standard.set(
+                username,
+                forKey: ChannelsStore.consumerTelegramBotUsernameDefaultsKey)
+        }
+
+        let activityConfirmed = self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible()
+        let shouldRefreshStatus = self.telegramSetupStatus == nil
+            || self.telegramSetupStatus == "Waiting for your first Telegram task..."
+            || self.telegramSetupStatus == "Saving Telegram setup..."
+            || self.telegramSetupStatus?.hasPrefix("Token verified") == true
+            || self.telegramSetupStatus?.hasPrefix("Telegram setup is saved, but OpenClaw could not") == true
+
+        if shouldRefreshStatus || activityConfirmed {
+            let username = status.probe?.bot?.username ?? self.telegramSetupBotUsername
+            if self.consumerTelegramFirstTaskVerified {
+                self.telegramSetupStatus = username.map {
+                    "Telegram bot is live as @\($0). First task verified."
+                } ?? "Telegram bot is live. First task verified."
+            } else {
+                self.telegramSetupStatus = username.map {
+                    "Telegram bot is live as @\($0). Send your first task, then click Verify first task."
+                } ?? "Telegram bot is live. Send your first task, then click Verify first task."
+            }
+        }
+    }
+}
+
+#if DEBUG
+extension ChannelsStore {
+    func _testReconcileTelegramSetupProgress(with snap: ChannelsStatusSnapshot) {
+        self.reconcileTelegramSetupProgress(with: snap)
+    }
+}
+#endif
 
 private struct WhatsAppLoginStartResult: Codable {
     let qrDataUrl: String?
