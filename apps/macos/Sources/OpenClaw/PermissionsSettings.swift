@@ -11,19 +11,11 @@ struct PermissionsSettings: View {
     @State private var requestingRecommended = false
     @State private var showOptionalPermissions = false
 
-    private static let consumerRecommendedCapabilities: [Capability] = [
-        .screenRecording,
-        .accessibility,
-        .notifications,
-        .appleScript,
-        .microphone,
-        .location,
-    ]
+    static let consumerRecommendedCapabilities = ConsumerPermissionCatalog.settingsRecommendedCapabilities
 
-    private static let consumerOptionalCapabilities: [Capability] = [
-        .camera,
-        .speechRecognition,
-    ]
+    static let consumerBulkGrantCapabilities = ConsumerPermissionCatalog.settingsBulkGrantCapabilities
+
+    private static let consumerOptionalCapabilities = ConsumerPermissionCatalog.optionalCapabilities
 
     private var isConsumer: Bool {
         AppFlavor.current.isConsumer
@@ -303,6 +295,10 @@ struct PermissionRow: View {
     let status: Bool
     let isPending: Bool
     let compact: Bool
+    let actionLabel: String?
+    let statusText: String?
+    let detailText: String?
+    let statusColor: Color?
     let action: () -> Void
 
     init(
@@ -310,12 +306,20 @@ struct PermissionRow: View {
         status: Bool,
         isPending: Bool = false,
         compact: Bool = false,
+        actionLabel: String? = nil,
+        statusText: String? = nil,
+        detailText: String? = nil,
+        statusColor: Color? = nil,
         action: @escaping () -> Void)
     {
         self.capability = capability
         self.status = status
         self.isPending = isPending
         self.compact = compact
+        self.actionLabel = actionLabel
+        self.statusText = statusText
+        self.detailText = detailText
+        self.statusColor = statusColor
         self.action = action
     }
 
@@ -333,6 +337,12 @@ struct PermissionRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if let detailText, !detailText.isEmpty {
+                    Text(detailText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .layoutPriority(1)
@@ -347,11 +357,14 @@ struct PermissionRow: View {
                     ProgressView()
                         .controlSize(.small)
                         .frame(width: 78)
-                } else {
-                    Button("Grant") { self.action() }
+                } else if let actionLabel {
+                    Button(actionLabel) { self.action() }
                         .buttonStyle(.bordered)
                         .controlSize(self.compact ? .small : .regular)
                         .frame(minWidth: self.compact ? 68 : 78, alignment: .trailing)
+                } else {
+                    Spacer()
+                        .frame(width: 78)
                 }
 
                 if self.status {
@@ -363,9 +376,9 @@ struct PermissionRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text(self.pendingHint)
+                    Text(self.statusText ?? self.pendingHint)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.statusColor ?? .secondary)
                 }
             }
             .frame(minWidth: self.compact ? 86 : 104, alignment: .trailing)

@@ -84,6 +84,8 @@ struct OnboardingView: View {
     @State var suppressRemoteProbeReset = false
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: OpenClawChatViewModel
+    @State var browserSetup = BrowserSetupModel()
+    @State var modelSetup = ConsumerModelSetupModel()
     @State var onboardingSkillsModel = SkillsSettingsModel()
     @State var onboardingWizard = OnboardingWizardModel()
     @State var didLoadOnboardingSkills = false
@@ -113,14 +115,14 @@ struct OnboardingView: View {
             case .remote:
                 return [0, 1, 3]
             case .local, .unconfigured:
+                // Consumer local onboarding drops directly into the setup work.
                 return [0]
             }
         }
 
         switch mode {
         case .remote:
-            // Remote setup doesn't need local gateway/CLI/workspace setup pages,
-            // and WhatsApp/Telegram setup is optional.
+            // Remote setup skips the local gateway/CLI/workspace setup pages.
             return showOnboardingChat ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
         case .unconfigured:
             return showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
@@ -148,7 +150,13 @@ struct OnboardingView: View {
     var buttonTitle: String {
         if AppFlavor.current.isConsumer {
             if self.pageCount == 1, self.activePageIndex == 0 {
-                return self.onboardingWizard.isComplete ? "Finish" : "Setting Up…"
+                if self.isCorePermissionsBlocking {
+                    return "Grant core permissions"
+                }
+                if self.canFinishConsumerInlineSetup {
+                    return "Finish"
+                }
+                return "Setting Up…"
             }
             if self.activePageIndex == self.wizardPageIndex, self.onboardingWizard.isComplete {
                 return "Finish"
@@ -168,12 +176,59 @@ struct OnboardingView: View {
     var isConsumerInlineSetupBlocking: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
-            self.state.connectionMode != .remote &&
-            !self.onboardingWizard.isComplete
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .unconfigured
+    }
+
+    var isBrowserSetupBlocking: Bool {
+        AppFlavor.current.isConsumer &&
+            self.pageCount == 1 &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
+            !self.browserSetup.isComplete
+    }
+
+    var isModelSetupBlocking: Bool {
+        AppFlavor.current.isConsumer &&
+            self.pageCount == 1 &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
+            self.browserSetup.isComplete &&
+            self.areCorePermissionsGranted &&
+            !self.modelSetup.isComplete
+    }
+
+    var areCorePermissionsGranted: Bool {
+        ConsumerPermissionCatalog.coreCapabilities.allSatisfy { capability in
+            self.permissionMonitor.status[capability] == true
+        }
+    }
+
+    var isCorePermissionsBlocking: Bool {
+        AppFlavor.current.isConsumer &&
+            self.pageCount == 1 &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
+            self.browserSetup.isComplete &&
+            !self.areCorePermissionsGranted
+    }
+
+    var canFinishConsumerInlineSetup: Bool {
+        AppFlavor.current.isConsumer &&
+            self.pageCount == 1 &&
+            self.activePageIndex == 0 &&
+            self.state.connectionMode == .local &&
+            self.browserSetup.isComplete &&
+            self.areCorePermissionsGranted &&
+            self.modelSetup.isComplete
     }
 
     var canAdvance: Bool {
-        !self.isWizardBlocking && !self.isConsumerInlineSetupBlocking
+        !self.isWizardBlocking &&
+            !self.isConsumerInlineSetupBlocking &&
+            !self.isBrowserSetupBlocking &&
+            !self.isModelSetupBlocking &&
+            !self.isCorePermissionsBlocking
     }
 
     var devLinkCommand: String {
@@ -198,6 +253,12 @@ struct OnboardingView: View {
         self.state = state
         self.permissionMonitor = permissionMonitor
         self._gatewayDiscovery = State(initialValue: discoveryModel)
+        self._browserSetup = State(
+            initialValue: BrowserSetupModel(
+                // Consumer onboarding should not silently accept a browser
+                // profile restored from config. Users need one explicit first-run
+                // confirmation so later browser tasks use the intended session.
+                restoredSelectionRequiresConfirmation: AppFlavor.current.isConsumer))
         self._onboardingChatModel = State(
             initialValue: OpenClawChatViewModel(
                 sessionKey: "onboarding",
