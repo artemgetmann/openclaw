@@ -19,3 +19,24 @@ services:
       name: openclaw-data
       mountPath: /data
       sizeGB: 1
+  - type: web
+    name: jarvis-backend
+    runtime: python
+    plan: starter
+    rootDir: services/jarvis-backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: JARVIS_BACKEND_ENV
+        value: production
+      - key: JARVIS_BACKEND_API_TOKEN
+        generateValue: true
+      - key: JARVIS_TRIAL_DAYS
+        value: "14"
+      - key: JARVIS_OFFLINE_GRACE_DAYS
+        value: "3"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
