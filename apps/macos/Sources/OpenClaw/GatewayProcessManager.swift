@@ -90,6 +90,9 @@ final class GatewayProcessManager {
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
             return
         }
+        if await self.shouldAttachInsteadOfEnableLaunchd() {
+            return
+        }
         let enabled = await GatewayLaunchAgentManager.isLoaded()
         guard !enabled else { return }
         let bundlePath = Bundle.main.bundleURL.path
@@ -246,6 +249,36 @@ final class GatewayProcessManager {
     }
 
     // MARK: - Internals
+
+    private func shouldAttachInsteadOfEnableLaunchd() async -> Bool {
+        switch self.status {
+        case .attachedExisting, .running:
+            return true
+        case .failed, .starting, .stopped:
+            break
+        }
+
+        guard GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime() else { return false }
+        do {
+            let data = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
+            let port = GatewayEnvironment.gatewayPort()
+            let instance = await PortGuardian.shared.describe(port: port)
+            let details = self.describe(
+                details: instance.map { self.describe(instance: $0) },
+                port: port,
+                snap: decodeHealthSnapshot(from: data))
+            self.existingGatewayDetails = details
+            self.clearLastFailure()
+            self.status = .attachedExisting(details: details)
+            self.appendLog("[gateway] launchd enable skipped; attached existing canonical gateway: \(details)\n")
+            self.logger.info("gateway launchd enable skipped; attached existing canonical gateway details=\(details)")
+            self.refreshControlChannelIfNeeded(reason: "attach existing canonical gateway")
+            self.refreshLog()
+            return true
+        } catch {
+            return false
+        }
+    }
 
     /// Attempt to connect to an already-running gateway on the configured port.
     /// If successful, mark status as attached and skip spawning a new process.
@@ -486,6 +519,10 @@ extension GatewayProcessManager {
 
     func setTestingLastFailureReason(_ reason: String?) {
         self.lastFailureReason = reason
+    }
+
+    func setTestingStatus(_ status: Status) {
+        self.status = status
     }
 }
 #endif
