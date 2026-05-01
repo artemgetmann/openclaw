@@ -109,4 +109,86 @@ struct GatewayChannelConnectTests {
             Issue.record("unexpected error: \(error)")
         }
     }
+
+    @Test func `stored role device token wins over shared gateway token`() async throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-channel-auth-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": root.path]) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "node",
+                token: "stored-node-token",
+                scopes: [])
+
+            let sent = CapturedConnectAuth()
+            let session = GatewayTestWebSocketSession(
+                taskFactory: {
+                    GatewayTestWebSocketTask(
+                        sendHook: { _, message, sendIndex in
+                            if sendIndex == 0 {
+                                sent.record(message)
+                            }
+                        })
+                })
+            let channel = try GatewayChannelActor(
+                url: #require(URL(string: "ws://127.0.0.1:18789")),
+                token: "shared-operator-token",
+                session: WebSocketSessionBox(session: session),
+                connectOptions: GatewayConnectOptions(
+                    role: "node",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-macos",
+                    clientMode: "node",
+                    clientDisplayName: "OpenClaw Test"))
+
+            try await channel.connect()
+
+            #expect(await channel.authSource() == .deviceToken)
+            #expect(sent.authToken() == "stored-node-token")
+            #expect(sent.role() == "node")
+        }
+    }
+}
+
+private final class CapturedConnectAuth: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tokenValue: String?
+    private var roleValue: String?
+
+    func record(_ message: URLSessionWebSocketTask.Message) {
+        let data: Data? = switch message {
+        case let .data(data): data
+        case let .string(text): text.data(using: .utf8)
+        @unknown default: nil
+        }
+        guard let data,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let params = object["params"] as? [String: Any]
+        else {
+            return
+        }
+        let auth = params["auth"] as? [String: Any]
+        self.lock.lock()
+        self.tokenValue = auth?["token"] as? String
+        self.roleValue = params["role"] as? String
+        self.lock.unlock()
+    }
+
+    func authToken() -> String? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.tokenValue
+    }
+
+    func role() -> String? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.roleValue
+    }
 }
