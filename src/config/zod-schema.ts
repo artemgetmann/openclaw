@@ -128,6 +128,27 @@ const HttpUrlSchema = z
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
 
+const JarvisSchema = z
+  .object({
+    backend: z
+      .object({
+        baseUrl: HttpUrlSchema.optional(),
+        accessToken: SecretInputSchema.optional().register(sensitive),
+        deviceId: z.string().min(1).optional(),
+        timeoutMs: z.number().int().positive().max(120000).optional(),
+      })
+      .strict()
+      .optional(),
+    managedServices: z
+      .object({
+        mode: z.enum(["off", "license-only", "managed"]).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const ResponsesEndpointUrlFetchShape = {
   allowUrl: z.boolean().optional(),
   urlAllowlist: z.array(z.string()).optional(),
@@ -404,6 +425,7 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     secrets: SecretsConfigSchema,
+    jarvis: JarvisSchema,
     auth: z
       .object({
         profiles: z

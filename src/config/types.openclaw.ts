@@ -14,6 +14,7 @@ import type {
   TalkConfig,
 } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
+import type { JarvisConfig } from "./types.jarvis.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type {
   AudioConfig,
@@ -36,6 +37,7 @@ export type OpenClawConfig = {
     lastTouchedAt?: string;
   };
   auth?: AuthConfig;
+  jarvis?: JarvisConfig;
   acp?: AcpConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
