@@ -241,6 +241,13 @@ done < <(openclaw_runtime_payload_files "$APP_PATH")
 
 codesign --verify --deep --strict "$APP_PATH" >/dev/null
 
+if [[ "${OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS:-0}" == "1" ]]; then
+  echo "WARN: skipping public package secret audit because OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS=1." >&2
+  echo "WARN: do not use this override for public consumer/Jarvis distribution." >&2
+else
+  "$OPENCLAW_NODE_BIN" "$ROOT_DIR/scripts/verify-public-package-secrets.mjs" "$APP_PATH" >/dev/null
+fi
+
 # Gatekeeper verdict is useful demo-distribution signal, but a local Apple
 # Development build should still count as a valid bundle assembly result.
 set +e

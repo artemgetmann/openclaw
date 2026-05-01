@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const CONSUMER_OPENAI_ENV_KEY = "OPENCLAW_CONSUMER_OPENAI_API_KEY";
 const CONSUMER_GEMINI_ENV_KEY = "OPENCLAW_CONSUMER_GEMINI_API_KEY";
+const ALLOW_BUNDLED_PROVIDER_KEYS_ENV_KEY = "OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS";
 
 function readSeededEnvValue(envKey, env = process.env) {
   const rawValue = env[envKey];
@@ -60,9 +61,17 @@ function setNestedValue(target, pathParts, value) {
 
 export function buildConsumerSeededDefaults({ env = process.env, founderConfig = {} } = {}) {
   const seeded = {};
+  const allowBundledProviderKeys = env[ALLOW_BUNDLED_PROVIDER_KEYS_ENV_KEY] === "1";
+
+  // Public builds must not embed founder/provider keys. BYOK users configure
+  // their own credentials after install; managed users should route through the
+  // Jarvis backend instead of receiving shared provider secrets in the bundle.
+  if (!allowBundledProviderKeys) {
+    return seeded;
+  }
 
   // Keep bundled defaults intentionally small. Packaging should only embed the
-  // keys and config surfaces the consumer bootstrap already tests and relies on.
+  // keys and config surfaces internal/demo bundles explicitly opt into.
   const openAiApiKey =
     readSeededEnvValue(CONSUMER_OPENAI_ENV_KEY, env) ??
     readNestedString(founderConfig, [
