@@ -199,6 +199,29 @@ describe("telegram text fragments", () => {
   const TEXT_FRAGMENT_FLUSH_MS = TELEGRAM_TEST_TIMINGS.textFragmentGapMs + 80;
 
   it(
+    "processes a single short text message immediately",
+    async () => {
+      const { handler, replySpy } = await createBotHandlerWithOptions({});
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 8,
+          date: 1736380800,
+          text: "quick question",
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0] as { RawBody?: string };
+      expect(payload.RawBody).toContain("quick question");
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "buffers near-limit text and processes sequential parts as one message",
     async () => {
       const { handler, replySpy } = await createBotHandlerWithOptions({});
@@ -239,6 +262,90 @@ describe("telegram text fragments", () => {
       } finally {
         vi.useRealTimers();
       }
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "buffers non-short rapid text continuations",
+    async () => {
+      const { handler, replySpy } = await createBotHandlerWithOptions({});
+      vi.useFakeTimers();
+      try {
+        const part1 = "A".repeat(900);
+        const part2 = "and this is the immediate continuation";
+
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 7, first_name: "Ada" },
+            message_id: 20,
+            date: 1736380800,
+            text: part1,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 7, first_name: "Ada" },
+            message_id: 21,
+            date: 1736380801,
+            text: part2,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+
+        expect(replySpy).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(TEXT_FRAGMENT_FLUSH_MS * 2);
+
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        const burstPayload = replySpy.mock.calls[0][0] as { RawBody?: string };
+        expect(burstPayload.RawBody).toContain(part1.slice(0, 32));
+        expect(burstPayload.RawBody).toContain(part2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "flushes pending burst text before processing a command",
+    async () => {
+      const { handler, replySpy } = await createBotHandlerWithOptions({});
+      const part1 = "A".repeat(900);
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          from: { id: 7, first_name: "Ada" },
+          message_id: 30,
+          date: 1736380800,
+          text: part1,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          from: { id: 7, first_name: "Ada" },
+          message_id: 31,
+          date: 1736380801,
+          text: "/status",
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      const flushedPayload = replySpy.mock.calls[0][0] as { RawBody?: string };
+      expect(flushedPayload.RawBody).toContain(part1.slice(0, 32));
+      expect(flushedPayload.RawBody).not.toContain("/status");
     },
     TEXT_FRAGMENT_TEST_TIMEOUT_MS,
   );

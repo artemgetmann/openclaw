@@ -325,6 +325,60 @@ describe("telegram media groups", () => {
   );
 });
 
+describe("telegram standalone media burst detection", () => {
+  const STANDALONE_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
+
+  it(
+    "keeps adjacent standalone media immediate and records burst instrumentation",
+    async () => {
+      const runtimeLog = vi.fn();
+      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({
+        runtimeLog,
+      });
+      const fetchSpy = mockTelegramPngDownload();
+
+      try {
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 7, first_name: "Ada" },
+            message_id: 31,
+            date: 1736380800,
+            photo: [{ file_id: "photo-a" }],
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "photos/a.jpg" }),
+        });
+
+        expect(replySpy).toHaveBeenCalledTimes(1);
+
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 7, first_name: "Ada" },
+            message_id: 32,
+            date: 1736380801,
+            photo: [{ file_id: "photo-b" }],
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "photos/b.jpg" }),
+        });
+
+        expect(runtimeError).not.toHaveBeenCalled();
+        expect(replySpy).toHaveBeenCalledTimes(2);
+        expect(runtimeLog).toHaveBeenCalledWith(
+          expect.stringContaining("telegram: adjacent standalone media detected"),
+        );
+        expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("previous_message_id=31"));
+        expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("message_id=32"));
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+    STANDALONE_MEDIA_TEST_TIMEOUT_MS,
+  );
+});
+
 describe("telegram forwarded bursts", () => {
   afterEach(() => {
     vi.clearAllTimers();

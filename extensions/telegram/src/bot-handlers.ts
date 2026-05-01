@@ -159,15 +159,27 @@ export const registerTelegramHandlers = ({
   logger,
 }: RegisterTelegramHandlerParams) => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
+  const DEFAULT_TEXT_BURST_MAX_GAP_MS = 350;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
+  const TELEGRAM_TEXT_BURST_START_THRESHOLD_CHARS = 800;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
     typeof opts.testTimings?.textFragmentGapMs === "number" &&
     Number.isFinite(opts.testTimings.textFragmentGapMs)
       ? Math.max(10, Math.floor(opts.testTimings.textFragmentGapMs))
       : DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS;
+  const TELEGRAM_TEXT_BURST_MAX_GAP_MS =
+    typeof opts.testTimings?.textFragmentGapMs === "number" &&
+    Number.isFinite(opts.testTimings.textFragmentGapMs)
+      ? Math.max(10, Math.floor(opts.testTimings.textFragmentGapMs))
+      : DEFAULT_TEXT_BURST_MAX_GAP_MS;
   const TELEGRAM_TEXT_FRAGMENT_MAX_ID_GAP = 1;
+  const TELEGRAM_TEXT_BURST_MAX_ID_GAP = 3;
+  const TELEGRAM_TEXT_BURST_MAX_DATE_GAP_SECONDS = 3;
   const TELEGRAM_TEXT_FRAGMENT_MAX_PARTS = 12;
   const TELEGRAM_TEXT_FRAGMENT_MAX_TOTAL_CHARS = 50_000;
+  const TELEGRAM_STANDALONE_MEDIA_BURST_MAX_GAP_MS = 1500;
+  const TELEGRAM_STANDALONE_MEDIA_BURST_MAX_ID_GAP = 3;
+  const TELEGRAM_STANDALONE_MEDIA_BURST_MAX_DATE_GAP_SECONDS = 3;
   const mediaGroupTimeoutMs =
     typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
     Number.isFinite(opts.testTimings.mediaGroupFlushMs)
@@ -179,11 +191,20 @@ export const registerTelegramHandlers = ({
 
   type TextFragmentEntry = {
     key: string;
+    mode: "fragment" | "burst";
+    flushAfterMs: number;
     messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
     timer: ReturnType<typeof setTimeout>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
   let textFragmentProcessing: Promise<void> = Promise.resolve();
+
+  type StandaloneMediaBurstSeen = {
+    messageId: number;
+    date?: number;
+    receivedAtMs: number;
+  };
+  const standaloneMediaBurstLastSeen = new Map<string, StandaloneMediaBurstSeen>();
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
@@ -236,6 +257,24 @@ export const registerTelegramHandlers = ({
         ? (ctx.getFile as TelegramContext["getFile"]).bind(ctx as object)
         : async () => ({});
     return { message, me: ctx.me, getFile };
+  };
+  const buildTelegramBurstKey = (params: {
+    chatId: number | string;
+    threadId?: number;
+    senderId?: string;
+    lane: string;
+  }): string | null => {
+    if (!params.senderId) {
+      return null;
+    }
+    return [
+      "telegram",
+      accountId ?? "default",
+      params.chatId,
+      params.threadId ?? "main",
+      params.senderId,
+      params.lane,
+    ].join(":");
   };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,
@@ -549,7 +588,9 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      const combinedText = entry.messages.map((m) => m.msg.text ?? "").join("");
+      const combinedText = entry.messages
+        .map((m) => m.msg.text ?? "")
+        .join(entry.mode === "fragment" ? "" : "\n");
       if (!combinedText.trim()) {
         return;
       }
@@ -589,7 +630,89 @@ export const registerTelegramHandlers = ({
     clearTimeout(entry.timer);
     entry.timer = setTimeout(async () => {
       await runTextFragmentFlush(entry);
-    }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS);
+    }, entry.flushAfterMs);
+  };
+
+  const flushPendingTextFragmentsForKey = async (key: string | null) => {
+    if (!key) {
+      return;
+    }
+    const existing = textFragmentBuffer.get(key);
+    if (!existing) {
+      return;
+    }
+    clearTimeout(existing.timer);
+    textFragmentBuffer.delete(key);
+    textFragmentProcessing = textFragmentProcessing
+      .then(async () => {
+        await flushTextFragments(existing);
+      })
+      .catch(() => undefined);
+    await textFragmentProcessing;
+  };
+
+  const shouldStartTextBurstBuffer = (text: string): boolean => {
+    const trimmed = text.trim();
+    return (
+      trimmed.length >= TELEGRAM_TEXT_BURST_START_THRESHOLD_CHARS &&
+      trimmed.length < TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS
+    );
+  };
+
+  const recordStandaloneMediaBurstObservation = (params: {
+    key: string | null;
+    msg: Message;
+    nowMs: number;
+    threadId?: number;
+    senderId?: string;
+    lane: TelegramDebounceLane;
+  }) => {
+    if (!params.key) {
+      return;
+    }
+    const previous = standaloneMediaBurstLastSeen.get(params.key);
+    if (previous) {
+      const idGap = params.msg.message_id - previous.messageId;
+      const receivedGapMs = params.nowMs - previous.receivedAtMs;
+      const dateGapSeconds =
+        typeof previous.date === "number" && typeof params.msg.date === "number"
+          ? params.msg.date - previous.date
+          : undefined;
+      const closeByTelegramDate =
+        dateGapSeconds == null
+          ? undefined
+          : dateGapSeconds >= 0 &&
+            dateGapSeconds <= TELEGRAM_STANDALONE_MEDIA_BURST_MAX_DATE_GAP_SECONDS;
+      const closeByProcessingTime =
+        receivedGapMs >= 0 && receivedGapMs <= TELEGRAM_STANDALONE_MEDIA_BURST_MAX_GAP_MS;
+      const isAdjacent =
+        idGap > 0 &&
+        idGap <= TELEGRAM_STANDALONE_MEDIA_BURST_MAX_ID_GAP &&
+        (closeByTelegramDate ?? closeByProcessingTime);
+
+      if (isAdjacent) {
+        runtime.log?.(
+          [
+            "telegram: adjacent standalone media detected",
+            `account=${accountId ?? "default"}`,
+            `chat=${params.msg.chat.id}`,
+            `thread=${params.threadId ?? "main"}`,
+            `sender=${params.senderId ?? "unknown"}`,
+            `lane=${params.lane}`,
+            `previous_message_id=${previous.messageId}`,
+            `message_id=${params.msg.message_id}`,
+            `id_gap=${idGap}`,
+            `received_gap_ms=${receivedGapMs}`,
+            ...(dateGapSeconds == null ? [] : [`date_gap_s=${dateGapSeconds}`]),
+          ].join(" "),
+        );
+      }
+    }
+    standaloneMediaBurstLastSeen.set(params.key, {
+      messageId: params.msg.message_id,
+      date: params.msg.date,
+      receivedAtMs: params.nowMs,
+    });
   };
 
   const loadStoreAllowFrom = async () =>
@@ -1027,29 +1150,54 @@ export const registerTelegramHandlers = ({
       oversizeLogMessage,
     } = params;
 
-    // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
-    // We buffer “near-limit” messages and append immediately-following parts.
+    // Telegram splits long pastes near 4096 chars. For non-short text, a very
+    // small buffer lets an immediate continuation join without slowing normal
+    // short single-message chat.
     const text = typeof msg.text === "string" ? msg.text : undefined;
     const isCommandLike = (text ?? "").trim().startsWith("/");
+    const nowMs = Date.now();
+    const senderId = msg.from?.id != null ? String(msg.from.id) : undefined;
+    const burstSenderId = senderId ?? "unknown";
+    const threadId = resolvedThreadId ?? dmThreadId;
+    const textBurstKey = buildTelegramBurstKey({
+      chatId,
+      threadId,
+      senderId: burstSenderId,
+      lane: resolveTelegramDebounceLane(msg),
+    });
+    if (isCommandLike) {
+      await flushPendingTextFragmentsForKey(textBurstKey);
+    }
     if (text && !isCommandLike) {
-      const nowMs = Date.now();
-      const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
-      // Use resolvedThreadId for forum groups, dmThreadId for DM topics
-      const threadId = resolvedThreadId ?? dmThreadId;
-      const key = `text:${chatId}:${threadId ?? "main"}:${senderId}`;
-      const existing = textFragmentBuffer.get(key);
+      const key = textBurstKey;
+      const existing = key ? textFragmentBuffer.get(key) : undefined;
 
-      if (existing) {
+      if (existing && key) {
         const last = existing.messages.at(-1);
         const lastMsgId = last?.msg.message_id;
         const lastReceivedAtMs = last?.receivedAtMs ?? nowMs;
+        const lastDate = last?.msg.date;
         const idGap = typeof lastMsgId === "number" ? msg.message_id - lastMsgId : Infinity;
         const timeGapMs = nowMs - lastReceivedAtMs;
+        const dateGapSeconds =
+          typeof lastDate === "number" && typeof msg.date === "number"
+            ? msg.date - lastDate
+            : undefined;
+        const maxIdGap =
+          existing.mode === "fragment"
+            ? TELEGRAM_TEXT_FRAGMENT_MAX_ID_GAP
+            : TELEGRAM_TEXT_BURST_MAX_ID_GAP;
+        const maxTimeGapMs =
+          existing.mode === "fragment"
+            ? TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS
+            : TELEGRAM_TEXT_BURST_MAX_GAP_MS;
         const canAppend =
           idGap > 0 &&
-          idGap <= TELEGRAM_TEXT_FRAGMENT_MAX_ID_GAP &&
+          idGap <= maxIdGap &&
           timeGapMs >= 0 &&
-          timeGapMs <= TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS;
+          timeGapMs <= maxTimeGapMs &&
+          (dateGapSeconds == null ||
+            (dateGapSeconds >= 0 && dateGapSeconds <= TELEGRAM_TEXT_BURST_MAX_DATE_GAP_SECONDS));
 
         if (canAppend) {
           const currentTotalChars = existing.messages.reduce(
@@ -1078,12 +1226,21 @@ export const registerTelegramHandlers = ({
         await textFragmentProcessing;
       }
 
-      const shouldStart = text.length >= TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS;
-      if (shouldStart) {
+      const mode =
+        text.length >= TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS
+          ? "fragment"
+          : shouldStartTextBurstBuffer(text)
+            ? "burst"
+            : null;
+      if (mode && key) {
+        const flushAfterMs =
+          mode === "fragment" ? TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS : TELEGRAM_TEXT_BURST_MAX_GAP_MS;
         const entry: TextFragmentEntry = {
           key,
+          mode,
+          flushAfterMs,
           messages: [{ msg, ctx, receivedAtMs: nowMs }],
-          timer: setTimeout(() => {}, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS),
+          timer: setTimeout(() => {}, flushAfterMs),
         };
         textFragmentBuffer.set(key, entry);
         scheduleTextFragmentFlush(entry);
@@ -1186,14 +1343,32 @@ export const registerTelegramHandlers = ({
           },
         ]
       : [];
-    const senderId = msg.from?.id ? String(msg.from.id) : "";
     const conversationThreadId = resolvedThreadId ?? dmThreadId;
     const conversationKey =
       conversationThreadId != null ? `${chatId}:topic:${conversationThreadId}` : String(chatId);
     const debounceLane = resolveTelegramDebounceLane(msg);
-    const debounceKey = senderId
-      ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}:${debounceLane}`
+    const debounceSenderId = senderId ?? "";
+    const debounceKey = debounceSenderId
+      ? `telegram:${accountId ?? "default"}:${conversationKey}:${debounceSenderId}:${debounceLane}`
       : null;
+    if (allMedia.length > 0) {
+      await flushPendingTextFragmentsForKey(textBurstKey);
+    }
+    if (allMedia.length > 0 && !msg.media_group_id) {
+      recordStandaloneMediaBurstObservation({
+        key: buildTelegramBurstKey({
+          chatId,
+          threadId: conversationThreadId,
+          senderId: burstSenderId,
+          lane: debounceLane,
+        }),
+        msg,
+        nowMs,
+        threadId: conversationThreadId,
+        senderId: burstSenderId,
+        lane: debounceLane,
+      });
+    }
     await inboundDebouncer.enqueue({
       ctx,
       msg,
