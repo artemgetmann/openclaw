@@ -267,11 +267,11 @@ extension GatewayLaunchAgentManager {
     private static func desiredEnableAction() async -> DesiredAction {
         let loaded = await self.readDaemonLoaded()
         let snapshot = self.launchdConfigSnapshot()
-        let launchAgentMatchesCurrentEntrypoint = self.launchAgentMatchesCurrentEntrypoint(snapshot: snapshot)
+        let launchAgentMatchesCurrentRuntime = self.launchAgentMatchesCurrentRuntime(snapshot: snapshot)
         let action = self.computeDesiredEnableAction(
             loaded: loaded,
             hasPlist: snapshot != nil,
-            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
+            launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime)
         switch action {
         case .noop:
             // A normal enable request means "make sure the service exists". If the
@@ -467,9 +467,9 @@ extension GatewayLaunchAgentManager {
     private static func computeDesiredEnableAction(
         loaded: Bool?,
         hasPlist: Bool,
-        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
+        launchAgentMatchesCurrentRuntime: Bool = true) -> DesiredAction
     {
-        if hasPlist, !launchAgentMatchesCurrentEntrypoint { return .install }
+        if hasPlist, !launchAgentMatchesCurrentRuntime { return .install }
         if loaded == true { return .noop }
         if loaded == false, hasPlist { return .start }
         if loaded == nil, hasPlist { return .start }
@@ -526,12 +526,12 @@ extension GatewayLaunchAgentManager {
     static func _testDesiredEnableAction(
         loaded: Bool?,
         hasPlist: Bool,
-        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
+        launchAgentMatchesCurrentRuntime: Bool = true) -> DesiredAction
     {
         self.computeDesiredEnableAction(
             loaded: loaded,
             hasPlist: hasPlist,
-            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
+            launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime)
     }
 
     static func _testShouldTreatBringupResultAsReady(_ payload: String) -> Bool {
