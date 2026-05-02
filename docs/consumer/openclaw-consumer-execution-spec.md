@@ -1,15 +1,29 @@
 # OpenClaw Consumer — Full Execution Spec
 
 > Generated from founder interview, 2026-03-14
-> Status: FINAL — ready for execution
+> Status: HISTORICAL — superseded by main/consumer consolidation
+>
+> Current source of truth:
+>
+> - `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
+> - `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
+> - `CONSUMER.md`
+>
+> This document is preserved for product intent and early sprint context. Do not
+> use its old branch-routing instructions for new work.
 
 ---
 
 ## 0) North Star
 
-**The consumer product IS your personal bot.** Not a fork, not a parallel thing — the same product. You're building it on the `consumer` branch, and once it's solid, it replaces your current `main` bot entirely. One codebase. One product. You use it. Others use it.
+**The consumer product IS your personal bot.** Not a fork, not a parallel thing
+— the same product. The branch strategy changed after this spec was written:
+consumer/product work now ships from `main`, and the old consumer branch is a
+legacy emergency fallback.
 
-This means the refactor and the consumer build are the same work — not two separate efforts. Strip the complexity out of what exists, make it Apple-simple, keep it insanely capable. The `main` branch is just a safety net while you build. When `consumer` is ready, `consumer` becomes your daily driver.
+This means the refactor and the consumer build are the same work — not two
+separate efforts. Strip the complexity out of what exists, make it Apple-simple,
+keep it insanely capable. `main` is now the daily-driver and shipping branch.
 
 **Philosophy:** MacBook, not a dev machine. Locked down and friendly to users, but so powerful it doesn't get in your way either.
 
@@ -80,39 +94,43 @@ This means the refactor and the consumer build are the same work — not two sep
 ### Structure
 
 - **Source clone:** `/Users/user/Programming_Projects/openclaw`
-- **Live bot (personal):** `~/.openclaw/workspace` — DO NOT TOUCH during consumer development
-- **Fork integration:** `main` on `artemgetmann/openclaw`
-- **Consumer work:** `codex/consumer-openclaw-project` on `artemgetmann/openclaw`
+- **Runtime root:** `~/Library/Application Support/OpenClaw/.openclaw`
+- **Fork integration and consumer work:** `main` on `artemgetmann/openclaw`
+- **Legacy fallback:** `codex/consumer-openclaw-project` only for explicit
+  emergency backports
 
 ### Convergence Plan
 
-- Current `main` = your live personal bot (complicated, works, don't break it)
-- `codex/consumer-openclaw-project` = the simplified rebuild and product branch
-- When `codex/consumer-openclaw-project` is stable → switch `~/.openclaw` to run from that branch → retire `main` as your daily driver
-- You end up with ONE bot, ONE codebase, that is both your personal agent AND the product
+- `main` now owns the shared runtime, macOS Consumer shell, setup resume, and
+  packaging handoff.
+- `openclaw-consumer` / `codex/consumer-openclaw-project` are legacy safety
+  nets, not normal implementation surfaces.
+- You have ONE bot, ONE codebase, that is both your personal agent AND the
+  product.
 
 ### Refactor Strategy
 
-The refactor doesn't happen on `main`. It happens as part of building `codex/consumer-openclaw-project`.
+The refactor now happens on short-lived branches from `origin/main`.
 
-- Branch off current `main` (so you have its working code as a starting point)
-- Aggressively simplify on `codex/consumer-openclaw-project` — remove everything not needed for the core loop
-- Your live bot on `main` stays untouched and working throughout
-- Periodically forward genuinely useful improvements from `main` into `codex/consumer-openclaw-project`
+- Branch off current `origin/main`.
+- Use temp worktrees under `/Users/user/Programming_Projects/openclaw/.worktrees`.
+- Keep the sacred main checkout as a pull-only runtime anchor.
+- Do not target the legacy consumer branch unless the user explicitly declares an
+  emergency backport.
 - For upstream intake rules, use `docs/agent-guides/fork-maintenance.md`
 
 ### Workflow
 
 ```sh
-# Refresh the consumer sacred home clone, then spawn a temp worktree for the task.
+# Refresh the main sacred home clone, then spawn a temp worktree for the task.
 # The blessed path fails closed unless the lane proves local tool readiness.
 source ~/Programming_Projects/openclaw/scripts/shell-helpers/home-clone-helpers.sh
-oc-consumer-task <task-name>
+oc-main-task <task-name>
 
 # Open a draft PR early, then validate in that temp worktree
 # Mark the PR ready only after validation is complete
 
-# Test consumer build without touching live bot
+# For isolated runtime tests, use explicit state/profile/port isolation
 pnpm install && pnpm build
 OPENCLAW_HOME=/tmp/openclaw-consumer \
 OPENCLAW_PROFILE=consumer-test \
@@ -122,11 +140,14 @@ pnpm openclaw gateway --port 19001 --bind loopback
 # See docs/agent-guides/fork-maintenance.md
 ```
 
-The consumer sacred home clone stays on `codex/consumer-openclaw-project`. It does not host feature work directly. Every consumer implementation task starts in a temp worktree created from that sacred home clone.
+The main sacred home clone stays on `main`. It does not host feature work
+directly. Every consumer implementation task starts in a temp worktree created
+from that sacred home clone.
 
 ### Rule
 
-Your personal bot stays on `main`. `codex/consumer-openclaw-project` is the product branch. Work on short-lived feature branches, not directly on the base branches, and only switch your personal bot when that branch is proven stable.
+Your personal bot and the product now converge on `main`. Work on short-lived
+feature branches, not directly on the base branch.
 
 ---
 
@@ -136,7 +157,7 @@ Your personal bot stays on `main`. `codex/consumer-openclaw-project` is the prod
 
 All three must be true:
 
-1. ✅ Consumer branch exists and runs independently on port 19001
+1. ✅ Main-built Consumer app/runtime path exists and can run isolated smokes
 2. ✅ Browser spike has a clear winner with benchmark data
 3. ✅ At least one killer task (flight search from Telegram) works end-to-end
 

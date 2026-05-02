@@ -36,7 +36,7 @@ Read this before doing consumer-product work in this repo.
 - Main/consumer consolidation and retirement:
   - `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
   - `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
-- Full execution plan:
+- Historical execution plan:
   - `docs/consumer/openclaw-consumer-execution-spec.md`
 - Sprint kickoff prompt:
   - `docs/consumer/CODEX-PROMPT.md`
