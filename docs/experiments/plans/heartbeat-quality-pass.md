@@ -2,10 +2,14 @@
 
 ## Summary
 
-Implement this in two stages:
+Historical note: this prompt predates the main/consumer consolidation. Treat
+`main` as the implementation target now. Do not port follow-up work to
+`codex/consumer-openclaw-project` unless the user explicitly declares an
+emergency backport.
+
+Implement this in one stage:
 
 1. Land and review the fix on `main`
-2. Port the validated fix to `codex/consumer-openclaw-project`
 
 The pass has three goals:
 
@@ -38,7 +42,7 @@ Chosen defaults:
   - `end: "20:00"`
   - `timezone: "user"`
 - Keep cadence unchanged at `1h` for now.
-- Apply the same default behavior in fork `main` and consumer after validation.
+- Apply the default behavior in `main`.
 
 ### 2. Recent-heartbeat memory
 
@@ -85,6 +89,6 @@ Chosen defaults:
 
 ## Rollout
 
-- Merge `main` first
+- Merge to `main`
 - Review prompt wording and behavior
-- Port to `codex/consumer-openclaw-project`
+- Backport only for an explicit emergency fallback request
