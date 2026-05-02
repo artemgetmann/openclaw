@@ -522,6 +522,9 @@ export type TelegramReplyTarget = {
   sender: string;
   body: string;
   kind: "reply" | "quote";
+  quoteText?: string;
+  quotePosition?: number;
+  quoteEntities?: unknown[];
   /** Forward context if the reply target was itself a forwarded message (issue #9619). */
   forwardedFrom?: TelegramForwardedContext;
 };
@@ -532,6 +535,11 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const quoteText =
     msg.quote?.text ??
     (externalReply as (Message & { quote?: { text?: string } }) | undefined)?.quote?.text;
+  const quotePosition =
+    typeof msg.quote?.position === "number" && Number.isFinite(msg.quote.position)
+      ? msg.quote.position
+      : undefined;
+  const quoteEntities = Array.isArray(msg.quote?.entities) ? msg.quote.entities : undefined;
   let body = "";
   let kind: TelegramReplyTarget["kind"] = "reply";
 
@@ -572,6 +580,9 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     sender: senderLabel,
     body,
     kind,
+    quoteText: kind === "quote" ? quoteText : undefined,
+    quotePosition: kind === "quote" ? quotePosition : undefined,
+    quoteEntities: kind === "quote" ? quoteEntities : undefined,
     forwardedFrom,
   };
 }

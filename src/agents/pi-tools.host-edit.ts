@@ -4,12 +4,30 @@ import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
-/** Resolve path for host edit: expand ~ and resolve relative paths against root. */
+function resolveOsHomeDir(): string | undefined {
+  const rawHome = process.env.HOME?.trim() || process.env.USERPROFILE?.trim();
+  if (rawHome) {
+    return path.resolve(rawHome);
+  }
+  try {
+    const fallbackHome = os.homedir().trim();
+    return fallbackHome ? path.resolve(fallbackHome) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function expandTildeToOsHome(filePath: string): string {
+  if (!filePath.startsWith("~")) {
+    return filePath;
+  }
+  const home = resolveOsHomeDir();
+  return home ? filePath.replace(/^~(?=$|[\\/])/, home) : filePath;
+}
+
+/** Resolve host edit recovery paths exactly like non-workspace host edit operations. */
 function resolveHostEditPath(root: string, pathParam: string): string {
-  const expanded =
-    pathParam.startsWith("~/") || pathParam === "~"
-      ? pathParam.replace(/^~/, os.homedir())
-      : pathParam;
+  const expanded = expandTildeToOsHome(pathParam);
   return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(root, expanded);
 }
 

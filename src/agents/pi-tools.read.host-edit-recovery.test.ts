@@ -38,6 +38,7 @@ describe("createHostWorkspaceEditTool post-write recovery", () => {
   let tmpDir = "";
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     mocks.executeThrows = true;
     if (tmpDir) {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -85,5 +86,37 @@ describe("createHostWorkspaceEditTool post-write recovery", () => {
     await expect(
       tool.execute("call-1", { path: filePath, oldText, newText }, undefined),
     ).rejects.toThrow("Simulated post-write failure");
+  });
+
+  it("recovers tilde paths against OS home even when OPENCLAW_HOME differs", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const osHome = path.join(tmpDir, "os-home");
+    const openclawHome = path.join(tmpDir, "openclaw-home");
+    await fs.mkdir(osHome, { recursive: true });
+    await fs.mkdir(openclawHome, { recursive: true });
+    vi.stubEnv("HOME", osHome);
+    vi.stubEnv("USERPROFILE", osHome);
+    vi.stubEnv("OPENCLAW_HOME", openclawHome);
+
+    const filePath = path.join(osHome, "demo.txt");
+    const oldText = "old text";
+    const newText = "new text";
+    // Simulates an upstream edit that wrote successfully before throwing during diff rendering.
+    await fs.writeFile(filePath, `before ${newText} after\n`, "utf-8");
+
+    const tool = createHostWorkspaceEditTool(tmpDir);
+    const result = await tool.execute(
+      "call-1",
+      { path: "~/demo.txt", oldText, newText },
+      undefined,
+    );
+
+    expect(result).toBeDefined();
+    const content = Array.isArray((result as { content?: unknown }).content)
+      ? (result as { content: Array<{ type?: string; text?: string }> }).content
+      : [];
+    const textBlock = content.find((b) => b?.type === "text" && typeof b.text === "string");
+    expect(textBlock?.text).toContain("Successfully replaced text in ~/demo.txt");
+    await expect(fs.access(path.join(openclawHome, "demo.txt"))).rejects.toBeDefined();
   });
 });

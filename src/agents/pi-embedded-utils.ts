@@ -224,13 +224,53 @@ export function stripDowngradedToolCallText(text: string): string {
   return cleaned.trim();
 }
 
+const THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)`;
+const THINKING_TAG_OPEN_RE = new RegExp(String.raw`<\s*${THINKING_TAG_NAME_PATTERN}\s*>`, "i");
+const THINKING_TAG_CLOSE_RE = new RegExp(
+  String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  "i",
+);
+const THINKING_TAG_OPEN_GLOBAL_RE = new RegExp(
+  String.raw`<\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  "gi",
+);
+const THINKING_TAG_CLOSE_GLOBAL_RE = new RegExp(
+  String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  "gi",
+);
+export const THINKING_TAG_SCAN_RE = new RegExp(
+  String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  "gi",
+);
+
+function stripThinkingBlocks(text: string): string {
+  let result = "";
+  let lastIndex = 0;
+  let inThinking = false;
+  THINKING_TAG_SCAN_RE.lastIndex = 0;
+  for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
+    const idx = match.index ?? 0;
+    if (!inThinking) {
+      result += text.slice(lastIndex, idx);
+    }
+    const isClose = match[1] === "/";
+    inThinking = !isClose;
+    lastIndex = idx + match[0].length;
+  }
+  if (!inThinking) {
+    result += text.slice(lastIndex);
+  }
+  return result.trim();
+}
+
 /**
  * Strip thinking tags and their content from text.
  * This is a safety net for cases where the model outputs <think> tags
  * that slip through other filtering mechanisms.
  */
 export function stripThinkingTagsFromText(text: string): string {
-  return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+  const withoutSharedReasoning = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+  return stripThinkingBlocks(withoutSharedReasoning);
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {
@@ -298,16 +338,13 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   if (!trimmedStart.startsWith("<")) {
     return null;
   }
-  const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
-  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
-  if (!openRe.test(trimmedStart)) {
+  if (!THINKING_TAG_OPEN_RE.test(trimmedStart)) {
     return null;
   }
-  if (!closeRe.test(text)) {
+  if (!THINKING_TAG_CLOSE_RE.test(text)) {
     return null;
   }
 
-  const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   let inThinking = false;
   let cursor = 0;
   let thinkingStart = 0;
@@ -327,7 +364,8 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     blocks.push({ type: "thinking", thinking: cleaned });
   };
 
-  for (const match of text.matchAll(scanRe)) {
+  THINKING_TAG_SCAN_RE.lastIndex = 0;
+  for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
     const index = match.index ?? 0;
     const isClose = Boolean(match[1]?.includes("/"));
 
@@ -408,11 +446,11 @@ export function extractThinkingFromTaggedText(text: string): string {
   if (!text) {
     return "";
   }
-  const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   let result = "";
   let lastIndex = 0;
   let inThinking = false;
-  for (const match of text.matchAll(scanRe)) {
+  THINKING_TAG_SCAN_RE.lastIndex = 0;
+  for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
     const idx = match.index ?? 0;
     if (inThinking) {
       result += text.slice(lastIndex, idx);
@@ -433,13 +471,13 @@ export function extractThinkingFromTaggedStream(text: string): string {
     return closed;
   }
 
-  const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
-  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
-  const openMatches = [...text.matchAll(openRe)];
+  THINKING_TAG_OPEN_GLOBAL_RE.lastIndex = 0;
+  const openMatches = [...text.matchAll(THINKING_TAG_OPEN_GLOBAL_RE)];
   if (openMatches.length === 0) {
     return "";
   }
-  const closeMatches = [...text.matchAll(closeRe)];
+  THINKING_TAG_CLOSE_GLOBAL_RE.lastIndex = 0;
+  const closeMatches = [...text.matchAll(THINKING_TAG_CLOSE_GLOBAL_RE)];
   const lastOpen = openMatches[openMatches.length - 1];
   const lastClose = closeMatches[closeMatches.length - 1];
   if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {

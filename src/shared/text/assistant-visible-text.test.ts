@@ -78,4 +78,31 @@ describe("stripAssistantInternalScaffolding", () => {
     ].join("\n");
     expect(stripAssistantInternalScaffolding(input)).toBe("Before\n\nsecret\n\nAfter");
   });
+
+  it("strips standalone function tool-call blocks with nested parameter XML", () => {
+    const input = [
+      "Let me check that.",
+      '<function name="read">',
+      '<parameter name="file_path">/tmp/test.md</parameter>',
+      "</function>",
+      "Done.",
+    ].join("\n");
+    expect(stripAssistantInternalScaffolding(input)).toBe("Let me check that.\n\nDone.");
+  });
+
+  it("strips inline function tool-call blocks after sentence lead-ins", () => {
+    const input =
+      'Let me check. <function name="read"><parameter name="path">/tmp</parameter></function> Done.';
+    expect(stripAssistantInternalScaffolding(input)).toBe("Let me check.  Done.");
+  });
+
+  it("preserves bare function XML examples in normal prose", () => {
+    const input = 'Use <function name="read"><parameter name="path">/tmp</parameter></function>.';
+    expect(stripAssistantInternalScaffolding(input)).toBe(input);
+  });
+
+  it("preserves dangling function blocks instead of hiding the tail", () => {
+    const input = '<function name="spawn">\n<parameter name="key">value</parameter>';
+    expect(stripAssistantInternalScaffolding(input)).toBe(input);
+  });
 });

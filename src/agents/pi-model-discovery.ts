@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
 import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { normalizeModelCompat } from "./model-compat.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
@@ -21,6 +23,17 @@ type InMemoryAuthStorageBackendLike = {
     },
   ): T;
 };
+
+type ProviderRuntimeModelLike = Model<Api> & {
+  api?: string | null;
+};
+
+const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+
+function isOpenAICodexDiscoveryRoute(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  return Boolean(trimmed && /^https?:\/\/chatgpt\.com\/backend-api(?:\/v1)?\/?$/i.test(trimmed));
+}
 
 function createInMemoryAuthStorageBackend(
   initialData: PiCredentialMap,
@@ -139,6 +152,41 @@ function resolvePiCredentials(agentDir: string): PiCredentialMap {
   return resolvePiCredentialMapFromStore(store);
 }
 
+export function normalizeDiscoveredPiModel<T>(value: T, _agentDir: string): T {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.name !== "string" ||
+    typeof value.provider !== "string"
+  ) {
+    return value;
+  }
+  const model = value as unknown as ProviderRuntimeModelLike;
+  // Keep discovery normalization cheap. This file is imported by hot model-registry paths,
+  // so only repair the known stale Codex transport shape instead of loading provider plugins.
+  if (model.provider !== "openai-codex" || !isOpenAICodexDiscoveryRoute(model.baseUrl)) {
+    return value;
+  }
+  const api =
+    !model.api || model.api === "openai-responses" || model.api === "openai-codex-responses"
+      ? "openai-codex-responses"
+      : model.api;
+  if (api !== "openai-codex-responses") {
+    return value;
+  }
+  return normalizeModelCompat({
+    ...model,
+    api,
+    baseUrl: OPENAI_CODEX_BASE_URL,
+  } as Model<Api>) as T;
+}
+
+function normalizeDiscoveredPiModels<T>(values: T, agentDir: string): T {
+  return Array.isArray(values)
+    ? (values.map((value) => normalizeDiscoveredPiModel(value, agentDir)) as T)
+    : normalizeDiscoveredPiModel(values, agentDir);
+}
+
 // Compatibility helpers for pi-coding-agent 0.50+ (discover* helpers removed).
 export function discoverAuthStorage(agentDir: string): PiAuthStorage {
   const credentials = resolvePiCredentials(agentDir);
@@ -148,5 +196,28 @@ export function discoverAuthStorage(agentDir: string): PiAuthStorage {
 }
 
 export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
-  return new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
+  const registry = new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
+  // Older persisted models.json files can hold stale OpenAI Codex transport metadata.
+  // Normalize reads at the registry boundary so list, availability, and runtime resolution agree.
+  const mutableRegistry = registry as unknown as {
+    find?: (...args: unknown[]) => unknown;
+    getAll?: (...args: unknown[]) => unknown;
+    getAvailable?: (...args: unknown[]) => unknown;
+  };
+  const originalFind = mutableRegistry.find?.bind(registry);
+  if (originalFind) {
+    mutableRegistry.find = (...args: unknown[]) =>
+      normalizeDiscoveredPiModels(originalFind(...args), agentDir);
+  }
+  const originalGetAll = mutableRegistry.getAll?.bind(registry);
+  if (originalGetAll) {
+    mutableRegistry.getAll = (...args: unknown[]) =>
+      normalizeDiscoveredPiModels(originalGetAll(...args), agentDir);
+  }
+  const originalGetAvailable = mutableRegistry.getAvailable?.bind(registry);
+  if (originalGetAvailable) {
+    mutableRegistry.getAvailable = (...args: unknown[]) =>
+      normalizeDiscoveredPiModels(originalGetAvailable(...args), agentDir);
+  }
+  return registry;
 }

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -712,8 +713,29 @@ function createSandboxEditOperations(params: SandboxToolParams) {
   } as const;
 }
 
+function resolveOsHomeDir(): string | undefined {
+  const rawHome = process.env.HOME?.trim() || process.env.USERPROFILE?.trim();
+  if (rawHome) {
+    return path.resolve(rawHome);
+  }
+  try {
+    const fallbackHome = os.homedir().trim();
+    return fallbackHome ? path.resolve(fallbackHome) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function expandTildeToOsHome(filePath: string): string {
+  if (!filePath.startsWith("~")) {
+    return filePath;
+  }
+  const home = resolveOsHomeDir();
+  return home ? filePath.replace(/^~(?=$|[\\/])/, home) : filePath;
+}
+
 async function writeHostFile(absolutePath: string, content: string) {
-  const resolved = path.resolve(absolutePath);
+  const resolved = path.resolve(expandTildeToOsHome(absolutePath));
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
 }
@@ -725,7 +747,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     // When workspaceOnly is false, allow writes anywhere on the host
     return {
       mkdir: async (dir: string) => {
-        const resolved = path.resolve(dir);
+        const resolved = path.resolve(expandTildeToOsHome(dir));
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: writeHostFile,
@@ -759,12 +781,12 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
         return await fs.readFile(resolved);
       },
       writeFile: writeHostFile,
       access: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
         await fs.access(resolved);
       },
     } as const;
