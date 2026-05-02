@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DEFAULT_DMG="/Users/user/Programming_Projects/openclaw/OpenClaw.dmg"
+DEFAULT_DMG="/Users/user/Programming_Projects/openclaw/dist/consumer-handoff/OpenClaw.dmg"
+LEGACY_ROOT_DMG="/Users/user/Programming_Projects/openclaw/OpenClaw.dmg"
 
 APP_PATH=""
 DMG_PATH=""
@@ -70,6 +71,8 @@ fi
 if [[ -z "$APP_PATH" && -z "$DMG_PATH" ]]; then
   if [[ -f "$DEFAULT_DMG" ]]; then
     DMG_PATH="$DEFAULT_DMG"
+  elif [[ -f "$LEGACY_ROOT_DMG" ]]; then
+    DMG_PATH="$LEGACY_ROOT_DMG"
   else
     APP_PATH="$ROOT_DIR/dist/OpenClaw.app"
   fi
