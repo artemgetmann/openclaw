@@ -19,6 +19,10 @@ MANAGE_WATCHDOG="${OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG:-1}"
 OPENCLAW_ENTRYPOINT="${MAIN_REPO}/openclaw.mjs"
 VALIDATED_NODE_HELPER="${MAIN_REPO}/scripts/lib/validated-node.sh"
 SHARED_RUNTIME_BUILD_SCRIPT="${MAIN_REPO}/scripts/build-shared-runtime.sh"
+CANONICAL_OPENCLAW_HOME="${HOME}/Library/Application Support/OpenClaw"
+CANONICAL_OPENCLAW_STATE_DIR="${CANONICAL_OPENCLAW_HOME}/.openclaw"
+CANONICAL_OPENCLAW_CONFIG_PATH="${CANONICAL_OPENCLAW_STATE_DIR}/openclaw.json"
+CANONICAL_OPENCLAW_LOG_DIR="${CANONICAL_OPENCLAW_STATE_DIR}/logs"
 
 if [[ -f "${VALIDATED_NODE_HELPER}" ]]; then
   # shellcheck disable=SC1090
@@ -311,9 +315,33 @@ pid_matches_main_runtime() {
 }
 
 install_main_launch_agent() {
+  mkdir -p "${CANONICAL_OPENCLAW_LOG_DIR}"
   (
     cd "${MAIN_REPO}"
-    "${NODE_BIN}" dist/index.js gateway install --force --allow-shared-service-takeover --runtime node --port "${PORT}"
+    # Recovery always reclaims the default shared gateway for the app-owned
+    # runtime under ~/Library/Application Support/OpenClaw. Do not inherit
+    # OPENCLAW_HOME, OPENCLAW_STATE_DIR, or OPENCLAW_PROFILE from the caller:
+    # stale shells and consumer lanes can otherwise reinstall ai.openclaw.gateway
+    # against ~/.openclaw or a profile-normalized identity that looks healthy
+    # but boots the wrong runtime.
+    #
+    # Keep this env intentionally small. The gateway installer persists selected
+    # service env into launchd, so passing a full shell environment here could
+    # accidentally snapshot tokens or other secrets into the LaunchAgent plist.
+    env -i \
+      HOME="${HOME}" \
+      USER="${USER:-}" \
+      LOGNAME="${LOGNAME:-${USER:-}}" \
+      TMPDIR="${TMPDIR:-/tmp}" \
+      PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" \
+      OPENCLAW_HOME="${CANONICAL_OPENCLAW_HOME}" \
+      OPENCLAW_STATE_DIR="${CANONICAL_OPENCLAW_STATE_DIR}" \
+      OPENCLAW_CONFIG_PATH="${CANONICAL_OPENCLAW_CONFIG_PATH}" \
+      OPENCLAW_LOG_DIR="${CANONICAL_OPENCLAW_LOG_DIR}" \
+      OPENCLAW_GATEWAY_BIND="loopback" \
+      OPENCLAW_LAUNCHD_LABEL="${GATEWAY_LABEL}" \
+      OPENCLAW_MAIN_REPO="${MAIN_REPO}" \
+      "${NODE_BIN}" dist/index.js gateway install --force --allow-shared-service-takeover --runtime node --port "${PORT}"
   )
 }
 
