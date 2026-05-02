@@ -185,10 +185,10 @@ bash scripts/new-worktree.sh my-feature
 What it does:
 
 1. Fetches `origin`.
-2. Chooses the base branch contextually:
-   - `origin/codex/consumer-openclaw-project` when the current branch or upstream is the consumer branch
-   - otherwise `origin/main`
-   - `--base <branch>` still overrides the default explicitly
+2. Chooses `origin/main` by default.
+   - `--base <branch>` still overrides the default explicitly.
+   - Use `--base codex/consumer-openclaw-project` only for an explicit legacy
+     emergency backport.
 3. Creates `.worktrees/my-feature` on `codex/my-feature` from that base.
 4. Runs `bash scripts/bootstrap-worktree-telegram.sh`.
 5. Attempts a bounded `scripts/telegram-live-runtime.sh ensure` so worktree creation does not hang for minutes waiting on runtime health.

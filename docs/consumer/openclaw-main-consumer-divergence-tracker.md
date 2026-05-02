@@ -26,10 +26,10 @@ are not the default place to implement P0 launch work.
 | Transitional Consumer packaging from main | Completed        | Main can build `OpenClaw Consumer.app`, `.zip`, `.dmg`, and dSYM from `origin/main`. Codesign stale-signature failure was fixed. Packaging now copies DMG/ZIP/dSYM ZIP handoff artifacts to the main checkout by default.             | Keep using this artifact only until rename migration is implemented.                                      |
 | App rename to `OpenClaw.app`              | Pending          | Not done. Current safe artifact remains `OpenClaw Consumer.app`.                                                                                                                                                                      | Implement after smoke. Prefer visible-name rename first; avoid bundle-id migration unless required.       |
 | Bundle id / TCC migration                 | Pending          | Current Consumer bundle identity is preserved for continuity.                                                                                                                                                                         | Decide separately from visible rename. Changing bundle id can reset permissions and create support churn. |
-| `openclaw-consumer` branch retirement     | Mostly completed | Main has the code needed to stop using the consumer checkout for new implementation. Existing-user and isolated fresh-user main-built smokes passed.                                                                                  | Audit remaining docs/workflows and archive/mark legacy.                                                   |
+| `openclaw-consumer` branch retirement     | Mostly completed | Main has the code needed to stop using the consumer checkout for new implementation. Existing-user and isolated fresh-user main-built smokes passed. Older docs/workflows now label the old branch as historical or emergency-only.   | Keep fallback available until app rename/migration is complete.                                           |
 | Consumer packaging wrappers               | Pending          | Consumer-named wrappers still exist for compatibility/test-lane use.                                                                                                                                                                  | Slim/rename wrappers so primary shipping path is obvious.                                                 |
 | Overlay/defaults policy                   | Pending          | Core runtime/setup is shared; product defaults are still not cleanly formalized.                                                                                                                                                      | Add explicit overlay/default contract for skills, models, visibility, and onboarding presentation.        |
-| Branch/workflow docs                      | Mostly completed | Primary workflow docs now target `main` for new consumer/product work and treat `openclaw-consumer` as legacy/emergency fallback.                                                                                                     | Audit older docs for stale branch-era instructions.                                                       |
+| Branch/workflow docs                      | Completed        | Primary and older workflow docs now target `main` for consumer/product work and treat `openclaw-consumer` as historical or legacy/emergency fallback.                                                                                 | Keep future docs aligned with the main-first workflow.                                                    |
 
 ## Completed PRs To Build From
 
@@ -49,10 +49,9 @@ are not the default place to implement P0 launch work.
 
 ## Queue Now
 
-1. Audit older docs for stale `codex/consumer-openclaw-project` targeting and mark `openclaw-consumer` legacy/read-only where needed.
-2. Implement conservative `OpenClaw.app` rename/migration.
-3. Slim/rename consumer-specific packaging wrappers.
-4. Formalize overlay/defaults policy.
+1. Implement conservative `OpenClaw.app` rename/migration.
+2. Slim/rename consumer-specific packaging wrappers.
+3. Formalize overlay/defaults policy.
 
 ## Things We Should Stop Saying
 

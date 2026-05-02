@@ -5,16 +5,19 @@ This fork is not an upstream-tracking branch. Treat upstream as a source of cand
 ## Branch roles
 
 - `upstream/main`: external source of fixes and ideas. Never merge it into this fork.
-- `origin/main`: fork integration branch. Shared stability, security, runtime, and upstream ports land here first unless the change is clearly consumer-only.
-- `origin/codex/consumer-openclaw-project`: consumer product branch. It only takes changes that help the product lane.
+- `origin/main`: fork integration branch and consumer-product shipping branch.
+  Shared stability, security, runtime, packaging, and upstream ports land here.
+- `origin/codex/consumer-openclaw-project`: legacy/emergency fallback branch.
+  Do not target it unless the user explicitly asks for an emergency backport.
 - `consumer`: legacy branch name in old docs. Do not recreate it or target new work at it.
-- If a user says "consumer branch", default that to `codex/consumer-openclaw-project` unless they explicitly mean the legacy `consumer` branch.
+- If a user says "consumer branch", clarify whether they mean the legacy
+  fallback before doing work there.
 
 ## Rules
 
 - Never do blind upstream merges or rebases onto fork branches.
 - Intake one bounded upstream change at a time.
-- Default to `main` first, then forward into `codex/consumer-openclaw-project` if the change helps the product branch too.
+- Default to `main`.
 - Only port what materially improves one of these:
   - security or trust-boundary hardening
   - Telegram reliability or onboarding
@@ -49,16 +52,17 @@ This fork is not an upstream-tracking branch. Treat upstream as a source of cand
 5. Port each item in a scoped worktree branch from `origin/main`
 6. Run narrow tests for the touched path plus the relevant runtime smoke
 7. Land to `main`
-8. Forward to `codex/consumer-openclaw-project` only if the change is product-relevant and validated there
+8. Use `codex/consumer-openclaw-project` only for explicit emergency backports
 
-## Forwarding rules for consumer
+## Emergency consumer backport rules
 
-- Prefer forwarding from `main`, not directly from upstream
-- Direct upstream-to-consumer ports are allowed only when all three are true:
+- Prefer forwarding from `main`, not directly from upstream.
+- Backport to `codex/consumer-openclaw-project` only when all three are true:
   - the change is consumer-critical
-  - `main` does not need it yet
+  - a user explicitly needs the legacy fallback branch
   - the port is small enough to validate in one pass
-- If a port touches browser startup, Telegram delivery, session routing, or onboarding, validate on the consumer branch before calling it done
+- If a backport touches browser startup, Telegram delivery, session routing, or
+  onboarding, validate on the legacy branch before calling it done.
 
 ## Decision heuristics
 
@@ -69,7 +73,8 @@ This fork is not an upstream-tracking branch. Treat upstream as a source of cand
 
 ## Current drift this doc replaces
 
-- Older docs still mention a `consumer` branch that is no longer the active product branch
+- Older docs still mention a `consumer` branch or
+  `codex/consumer-openclaw-project` as product branches
 - Older docs still show `git merge upstream/main`
 
 Those instructions are stale. This document overrides them.

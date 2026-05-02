@@ -227,7 +227,7 @@ clawdock-start
 
 ## Repo home-clone helpers
 
-This repo also ships a separate shell helper for the two default branch homes:
+This repo also ships a separate shell helper for the main branch home:
 
 ```bash
 source /Users/user/Programming_Projects/openclaw/scripts/shell-helpers/home-clone-helpers.sh
@@ -237,10 +237,18 @@ Use:
 
 ```bash
 oc-main
-oc-consumer
 oc-main-task my-feature
-oc-consumer-task my-feature
 ```
+
+Legacy fallback helpers still exist:
+
+```bash
+oc-consumer
+oc-consumer-task emergency-backport
+```
+
+Use them only when the user explicitly declares work against the old
+`openclaw-consumer` / `codex/consumer-openclaw-project` fallback.
 
 Those wrappers require the home clone to be clean on its base branch, run
 `git pull --ff-only`, then enter it. The `*-task` wrappers immediately create

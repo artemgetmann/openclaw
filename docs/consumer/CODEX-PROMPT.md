@@ -6,11 +6,14 @@ Copy and paste this into Codex to start execution.
 
 ## Prompt
 
-We are building the OpenClaw consumer product on the `consumer` branch of this repo.
+We are building the OpenClaw consumer product from this repo's `main` branch.
 
 Read `CONSUMER.md` in the repo root first — it has full context on what we're building, the design philosophy, branch rules, and what's in/out of scope.
 
-Read `docs/consumer/openclaw-consumer-execution-spec.md` for the full execution plan.
+Read `docs/consumer/openclaw-main-consumer-consolidation-plan.md` and
+`docs/consumer/openclaw-main-consumer-divergence-tracker.md` for the current
+main-first plan. Read `docs/consumer/openclaw-consumer-execution-spec.md` only
+as historical product context.
 
 **Your job for this session is to continue the consumer browser decision work without reopening already-settled debates.**
 
@@ -49,7 +52,8 @@ Write your results to `docs/consumer/browser-spike-results.md` with:
 
 ### Rules
 
-- Work on the `consumer` branch only — never commit to `main`
+- Work from `origin/main` in a temp worktree; never code directly in the sacred
+  main checkout
 - Prefer the smallest repo surface that changes real behavior
 - Browser routing guidance belongs in the browser tool / prompt seam, not a giant new prompt block
 - Document every failure — failures are product evidence, not noise

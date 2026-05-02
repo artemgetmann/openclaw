@@ -54,9 +54,9 @@
   - `source /Users/user/Programming_Projects/openclaw/scripts/shell-helpers/home-clone-helpers.sh`
 - Then use:
   - `oc-main`
-  - `oc-consumer`
   - `oc-main-task <feature-name>`
-  - `oc-consumer-task <feature-name>`
+  - `oc-consumer` / `oc-consumer-task <feature-name>` only for explicit
+    legacy/emergency fallback work
 - Those wrappers:
   - enter the correct sacred home clone
   - require the clone to already be on its base branch
@@ -68,8 +68,8 @@
 
 ## Daily agent sequence
 
-1. Start the task with `oc-main-task <feature-name>` or `oc-consumer-task <feature-name>`.
-2. Use `oc-main-task` for new consumer-product work. Use `oc-consumer-task` only for explicit emergency fallback/backport work.
+1. Start normal work with `oc-main-task <feature-name>`.
+2. Use `oc-consumer-task` only for explicit emergency fallback/backport work.
 3. Let that wrapper fast-forward the correct sacred home clone, create the temp worktree, and drop you into it.
 4. Code inside that temp worktree only.
 5. Open or update a draft PR early.

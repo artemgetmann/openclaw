@@ -28,7 +28,8 @@
 - For consumer macOS packaging/relaunch iteration, prefer `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>` and the notes in `apps/macos/README.md` instead of rediscovering the warm-path flags by hand.
 - Use `docs/agent-guides/workflow.md` as the source of truth for the two-clone model, migration path, feature-branch rule, and draft-PR workflow. Do not rely on memory for branch/home-clone conventions.
 - Before opening or updating a PR:
-  - For fork PRs targeting `artemgetmann/openclaw` `main` or `codex/consumer-openclaw-project`, read `FORK_CONTRIBUTING.md`
+  - For fork PRs targeting `artemgetmann/openclaw` `main`, read `FORK_CONTRIBUTING.md`
+  - For explicit emergency backports targeting `codex/consumer-openclaw-project`, also read `FORK_CONTRIBUTING.md`
   - For upstream PRs or other targets, read `CONTRIBUTING.md`
 - Read `.github/pull_request_template.md` before opening or updating a PR.
 - Do not edit security-owned paths unless a listed owner asked for the change or is already reviewing it.

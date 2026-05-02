@@ -1,18 +1,20 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-22
+Last updated: 2026-05-02
 Owner: consumer execution team
-Status: Active
+Status: Historical tracker; use current consolidation docs for branch routing
 
 ## Source of truth
 
 Use these documents in this order when there is any ambiguity:
 
-1. `CONSUMER.md` (branch identity, north star, week-1 boundaries)
-2. `docs/consumer/openclaw-consumer-execution-spec.md` (week-1 execution spec)
-3. `docs/consumer/CODEX-PROMPT.md` (browser-spike task framing)
-4. `docs/consumer/openclaw-consumer-brutal-execution-board.md` (30-day cadence)
-5. `docs/consumer/openclaw-consumer-go-to-market-plan.md` (architecture and launch context)
+1. `CONSUMER.md` (current branch identity, north star, boundaries)
+2. `docs/consumer/openclaw-main-consumer-consolidation-plan.md` (main/consumer consolidation status)
+3. `docs/consumer/openclaw-main-consumer-divergence-tracker.md` (completed vs remaining consolidation slices)
+4. `docs/consumer/openclaw-consumer-execution-spec.md` (historical week-1 product intent)
+5. `docs/consumer/CODEX-PROMPT.md` (browser-spike task framing)
+6. `docs/consumer/openclaw-consumer-brutal-execution-board.md` (30-day cadence)
+7. `docs/consumer/openclaw-consumer-go-to-market-plan.md` (architecture and launch context)
 
 ## Locked decisions
 
@@ -52,7 +54,7 @@ Use these documents in this order when there is any ambiguity:
 
 This file is the only master tracker. Do not create per-worktree tracker copies.
 
-- All delegated branches should start from `origin/codex/consumer-openclaw-project`.
+- All delegated branches should start from `origin/main`.
 - Each delegated workstream owns one scoped branch and one PR.
 - Workstreams should not edit files owned by another active workstream.
 - Only merge-validated work should update this master tracker status.
@@ -70,8 +72,12 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
 
 1. Assign WS-ID -> owner -> branch before coding.
 2. If a needed file appears in another WS `No-touch files`, pause and coordinate before editing.
-3. Open a scoped PR into `origin/codex/consumer-openclaw-project`.
+3. Open a scoped PR into `origin/main`.
 4. Update this table after PR merge (status, PR link, notes).
+
+Legacy note: older rows below may mention consumer branch lanes from the March
+browser sprint. Treat those as historical breadcrumbs, not current routing
+instructions.
 
 ## Current baseline snapshot
 
@@ -324,7 +330,7 @@ Gate to exit Phase D:
 
 ## Runbook commands
 
-### Consumer runtime baseline
+### Isolated runtime baseline
 
 ```bash
 pnpm install && pnpm build
@@ -332,6 +338,10 @@ OPENCLAW_HOME=/tmp/openclaw-consumer \
 OPENCLAW_PROFILE=consumer-test \
 pnpm openclaw gateway run --port 19001 --bind loopback
 ```
+
+Use `/tmp/openclaw-consumer` only for isolated benchmark/debug state. Do not use
+it as the shipping runtime root or as evidence that the old consumer branch is
+active again.
 
 ### Health and probes
 

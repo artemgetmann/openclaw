@@ -56,9 +56,9 @@ when packaging is invoked from a temp worktree. Override with
 | Update-safe setup resume            | Completed                                    | Existing installs can skip setup only after browser, permissions, model, and Telegram health checks pass. Broken configs resume to relevant blockers. Existing-user smoke confirmed setup did not repeat. Isolated fresh-user smoke confirmed first-run onboarding appears from clean state. | Keep future setup fixes in `main`.                                                                                                                                       |
 | Packaging from main                 | Completed for transitional Consumer artifact | `main` can produce `OpenClaw Consumer.app`, `.zip`, `.dmg`, and dSYM from `origin/main`. Codesign retry blocker is fixed. Packaging now copies distributable handoff artifacts to the canonical main checkout handoff directory by default.                                                  | Product rename to `OpenClaw.app`, notarization/updater spine, and wrapper cleanup are separate follow-ups.                                                               |
 | App name / bundle identity          | Pending                                      | We deliberately preserved `OpenClaw Consumer.app` for the immediate safe build.                                                                                                                                                                                                              | Implement conservative `OpenClaw.app` migration after smoke passes. Prefer visible-name rename first; bundle-id migration needs a stronger reason and a migration plan.  |
-| `openclaw-consumer` retirement      | Mostly completed                             | `main` is now the target for new work. Consumer branch is no longer the default implementation surface. Existing-user and isolated fresh-user main-built app smokes passed.                                                                                                                  | Audit older docs/workflows, then mark `openclaw-consumer` read-only/legacy everywhere still relevant.                                                                    |
+| `openclaw-consumer` retirement      | Mostly completed                             | `main` is now the target for new work. Consumer branch is no longer the default implementation surface. Existing-user and isolated fresh-user main-built app smokes passed. Older docs/workflows now label the old branch as historical or emergency-only.                                   | Keep `openclaw-consumer` as an emergency fallback until app rename/migration is complete.                                                                                |
 | Overlay/defaults contract           | Pending                                      | Core setup/runtime pieces are shared.                                                                                                                                                                                                                                                        | Formalize product defaults for skill visibility, model shortlist, onboarding defaults, and first-run presentation as overlay/default config, not scattered conditionals. |
-| Docs / workflow cleanup             | Pending                                      | This plan and divergence tracker define the new direction.                                                                                                                                                                                                                                   | Update older docs that still say consumer work targets `codex/consumer-openclaw-project`.                                                                                |
+| Docs / workflow cleanup             | Completed                                    | Primary and older workflow docs now point normal consumer work at `main` and label `codex/consumer-openclaw-project` as historical or emergency-only.                                                                                                                                        | Keep future docs aligned with the main-first workflow.                                                                                                                   |
 
 ## Retirement Gate
 
@@ -67,24 +67,12 @@ Do not fully retire `openclaw-consumer` until all of these are true:
 - [x] Main-built app smoke passes for an existing user setup.
 - [x] Main-built app smoke passes for an isolated fresh setup path.
 - [x] Main packaging is repeatable from `origin/main`.
-- [x] New consumer/product work is documented to target `main` in the primary workflow docs.
+- [x] New consumer/product work is documented to target `main` in primary and older workflow docs.
 - Any old installed `OpenClaw.app` conflict is understood before the product rename.
 
 ## Next Implementation Slices
 
-### 1. Docs / workflow source-of-truth cleanup
-
-Update `CONSUMER.md`, workflow docs, and older consumer execution docs so agents
-stop targeting `openclaw-consumer` or `codex/consumer-openclaw-project` for new
-P0 work.
-
-Why this matters:
-
-- Stale docs create duplicated implementation lanes.
-- Agents will keep redoing branch-era work if the docs still say the old branch
-  is the product branch.
-
-### 2. Conservative `OpenClaw.app` product rename
+### 1. Conservative `OpenClaw.app` product rename
 
 Implement the rename as a controlled migration.
 
@@ -97,12 +85,12 @@ Preferred first step:
 Do not change visible name and bundle id together unless there is a concrete
 release/updater requirement. That would create avoidable support risk.
 
-### 3. Packaging wrapper cleanup
+### 2. Packaging wrapper cleanup
 
 Slim or rename the consumer-specific scripts so they are clearly compatibility
 or test-lane wrappers, not the primary shipping path.
 
-### 4. Overlay/defaults contract
+### 3. Overlay/defaults contract
 
 Move product defaults into explicit overlay/default configuration:
 
@@ -112,6 +100,21 @@ Move product defaults into explicit overlay/default configuration:
 - Telegram/browser first-run presentation
 
 ## Completed Implementation Slices
+
+### Docs / workflow source-of-truth cleanup
+
+Update `CONSUMER.md`, workflow docs, and older consumer execution docs so agents
+stop targeting `openclaw-consumer` or `codex/consumer-openclaw-project` for new
+P0 work.
+
+Status: completed. Stale branch-era execution docs are preserved as historical
+context and now point normal work at `main`.
+
+Why this matters:
+
+- Stale docs create duplicated implementation lanes.
+- Agents will keep redoing branch-era work if the docs still say the old branch
+  is the product branch.
 
 ### Main-built app smoke
 
