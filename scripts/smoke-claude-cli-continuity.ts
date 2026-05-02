@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import crypto, { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { runCliAgent } from "../src/agents/cli-runner.js";
@@ -57,8 +58,11 @@ function mode():
   | "continuity"
   | "memory"
   | "memory-get"
+  | "memory-chain"
   | "browser"
   | "browser-tabs"
+  | "browser-open-snapshot"
+  | "codex-context"
   | "latency"
   | "inspect" {
   const raw = readFlag("--mode") ?? "continuity";
@@ -66,8 +70,11 @@ function mode():
     raw === "continuity" ||
     raw === "memory" ||
     raw === "memory-get" ||
+    raw === "memory-chain" ||
     raw === "browser" ||
     raw === "browser-tabs" ||
+    raw === "browser-open-snapshot" ||
+    raw === "codex-context" ||
     raw === "latency" ||
     raw === "inspect"
   ) {
@@ -142,6 +149,7 @@ async function runAgentTurn(params: {
   sessionFile: string;
   workspaceDir: string;
   config: OpenClawConfig;
+  provider?: string;
   model: string;
   timeoutMs: number;
   runId: string;
@@ -157,7 +165,7 @@ async function runAgentTurn(params: {
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.config,
-    provider: "claude-cli",
+    provider: params.provider ?? "claude-cli",
     model: params.model,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
@@ -178,6 +186,43 @@ async function runAgentTurn(params: {
     firstVisibleTextMs,
     totalMs: Number(process.hrtime.bigint() - startedAt) / 1e6,
   };
+}
+
+async function withTempHttpPage<T>(
+  html: string,
+  callback: (url: string) => Promise<T>,
+): Promise<T> {
+  const server = http.createServer((req, res) => {
+    if (req.url !== "/" && req.url !== "/smoke.html") {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("not found");
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    res.end(html);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("Temp HTTP smoke server did not bind to a TCP port.");
+  }
+  try {
+    return await callback(`http://127.0.0.1:${address.port}/smoke.html`);
+  } finally {
+    server.closeIdleConnections?.();
+    server.closeAllConnections?.();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 }
 
 async function runContinuitySmoke(): Promise<void> {
@@ -413,6 +458,68 @@ async function runMemoryGetSmoke(): Promise<void> {
   );
 }
 
+async function runMemoryChainSmoke(): Promise<void> {
+  const ctx = await createSmokeContext();
+  const memoryNeedle = `MEMORY_CHAIN_NEEDLE_${ctx.nonce}`;
+  await fs.writeFile(
+    path.join(ctx.workspaceDir, "MEMORY.md"),
+    [
+      "# Claude CLI Memory Chain Smoke",
+      "",
+      "This file is created by the live smoke harness.",
+      `Needle: ${memoryNeedle}`,
+      "Path hint: MEMORY.md",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+  const turn = await runAgentTurn({
+    ...ctx,
+    model: ctx.model,
+    runId: "smoke-claude-cli-memory-chain",
+    prompt: [
+      "You must use the directly available mcp__openclaw__memory_search tool first.",
+      `Search for the exact query: ${memoryNeedle}. Set maxResults to 1.`,
+      "Then use the directly available mcp__openclaw__memory_get tool exactly once for the path from the search result.",
+      'If the search result is empty or has no usable path, use path="MEMORY.md", from=1, and lines=6, and say MEMORY_CHAIN_DIRECT_PATH_USED.',
+      "Do not use ToolSearch, shell, filesystem, browser, or web tools.",
+      `Then reply with one short sentence containing MEMORY_CHAIN_MCP_OK, the exact nonce ${ctx.nonce}, and the exact needle ${memoryNeedle}.`,
+    ].join("\n"),
+  });
+  const text = textFromResult(turn.result);
+  if (
+    !text.includes("MEMORY_CHAIN_MCP_OK") ||
+    !text.includes(ctx.nonce) ||
+    !text.includes(memoryNeedle)
+  ) {
+    throw new Error(`Memory chain smoke did not report expected needle. Text: ${text}`);
+  }
+  if (containsToolSubstitution(text)) {
+    throw new Error(`Memory chain smoke substituted another tool. Text: ${text}`);
+  }
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        mode: "memory-chain",
+        provider: "claude-cli",
+        model: ctx.model,
+        workspaceDir: ctx.workspaceDir,
+        nonce: ctx.nonce,
+        memoryNeedle,
+        directPathFallbackUsed: text.includes("MEMORY_CHAIN_DIRECT_PATH_USED"),
+        claudeSessionId: sessionIdFromResult(turn.result),
+        assistantStartMs: turn.assistantStartMs,
+        firstVisibleTextMs: turn.firstVisibleTextMs,
+        totalMs: turn.totalMs,
+        text,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 async function runBrowserSmoke(): Promise<void> {
   const listed = await mcpRpc("tools/list");
   const result = listed.body.result as { tools?: Array<{ name: string }> } | undefined;
@@ -517,6 +624,94 @@ async function runBrowserTabsSmoke(): Promise<void> {
   );
 }
 
+async function runBrowserOpenSnapshotSmoke(): Promise<void> {
+  const listed = await mcpRpc("tools/list");
+  const result = listed.body.result as { tools?: Array<{ name: string }> } | undefined;
+  const names = (result?.tools ?? []).map((tool) => tool.name);
+  if (!names.includes("browser")) {
+    console.log(
+      JSON.stringify(
+        { ok: false, mode: "browser-open-snapshot", blocker: "browser tool not listed" },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  const ctx = await createSmokeContext();
+  const pageMarker = `BROWSER_OPEN_SNAPSHOT_MARKER_${ctx.nonce}`;
+  await withTempHttpPage(
+    [
+      "<!doctype html>",
+      '<html lang="en">',
+      "<head>",
+      '<meta charset="utf-8">',
+      "<title>OpenClaw Claude CLI Browser Smoke</title>",
+      "</head>",
+      "<body>",
+      "<main>",
+      "<h1>OpenClaw Claude CLI browser smoke</h1>",
+      `<button type="button">${pageMarker}</button>`,
+      "</main>",
+      "</body>",
+      "</html>",
+    ].join("\n"),
+    async (targetUrl) => {
+      const turn = await runAgentTurn({
+        ...ctx,
+        model: ctx.model,
+        runId: "smoke-claude-cli-browser-open-snapshot",
+        prompt: [
+          "You must use the directly available mcp__openclaw__browser tool exactly twice.",
+          `First call it with action="open", profile="openclaw", targetUrl="${targetUrl}", and timeoutMs=15000.`,
+          'Then call it with action="snapshot", profile="openclaw", snapshotFormat="ai", maxChars=2000, and timeoutMs=15000.',
+          "Do not use ToolSearch, web tools, shell, or filesystem tools.",
+          "Only include BROWSER_OPEN_SNAPSHOT_MCP_OK if both browser calls succeeded and the snapshot output included the page marker.",
+          "If either browser call times out or errors, reply with BROWSER_OPEN_SNAPSHOT_MCP_FAIL and the error summary instead.",
+          `On success, reply with one short sentence containing BROWSER_OPEN_SNAPSHOT_MCP_OK, the exact nonce ${ctx.nonce}, and the exact page marker ${pageMarker}.`,
+        ].join("\n"),
+      });
+      const text = textFromResult(turn.result);
+      if (/BROWSER_OPEN_SNAPSHOT_MCP_FAIL|timed?\s*out|timeout|error|failed/i.test(text)) {
+        throw new Error(`Browser open+snapshot smoke reported tool failure. Text: ${text}`);
+      }
+      if (
+        !text.includes("BROWSER_OPEN_SNAPSHOT_MCP_OK") ||
+        !text.includes(ctx.nonce) ||
+        !text.includes(pageMarker)
+      ) {
+        throw new Error(
+          `Browser open+snapshot smoke did not report expected marker. Text: ${text}`,
+        );
+      }
+      if (containsToolSubstitution(text)) {
+        throw new Error(`Browser open+snapshot smoke substituted another tool. Text: ${text}`);
+      }
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            mode: "browser-open-snapshot",
+            provider: "claude-cli",
+            model: ctx.model,
+            workspaceDir: ctx.workspaceDir,
+            nonce: ctx.nonce,
+            targetUrl,
+            pageMarker,
+            claudeSessionId: sessionIdFromResult(turn.result),
+            assistantStartMs: turn.assistantStartMs,
+            firstVisibleTextMs: turn.firstVisibleTextMs,
+            totalMs: turn.totalMs,
+            text,
+          },
+          null,
+          2,
+        ),
+      );
+    },
+  );
+}
+
 async function runWarmLatencySmoke(): Promise<void> {
   const ctx = await createSmokeContext();
   const turn1 = await runAgentTurn({
@@ -593,6 +788,85 @@ async function runWarmLatencySmoke(): Promise<void> {
   );
 }
 
+async function runCodexContextSwitchSmoke(): Promise<void> {
+  const ctx = await createSmokeContext();
+  const codexModel = readFlag("--codex-model") ?? "gpt-5.1-codex-mini";
+  const contextNeedle = `CODEX_CONTEXT_NEEDLE_${ctx.nonce}`;
+  const codexTurn = await runAgentTurn({
+    ...ctx,
+    provider: "codex-cli",
+    model: codexModel,
+    runId: "smoke-codex-context-turn-1",
+    prompt: [
+      "Do not call tools.",
+      `Reply with one short sentence containing CODEX_CONTEXT_SET and the exact needle ${contextNeedle}.`,
+    ].join("\n"),
+  });
+  const codexText = textFromResult(codexTurn.result);
+  const codexSessionId = sessionIdFromResult(codexTurn.result);
+  if (!codexText.includes("CODEX_CONTEXT_SET") || !codexText.includes(contextNeedle)) {
+    throw new Error(`Codex context setup did not report expected needle. Text: ${codexText}`);
+  }
+
+  const claudeTurn = await runAgentTurn({
+    ...ctx,
+    model: ctx.model,
+    runId: "smoke-codex-context-turn-2",
+    prompt: [
+      "Do not call any tools.",
+      "What exact needle did the previous backend turn set in this same OpenClaw session?",
+      `Reply with one short sentence containing CODEX_CONTEXT_SWITCH_OK and the exact needle ${contextNeedle}.`,
+    ].join("\n"),
+  });
+  const claudeText = textFromResult(claudeTurn.result);
+  if (!claudeText.includes("CODEX_CONTEXT_SWITCH_OK") || !claudeText.includes(contextNeedle)) {
+    throw new Error(
+      [
+        "Claude did not see prior Codex context.",
+        `Codex text: ${codexText}`,
+        `Claude text: ${claudeText}`,
+        `Session file: ${ctx.sessionFile}`,
+      ].join("\n"),
+    );
+  }
+  if (containsToolSubstitution(claudeText)) {
+    throw new Error(`Codex context switch smoke substituted another tool. Text: ${claudeText}`);
+  }
+
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        mode: "codex-context",
+        firstProvider: "codex-cli",
+        firstModel: codexModel,
+        secondProvider: "claude-cli",
+        secondModel: ctx.model,
+        workspaceDir: ctx.workspaceDir,
+        sessionFile: ctx.sessionFile,
+        nonce: ctx.nonce,
+        contextNeedle,
+        codexSessionId,
+        claudeSessionId: sessionIdFromResult(claudeTurn.result),
+        codex: {
+          assistantStartMs: codexTurn.assistantStartMs,
+          firstVisibleTextMs: codexTurn.firstVisibleTextMs,
+          totalMs: codexTurn.totalMs,
+          text: codexText,
+        },
+        claude: {
+          assistantStartMs: claudeTurn.assistantStartMs,
+          firstVisibleTextMs: claudeTurn.firstVisibleTextMs,
+          totalMs: claudeTurn.totalMs,
+          text: claudeText,
+        },
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 async function main(): Promise<void> {
   requireLiveOptIn();
   const selectedMode = mode();
@@ -608,12 +882,24 @@ async function main(): Promise<void> {
     await runMemoryGetSmoke();
     return;
   }
+  if (selectedMode === "memory-chain") {
+    await runMemoryChainSmoke();
+    return;
+  }
   if (selectedMode === "browser") {
     await runBrowserSmoke();
     return;
   }
   if (selectedMode === "browser-tabs") {
     await runBrowserTabsSmoke();
+    return;
+  }
+  if (selectedMode === "browser-open-snapshot") {
+    await runBrowserOpenSnapshotSmoke();
+    return;
+  }
+  if (selectedMode === "codex-context") {
+    await runCodexContextSwitchSmoke();
     return;
   }
   if (selectedMode === "latency") {

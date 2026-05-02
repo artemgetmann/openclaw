@@ -181,7 +181,7 @@ Decision:
 
 ### Slice 1b: Cross-backend session continuity
 
-Prove that switching providers does not erase the useful conversation state.
+Status: failed for `codex-cli/gpt-5.5 -> claude-cli/haiku`.
 
 Example path:
 
@@ -197,6 +197,31 @@ Pass condition:
 - provider-specific prompt rewriting does not remove essential user/session information
 
 This is the real `/codex`-style expectation: different model, same assistant context and comparable capabilities.
+
+Proof attempt:
+
+- First attempt with `codex-cli/gpt-5.1-codex-mini` failed before the Claude turn because local Codex CLI rejected that model for the current ChatGPT account.
+- Retry with `codex-cli/gpt-5.5` successfully completed the Codex setup turn.
+- The follow-up `claude-cli/haiku` turn did not see the prior Codex text from the same harness session.
+
+Command:
+
+- `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode codex-context --model haiku --codex-model gpt-5.5 --timeout-ms 240000`
+
+Result:
+
+- fail: Claude replied that it did not have access to previous backend turns in the OpenClaw session.
+
+Interpretation:
+
+- current warm Claude CLI continuity is Claude-native session continuity, not shared OpenClaw transcript replay
+- `runCliAgent` persists CLI turns into the shared session file, but the Claude CLI path does not currently rebuild/inject prior non-Claude turns into the prompt
+- do not claim `/codex -> Claude` continuity until this is fixed
+
+Next implementation slice:
+
+- add shared transcript replay/bootstrap for `claude-cli` first-turn prompts, bounded and provider-safe
+- then rerun `codex-context` and require Claude to recall a prior Codex nonce without tools
 
 ### Slice 2: Claude CLI browser tool
 
@@ -224,7 +249,7 @@ Measured result:
 Blockers:
 
 - none for `browser.status` or `browser.tabs`.
-- `open` + `snapshot` still needs a separate smoke before claiming full browser automation quality.
+- `browser.open` reaches the tool and succeeds, but `browser.snapshot` currently times out during browser connection.
 
 ### Slice 2b: Memory/tool surface parity
 
@@ -273,9 +298,15 @@ Measured result:
 - total: 16929.0ms
 - Claude session id: `0be1e868-1132-42ab-a2db-a58df607bbcd`
 
+Additional proof:
+
+- Live chain smoke made Claude call `mcp__openclaw__memory_search`, then `mcp__openclaw__memory_get` in one turn.
+- The search reached loopback with `isError=false`, but did not return the newly created temp-workspace memory entry.
+- Claude then used the explicit fallback path `MEMORY.md`; `memory_get` reached loopback with `isError=false` and returned the expected needle.
+
 Remaining check:
 
-- chain `memory_search -> memory_get` in one live model turn once a stable indexed memory result exists
+- make the memory index include the known temp entry quickly enough that `memory_search` returns the path without direct fallback
 
 ### Slice 3: Warm Claude CLI spike
 
@@ -352,7 +383,9 @@ Pass condition:
 Current pass/fail:
 
 - session continuity: pass
-- loopback MCP memory/browser tools: pass for `memory_search`, `memory_get`, `browser.status`, and `browser.tabs`
+- loopback MCP memory/browser tools: pass for `memory_search`, `memory_get`, `memory_search -> memory_get` with direct path fallback, `browser.status`, and `browser.tabs`
+- browser open+snapshot: fail at `snapshot` timeout after successful `open`
+- cross-backend `/codex -> Claude` context: fail; Claude CLI does not replay prior Codex turn yet
 - same live process reuse on same-model follow-up: pass
 - warm latency: pass for the current `haiku` smoke; follow-up was materially faster after PID reuse
 
@@ -409,6 +442,12 @@ Tests run in this slice:
   - pass: Claude called `mcp__openclaw__memory_get` and returned the nonce plus a unique needle from temp-workspace `MEMORY.md`
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode browser-tabs --model haiku --timeout-ms 240000`
   - pass: Claude called `mcp__openclaw__browser` with `action="tabs"` and returned the nonce
+- `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode memory-chain --model haiku --timeout-ms 240000`
+  - pass with caveat: Claude called `memory_search`, then `memory_get`; search did not return the new temp entry, so Claude used the explicit `MEMORY.md` fallback path
+- `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode browser-open-snapshot --model haiku --timeout-ms 240000`
+  - fail: Claude called `browser.open` successfully, then `browser.snapshot` returned `isError=true` after a 15s browser connection timeout
+- `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode codex-context --model haiku --codex-model gpt-5.5 --timeout-ms 240000`
+  - fail: Codex setup turn completed, but Claude did not see the prior Codex turn in the same OpenClaw session
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode latency --model haiku --timeout-ms 180000`
   - partial: same Claude session id, different live process PID
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode latency --model haiku --timeout-ms 240000`
@@ -423,6 +462,6 @@ Tests run in this slice:
 
 Next:
 
-1. cross-backend context switch probe
-2. `browser.open` + `snapshot` smoke with an isolated/safe target
-3. chain `memory_search -> memory_get` once a stable indexed memory result exists
+1. implement bounded shared transcript replay/bootstrap for first-turn `claude-cli` prompts
+2. debug browser snapshot connection timeout after successful `browser.open`
+3. make temp memory sync/indexing deterministic enough for `memory_search -> memory_get` without direct path fallback
