@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,9 @@ import {
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
+  mcpConfigHash?: string;
+  mcpResumeHash?: string;
+  env?: Record<string, string>;
 };
 
 function supportsBundleMcpOverlay(backendId: string): boolean {
@@ -25,7 +29,14 @@ function supportsBundleMcpOverlay(backendId: string): boolean {
 }
 
 function supportsNativeOpenClawMcpServer(backendId: string): boolean {
-  return backendId === "claude-bridge";
+  return backendId === "claude-cli" || backendId === "claude-bridge";
+}
+
+function resolveNativeOpenClawMcpServerKey(backendId: string): string {
+  if (backendId === "claude-cli") {
+    return "openclaw";
+  }
+  return OPENCLAW_NATIVE_MCP_SERVER_KEY;
 }
 
 function extractServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
@@ -97,6 +108,48 @@ function injectMcpConfigArgs(args: string[] | undefined, mcpConfigPath: string):
   return next;
 }
 
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sortJsonValue(entry));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.keys(value)
+      .toSorted()
+      .map((key) => [key, sortJsonValue(value[key])]),
+  );
+}
+
+function normalizeOpenClawLoopbackUrl(value: string): string {
+  const match =
+    /^(http:\/\/(?:127\.0\.0\.1|localhost|\[::1\])):\d+(\/mcp)$/.exec(value.trim()) ?? undefined;
+  if (!match) {
+    return value;
+  }
+  return `${match[1]}:<openclaw-loopback>${match[2]}`;
+}
+
+function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
+  return {
+    mcpServers: Object.fromEntries(
+      Object.entries(config.mcpServers).map(([name, server]) => {
+        if (name !== "openclaw" || typeof server.url !== "string") {
+          return [name, sortJsonValue(server)];
+        }
+        return [
+          name,
+          sortJsonValue({
+            ...server,
+            url: normalizeOpenClawLoopbackUrl(server.url),
+          }),
+        ];
+      }),
+    ) as BundleMcpConfig["mcpServers"],
+  };
+}
+
 export async function prepareCliBundleMcpConfig(params: {
   backendId: string;
   backend: CliBackendConfig;
@@ -104,10 +157,12 @@ export async function prepareCliBundleMcpConfig(params: {
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
+  additionalConfig?: BundleMcpConfig;
+  env?: Record<string, string>;
   warn?: (message: string) => void;
 }): Promise<PreparedCliBundleMcpConfig> {
   if (!supportsBundleMcpOverlay(params.backendId)) {
-    return { backend: params.backend };
+    return { backend: params.backend, env: params.env };
   }
 
   const existingMcpConfigPath =
@@ -132,17 +187,24 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+  if (params.additionalConfig) {
+    mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
+  }
 
-  const needsNativeServer = supportsNativeOpenClawMcpServer(params.backendId);
+  const usesLoopbackOpenClawServer =
+    params.backendId === "claude-cli" && Boolean(params.additionalConfig?.mcpServers?.openclaw);
+  const needsNativeServer =
+    supportsNativeOpenClawMcpServer(params.backendId) && !usesLoopbackOpenClawServer;
   if (!needsNativeServer && Object.keys(mergedConfig.mcpServers).length === 0) {
-    return { backend: params.backend };
+    return { backend: params.backend, env: params.env };
   }
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
   if (needsNativeServer) {
+    const serverKey = resolveNativeOpenClawMcpServerKey(params.backendId);
     mergedConfig = applyMergePatch(mergedConfig, {
       mcpServers: {
-        [OPENCLAW_NATIVE_MCP_SERVER_KEY]: await createNativeOpenClawMcpServerConfig({
+        [serverKey]: await createNativeOpenClawMcpServerConfig({
           tempDir,
           workspaceDir: params.workspaceDir,
           config: params.config,
@@ -153,7 +215,15 @@ export async function prepareCliBundleMcpConfig(params: {
     }) as BundleMcpConfig;
   }
   const mcpConfigPath = path.join(tempDir, "mcp.json");
-  await fs.writeFile(mcpConfigPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, "utf-8");
+  const serializedConfig = `${JSON.stringify(mergedConfig, null, 2)}\n`;
+  const mcpConfigHash = crypto.createHash("sha256").update(serializedConfig).digest("hex");
+  const serializedResumeConfig = `${JSON.stringify(
+    canonicalizeBundleMcpConfigForResume(mergedConfig),
+    null,
+    2,
+  )}\n`;
+  const mcpResumeHash = crypto.createHash("sha256").update(serializedResumeConfig).digest("hex");
+  await fs.writeFile(mcpConfigPath, serializedConfig, "utf-8");
 
   return {
     backend: {
@@ -164,6 +234,9 @@ export async function prepareCliBundleMcpConfig(params: {
         mcpConfigPath,
       ),
     },
+    mcpConfigHash,
+    mcpResumeHash,
+    env: params.env,
     cleanup: async () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     },

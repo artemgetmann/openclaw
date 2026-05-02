@@ -30,6 +30,24 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
 }));
 
+vi.mock("../gateway/mcp-http.js", () => ({
+  ensureMcpLoopbackServer: vi.fn(async () => ({ port: 9123, close: vi.fn() })),
+  getActiveMcpLoopbackRuntime: vi.fn(() => ({
+    port: 9123,
+    ownerToken: "owner-token",
+    nonOwnerToken: "non-owner-token",
+  })),
+  createMcpLoopbackServerConfig: (port: number) => ({
+    mcpServers: {
+      openclaw: {
+        type: "http",
+        url: `http://127.0.0.1:${port}/mcp`,
+        headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+      },
+    },
+  }),
+}));
+
 vi.mock("./claude-bridge.js", () => ({
   runClaudeBridgeAgent: (...args: unknown[]) => bridgeRunMock(...args),
 }));
@@ -170,6 +188,107 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
+  });
+
+  it("streams claude-cli stream-json text deltas through partial reply callbacks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-cli-bridge-prompt-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.md"),
+      "# AGENTS.md - Test Workspace\n\nThis full OpenClaw prompt content must not be inlined.\n",
+      "utf-8",
+    );
+    const stdout = [
+      JSON.stringify({ type: "init", session_id: "claude-session-1" }),
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: "Hello" },
+        },
+      }),
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: " there" },
+        },
+      }),
+      JSON.stringify({
+        type: "result",
+        session_id: "claude-session-1",
+        result: "Hello there",
+        usage: { input_tokens: 7, output_tokens: 2, cache_creation_input_tokens: 3 },
+      }),
+    ].join("\n");
+    supervisorSpawnMock.mockImplementationOnce(
+      async (input: { onStdout?: (chunk: string) => void }) => ({
+        runId: "run-supervisor",
+        pid: 1234,
+        startedAtMs: Date.now(),
+        stdin: {
+          write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+            input.onStdout?.(`${stdout}\n`);
+            cb?.();
+          }),
+          end: vi.fn(),
+        },
+        wait: vi.fn().mockImplementation(async () => {
+          await new Promise(() => {});
+          return {
+            reason: "exit",
+            exitCode: 0,
+            exitSignal: null,
+            durationMs: 50,
+            stdout,
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          };
+        }),
+        cancel: vi.fn(),
+      }),
+    );
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+
+    try {
+      const result = await runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir,
+        prompt: "hi",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-stream",
+        onAssistantMessageStart,
+        onPartialReply,
+      });
+
+      expect(result.payloads?.[0]?.text).toBe("Hello there");
+      expect(result.meta.agentMeta?.sessionId).toBe("claude-session-1");
+      expect(result.meta.agentMeta?.usage?.cacheWrite).toBe(3);
+      expect(result.meta.systemPromptReport?.injectedWorkspaceFiles).toEqual([]);
+      expect(result.meta.systemPromptReport?.systemPrompt.projectContextChars).toBe(0);
+      expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+      expect(onPartialReply.mock.calls).toEqual([[{ text: "Hello" }], [{ text: "Hello there" }]]);
+      const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+      const argv = spawnInput.argv ?? [];
+      const systemPromptIndex = argv.indexOf("--append-system-prompt");
+      expect(systemPromptIndex).toBeGreaterThanOrEqual(0);
+      const systemPrompt = argv[systemPromptIndex + 1] ?? "";
+      expect(systemPrompt).toContain(
+        "Your home is the runtime workspace at ~/.openclaw/workspace.",
+      );
+      expect(systemPrompt).toContain("~/.openclaw/workspace/AGENTS.md first");
+      expect(systemPrompt).not.toContain("# Project Context");
+      expect(systemPrompt).not.toContain("This full OpenClaw prompt content must not be inlined.");
+      expect(JSON.stringify(argv)).not.toContain("Tools are disabled");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("forwards streaming callbacks to the claude bridge backend", async () => {

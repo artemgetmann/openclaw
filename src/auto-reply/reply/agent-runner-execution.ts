@@ -326,6 +326,9 @@ export async function runAgentTurnWithFallback(params: {
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                   }),
                   ownerNumbers: params.followupRun.run.ownerNumbers,
+                  messageChannel: params.followupRun.run.messageProvider,
+                  agentAccountId: params.followupRun.run.agentAccountId,
+                  senderIsOwner: params.followupRun.run.senderIsOwner,
                   cliSessionId,
                   bootstrapPromptWarningSignaturesSeen,
                   bootstrapPromptWarningSignature:

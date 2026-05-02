@@ -5,6 +5,11 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  createMcpLoopbackServerConfig,
+  ensureMcpLoopbackServer,
+  getActiveMcpLoopbackRuntime,
+} from "../gateway/mcp-http.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -24,9 +29,14 @@ import { runClaudeBridgeAgent } from "./claude-bridge.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import { prepareCliBundleMcpConfig } from "./cli-runner/bundle-mcp.js";
 import {
+  runClaudeLiveSessionTurn,
+  shouldUseClaudeLiveSession,
+} from "./cli-runner/claude-live-session.js";
+import {
   appendImagePathsToPrompt,
   buildCliSupervisorScopeKey,
   buildCliArgs,
+  createCliJsonlStreamingParser,
   buildSystemPrompt,
   enqueueCliRun,
   normalizeCliModel,
@@ -214,6 +224,7 @@ function buildClaudeBridgeBehaviorSections(mode: ClaudeBridgePromptMode): string
         "Do not claim to have read files, run commands, or verified behavior unless that happened in this session.",
         "Start with ~/.openclaw/workspace/AGENTS.md, then follow its workspace contract precisely.",
         "If more context is needed, read the smallest relevant workspace file instead of asking for a giant project dump.",
+        "OpenClaw tools may be deferred; use ToolSearch for mcp__openclaw__exec, mcp__openclaw__process, or mcp__openclaw__browser when a task needs runtime tools.",
         "Preserve bridge mechanics and isolate runtime-sensitive testing.",
       ].join("\n"),
       [
@@ -699,6 +710,9 @@ export async function runCliAgent(params: {
   streamParams?: import("../commands/agent/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
+  messageChannel?: string;
+  agentAccountId?: string;
+  senderIsOwner?: boolean;
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
@@ -729,6 +743,16 @@ export async function runCliAgent(params: {
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  let mcpLoopbackRuntime =
+    backendResolved.id === "claude-cli" ? getActiveMcpLoopbackRuntime() : undefined;
+  if (backendResolved.id === "claude-cli" && !mcpLoopbackRuntime) {
+    try {
+      await ensureMcpLoopbackServer();
+    } catch (error) {
+      log.warn(`mcp loopback server failed to start: ${String(error)}`);
+    }
+    mcpLoopbackRuntime = getActiveMcpLoopbackRuntime();
+  }
   const preparedBackend = await prepareCliBundleMcpConfig({
     backendId: backendResolved.id,
     backend: backendResolved.config,
@@ -736,6 +760,21 @@ export async function runCliAgent(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     config: params.config,
+    additionalConfig: mcpLoopbackRuntime
+      ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+      : undefined,
+    env: mcpLoopbackRuntime
+      ? {
+          OPENCLAW_MCP_TOKEN:
+            params.senderIsOwner === true
+              ? mcpLoopbackRuntime.ownerToken
+              : mcpLoopbackRuntime.nonOwnerToken,
+          OPENCLAW_MCP_AGENT_ID: params.agentId ?? "",
+          OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
+          OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
+          OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? "",
+        }
+      : undefined,
     warn: (message) => log.warn(message),
   });
   const backend = preparedBackend.backend;
@@ -743,11 +782,11 @@ export async function runCliAgent(params: {
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
 
-  // Preserve the legacy tool-disable line for non-bridge CLIs only.
-  // The Claude bridge has real tool wiring elsewhere, so injecting that line
-  // into either prompt path makes the bridge lie about available capabilities.
+  // Preserve the legacy tool-disable line only for CLIs that still lack native
+  // tool wiring. Claude bridge and Claude CLI both receive OpenClaw MCP tools,
+  // so telling either backend tools are disabled makes the prompt lie.
   const extraSystemPrompt =
-    backendResolved.id === "claude-bridge"
+    backendResolved.id === "claude-bridge" || backendResolved.id === "claude-cli"
       ? (params.extraSystemPrompt?.trim() ?? "")
       : [params.extraSystemPrompt?.trim(), "Tools are disabled in this session. Do not call tools."]
           .filter(Boolean)
@@ -812,14 +851,17 @@ export async function runCliAgent(params: {
     return result;
   }
 
+  const useBridgeSafeClaudeCliPrompt = backendResolved.id === "claude-cli";
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
-    workspaceDir,
-    config: params.config,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-  });
+  const { bootstrapFiles, contextFiles } = useBridgeSafeClaudeCliPrompt
+    ? { bootstrapFiles: [], contextFiles: [] }
+    : await resolveBootstrapContextForRun({
+        workspaceDir,
+        config: params.config,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+      });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
   const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -846,26 +888,34 @@ export async function runCliAgent(params: {
     sessionAgentId === defaultAgentId
       ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
       : undefined;
-  const docsPath = await resolveOpenClawDocsPath({
-    workspaceDir,
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-    moduleUrl: import.meta.url,
-  });
-  const systemPrompt = buildSystemPrompt({
-    workspaceDir,
-    config: params.config,
-    defaultThinkLevel: params.thinkLevel,
-    extraSystemPrompt,
-    ownerNumbers: params.ownerNumbers,
-    heartbeatPrompt,
-    docsPath: docsPath ?? undefined,
-    tools: [],
-    contextFiles,
-    bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
-    modelDisplay,
-    agentId: sessionAgentId,
-  });
+  const docsPath = useBridgeSafeClaudeCliPrompt
+    ? undefined
+    : await resolveOpenClawDocsPath({
+        workspaceDir,
+        argv1: process.argv[1],
+        cwd: process.cwd(),
+        moduleUrl: import.meta.url,
+      });
+  const systemPrompt = useBridgeSafeClaudeCliPrompt
+    ? buildClaudeBridgePrompt({
+        mode: resolveClaudeBridgePromptMode(),
+        splitMode: resolveClaudeBridgeSplitMode(),
+        extraSystemPrompt: params.extraSystemPrompt,
+      })
+    : buildSystemPrompt({
+        workspaceDir,
+        config: params.config,
+        defaultThinkLevel: params.thinkLevel,
+        extraSystemPrompt,
+        ownerNumbers: params.ownerNumbers,
+        heartbeatPrompt,
+        docsPath: docsPath ?? undefined,
+        tools: [],
+        contextFiles,
+        bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
+        modelDisplay,
+        agentId: sessionAgentId,
+      });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),
@@ -998,6 +1048,9 @@ export async function runCliAgent(params: {
           for (const key of backend.clearEnv ?? []) {
             delete next[key];
           }
+          if (preparedBackend.env && Object.keys(preparedBackend.env).length > 0) {
+            Object.assign(next, preparedBackend.env);
+          }
           return next;
         })();
         const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
@@ -1005,12 +1058,95 @@ export async function runCliAgent(params: {
           timeoutMs: params.timeoutMs,
           useResume,
         });
+        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+        let streamingCallbackChain = Promise.resolve();
+        let streamedAssistantStarted = false;
+        const enqueueStreamingCallback = (task: () => Promise<void> | void) => {
+          streamingCallbackChain = streamingCallbackChain.then(async () => {
+            await task();
+          });
+          void streamingCallbackChain.catch((error) => {
+            log.warn(`cli stream callback failed: ${String(error)}`);
+          });
+        };
+        const streamingParser =
+          outputMode === "jsonl"
+            ? createCliJsonlStreamingParser({
+                backend,
+                providerId: backendResolved.id,
+                onAssistantDelta: ({ text }) => {
+                  enqueueStreamingCallback(async () => {
+                    if (!streamedAssistantStarted) {
+                      streamedAssistantStarted = true;
+                      await params.onAssistantMessageStart?.();
+                    }
+                    await params.onPartialReply?.({ text });
+                  });
+                },
+              })
+            : null;
         const supervisor = getProcessSupervisor();
         const scopeKey = buildCliSupervisorScopeKey({
           backend,
           backendId: backendResolved.id,
           cliSessionId: useResume ? resolvedSessionId : undefined,
         });
+
+        if (
+          shouldUseClaudeLiveSession({
+            backendId: backendResolved.id,
+            backend,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            agentId: params.agentId,
+            workspaceDir,
+            provider: params.provider,
+            modelId,
+            normalizedModel,
+            timeoutMs: params.timeoutMs,
+            systemPrompt,
+            mcpConfigHash: preparedBackend.mcpConfigHash,
+            mcpResumeHash: preparedBackend.mcpResumeHash,
+          })
+        ) {
+          const liveResult = await runClaudeLiveSessionTurn({
+            context: {
+              backendId: backendResolved.id,
+              backend,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              agentId: params.agentId,
+              workspaceDir,
+              provider: params.provider,
+              modelId,
+              normalizedModel,
+              timeoutMs: params.timeoutMs,
+              systemPrompt,
+              mcpConfigHash: preparedBackend.mcpConfigHash,
+              mcpResumeHash: preparedBackend.mcpResumeHash,
+            },
+            args,
+            env: env as Record<string, string>,
+            prompt,
+            useResume,
+            noOutputTimeoutMs,
+            getProcessSupervisor,
+            onAssistantDelta: ({ text }) => {
+              enqueueStreamingCallback(async () => {
+                if (!streamedAssistantStarted) {
+                  streamedAssistantStarted = true;
+                  await params.onAssistantMessageStart?.();
+                }
+                await params.onPartialReply?.({ text });
+              });
+            },
+            cleanup: async () => {
+              await preparedBackend.cleanup?.();
+            },
+          });
+          await streamingCallbackChain;
+          return liveResult.output;
+        }
 
         const managedRun = await supervisor.spawn({
           sessionId: params.sessionId,
@@ -1024,8 +1160,11 @@ export async function runCliAgent(params: {
           cwd: workspaceDir,
           env,
           input: stdinPayload,
+          onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
         });
         const result = await managedRun.wait();
+        streamingParser?.finish();
+        await streamingCallbackChain;
 
         const stdout = result.stdout.trim();
         const stderr = result.stderr.trim();
@@ -1090,17 +1229,15 @@ export async function runCliAgent(params: {
           });
         }
 
-        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
-
         if (outputMode === "text") {
           return { text: stdout, sessionId: undefined };
         }
         if (outputMode === "jsonl") {
-          const parsed = parseCliJsonl(stdout, backend);
+          const parsed = parseCliJsonl(stdout, backend, backendResolved.id);
           return parsed ?? { text: stdout };
         }
 
-        const parsed = parseCliJson(stdout, backend);
+        const parsed = parseCliJson(stdout, backend, backendResolved.id);
         return parsed ?? { text: stdout };
       });
 

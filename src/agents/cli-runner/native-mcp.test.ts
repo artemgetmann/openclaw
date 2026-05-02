@@ -54,9 +54,11 @@ describe("createNativeOpenClawMcpServerConfig", () => {
       env?: Record<string, string>;
     };
 
-    expect(serverConfig.command).toBe(process.execPath);
+    expect(serverConfig.command).toBe("/bin/sh");
     expect(serverConfig.cwd).toBe(__testing.resolveNativeOpenClawRepoRoot());
-    expect(serverConfig.args?.at(-1)).toMatch(/native-mcp-server\.(?:ts|js)$/);
+    expect(serverConfig.args?.[0]).toBe("-lc");
+    expect(serverConfig.args?.[1]).toContain(__testing.resolveTsxLoaderPath());
+    expect(serverConfig.args?.[1]).toContain("openclaw-native-mcp-launcher.mjs");
     expect(serverConfig.env).toEqual(
       expect.objectContaining({
         [OPENCLAW_NATIVE_MCP_WORKSPACE_ENV]: workspaceDir,
@@ -72,6 +74,14 @@ describe("createNativeOpenClawMcpServerConfig", () => {
     expect(writtenConfigPath).toBeTruthy();
     await expect(fs.readFile(writtenConfigPath as string, "utf-8")).resolves.toContain(
       '"host": "gateway"',
+    );
+
+    const launcherPathMatch = serverConfig.args?.[1]?.match(
+      /'([^']*openclaw-native-mcp-launcher\.mjs)'/,
+    );
+    expect(launcherPathMatch?.[1]).toBeTruthy();
+    await expect(fs.readFile(launcherPathMatch?.[1] as string, "utf-8")).resolves.toContain(
+      "process.chdir",
     );
   });
 });

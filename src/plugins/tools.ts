@@ -6,6 +6,7 @@ import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.
 import { getGlobalPluginRegistry } from "./hook-runner-global.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
+import { defaultSlotIdForKey } from "./slots.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -44,6 +45,22 @@ function isOptionalToolAllowed(params: {
   return params.allowlist.has("group:plugins");
 }
 
+function resolveScopedPluginToolIds(params: {
+  allowlist: Set<string>;
+  entries: Record<string, unknown>;
+  memorySlot?: string | null;
+}): string[] | undefined {
+  if (!params.allowlist.has("*") && !params.allowlist.has("group:plugins")) {
+    return undefined;
+  }
+  return [
+    ...new Set([
+      ...Object.keys(params.entries),
+      params.memorySlot ?? defaultSlotIdForKey("memory"),
+    ]),
+  ].filter(Boolean);
+}
+
 function tracePluginToolStage(stage: string): void {
   const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
   if (!stageLogPath) {
@@ -72,24 +89,30 @@ export function resolvePluginTools(params: {
     tracePluginToolStage("plugin-tools-disabled");
     return [];
   }
+  const allowlist = normalizeAllowlist(params.toolAllowlist);
+  const globalRegistry = getGlobalPluginRegistry();
 
   // Agent runtime paths eagerly bootstrap plugins before tool construction, so reusing the
   // global registry avoids a second full discovery/import/register pass on the same turn.
   tracePluginToolStage("plugin-tools-pre-registry");
   const registry =
-    getGlobalPluginRegistry() ??
+    globalRegistry ??
     loadOpenClawPlugins({
       config: effectiveConfig,
       workspaceDir: params.context.workspaceDir,
       env,
       logger: createPluginLoaderLogger(log),
+      onlyPluginIds: resolveScopedPluginToolIds({
+        allowlist,
+        entries: normalized.entries,
+        memorySlot: normalized.slots.memory,
+      }),
     });
   tracePluginToolStage(`plugin-tools-post-registry count=${registry.tools.length}`);
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
-  const allowlist = normalizeAllowlist(params.toolAllowlist);
   const blockedPlugins = new Set<string>();
 
   for (const entry of registry.tools) {
