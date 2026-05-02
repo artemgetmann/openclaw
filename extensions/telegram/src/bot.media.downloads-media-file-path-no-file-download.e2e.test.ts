@@ -326,16 +326,22 @@ describe("telegram media groups", () => {
 });
 
 describe("telegram standalone media burst detection", () => {
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
   const STANDALONE_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
 
   it(
-    "keeps adjacent standalone media immediate and records burst instrumentation",
+    "coalesces adjacent standalone media and nearby text into one turn",
     async () => {
       const runtimeLog = vi.fn();
       const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({
         runtimeLog,
       });
       const fetchSpy = mockTelegramPngDownload();
+      vi.useFakeTimers();
 
       try {
         await handler({
@@ -350,7 +356,7 @@ describe("telegram standalone media burst detection", () => {
           getFile: async () => ({ file_path: "photos/a.jpg" }),
         });
 
-        expect(replySpy).toHaveBeenCalledTimes(1);
+        expect(replySpy).not.toHaveBeenCalled();
 
         await handler({
           message: {
@@ -364,13 +370,120 @@ describe("telegram standalone media burst detection", () => {
           getFile: async () => ({ file_path: "photos/b.jpg" }),
         });
 
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 7, first_name: "Ada" },
+            message_id: 33,
+            date: 1736380802,
+            text: "What are these?",
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+
+        expect(replySpy).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(TELEGRAM_TEST_TIMINGS.mediaBurstGraceMs + 5);
+
         expect(runtimeError).not.toHaveBeenCalled();
-        expect(replySpy).toHaveBeenCalledTimes(2);
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        const payload = replySpy.mock.calls[0][0] as {
+          Body?: string;
+          MediaPaths?: string[];
+        };
+        expect(payload.Body).toContain("What are these?");
+        expect(payload.MediaPaths).toHaveLength(2);
         expect(runtimeLog).toHaveBeenCalledWith(
           expect.stringContaining("telegram: adjacent standalone media detected"),
         );
         expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("previous_message_id=31"));
         expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("message_id=32"));
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+    STANDALONE_MEDIA_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "flushes a single standalone media message after the short media grace",
+    async () => {
+      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const fetchSpy = mockTelegramPngDownload();
+      vi.useFakeTimers();
+
+      try {
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 7, first_name: "Ada" },
+            message_id: 41,
+            date: 1736380800,
+            photo: [{ file_id: "photo-single" }],
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "photos/single.jpg" }),
+        });
+
+        expect(replySpy).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(TELEGRAM_TEST_TIMINGS.mediaBurstGraceMs + 5);
+
+        expect(runtimeError).not.toHaveBeenCalled();
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        const payload = replySpy.mock.calls[0][0] as {
+          Body?: string;
+          MediaPaths?: string[];
+        };
+        expect(payload.Body).toContain("<media:image>");
+        expect(payload.MediaPaths).toHaveLength(1);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+    STANDALONE_MEDIA_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "flushes pending media before handling a control command",
+    async () => {
+      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const fetchSpy = mockTelegramPngDownload();
+      vi.useFakeTimers();
+
+      try {
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 7, first_name: "Ada" },
+            message_id: 51,
+            date: 1736380800,
+            photo: [{ file_id: "photo-before-command" }],
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "photos/before-command.jpg" }),
+        });
+
+        expect(replySpy).not.toHaveBeenCalled();
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 7, first_name: "Ada" },
+            message_id: 52,
+            date: 1736380801,
+            text: "/status",
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+
+        expect(runtimeError).not.toHaveBeenCalled();
+        expect(replySpy).toHaveBeenCalledTimes(2);
+        const mediaPayload = replySpy.mock.calls[0][0] as {
+          Body?: string;
+          MediaPaths?: string[];
+        };
+        expect(mediaPayload.Body).toContain("<media:image>");
+        expect(mediaPayload.MediaPaths).toHaveLength(1);
       } finally {
         fetchSpy.mockRestore();
       }

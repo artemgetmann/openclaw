@@ -14,6 +14,7 @@ let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn> = null;
 
 export const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
+  mediaBurstGraceMs: 20,
   textFragmentGapMs: 30,
 } as const;
 
