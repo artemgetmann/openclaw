@@ -22,6 +22,11 @@ Env:
   SKIP_DSYM=1         Skip dSYM zip generation
   APP_VERSION=...     Override CFBundleShortVersionString
   APP_BUILD=...       Override CFBundleVersion
+  OPENCLAW_CONSUMER_DIST_HANDOFF_DIR=/path
+                      Copy final distributable artifacts there after packaging.
+                      Defaults to the main checkout's dist/consumer-handoff
+                      directory when run from a temp worktree.
+                      Set to 0 to disable the handoff copy.
   VERSIONED_ARTIFACT_NAMES=1
                       Opt into versioned zip/dmg filenames instead of the
                       clean handoff defaults
@@ -62,6 +67,64 @@ sign_dmg_if_possible() {
 
   echo "🔏 Signing DMG: $dmg_path"
   /usr/bin/codesign --force --sign "$signing_authority" "$timestamp_arg" "$dmg_path"
+}
+
+canonical_checkout_root() {
+  local common_dir
+  common_dir="$(git -C "$ROOT_DIR" rev-parse --git-common-dir 2>/dev/null || true)"
+  if [[ -n "$common_dir" ]]; then
+    if [[ "$common_dir" != /* ]]; then
+      common_dir="$ROOT_DIR/$common_dir"
+    fi
+    common_dir="$(cd "$common_dir" && pwd -P)"
+    if [[ "$(basename "$common_dir")" == ".git" ]]; then
+      dirname "$common_dir"
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "$ROOT_DIR"
+}
+
+default_handoff_dir() {
+  local checkout_root
+  checkout_root="$(canonical_checkout_root)"
+  printf '%s\n' "$checkout_root/dist/consumer-handoff"
+}
+
+copy_handoff_artifacts() {
+  local handoff_dir
+  if [[ -n "${OPENCLAW_CONSUMER_DIST_HANDOFF_DIR:-}" ]]; then
+    handoff_dir="$OPENCLAW_CONSUMER_DIST_HANDOFF_DIR"
+  else
+    handoff_dir="$(default_handoff_dir)"
+  fi
+
+  if [[ "$handoff_dir" == "0" || "$handoff_dir" == "false" ]]; then
+    echo "📤 Handoff artifacts: skipped"
+    return 0
+  fi
+
+  mkdir -p "$handoff_dir"
+
+  local copied=()
+  local artifact
+  for artifact in "$DMG" "$ZIP" "$DSYM_ZIP"; do
+    if [[ -f "$artifact" ]]; then
+      rm -f "$handoff_dir/$(basename "$artifact")"
+      cp -f "$artifact" "$handoff_dir/"
+      copied+=("$handoff_dir/$(basename "$artifact")")
+    fi
+  done
+
+  echo "📤 Handoff artifacts:"
+  if [[ "${#copied[@]}" -eq 0 ]]; then
+    echo "  none copied"
+  else
+    printf '  %s\n' "${copied[@]}"
+  fi
+  echo "  app_bundle=$APP_PATH"
+  echo "  app_bundle_handoff=not copied (use dmg/zip for distribution)"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -221,10 +284,13 @@ if [[ "$SKIP_DSYM" != "1" ]]; then
   fi
 fi
 
+copy_handoff_artifacts
+
 echo "Consumer distribution package ready:"
 echo "  app=$APP_PATH"
 echo "  zip=$ZIP"
 echo "  dmg=$DMG"
+echo "  handoff_dir=${OPENCLAW_CONSUMER_DIST_HANDOFF_DIR:-$(default_handoff_dir)}"
 echo "  app_version=$VERSION"
 echo "  signing_authority=${SIGNING_AUTHORITY:-unknown}"
 if [[ "$NOTARIZE" == "1" ]]; then

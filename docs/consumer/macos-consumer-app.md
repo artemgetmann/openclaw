@@ -83,6 +83,32 @@ Consumer v1 targets signed + notarized direct download distribution.
 - Mac App Store distribution is deferred.
 - Current product decisions should not be shaped by Mac App Store constraints.
 
+## Distribution package handoff
+
+Use the guarded distribution wrapper for a user-facing Consumer package:
+
+```bash
+SKIP_NOTARIZE=1 bash scripts/package-consumer-mac-dist.sh
+```
+
+The app bundle stays in the invoking checkout's `dist/` directory for local
+verification. The distributable artifacts are also copied to the canonical
+handoff directory so temp-worktree builds do not strand the ship artifact inside
+`.worktrees/.../dist`:
+
+- Default handoff directory: `dist/consumer-handoff` under the main checkout
+- Copied artifacts: `.dmg`, `.zip`, and dSYM `.zip` when present
+- Not copied: the `.app` bundle; use the DMG or ZIP for distribution
+
+Override the handoff directory with:
+
+```bash
+OPENCLAW_CONSUMER_DIST_HANDOFF_DIR=/path/to/handoff \
+  SKIP_NOTARIZE=1 bash scripts/package-consumer-mac-dist.sh
+```
+
+Set `OPENCLAW_CONSUMER_DIST_HANDOFF_DIR=0` to disable the handoff copy.
+
 ## Future iPhone path
 
 The Mac remains the execution host.

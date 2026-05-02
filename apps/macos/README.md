@@ -53,6 +53,18 @@ This keeps the final packaged artifact in `dist/`, but skips the repeated
 dependency reinstall, JS build, and Control UI build that are usually unrelated
 to a native-app relaunch loop.
 
+For user-facing Consumer handoff builds:
+
+```bash
+SKIP_NOTARIZE=1 bash scripts/package-consumer-mac-dist.sh
+```
+
+The wrapper leaves the `.app` bundle in the invoking checkout's `dist/` for
+verification, then copies the distributable `.dmg`, `.zip`, and dSYM `.zip`
+when present to the main checkout's `dist/consumer-handoff` directory. Override
+that handoff path with `OPENCLAW_CONSUMER_DIST_HANDOFF_DIR=/path`, or set it to
+`0` to skip the copy.
+
 This consumer flavor defaults to its own runtime identity:
 
 - bundle identifier: `ai.openclaw.consumer.mac.*`
