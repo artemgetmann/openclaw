@@ -180,6 +180,12 @@ export const registerTelegramHandlers = ({
   const TELEGRAM_STANDALONE_MEDIA_BURST_MAX_GAP_MS = 1500;
   const TELEGRAM_STANDALONE_MEDIA_BURST_MAX_ID_GAP = 3;
   const TELEGRAM_STANDALONE_MEDIA_BURST_MAX_DATE_GAP_SECONDS = 3;
+  const DEFAULT_MEDIA_BURST_GRACE_MS = 1200;
+  const TELEGRAM_MEDIA_BURST_GRACE_MS =
+    typeof opts.testTimings?.mediaBurstGraceMs === "number" &&
+    Number.isFinite(opts.testTimings.mediaBurstGraceMs)
+      ? Math.max(10, Math.floor(opts.testTimings.mediaBurstGraceMs))
+      : DEFAULT_MEDIA_BURST_GRACE_MS;
   const mediaGroupTimeoutMs =
     typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
     Number.isFinite(opts.testTimings.mediaGroupFlushMs)
@@ -208,7 +214,7 @@ export const registerTelegramHandlers = ({
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
-  type TelegramDebounceLane = "default" | "forward";
+  type TelegramDebounceLane = "default" | "forward" | "media";
   type TelegramDebounceEntry = {
     ctx: TelegramContext;
     msg: Message;
@@ -218,6 +224,7 @@ export const registerTelegramHandlers = ({
     debounceLane: TelegramDebounceLane;
     botUsername?: string;
   };
+  const pendingMediaBurstKeys = new Set<string>();
   const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane => {
     const forwardMeta = msg as {
       forward_origin?: unknown;
@@ -234,6 +241,14 @@ export const registerTelegramHandlers = ({
       ? "forward"
       : "default";
   };
+  const resolveTelegramDebounceKey = (params: {
+    conversationKey: string;
+    senderId?: string;
+    lane: TelegramDebounceLane;
+  }): string | null =>
+    params.senderId
+      ? `telegram:${accountId ?? "default"}:${params.conversationKey}:${params.senderId}:${params.lane}`
+      : null;
   const buildSyntheticTextMessage = (params: {
     base: Message;
     text: string;
@@ -278,8 +293,15 @@ export const registerTelegramHandlers = ({
   };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,
-    resolveDebounceMs: (entry) =>
-      entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs,
+    resolveDebounceMs: (entry) => {
+      if (entry.debounceLane === "forward") {
+        return FORWARD_BURST_DEBOUNCE_MS;
+      }
+      if (entry.debounceLane === "media") {
+        return TELEGRAM_MEDIA_BURST_GRACE_MS;
+      }
+      return debounceMs;
+    },
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: (entry) => {
       const text = entry.msg.text ?? entry.msg.caption ?? "";
@@ -293,6 +315,12 @@ export const registerTelegramHandlers = ({
         // Debounce media-only forward entries too so they can coalesce.
         return hasDebounceableText || entry.allMedia.length > 0;
       }
+      if (entry.debounceLane === "media") {
+        // Standalone photos/files can arrive as separate Telegram updates before
+        // the user's caption/text lands. Hold only this media-key lane briefly;
+        // ordinary short text keeps the immediate default path.
+        return entry.allMedia.length > 0 || hasDebounceableText;
+      }
       if (!hasDebounceableText) {
         return false;
       }
@@ -302,6 +330,11 @@ export const registerTelegramHandlers = ({
       const last = entries.at(-1);
       if (!last) {
         return;
+      }
+      for (const entry of entries) {
+        if (entry.debounceKey) {
+          pendingMediaBurstKeys.delete(entry.debounceKey);
+        }
       }
       if (entries.length === 1) {
         const replyMedia = await resolveReplyMediaForMessage(last.ctx, last.msg);
@@ -335,6 +368,11 @@ export const registerTelegramHandlers = ({
       );
     },
     onError: (err, items) => {
+      for (const item of items) {
+        if (item.debounceKey) {
+          pendingMediaBurstKeys.delete(item.debounceKey);
+        }
+      }
       runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
       const chatId = items[0]?.msg.chat.id;
       if (chatId != null) {
@@ -1346,11 +1384,26 @@ export const registerTelegramHandlers = ({
     const conversationThreadId = resolvedThreadId ?? dmThreadId;
     const conversationKey =
       conversationThreadId != null ? `${chatId}:topic:${conversationThreadId}` : String(chatId);
-    const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceSenderId = senderId ?? "";
-    const debounceKey = debounceSenderId
-      ? `telegram:${accountId ?? "default"}:${conversationKey}:${debounceSenderId}:${debounceLane}`
-      : null;
+    const baseDebounceLane = resolveTelegramDebounceLane(msg);
+    const mediaDebounceKey = resolveTelegramDebounceKey({
+      conversationKey,
+      senderId: debounceSenderId,
+      lane: "media",
+    });
+    const shouldUseMediaGrace =
+      baseDebounceLane === "default" &&
+      Boolean(mediaDebounceKey) &&
+      (allMedia.length > 0 || pendingMediaBurstKeys.has(mediaDebounceKey ?? ""));
+    const debounceLane: TelegramDebounceLane = shouldUseMediaGrace ? "media" : baseDebounceLane;
+    const debounceKey =
+      debounceLane === "media"
+        ? mediaDebounceKey
+        : resolveTelegramDebounceKey({
+            conversationKey,
+            senderId: debounceSenderId,
+            lane: debounceLane,
+          });
     if (allMedia.length > 0) {
       await flushPendingTextFragmentsForKey(textBurstKey);
     }
@@ -1366,8 +1419,11 @@ export const registerTelegramHandlers = ({
         nowMs,
         threadId: conversationThreadId,
         senderId: burstSenderId,
-        lane: debounceLane,
+        lane: baseDebounceLane,
       });
+    }
+    if (debounceLane === "media" && debounceKey) {
+      pendingMediaBurstKeys.add(debounceKey);
     }
     await inboundDebouncer.enqueue({
       ctx,
