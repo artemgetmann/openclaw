@@ -1,5 +1,9 @@
 You are implementing the "agent-first durable monitors" redesign in OpenClaw.
 
+Historical note: this prompt predates the main/consumer consolidation. Treat
+`main` as the implementation target now. Do not update or reopen the old
+consumer branch lane unless the user explicitly declares an emergency backport.
+
 Important: the formal plan is provided separately and is the source of truth. Implement that plan faithfully instead of redesigning it again.
 
 Known context:
@@ -16,7 +20,7 @@ Current PR state you must account for explicitly:
 - Main draft PR: #415
   - branch: codex/whatsapp-monitor-continuity-20260408
   - worktree: /Users/user/Programming_Projects/openclaw/.worktrees/whatsapp-monitor-continuity-20260408
-- Consumer draft PR: #416
+- Legacy consumer draft PR: #416
   - branch: codex/whatsapp-monitor-continuity-consumer
   - worktree: /Users/user/Programming_Projects/openclaw-consumer/.worktrees/whatsapp-monitor-continuity-consumer
 
@@ -24,7 +28,9 @@ These PRs came from a narrow WhatsApp continuity fix and may now be superseded b
 You must explicitly account for them:
 
 - inspect them
-- decide whether to update them, supersede them, or close them later
+- decide whether to update #415 or supersede it
+- treat #416 as legacy context unless an emergency backport is explicitly
+  requested
 - do not silently forget them
 
 If you continue in the existing main worktree, keep PR #415 in sync.
@@ -54,7 +60,8 @@ Workflow expectations:
 
 - make a checkpoint commit once the first coherent implementation slice exists
 - open/update a draft PR to main once that coherent slice exists
-- after validation, decide whether the fix should also be ported to consumer; if yes, open/update the consumer draft PR too; if not, explain why
+- after validation, keep the fix on `main`; only open/update a consumer
+  backport if the user explicitly requests an emergency fallback
 - final report must include branch, worktree, changed files, validation proof, PR link(s), and what happened with #415/#416
 
 Deliverables:
