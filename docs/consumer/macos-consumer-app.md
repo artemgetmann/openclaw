@@ -1,6 +1,7 @@
-# Consumer macOS App
+# OpenClaw macOS Consumer App
 
-The consumer macOS app is the simplified local controller for the OpenClaw consumer product.
+The main-built macOS app is the simplified local controller for the OpenClaw
+consumer product.
 
 ## Purpose
 
@@ -10,16 +11,19 @@ The consumer macOS app is the simplified local controller for the OpenClaw consu
 
 ## Isolation model
 
-The consumer build is a separate app/runtime identity, not a separate repository.
+The consumer product is no longer shipped from a separate repository. Release
+artifacts are visibly named `OpenClaw`, while the current bundle/runtime
+identity stays consumer-scoped for continuity.
 
-- App identity: separate bundle identifier and app variant metadata
-- State directory: `~/Library/Application Support/OpenClaw Consumer/.openclaw`
-- Legacy fallback: `~/.openclaw-consumer` is still read if it already exists from an older local test setup
-- Local gateway port: `19001`
-- Launch labels: `ai.openclaw.consumer.mac` and `ai.openclaw.consumer.gateway`
-- Logs: `/tmp/openclaw-consumer`
+- Visible app name: `OpenClaw.app`
+- Bundle identifier: `ai.openclaw.consumer.mac`
+- App variant metadata: `consumer`
+- State directory: `~/Library/Application Support/OpenClaw/.openclaw`
+- Local gateway port: `18789`
+- Gateway launch label: `ai.openclaw.gateway`
 
-This keeps consumer testing from silently reusing the founder runtime.
+This keeps replacement installs stable without pretending the retired
+`openclaw-consumer` checkout is still the shipping source.
 
 ## Default UX
 
@@ -62,7 +66,7 @@ macOS caveat:
 
 ## Safe local testing
 
-Package the consumer app with a separate app identity:
+Package an isolated debug lane with a separate app identity:
 
 ```bash
 APP_NAME="OpenClaw Consumer" \
@@ -85,11 +89,15 @@ Consumer v1 targets signed + notarized direct download distribution.
 
 ## Distribution package handoff
 
-Use the guarded distribution wrapper for a user-facing Consumer package:
+Use the guarded distribution wrapper for a user-facing OpenClaw package:
 
 ```bash
-SKIP_NOTARIZE=1 bash scripts/package-consumer-mac-dist.sh
+SKIP_NOTARIZE=1 bash scripts/package-openclaw-mac-dist.sh
 ```
+
+`scripts/package-consumer-mac-dist.sh` remains as a compatibility wrapper for
+old automation. New shipping docs and agents should use
+`scripts/package-openclaw-mac-dist.sh`.
 
 The app bundle stays in the invoking checkout's `dist/` directory for local
 verification. The distributable artifacts are also copied to the canonical
@@ -104,7 +112,7 @@ Override the handoff directory with:
 
 ```bash
 OPENCLAW_CONSUMER_DIST_HANDOFF_DIR=/path/to/handoff \
-  SKIP_NOTARIZE=1 bash scripts/package-consumer-mac-dist.sh
+  SKIP_NOTARIZE=1 bash scripts/package-openclaw-mac-dist.sh
 ```
 
 Set `OPENCLAW_CONSUMER_DIST_HANDOFF_DIR=0` to disable the handoff copy.

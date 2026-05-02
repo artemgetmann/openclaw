@@ -7,7 +7,7 @@ const root = process.cwd();
 describe("consumer product rename", () => {
   it("ships release artifacts as OpenClaw while preserving consumer identity", () => {
     const distScript = fs.readFileSync(
-      path.join(root, "scripts", "package-consumer-mac-dist.sh"),
+      path.join(root, "scripts", "package-openclaw-mac-dist.sh"),
       "utf8",
     );
 
@@ -16,9 +16,21 @@ describe("consumer product rename", () => {
       'EXPECTED_BUNDLE_ID="${BUNDLE_ID:-$(consumer_instance_release_bundle_id "$NORMALIZED_INSTANCE_ID")}"',
     );
     expect(distScript).toContain('EXPECTED_URL_SCHEME="${URL_SCHEME:-openclaw-consumer}"');
+    expect(distScript).toContain("Usage: scripts/package-openclaw-mac-dist.sh");
 
     const packageScript = fs.readFileSync(path.join(root, "scripts", "package-mac-app.sh"), "utf8");
     expect(packageScript).toContain('APP_NAME="${APP_NAME:-OpenClaw}"');
+  });
+
+  it("keeps the old consumer distribution command as a compatibility wrapper", () => {
+    const wrapperScript = fs.readFileSync(
+      path.join(root, "scripts", "package-consumer-mac-dist.sh"),
+      "utf8",
+    );
+
+    expect(wrapperScript).toContain("Compatibility wrapper");
+    expect(wrapperScript).toContain("scripts/package-openclaw-mac-dist.sh");
+    expect(wrapperScript).toContain('exec "$ROOT_DIR/scripts/package-openclaw-mac-dist.sh" "$@"');
   });
 
   it("keeps the release smoke pointed at the renamed app bundle", () => {
@@ -28,7 +40,7 @@ describe("consumer product rename", () => {
     );
 
     expect(smokeScript).toContain(
-      'DEFAULT_DMG="/Users/user/Programming_Projects/openclaw/OpenClaw.dmg"',
+      'DEFAULT_DMG="/Users/user/Programming_Projects/openclaw/dist/consumer-handoff/OpenClaw.dmg"',
     );
     expect(smokeScript).toContain('APP_PATH="$ROOT_DIR/dist/OpenClaw.app"');
     expect(smokeScript).toContain(

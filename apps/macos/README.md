@@ -53,11 +53,16 @@ This keeps the final packaged artifact in `dist/`, but skips the repeated
 dependency reinstall, JS build, and Control UI build that are usually unrelated
 to a native-app relaunch loop.
 
-For user-facing Consumer handoff builds:
+For user-facing OpenClaw handoff builds, use the main product distribution
+wrapper:
 
 ```bash
-SKIP_NOTARIZE=1 bash scripts/package-consumer-mac-dist.sh
+SKIP_NOTARIZE=1 bash scripts/package-openclaw-mac-dist.sh
 ```
+
+The older `scripts/package-consumer-mac-dist.sh` command is still supported as a
+compatibility wrapper for old automation, but it is no longer the canonical
+shipping command.
 
 The wrapper leaves the `.app` bundle in the invoking checkout's `dist/` for
 verification, then copies the distributable `.dmg`, `.zip`, and dSYM `.zip`
@@ -99,7 +104,7 @@ export SPARKLE_PUBLIC_ED_KEY="<consumer Sparkle public EdDSA key>"
 export SPARKLE_PRIVATE_KEY_FILE="$HOME/.config/openclaw/sparkle-consumer-private-key"
 export NOTARYTOOL_PROFILE="<keychain notary profile>"
 
-bash scripts/package-consumer-mac-dist.sh
+bash scripts/package-openclaw-mac-dist.sh
 ```
 
 Notary profile setup uses Apple's keychain profile storage:
@@ -154,7 +159,7 @@ Real notarized release sequence:
 
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
-bash scripts/package-consumer-mac-dist.sh
+bash scripts/package-openclaw-mac-dist.sh
 APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' 'dist/OpenClaw.app/Contents/Info.plist')"
 SPARKLE_APP_NAME="OpenClaw" \
 SPARKLE_RELEASE_VERSION="$APP_VERSION" \

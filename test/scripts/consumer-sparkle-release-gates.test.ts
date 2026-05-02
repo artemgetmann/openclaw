@@ -7,7 +7,7 @@ const root = process.cwd();
 describe("consumer Sparkle release gates", () => {
   it("keeps notarized consumer distribution blocked without a feed and production key", () => {
     const script = fs.readFileSync(
-      path.join(root, "scripts", "package-consumer-mac-dist.sh"),
+      path.join(root, "scripts", "package-openclaw-mac-dist.sh"),
       "utf8",
     );
 
