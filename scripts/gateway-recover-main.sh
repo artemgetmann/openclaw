@@ -11,7 +11,6 @@ RETRY_KICKSTART_AFTER_SECONDS="${OPENCLAW_GATEWAY_RETRY_KICKSTART_AFTER_SECONDS:
 POLL_INTERVAL_SECONDS="${OPENCLAW_GATEWAY_POLL_INTERVAL_SECONDS:-2}"
 GATEWAY_LABEL="ai.openclaw.gateway"
 WATCHDOG_LABEL="ai.openclaw.gateway-watchdog"
-GATEWAY_ERR_LOG="${HOME}/.openclaw/logs/gateway.err.log"
 WATCHDOG_ERR_LOG="/tmp/openclaw/gateway-watchdog.err.log"
 WATCHDOG_STABILIZE_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_STABILIZE_SECONDS:-8}"
 WATCHDOG_AUTO_DISABLE_ON_DUPLICATE="${OPENCLAW_GATEWAY_WATCHDOG_AUTO_DISABLE_ON_DUPLICATE:-1}"
@@ -23,6 +22,7 @@ CANONICAL_OPENCLAW_HOME="${HOME}/Library/Application Support/OpenClaw"
 CANONICAL_OPENCLAW_STATE_DIR="${CANONICAL_OPENCLAW_HOME}/.openclaw"
 CANONICAL_OPENCLAW_CONFIG_PATH="${CANONICAL_OPENCLAW_STATE_DIR}/openclaw.json"
 CANONICAL_OPENCLAW_LOG_DIR="${CANONICAL_OPENCLAW_STATE_DIR}/logs"
+GATEWAY_ERR_LOG="${CANONICAL_OPENCLAW_LOG_DIR}/gateway.err.log"
 
 if [[ -f "${VALIDATED_NODE_HELPER}" ]]; then
   # shellcheck disable=SC1090
@@ -216,7 +216,10 @@ listener_ready() {
 }
 
 http_ready() {
-  curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/" >/dev/null 2>&1
+  # The gateway's stable liveness route is /healthz. Probing "/" can return a
+  # non-2xx even after the WebSocket gateway is listening, which makes recovery
+  # falsely report failure after it has already repaired launchd.
+  curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1
 }
 
 assert_main_runtime_path() {
@@ -276,7 +279,7 @@ wait_for_http_probe() {
     now="$(date +%s)"
     elapsed="$((now - start_epoch))"
     if [[ "${elapsed}" -ge "${RPC_TIMEOUT_SECONDS}" ]]; then
-      dump_failure_diagnostics "curl -fsS http://127.0.0.1:${PORT}/" "HTTP probe failed before timeout"
+      dump_failure_diagnostics "curl -fsS http://127.0.0.1:${PORT}/healthz" "HTTP health probe failed before timeout"
       exit 1
     fi
     sleep "${POLL_INTERVAL_SECONDS}"
@@ -384,7 +387,7 @@ stabilize_watchdog() {
 main() {
   log "starting deterministic recovery (port=${PORT}, main=${MAIN_REPO})"
 
-  capture_best_effort "Baseline: HTTP probe" curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/"
+  capture_best_effort "Baseline: HTTP health probe" curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/healthz"
   capture_best_effort "Baseline: lsof listener check" lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN
   capture_best_effort \
     "Baseline: launchctl print (program/arguments/pid/state)" \
@@ -431,7 +434,7 @@ main() {
   local launch_command
   launch_command="$(launchctl print "gui/$(id -u)/${GATEWAY_LABEL}" | grep -F -- "${EXPECTED_RUNTIME}" || true)"
   local http_result
-  http_result="$(curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/" 2>&1 | head -n 5)"
+  http_result="$(curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/healthz" 2>&1 | head -n 5)"
   local listener_result
   listener_result="$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>&1)"
 
