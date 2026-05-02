@@ -53,12 +53,21 @@ function textFromResult(result: Awaited<ReturnType<typeof runCliAgent>>): string
   );
 }
 
-function mode(): "continuity" | "memory" | "browser" | "latency" | "inspect" {
+function mode():
+  | "continuity"
+  | "memory"
+  | "memory-get"
+  | "browser"
+  | "browser-tabs"
+  | "latency"
+  | "inspect" {
   const raw = readFlag("--mode") ?? "continuity";
   if (
     raw === "continuity" ||
     raw === "memory" ||
+    raw === "memory-get" ||
     raw === "browser" ||
+    raw === "browser-tabs" ||
     raw === "latency" ||
     raw === "inspect"
   ) {
@@ -346,6 +355,64 @@ async function runMemorySmoke(): Promise<void> {
   );
 }
 
+async function runMemoryGetSmoke(): Promise<void> {
+  const ctx = await createSmokeContext();
+  const memoryNeedle = `MEMORY_GET_NEEDLE_${ctx.nonce}`;
+  await fs.writeFile(
+    path.join(ctx.workspaceDir, "MEMORY.md"),
+    [
+      "# Claude CLI Memory Get Smoke",
+      "",
+      "This file is created by the live smoke harness.",
+      `Needle: ${memoryNeedle}`,
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+  const turn = await runAgentTurn({
+    ...ctx,
+    model: ctx.model,
+    runId: "smoke-claude-cli-memory-get",
+    prompt: [
+      "You must use the directly available mcp__openclaw__memory_get tool exactly once.",
+      'Call it with path="MEMORY.md", from=1, and lines=5.',
+      "Do not use ToolSearch, shell, filesystem, or web tools.",
+      `Then reply with one short sentence containing MEMORY_GET_MCP_OK, the exact nonce ${ctx.nonce}, and the exact needle ${memoryNeedle}.`,
+    ].join("\n"),
+  });
+  const text = textFromResult(turn.result);
+  if (
+    !text.includes("MEMORY_GET_MCP_OK") ||
+    !text.includes(ctx.nonce) ||
+    !text.includes(memoryNeedle)
+  ) {
+    throw new Error(`Memory_get smoke did not report expected needle. Text: ${text}`);
+  }
+  if (containsToolSubstitution(text)) {
+    throw new Error(`Memory_get smoke substituted another tool. Text: ${text}`);
+  }
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        mode: "memory-get",
+        provider: "claude-cli",
+        model: ctx.model,
+        workspaceDir: ctx.workspaceDir,
+        nonce: ctx.nonce,
+        memoryNeedle,
+        claudeSessionId: sessionIdFromResult(turn.result),
+        assistantStartMs: turn.assistantStartMs,
+        firstVisibleTextMs: turn.firstVisibleTextMs,
+        totalMs: turn.totalMs,
+        text,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 async function runBrowserSmoke(): Promise<void> {
   const listed = await mcpRpc("tools/list");
   const result = listed.body.result as { tools?: Array<{ name: string }> } | undefined;
@@ -380,6 +447,60 @@ async function runBrowserSmoke(): Promise<void> {
       {
         ok: true,
         mode: "browser",
+        provider: "claude-cli",
+        model: ctx.model,
+        workspaceDir: ctx.workspaceDir,
+        nonce: ctx.nonce,
+        claudeSessionId: sessionIdFromResult(turn.result),
+        assistantStartMs: turn.assistantStartMs,
+        firstVisibleTextMs: turn.firstVisibleTextMs,
+        totalMs: turn.totalMs,
+        text,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+async function runBrowserTabsSmoke(): Promise<void> {
+  const listed = await mcpRpc("tools/list");
+  const result = listed.body.result as { tools?: Array<{ name: string }> } | undefined;
+  const names = (result?.tools ?? []).map((tool) => tool.name);
+  if (!names.includes("browser")) {
+    console.log(
+      JSON.stringify(
+        { ok: false, mode: "browser-tabs", blocker: "browser tool not listed" },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  const ctx = await createSmokeContext();
+  const turn = await runAgentTurn({
+    ...ctx,
+    model: ctx.model,
+    runId: "smoke-claude-cli-browser-tabs",
+    prompt: [
+      "You must use the directly available mcp__openclaw__browser tool exactly once.",
+      'Call it with action="tabs", profile="openclaw", and timeoutMs=3000.',
+      "Do not use ToolSearch or web tools.",
+      `Then reply with one short sentence containing BROWSER_TABS_MCP_OK and the exact nonce ${ctx.nonce}.`,
+    ].join("\n"),
+  });
+  const text = textFromResult(turn.result);
+  if (!text.includes("BROWSER_TABS_MCP_OK") || !text.includes(ctx.nonce)) {
+    throw new Error(`Browser tabs smoke did not report expected nonce. Text: ${text}`);
+  }
+  if (containsToolSubstitution(text)) {
+    throw new Error(`Browser tabs smoke substituted another tool. Text: ${text}`);
+  }
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        mode: "browser-tabs",
         provider: "claude-cli",
         model: ctx.model,
         workspaceDir: ctx.workspaceDir,
@@ -483,8 +604,16 @@ async function main(): Promise<void> {
     await runMemorySmoke();
     return;
   }
+  if (selectedMode === "memory-get") {
+    await runMemoryGetSmoke();
+    return;
+  }
   if (selectedMode === "browser") {
     await runBrowserSmoke();
+    return;
+  }
+  if (selectedMode === "browser-tabs") {
+    await runBrowserTabsSmoke();
     return;
   }
   if (selectedMode === "latency") {

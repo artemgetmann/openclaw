@@ -200,7 +200,7 @@ This is the real `/codex`-style expectation: different model, same assistant con
 
 ### Slice 2: Claude CLI browser tool
 
-Status: passed for `browser.status`.
+Status: passed for `browser.status` and `browser.tabs`.
 
 Proof:
 
@@ -209,6 +209,9 @@ Proof:
 - Claude called `mcp__openclaw__browser` with `action="status"`, `profile="openclaw"`, and `timeoutMs=3000`.
 - Loopback logs showed `tools/call` with `toolName="browser"` and `isError=false`.
 - Claude returned `BROWSER_MCP_OK` with the expected nonce.
+- Follow-up live smoke made Claude call `mcp__openclaw__browser` with `action="tabs"` and `profile="openclaw"`.
+- Loopback logs again showed `toolName="browser"` and `isError=false`.
+- Claude returned `BROWSER_TABS_MCP_OK` with the expected nonce and summarized the open tab list.
 
 Measured result:
 
@@ -220,12 +223,12 @@ Measured result:
 
 Blockers:
 
-- none for `browser.status`.
-- Deeper browser actions still need a separate smoke because `status` proves exposure and request routing, not tab automation quality.
+- none for `browser.status` or `browser.tabs`.
+- `open` + `snapshot` still needs a separate smoke before claiming full browser automation quality.
 
 ### Slice 2b: Memory/tool surface parity
 
-Status: passed for `memory_search` invocation; `memory_get` still needs a useful path-backed entry.
+Status: passed for `memory_search` and `memory_get`.
 
 Direct loopback `tools/list` currently exposes:
 
@@ -258,6 +261,9 @@ Proof:
 - Live `runCliAgent` smoke made Claude call `mcp__openclaw__memory_search` exactly once.
 - Loopback logs showed `tools/call` with `toolName="memory_search"` and `isError=false`.
 - Claude returned `MEMORY_MCP_OK` with the expected nonce.
+- Live `runCliAgent` smoke created a real temp-workspace `MEMORY.md`, made Claude call `mcp__openclaw__memory_get` with `path="MEMORY.md"`, and required Claude to echo a unique needle from the file.
+- Loopback logs showed `tools/call` with `toolName="memory_get"` and `isError=false`.
+- Claude returned `MEMORY_GET_MCP_OK` with the expected nonce and needle.
 
 Measured result:
 
@@ -269,7 +275,7 @@ Measured result:
 
 Remaining check:
 
-- make Claude call `mcp__openclaw__memory_get` after `memory_search` once a useful path-backed memory result exists
+- chain `memory_search -> memory_get` in one live model turn once a stable indexed memory result exists
 
 ### Slice 3: Warm Claude CLI spike
 
@@ -346,7 +352,7 @@ Pass condition:
 Current pass/fail:
 
 - session continuity: pass
-- loopback MCP memory/browser tools: pass for `memory_search` and `browser.status`
+- loopback MCP memory/browser tools: pass for `memory_search`, `memory_get`, `browser.status`, and `browser.tabs`
 - same live process reuse on same-model follow-up: pass
 - warm latency: pass for the current `haiku` smoke; follow-up was materially faster after PID reuse
 
@@ -399,6 +405,10 @@ Tests run in this slice:
   - pass: Claude called `mcp__openclaw__memory_search`
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode browser --model haiku --timeout-ms 180000`
   - pass: Claude called `mcp__openclaw__browser` with `action="status"`
+- `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode memory-get --model haiku --timeout-ms 240000`
+  - pass: Claude called `mcp__openclaw__memory_get` and returned the nonce plus a unique needle from temp-workspace `MEMORY.md`
+- `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode browser-tabs --model haiku --timeout-ms 240000`
+  - pass: Claude called `mcp__openclaw__browser` with `action="tabs"` and returned the nonce
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode latency --model haiku --timeout-ms 180000`
   - partial: same Claude session id, different live process PID
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode latency --model haiku --timeout-ms 240000`
@@ -413,6 +423,6 @@ Tests run in this slice:
 
 Next:
 
-1. smoke `memory_get` against a known path-backed memory entry
-2. run a deeper browser action smoke (`tabs` or `open` + `snapshot`) after deciding acceptable side effects
-3. cross-backend context switch probe
+1. cross-backend context switch probe
+2. `browser.open` + `snapshot` smoke with an isolated/safe target
+3. chain `memory_search -> memory_get` once a stable indexed memory result exists
