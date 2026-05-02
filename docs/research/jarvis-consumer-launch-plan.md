@@ -617,9 +617,9 @@ Do not overbuild the website first.
 Build the commercial spine first:
 
 1. signed/notarized downloadable app
-2. account login
-3. trial/license status
-4. update mechanism
+2. signing/notarization
+3. update mechanism
+4. account login and trial/license status
 5. no leaked founder keys
 6. managed/BYOK switch
 7. GitHub README as landing page
@@ -632,21 +632,21 @@ Build the commercial spine first:
 
 Current implementation order:
 
-1. Backend contract + OpenClaw client config.
-2. Private Render deploy path for the backend.
-3. Secrets/public-package audit guard.
-4. Account/license persistence.
-5. Signing/notarization + updater.
+1. Backend contract + OpenClaw client config. Done in PR #560.
+2. Private Render deploy path for the backend. Done in PR #561.
+3. Secrets/public-package audit guard. Done in PR #565.
+4. Account/license persistence. Done in PR #569.
+5. Signing/notarization + updater. Current next main lane.
 
 Progress:
 
 - [x] Backend contract + OpenClaw client config landed in PR #560.
 - [x] Minimal Jarvis backend MVP landed in PR #560.
-- [ ] Render deploy guardrails are in PR #561.
-- [ ] Render service is created and configured with production env values.
-- [ ] Secrets/public-package audit guard prevents public builds from shipping founder/provider keys.
-- [ ] Account/license persistence replaces stateless trial responses.
+- [x] Render deploy guardrails / backend Render service path landed in PR #561.
+- [x] Secrets/public-package audit guard prevents public builds from shipping founder/provider keys; landed in PR #565.
+- [x] Account/license persistence replaces stateless trial responses; Neon-backed persistence landed in PR #569.
 - [ ] Signing/notarization + updater are production-ready.
+- [ ] Render service is created and configured with production env values.
 
 Deployment/security boundary:
 
@@ -658,13 +658,13 @@ Deployment/security boundary:
 ### P0 — Before wider strangers
 
 - [x] Finalize plan decisions in this document.
-- [ ] Audit all bundled/secrets/config surfaces.
+- [x] Audit all bundled/secrets/config surfaces enough to block public packages from shipping founder/provider keys; landed in PR #565.
 - [ ] Decide exact plan names and prices.
-- [ ] Implement account login + 14-day trial.
-- [ ] Implement license check + offline grace. Contract MVP exists in PR #560; persistence still needed.
-- [ ] Implement update check/install path.
+- [ ] Implement account login + 14-day trial. Google Auth/account login should run as a parallel investigation if low-effort; do not block signing/notarization + updater on auth polish.
+- [x] Implement license check + offline grace. Contract MVP exists in PR #560; Neon persistence landed in PR #569.
+- [ ] Implement update check/install path. Current next main lane with signing/notarization.
 - [ ] Sign/notarize macOS app.
-- [ ] Remove or proxy all founder keys. Backend/proxy contract exists in PR #560; audit guard still needed.
+- [x] Remove or proxy all founder keys from public builds. Backend/proxy contract exists in PR #560; public-package audit guard landed in PR #565.
 - [ ] Define self-modification boundaries: normal mode, guarded mode, developer mode, fork mode.
 - [ ] Define config/defaults update policy: migrate/merge without clobbering user config.
 - [ ] Define bundled skill vs workspace skill update policy.
