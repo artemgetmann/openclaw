@@ -3,7 +3,9 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ZIP=${1:?"Usage: $0 OpenClaw-<ver>.zip"}
-FEED_URL=${2:-"https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml"}
+APP_NAME=${SPARKLE_APP_NAME:-OpenClaw}
+DEFAULT_FEED_URL="https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml"
+FEED_URL=${SPARKLE_FEED_URL:-${2:-$DEFAULT_FEED_URL}}
 PRIVATE_KEY_FILE=${SPARKLE_PRIVATE_KEY_FILE:-}
 if [[ -z "$PRIVATE_KEY_FILE" ]]; then
   echo "Set SPARKLE_PRIVATE_KEY_FILE to your ed25519 private key (Sparkle)." >&2
@@ -29,6 +31,21 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 TMP_DIR="$(mktemp -d)"
+APPCAST_OUTPUT="${SPARKLE_APPCAST_OUTPUT:-}"
+if [[ -z "$APPCAST_OUTPUT" ]]; then
+  if [[ "$APP_NAME" == "OpenClaw" ]]; then
+    APPCAST_OUTPUT="$ROOT/appcast.xml"
+  else
+    # Consumer artifacts use clean names such as "OpenClaw Consumer.zip", so
+    # version inference depends on SPARKLE_RELEASE_VERSION. Keep the generated
+    # appcast next to that artifact unless a release caller explicitly targets
+    # the root appcast path.
+    APPCAST_OUTPUT="$ZIP_DIR/appcast.xml"
+  fi
+fi
+mkdir -p "$(dirname "$APPCAST_OUTPUT")"
+APPCAST_OUTPUT_DIR=$(cd "$(dirname "$APPCAST_OUTPUT")" && pwd)
+APPCAST_OUTPUT="$APPCAST_OUTPUT_DIR/$(basename "$APPCAST_OUTPUT")"
 cleanup() {
   rm -rf "$TMP_DIR"
   if [[ "${KEEP_SPARKLE_NOTES:-0}" != "1" ]]; then
@@ -37,8 +54,8 @@ cleanup() {
 }
 trap cleanup EXIT
 cp -f "$ZIP" "$TMP_DIR/$ZIP_NAME"
-if [[ -f "$ROOT/appcast.xml" ]]; then
-  cp -f "$ROOT/appcast.xml" "$TMP_DIR/appcast.xml"
+if [[ -f "$APPCAST_OUTPUT" ]]; then
+  cp -f "$APPCAST_OUTPUT" "$TMP_DIR/appcast.xml"
 fi
 
 NOTES_HTML="${ZIP_DIR}/${ZIP_BASE}.html"
@@ -65,6 +82,6 @@ generate_appcast \
   --link "$FEED_URL" \
   "$TMP_DIR"
 
-cp -f "$TMP_DIR/appcast.xml" "$ROOT/appcast.xml"
+cp -f "$TMP_DIR/appcast.xml" "$APPCAST_OUTPUT"
 
-echo "Appcast generated (appcast.xml). Upload alongside $ZIP at $FEED_URL"
+echo "Appcast generated ($APPCAST_OUTPUT). Upload alongside $ZIP at $FEED_URL"

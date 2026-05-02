@@ -77,6 +77,51 @@ means the bundle assembly is fine and the remaining friction is distribution
 trust. Apple Development signing is enough for local/manual-trust demos, but
 broader distribution still needs Developer ID + notarization.
 
+## Consumer production distribution
+
+Production Consumer releases use Developer ID signing, notarization, and
+Sparkle with a consumer-owned appcast. Do not point Consumer builds at the
+generic upstream OpenClaw appcast.
+
+```bash
+export SPARKLE_FEED_URL="https://example.com/openclaw-consumer/appcast.xml"
+export SPARKLE_PUBLIC_ED_KEY="<consumer Sparkle public EdDSA key>"
+export SPARKLE_PRIVATE_KEY_FILE="$HOME/.config/openclaw/sparkle-consumer-private-key"
+export NOTARYTOOL_PROFILE="<keychain notary profile>"
+
+bash scripts/package-consumer-mac-dist.sh
+```
+
+Local smoke packaging can skip Apple trust services and leave Sparkle disabled:
+
+```bash
+SKIP_NOTARIZE=1 \
+ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE=1 \
+ALLOW_SINGLE_ARCH_CONSUMER_SMOKE=1 \
+bash scripts/package-consumer-mac-app-fast.sh
+```
+
+Strict release verification is explicit so normal smoke checks do not require
+Developer ID:
+
+```bash
+SPARKLE_EXPECTED_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
+bash scripts/verify-consumer-mac-app.sh --release "dist/OpenClaw Consumer.app"
+```
+
+Generate the Consumer appcast from the clean artifact name by supplying the
+release version. The default output stays beside the zip for non-OpenClaw app
+names unless `SPARKLE_APPCAST_OUTPUT` points somewhere else.
+
+```bash
+SPARKLE_APP_NAME="OpenClaw Consumer" \
+SPARKLE_RELEASE_VERSION="$APP_VERSION" \
+SPARKLE_FEED_URL="$SPARKLE_FEED_URL" \
+SPARKLE_DOWNLOAD_URL_PREFIX="https://example.com/openclaw-consumer/releases/${APP_VERSION}/" \
+SPARKLE_APPCAST_OUTPUT="dist/openclaw-consumer-appcast.xml" \
+bash scripts/make_appcast.sh "dist/OpenClaw Consumer.zip"
+```
+
 ## Signing behavior
 
 Auto-selects identity (first match):
