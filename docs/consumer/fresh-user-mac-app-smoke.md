@@ -6,7 +6,7 @@ runtime.
 
 ```bash
 scripts/smoke-consumer-fresh-user-mac-app.sh \
-  --dmg "/Users/user/Programming_Projects/openclaw/OpenClaw.dmg" \
+  --dmg "/Users/user/Programming_Projects/openclaw/dist/consumer-handoff/OpenClaw.dmg" \
   --timeout 240 \
   --quit-existing-app
 ```
