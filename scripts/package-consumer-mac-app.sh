@@ -9,6 +9,11 @@ INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 usage() {
   cat <<'EOF'
 Usage: scripts/package-consumer-mac-app.sh [--instance <id>]
+
+Builds a consumer-identity app bundle for isolated tester/debug lanes.
+Use scripts/package-openclaw-mac-dist.sh for user-facing OpenClaw DMG/ZIP
+shipping artifacts.
+
 Set OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 to package an isolated runtime lane
 with the stable consumer debug app identity for Screen Recording/TCC testing.
 EOF

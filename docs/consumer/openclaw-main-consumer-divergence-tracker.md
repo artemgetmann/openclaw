@@ -27,7 +27,7 @@ are not the default place to implement P0 launch work.
 | App rename to `OpenClaw.app`          | Completed | Release packaging now ships the visible product as `OpenClaw.app` / `OpenClaw.dmg` / `OpenClaw.zip`.                                                                                                                                                      | Keep old `OpenClaw Consumer` references only where they describe history or debug compatibility.          |
 | Bundle id / TCC migration             | Deferred  | Current Consumer bundle identity is preserved for continuity.                                                                                                                                                                                             | Decide separately from visible rename. Changing bundle id can reset permissions and create support churn. |
 | `openclaw-consumer` branch retirement | Completed | Main has the code needed to stop using the consumer checkout for new implementation. Existing-user and isolated fresh-user main-built smokes passed. Older docs/workflows now label the old branch as historical or emergency-only.                       | Keep fallback available only for emergency recovery.                                                      |
-| Consumer packaging wrappers           | Pending   | Consumer-named wrappers still exist for compatibility/test-lane use.                                                                                                                                                                                      | Slim/rename wrappers so primary shipping path is obvious.                                                 |
+| Consumer packaging wrappers           | Completed | `scripts/package-openclaw-mac-dist.sh` is the canonical main-built shipping command. `scripts/package-consumer-mac-dist.sh` remains as a compatibility wrapper for old automation.                                                                        | Keep compatibility wrapper behavior unless a later cleanup deliberately removes it.                       |
 | Overlay/defaults policy               | Pending   | Core runtime/setup is shared; product defaults are still not cleanly formalized.                                                                                                                                                                          | Add explicit overlay/default contract for skills, models, visibility, and onboarding presentation.        |
 | Branch/workflow docs                  | Completed | Primary and older workflow docs now target `main` for consumer/product work and treat `openclaw-consumer` as historical or legacy/emergency fallback.                                                                                                     | Keep future docs aligned with the main-first workflow.                                                    |
 
@@ -49,11 +49,11 @@ are not the default place to implement P0 launch work.
 - #583: consumer Sparkle release gates
 - #584: docs/workflow cleanup for main-first consumer work
 - #588: conservative product rename to `OpenClaw.app`
+- #590: OpenClaw macOS distribution wrapper promotion
 
 ## Queue Now
 
-1. Slim/rename consumer-specific packaging wrappers.
-2. Formalize overlay/defaults policy.
+1. Formalize overlay/defaults policy.
 
 ## Things We Should Stop Saying
 
