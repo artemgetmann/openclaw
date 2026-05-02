@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DEFAULT_DMG="/Users/user/Programming_Projects/openclaw/OpenClaw Consumer.dmg"
+DEFAULT_DMG="/Users/user/Programming_Projects/openclaw/OpenClaw.dmg"
 
 APP_PATH=""
 DMG_PATH=""
@@ -15,14 +15,14 @@ usage() {
   cat <<'EOF'
 Usage: scripts/smoke-consumer-fresh-user-mac-app.sh [--dmg <path> | --app <path>] [--timeout <seconds>] [--keep-artifacts] [--quit-existing-app]
 
-Runs the packaged OpenClaw Consumer macOS app against an isolated fake home and
+Runs the packaged OpenClaw macOS consumer app against an isolated fake home and
 instance id. This is the closest non-admin fresh-user smoke: it avoids the real
 user's OpenClaw config/runtime while proving bundled runtime bootstrap, isolated
 gateway startup, and first-run onboarding visibility from clean state.
 
-By default the script refuses to run while another OpenClaw Consumer app with the
-same bundle id is already open. Pass --quit-existing-app only when this smoke is
-allowed to close that app first.
+By default the script refuses to run while another app process with the same
+consumer bundle id is already open. Pass --quit-existing-app only when this
+smoke is allowed to close that app first.
 
 The script never prints secrets or dumps config contents.
 EOF
@@ -71,7 +71,7 @@ if [[ -z "$APP_PATH" && -z "$DMG_PATH" ]]; then
   if [[ -f "$DEFAULT_DMG" ]]; then
     DMG_PATH="$DEFAULT_DMG"
   else
-    APP_PATH="$ROOT_DIR/dist/OpenClaw Consumer.app"
+    APP_PATH="$ROOT_DIR/dist/OpenClaw.app"
   fi
 fi
 
@@ -126,9 +126,27 @@ read_onboarding_windows() {
   swift -e 'import CoreGraphics; let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []; for w in list { let owner = w[kCGWindowOwnerName as String] as? String ?? ""; let name = w[kCGWindowName as String] as? String ?? ""; if owner == "OpenClaw" || owner == "OpenClaw Consumer" || name.contains("OpenClaw") { print(name.isEmpty ? "<untitled>" : name) } }' 2>/dev/null || true
 }
 
-running_openclaw_consumer_pids() {
-  /bin/ps -axo pid=,command= \
-    | /usr/bin/awk '/OpenClaw Consumer\.app\/Contents\/MacOS\/OpenClaw/ { print $1 }'
+running_same_bundle_pids() {
+  local expected_bundle_id="$1"
+  local pid=""
+  local binary_path=""
+  local app_root=""
+  local plist_path=""
+
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    binary_path="$(/usr/sbin/lsof -a -p "$pid" -Fn 2>/dev/null \
+      | /usr/bin/sed -n 's/^n//p' \
+      | /usr/bin/grep '/Contents/MacOS/OpenClaw$' \
+      | /usr/bin/head -n 1 || true)"
+    [[ -n "$binary_path" ]] || continue
+    app_root="${binary_path%/Contents/MacOS/OpenClaw}"
+    plist_path="$app_root/Contents/Info.plist"
+    [[ -f "$plist_path" ]] || continue
+    if [[ "$(plist_value "$plist_path" "CFBundleIdentifier")" == "$expected_bundle_id" ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done < <(/usr/bin/pgrep -x OpenClaw 2>/dev/null || true)
 }
 
 cleanup() {
@@ -203,7 +221,7 @@ BUNDLE_ID="$(plist_value "$INFO_PLIST" "CFBundleIdentifier")"
 VARIANT="$(plist_value "$INFO_PLIST" "OpenClawAppVariant")"
 COMMIT="$(plist_value "$INFO_PLIST" "OpenClawGitCommit")"
 
-if [[ "$DISPLAY_NAME" != "OpenClaw Consumer" || "$VARIANT" != "consumer" ]]; then
+if [[ "$DISPLAY_NAME" != "OpenClaw" || "$VARIANT" != "consumer" ]]; then
   echo "ERROR: refusing to smoke unexpected app bundle" >&2
   echo "display_name=$DISPLAY_NAME" >&2
   echo "variant=$VARIANT" >&2
@@ -214,10 +232,10 @@ EXISTING_APP_PIDS=()
 while IFS= read -r pid; do
   [[ -n "$pid" ]] || continue
   EXISTING_APP_PIDS+=("$pid")
-done < <(running_openclaw_consumer_pids)
+done < <(running_same_bundle_pids "$BUNDLE_ID")
 if [[ "${#EXISTING_APP_PIDS[@]}" -gt 0 ]]; then
   if [[ "$QUIT_EXISTING_APP" != "1" ]]; then
-    echo "ERROR: another OpenClaw Consumer app is already running with the same bundle identity" >&2
+    echo "ERROR: another OpenClaw consumer app is already running with the same bundle identity" >&2
     echo "existing_app_pids=${EXISTING_APP_PIDS[*]}" >&2
     echo "rerun_with=--quit-existing-app" >&2
     exit 1

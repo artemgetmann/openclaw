@@ -210,10 +210,11 @@ if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
   exit 1
 fi
 
-# Transitional main parity packaging intentionally preserves the old Consumer
-# visible app name and bundle id. The long-term OpenClaw.app identity migration
-# is a separate user-state migration problem, not a packaging side effect.
-APP_NAME="${APP_NAME:-OpenClaw Consumer}"
+# Release packaging now ships the consumer product under the final visible
+# product name while preserving the existing consumer bundle id/runtime identity.
+# That lets replacement installs keep state and permissions continuity instead
+# of turning a cosmetic rename into a new-app migration.
+APP_NAME="${APP_NAME:-OpenClaw}"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"
 APP_PATH="$ROOT_DIR/dist/${APP_BUNDLE_NAME}"
 EXPECTED_BUNDLE_ID="${BUNDLE_ID:-$(consumer_instance_release_bundle_id "$NORMALIZED_INSTANCE_ID")}"

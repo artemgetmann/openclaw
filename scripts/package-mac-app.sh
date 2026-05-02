@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
-APP_NAME="${APP_NAME:-OpenClaw Consumer}"
+APP_NAME="${APP_NAME:-OpenClaw}"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"
 APP_ROOT="$ROOT_DIR/dist/${APP_BUNDLE_NAME}"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"

@@ -65,12 +65,14 @@ when present to the main checkout's `dist/consumer-handoff` directory. Override
 that handoff path with `OPENCLAW_CONSUMER_DIST_HANDOFF_DIR=/path`, or set it to
 `0` to skip the copy.
 
-This consumer flavor defaults to its own runtime identity:
+The user-facing consumer distribution now ships with the visible product name
+`OpenClaw.app` / `OpenClaw.dmg` / `OpenClaw.zip` while preserving the existing
+consumer bundle id for continuity:
 
-- bundle identifier: `ai.openclaw.consumer.mac.*`
-- state dir: `~/Library/Application Support/OpenClaw Consumer/.openclaw`
-- local gateway port: `19001`
-- launch labels: `ai.openclaw.consumer.*`
+- bundle identifier: `ai.openclaw.consumer.mac`
+- state dir: `~/Library/Application Support/OpenClaw/.openclaw`
+- local gateway port: `18789`
+- gateway launch label: `ai.openclaw.gateway`
 
 If `verify-consumer-mac-app.sh` passes but `spctl` still rejects the app, that
 means the bundle assembly is fine and the remaining friction is distribution
@@ -132,7 +134,7 @@ Developer ID:
 
 ```bash
 SPARKLE_EXPECTED_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
-bash scripts/verify-consumer-mac-app.sh --release "dist/OpenClaw Consumer.app"
+bash scripts/verify-consumer-mac-app.sh --release "dist/OpenClaw.app"
 ```
 
 Generate the Consumer appcast from the clean artifact name by supplying the
@@ -140,12 +142,12 @@ release version. The default output stays beside the zip for non-OpenClaw app
 names unless `SPARKLE_APPCAST_OUTPUT` points somewhere else.
 
 ```bash
-SPARKLE_APP_NAME="OpenClaw Consumer" \
+SPARKLE_APP_NAME="OpenClaw" \
 SPARKLE_RELEASE_VERSION="$APP_VERSION" \
 SPARKLE_FEED_URL="$SPARKLE_FEED_URL" \
 SPARKLE_DOWNLOAD_URL_PREFIX="https://example.com/openclaw-consumer/releases/${APP_VERSION}/" \
 SPARKLE_APPCAST_OUTPUT="dist/openclaw-consumer-appcast.xml" \
-bash scripts/make_appcast.sh "dist/OpenClaw Consumer.zip"
+bash scripts/make_appcast.sh "dist/OpenClaw.zip"
 ```
 
 Real notarized release sequence:
@@ -153,15 +155,15 @@ Real notarized release sequence:
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
 bash scripts/package-consumer-mac-dist.sh
-APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' 'dist/OpenClaw Consumer.app/Contents/Info.plist')"
-SPARKLE_APP_NAME="OpenClaw Consumer" \
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' 'dist/OpenClaw.app/Contents/Info.plist')"
+SPARKLE_APP_NAME="OpenClaw" \
 SPARKLE_RELEASE_VERSION="$APP_VERSION" \
 SPARKLE_FEED_URL="$SPARKLE_FEED_URL" \
 SPARKLE_DOWNLOAD_URL_PREFIX="https://example.com/openclaw-consumer/releases/${APP_VERSION}/" \
 SPARKLE_APPCAST_OUTPUT="dist/openclaw-consumer-appcast.xml" \
-bash scripts/make_appcast.sh "dist/OpenClaw Consumer.zip"
+bash scripts/make_appcast.sh "dist/OpenClaw.zip"
 SPARKLE_EXPECTED_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
-bash scripts/verify-consumer-mac-app.sh --release "dist/OpenClaw Consumer.app"
+bash scripts/verify-consumer-mac-app.sh --release "dist/OpenClaw.app"
 ```
 
 ## Signing behavior

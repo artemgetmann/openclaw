@@ -36,10 +36,9 @@ if [[ -z "$APPCAST_OUTPUT" ]]; then
   if [[ "$APP_NAME" == "OpenClaw" ]]; then
     APPCAST_OUTPUT="$ROOT/appcast.xml"
   else
-    # Consumer artifacts use clean names such as "OpenClaw Consumer.zip", so
-    # version inference depends on SPARKLE_RELEASE_VERSION. Keep the generated
-    # appcast next to that artifact unless a release caller explicitly targets
-    # the root appcast path.
+    # Nonstandard artifact names depend on SPARKLE_RELEASE_VERSION. Keep the
+    # generated appcast next to that artifact unless a release caller explicitly
+    # targets the root appcast path.
     APPCAST_OUTPUT="$ZIP_DIR/appcast.xml"
   fi
 fi

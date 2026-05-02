@@ -54,9 +54,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
-# Release bridge builds from main still ship as "OpenClaw Consumer.app".
-# Keep the verifier reusable by allowing the dist wrapper to pin the visible
-# name without changing the shared runtime-identity contract.
+# Release builds ship with the final visible product name by default while the
+# verifier stays reusable for debug lanes or explicit compatibility overrides.
 EXPECTED_NAME="${APP_NAME:-$(consumer_instance_display_name "$NORMALIZED_INSTANCE_ID")}"
 # Allow release/distribution callers to override the debug bundle id while still
 # reusing the same consumer-identity verifier.
