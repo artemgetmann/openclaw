@@ -84,6 +84,14 @@ Sparkle with a consumer-owned appcast. Do not point Consumer builds at the
 generic upstream OpenClaw appcast.
 
 ```bash
+# Read-only. Reports missing/present state without printing secret values.
+bash scripts/preflight-consumer-mac-release.sh
+```
+
+Set release credentials with real values in your local shell or password
+manager-backed environment. Keep private key files outside the repo.
+
+```bash
 export SPARKLE_FEED_URL="https://example.com/openclaw-consumer/appcast.xml"
 export SPARKLE_PUBLIC_ED_KEY="<consumer Sparkle public EdDSA key>"
 export SPARKLE_PRIVATE_KEY_FILE="$HOME/.config/openclaw/sparkle-consumer-private-key"
@@ -91,6 +99,24 @@ export NOTARYTOOL_PROFILE="<keychain notary profile>"
 
 bash scripts/package-consumer-mac-dist.sh
 ```
+
+Notary profile setup uses Apple's keychain profile storage:
+
+```bash
+xcrun notarytool store-credentials "<keychain notary profile>" \
+  --apple-id "<apple-id@example.com>" \
+  --team-id "<TEAMID>" \
+  --password "<app-specific-password>"
+```
+
+If the local Sparkle tools are built, generate a Consumer keypair with:
+
+```bash
+apps/macos/.build/artifacts/sparkle/Sparkle/bin/generate_keys
+```
+
+Store the generated private key outside the repo, put only the public EdDSA key
+in `SPARKLE_PUBLIC_ED_KEY`, and never commit generated key material.
 
 Local smoke packaging can skip Apple trust services and leave Sparkle disabled:
 
@@ -120,6 +146,22 @@ SPARKLE_FEED_URL="$SPARKLE_FEED_URL" \
 SPARKLE_DOWNLOAD_URL_PREFIX="https://example.com/openclaw-consumer/releases/${APP_VERSION}/" \
 SPARKLE_APPCAST_OUTPUT="dist/openclaw-consumer-appcast.xml" \
 bash scripts/make_appcast.sh "dist/OpenClaw Consumer.zip"
+```
+
+Real notarized release sequence:
+
+```bash
+bash scripts/preflight-consumer-mac-release.sh
+bash scripts/package-consumer-mac-dist.sh
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' 'dist/OpenClaw Consumer.app/Contents/Info.plist')"
+SPARKLE_APP_NAME="OpenClaw Consumer" \
+SPARKLE_RELEASE_VERSION="$APP_VERSION" \
+SPARKLE_FEED_URL="$SPARKLE_FEED_URL" \
+SPARKLE_DOWNLOAD_URL_PREFIX="https://example.com/openclaw-consumer/releases/${APP_VERSION}/" \
+SPARKLE_APPCAST_OUTPUT="dist/openclaw-consumer-appcast.xml" \
+bash scripts/make_appcast.sh "dist/OpenClaw Consumer.zip"
+SPARKLE_EXPECTED_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
+bash scripts/verify-consumer-mac-app.sh --release "dist/OpenClaw Consumer.app"
 ```
 
 ## Signing behavior
