@@ -9,12 +9,17 @@ source "$ROOT_DIR/scripts/lib/openclaw-runtime-payloads.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
+VERIFY_RELEASE="${OPENCLAW_CONSUMER_VERIFY_RELEASE:-0}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/verify-consumer-mac-app.sh [--instance <id>] [app_path]
+Usage: scripts/verify-consumer-mac-app.sh [--instance <id>] [--release] [app_path]
 Set OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 when verifying an isolated runtime
 lane that was packaged with the stable consumer debug app identity.
+
+Release verification:
+  --release or OPENCLAW_CONSUMER_VERIFY_RELEASE=1
+  SPARKLE_EXPECTED_PUBLIC_ED_KEY=...  Assert the bundled Sparkle public key
 EOF
 }
 
@@ -27,6 +32,10 @@ while [[ $# -gt 0 ]]; do
       fi
       INSTANCE_ID="$2"
       shift 2
+      ;;
+    --release)
+      VERIFY_RELEASE=1
+      shift
       ;;
     --help|-h)
       usage
@@ -266,6 +275,31 @@ if [[ $spctl_status -ne 0 ]]; then
   fi
 fi
 
+if [[ "$VERIFY_RELEASE" == "1" ]]; then
+  if [[ "$signing_authority" != Developer\ ID\ Application:* ]]; then
+    echo "ERROR: release verification requires a Developer ID Application signature." >&2
+    echo "Current signing authority: ${signing_authority:-unknown}" >&2
+    exit 1
+  fi
+
+  if [[ -z "$sparkle_feed_url" ]]; then
+    echo "ERROR: release verification requires a nonblank Sparkle feed URL." >&2
+    exit 1
+  fi
+
+  if [[ -n "${SPARKLE_EXPECTED_PUBLIC_ED_KEY:-}" && "$sparkle_public_ed_key" != "$SPARKLE_EXPECTED_PUBLIC_ED_KEY" ]]; then
+    echo "ERROR: release verification found the wrong Sparkle public key." >&2
+    echo "Expected the key provided by SPARKLE_EXPECTED_PUBLIC_ED_KEY; actual key is intentionally not printed." >&2
+    exit 1
+  fi
+
+  if [[ $spctl_status -ne 0 ]]; then
+    echo "ERROR: release verification requires Gatekeeper acceptance." >&2
+    echo "spctl output: ${spctl_output//$'\n'/ | }" >&2
+    exit 1
+  fi
+fi
+
 runtime_root="$(consumer_instance_runtime_root "$HOME" "$EFFECTIVE_INSTANCE_ID")"
 state_dir="$(consumer_instance_state_dir "$HOME" "$EFFECTIVE_INSTANCE_ID")"
 config_path="$(consumer_instance_config_path "$HOME" "$EFFECTIVE_INSTANCE_ID")"
@@ -288,7 +322,12 @@ echo "  build_timestamp=$actual_build_ts"
 echo "  sparkle_mode=$sparkle_mode"
 echo "  sparkle_feed_url=${sparkle_feed_url:-<blank>}"
 echo "  sparkle_auto_checks=${sparkle_auto_checks:-<missing>}"
-echo "  sparkle_public_ed_key=${sparkle_public_ed_key:-<blank>}"
+if [[ -n "$sparkle_public_ed_key" ]]; then
+  echo "  sparkle_public_ed_key=<present>"
+else
+  echo "  sparkle_public_ed_key=<blank>"
+fi
+echo "  release_verification=$VERIFY_RELEASE"
 echo "  signing_authority=${signing_authority:-unknown}"
 echo "  team_id=${team_identifier:-unknown}"
 echo "  code_format=${format_line:-unknown}"

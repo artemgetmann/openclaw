@@ -27,6 +27,11 @@ Env:
                       Defaults to the main checkout's dist/consumer-handoff
                       directory when run from a temp worktree.
                       Set to 0 to disable the handoff copy.
+  SPARKLE_FEED_URL=...        Consumer-owned Sparkle appcast URL for release
+  SPARKLE_PUBLIC_ED_KEY=...   Consumer Sparkle public EdDSA key
+  ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE=1
+                      Allow the generic development Sparkle key when
+                      notarization is skipped for local smoke packaging only
   VERSIONED_ARTIFACT_NAMES=1
                       Opt into versioned zip/dmg filenames instead of the
                       clean handoff defaults
@@ -51,6 +56,45 @@ bundle_signing_authority() {
   /usr/bin/codesign -dv --verbose=4 "$bundle_path" 2>&1 \
     | /usr/bin/sed -n 's/^Authority=//p' \
     | /usr/bin/head -n 1
+}
+
+consumer_sparkle_release_gate() {
+  local default_key="AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI="
+  local feed_url="${SPARKLE_FEED_URL:-}"
+  local public_key="${SPARKLE_PUBLIC_ED_KEY:-$default_key}"
+
+  if [[ "$public_key" == "$default_key" && "${ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE:-0}" != "1" ]]; then
+    echo "ERROR: consumer packaging is using the generic Sparkle public key." >&2
+    echo "Set SPARKLE_PUBLIC_ED_KEY to the consumer key for release packaging." >&2
+    echo "For local smoke packaging only, set ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE=1." >&2
+    exit 1
+  fi
+
+  if [[ "$NOTARIZE" != "1" ]]; then
+    if [[ "$public_key" == "$default_key" ]]; then
+      echo "WARN: consumer smoke packaging is intentionally using the generic Sparkle public key." >&2
+    fi
+    return 0
+  fi
+
+  if [[ -z "$feed_url" ]]; then
+    echo "ERROR: notarized consumer packaging requires SPARKLE_FEED_URL." >&2
+    echo "Use a consumer-owned Sparkle appcast URL, or rerun with SKIP_NOTARIZE=1 for local smoke packaging." >&2
+    exit 1
+  fi
+
+  if [[ "$feed_url" == "https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml" ]]; then
+    echo "ERROR: consumer release packaging must not use the generic OpenClaw appcast." >&2
+    echo "Set SPARKLE_FEED_URL to a consumer-owned feed." >&2
+    exit 1
+  fi
+
+  if [[ "$public_key" == "$default_key" ]]; then
+    echo "ERROR: notarized consumer packaging requires a consumer Sparkle public key." >&2
+    echo "Set SPARKLE_PUBLIC_ED_KEY to the production consumer key." >&2
+    echo "The generic development key is only allowed for smoke packaging with SKIP_NOTARIZE=1." >&2
+    exit 1
+  fi
 }
 
 sign_dmg_if_possible() {
@@ -186,6 +230,8 @@ if [[ "$SKIP_NOTARIZE" == "1" ]]; then
   NOTARIZE=0
 fi
 
+consumer_sparkle_release_gate
+
 APP_NAME="$APP_NAME" \
 APP_BUNDLE_NAME="$APP_BUNDLE_NAME" \
 BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
@@ -243,6 +289,11 @@ if [[ "$NOTARIZE" == "1" ]]; then
   ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$NOTARY_ZIP"
   STAPLE_APP_PATH="$APP_PATH" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
+  BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
+  APP_NAME="$APP_NAME" \
+  OPENCLAW_CONSUMER_VERIFY_RELEASE=1 \
+  SPARKLE_EXPECTED_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}" \
+    "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
 fi
 
 echo "💿 DMG: $DMG"

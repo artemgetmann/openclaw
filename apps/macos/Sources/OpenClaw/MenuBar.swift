@@ -455,11 +455,20 @@ private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
     return false
 }
 
+private func hasNonBlankSparkleFeedURL() -> Bool {
+    guard let rawFeedURL = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String else {
+        return false
+    }
+    return !rawFeedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+}
+
 @MainActor
 private func makeUpdaterController() -> UpdaterProviding {
     let bundleURL = Bundle.main.bundleURL
     let isBundledApp = bundleURL.pathExtension == "app"
-    guard isBundledApp, isDeveloperIDSigned(bundleURL: bundleURL) else { return DisabledUpdaterController() }
+    guard isBundledApp, isDeveloperIDSigned(bundleURL: bundleURL), hasNonBlankSparkleFeedURL() else {
+        return DisabledUpdaterController()
+    }
 
     let defaults = UserDefaults.standard
     let autoUpdateKey = "autoUpdateEnabled"
