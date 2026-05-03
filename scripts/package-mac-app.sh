@@ -426,13 +426,24 @@ bundle_consumer_cli_archive() {
   # packaging flow in a stale half-finished state.
   local pack_dir
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-cli-pack.XXXXXX")"
+  local excluded_dist_dir="$pack_dir/excluded-dist-artifacts"
+  local pack_status=0
   local archive_src=""
   rm -f "$pack_dir"/*.tgz 2>/dev/null || true
   echo "📦 Bundling consumer CLI archive"
+  stage_consumer_cli_pack_excluded_dist_artifacts "$excluded_dist_dir"
+  set +e
   (
     cd "$ROOT_DIR"
     "$VALIDATED_NPM_BIN" pack --ignore-scripts --pack-destination "$pack_dir" >/dev/null
   )
+  pack_status=$?
+  set -e
+  restore_consumer_cli_pack_excluded_dist_artifacts "$excluded_dist_dir"
+  if (( pack_status != 0 )); then
+    echo "ERROR: npm pack failed while bundling consumer CLI archive." >&2
+    exit "$pack_status"
+  fi
   archive_src="$(find "$pack_dir" -maxdepth 1 -type f -name 'openclaw-*.tgz' -print -quit)"
   if [[ -z "$archive_src" || ! -f "$archive_src" ]]; then
     echo "ERROR: expected bundled CLI archive missing in staging dir: $pack_dir" >&2
@@ -441,6 +452,149 @@ bundle_consumer_cli_archive() {
   CLI_ARCHIVE_STAGED="$pack_dir/$BUNDLED_CLI_ARCHIVE_NAME"
   CLI_ARCHIVE_STAGE_DIR="$pack_dir"
   mv "$archive_src" "$CLI_ARCHIVE_STAGED"
+  sign_consumer_cli_archive_machos "$CLI_ARCHIVE_STAGED"
+}
+
+stage_consumer_cli_pack_excluded_dist_artifacts() {
+  local excluded_dir="$1"
+  local artifact=""
+  local moved_count=0
+
+  mkdir -p "$excluded_dir"
+  if [[ ! -d "$ROOT_DIR/dist" ]]; then
+    return 0
+  fi
+
+  for artifact in \
+    "$ROOT_DIR"/dist/*.app \
+    "$ROOT_DIR"/dist/*.dmg \
+    "$ROOT_DIR"/dist/*.zip \
+    "$ROOT_DIR"/dist/*appcast*.xml
+  do
+    [[ -e "$artifact" ]] || continue
+    mv "$artifact" "$excluded_dir/"
+    moved_count=$((moved_count + 1))
+  done
+
+  if (( moved_count > 0 )); then
+    echo "📦 Temporarily excluded $moved_count mac release artifact(s) from CLI npm pack"
+  fi
+}
+
+restore_consumer_cli_pack_excluded_dist_artifacts() {
+  local excluded_dir="$1"
+  local artifact=""
+
+  if [[ ! -d "$excluded_dir" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$ROOT_DIR/dist"
+  for artifact in "$excluded_dir"/*; do
+    [[ -e "$artifact" ]] || continue
+    mv "$artifact" "$ROOT_DIR/dist/"
+  done
+  rmdir "$excluded_dir" 2>/dev/null || true
+}
+
+select_cli_archive_signing_identity() {
+  local preferred=""
+  local available=""
+
+  if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+    printf '%s\n' "$SIGN_IDENTITY"
+    return 0
+  fi
+
+  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
+    | awk -F'\"' '/Developer ID Application/ { print $2; exit }')"
+  if [[ -n "$preferred" ]]; then
+    printf '%s\n' "$preferred"
+    return 0
+  fi
+
+  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
+    | awk -F'\"' '/Apple Distribution/ { print $2; exit }')"
+  if [[ -n "$preferred" ]]; then
+    printf '%s\n' "$preferred"
+    return 0
+  fi
+
+  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
+    | awk -F'\"' '/Apple Development/ { print $2; exit }')"
+  if [[ -n "$preferred" ]]; then
+    printf '%s\n' "$preferred"
+    return 0
+  fi
+
+  available="$(security find-identity -p codesigning -v 2>/dev/null \
+    | sed -n 's/.*\"\\(.*\\)\"/\\1/p')"
+  if [[ -n "$available" ]]; then
+    printf '%s\n' "$available" | head -n1
+    return 0
+  fi
+
+  if [[ "${ALLOW_ADHOC_SIGNING:-}" == "1" ]]; then
+    printf '%s\n' "-"
+    return 0
+  fi
+
+  return 1
+}
+
+sign_consumer_cli_archive_machos() {
+  local archive_path="$1"
+  local signing_identity=""
+  local timestamp_arg="--timestamp=none"
+  local work_dir=""
+  local macho_count=0
+  local macho_file=""
+  local repacked_archive=""
+
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$archive_path" ]]; then
+    echo "ERROR: consumer CLI archive missing before signing: $archive_path" >&2
+    exit 1
+  fi
+  if ! signing_identity="$(select_cli_archive_signing_identity)"; then
+    echo "ERROR: no codesigning identity found for consumer CLI archive." >&2
+    echo "Set SIGN_IDENTITY or ALLOW_ADHOC_SIGNING=1 before packaging." >&2
+    exit 1
+  fi
+
+  if [[ "$signing_identity" == *"Developer ID Application"* ]]; then
+    timestamp_arg="--timestamp"
+  fi
+  if [[ "$signing_identity" == "-" ]]; then
+    timestamp_arg="--timestamp=none"
+  fi
+
+  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-cli-archive-sign.XXXXXX")"
+  tar -xzf "$archive_path" -C "$work_dir"
+  if [[ ! -d "$work_dir/package" ]]; then
+    echo "ERROR: consumer CLI archive did not contain npm package root." >&2
+    rm -rf "$work_dir"
+    exit 1
+  fi
+
+  while IFS= read -r -d '' macho_file; do
+    if /usr/bin/file "$macho_file" | /usr/bin/grep -q "Mach-O"; then
+      macho_count=$((macho_count + 1))
+      codesign --remove-signature "$macho_file" 2>/dev/null || true
+      codesign --force --options runtime "$timestamp_arg" --sign "$signing_identity" "$macho_file"
+    fi
+  done < <(find "$work_dir/package" -type f -print0)
+
+  if (( macho_count > 0 )); then
+    echo "🔏 Signed $macho_count Mach-O file(s) inside bundled consumer CLI archive"
+  fi
+
+  repacked_archive="$work_dir/$BUNDLED_CLI_ARCHIVE_NAME"
+  tar -czf "$repacked_archive" -C "$work_dir" package
+  mv "$repacked_archive" "$archive_path"
+  rm -rf "$work_dir"
 }
 
 ensure_consumer_node_runtime() {
@@ -729,6 +883,9 @@ prepare_bundled_consumer_runtime() {
   mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist"
   rsync -a \
     --exclude '*.app' \
+    --exclude '*.dmg' \
+    --exclude '*.zip' \
+    --exclude '*appcast*.xml' \
     "$ROOT_DIR/dist/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist/"
 
   deploy_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-deploy.XXXXXX")"
