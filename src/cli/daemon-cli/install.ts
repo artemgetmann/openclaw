@@ -5,8 +5,10 @@ import {
 } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
 import { resolveGatewayRuntimeIdentityEnv } from "../../daemon/service-env.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -70,19 +72,32 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   if (loaded) {
     if (!opts.force) {
-      emit({
-        ok: true,
-        result: "already-installed",
-        message: `Gateway service already ${service.loadedText}.`,
-        service: buildDaemonServiceSnapshot(service, loaded),
+      const currentCommand = await service.readCommand(daemonEnv).catch(() => null);
+      const embeddedTokenRefreshMessage = getEmbeddedGatewayTokenRefreshMessage({
+        currentCommand,
+        plannedEnvironment: environment,
       });
-      if (!json) {
-        defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
-        defaultRuntime.log(
-          `Reinstall with: ${formatCliCommand("openclaw gateway install --force", daemonEnv)}`,
-        );
+      if (embeddedTokenRefreshMessage) {
+        if (json) {
+          warnings.push(embeddedTokenRefreshMessage);
+        } else {
+          defaultRuntime.log(embeddedTokenRefreshMessage);
+        }
+      } else {
+        emit({
+          ok: true,
+          result: "already-installed",
+          message: `Gateway service already ${service.loadedText}.`,
+          service: buildDaemonServiceSnapshot(service, loaded),
+        });
+        if (!json) {
+          defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
+          defaultRuntime.log(
+            `Reinstall with: ${formatCliCommand("openclaw gateway install --force", daemonEnv)}`,
+          );
+        }
+        return;
       }
-      return;
     }
   }
 
@@ -134,4 +149,26 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       });
     },
   });
+}
+
+function getEmbeddedGatewayTokenRefreshMessage(params: {
+  currentCommand: GatewayServiceCommandConfig | null;
+  plannedEnvironment: Record<string, string | undefined>;
+}): string | undefined {
+  const currentEmbeddedToken = params.currentCommand
+    ? readEmbeddedGatewayToken(params.currentCommand)
+    : undefined;
+  if (!currentEmbeddedToken) {
+    return undefined;
+  }
+
+  // Env-file backed service tokens are ignored by readEmbeddedGatewayToken().
+  // Only inline/stale service tokens should bypass the already-installed fast path.
+  const plannedEmbeddedToken =
+    params.plannedEnvironment.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  if (currentEmbeddedToken === plannedEmbeddedToken) {
+    return undefined;
+  }
+
+  return "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.";
 }
