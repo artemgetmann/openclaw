@@ -338,11 +338,14 @@ Latest focused result:
   - point `OPENCLAW_CONFIG_PATH` at the temp config while the loopback MCP server handles the Claude turn
 - Result before watchdog fix: preflight passed, but the live Claude CLI memory-chain turn could hang before MCP initialization and exceeded the requested `--timeout-ms 240000`; this exposed a separate runner/watchdog failure.
 - Result after watchdog fix: the same strict smoke now fails cleanly with `FailoverError: CLI produced no output for 192s and was terminated.`
+- Follow-up bisect result: the no-output failure is not specific to `memory_get`, `haiku`, or the indexed-memory prompt. A new `memory-indexed-search` smoke also no-outputed on both `haiku` and `sonnet`, and a new no-tool `temp-config-echo` smoke also no-outputed.
+- Scoped loopback config checkpoint: replaced the smoke's process-wide `OPENCLAW_CONFIG_PATH` swap with a scoped in-memory MCP loopback config override experiment. Unit coverage passed, but the live `temp-config-echo` smoke still failed after MCP `initialize` returned OK and before Claude sent `notifications/initialized`, `tools/list`, or assistant output.
 
 Decision:
 
 - Do not mark memory-chain parity green yet.
-- The remaining blocker is no longer "fresh memory file cannot be indexed" or "timeout does not fire"; it is "Claude CLI produces no output for the strict memory-chain live turn."
+- The remaining blocker is no longer "fresh memory file cannot be indexed," "timeout does not fire," or "memory_get specifically fails"; it is "Claude CLI produces no output for temp-config-shaped runs after MCP initialize."
+- Next suspect: generated Claude MCP config/session setup or warm-session reuse around strict temp-config runs.
 
 ### Slice 3: Warm Claude CLI spike
 
@@ -505,6 +508,6 @@ Tests run in this slice:
 
 Next:
 
-1. debug why Claude CLI produces no output for the strict memory-chain prompt even though temp-memory preflight passes
+1. debug why Claude CLI produces no output for temp-config-shaped runs after MCP `initialize` even when no tools are requested
 2. rerun strict `memory_search -> memory_get` without direct fallback after the no-output cause is fixed
 3. keep PR #586 draft until that strict memory-chain gate is green or explicitly accepted as a follow-up blocker
