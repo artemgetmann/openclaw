@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { resolveSessionAgentId } from "../src/agents/agent-scope.js";
 import { runCliAgent } from "../src/agents/cli-runner.js";
 import {
   getClaudeLiveSessionSnapshotsForTest,
@@ -15,6 +16,7 @@ import {
   ensureMcpLoopbackServer,
   getActiveMcpLoopbackRuntime,
 } from "../src/gateway/mcp-http.js";
+import { getMemorySearchManager } from "../src/memory/index.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 
@@ -105,7 +107,39 @@ function createConfig(workspaceDir: string): OpenClawConfig {
     agents: {
       defaults: {
         workspace: workspaceDir,
+        memorySearch: {
+          provider: "none",
+          fallback: "none",
+          store: {
+            path: path.join(workspaceDir, ".openclaw-smoke-memory.sqlite"),
+            vector: {
+              enabled: false,
+            },
+          },
+          sync: {
+            onSessionStart: false,
+            onSearch: false,
+            watch: false,
+          },
+          query: {
+            minScore: 0,
+            maxResults: 5,
+          },
+        },
       },
+      list: [
+        {
+          id: "main",
+          default: true,
+          agentDir: path.join(workspaceDir, ".openclaw-smoke-agent-main"),
+          workspace: workspaceDir,
+        },
+        {
+          id: "claude-cli-continuity",
+          agentDir: path.join(workspaceDir, ".openclaw-smoke-agent-claude-cli-continuity"),
+          workspace: workspaceDir,
+        },
+      ],
     },
     tools: {
       exec: {
@@ -114,6 +148,42 @@ function createConfig(workspaceDir: string): OpenClawConfig {
       },
     },
   };
+}
+
+async function syncMemoryForSmoke(ctx: {
+  config: OpenClawConfig;
+  sessionKey: string;
+  memoryNeedle: string;
+}): Promise<string> {
+  const agentId = resolveSessionAgentId({
+    sessionKey: ctx.sessionKey,
+    config: ctx.config,
+  });
+  const managerResult = await getMemorySearchManager({
+    cfg: ctx.config,
+    agentId,
+  });
+  const { manager, error } = managerResult;
+  if (!manager) {
+    throw new Error(`Memory manager unavailable for smoke preflight: ${error ?? "unknown error"}`);
+  }
+
+  // The product path intentionally syncs in the background on search. This smoke
+  // needs a deterministic fresh-file gate, so force the isolated temp index to
+  // include the just-written MEMORY.md before Claude searches it.
+  await manager.sync?.({ reason: "claude-cli-memory-chain-smoke", force: true });
+  const results = await manager.search(ctx.memoryNeedle, { maxResults: 3, minScore: 0 });
+  const entry = results.find((result) => result.path === "MEMORY.md");
+  if (!entry) {
+    throw new Error(
+      [
+        "Memory chain preflight could not find the temp MEMORY.md entry after forced sync.",
+        `Needle: ${ctx.memoryNeedle}`,
+        `Results: ${JSON.stringify(results, null, 2)}`,
+      ].join("\n"),
+    );
+  }
+  return entry.path;
 }
 
 async function createSmokeContext() {
@@ -130,6 +200,8 @@ async function createSmokeContext() {
   const sessionKey = `agent:claude-cli-continuity:${randomUUID()}`;
   const sessionFile = path.join(workspaceDir, "session.jsonl");
   const config = createConfig(workspaceDir);
+  const configPath = path.join(workspaceDir, "openclaw-smoke-config.json");
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
   return {
     timeoutMs,
     model,
@@ -139,8 +211,23 @@ async function createSmokeContext() {
     sessionId,
     sessionKey,
     sessionFile,
+    configPath,
     config,
   };
+}
+
+async function withSmokeConfigPath<T>(configPath: string, callback: () => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_CONFIG_PATH;
+  process.env.OPENCLAW_CONFIG_PATH = configPath;
+  try {
+    return await callback();
+  } finally {
+    if (typeof previous === "string") {
+      process.env.OPENCLAW_CONFIG_PATH = previous;
+    } else {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    }
+  }
 }
 
 async function runAgentTurn(params: {
@@ -473,19 +560,28 @@ async function runMemoryChainSmoke(): Promise<void> {
     ].join("\n"),
     "utf-8",
   );
-  const turn = await runAgentTurn({
-    ...ctx,
-    model: ctx.model,
-    runId: "smoke-claude-cli-memory-chain",
-    prompt: [
-      "You must use the directly available mcp__openclaw__memory_search tool first.",
-      `Search for the exact query: ${memoryNeedle}. Set maxResults to 1.`,
-      "Then use the directly available mcp__openclaw__memory_get tool exactly once for the path from the search result.",
-      'If the search result is empty or has no usable path, use path="MEMORY.md", from=1, and lines=6, and say MEMORY_CHAIN_DIRECT_PATH_USED.',
-      "Do not use ToolSearch, shell, filesystem, browser, or web tools.",
-      `Then reply with one short sentence containing MEMORY_CHAIN_MCP_OK, the exact nonce ${ctx.nonce}, and the exact needle ${memoryNeedle}.`,
-    ].join("\n"),
+  const indexedMemoryPath = await syncMemoryForSmoke({
+    config: ctx.config,
+    sessionKey: ctx.sessionKey,
+    memoryNeedle,
   });
+  const turn = await withSmokeConfigPath(
+    ctx.configPath,
+    async () =>
+      await runAgentTurn({
+        ...ctx,
+        model: ctx.model,
+        runId: "smoke-claude-cli-memory-chain",
+        prompt: [
+          "You must use the directly available mcp__openclaw__memory_search tool first.",
+          `Search for the exact query: ${memoryNeedle}. Set maxResults to 1.`,
+          "Then use the directly available mcp__openclaw__memory_get tool exactly once for the path from the search result.",
+          "If the search result is empty or has no usable path, reply with MEMORY_CHAIN_SEARCH_EMPTY and do not call memory_get.",
+          "Do not use ToolSearch, shell, filesystem, browser, or web tools.",
+          `Then reply with one short sentence containing MEMORY_CHAIN_MCP_OK, the exact nonce ${ctx.nonce}, and the exact needle ${memoryNeedle}.`,
+        ].join("\n"),
+      }),
+  );
   const text = textFromResult(turn.result);
   if (
     !text.includes("MEMORY_CHAIN_MCP_OK") ||
@@ -497,6 +593,12 @@ async function runMemoryChainSmoke(): Promise<void> {
   if (containsToolSubstitution(text)) {
     throw new Error(`Memory chain smoke substituted another tool. Text: ${text}`);
   }
+  if (
+    text.includes("MEMORY_CHAIN_SEARCH_EMPTY") ||
+    text.includes("MEMORY_CHAIN_DIRECT_PATH_USED")
+  ) {
+    throw new Error(`Memory chain smoke did not use the indexed search result path. Text: ${text}`);
+  }
   console.log(
     JSON.stringify(
       {
@@ -507,7 +609,8 @@ async function runMemoryChainSmoke(): Promise<void> {
         workspaceDir: ctx.workspaceDir,
         nonce: ctx.nonce,
         memoryNeedle,
-        directPathFallbackUsed: text.includes("MEMORY_CHAIN_DIRECT_PATH_USED"),
+        indexedMemoryPath,
+        directPathFallbackUsed: false,
         claudeSessionId: sessionIdFromResult(turn.result),
         assistantStartMs: turn.assistantStartMs,
         firstVisibleTextMs: turn.firstVisibleTextMs,
@@ -663,8 +766,8 @@ async function runBrowserOpenSnapshotSmoke(): Promise<void> {
         runId: "smoke-claude-cli-browser-open-snapshot",
         prompt: [
           "You must use the directly available mcp__openclaw__browser tool exactly twice.",
-          `First call it with action="open", profile="openclaw", targetUrl="${targetUrl}", and timeoutMs=15000.`,
-          'Then call it with action="snapshot", profile="openclaw", snapshotFormat="ai", maxChars=2000, and timeoutMs=15000.',
+          `First call it with action="open", profile="openclaw", targetUrl="${targetUrl}", and timeoutMs=45000.`,
+          'Then call it with action="snapshot", profile="openclaw", targetId set to the targetId returned by open, snapshotFormat="ai", maxChars=2000, and timeoutMs=45000.',
           "Do not use ToolSearch, web tools, shell, or filesystem tools.",
           "Only include BROWSER_OPEN_SNAPSHOT_MCP_OK if both browser calls succeeded and the snapshot output included the page marker.",
           "If either browser call times out or errors, reply with BROWSER_OPEN_SNAPSHOT_MCP_FAIL and the error summary instead.",

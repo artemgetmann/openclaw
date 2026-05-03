@@ -259,7 +259,16 @@ Measured result:
 Blockers:
 
 - none for `browser.status` or `browser.tabs`.
-- `browser.open` reaches the tool and succeeds, but `browser.snapshot` currently times out during browser connection.
+- `browser.open + browser.snapshot` is now passed after making the smoke snapshot the `targetId` returned by `browser.open` and allowing a 45s browser-tool timeout.
+
+Additional proof:
+
+- `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode browser-open-snapshot --model haiku --timeout-ms 240000`
+  - pass: Claude called `browser.open`, then `browser.snapshot`
+  - pass: loopback returned `toolName="browser"` and `isError=false` for both calls
+  - pass: Claude returned `BROWSER_OPEN_SNAPSHOT_MCP_OK` with nonce `RUNCLI_ec68c8a7a5c24826`
+  - total: `19555.9ms`
+  - Claude session id: `77448afd-424c-486e-a9d9-1a85ffdce21b`
 
 ### Slice 2b: Memory/tool surface parity
 
@@ -316,7 +325,23 @@ Additional proof:
 
 Remaining check:
 
-- make the memory index include the known temp entry quickly enough that `memory_search` returns the path without direct fallback
+- make the Claude CLI memory-chain turn complete reliably after the deterministic temp index preflight passes
+
+Latest focused result:
+
+- Added explicit FTS-only memory support with `agents.*.memorySearch.provider = "none"` so fresh `MEMORY.md` files can be indexed and searched without any embedding provider or real auth profile.
+- Added `src/memory/manager.fts-only-index.test.ts`; it proves `MEMORY.md` indexes and searches in FTS-only mode.
+- Updated `memory-chain` smoke to:
+  - create an isolated temp config/index
+  - force-sync the temp memory manager before asking Claude
+  - remove the old direct `MEMORY.md` fallback success path
+  - point `OPENCLAW_CONFIG_PATH` at the temp config while the loopback MCP server handles the Claude turn
+- Result: preflight now passes, but the live Claude CLI memory-chain turn can still hang before MCP initialization and exceeded the requested `--timeout-ms 240000`; this exposed a separate runner/watchdog failure.
+
+Decision:
+
+- Do not mark memory-chain parity green yet.
+- The remaining blocker is no longer "fresh memory file cannot be indexed"; it is "Claude CLI memory-chain live turn can hang instead of failing within the configured timeout."
 
 ### Slice 3: Warm Claude CLI spike
 
@@ -393,11 +418,12 @@ Pass condition:
 Current pass/fail:
 
 - session continuity: pass
-- loopback MCP memory/browser tools: pass for `memory_search`, `memory_get`, `memory_search -> memory_get` with direct path fallback, `browser.status`, and `browser.tabs`
-- browser open+snapshot: fail at `snapshot` timeout after successful `open`
-- cross-backend `/codex -> Claude` context: fail; Claude CLI does not replay prior Codex turn yet
+- loopback MCP memory/browser tools: pass for `memory_search`, `memory_get`, `memory_search -> memory_get` with direct path fallback, `browser.status`, `browser.tabs`, and `browser.open -> browser.snapshot`
+- browser open+snapshot: pass
+- cross-backend `/codex -> Claude` context: pass after Shared Transcript Replay
 - same live process reuse on same-model follow-up: pass
 - warm latency: pass for the current `haiku` smoke; follow-up was materially faster after PID reuse
+- strict `memory_search -> memory_get` without direct fallback: red; deterministic FTS-only preflight works, but the live Claude CLI turn can hang before MCP initialization and the runner watchdog did not terminate it
 
 ### Slice 4: Product decision
 
@@ -455,7 +481,11 @@ Tests run in this slice:
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode memory-chain --model haiku --timeout-ms 240000`
   - pass with caveat: Claude called `memory_search`, then `memory_get`; search did not return the new temp entry, so Claude used the explicit `MEMORY.md` fallback path
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode browser-open-snapshot --model haiku --timeout-ms 240000`
-  - fail: Claude called `browser.open` successfully, then `browser.snapshot` returned `isError=true` after a 15s browser connection timeout
+  - pass after targetId/timeout smoke fix: Claude called `browser.open`, then `browser.snapshot`, and returned `BROWSER_OPEN_SNAPSHOT_MCP_OK`
+- `pnpm exec vitest run src/memory/manager.fts-only-index.test.ts`
+  - pass: 1 file, 1 test
+- `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode memory-chain --model haiku --timeout-ms 240000`
+  - fail: deterministic temp-memory preflight passed, but the live Claude CLI turn hung before MCP initialization and exceeded `--timeout-ms 240000`
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode codex-context --model haiku --codex-model gpt-5.5 --timeout-ms 240000`
   - pass after Shared Transcript Replay For Claude CLI: Codex setup turn completed, and Claude returned the prior Codex context needle from the same OpenClaw session
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode latency --model haiku --timeout-ms 180000`
@@ -472,5 +502,6 @@ Tests run in this slice:
 
 Next:
 
-1. debug browser snapshot connection timeout after successful `browser.open`
-2. make temp memory sync/indexing deterministic enough for `memory_search -> memory_get` without direct path fallback
+1. fix Claude CLI live-session timeout/watchdog so hung turns terminate and report a real failure
+2. rerun strict `memory_search -> memory_get` without direct fallback after the watchdog fix
+3. keep PR #586 draft until that strict memory-chain gate is green or explicitly accepted as a follow-up blocker

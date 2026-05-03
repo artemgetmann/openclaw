@@ -826,11 +826,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           .run(pathname, source);
       } catch {}
     }
-    if (this.fts.enabled && this.fts.available && this.provider) {
+    if (this.fts.enabled && this.fts.available) {
       try {
-        this.db
-          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-          .run(pathname, source, this.provider.model);
+        const sql = this.provider
+          ? `DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`
+          : `DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`;
+        const params = this.provider
+          ? ([pathname, source, this.provider.model] as const)
+          : ([pathname, source] as const);
+        this.db.prepare(sql).run(...params);
       } catch {}
     }
     this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);
@@ -863,18 +867,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ) {
-    // FTS-only mode: skip indexing if no provider
-    if (!this.provider) {
-      log.debug("Skipping embedding indexing in FTS-only mode", {
-        path: entry.path,
-        source: options.source,
-      });
-      return;
-    }
-
     let chunks: MemoryChunk[];
     let structuredInputBytes: number | undefined;
     if ("kind" in entry && entry.kind === "multimodal") {
+      if (!this.provider) {
+        this.clearIndexedFileData(entry.path, options.source);
+        this.deleteFileRecord(entry.path, options.source);
+        return;
+      }
       const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
       if (!multimodalChunk) {
         this.clearIndexedFileData(entry.path, options.source);
@@ -885,51 +885,53 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       chunks = [multimodalChunk.chunk];
     } else {
       const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-      chunks = enforceEmbeddingMaxInputTokens(
-        this.provider,
-        chunkMarkdown(content, this.settings.chunking).filter(
-          (chunk) => chunk.text.trim().length > 0,
-        ),
-        EMBEDDING_BATCH_MAX_TOKENS,
+      chunks = chunkMarkdown(content, this.settings.chunking).filter(
+        (chunk) => chunk.text.trim().length > 0,
       );
+      if (this.provider) {
+        chunks = enforceEmbeddingMaxInputTokens(this.provider, chunks, EMBEDDING_BATCH_MAX_TOKENS);
+      }
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
       }
     }
-    let embeddings: number[][];
-    try {
-      embeddings = this.batch.enabled
-        ? await this.embedChunksWithBatch(chunks, entry, options.source)
-        : await this.embedChunksInBatches(chunks);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (
-        "kind" in entry &&
-        entry.kind === "multimodal" &&
-        this.isStructuredInputTooLargeError(message)
-      ) {
-        log.warn("memory embeddings: skipping multimodal file rejected as too large", {
-          path: entry.path,
-          bytes: structuredInputBytes,
-          provider: this.provider.id,
-          model: this.provider.model,
-          error: message,
-        });
-        this.clearIndexedFileData(entry.path, options.source);
-        this.upsertFileRecord(entry, options.source);
-        return;
+    let embeddings: number[][] = chunks.map(() => []);
+    if (this.provider) {
+      try {
+        embeddings = this.batch.enabled
+          ? await this.embedChunksWithBatch(chunks, entry, options.source)
+          : await this.embedChunksInBatches(chunks);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (
+          "kind" in entry &&
+          entry.kind === "multimodal" &&
+          this.isStructuredInputTooLargeError(message)
+        ) {
+          log.warn("memory embeddings: skipping multimodal file rejected as too large", {
+            path: entry.path,
+            bytes: structuredInputBytes,
+            provider: this.provider.id,
+            model: this.provider.model,
+            error: message,
+          });
+          this.clearIndexedFileData(entry.path, options.source);
+          this.upsertFileRecord(entry, options.source);
+          return;
+        }
+        throw err;
       }
-      throw err;
     }
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
     const now = Date.now();
     this.clearIndexedFileData(entry.path, options.source);
+    const model = this.provider?.model ?? "fts-only";
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const embedding = embeddings[i] ?? [];
       const id = hashText(
-        `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${this.provider.model}`,
+        `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
       );
       this.db
         .prepare(
@@ -949,7 +951,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           chunk.startLine,
           chunk.endLine,
           chunk.hash,
-          this.provider.model,
+          model,
           chunk.text,
           JSON.stringify(embedding),
           now,
@@ -968,15 +970,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
               ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(
-            chunk.text,
-            id,
-            entry.path,
-            options.source,
-            this.provider.model,
-            chunk.startLine,
-            chunk.endLine,
-          );
+          .run(chunk.text, id, entry.path, options.source, model, chunk.startLine, chunk.endLine);
       }
     }
     this.upsertFileRecord(entry, options.source);
