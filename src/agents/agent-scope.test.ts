@@ -65,6 +65,35 @@ describe("resolveAgentConfig", () => {
       subagents: undefined,
       sandbox: undefined,
       tools: undefined,
+      contextLimits: undefined,
+    });
+  });
+
+  it("merges contextLimits from defaults with per-agent overrides", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          contextLimits: {
+            memoryGetMaxChars: 20_000,
+            memoryGetDefaultLines: 180,
+            toolResultMaxChars: 18_000,
+          },
+        },
+        list: [
+          {
+            id: "main",
+            contextLimits: {
+              memoryGetMaxChars: 24_000,
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveAgentConfig(cfg, "main")?.contextLimits).toEqual({
+      memoryGetMaxChars: 24_000,
+      memoryGetDefaultLines: 180,
+      toolResultMaxChars: 18_000,
     });
   });
 

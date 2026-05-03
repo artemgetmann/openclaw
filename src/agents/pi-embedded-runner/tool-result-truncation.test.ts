@@ -6,11 +6,14 @@ import {
   truncateToolResultText,
   truncateToolResultMessage,
   calculateMaxToolResultChars,
+  calculateMaxToolResultCharsWithCap,
   getToolResultTextLength,
   truncateOversizedToolResultsInMessages,
   isOversizedToolResult,
   sessionLikelyHasOversizedToolResults,
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   HARD_MAX_TOOL_RESULT_CHARS,
+  resolveLiveToolResultMaxChars,
 } from "./tool-result-truncation.js";
 
 let testTimestamp = 1;
@@ -57,10 +60,17 @@ describe("truncateToolResultText", () => {
     expect(result).toContain("truncated");
   });
 
-  it("preserves at least MIN_KEEP_CHARS (2000)", () => {
+  it("preserves at least MIN_KEEP_CHARS (2000) when the budget allows it", () => {
     const text = "x".repeat(50_000);
-    const result = truncateToolResultText(text, 100); // Even with small limit
+    const result = truncateToolResultText(text, 3_000);
     expect(result.length).toBeGreaterThan(2000);
+  });
+
+  it("never exceeds tiny configured caps", () => {
+    const text = "x".repeat(50_000);
+    const result = truncateToolResultText(text, 120);
+    expect(result.length).toBeLessThanOrEqual(120);
+    expect(result).toContain("truncated");
   });
 
   it("tries to break at newline boundary", () => {
@@ -145,9 +155,14 @@ describe("truncateToolResultMessage", () => {
 
 describe("calculateMaxToolResultChars", () => {
   it("scales with context window size", () => {
-    const small = calculateMaxToolResultChars(32_000);
+    const small = calculateMaxToolResultChars(8_000);
     const large = calculateMaxToolResultChars(200_000);
     expect(large).toBeGreaterThan(small);
+  });
+
+  it("exports the live cap through both constant names", () => {
+    expect(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS).toBe(16_000);
+    expect(HARD_MAX_TOOL_RESULT_CHARS).toBe(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
   });
 
   it("caps at HARD_MAX_TOOL_RESULT_CHARS for very large windows", () => {
@@ -157,9 +172,29 @@ describe("calculateMaxToolResultChars", () => {
 
   it("returns reasonable size for 128K context", () => {
     const result = calculateMaxToolResultChars(128_000);
-    // 30% of 128K = 38.4K tokens * 4 chars = 153.6K chars
-    expect(result).toBeGreaterThan(100_000);
-    expect(result).toBeLessThan(200_000);
+    expect(result).toBe(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
+  });
+
+  it("supports a higher configured hard cap", () => {
+    expect(calculateMaxToolResultCharsWithCap(128_000, 32_000)).toBe(32_000);
+  });
+
+  it("resolves per-agent tool-result cap overrides", () => {
+    const result = resolveLiveToolResultMaxChars({
+      contextWindowTokens: 128_000,
+      cfg: {
+        agents: {
+          defaults: {
+            contextLimits: {
+              toolResultMaxChars: 24_000,
+            },
+          },
+          list: [{ id: "writer" }],
+        },
+      } as unknown as Parameters<typeof resolveLiveToolResultMaxChars>[0]["cfg"],
+      agentId: "writer",
+    });
+    expect(result).toBe(24_000);
   });
 });
 
@@ -177,6 +212,11 @@ describe("isOversizedToolResult", () => {
   it("returns false for non-toolResult messages", () => {
     const msg = makeUserMessage("x".repeat(500_000));
     expect(isOversizedToolResult(msg, 128_000)).toBe(false);
+  });
+
+  it("honors an explicit higher maxChars override", () => {
+    const msg = makeToolResult("x".repeat(20_000));
+    expect(isOversizedToolResult(msg, 128_000, 24_000)).toBe(false);
   });
 });
 

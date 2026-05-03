@@ -25,6 +25,12 @@ export { resolveAgentIdFromSessionKey };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
+export type AgentContextLimitsConfig = {
+  toolResultMaxChars?: number;
+  memoryGetMaxChars?: number;
+  memoryGetDefaultLines?: number;
+};
+
 type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
@@ -33,6 +39,7 @@ type ResolvedAgentConfig = {
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
+  contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
@@ -40,6 +47,21 @@ type ResolvedAgentConfig = {
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };
+
+function asContextLimits(value: unknown): AgentContextLimitsConfig | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as AgentContextLimitsConfig;
+}
+
+function readDefaultsContextLimits(
+  cfg: OpenClawConfig | undefined,
+): AgentContextLimitsConfig | undefined {
+  return asContextLimits(
+    (cfg?.agents?.defaults as { contextLimits?: unknown } | undefined)?.contextLimits,
+  );
+}
 
 let defaultAgentWarned = false;
 
@@ -124,6 +146,8 @@ export function resolveAgentConfig(
   if (!entry) {
     return undefined;
   }
+  const defaultContextLimits = readDefaultsContextLimits(cfg);
+  const agentContextLimits = asContextLimits((entry as { contextLimits?: unknown }).contextLimits);
   return {
     name: typeof entry.name === "string" ? entry.name : undefined,
     workspace: typeof entry.workspace === "string" ? entry.workspace : undefined,
@@ -135,6 +159,9 @@ export function resolveAgentConfig(
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
+    contextLimits: agentContextLimits
+      ? { ...defaultContextLimits, ...agentContextLimits }
+      : defaultContextLimits,
     heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,
@@ -142,6 +169,17 @@ export function resolveAgentConfig(
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+export function resolveAgentContextLimits(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): AgentContextLimitsConfig | undefined {
+  const defaults = readDefaultsContextLimits(cfg);
+  if (!cfg || !agentId) {
+    return defaults;
+  }
+  return resolveAgentConfig(cfg, agentId)?.contextLimits ?? defaults;
 }
 
 export function resolveAgentSkillsFilter(
