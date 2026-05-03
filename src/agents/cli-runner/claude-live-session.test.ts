@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CliBackendConfig } from "../../config/types.js";
-import { buildClaudeLiveArgs, shouldUseClaudeLiveSession } from "./claude-live-session.js";
+import type { ManagedRun, ProcessSupervisor, SpawnInput } from "../../process/supervisor/types.js";
+import {
+  buildClaudeLiveArgs,
+  getClaudeLiveSessionSnapshotsForTest,
+  resetClaudeLiveSessionsForTest,
+  runClaudeLiveSessionTurn,
+  shouldUseClaudeLiveSession,
+} from "./claude-live-session.js";
 
 const backend = {
   command: "claude",
@@ -14,6 +21,11 @@ const backend = {
 } satisfies CliBackendConfig;
 
 describe("Claude CLI live session helpers", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    resetClaudeLiveSessionsForTest();
+  });
+
   it("adds stdio live-process flags without removing first-turn prompt args", () => {
     const args = buildClaudeLiveArgs({
       backend,
@@ -73,7 +85,7 @@ describe("Claude CLI live session helpers", () => {
         provider: "claude-cli",
         modelId: "opus",
         normalizedModel: "opus",
-        timeoutMs: 1_000,
+        timeoutMs: 5_000,
         systemPrompt: "safe prompt",
       }),
     ).toBe(true);
@@ -90,5 +102,64 @@ describe("Claude CLI live session helpers", () => {
         systemPrompt: "safe prompt",
       }),
     ).toBe(false);
+  });
+
+  it("fails and cleans up when a live turn produces no output while stdin write is stuck", async () => {
+    vi.useFakeTimers();
+    const cancelMock = vi.fn();
+    const cleanupMock = vi.fn(async () => {});
+    const stdinWriteMock = vi.fn((_data: string, _cb?: (err?: Error | null) => void) => {
+      // Simulate a wedged Claude process that never accepts the prompt write.
+    });
+    const managedRun = {
+      runId: "run-stuck-stdin",
+      pid: 4321,
+      startedAtMs: Date.now(),
+      stdin: {
+        write: stdinWriteMock,
+        end: vi.fn(),
+      },
+      wait: vi.fn(async () => await new Promise<never>(() => {})),
+      cancel: cancelMock,
+    } satisfies ManagedRun;
+    const supervisor = {
+      spawn: vi.fn(async (_input: SpawnInput) => managedRun),
+      cancel: vi.fn(),
+      cancelScope: vi.fn(),
+      reconcileOrphans: vi.fn(async () => {}),
+      getRecord: vi.fn(),
+    } satisfies ProcessSupervisor;
+
+    const turnPromise = runClaudeLiveSessionTurn({
+      context: {
+        backendId: "claude-cli",
+        backend,
+        sessionId: "session-stuck-stdin",
+        workspaceDir: "/tmp/openclaw-live-test",
+        provider: "claude-cli",
+        modelId: "haiku",
+        normalizedModel: "haiku",
+        timeoutMs: 1_000,
+        systemPrompt: "safe prompt",
+      },
+      args: ["-p"],
+      env: {},
+      prompt: "remember this",
+      useResume: false,
+      noOutputTimeoutMs: 1_000,
+      getProcessSupervisor: () => supervisor,
+      onAssistantDelta: vi.fn(),
+      cleanup: cleanupMock,
+    });
+
+    const rejection = expect(turnPromise).rejects.toThrow(
+      "CLI produced no output for 1s and was terminated.",
+    );
+    await vi.advanceTimersByTimeAsync(1_001);
+    await rejection;
+    expect(stdinWriteMock).toHaveBeenCalledOnce();
+    expect(cancelMock).toHaveBeenCalledWith("manual-cancel");
+    expect(cleanupMock).toHaveBeenCalledOnce();
+    expect(getClaudeLiveSessionSnapshotsForTest()).toEqual([]);
   });
 });

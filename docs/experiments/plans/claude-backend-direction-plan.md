@@ -336,12 +336,13 @@ Latest focused result:
   - force-sync the temp memory manager before asking Claude
   - remove the old direct `MEMORY.md` fallback success path
   - point `OPENCLAW_CONFIG_PATH` at the temp config while the loopback MCP server handles the Claude turn
-- Result: preflight now passes, but the live Claude CLI memory-chain turn can still hang before MCP initialization and exceeded the requested `--timeout-ms 240000`; this exposed a separate runner/watchdog failure.
+- Result before watchdog fix: preflight passed, but the live Claude CLI memory-chain turn could hang before MCP initialization and exceeded the requested `--timeout-ms 240000`; this exposed a separate runner/watchdog failure.
+- Result after watchdog fix: the same strict smoke now fails cleanly with `FailoverError: CLI produced no output for 192s and was terminated.`
 
 Decision:
 
 - Do not mark memory-chain parity green yet.
-- The remaining blocker is no longer "fresh memory file cannot be indexed"; it is "Claude CLI memory-chain live turn can hang instead of failing within the configured timeout."
+- The remaining blocker is no longer "fresh memory file cannot be indexed" or "timeout does not fire"; it is "Claude CLI produces no output for the strict memory-chain live turn."
 
 ### Slice 3: Warm Claude CLI spike
 
@@ -423,7 +424,7 @@ Current pass/fail:
 - cross-backend `/codex -> Claude` context: pass after Shared Transcript Replay
 - same live process reuse on same-model follow-up: pass
 - warm latency: pass for the current `haiku` smoke; follow-up was materially faster after PID reuse
-- strict `memory_search -> memory_get` without direct fallback: red; deterministic FTS-only preflight works, but the live Claude CLI turn can hang before MCP initialization and the runner watchdog did not terminate it
+- strict `memory_search -> memory_get` without direct fallback: red; deterministic FTS-only preflight works, and the watchdog now terminates the live Claude CLI turn cleanly, but Claude still produces no output for that turn
 
 ### Slice 4: Product decision
 
@@ -485,7 +486,9 @@ Tests run in this slice:
 - `pnpm exec vitest run src/memory/manager.fts-only-index.test.ts`
   - pass: 1 file, 1 test
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode memory-chain --model haiku --timeout-ms 240000`
-  - fail: deterministic temp-memory preflight passed, but the live Claude CLI turn hung before MCP initialization and exceeded `--timeout-ms 240000`
+  - fail before watchdog fix: deterministic temp-memory preflight passed, but the live Claude CLI turn hung before MCP initialization and exceeded `--timeout-ms 240000`
+- `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode memory-chain --model haiku --timeout-ms 240000`
+  - fail after watchdog fix: deterministic temp-memory preflight passed, then the live Claude CLI turn failed cleanly with `FailoverError: CLI produced no output for 192s and was terminated.`
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode codex-context --model haiku --codex-model gpt-5.5 --timeout-ms 240000`
   - pass after Shared Transcript Replay For Claude CLI: Codex setup turn completed, and Claude returned the prior Codex context needle from the same OpenClaw session
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode latency --model haiku --timeout-ms 180000`
@@ -502,6 +505,6 @@ Tests run in this slice:
 
 Next:
 
-1. fix Claude CLI live-session timeout/watchdog so hung turns terminate and report a real failure
-2. rerun strict `memory_search -> memory_get` without direct fallback after the watchdog fix
+1. debug why Claude CLI produces no output for the strict memory-chain prompt even though temp-memory preflight passes
+2. rerun strict `memory_search -> memory_get` without direct fallback after the no-output cause is fixed
 3. keep PR #586 draft until that strict memory-chain gate is green or explicitly accepted as a follow-up blocker

@@ -832,15 +832,19 @@ export async function runClaudeLiveSessionTurn(params: {
     params.context.replyOperation?.attachBackend?.(replyBackendHandle);
   }
   try {
-    if (params.context.abortSignal?.aborted) {
-      abort();
-    } else {
-      try {
-        await writeTurnInput(liveSession, params.prompt);
-      } catch (error) {
-        closeLiveSession(liveSession, "abort", error);
+    // The watchdog owns turn completion once timers are armed; a wedged stdin write
+    // must not block the caller from observing timeout/no-output rejection.
+    const writePromise = (async () => {
+      if (params.context.abortSignal?.aborted) {
+        abort();
+        return;
       }
-    }
+      await writeTurnInput(liveSession, params.prompt);
+    })();
+    void writePromise.catch((error) => {
+      closeLiveSession(liveSession, "abort", error);
+    });
+    await Promise.race([outputPromise, writePromise]);
     return { output: await outputPromise };
   } finally {
     replyBackendCompleted = true;
