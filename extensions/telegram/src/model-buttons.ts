@@ -296,7 +296,11 @@ export function resolveRecommendedFamilyModel(params: {
     if (sonnet) {
       return { provider, model: sonnet };
     }
-    const gpt = [...models].find((model) => model.toLowerCase().includes("gpt"));
+    const gpt = [...models].find(
+      (model) =>
+        model.toLowerCase().includes("gpt") &&
+        shouldShowInModelFamily({ family: params.family, model }),
+    );
     if (gpt) {
       return { provider, model: gpt };
     }
@@ -312,6 +316,8 @@ export function listFamilyModels(params: {
 }): FamilyModelRef[] {
   const info = resolveModelFamilyInfo(params.family);
   const out: FamilyModelRef[] = [];
+  const seenLabels = new Set<string>();
+  const excludedLabel = params.exclude ? formatFamilyModelLabel(params.family, params.exclude) : "";
   for (const provider of info.providers) {
     const models = params.byProvider.get(provider);
     if (!models) {
@@ -321,17 +327,72 @@ export function listFamilyModels(params: {
       if (params.exclude?.provider === provider && params.exclude.model === model) {
         continue;
       }
+      if (!shouldShowInModelFamily({ family: params.family, model })) {
+        continue;
+      }
+      const label = formatFamilyModelLabel(params.family, { provider, model });
+      if (label === excludedLabel || seenLabels.has(label)) {
+        continue;
+      }
+      seenLabels.add(label);
       out.push({ provider, model });
     }
   }
   return out;
 }
 
-function formatFamilyModelLabel(ref: FamilyModelRef): string {
-  if (ref.provider === "claude-bridge") {
-    return truncateModelId(formatModelDisplayName(ref.provider, ref.model), 38);
+function shouldShowInModelFamily(params: { family: ModelFamilyId; model: string }): boolean {
+  if (params.family !== "chatgpt") {
+    return true;
   }
-  return truncateModelId(ref.model, 38);
+  // The ChatGPT family is for chat/coding model selection. Image models stay in
+  // the raw provider browser behind top-level More.
+  return !/\bimage\b/i.test(params.model);
+}
+
+function formatFamilyModelLabel(family: ModelFamilyId, ref: FamilyModelRef): string {
+  if (family === "chatgpt") {
+    return formatChatGptModelLabel(ref.model);
+  }
+
+  if (ref.provider === "claude-bridge") {
+    return formatClaudeModelLabel(formatModelDisplayName(ref.provider, ref.model));
+  }
+  return formatClaudeModelLabel(ref.model);
+}
+
+function formatClaudeModelLabel(model: string): string {
+  const normalized = model.toLowerCase();
+  const shortMatch = normalized.match(/^claude-(sonnet|opus|haiku)-([0-9]+)-([0-9]+)$/);
+  if (shortMatch) {
+    return `${capitalize(shortMatch[1] ?? "")} ${shortMatch[2]}.${shortMatch[3]}`;
+  }
+
+  const versionedMatch = normalized.match(/^claude-[0-9]+-[0-9]+-(sonnet|opus|haiku)/);
+  if (versionedMatch) {
+    return capitalize(versionedMatch[1] ?? "");
+  }
+
+  return truncateModelId(model, 38);
+}
+
+function formatChatGptModelLabel(model: string): string {
+  const normalized = model.toLowerCase();
+  const gptMatch = normalized.match(/^gpt-([0-9]+(?:\.[0-9]+)?)(?:-(.+))?$/);
+  if (!gptMatch) {
+    return truncateModelId(model, 38);
+  }
+
+  const suffix = gptMatch[2]
+    ?.split("-")
+    .filter(Boolean)
+    .map((part) => (part.toLowerCase() === "gpt" ? "GPT" : capitalize(part)))
+    .join(" ");
+  return suffix ? `GPT ${gptMatch[1]} ${suffix}` : `GPT ${gptMatch[1]}`;
+}
+
+function capitalize(value: string): string {
+  return value ? `${value.charAt(0).toUpperCase()}${value.slice(1).toLowerCase()}` : value;
 }
 
 export function buildModelFamilyKeyboard(params: {
@@ -360,7 +421,7 @@ export function buildModelFamilyKeyboard(params: {
       continue;
     }
     const currentRef = `${ref.provider}/${ref.model}`;
-    const label = formatFamilyModelLabel(ref);
+    const label = formatFamilyModelLabel(params.family, ref);
     rows.push([
       {
         text: currentRef === params.currentModel ? `${label} ✓` : label,
