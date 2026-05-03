@@ -9,6 +9,7 @@ import {
   createMcpLoopbackServerConfig,
   ensureMcpLoopbackServer,
   getActiveMcpLoopbackRuntime,
+  registerMcpLoopbackConfigOverride,
 } from "../gateway/mcp-http.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -757,6 +758,15 @@ export async function runCliAgent(params: {
     }
     mcpLoopbackRuntime = getActiveMcpLoopbackRuntime();
   }
+  const unregisterMcpLoopbackConfigOverride =
+    mcpLoopbackRuntime && params.config
+      ? registerMcpLoopbackConfigOverride({
+          ownerToken: mcpLoopbackRuntime.ownerToken,
+          nonOwnerToken: mcpLoopbackRuntime.nonOwnerToken,
+          sessionKey: params.sessionKey,
+          config: params.config,
+        })
+      : undefined;
   const preparedBackend = await prepareCliBundleMcpConfig({
     backendId: backendResolved.id,
     backend: backendResolved.config,
@@ -1350,6 +1360,7 @@ export async function runCliAgent(params: {
       throw err;
     }
   } finally {
+    unregisterMcpLoopbackConfigOverride?.();
     await preparedBackend.cleanup?.();
   }
 }

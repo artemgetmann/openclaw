@@ -8,11 +8,13 @@ import { loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import { getHeader } from "./http-utils.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  resolveMcpLoopbackConfigOverride,
   setActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
@@ -26,6 +28,7 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 export {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  registerMcpLoopbackConfigOverride,
   resolveMcpLoopbackBearerToken,
 } from "./mcp-http.loopback-runtime.js";
 
@@ -102,7 +105,13 @@ export async function startMcpLoopbackServer(port = 0): Promise<McpLoopbackServe
       try {
         const body = await readMcpHttpBody(req);
         const parsed: JsonRpcRequest | JsonRpcRequest[] = JSON.parse(body);
-        const cfg = loadConfig();
+        const cfg =
+          resolveMcpLoopbackConfigOverride({
+            ownerToken,
+            nonOwnerToken,
+            senderIsOwner: auth.senderIsOwner,
+            rawSessionKey: getHeader(req, "x-session-key"),
+          }) ?? loadConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const scopedTools = toolCache.resolve({
           cfg,

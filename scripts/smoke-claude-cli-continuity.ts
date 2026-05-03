@@ -60,24 +60,28 @@ function mode():
   | "continuity"
   | "memory"
   | "memory-get"
+  | "memory-indexed-search"
   | "memory-chain"
   | "browser"
   | "browser-tabs"
   | "browser-open-snapshot"
   | "codex-context"
   | "latency"
+  | "temp-config-echo"
   | "inspect" {
   const raw = readFlag("--mode") ?? "continuity";
   if (
     raw === "continuity" ||
     raw === "memory" ||
     raw === "memory-get" ||
+    raw === "memory-indexed-search" ||
     raw === "memory-chain" ||
     raw === "browser" ||
     raw === "browser-tabs" ||
     raw === "browser-open-snapshot" ||
     raw === "codex-context" ||
     raw === "latency" ||
+    raw === "temp-config-echo" ||
     raw === "inspect"
   ) {
     return raw;
@@ -124,6 +128,11 @@ function createConfig(workspaceDir: string): OpenClawConfig {
           query: {
             minScore: 0,
             maxResults: 5,
+          },
+        },
+        cliBackends: {
+          "claude-cli": {
+            command: "claude",
           },
         },
       },
@@ -214,20 +223,6 @@ async function createSmokeContext() {
     configPath,
     config,
   };
-}
-
-async function withSmokeConfigPath<T>(configPath: string, callback: () => Promise<T>): Promise<T> {
-  const previous = process.env.OPENCLAW_CONFIG_PATH;
-  process.env.OPENCLAW_CONFIG_PATH = configPath;
-  try {
-    return await callback();
-  } finally {
-    if (typeof previous === "string") {
-      process.env.OPENCLAW_CONFIG_PATH = previous;
-    } else {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    }
-  }
 }
 
 async function runAgentTurn(params: {
@@ -545,13 +540,13 @@ async function runMemoryGetSmoke(): Promise<void> {
   );
 }
 
-async function runMemoryChainSmoke(): Promise<void> {
+async function createIndexedMemorySmokeContext(label: string) {
   const ctx = await createSmokeContext();
-  const memoryNeedle = `MEMORY_CHAIN_NEEDLE_${ctx.nonce}`;
+  const memoryNeedle = `MEMORY_${label}_NEEDLE_${ctx.nonce}`;
   await fs.writeFile(
     path.join(ctx.workspaceDir, "MEMORY.md"),
     [
-      "# Claude CLI Memory Chain Smoke",
+      `# Claude CLI Memory ${label} Smoke`,
       "",
       "This file is created by the live smoke harness.",
       `Needle: ${memoryNeedle}`,
@@ -565,23 +560,108 @@ async function runMemoryChainSmoke(): Promise<void> {
     sessionKey: ctx.sessionKey,
     memoryNeedle,
   });
-  const turn = await withSmokeConfigPath(
-    ctx.configPath,
-    async () =>
-      await runAgentTurn({
-        ...ctx,
+  return { ctx, memoryNeedle, indexedMemoryPath };
+}
+
+async function runMemoryIndexedSearchSmoke(): Promise<void> {
+  const { ctx, memoryNeedle, indexedMemoryPath } =
+    await createIndexedMemorySmokeContext("SEARCH_ONLY");
+  const turn = await runAgentTurn({
+    ...ctx,
+    model: ctx.model,
+    runId: "smoke-claude-cli-memory-indexed-search",
+    prompt: [
+      "You must use the directly available mcp__openclaw__memory_search tool exactly once.",
+      `Search for the exact query: ${memoryNeedle}. Set maxResults to 1.`,
+      "Do not use ToolSearch, shell, filesystem, browser, web tools, or memory_get.",
+      `Then reply with one short sentence containing MEMORY_INDEXED_SEARCH_MCP_OK, the exact nonce ${ctx.nonce}, and the exact needle ${memoryNeedle}.`,
+    ].join("\n"),
+  });
+  const text = textFromResult(turn.result);
+  if (
+    !text.includes("MEMORY_INDEXED_SEARCH_MCP_OK") ||
+    !text.includes(ctx.nonce) ||
+    !text.includes(memoryNeedle)
+  ) {
+    throw new Error(`Memory indexed search smoke did not report expected needle. Text: ${text}`);
+  }
+  if (containsToolSubstitution(text)) {
+    throw new Error(`Memory indexed search smoke substituted another tool. Text: ${text}`);
+  }
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        mode: "memory-indexed-search",
+        provider: "claude-cli",
         model: ctx.model,
-        runId: "smoke-claude-cli-memory-chain",
-        prompt: [
-          "You must use the directly available mcp__openclaw__memory_search tool first.",
-          `Search for the exact query: ${memoryNeedle}. Set maxResults to 1.`,
-          "Then use the directly available mcp__openclaw__memory_get tool exactly once for the path from the search result.",
-          "If the search result is empty or has no usable path, reply with MEMORY_CHAIN_SEARCH_EMPTY and do not call memory_get.",
-          "Do not use ToolSearch, shell, filesystem, browser, or web tools.",
-          `Then reply with one short sentence containing MEMORY_CHAIN_MCP_OK, the exact nonce ${ctx.nonce}, and the exact needle ${memoryNeedle}.`,
-        ].join("\n"),
-      }),
+        workspaceDir: ctx.workspaceDir,
+        nonce: ctx.nonce,
+        memoryNeedle,
+        indexedMemoryPath,
+        claudeSessionId: sessionIdFromResult(turn.result),
+        assistantStartMs: turn.assistantStartMs,
+        firstVisibleTextMs: turn.firstVisibleTextMs,
+        totalMs: turn.totalMs,
+        text,
+      },
+      null,
+      2,
+    ),
   );
+}
+
+async function runTempConfigEchoSmoke(): Promise<void> {
+  const ctx = await createSmokeContext();
+  const turn = await runAgentTurn({
+    ...ctx,
+    model: ctx.model,
+    runId: "smoke-claude-cli-temp-config-echo",
+    prompt: [
+      "Do not use tools.",
+      `Reply with one short sentence containing TEMP_CONFIG_ECHO_OK and the exact nonce ${ctx.nonce}.`,
+    ].join("\n"),
+  });
+  const text = textFromResult(turn.result);
+  if (!text.includes("TEMP_CONFIG_ECHO_OK") || !text.includes(ctx.nonce)) {
+    throw new Error(`Temp config echo smoke did not report expected nonce. Text: ${text}`);
+  }
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        mode: "temp-config-echo",
+        provider: "claude-cli",
+        model: ctx.model,
+        workspaceDir: ctx.workspaceDir,
+        nonce: ctx.nonce,
+        claudeSessionId: sessionIdFromResult(turn.result),
+        assistantStartMs: turn.assistantStartMs,
+        firstVisibleTextMs: turn.firstVisibleTextMs,
+        totalMs: turn.totalMs,
+        text,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+async function runMemoryChainSmoke(): Promise<void> {
+  const { ctx, memoryNeedle, indexedMemoryPath } = await createIndexedMemorySmokeContext("CHAIN");
+  const turn = await runAgentTurn({
+    ...ctx,
+    model: ctx.model,
+    runId: "smoke-claude-cli-memory-chain",
+    prompt: [
+      "You must use the directly available mcp__openclaw__memory_search tool first.",
+      `Search for the exact query: ${memoryNeedle}. Set maxResults to 1.`,
+      "Then use the directly available mcp__openclaw__memory_get tool exactly once for the path from the search result.",
+      "If the search result is empty or has no usable path, reply with MEMORY_CHAIN_SEARCH_EMPTY and do not call memory_get.",
+      "Do not use ToolSearch, shell, filesystem, browser, or web tools.",
+      `Then reply with one short sentence containing MEMORY_CHAIN_MCP_OK, the exact nonce ${ctx.nonce}, and the exact needle ${memoryNeedle}.`,
+    ].join("\n"),
+  });
   const text = textFromResult(turn.result);
   if (
     !text.includes("MEMORY_CHAIN_MCP_OK") ||
@@ -985,6 +1065,10 @@ async function main(): Promise<void> {
     await runMemoryGetSmoke();
     return;
   }
+  if (selectedMode === "memory-indexed-search") {
+    await runMemoryIndexedSearchSmoke();
+    return;
+  }
   if (selectedMode === "memory-chain") {
     await runMemoryChainSmoke();
     return;
@@ -1003,6 +1087,10 @@ async function main(): Promise<void> {
   }
   if (selectedMode === "codex-context") {
     await runCodexContextSwitchSmoke();
+    return;
+  }
+  if (selectedMode === "temp-config-echo") {
+    await runTempConfigEchoSmoke();
     return;
   }
   if (selectedMode === "latency") {

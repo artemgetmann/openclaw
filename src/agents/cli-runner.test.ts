@@ -52,6 +52,7 @@ vi.mock("../gateway/mcp-http.js", () => ({
     ownerToken: "owner-token",
     nonOwnerToken: "non-owner-token",
   })),
+  registerMcpLoopbackConfigOverride: vi.fn(() => vi.fn()),
   createMcpLoopbackServerConfig: (port: number) => ({
     mcpServers: {
       openclaw: {
