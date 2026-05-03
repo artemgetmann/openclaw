@@ -1,6 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentContextLimits } from "../agent-scope.js";
 import { log } from "./logger.js";
 
 /**
@@ -11,12 +13,14 @@ import { log } from "./logger.js";
 const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
 
 /**
- * Hard character limit for a single tool result text block.
- * Even for the largest context windows (~2M tokens), a single tool result
- * should not exceed ~400K characters (~100K tokens).
- * This acts as a safety net when we don't know the context window size.
+ * Default hard character limit for a live tool result.
+ * Keep this conservative so one oversized tool payload cannot dominate the
+ * next model request or persisted transcript.
  */
-export const HARD_MAX_TOOL_RESULT_CHARS = 400_000;
+export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 16_000;
+
+/** Backward-compatible alias for older call sites/tests. */
+export const HARD_MAX_TOOL_RESULT_CHARS = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 
 /**
  * Minimum characters to keep when truncating.
@@ -37,6 +41,36 @@ type ToolResultTruncationOptions = {
   suffix?: string;
   minKeepChars?: number;
 };
+
+function resolveEffectiveMinKeepChars(params: {
+  maxChars: number;
+  minKeepChars: number;
+  suffix: string;
+}): number {
+  return Math.max(
+    0,
+    Math.min(params.minKeepChars, Math.max(0, params.maxChars - params.suffix.length)),
+  );
+}
+
+function appendBoundedTruncationSuffix(params: {
+  keptText: string;
+  maxChars: number;
+  suffix: string;
+}): string {
+  let keptText = params.keptText;
+  while (true) {
+    const finalText = keptText + params.suffix;
+    if (finalText.length <= params.maxChars) {
+      return finalText;
+    }
+    if (keptText.length === 0) {
+      return finalText.slice(0, params.maxChars);
+    }
+    const overflow = finalText.length - params.maxChars;
+    keptText = keptText.slice(0, Math.max(0, keptText.length - overflow));
+  }
+}
 
 /**
  * Marker inserted between head and tail when using head+tail truncation.
@@ -74,11 +108,16 @@ export function truncateToolResultText(
   options: ToolResultTruncationOptions = {},
 ): string {
   const suffix = options.suffix ?? TRUNCATION_SUFFIX;
-  const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
+  const boundedMaxChars = Math.max(1, Math.floor(maxChars));
+  const minKeepChars = resolveEffectiveMinKeepChars({
+    maxChars: boundedMaxChars,
+    minKeepChars: options.minKeepChars ?? MIN_KEEP_CHARS,
+    suffix,
+  });
   if (text.length <= maxChars) {
     return text;
   }
-  const budget = Math.max(minKeepChars, maxChars - suffix.length);
+  const budget = Math.max(minKeepChars, boundedMaxChars - suffix.length);
 
   // If tail looks important, split budget between head and tail
   if (hasImportantTail(text) && budget > minKeepChars * 2) {
@@ -99,7 +138,11 @@ export function truncateToolResultText(
         tailStart = tailNewline + 1;
       }
 
-      return text.slice(0, headCut) + MIDDLE_OMISSION_MARKER + text.slice(tailStart) + suffix;
+      return appendBoundedTruncationSuffix({
+        keptText: text.slice(0, headCut) + MIDDLE_OMISSION_MARKER + text.slice(tailStart),
+        maxChars: boundedMaxChars,
+        suffix,
+      });
     }
   }
 
@@ -109,7 +152,11 @@ export function truncateToolResultText(
   if (lastNewline > budget * 0.8) {
     cutPoint = lastNewline;
   }
-  return text.slice(0, cutPoint) + suffix;
+  return appendBoundedTruncationSuffix({
+    keptText: text.slice(0, cutPoint),
+    maxChars: boundedMaxChars,
+    suffix,
+  });
 }
 
 /**
@@ -120,10 +167,31 @@ export function truncateToolResultText(
  * actual ratio varies by tokenizer).
  */
 export function calculateMaxToolResultChars(contextWindowTokens: number): number {
+  return calculateMaxToolResultCharsWithCap(
+    contextWindowTokens,
+    DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  );
+}
+
+export function calculateMaxToolResultCharsWithCap(
+  contextWindowTokens: number,
+  hardCapChars: number,
+): number {
   const maxTokens = Math.floor(contextWindowTokens * MAX_TOOL_RESULT_CONTEXT_SHARE);
   // Rough conversion: ~4 chars per token on average
   const maxChars = maxTokens * 4;
-  return Math.min(maxChars, HARD_MAX_TOOL_RESULT_CHARS);
+  return Math.min(maxChars, Math.max(1, Math.floor(hardCapChars)));
+}
+
+export function resolveLiveToolResultMaxChars(params: {
+  contextWindowTokens: number;
+  cfg?: OpenClawConfig;
+  agentId?: string | null;
+}): number {
+  const configuredCap =
+    resolveAgentContextLimits(params.cfg, params.agentId)?.toolResultMaxChars ??
+    DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+  return calculateMaxToolResultCharsWithCap(params.contextWindowTokens, configuredCap);
 }
 
 /**
@@ -159,7 +227,12 @@ export function truncateToolResultMessage(
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
   const suffix = options.suffix ?? TRUNCATION_SUFFIX;
-  const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
+  const boundedMaxChars = Math.max(1, Math.floor(maxChars));
+  const minKeepChars = resolveEffectiveMinKeepChars({
+    maxChars: boundedMaxChars,
+    minKeepChars: options.minKeepChars ?? MIN_KEEP_CHARS,
+    suffix,
+  });
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
     return msg;
@@ -167,7 +240,7 @@ export function truncateToolResultMessage(
 
   // Calculate total text size
   const totalTextChars = getToolResultTextLength(msg);
-  if (totalTextChars <= maxChars) {
+  if (totalTextChars <= boundedMaxChars) {
     return msg;
   }
 
@@ -182,7 +255,11 @@ export function truncateToolResultMessage(
     }
     // Proportional budget for this block
     const blockShare = textBlock.text.length / totalTextChars;
-    const blockBudget = Math.max(minKeepChars + suffix.length, Math.floor(maxChars * blockShare));
+    const proportionalBudget = Math.floor(boundedMaxChars * blockShare);
+    const blockBudget = Math.max(
+      1,
+      Math.min(boundedMaxChars, Math.max(minKeepChars + suffix.length, proportionalBudget)),
+    );
     return {
       ...textBlock,
       text: truncateToolResultText(textBlock.text, blockBudget, { suffix, minKeepChars }),
@@ -206,11 +283,15 @@ export function truncateToolResultMessage(
 export async function truncateOversizedToolResultsInSession(params: {
   sessionFile: string;
   contextWindowTokens: number;
+  maxCharsOverride?: number;
   sessionId?: string;
   sessionKey?: string;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { sessionFile, contextWindowTokens } = params;
-  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  const maxChars = Math.max(
+    1,
+    params.maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
+  );
 
   try {
     const sessionManager = SessionManager.open(sessionFile);
@@ -340,8 +421,12 @@ export async function truncateOversizedToolResultsInSession(params: {
 export function truncateOversizedToolResultsInMessages(
   messages: AgentMessage[],
   contextWindowTokens: number,
+  maxCharsOverride?: number,
 ): { messages: AgentMessage[]; truncatedCount: number } {
-  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  const maxChars = Math.max(
+    1,
+    maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
+  );
   let truncatedCount = 0;
 
   const result = messages.map((msg) => {
@@ -362,11 +447,18 @@ export function truncateOversizedToolResultsInMessages(
 /**
  * Check if a tool result message exceeds the size limit for a given context window.
  */
-export function isOversizedToolResult(msg: AgentMessage, contextWindowTokens: number): boolean {
+export function isOversizedToolResult(
+  msg: AgentMessage,
+  contextWindowTokens: number,
+  maxCharsOverride?: number,
+): boolean {
   if ((msg as { role?: string }).role !== "toolResult") {
     return false;
   }
-  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  const maxChars = Math.max(
+    1,
+    maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
+  );
   return getToolResultTextLength(msg) > maxChars;
 }
 
@@ -378,9 +470,13 @@ export function isOversizedToolResult(msg: AgentMessage, contextWindowTokens: nu
 export function sessionLikelyHasOversizedToolResults(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
+  maxCharsOverride?: number;
 }): boolean {
   const { messages, contextWindowTokens } = params;
-  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  const maxChars = Math.max(
+    1,
+    params.maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
+  );
 
   for (const msg of messages) {
     if ((msg as { role?: string }).role !== "toolResult") {

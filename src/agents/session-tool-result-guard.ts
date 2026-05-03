@@ -6,7 +6,7 @@ import type {
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
-  HARD_MAX_TOOL_RESULT_CHARS,
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
 } from "./pi-embedded-runner/tool-result-truncation.js";
 import { createPendingToolCallState } from "./session-tool-result-state.js";
@@ -22,14 +22,18 @@ const GUARD_TRUNCATION_SUFFIX =
  * Returns the original message if under the limit, or a new message with
  * truncated text blocks otherwise.
  */
-function capToolResultSize(msg: AgentMessage): AgentMessage {
+function capToolResultSize(msg: AgentMessage, maxChars: number): AgentMessage {
   if ((msg as { role?: string }).role !== "toolResult") {
     return msg;
   }
-  return truncateToolResultMessage(msg, HARD_MAX_TOOL_RESULT_CHARS, {
+  return truncateToolResultMessage(msg, maxChars, {
     suffix: GUARD_TRUNCATION_SUFFIX,
     minKeepChars: 2_000,
   });
+}
+
+function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): number {
+  return Math.max(1, Math.floor(opts?.maxToolResultChars ?? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS));
 }
 
 function trimNonEmptyString(value: unknown): string | undefined {
@@ -101,6 +105,8 @@ export function installSessionToolResultGuard(
     beforeMessageWriteHook?: (
       event: PluginHookBeforeMessageWriteEvent,
     ) => PluginHookBeforeMessageWriteResult | undefined;
+    /** Optional live cap resolved from agent context limits and model context window. */
+    maxToolResultChars?: number;
   },
 ): {
   flushPendingToolResults: () => void;
@@ -124,6 +130,7 @@ export function installSessionToolResultGuard(
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
   const beforeWrite = opts?.beforeMessageWriteHook;
+  const maxToolResultChars = resolveMaxToolResultChars(opts);
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -158,7 +165,7 @@ export function installSessionToolResultGuard(
           }),
         );
         if (flushed) {
-          originalAppend(flushed as never);
+          originalAppend(capToolResultSize(flushed, maxToolResultChars) as never);
         }
       }
     }
@@ -195,7 +202,7 @@ export function installSessionToolResultGuard(
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
-      const capped = capToolResultSize(persistMessage(normalizedToolResult));
+      const capped = capToolResultSize(persistMessage(normalizedToolResult), maxToolResultChars);
       const persisted = applyBeforeWriteHook(
         persistToolResult(capped, {
           toolCallId: id ?? undefined,
@@ -206,7 +213,7 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(persisted as never);
+      return originalAppend(capToolResultSize(persisted, maxToolResultChars) as never);
     }
 
     // Skip tool call extraction for aborted/errored assistant messages.

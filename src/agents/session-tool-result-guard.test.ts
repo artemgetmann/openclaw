@@ -364,6 +364,19 @@ describe("installSessionToolResultGuard", () => {
     expect(text).toContain("truncated");
   });
 
+  it("honors tiny configured tool-result caps truthfully", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      maxToolResultChars: 120,
+    });
+
+    appendToolResultText(sm, "x".repeat(80_000));
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    expect(text.length).toBeLessThanOrEqual(120);
+    expect(text).toContain("truncated");
+  });
+
   it("does not truncate tool results under the limit", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
