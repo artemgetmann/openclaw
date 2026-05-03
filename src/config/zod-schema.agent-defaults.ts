@@ -157,6 +157,22 @@ export const AgentDefaultsSchema = z
     blockStreamingChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     humanDelay: HumanDelaySchema.optional(),
+    replyRunWatchdog: z
+      .object({
+        enabled: z.boolean().optional(),
+        intervalMs: z.number().int().positive().optional(),
+        text: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    replyTimeoutContinuation: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxAttempts: z.number().int().positive().optional(),
+        statusText: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),

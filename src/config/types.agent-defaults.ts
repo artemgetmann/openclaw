@@ -208,6 +208,27 @@ export type AgentDefaultsConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
+  /** One-shot visible progress ping for long user-triggered reply runs. */
+  replyRunWatchdog?: {
+    /** Set false to disable the progress ping. */
+    enabled?: boolean;
+    /** Milliseconds before sending the progress ping (default: 90000). */
+    intervalMs?: number;
+    /** Optional custom progress text. */
+    text?: string;
+  };
+  /** Auto-continue user-facing reply runs that hit the agent timeout before a final answer. */
+  replyTimeoutContinuation?: {
+    /** Set false to surface the timeout instead of auto-continuing. */
+    enabled?: boolean;
+    /**
+     * Maximum continuation attempts after the original user turn times out
+     * (default: 5). This does not count the original run.
+     */
+    maxAttempts?: number;
+    /** Optional status text sent before the continuation attempt. */
+    statusText?: string;
+  };
   timeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;

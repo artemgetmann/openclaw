@@ -47,14 +47,24 @@ import {
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
+import {
+  buildEmptyFinalFallbackPayload,
+  shouldReturnEmptyFinalFallback,
+} from "./empty-final-reply.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+import { isRenderablePayload, shouldSuppressReasoningPayload } from "./reply-payloads.js";
+import { startReplyRunWatchdog } from "./reply-run-watchdog.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import {
+  REPLY_TIMEOUT_CONTINUATION_PROMPT,
+  shouldContinueAfterReplyTimeout,
+} from "./timeout-continuation.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -155,13 +165,43 @@ export async function runReplyAgent(params: {
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
+  const didSendVisibleReply = { value: opts?.hasRepliedRef?.value === true };
+  const markVisibleReply = (payload: ReplyPayload) => {
+    if (shouldSuppressReasoningPayload(payload) || !isRenderablePayload(payload)) {
+      return;
+    }
+    didSendVisibleReply.value = true;
+  };
+  const runOpts =
+    opts &&
+    ({
+      ...opts,
+      onBlockReply: opts.onBlockReply
+        ? async (payload, context) => {
+            await opts.onBlockReply?.(payload, context);
+            markVisibleReply(payload);
+          }
+        : undefined,
+      onPartialReply: opts.onPartialReply
+        ? async (payload) => {
+            await opts.onPartialReply?.(payload);
+            markVisibleReply(payload);
+          }
+        : undefined,
+      onToolResult: opts.onToolResult
+        ? async (payload) => {
+            await opts.onToolResult?.(payload);
+            markVisibleReply(payload);
+          }
+        : undefined,
+    } satisfies GetReplyOptions);
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
     cfg,
     sessionKey,
     workspaceDir: followupRun.run.workspaceDir,
   });
   const blockReplyCoalescing =
-    blockStreamingEnabled && opts?.onBlockReply
+    blockStreamingEnabled && runOpts?.onBlockReply
       ? resolveEffectiveBlockStreamingConfig({
           cfg,
           provider: sessionCtx.Provider,
@@ -170,9 +210,9 @@ export async function runReplyAgent(params: {
         }).coalescing
       : undefined;
   const blockReplyPipeline =
-    blockStreamingEnabled && opts?.onBlockReply
+    blockStreamingEnabled && runOpts?.onBlockReply
       ? createBlockReplyPipeline({
-          onBlockReply: opts.onBlockReply,
+          onBlockReply: runOpts.onBlockReply,
           timeoutMs: blockReplyTimeoutMs,
           coalescing: blockReplyCoalescing,
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
@@ -229,7 +269,7 @@ export async function runReplyAgent(params: {
     followupRun,
     promptForEstimate: followupRun.prompt,
     sessionCtx,
-    opts,
+    opts: runOpts,
     defaultModel,
     agentCfgContextTokens,
     resolvedVerboseLevel,
@@ -241,7 +281,7 @@ export async function runReplyAgent(params: {
   });
 
   const runFollowupTurn = createFollowupRunner({
-    opts,
+    opts: runOpts,
     typing,
     typingMode,
     sessionEntry: activeSessionEntry,
@@ -342,31 +382,87 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
+  let stopReplyRunWatchdog = () => {};
   try {
     const runStartedAt = Date.now();
-    const runOutcome = await runAgentTurnWithFallback({
-      commandBody,
-      followupRun,
-      sessionCtx,
-      opts,
-      typingSignals,
-      blockReplyPipeline,
-      blockStreamingEnabled,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
-      applyReplyToMode,
-      shouldEmitToolResult,
-      shouldEmitToolOutput,
-      pendingToolTasks,
-      resetSessionAfterCompactionFailure,
-      resetSessionAfterRoleOrderingConflict,
-      isHeartbeat,
-      sessionKey,
-      getActiveSessionEntry: () => activeSessionEntry,
-      activeSessionStore,
-      storePath,
-      resolvedVerboseLevel,
-    });
+    const runSingleTurn = async (prompt: string) => {
+      stopReplyRunWatchdog = startReplyRunWatchdog({
+        cfg,
+        enabled:
+          !isHeartbeat &&
+          runOpts?.typingPolicy !== "system_event" &&
+          runOpts?.typingPolicy !== "heartbeat",
+        // The watchdog is a status ping, not an agent/tool result. Use the original
+        // channel callback so it does not suppress the empty-final fallback.
+        onBlockReply: opts?.onBlockReply,
+        log: (message) => defaultRuntime.log(message),
+      });
+      try {
+        return await runAgentTurnWithFallback({
+          commandBody: prompt,
+          followupRun,
+          sessionCtx,
+          opts: runOpts,
+          typingSignals,
+          blockReplyPipeline,
+          blockStreamingEnabled,
+          blockReplyChunking,
+          resolvedBlockStreamingBreak,
+          applyReplyToMode,
+          shouldEmitToolResult,
+          shouldEmitToolOutput,
+          pendingToolTasks,
+          resetSessionAfterCompactionFailure,
+          resetSessionAfterRoleOrderingConflict,
+          isHeartbeat,
+          sessionKey,
+          getActiveSessionEntry: () => activeSessionEntry,
+          activeSessionStore,
+          storePath,
+          resolvedVerboseLevel,
+        });
+      } finally {
+        stopReplyRunWatchdog();
+        stopReplyRunWatchdog = () => {};
+      }
+    };
+
+    let continuationAttempts = 0;
+    let runOutcome = await runSingleTurn(commandBody);
+    while (runOutcome.kind !== "final") {
+      // Direct block/tool deliveries may still be queued locally when the model
+      // returns. Drain them before deciding whether the user already saw a real
+      // answer; watchdog/status pings still bypass this wrapped path.
+      if (blockReplyPipeline) {
+        await blockReplyPipeline.flush({ force: true });
+      }
+      if (pendingToolTasks.size > 0) {
+        await Promise.allSettled(pendingToolTasks);
+      }
+      const timeoutContinuation = shouldContinueAfterReplyTimeout({
+        cfg,
+        opts: runOpts,
+        isHeartbeat,
+        attemptsUsed: continuationAttempts,
+        payloads: runOutcome.runResult.payloads ?? [],
+        didSendVisibleReply: didSendVisibleReply.value,
+        messagingToolSentTargets: runOutcome.runResult.messagingToolSentTargets,
+        messageProvider: followupRun.run.messageProvider,
+        originatingTo: sessionCtx.OriginatingTo,
+        accountId: sessionCtx.AccountId,
+      });
+      if (!timeoutContinuation.shouldContinue) {
+        break;
+      }
+      continuationAttempts += 1;
+      // This notice is visible, but it is not the final answer and must not mark
+      // the turn as satisfied. The continuation still owes the user a real reply.
+      await opts?.onBlockReply?.({ text: timeoutContinuation.config.statusText });
+      defaultRuntime.log(
+        `reply run timed out before final answer; auto-continuing attempt ${continuationAttempts}/${timeoutContinuation.config.maxAttempts}`,
+      );
+      runOutcome = await runSingleTurn(REPLY_TIMEOUT_CONTINUATION_PROMPT);
+    }
 
     if (runOutcome.kind === "final") {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
@@ -482,6 +578,20 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      if (
+        shouldReturnEmptyFinalFallback({
+          opts: runOpts,
+          isHeartbeat,
+          rawPayloads: payloadArray,
+          didSendVisibleReply: didSendVisibleReply.value,
+          messagingToolSentTargets: runResult.messagingToolSentTargets,
+          messageProvider: followupRun.run.messageProvider,
+          originatingTo: sessionCtx.OriginatingTo,
+          accountId: sessionCtx.AccountId,
+        })
+      ) {
+        return finalizeWithFollowup(buildEmptyFinalFallbackPayload(), queueKey, runFollowupTurn);
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -511,6 +621,21 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      if (
+        shouldReturnEmptyFinalFallback({
+          opts: runOpts,
+          isHeartbeat,
+          rawPayloads: payloadArray,
+          replyPayloads,
+          didSendVisibleReply: didSendVisibleReply.value,
+          messagingToolSentTargets: runResult.messagingToolSentTargets,
+          messageProvider: followupRun.run.messageProvider,
+          originatingTo: sessionCtx.OriginatingTo,
+          accountId: sessionCtx.AccountId,
+        })
+      ) {
+        return finalizeWithFollowup(buildEmptyFinalFallbackPayload(), queueKey, runFollowupTurn);
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -711,6 +836,7 @@ export async function runReplyAgent(params: {
     finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     throw error;
   } finally {
+    stopReplyRunWatchdog();
     blockReplyPipeline?.stop();
     typing.markRunComplete();
     // Safety net: the dispatcher's onIdle callback normally fires

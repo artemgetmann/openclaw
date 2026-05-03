@@ -9,7 +9,7 @@ import { onAgentEvent } from "../../infra/agent-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
@@ -2114,6 +2114,352 @@ describe("runReplyAgent transient HTTP retry", () => {
 
     const payload = Array.isArray(result) ? result[0] : result;
     expect(payload?.text).toContain("Recovered response");
+  });
+});
+
+describe("runReplyAgent reply liveness", () => {
+  function createRun(params?: {
+    opts?: Parameters<typeof runReplyAgent>[0]["opts"];
+    config?: Record<string, unknown>;
+    isHeartbeat?: boolean;
+    blockStreamingEnabled?: boolean;
+  }) {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const followupRun = createMockFollowupRun({
+      run: {
+        messageProvider: "telegram",
+        config: params?.config ?? {},
+      },
+    });
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue: { mode: "interrupt" } as unknown as QueueSettings,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: params?.opts,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: params?.blockStreamingEnabled ?? false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("sends one visible progress ping when a user run stays active past the watchdog interval", async () => {
+    vi.useFakeTimers();
+    const onBlockReply = vi.fn();
+    let finishRun: (() => void) | undefined;
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRun = () => resolve({ payloads: [{ text: "done" }], meta: {} });
+        }),
+    );
+
+    const runPromise = createRun({
+      opts: { onBlockReply },
+      config: {
+        agents: {
+          defaults: {
+            replyRunWatchdog: {
+              intervalMs: 10,
+              text: "Still working.",
+            },
+          },
+        },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(9);
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith({ text: "Still working." });
+
+    finishRun?.();
+    const result = await runPromise;
+    expect(result).toMatchObject({ text: "done" });
+  });
+
+  it("returns a visible fallback when a user run finishes with no payload", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+
+    const result = await createRun();
+
+    expect(result).toMatchObject({
+      text: "I finished the run, but the model did not return a visible reply.",
+    });
+  });
+
+  it("still returns the empty-final fallback after a watchdog progress ping", async () => {
+    vi.useFakeTimers();
+    const onBlockReply = vi.fn();
+    let finishRun: (() => void) | undefined;
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRun = () => resolve({ payloads: [], meta: {} });
+        }),
+    );
+
+    const runPromise = createRun({
+      opts: { onBlockReply },
+      config: {
+        agents: {
+          defaults: {
+            replyRunWatchdog: { intervalMs: 5 },
+          },
+        },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    finishRun?.();
+    const result = await runPromise;
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      text: "I finished the run, but the model did not return a visible reply.",
+    });
+  });
+
+  it("keeps intentional NO_REPLY silent", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
+
+    await expect(createRun()).resolves.toBeUndefined();
+  });
+
+  it("keeps heartbeat no-op runs silent", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+
+    await expect(createRun({ opts: { isHeartbeat: true } })).resolves.toBeUndefined();
+  });
+
+  it("keeps system event no-op runs silent", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+
+    await expect(createRun({ opts: { typingPolicy: "system_event" } })).resolves.toBeUndefined();
+  });
+
+  it("keeps message-tool sent runs silent when the tool already delivered to the origin", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "chat" }],
+      meta: {},
+    });
+
+    await expect(createRun()).resolves.toBeUndefined();
+  });
+
+  it("returns the empty-final fallback when message-tool delivery went somewhere else", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "other-chat" }],
+      meta: {},
+    });
+
+    await expect(createRun()).resolves.toMatchObject({
+      text: "I finished the run, but the model did not return a visible reply.",
+    });
+  });
+
+  it("does not add empty-final fallback after a direct block reply already sent", async () => {
+    const onBlockReply = vi.fn();
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: { onBlockReply?: (payload: { text?: string }) => Promise<void> | void }) => {
+        await params.onBlockReply?.({ text: "sent directly" });
+        return { payloads: [], meta: {} };
+      },
+    );
+
+    const result = await createRun({ opts: { onBlockReply }, blockStreamingEnabled: true });
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "sent directly" }),
+      expect.anything(),
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("does not add empty-final fallback after a partial reply already streamed", async () => {
+    const onPartialReply = vi.fn();
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: { onPartialReply?: (payload: { text?: string }) => Promise<void> | void }) => {
+        await params.onPartialReply?.({ text: "streamed directly" });
+        return { payloads: [], meta: {} };
+      },
+    );
+
+    const result = await createRun({ opts: { onPartialReply } });
+
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "streamed directly" }),
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("auto-continues when a user run times out before any final visible reply", async () => {
+    const onBlockReply = vi.fn();
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [
+          {
+            text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+            isError: true,
+          },
+        ],
+        meta: {},
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "done after continuing" }],
+        meta: {},
+      });
+
+    const result = await createRun({ opts: { onBlockReply } });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedPiAgentMock.mock.calls[1]?.[0]).toMatchObject({
+      prompt: expect.stringContaining("Continue the previous user task"),
+    });
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: "Still working. I hit the run limit and am continuing automatically.",
+    });
+    expect(result).toMatchObject({ text: "done after continuing" });
+  });
+
+  it("uses the default five continuation attempts before surfacing the sixth timeout", async () => {
+    const onBlockReply = vi.fn();
+    const timeoutPayload = {
+      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      isError: true,
+    };
+    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [timeoutPayload], meta: {} });
+
+    const result = await createRun({ opts: { onBlockReply } });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(6);
+    for (const call of runEmbeddedPiAgentMock.mock.calls.slice(1)) {
+      expect(call[0]).toMatchObject({
+        prompt: expect.stringContaining("Continue the previous user task"),
+      });
+    }
+    expect(onBlockReply).toHaveBeenCalledTimes(5);
+    expect(onBlockReply).toHaveBeenNthCalledWith(1, {
+      text: "Still working. I hit the run limit and am continuing automatically.",
+    });
+    expect(onBlockReply).toHaveBeenNthCalledWith(5, {
+      text: "Still working. I hit the run limit and am continuing automatically.",
+    });
+    expect(result).toMatchObject({ text: expect.stringContaining("Request timed out") });
+  });
+
+  it("honors maxAttempts as continuation attempts after the original run", async () => {
+    const onBlockReply = vi.fn();
+    const timeoutPayload = {
+      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      isError: true,
+    };
+    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [timeoutPayload], meta: {} });
+
+    const result = await createRun({
+      opts: { onBlockReply },
+      config: {
+        agents: {
+          defaults: {
+            replyTimeoutContinuation: { maxAttempts: 1 },
+          },
+        },
+      },
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ text: expect.stringContaining("Request timed out") });
+  });
+
+  it("surfaces the timeout when timeout continuation is disabled", async () => {
+    const onBlockReply = vi.fn();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+          isError: true,
+        },
+      ],
+      meta: {},
+    });
+
+    const result = await createRun({
+      opts: { onBlockReply },
+      config: {
+        agents: {
+          defaults: {
+            replyTimeoutContinuation: { enabled: false },
+          },
+        },
+      },
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ text: expect.stringContaining("Request timed out") });
+  });
+
+  it("does not auto-continue heartbeat or system event timeout payloads", async () => {
+    const timeoutPayload = {
+      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      isError: true,
+    };
+
+    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [timeoutPayload], meta: {} });
+
+    await createRun({ opts: { isHeartbeat: true } });
+    await createRun({ opts: { typingPolicy: "system_event" } });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not auto-continue after a direct visible reply already delivered", async () => {
+    const onBlockReply = vi.fn();
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: { onBlockReply?: (payload: { text?: string }) => Promise<void> | void }) => {
+        await params.onBlockReply?.({ text: "visible before timeout" });
+        return {
+          payloads: [
+            {
+              text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+              isError: true,
+            },
+          ],
+          meta: {},
+        };
+      },
+    );
+
+    const result = await createRun({ opts: { onBlockReply }, blockStreamingEnabled: true });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(result).toBeUndefined();
   });
 });
 
