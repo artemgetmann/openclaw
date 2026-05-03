@@ -10,6 +10,7 @@ export {
   resolveConfigPath,
   resolveRuntimePlatform,
   resolveSkillConfig,
+  shouldExposeSkillToModel,
 } from "./skills/config.js";
 export {
   applySkillEnvOverrides,

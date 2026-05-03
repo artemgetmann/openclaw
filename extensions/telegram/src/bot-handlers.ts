@@ -92,11 +92,14 @@ import {
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
+  buildModelFamilyKeyboard,
+  buildModelHomeKeyboard,
   buildModelsKeyboard,
   buildProviderKeyboard,
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
+  resolveModelFamilyInfo,
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
@@ -1791,6 +1794,22 @@ export const registerTelegramHandlers = ({
           }
         };
 
+        if (modelCallback.type === "home") {
+          const currentSessionState = resolveTelegramSessionState({
+            chatId,
+            isGroup,
+            isForum,
+            messageThreadId,
+            resolvedThreadId,
+            senderId,
+          });
+          await editMessageWithButtons(
+            `Current: ${currentSessionState.model}`,
+            buildModelHomeKeyboard(),
+          );
+          return;
+        }
+
         if (modelCallback.type === "providers" || modelCallback.type === "back") {
           if (providers.length === 0) {
             await editMessageWithButtons("No providers available.", []);
@@ -1802,6 +1821,29 @@ export const registerTelegramHandlers = ({
           }));
           const buttons = buildProviderKeyboard(providerInfos);
           await editMessageWithButtons("Select a provider:", buttons);
+          return;
+        }
+
+        if (modelCallback.type === "family") {
+          const currentSessionState = resolveTelegramSessionState({
+            chatId,
+            isGroup,
+            isForum,
+            messageThreadId,
+            resolvedThreadId,
+            senderId,
+          });
+          const familyInfo = resolveModelFamilyInfo(modelCallback.family);
+          const buttons = buildModelFamilyKeyboard({
+            family: modelCallback.family,
+            byProvider,
+            currentModel: currentSessionState.model,
+            more: modelCallback.more,
+          });
+          const text = modelCallback.more
+            ? `${familyInfo.label} models:`
+            : `${familyInfo.label} recommended model:`;
+          await editMessageWithButtons(text, buttons);
           return;
         }
 

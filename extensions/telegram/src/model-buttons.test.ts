@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildModelSelectionCallbackData,
+  buildModelFamilyKeyboard,
+  buildModelHomeKeyboard,
   buildModelsKeyboard,
   buildBrowseProvidersButton,
   buildProviderKeyboard,
@@ -15,6 +17,9 @@ describe("parseModelCallbackData", () => {
   it("parses supported callback variants", () => {
     const cases = [
       ["mdl_prov", { type: "providers" }],
+      ["mdl_home", { type: "home" }],
+      ["mdl_fam_claude", { type: "family", family: "claude", more: false }],
+      ["mdl_fam_chatgpt_more", { type: "family", family: "chatgpt", more: true }],
       ["mdl_back", { type: "back" }],
       ["mdl_list_anthropic_2", { type: "list", provider: "anthropic", page: 2 }],
       ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
@@ -331,6 +336,55 @@ describe("buildBrowseProvidersButton", () => {
     expect(result[0]).toHaveLength(1);
     expect(result[0]?.[0]?.text).toBe("Browse providers");
     expect(result[0]?.[0]?.callback_data).toBe("mdl_prov");
+  });
+});
+
+describe("buildModelHomeKeyboard", () => {
+  it("renders consumer model family choices before advanced providers", () => {
+    const result = buildModelHomeKeyboard();
+    expect(result).toEqual([
+      [
+        { text: "Claude", callback_data: "mdl_fam_claude" },
+        { text: "ChatGPT", callback_data: "mdl_fam_chatgpt" },
+      ],
+      [{ text: "More", callback_data: "mdl_prov" }],
+    ]);
+  });
+});
+
+describe("buildModelFamilyKeyboard", () => {
+  it("shows the recommended Claude model without selecting on family tap", () => {
+    const result = buildModelFamilyKeyboard({
+      family: "claude",
+      byProvider: new Map([["anthropic", new Set(["claude-opus-4-6", "claude-sonnet-4-6"])]]),
+      currentModel: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(result[0]?.[0]).toEqual({
+      text: "claude-sonnet-4-6 ✓",
+      callback_data: "mdl_sel_anthropic/claude-sonnet-4-6",
+    });
+    expect(result[1]?.[0]).toEqual({ text: "More", callback_data: "mdl_fam_claude_more" });
+  });
+
+  it("prefers ChatGPT GPT 5.5 when configured and lists other GPT models behind More", () => {
+    const byProvider = new Map([
+      ["openai-codex", new Set(["gpt-5.4", "gpt-5.5"])],
+      ["openai", new Set(["gpt-5.4-mini"])],
+    ]);
+
+    const recommended = buildModelFamilyKeyboard({ family: "chatgpt", byProvider });
+    expect(recommended[0]?.[0]).toEqual({
+      text: "gpt-5.5",
+      callback_data: "mdl_sel_openai-codex/gpt-5.5",
+    });
+
+    const more = buildModelFamilyKeyboard({ family: "chatgpt", byProvider, more: true });
+    expect(more.map((row) => row[0]?.callback_data)).toEqual([
+      "mdl_sel_openai-codex/gpt-5.4",
+      "mdl_sel_openai/gpt-5.4-mini",
+      "mdl_home",
+    ]);
   });
 });
 

@@ -86,10 +86,13 @@ export { collectTelegramStatusIssues } from "../../extensions/telegram/src/statu
 export { sendTelegramPayloadMessages } from "../../extensions/telegram/src/outbound-adapter.js";
 export {
   buildBrowseProvidersButton,
+  buildModelFamilyKeyboard,
+  buildModelHomeKeyboard,
   buildModelsKeyboard,
   buildProviderKeyboard,
   calculateTotalPages,
   getModelsPageSize,
+  resolveModelFamilyInfo,
   type ProviderInfo,
 } from "../../extensions/telegram/src/model-buttons.js";
 export {

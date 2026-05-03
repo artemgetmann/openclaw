@@ -106,9 +106,9 @@ describe("buildWorkspaceSkillsPrompt", () => {
     );
     expect(defaultPrompt).toContain("always-skill");
     expect(defaultPrompt).toContain("config-skill");
-    expect(defaultPrompt).not.toContain("bin-skill");
-    expect(defaultPrompt).not.toContain("anybin-skill");
-    expect(defaultPrompt).not.toContain("env-skill");
+    expect(defaultPrompt).toContain("bin-skill");
+    expect(defaultPrompt).toContain("anybin-skill");
+    expect(defaultPrompt).toContain("env-skill");
 
     const gatedPrompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
@@ -131,7 +131,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(gatedPrompt).toContain("anybin-skill");
     expect(gatedPrompt).toContain("env-skill");
     expect(gatedPrompt).toContain("always-skill");
-    expect(gatedPrompt).not.toContain("config-skill");
+    expect(gatedPrompt).toContain("config-skill");
   });
   it("uses skillKey for config lookups", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");

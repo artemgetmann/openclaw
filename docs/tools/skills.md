@@ -234,7 +234,8 @@ Rules:
   Supports plaintext string or SecretRef object (`{ source, provider, id }`).
 - `config`: optional bag for custom per-skill fields; custom keys must live here.
 - `allowBundled`: optional allowlist for **bundled** skills only. If set, only
-  bundled skills in the list are eligible (managed/workspace skills unaffected).
+  bundled skills in the list are model-visible or eligible
+  (managed/workspace skills unaffected).
 
 ## Environment injection (per agent run)
 
@@ -243,14 +244,20 @@ When an agent run starts, OpenClaw:
 1. Reads skill metadata.
 2. Applies any `skills.entries.<key>.env` or `skills.entries.<key>.apiKey` to
    `process.env`.
-3. Builds the system prompt with **eligible** skills.
+3. Builds the system prompt with model-visible skills.
 4. Restores the original environment after the run ends.
 
 This is **scoped to the agent run**, not a global shell environment.
 
+Model-visible is broader than ready-to-execute: missing auth, config, or local
+helper binaries do not hide useful skills from the model-facing prompt. The
+model should route the user to setup or explain the missing requirement.
+Explicitly disabled skills, bundled skills blocked by `allowBundled`, and skills
+for an unsupported OS remain hidden.
+
 ## Session snapshot (performance)
 
-OpenClaw snapshots the eligible skills **when a session starts** and reuses that list for subsequent turns in the same session. Changes to skills or config take effect on the next new session.
+OpenClaw snapshots the model-visible skills **when a session starts** and reuses that list for subsequent turns in the same session. Changes to skills or config take effect on the next new session.
 
 Skills can also refresh mid-session when the skills watcher is enabled or when a new eligible remote node appears (see below). Think of this as a **hot reload**: the refreshed list is picked up on the next agent turn.
 
