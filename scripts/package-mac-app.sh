@@ -647,7 +647,11 @@ materialize_bundled_extension_node_modules() {
     dest_node_modules="$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions/$extension_name/node_modules"
     rm -rf "$dest_node_modules"
     mkdir -p "$(dirname "$dest_node_modules")"
-    rsync -aL "$source_node_modules/" "$dest_node_modules/"
+    # Some extension dev installs contain an `openclaw -> ../../..` workspace
+    # symlink. Following that would recursively copy the whole checkout into the
+    # packaged app, so keep extension dependencies self-contained but skip the
+    # repo back-link itself.
+    rsync -aL --exclude '/openclaw' "$source_node_modules/" "$dest_node_modules/"
   done < <(find "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/extensions" -mindepth 1 -maxdepth 1 -type d -print0)
 }
 
@@ -778,6 +782,7 @@ prepare_bundled_consumer_runtime() {
 
   node_arm64_root="$(ensure_consumer_node_runtime "$node_version" "darwin-arm64")"
   node_x64_root="$(ensure_consumer_node_runtime "$node_version" "darwin-x64")"
+  mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/node" "$BUNDLED_RUNTIME_RESOURCE_DIR/uv"
   cp -R "$node_arm64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-arm64"
   cp -R "$node_x64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/node/darwin-x64"
 
@@ -924,7 +929,10 @@ if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
   for arch in "${BUILD_ARCHS[@]}"; do
     BIN_INPUTS+=("$(bin_for_arch "$arch")")
   done
-  /usr/bin/lipo -create "${BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/OpenClaw"
+  LIPO_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/openclaw-bin.XXXXXX")"
+  /usr/bin/lipo -create "${BIN_INPUTS[@]}" -output "$LIPO_OUTPUT"
+  mkdir -p "$APP_ROOT/Contents/MacOS"
+  mv "$LIPO_OUTPUT" "$APP_ROOT/Contents/MacOS/OpenClaw"
 fi
 chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.

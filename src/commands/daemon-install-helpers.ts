@@ -1,7 +1,3 @@
-import {
-  loadAuthProfileStoreForSecretsRuntime,
-  type AuthProfileStore,
-} from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -61,33 +57,6 @@ function resolveRepoRootFromGatewayProgram(params: {
   return undefined;
 }
 
-function collectAuthProfileServiceEnvVars(params: {
-  env: Record<string, string | undefined>;
-  authStore?: AuthProfileStore;
-}): Record<string, string> {
-  const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
-  const entries: Record<string, string> = {};
-
-  for (const credential of Object.values(authStore.profiles)) {
-    const ref =
-      credential.type === "api_key"
-        ? credential.keyRef
-        : credential.type === "token"
-          ? credential.tokenRef
-          : undefined;
-    if (!ref || ref.source !== "env") {
-      continue;
-    }
-    const value = params.env[ref.id]?.trim();
-    if (!value) {
-      continue;
-    }
-    entries[ref.id] = value;
-  }
-
-  return entries;
-}
-
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -97,7 +66,6 @@ export async function buildGatewayInstallPlan(params: {
   warn?: DaemonInstallWarnFn;
   /** Config stays available for call-site parity; install env must not persist config.env. */
   config?: OpenClawConfig;
-  authStore?: AuthProfileStore;
 }): Promise<GatewayInstallPlan> {
   const daemonEnv = resolveGatewayRuntimeIdentityEnv(params.env);
   const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
@@ -137,15 +105,11 @@ export async function buildGatewayInstallPlan(params: {
     });
   }
 
-  // Persist only daemon-owned env here. config.env is loaded again at runtime via
-  // loadConfig(), so snapshotting it into launchd/systemd would let stale secrets
-  // survive normal restarts until the service is explicitly reinstalled.
-  const environment: Record<string, string | undefined> = {
-    ...collectAuthProfileServiceEnvVars({
-      env: params.env,
-      authStore: params.authStore,
-    }),
-  };
+  // Persist only daemon-owned env here. Provider keys/tokens and config.env are
+  // loaded again at runtime through config/secrets resolution; freezing them
+  // into launchd/systemd would let stale secrets survive normal restarts until
+  // the service is explicitly reinstalled.
+  const environment: Record<string, string | undefined> = {};
   Object.assign(environment, serviceEnvironment);
 
   return { programArguments, workingDirectory, environment };

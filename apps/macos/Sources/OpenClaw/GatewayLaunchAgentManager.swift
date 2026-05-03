@@ -436,7 +436,13 @@ extension GatewayLaunchAgentManager {
     {
         let identity = RuntimeIdentity.current
         let instance = ConsumerInstance.current
-        var env = base
+        var env: [String: String] = [:]
+        for key in ["HOME", "USER", "LOGNAME", "TMPDIR"] {
+            let value = base[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !value.isEmpty {
+                env[key] = value
+            }
+        }
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         env["OPENCLAW_PROFILE"] = identity.profile ?? "default"
         env["OPENCLAW_HOME"] = identity.runtimeRootURL.path
