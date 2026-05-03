@@ -361,26 +361,48 @@ describe("buildModelFamilyKeyboard", () => {
     });
 
     expect(result[0]?.[0]).toEqual({
-      text: "claude-sonnet-4-6 ✓",
+      text: "Sonnet 4.6 ✓",
       callback_data: "mdl_sel_anthropic/claude-sonnet-4-6",
     });
     expect(result[1]?.[0]).toEqual({ text: "More", callback_data: "mdl_fam_claude_more" });
   });
 
-  it("prefers ChatGPT GPT 5.5 when configured and lists other GPT models behind More", () => {
+  it("dedupes Claude variants and shows product labels behind More", () => {
     const byProvider = new Map([
-      ["openai-codex", new Set(["gpt-5.4", "gpt-5.5"])],
-      ["openai", new Set(["gpt-5.4-mini"])],
+      ["anthropic", new Set(["claude-haiku-4-5", "claude-opus-4-6", "claude-sonnet-4-6"])],
+      ["claude-bridge", new Set(["haiku", "opus", "sonnet"])],
+    ]);
+
+    const more = buildModelFamilyKeyboard({ family: "claude", byProvider, more: true });
+    expect(more.map((row) => row[0]?.text)).toEqual(["Haiku 4.5", "Opus 4.6", "<< Back"]);
+    expect(more.map((row) => row[0]?.callback_data)).toEqual([
+      "mdl_sel_anthropic/claude-haiku-4-5",
+      "mdl_sel_anthropic/claude-opus-4-6",
+      "mdl_home",
+    ]);
+  });
+
+  it("prefers ChatGPT GPT 5.5 when configured and lists other chat models behind More", () => {
+    const byProvider = new Map([
+      ["openai-codex", new Set(["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.5"])],
+      ["openai", new Set(["gpt-5.4", "gpt-5.4-mini", "gpt-image-2"])],
     ]);
 
     const recommended = buildModelFamilyKeyboard({ family: "chatgpt", byProvider });
     expect(recommended[0]?.[0]).toEqual({
-      text: "gpt-5.5",
+      text: "GPT 5.5",
       callback_data: "mdl_sel_openai-codex/gpt-5.5",
     });
 
     const more = buildModelFamilyKeyboard({ family: "chatgpt", byProvider, more: true });
+    expect(more.map((row) => row[0]?.text)).toEqual([
+      "GPT 5.3 Codex Spark",
+      "GPT 5.4",
+      "GPT 5.4 Mini",
+      "<< Back",
+    ]);
     expect(more.map((row) => row[0]?.callback_data)).toEqual([
+      "mdl_sel_openai-codex/gpt-5.3-codex-spark",
       "mdl_sel_openai-codex/gpt-5.4",
       "mdl_sel_openai/gpt-5.4-mini",
       "mdl_home",

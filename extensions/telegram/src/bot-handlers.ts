@@ -99,7 +99,6 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
-  resolveModelFamilyInfo,
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
@@ -1833,16 +1832,13 @@ export const registerTelegramHandlers = ({
             resolvedThreadId,
             senderId,
           });
-          const familyInfo = resolveModelFamilyInfo(modelCallback.family);
           const buttons = buildModelFamilyKeyboard({
             family: modelCallback.family,
             byProvider,
             currentModel: currentSessionState.model,
             more: modelCallback.more,
           });
-          const text = modelCallback.more
-            ? `${familyInfo.label} models:`
-            : `${familyInfo.label} recommended model:`;
+          const text = modelCallback.more ? "More models:" : "Recommended model:";
           await editMessageWithButtons(text, buttons);
           return;
         }
