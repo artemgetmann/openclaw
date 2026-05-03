@@ -59,4 +59,19 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
     expect(lastCall[0].text).toContain("Hello");
     expect(lastCall[0].text).toContain("world");
   });
+
+  it("strips namespaced antml thinking tags outside code spans", () => {
+    const { emit, onPartialReply } = createPartialReplyHarness();
+
+    emitAssistantTextDelta({
+      emit,
+      delta: "Hello <antml:thinking>internal thought</antml:thinking> world",
+    });
+
+    expect(onPartialReply).toHaveBeenCalled();
+    const lastCall = onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
+    expect(lastCall[0].text).not.toContain("internal thought");
+    expect(lastCall[0].text).toContain("Hello");
+    expect(lastCall[0].text).toContain("world");
+  });
 });

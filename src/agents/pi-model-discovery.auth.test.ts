@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { saveAuthProfileStore } from "./auth-profiles.js";
-import { discoverAuthStorage } from "./pi-model-discovery.js";
+import { discoverAuthStorage, normalizeDiscoveredPiModel } from "./pi-model-discovery.js";
 
 async function createAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-auth-storage-"));
@@ -147,6 +147,57 @@ describe("discoverAuthStorage", () => {
           process.env.OPENCLAW_AUTH_STORE_READONLY = previous;
         }
       }
+    });
+  });
+
+  it("normalizes stale discovered openai-codex rows when api metadata is missing", () => {
+    const normalized = normalizeDiscoveredPiModel(
+      {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+      },
+      "/tmp/agent",
+    ) as {
+      api?: string;
+      baseUrl?: string;
+    };
+
+    expect(normalized).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
+  it("canonicalizes stale discovered openai-codex backend-api/v1 rows", () => {
+    const normalized = normalizeDiscoveredPiModel(
+      {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+      },
+      "/tmp/agent",
+    ) as {
+      api?: string;
+      baseUrl?: string;
+    };
+
+    expect(normalized).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
     });
   });
 });

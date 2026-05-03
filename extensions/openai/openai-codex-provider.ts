@@ -73,18 +73,34 @@ function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
   if (!trimmed) {
     return false;
   }
-  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/i.test(trimmed);
+  return /^https?:\/\/chatgpt\.com\/backend-api(?:\/v1)?\/?$/i.test(trimmed);
+}
+
+function normalizeCodexTransportFields(params: {
+  api?: ProviderRuntimeModel["api"] | null;
+  baseUrl?: string;
+}): {
+  api?: ProviderRuntimeModel["api"];
+  baseUrl?: string;
+} {
+  const useCodexTransport =
+    !params.baseUrl || isOpenAIApiBaseUrl(params.baseUrl) || isOpenAICodexBaseUrl(params.baseUrl);
+  const api =
+    useCodexTransport && (!params.api || params.api === "openai-responses")
+      ? "openai-codex-responses"
+      : (params.api ?? undefined);
+  const baseUrl =
+    api === "openai-codex-responses" && useCodexTransport ? OPENAI_CODEX_BASE_URL : params.baseUrl;
+  return { api, baseUrl };
 }
 
 function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  const useCodexTransport =
-    !model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl) || isOpenAICodexBaseUrl(model.baseUrl);
-  const api =
-    useCodexTransport && model.api === "openai-responses" ? "openai-codex-responses" : model.api;
-  const baseUrl =
-    api === "openai-codex-responses" && (!model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl))
-      ? OPENAI_CODEX_BASE_URL
-      : model.baseUrl;
+  const normalizedTransport = normalizeCodexTransportFields({
+    api: model.api,
+    baseUrl: model.baseUrl,
+  });
+  const api = normalizedTransport.api ?? model.api;
+  const baseUrl = normalizedTransport.baseUrl ?? model.baseUrl;
   if (api === model.api && baseUrl === model.baseUrl) {
     return model;
   }

@@ -22,7 +22,7 @@ import { normalizePollInput, type PollInput } from "../../../src/polls.js";
 import { loadWebMedia } from "../../whatsapp/src/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
+import { buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
@@ -33,6 +33,10 @@ import {
   isTelegramServerError,
 } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
+import {
+  buildTelegramThreadReplyParams,
+  resolveTelegramSendThreadSpec,
+} from "./reply-parameters.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import {
@@ -367,38 +371,6 @@ function isTelegramHtmlParseError(err: unknown): boolean {
   return PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
-function buildTelegramThreadReplyParams(params: {
-  targetMessageThreadId?: number;
-  messageThreadId?: number;
-  chatType?: "direct" | "group" | "unknown";
-  replyToMessageId?: number;
-  quoteText?: string;
-}): Record<string, unknown> {
-  const messageThreadId =
-    params.messageThreadId != null ? params.messageThreadId : params.targetMessageThreadId;
-  const threadScope = params.chatType === "direct" ? ("dm" as const) : ("forum" as const);
-  // Never blanket-strip DM message_thread_id by chat-id sign.
-  // Telegram supports DM topics; stripping silently misroutes topic replies.
-  // Keep thread id and rely on thread-not-found retry fallback for plain DMs.
-  const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: threadScope } : undefined;
-  const threadIdParams = buildTelegramThreadParams(threadSpec);
-  const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
-
-  if (params.replyToMessageId != null) {
-    const replyToMessageId = Math.trunc(params.replyToMessageId);
-    if (params.quoteText?.trim()) {
-      threadParams.reply_parameters = {
-        message_id: replyToMessageId,
-        quote: params.quoteText.trim(),
-      };
-    } else {
-      threadParams.reply_to_message_id = replyToMessageId;
-    }
-  }
-  return threadParams;
-}
-
 async function withTelegramHtmlParseFallback<T>(params: {
   label: string;
   verbose?: boolean;
@@ -629,11 +601,14 @@ export async function sendMessageTelegram(
   const replyMarkup = buildInlineKeyboard(opts.buttons);
 
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-    chatType: target.chatType,
+    thread: resolveTelegramSendThreadSpec({
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+      chatType: target.chatType,
+    }),
     replyToMessageId: opts.replyToMessageId,
-    quoteText: opts.quoteText,
+    replyQuoteText: opts.quoteText,
+    useReplyIdAsQuoteSource: true,
   });
   // Threadless retry is only safe for DM topics. For forum topics, stripping
   // the thread id silently posts into the parent chat/root topic.
@@ -1461,9 +1436,11 @@ export async function sendStickerTelegram(
   });
 
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-    chatType: target.chatType,
+    thread: resolveTelegramSendThreadSpec({
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+      chatType: target.chatType,
+    }),
     replyToMessageId: opts.replyToMessageId,
   });
   const allowThreadlessRetry = target.chatType === "direct";
@@ -1547,9 +1524,11 @@ export async function sendPollTelegram(
   const normalizedPoll = normalizePollInput(poll, { maxOptions: 10 });
 
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-    chatType: target.chatType,
+    thread: resolveTelegramSendThreadSpec({
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+      chatType: target.chatType,
+    }),
     replyToMessageId: opts.replyToMessageId,
   });
   const allowThreadlessRetry = target.chatType === "direct";

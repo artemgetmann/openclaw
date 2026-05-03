@@ -583,7 +583,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("uses reply_to_message_id when quote text is provided", async () => {
+  it("uses reply_to_message_id when quote source is not available", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 10,
@@ -613,6 +613,75 @@ describe("deliverReplies", () => {
         reply_parameters: expect.anything(),
       }),
     );
+  });
+
+  it("uses native quote reply parameters when quote source matches reply target", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteMessageId: 500,
+      replyQuoteText: "quoted text",
+      replyQuotePosition: 4,
+      replyQuoteEntities: [{ type: "italic", offset: 0, length: 6 }],
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        reply_parameters: {
+          message_id: 500,
+          quote: "quoted text",
+          quote_position: 4,
+          quote_entities: [{ type: "italic", offset: 0, length: 6 }],
+          allow_sending_without_reply: true,
+        },
+      }),
+    );
+  });
+
+  it("retries native quote sends as legacy replies when Telegram rejects quote text", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("400: Bad Request: quote not found"))
+      .mockResolvedValueOnce({
+        message_id: 11,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteMessageId: 500,
+      replyQuoteText: "quoted text",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        reply_parameters: expect.objectContaining({ message_id: 500, quote: "quoted text" }),
+      }),
+    );
+    expect(sendMessage.mock.calls[1]?.[2]).toEqual(
+      expect.objectContaining({
+        reply_to_message_id: 500,
+        allow_sending_without_reply: true,
+      }),
+    );
+    expect(sendMessage.mock.calls[1]?.[2]).not.toHaveProperty("reply_parameters");
   });
 
   it("falls back to text when sendVoice fails with VOICE_MESSAGES_FORBIDDEN", async () => {

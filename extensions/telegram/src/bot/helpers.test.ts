@@ -348,6 +348,34 @@ describe("describeReplyTarget", () => {
     expect(result?.kind).toBe("reply");
   });
 
+  it("preserves native quote metadata from Telegram replies", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      quote: {
+        text: "Original",
+        position: 9,
+        entities: [{ type: "bold", offset: 0, length: 8 }],
+      },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        text: "Original message",
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+
+    expect(result).not.toBeNull();
+    expect(result?.body).toBe("Original");
+    expect(result?.kind).toBe("quote");
+    expect(result?.quoteText).toBe("Original");
+    expect(result?.quotePosition).toBe(9);
+    expect(result?.quoteEntities).toEqual([{ type: "bold", offset: 0, length: 8 }]);
+  });
+
   it("extracts forwarded context from reply_to_message (issue #9619)", () => {
     // When user forwards a message with a comment, the comment message has
     // reply_to_message pointing to the forwarded message. We should extract

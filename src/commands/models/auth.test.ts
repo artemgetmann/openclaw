@@ -40,11 +40,15 @@ vi.mock("@clack/prompts", () => ({
   text: mocks.clackText,
 }));
 
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
-  resolveAgentDir: mocks.resolveAgentDir,
-  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-}));
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
+  return {
+    ...actual,
+    resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+    resolveAgentDir: mocks.resolveAgentDir,
+    resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  };
+});
 
 vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
@@ -75,8 +79,12 @@ vi.mock("../onboard-helpers.js", () => ({
   openUrl: mocks.openUrl,
 }));
 
-const { modelsAuthLoginCommand, modelsAuthPasteTokenCommand, modelsAuthSetupTokenCommand } =
-  await import("./auth.js");
+const {
+  modelsAuthAddCommand,
+  modelsAuthLoginCommand,
+  modelsAuthPasteTokenCommand,
+  modelsAuthSetupTokenCommand,
+} = await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -192,6 +200,22 @@ describe("modelsAuthLoginCommand", () => {
     restoreStdin = null;
   });
 
+  function useCoderAgentConfig() {
+    currentConfig = {
+      agents: {
+        list: [{ id: "main" }, { id: "coder", workspace: "/tmp/openclaw/workspaces/coder" }],
+      },
+    };
+    const originalConfig = currentConfig;
+    mocks.resolveAgentDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
+      agentId === "coder" ? "/tmp/openclaw/agents/coder" : "/tmp/openclaw/agents/main",
+    );
+    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
+      agentId === "coder" ? "/tmp/openclaw/workspaces/coder" : "/tmp/openclaw/workspace",
+    );
+    return originalConfig;
+  }
+
   it("runs plugin-owned openai-codex login", async () => {
     const runtime = createRuntime();
 
@@ -283,6 +307,36 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main");
   });
 
+  it("uses the requested agent store for provider auth login", async () => {
+    const runtime = createRuntime();
+    const coderStore = {
+      profiles: {
+        "openai-codex:coder@example.com": {
+          type: "oauth",
+          provider: "openai-codex",
+        },
+      },
+      usageStats: {},
+    };
+    const originalConfig = useCoderAgentConfig();
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue(coderStore);
+
+    await modelsAuthLoginCommand({ provider: "openai-codex", agent: "coder" }, runtime);
+
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/coder");
+    expect(runProviderAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw/agents/coder",
+        workspaceDir: "/tmp/openclaw/workspaces/coder",
+      }),
+    );
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: "/tmp/openclaw/agents/coder" }),
+    );
+  });
+
   it("reports loaded plugin providers when requested provider is unavailable", async () => {
     const runtime = createRuntime();
 
@@ -313,6 +367,40 @@ describe("modelsAuthLoginCommand", () => {
     } finally {
       exitSpy.mockRestore();
     }
+  });
+
+  it("writes pasted tokens to the requested agent store", async () => {
+    const runtime = createRuntime();
+    useCoderAgentConfig();
+    mocks.clackText.mockResolvedValue("openai-token");
+
+    await modelsAuthPasteTokenCommand({ provider: "openai", agent: "coder" }, runtime);
+
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "token",
+        provider: "openai",
+        token: "openai-token",
+      },
+      agentDir: "/tmp/openclaw/agents/coder",
+    });
+  });
+
+  it("rejects an unknown agent before prompting for pasted tokens", async () => {
+    const runtime = createRuntime();
+    currentConfig = { agents: { list: [{ id: "main" }] } };
+
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai", agent: "missing" }, runtime),
+    ).rejects.toThrow(
+      'Unknown agent id "missing". Use "openclaw agents list" to see configured agents.',
+    );
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
   it("runs token auth for any token-capable provider plugin", async () => {
@@ -355,6 +443,120 @@ describe("modelsAuthLoginCommand", () => {
         token: "moonshot-token",
       },
       agentDir: "/tmp/openclaw/agents/main",
+    });
+  });
+
+  it("uses the requested agent store for setup-token provider auth", async () => {
+    const runtime = createRuntime();
+    useCoderAgentConfig();
+    const runTokenAuth = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "moonshot:token",
+          credential: {
+            type: "token",
+            provider: "moonshot",
+            token: "moonshot-token",
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      {
+        id: "moonshot",
+        label: "Moonshot",
+        auth: [
+          {
+            id: "setup-token",
+            label: "setup-token",
+            kind: "token",
+            run: runTokenAuth,
+          },
+        ],
+      },
+    ]);
+
+    await modelsAuthSetupTokenCommand({ provider: "moonshot", yes: true, agent: "coder" }, runtime);
+
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(runTokenAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw/agents/coder",
+        workspaceDir: "/tmp/openclaw/workspaces/coder",
+      }),
+    );
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: "/tmp/openclaw/agents/coder" }),
+    );
+  });
+
+  it("uses the requested agent store for interactive token auth add", async () => {
+    const runtime = createRuntime();
+    useCoderAgentConfig();
+    const runTokenAuth = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "moonshot:token",
+          credential: {
+            type: "token",
+            provider: "moonshot",
+            token: "moonshot-token",
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      {
+        id: "moonshot",
+        label: "Moonshot",
+        auth: [
+          {
+            id: "setup-token",
+            label: "setup-token",
+            kind: "token",
+            run: runTokenAuth,
+          },
+        ],
+      },
+    ]);
+    mocks.clackSelect.mockResolvedValueOnce("moonshot").mockResolvedValueOnce("setup-token");
+
+    await modelsAuthAddCommand({ agent: "coder" }, runtime);
+
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(runTokenAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw/agents/coder",
+        workspaceDir: "/tmp/openclaw/workspaces/coder",
+      }),
+    );
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: "/tmp/openclaw/agents/coder" }),
+    );
+  });
+
+  it("keeps the requested agent store when interactive auth add falls back to paste-token", async () => {
+    const runtime = createRuntime();
+    useCoderAgentConfig();
+    mocks.resolvePluginProviders.mockReturnValue([]);
+    mocks.clackSelect.mockResolvedValue("custom");
+    mocks.clackText
+      .mockResolvedValueOnce("openai")
+      .mockResolvedValueOnce("openai:manual")
+      .mockResolvedValueOnce("openai-token");
+    mocks.clackConfirm.mockResolvedValue(false);
+
+    await modelsAuthAddCommand({ agent: "coder" }, runtime);
+
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "token",
+        provider: "openai",
+        token: "openai-token",
+      },
+      agentDir: "/tmp/openclaw/agents/coder",
     });
   });
 });

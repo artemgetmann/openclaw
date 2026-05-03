@@ -212,6 +212,60 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("disables answer preview streaming and preserves native quote replies", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "quoted answer", replyToId: "456" },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          MessageSid: "456",
+          ReplyToId: "500",
+          ReplyToBody: "fallback quote",
+          ReplyToIsQuote: true,
+          ReplyToQuoteText: "selected quote",
+          ReplyToQuotePosition: 3,
+          ReplyToQuoteEntities: [{ type: "bold", offset: 0, length: 8 }],
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyQuoteMessageId: 500,
+        replyQuoteText: "selected quote",
+        replyQuotePosition: 3,
+        replyQuoteEntities: [{ type: "bold", offset: 0, length: 8 }],
+        replies: [expect.objectContaining({ replyToId: "500" })],
+      }),
+    );
+  });
+
+  it("keeps tool progress fallback delivery when preview streaming is off", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolResult?.({ text: "🔧 exec: ls" });
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "🔧 exec: ls" })],
+      }),
+    );
+  });
+
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
