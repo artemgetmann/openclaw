@@ -166,9 +166,11 @@ gateway_healthy() {
     return 1
   fi
 
-  # Keep the direct-entry RPC probe as the last gate. If the CLI dependency
-  # graph regresses again, the loop still stays bounded by the log truncation.
-  run_openclaw_cli gateway status --deep --require-rpc >/dev/null 2>&1
+  # Do not require a deep CLI/RPC probe here. Recovery itself rebuilds through
+  # the CLI, so making the watchdog depend on a deep CLI path can turn a
+  # transient startup delay or dependency-graph issue into a self-inflicted
+  # SIGTERM loop. Liveness plus launchd ownership is enough for this hot path.
+  return 0
 }
 
 failures=0
