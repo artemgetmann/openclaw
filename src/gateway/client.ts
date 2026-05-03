@@ -63,6 +63,12 @@ type SelectedConnectAuth = {
   storedToken?: string;
 };
 
+export type GatewayReconnectPausedInfo = {
+  code: number;
+  reason: string;
+  detailCode: string | null;
+};
+
 class GatewayClientRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
@@ -104,6 +110,7 @@ export type GatewayClientOptions = {
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
+  onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
   onClose?: (code: number, reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
@@ -131,6 +138,7 @@ export class GatewayClient {
   private connectNonce: string | null = null;
   private connectSent = false;
   private connectTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
   private pendingConnectErrorDetailCode: string | null = null;
@@ -158,6 +166,7 @@ export class GatewayClient {
     if (this.closed) {
       return;
     }
+    this.clearReconnectTimer();
     const url = this.opts.url ?? "ws://127.0.0.1:18789";
     if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
       this.opts.onConnectError?.(new Error("gateway tls fingerprint requires wss:// gateway url"));
@@ -278,6 +287,11 @@ export class GatewayClient {
       }
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
       if (this.shouldPauseReconnectAfterAuthFailure(connectErrorDetailCode)) {
+        this.opts.onReconnectPaused?.({
+          code,
+          reason: reasonText,
+          detailCode: connectErrorDetailCode,
+        });
         this.opts.onClose?.(code, reasonText);
         return;
       }
@@ -297,6 +311,7 @@ export class GatewayClient {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.pendingConnectErrorDetailCode = null;
+    this.clearReconnectTimer();
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
@@ -652,6 +667,13 @@ export class GatewayClient {
     }, connectChallengeTimeoutMs);
   }
 
+  private clearReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
   private scheduleReconnect() {
     if (this.closed) {
       return;
@@ -660,9 +682,13 @@ export class GatewayClient {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
+    this.clearReconnectTimer();
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
-    setTimeout(() => this.start(), delay).unref();
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.start();
+    }, delay);
   }
 
   private flushPendingErrors(err: Error) {

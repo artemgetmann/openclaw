@@ -353,6 +353,80 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
+  it("refreshes install when the loaded service embeds a stale gateway token", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "stale-service-token",
+      },
+    });
+    buildGatewayInstallPlanMock.mockResolvedValueOnce({
+      programArguments: ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "current-plan-token",
+      },
+    });
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed).toEqual([]);
+    expect(actionState.warnings).toContain(
+      "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.",
+    );
+    expect(actionState.emitted).toEqual([]);
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns already-installed when the embedded gateway token matches the install plan", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "current-plan-token",
+      },
+    });
+    buildGatewayInstallPlanMock.mockResolvedValueOnce({
+      programArguments: ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "current-plan-token",
+      },
+    });
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed).toEqual([]);
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+  });
+
+  it("keeps env-file gateway tokens on the already-installed path", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "env-file-token",
+      },
+      environmentValueSources: {
+        OPENCLAW_GATEWAY_TOKEN: "file",
+      },
+    });
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed).toEqual([]);
+    expect(actionState.warnings).not.toContain(
+      "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.",
+    );
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+  });
+
   it("blocks default shared gateway takeover when installed ownership drifts", async () => {
     service.readCommand.mockResolvedValue({
       programArguments: [
