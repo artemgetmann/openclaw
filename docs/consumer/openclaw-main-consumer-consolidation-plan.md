@@ -1,6 +1,6 @@
 # OpenClaw Main + Consumer Consolidation Plan
 
-Last updated: 2026-05-02
+Last updated: 2026-05-04
 
 ## North Star
 
@@ -32,16 +32,44 @@ reviewable consolidation slices have now landed through smaller PRs:
 - #583: consumer Sparkle release gates
 - #584: docs/workflow cleanup for main-first consumer work
 - #588: conservative product rename to `OpenClaw.app`
+- #589: consumer smoke handoff default
+- #590: OpenClaw macOS distribution wrapper promotion
+- #592: simplified consumer model picker defaults
+- #594: model picker label polish
+- #597: packaged app smoke fixes for gateway/env/setup preservation
+- #599: shallow gateway watchdog health probe
 
 The main-built consumer artifact now uses the visible product name
 `OpenClaw.app` while preserving the consumer bundle id/runtime identity. The
 bundle-id migration remains deliberately separate because changing it can reset
 TCC permissions and update identity.
 
-The latest main-built shipping DMG was produced from `origin/main` commit
-`53f7174699` and copied to:
+The latest local main-built smoke package was produced from `origin/main` commit
+`59454cae1e` and landed at:
 
-- `/Users/user/Programming_Projects/openclaw/OpenClaw.dmg`
+- `/Users/user/Programming_Projects/openclaw/dist/OpenClaw.app`
+- `/Users/user/Programming_Projects/openclaw/dist/OpenClaw.dmg`
+- `/Users/user/Programming_Projects/openclaw/dist/OpenClaw.zip`
+- `/Users/user/Programming_Projects/openclaw/dist/consumer-handoff/OpenClaw.dmg`
+- `/Users/user/Programming_Projects/openclaw/dist/consumer-handoff/OpenClaw.zip`
+- `/Users/user/Programming_Projects/openclaw/dist/OpenClaw-2026.3.14.dSYM.zip`
+
+That smoke build used `SKIP_NOTARIZE=1` and
+`ALLOW_DEFAULT_SPARKLE_KEY_FOR_CONSUMER_SMOKE=1`. It is valid for local smoke
+and manual-trust demos, not broad public distribution. Public release still
+needs Developer ID signing, notarization, and the real Sparkle key/feed.
+
+The fresh main-built app has also replaced `/Applications/OpenClaw.app` on the
+local machine. The installed app reports:
+
+- display name: `OpenClaw`
+- bundle id: `ai.openclaw.consumer.mac`
+- variant: `consumer`
+- version: `2026.3.14`
+- git commit: `59454cae1e`
+
+The installed app launched and the canonical gateway stayed healthy on
+`ai.openclaw.gateway` / port `18789` through a 90-second `/healthz` hold.
 
 After #579, new Consumer package runs also copy `.dmg`, `.zip`, and dSYM `.zip`
 handoff artifacts to `dist/consumer-handoff` under the main checkout by default
@@ -50,17 +78,17 @@ when packaging is invoked from a temp worktree. Override with
 
 ## Status Snapshot
 
-| Area                                | Status                        | What is done                                                                                                                                                                                                                                                                                                                                                                                                             | What remains                                                                                      |
-| ----------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| Runtime identity / paths            | Completed                     | Runtime root, state/config/workspace/log paths, gateway label, and port behavior are shared in `main`. Default runtime is `~/Library/Application Support/OpenClaw/.openclaw`; gateway is `ai.openclaw.gateway` on `18789`.                                                                                                                                                                                               | Keep future changes in shared runtime code. Do not recreate branch-specific runtime rules.        |
-| Gateway ownership / launch behavior | Completed                     | Shared gateway/service ownership is canonical in `main`, with takeover guardrails and canonical env fixes merged. Main-built app smoke kept the existing gateway alive on the same run count and pid through 90 seconds.                                                                                                                                                                                                 | Treat future fixes as normal `main` runtime maintenance.                                          |
-| Consumer macOS shell parity         | Completed                     | Consumer setup shell pieces were ported into `main`: browser setup, readiness, permissions, Telegram setup card/state/verifier, bundled runtime/bootstrap, and packaging entrypoints. Existing-user main-built app smoke passed. Isolated fresh-user smoke passed.                                                                                                                                                       | Keep future setup/app fixes in `main`.                                                            |
-| Update-safe setup resume            | Completed                     | Existing installs can skip setup only after browser, permissions, model, and Telegram health checks pass. Broken configs resume to relevant blockers. Existing-user smoke confirmed setup did not repeat. Isolated fresh-user smoke confirmed first-run onboarding appears from clean state.                                                                                                                             | Keep future setup fixes in `main`.                                                                |
-| Packaging from main                 | Completed                     | `main` can produce `OpenClaw.app`, `.zip`, `.dmg`, and dSYM from `origin/main`. Codesign retry blocker is fixed. Packaging now copies distributable handoff artifacts to the canonical main checkout handoff directory by default. Sparkle consumer release gates are in place. The canonical command is `scripts/package-openclaw-mac-dist.sh`; `scripts/package-consumer-mac-dist.sh` remains a compatibility wrapper. | Notarization/updater spine remains a separate follow-up.                                          |
-| App name / bundle identity          | Completed for visible name    | Release packaging now ships as `OpenClaw.app` / `OpenClaw.dmg` / `OpenClaw.zip` while preserving `ai.openclaw.consumer.mac`.                                                                                                                                                                                                                                                                                             | Bundle-id migration needs a stronger reason and a migration plan.                                 |
-| `openclaw-consumer` retirement      | Completed for normal workflow | `main` is now the target for new work. Consumer branch is no longer the default implementation surface. Existing-user and isolated fresh-user main-built app smokes passed. Older docs/workflows now label the old branch as historical or emergency-only.                                                                                                                                                               | Keep `openclaw-consumer` only as an emergency fallback.                                           |
-| Overlay/defaults contract           | Mostly completed              | Core setup/runtime pieces are shared. Telegram `/model` now starts with Claude, ChatGPT, and More. Fresh consumer configs get broad useful bundled skills by default, and model-facing skills remain visible when setup/auth is missing.                                                                                                                                                                                 | Keep future onboarding presentation defaults explicit instead of scattering product conditionals. |
-| Docs / workflow cleanup             | Completed                     | Primary and older workflow docs now point normal consumer work at `main` and label `codex/consumer-openclaw-project` as historical or emergency-only.                                                                                                                                                                                                                                                                    | Keep future docs aligned with the main-first workflow.                                            |
+| Area                                | Status                        | What is done                                                                                                                                                                                                                                                                                                                                                                                                                                                              | What remains                                                                                      |
+| ----------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Runtime identity / paths            | Completed                     | Runtime root, state/config/workspace/log paths, gateway label, and port behavior are shared in `main`. Default runtime is `~/Library/Application Support/OpenClaw/.openclaw`; gateway is `ai.openclaw.gateway` on `18789`.                                                                                                                                                                                                                                                | Keep future changes in shared runtime code. Do not recreate branch-specific runtime rules.        |
+| Gateway ownership / launch behavior | Completed                     | Shared gateway/service ownership is canonical in `main`, with takeover guardrails and canonical env fixes merged. #597 prevents the consumer app from stopping an already-healthy canonical gateway during setup/attach paths. #599 keeps the watchdog health probe shallow so a healthy `/healthz` gateway is not killed by an overly deep CLI/RPC probe. Main-built app smoke kept the gateway healthy through 90 seconds.                                              | Treat future fixes as normal `main` runtime maintenance.                                          |
+| Consumer macOS shell parity         | Completed                     | Consumer setup shell pieces were ported into `main`: browser setup, readiness, permissions, Telegram setup card/state/verifier, bundled runtime/bootstrap, and packaging entrypoints. Existing-user main-built app smoke passed. Isolated fresh-user smoke passed.                                                                                                                                                                                                        | Keep future setup/app fixes in `main`.                                                            |
+| Update-safe setup resume            | Completed                     | Existing installs can skip setup only after browser, permissions, model, and Telegram health checks pass. Broken configs resume to relevant blockers. Existing-user smoke confirmed setup did not repeat. Isolated fresh-user smoke confirmed first-run onboarding appears from clean state.                                                                                                                                                                              | Keep future setup fixes in `main`.                                                                |
+| Packaging from main                 | Completed                     | `main` can produce `OpenClaw.app`, `.zip`, `.dmg`, and dSYM from `origin/main`. Codesign retry blocker is fixed. Packaging now copies distributable handoff artifacts to the canonical main checkout handoff directory by default. Sparkle consumer release gates are in place. The canonical command is `scripts/package-openclaw-mac-dist.sh`; `scripts/package-consumer-mac-dist.sh` remains a compatibility wrapper. Latest local smoke package is from `59454cae1e`. | Public notarization/updater spine remains a separate follow-up.                                   |
+| App name / bundle identity          | Completed for visible name    | Release packaging now ships as `OpenClaw.app` / `OpenClaw.dmg` / `OpenClaw.zip` while preserving `ai.openclaw.consumer.mac`.                                                                                                                                                                                                                                                                                                                                              | Bundle-id migration needs a stronger reason and a migration plan.                                 |
+| `openclaw-consumer` retirement      | Completed for normal workflow | `main` is now the target for new work. Consumer branch is no longer the default implementation surface. Existing-user and isolated fresh-user main-built app smokes passed. Older docs/workflows now label the old branch as historical or emergency-only.                                                                                                                                                                                                                | Keep `openclaw-consumer` only as an emergency fallback.                                           |
+| Overlay/defaults contract           | Mostly completed              | Core setup/runtime pieces are shared. Telegram `/model` now starts with Claude, ChatGPT, and More. Model labels were polished after live feedback: `GPT` is capitalized, duplicate/noisy ChatGPT entries are removed, and Claude family labels use product-facing names such as `Sonnet 4.6`. Fresh consumer configs get broad useful bundled skills by default, and model-facing skills remain visible when setup/auth is missing.                                       | Keep future onboarding presentation defaults explicit instead of scattering product conditionals. |
+| Docs / workflow cleanup             | Completed                     | Primary and older workflow docs now point normal consumer work at `main` and label `codex/consumer-openclaw-project` as historical or emergency-only.                                                                                                                                                                                                                                                                                                                     | Keep future docs aligned with the main-first workflow.                                            |
 
 ## Retirement Gate
 
@@ -102,7 +130,9 @@ hiding useful capability hints. Fresh consumer configs include `consumer-setup`,
 `obsidian`, `things-mac`, `github`, `slack`, `discord`, `openai-image-gen`,
 `openai-whisper`, and `nano-pdf`.
 
-Status: completed for the current model/skill default slice.
+Status: completed for the current model/skill default slice by #592 and #594.
+If the live Jarvis bot still shows stale model rows, treat that as runtime
+deployment/config state, not an open consolidation-plan question.
 
 ### Conservative `OpenClaw.app` product rename
 
@@ -169,6 +199,17 @@ Why this matters:
 - The shipping artifact should live in the canonical main checkout by default.
 
 Status: completed by #579 for `.dmg`, `.zip`, and dSYM `.zip` handoff copies.
+
+### Packaged app gateway/setup preservation
+
+Fix the packaged app path so attaching the consumer-style `OpenClaw.app` to an
+existing healthy setup does not tear down the canonical gateway, persist
+secret-looking provider env vars into the LaunchAgent plist, or trigger watchdog
+recovery loops.
+
+Status: completed by #597 and #599. The fresh `/Applications/OpenClaw.app`
+replacement launched from commit `59454cae1e`; the canonical gateway stayed
+healthy on `/healthz` for 90 seconds.
 
 ## Guardrails
 
