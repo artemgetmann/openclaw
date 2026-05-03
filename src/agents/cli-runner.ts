@@ -48,6 +48,10 @@ import {
   resolveSystemPromptUsage,
   writeCliImages,
 } from "./cli-runner/helpers.js";
+import {
+  buildClaudeCliSharedTranscriptReplay,
+  prependClaudeCliSharedTranscriptReplay,
+} from "./cli-runner/transcript-replay.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -969,6 +973,14 @@ export async function runCliAgent(params: {
     let imagePaths: string[] | undefined;
     let cleanupImages: (() => Promise<void>) | undefined;
     let prompt = params.prompt;
+    if (backendResolved.id === "claude-cli") {
+      const replay = await buildClaudeCliSharedTranscriptReplay({
+        sessionFile: params.sessionFile,
+        currentPrompt: params.prompt,
+        cliSessionId: cliSessionIdToUse,
+      });
+      prompt = prependClaudeCliSharedTranscriptReplay({ prompt, replay });
+    }
     if (params.images && params.images.length > 0) {
       const imagePayload = await writeCliImages(params.images);
       imagePaths = imagePayload.paths;

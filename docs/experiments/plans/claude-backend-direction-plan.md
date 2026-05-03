@@ -181,7 +181,7 @@ Decision:
 
 ### Slice 1b: Cross-backend session continuity
 
-Status: failed for `codex-cli/gpt-5.5 -> claude-cli/haiku`.
+Status: passed for `codex-cli/gpt-5.5 -> claude-cli/haiku` after Shared Transcript Replay For Claude CLI.
 
 Example path:
 
@@ -198,7 +198,7 @@ Pass condition:
 
 This is the real `/codex`-style expectation: different model, same assistant context and comparable capabilities.
 
-Proof attempt:
+Earlier proof attempt:
 
 - First attempt with `codex-cli/gpt-5.1-codex-mini` failed before the Claude turn because local Codex CLI rejected that model for the current ChatGPT account.
 - Retry with `codex-cli/gpt-5.5` successfully completed the Codex setup turn.
@@ -212,16 +212,26 @@ Result:
 
 - fail: Claude replied that it did not have access to previous backend turns in the OpenClaw session.
 
-Interpretation:
+Fix:
 
-- current warm Claude CLI continuity is Claude-native session continuity, not shared OpenClaw transcript replay
-- `runCliAgent` persists CLI turns into the shared session file, but the Claude CLI path does not currently rebuild/inject prior non-Claude turns into the prompt
-- do not claim `/codex -> Claude` continuity until this is fixed
+- `claude-cli` now injects a bounded "Recent shared OpenClaw session history" section when the shared transcript has previous non-Claude assistant history.
+- replay keeps recent user/assistant/tool-result turns as labelled text when they fit
+- replay strips unsafe tool-call structure, truncates huge tool outputs, and only summarizes older turns when the replay exceeds budget
+- resumed Claude-native follow-ups without newer non-Claude turns skip replay so Claude does not receive duplicate native memory
 
-Next implementation slice:
+Proof after fix:
 
-- add shared transcript replay/bootstrap for `claude-cli` first-turn prompts, bounded and provider-safe
-- then rerun `codex-context` and require Claude to recall a prior Codex nonce without tools
+- `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode codex-context --model haiku --codex-model gpt-5.5 --timeout-ms 240000`
+  - pass: Codex returned `CODEX_CONTEXT_SET CODEX_CONTEXT_NEEDLE_RUNCLI_d04ed29f7a2a47a1`
+  - pass: Claude returned `CODEX_CONTEXT_SWITCH_OK CODEX_CONTEXT_NEEDLE_RUNCLI_d04ed29f7a2a47a1`
+  - Codex total: `11365.7ms`
+  - Claude first visible text: `5897.4ms`
+  - Claude total: `8789.1ms`
+
+Decision:
+
+- This slice is done.
+- `/codex -> claude-cli` continuity now has live proof for recent shared transcript replay.
 
 ### Slice 2: Claude CLI browser tool
 
@@ -447,7 +457,7 @@ Tests run in this slice:
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode browser-open-snapshot --model haiku --timeout-ms 240000`
   - fail: Claude called `browser.open` successfully, then `browser.snapshot` returned `isError=true` after a 15s browser connection timeout
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode codex-context --model haiku --codex-model gpt-5.5 --timeout-ms 240000`
-  - fail: Codex setup turn completed, but Claude did not see the prior Codex turn in the same OpenClaw session
+  - pass after Shared Transcript Replay For Claude CLI: Codex setup turn completed, and Claude returned the prior Codex context needle from the same OpenClaw session
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode latency --model haiku --timeout-ms 180000`
   - partial: same Claude session id, different live process PID
 - `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode latency --model haiku --timeout-ms 240000`
@@ -462,6 +472,5 @@ Tests run in this slice:
 
 Next:
 
-1. implement bounded shared transcript replay/bootstrap for first-turn `claude-cli` prompts
-2. debug browser snapshot connection timeout after successful `browser.open`
-3. make temp memory sync/indexing deterministic enough for `memory_search -> memory_get` without direct path fallback
+1. debug browser snapshot connection timeout after successful `browser.open`
+2. make temp memory sync/indexing deterministic enough for `memory_search -> memory_get` without direct path fallback
