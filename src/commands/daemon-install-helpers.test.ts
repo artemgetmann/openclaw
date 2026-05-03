@@ -1,16 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  loadAuthProfileStoreForSecretsRuntime: vi.fn(),
   resolvePreferredNodePath: vi.fn(),
   resolveGatewayProgramArguments: vi.fn(),
   resolveSystemNodeInfo: vi.fn(),
   renderSystemNodeWarning: vi.fn(),
   buildServiceEnvironment: vi.fn(),
-}));
-
-vi.mock("../agents/auth-profiles.js", () => ({
-  loadAuthProfileStoreForSecretsRuntime: mocks.loadAuthProfileStoreForSecretsRuntime,
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
@@ -68,10 +63,6 @@ function mockNodeGatewayPlanFixture(
   mocks.resolveGatewayProgramArguments.mockResolvedValue({
     programArguments: ["node", "gateway"],
     workingDirectory,
-  });
-  mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-    version: 1,
-    profiles: {},
   });
   mocks.resolveSystemNodeInfo.mockResolvedValue({
     path: "/opt/node",
@@ -289,25 +280,10 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_MAIN_REPO).toBeUndefined();
   });
 
-  it("merges env-backed auth-profile refs into the service environment", async () => {
+  it("does not persist env-backed auth-profile refs into the service environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
-      },
-    });
-    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-        "anthropic:default": {
-          type: "token",
-          provider: "anthropic",
-          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
-        },
       },
     });
 
@@ -320,24 +296,15 @@ describe("buildGatewayInstallPlan", () => {
       runtime: "node",
     });
 
-    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
-    expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
+    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+    expect(plan.environment.ANTHROPIC_TOKEN).toBeUndefined();
+    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
   });
 
-  it("keeps env-backed auth refs while excluding config env vars", async () => {
+  it("excludes env-backed auth refs and config env vars", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
-      },
-    });
-    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
       },
     });
 
@@ -357,25 +324,15 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
+    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
     expect(plan.environment.GOOGLE_API_KEY).toBeUndefined();
     expect(plan.environment.CUSTOM_VAR).toBeUndefined();
   });
 
-  it("skips unresolved auth-profile env refs", async () => {
+  it("keeps install planning independent from auth-profile env resolution", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
-      },
-    });
-    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
       },
     });
 

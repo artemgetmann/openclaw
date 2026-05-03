@@ -8,6 +8,13 @@ final class ConnectionModeCoordinator {
     private let logger = Logger(subsystem: "ai.openclaw", category: "connection")
     private var lastMode: AppState.ConnectionMode?
 
+    nonisolated static func shouldStopGatewayForUnconfiguredMode(appFlavor: AppFlavor = .current) -> Bool {
+        // Consumer setup can temporarily resolve as "unconfigured" while the
+        // app is still attaching to an already-healthy canonical gateway. Treat
+        // that state as UI/setup absence, not as permission to unload the user's bot.
+        !appFlavor.isConsumer
+    }
+
     /// Apply the requested connection mode by starting/stopping local gateway,
     /// managing the control-channel SSH tunnel, and cleaning up chat windows/panels.
     func apply(mode: AppState.ConnectionMode, paused: Bool) async {
@@ -22,7 +29,9 @@ final class ConnectionModeCoordinator {
             NodesStore.shared.lastError = nil
             await RemoteTunnelManager.shared.stopAll()
             WebChatManager.shared.resetTunnels()
-            GatewayProcessManager.shared.stop()
+            if Self.shouldStopGatewayForUnconfiguredMode() {
+                GatewayProcessManager.shared.stop()
+            }
             await GatewayConnection.shared.shutdown()
             await ControlChannel.shared.disconnect()
             Task.detached { await PortGuardian.shared.sweep(mode: .unconfigured) }

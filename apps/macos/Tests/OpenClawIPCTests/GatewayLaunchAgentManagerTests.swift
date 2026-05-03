@@ -293,6 +293,26 @@ struct GatewayLaunchAgentManagerTests {
         }
     }
 
+    @Test func `daemon command environment does not inherit shell secrets`() async {
+        await TestIsolation.withEnvValues([ConsumerInstance.envKey: nil]) {
+            let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
+                base: [
+                    "HOME": "/Users/tester",
+                    "OPENAI_API_KEY": "sk-test",
+                    "ANTHROPIC_AUTH_TOKEN": "token",
+                    "CUSTOM_SECRET": "secret",
+                    "PATH": "/tmp/unsafe",
+                ],
+                projectRootHint: nil)
+
+            #expect(env["HOME"] == "/Users/tester")
+            #expect(env["OPENAI_API_KEY"] == nil)
+            #expect(env["ANTHROPIC_AUTH_TOKEN"] == nil)
+            #expect(env["CUSTOM_SECRET"] == nil)
+            #expect(env["PATH"] != "/tmp/unsafe")
+        }
+    }
+
     @MainActor
     @Test func `daemon command environment marks app support config as canonical owner`() async throws {
         let home = FileManager().temporaryDirectory
