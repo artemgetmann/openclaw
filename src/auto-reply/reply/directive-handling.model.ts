@@ -8,7 +8,7 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { buildBrowseProvidersButton } from "../../plugin-sdk-internal/telegram.js";
+import { buildModelHomeKeyboard } from "../../plugin-sdk-internal/telegram.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
@@ -248,13 +248,13 @@ export async function maybeHandleModelDirectiveInfo(params: {
       : null;
 
     if (isTelegram) {
-      const buttons = buildBrowseProvidersButton();
+      const buttons = buildModelHomeKeyboard();
       return {
         text: [
           `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
           activeRuntimeLine,
           "",
-          "Tap below to browse models, or use:",
+          "Pick a model family, or use:",
           "/model <provider/model> to switch",
           "/model status for details",
         ]

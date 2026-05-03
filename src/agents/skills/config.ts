@@ -8,6 +8,7 @@ import {
   resolveConfigPath,
   resolveRuntimePlatform,
 } from "../../shared/config-eval.js";
+import { evaluateEntryRequirementsForCurrentPlatform } from "../../shared/entry-status.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEligibilityContext, SkillEntry } from "./types.js";
@@ -93,6 +94,81 @@ export function hasRelativeSkillBin(entry: SkillEntry, bin: string): boolean {
   }
 }
 
+function resolveSkillHasLocalBin(entry: SkillEntry): (bin: string) => boolean {
+  return (bin) => hasRelativeSkillBin(entry, bin) || hasBinary(bin);
+}
+
+type SkillEntryEvaluation = {
+  skillKey: string;
+  skillConfig?: SkillConfig;
+  disabled: boolean;
+  blockedByAllowlist: boolean;
+  emoji?: string;
+  homepage?: string;
+  requirements: {
+    bins: string[];
+    anyBins: string[];
+    env: string[];
+    config: string[];
+    os: string[];
+  };
+  missing: {
+    bins: string[];
+    anyBins: string[];
+    env: string[];
+    config: string[];
+    os: string[];
+  };
+  configChecks: ReturnType<typeof evaluateEntryRequirementsForCurrentPlatform>["configChecks"];
+  requirementsSatisfied: boolean;
+  eligible: boolean;
+};
+
+export function evaluateSkillEntry(params: {
+  entry: SkillEntry;
+  config?: OpenClawConfig;
+  eligibility?: SkillEligibilityContext;
+}): SkillEntryEvaluation {
+  const { entry, config, eligibility } = params;
+  const skillKey = resolveSkillKey(entry.skill, entry);
+  const skillConfig = resolveSkillConfig(config, skillKey);
+  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
+  const disabled = skillConfig?.enabled === false;
+  const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
+
+  // Shared-core decides whether a skill is usable at all. Overlay-owned defaults
+  // and visibility can still sit on top, but they should not fork this semantic
+  // evaluation or status/prompt drift comes back immediately.
+  const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
+    evaluateEntryRequirementsForCurrentPlatform({
+      always: entry.metadata?.always === true,
+      entry,
+      hasLocalBin: resolveSkillHasLocalBin(entry),
+      remote: eligibility?.remote,
+      isEnvSatisfied: (envName) =>
+        Boolean(
+          process.env[envName] ||
+          skillConfig?.env?.[envName] ||
+          (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+        ),
+      isConfigSatisfied: (configPath) => isConfigPathTruthy(config, configPath),
+    });
+
+  return {
+    skillKey,
+    skillConfig,
+    disabled,
+    blockedByAllowlist,
+    emoji,
+    homepage,
+    requirements: required,
+    missing,
+    configChecks,
+    requirementsSatisfied,
+    eligible: !disabled && !blockedByAllowlist && requirementsSatisfied,
+  };
+}
+
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: OpenClawConfig;
@@ -127,4 +203,17 @@ export function shouldIncludeSkill(params: {
       ),
     isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
   });
+}
+
+export function shouldExposeSkillToModel(params: {
+  entry: SkillEntry;
+  config?: OpenClawConfig;
+  eligibility?: SkillEligibilityContext;
+}): boolean {
+  const evaluated = evaluateSkillEntry(params);
+  // Skills are model-facing capability hints. Missing auth, config, or local
+  // binaries should make invocation explain/setup-aware, not hide useful skills
+  // from the model. OS-incompatible skills stay hidden because the model cannot
+  // route around a platform mismatch without a remote eligible node.
+  return !evaluated.disabled && !evaluated.blockedByAllowlist && evaluated.missing.os.length === 0;
 }

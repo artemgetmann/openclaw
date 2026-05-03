@@ -41,7 +41,15 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
 ## Fields
 
 - `allowBundled`: optional allowlist for **bundled** skills only. When set, only
-  bundled skills in the list are eligible (managed/workspace skills unaffected).
+  bundled skills in the list are model-visible or eligible (managed/workspace
+  skills unaffected).
+
+Skills are model-facing. Missing auth, config, or local helper binaries can make
+a skill not ready to execute, but OpenClaw still includes the skill in the
+model-facing prompt so the model can route to setup or explain what is missing.
+Explicit `enabled: false`, bundled allowlist blocking, and unsupported OS still
+hide the skill.
+
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
   For personal skills shared across agents, keep the real folders in
   `~/.agents/skills` and symlink the active OpenClaw managed root

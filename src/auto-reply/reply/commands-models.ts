@@ -11,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  buildModelHomeKeyboard,
   buildModelsKeyboard,
   buildProviderKeyboard,
   calculateTotalPages,
@@ -131,14 +132,18 @@ function parseModelsArgs(raw: string): {
   page: number;
   pageSize: number;
   all: boolean;
+  browseAll: boolean;
 } {
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { page: 1, pageSize: PAGE_SIZE_DEFAULT, all: false };
+    return { page: 1, pageSize: PAGE_SIZE_DEFAULT, all: false, browseAll: false };
   }
 
   const tokens = trimmed.split(/\s+/g).filter(Boolean);
-  const provider = tokens[0]?.trim();
+  const firstToken = tokens[0]?.trim();
+  const firstLower = firstToken?.toLowerCase();
+  const browseAll = firstLower === "all" || firstLower === "more" || firstLower === "--all";
+  const provider = browseAll ? undefined : firstToken;
 
   let page = 1;
   let all = false;
@@ -180,6 +185,7 @@ function parseModelsArgs(raw: string): {
     page,
     pageSize,
     all,
+    browseAll,
   };
 }
 
@@ -232,13 +238,25 @@ export async function resolveModelsCommandReply(params: {
   }
 
   const argText = body.replace(/^\/models\b/i, "").trim();
-  const { provider, page, pageSize, all } = parseModelsArgs(argText);
+  const { provider, page, pageSize, all, browseAll } = parseModelsArgs(argText);
 
-  const { byProvider, providers } = await buildModelsProviderData(params.cfg, params.agentId);
+  const { byProvider, providers, resolvedDefault } = await buildModelsProviderData(
+    params.cfg,
+    params.agentId,
+  );
   const isTelegram = params.surface === "telegram";
 
   // Provider list (no provider specified)
   if (!provider) {
+    if (isTelegram && !browseAll) {
+      const currentModel =
+        params.currentModel ?? `${resolvedDefault.provider}/${resolvedDefault.model}`;
+      return {
+        text: `Current: ${currentModel}`,
+        channelData: { telegram: { buttons: buildModelHomeKeyboard() } },
+      };
+    }
+
     // For Telegram: show buttons if there are providers
     if (isTelegram && providers.length > 0) {
       const providerInfos: ProviderInfo[] = providers.map((p) => ({

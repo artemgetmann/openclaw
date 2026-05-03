@@ -8,7 +8,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { shouldIncludeSkill } from "./config.js";
+import { shouldExposeSkillToModel, shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
 import {
   parseFrontmatter,
@@ -75,8 +75,12 @@ function filterSkillEntries(
   config?: OpenClawConfig,
   skillFilter?: string[],
   eligibility?: SkillEligibilityContext,
+  opts?: { includeMissingSetupForModel?: boolean },
 ): SkillEntry[] {
-  let filtered = entries.filter((entry) => shouldIncludeSkill({ entry, config, eligibility }));
+  const includeEntry = opts?.includeMissingSetupForModel
+    ? shouldExposeSkillToModel
+    : shouldIncludeSkill;
+  let filtered = entries.filter((entry) => includeEntry({ entry, config, eligibility }));
   // If skillFilter is provided, only include skills in the filter list.
   if (skillFilter !== undefined) {
     const normalized = normalizeSkillFilter(skillFilter) ?? [];
@@ -621,6 +625,7 @@ function resolveWorkspaceSkillPromptState(
     opts?.config,
     opts?.skillFilter,
     opts?.eligibility,
+    { includeMissingSetupForModel: true },
   );
   const promptEntries = eligible.filter(
     (entry) => entry.invocation?.disableModelInvocation !== true,
