@@ -46,6 +46,7 @@ const OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_51_CODEX_MODEL_ID = "gpt-5.1-codex";
 const OPENAI_CODEX_SUPPRESSED_MODEL_IDS = new Set([
+  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
   OPENAI_CODEX_GPT_53_MODEL_ID,
   OPENAI_CODEX_GPT_51_CODEX_MODEL_ID,
   "gpt-5.1-codex-mini",
@@ -333,11 +334,6 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         providerId: PROVIDER_ID,
         templateIds: OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
       });
-      const gpt54MiniTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS,
-      });
       const sparkTemplate = findCatalogTemplate({
         entries: ctx.entries,
         providerId: PROVIDER_ID,
@@ -356,13 +352,6 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
               ...gpt54Template,
               id: OPENAI_CODEX_GPT_54_MODEL_ID,
               name: "GPT-5.4",
-            }
-          : undefined,
-        gpt54MiniTemplate
-          ? {
-              ...gpt54MiniTemplate,
-              id: OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
-              name: "GPT-5.4 Mini",
             }
           : undefined,
         sparkTemplate

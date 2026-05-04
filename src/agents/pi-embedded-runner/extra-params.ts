@@ -26,6 +26,8 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOpenAIAttributionHeadersWrapper,
+  createOpenAICodexResponsesPayloadSanitizerWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
@@ -351,6 +353,8 @@ export function applyExtraParamsToAgent(
   const providerWrapperHandled =
     pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
 
+  agent.streamFn = createOpenAIAttributionHeadersWrapper(agent.streamFn);
+
   if (!providerWrapperHandled && shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
     // Preserve the legacy Moonshot compatibility path when no plugin wrapper
     // actually handled the stream function. This covers tests/disabled plugins
@@ -406,6 +410,7 @@ export function applyExtraParamsToAgent(
     agent.streamFn,
     effectiveExtraParams,
   );
+  agent.streamFn = createOpenAICodexResponsesPayloadSanitizerWrapper(agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [resolvedExtraParams, override],
