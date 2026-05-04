@@ -66,6 +66,7 @@ export const SessionSchema = z
         enabled: z.boolean().optional(),
         idleHours: z.number().nonnegative().optional(),
         maxAgeHours: z.number().nonnegative().optional(),
+        spawnSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -148,6 +149,7 @@ export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
     responsePrefix: z.string().optional(),
+    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,
     inbound: InboundDebounceSchema,

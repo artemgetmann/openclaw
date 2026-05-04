@@ -160,6 +160,7 @@ const TARGET_KEYS = [
   "session.threadBindings.enabled",
   "session.threadBindings.idleHours",
   "session.threadBindings.maxAgeHours",
+  "session.threadBindings.spawnSessions",
   "session.maintenance",
   "session.maintenance.mode",
   "session.maintenance.pruneAfter",

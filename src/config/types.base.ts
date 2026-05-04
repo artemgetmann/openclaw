@@ -101,6 +101,12 @@ export type SessionThreadBindingsConfig = {
    * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
    */
   maxAgeHours?: number;
+  /**
+   * Allow channel integrations to create thread-bound work sessions from
+   * sessions_spawn or native ACP spawn flows. Channel/account keys can override.
+   * Default: true when thread bindings are enabled.
+   */
+  spawnSessions?: boolean;
 };
 
 export type SessionConfig = {

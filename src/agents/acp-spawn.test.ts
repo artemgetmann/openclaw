@@ -17,7 +17,7 @@ function createDefaultSpawnConfig(): OpenClawConfig {
       discord: {
         threadBindings: {
           enabled: true,
-          spawnAcpSessions: true,
+          spawnSessions: true,
         },
       },
     },
@@ -31,7 +31,7 @@ function createTelegramSpawnConfig(): OpenClawConfig {
       telegram: {
         threadBindings: {
           enabled: true,
-          spawnAcpSessions: true,
+          spawnSessions: true,
         },
       },
     },
@@ -538,7 +538,7 @@ describe("spawnAcpDirect", () => {
         discord: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: false,
+            spawnSessions: false,
           },
         },
       },
@@ -559,7 +559,7 @@ describe("spawnAcpDirect", () => {
     );
 
     expect(result.status).toBe("error");
-    expect(result.error).toContain("spawnAcpSessions=true");
+    expect(result.error).toContain("spawnSessions=true");
   });
 
   it("forbids ACP spawn from sandboxed requester sessions", async () => {

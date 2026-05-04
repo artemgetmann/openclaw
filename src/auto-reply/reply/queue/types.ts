@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { OriginatingChannelType } from "../../templating.js";
+import type { SourceReplyDeliveryMode } from "../../types.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 
 export type QueueMode = "steer" | "followup" | "collect" | "steer-backlog" | "interrupt" | "queue";
@@ -81,6 +82,7 @@ export type FollowupRun = {
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
     enforceFinalTag?: boolean;
+    sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   };
 };
 

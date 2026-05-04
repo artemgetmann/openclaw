@@ -1188,6 +1188,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle auto-unfocus). Default: 24.",
   "session.threadBindings.maxAgeHours":
     "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
+  "session.threadBindings.spawnSessions":
+    "Default switch for channel integrations that create thread-bound work sessions from sessions_spawn or native ACP spawn flows.",
   "session.maintenance":
     "Automatic session-store maintenance controls for pruning age, entry caps, and file rotation behavior. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
   "session.maintenance.mode":
@@ -1550,10 +1552,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
   "channels.telegram.threadBindings.maxAgeHours":
     "Optional hard max age in hours for Telegram bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
+  "channels.telegram.threadBindings.spawnSessions":
+    "Allow session spawns with thread=true to auto-bind Telegram current conversations when supported.",
   "channels.telegram.threadBindings.spawnSubagentSessions":
-    "Allow subagent spawns with thread=true to auto-bind Telegram current conversations when supported.",
+    "Deprecated. Use channels.telegram.threadBindings.spawnSessions instead.",
   "channels.telegram.threadBindings.spawnAcpSessions":
-    "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
+    "Deprecated. Use channels.telegram.threadBindings.spawnSessions instead.",
   "channels.whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
   "channels.whatsapp.selfChatMode": "Same-phone setup (bot uses your personal WhatsApp number).",
@@ -1587,10 +1591,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Inactivity window in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
   "channels.discord.threadBindings.maxAgeHours":
     "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
+  "channels.discord.threadBindings.spawnSessions":
+    "Allow session spawns with thread=true to auto-create and bind Discord threads.",
   "channels.discord.threadBindings.spawnSubagentSessions":
-    "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
+    "Deprecated. Use channels.discord.threadBindings.spawnSessions instead.",
   "channels.discord.threadBindings.spawnAcpSessions":
-    "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
+    "Deprecated. Use channels.discord.threadBindings.spawnSessions instead.",
   "channels.discord.ui.components.accentColor":
     "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
   "channels.discord.voice.enabled":

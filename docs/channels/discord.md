@@ -667,7 +667,7 @@ Default slash command settings:
         enabled: true,
         idleHours: 24,
         maxAgeHours: 0,
-        spawnSubagentSessions: false, // opt-in
+        spawnSessions: true,
       },
     },
   },
@@ -678,8 +678,7 @@ Default slash command settings:
 
     - `session.threadBindings.*` sets global defaults.
     - `channels.discord.threadBindings.*` overrides Discord behavior.
-    - `spawnSubagentSessions` must be true to auto-create/bind threads for `sessions_spawn({ thread: true })`.
-    - `spawnAcpSessions` must be true to auto-create/bind threads for ACP (`/acp spawn ... --thread ...` or `sessions_spawn({ runtime: "acp", thread: true })`).
+    - `spawnSessions` controls auto-create/bind threads for `sessions_spawn({ thread: true })`, `/acp spawn ... --thread ...`, and `sessions_spawn({ runtime: "acp", thread: true })`.
     - If thread bindings are disabled for an account, `/focus` and related thread binding operations are unavailable.
 
     See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).

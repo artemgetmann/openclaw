@@ -1711,6 +1711,7 @@ export async function runEmbeddedAttempt(
       acpEnabled: params.config?.acp?.enabled !== false,
       runtimeInfo,
       messageToolHints,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       sandboxInfo,
       tools,
       modelAliasLines: buildModelAliasLines(params.config),

@@ -327,6 +327,99 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps native command replies visible in group turns", async () => {
+    setNoAbort();
+    const cfg = {
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "group",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      SessionKey: "agent:main:telegram:group:G1",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      return { text: "status reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "status reply" }),
+    );
+  });
+
+  it("falls back to automatic group delivery when message-tool-only mode cannot run", async () => {
+    setNoAbort();
+    const cfg = {
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
+      tools: {
+        deny: ["message"],
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "group",
+      SessionKey: "agent:main:telegram:group:G1",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      return { text: "fallback reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "fallback reply" }),
+    );
+  });
+
+  it("suppresses automatic group delivery when message-tool-only mode can run", async () => {
+    setNoAbort();
+    const cfg = {
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "group",
+      SessionKey: "agent:main:telegram:group:G1",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      await opts?.onToolResult?.({ text: "tool summary" });
+      await opts?.onBlockReply?.({ text: "block reply" });
+      return { text: "private final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("routes when OriginatingChannel differs from Provider", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

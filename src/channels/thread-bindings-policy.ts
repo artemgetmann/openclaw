@@ -9,6 +9,7 @@ type SessionThreadBindingsConfigShape = {
   enabled?: unknown;
   idleHours?: unknown;
   maxAgeHours?: unknown;
+  spawnSessions?: unknown;
   spawnSubagentSessions?: unknown;
   spawnAcpSessions?: unknown;
 };
@@ -126,9 +127,12 @@ export function resolveThreadBindingSpawnPolicy(params: {
     true;
   const spawnFlagKey = resolveSpawnFlagKey(params.kind);
   const spawnEnabledRaw =
-    normalizeBoolean(account?.[spawnFlagKey]) ?? normalizeBoolean(root?.[spawnFlagKey]);
-  // Non-Discord channels currently have no dedicated spawn gate config keys.
-  const spawnEnabled = spawnEnabledRaw ?? channel !== DISCORD_THREAD_BINDING_CHANNEL;
+    normalizeBoolean(account?.[spawnFlagKey]) ??
+    normalizeBoolean(account?.spawnSessions) ??
+    normalizeBoolean(root?.[spawnFlagKey]) ??
+    normalizeBoolean(root?.spawnSessions) ??
+    normalizeBoolean(params.cfg.session?.threadBindings?.spawnSessions);
+  const spawnEnabled = spawnEnabledRaw ?? true;
   return {
     channel,
     accountId,
@@ -191,11 +195,5 @@ export function formatThreadBindingSpawnDisabledError(params: {
   accountId: string;
   kind: ThreadBindingSpawnKind;
 }): string {
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "acp") {
-    return "Discord thread-bound ACP spawns are disabled for this account (set channels.discord.threadBindings.spawnAcpSessions=true to enable).";
-  }
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "subagent") {
-    return "Discord thread-bound subagent spawns are disabled for this account (set channels.discord.threadBindings.spawnSubagentSessions=true to enable).";
-  }
-  return `Thread-bound ${params.kind} spawns are disabled for ${params.channel}.`;
+  return `Thread-bound session spawns are disabled for ${params.channel} (set channels.${params.channel}.threadBindings.spawnSessions=true to enable).`;
 }
