@@ -94,6 +94,43 @@ function migrateThreadBindingsTtlHoursForPath(params: {
   return true;
 }
 
+function migrateThreadBindingsSpawnSessionsForPath(params: {
+  owner: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): boolean {
+  const threadBindings = getRecord(params.owner.threadBindings);
+  if (!threadBindings) {
+    return false;
+  }
+  const hasSubagent = hasOwnKey(threadBindings, "spawnSubagentSessions");
+  const hasAcp = hasOwnKey(threadBindings, "spawnAcpSessions");
+  if (!hasSubagent && !hasAcp) {
+    return false;
+  }
+
+  const hadUnified = threadBindings.spawnSessions !== undefined;
+  if (!hadUnified) {
+    const legacyValues = [
+      threadBindings.spawnSubagentSessions,
+      threadBindings.spawnAcpSessions,
+    ].filter((value): value is boolean => typeof value === "boolean");
+    if (legacyValues.length > 0) {
+      threadBindings.spawnSessions = legacyValues.some(Boolean);
+    }
+  }
+  delete threadBindings.spawnSubagentSessions;
+  delete threadBindings.spawnAcpSessions;
+  params.owner.threadBindings = threadBindings;
+
+  params.changes.push(
+    hadUnified
+      ? `Removed ${params.pathPrefix}.threadBindings.spawnSubagentSessions/spawnAcpSessions (${params.pathPrefix}.threadBindings.spawnSessions already set).`
+      : `Moved ${params.pathPrefix}.threadBindings.spawnSubagentSessions/spawnAcpSessions → ${params.pathPrefix}.threadBindings.spawnSessions.`,
+  );
+  return true;
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
   {
     id: "bindings.match.provider->bindings.match.channel",
@@ -296,6 +333,58 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
       }
 
       channels.discord = discord;
+      raw.channels = channels;
+    },
+  },
+  {
+    id: "thread-bindings.spawnSubagentSessions/spawnAcpSessions->spawnSessions",
+    describe:
+      "Move legacy threadBindings spawnSubagentSessions/spawnAcpSessions keys to threadBindings.spawnSessions",
+    apply: (raw, changes) => {
+      const session = getRecord(raw.session);
+      if (session) {
+        migrateThreadBindingsSpawnSessionsForPath({
+          owner: session,
+          pathPrefix: "session",
+          changes,
+        });
+        raw.session = session;
+      }
+
+      const channels = getRecord(raw.channels);
+      if (!channels) {
+        return;
+      }
+
+      for (const channelKey of ["discord", "telegram"]) {
+        const channel = getRecord(channels[channelKey]);
+        if (!channel) {
+          continue;
+        }
+        migrateThreadBindingsSpawnSessionsForPath({
+          owner: channel,
+          pathPrefix: `channels.${channelKey}`,
+          changes,
+        });
+
+        const accounts = getRecord(channel.accounts);
+        if (accounts) {
+          for (const [accountId, accountRaw] of Object.entries(accounts)) {
+            const account = getRecord(accountRaw);
+            if (!account) {
+              continue;
+            }
+            migrateThreadBindingsSpawnSessionsForPath({
+              owner: account,
+              pathPrefix: `channels.${channelKey}.accounts.${accountId}`,
+              changes,
+            });
+            accounts[accountId] = account;
+          }
+          channel.accounts = accounts;
+        }
+        channels[channelKey] = channel;
+      }
       raw.channels = channels;
     },
   },

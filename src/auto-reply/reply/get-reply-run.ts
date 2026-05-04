@@ -558,6 +558,7 @@ export async function runPreparedReply(
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
+      sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
     },
   };
 

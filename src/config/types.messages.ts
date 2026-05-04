@@ -4,6 +4,8 @@ import type { TtsConfig } from "./types.tts.js";
 export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
+  /** In groups/channels, require the message tool for visible replies unless automatic is requested. */
+  visibleReplies?: "automatic" | "message_tool";
 };
 
 export type DmConfig = {
@@ -106,6 +108,8 @@ export type MessagesConfig = {
    * Default: none
    */
   responsePrefix?: string;
+  /** Direct-chat source reply delivery mode. Default: automatic. */
+  visibleReplies?: "automatic" | "message_tool";
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */

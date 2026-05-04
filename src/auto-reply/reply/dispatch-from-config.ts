@@ -1,4 +1,7 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveEffectiveToolPolicy } from "../../agents/pi-tools.policy.js";
+import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
+import { resolveToolProfilePolicy } from "../../agents/tool-policy-shared.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -50,6 +53,7 @@ import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -504,6 +508,25 @@ export async function dispatchReplyFromConfig(params: {
         undefined,
       chatType: sessionStoreEntry.entry?.chatType,
     });
+    const { globalPolicy, agentPolicy, profile, providerProfile } = resolveEffectiveToolPolicy({
+      config: cfg,
+      sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+    });
+    const messageToolAvailable = isToolAllowedByPolicies("message", [
+      resolveToolProfilePolicy(profile),
+      resolveToolProfilePolicy(providerProfile),
+      globalPolicy,
+      agentPolicy,
+    ]);
+    const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
+      cfg,
+      ctx,
+      requested: params.replyOptions?.sourceReplyDeliveryMode,
+      sendPolicy,
+      explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
+      shouldSuppressTyping,
+      messageToolAvailable,
+    });
     if (sendPolicy === "deny" && !bypassAcpForCommand) {
       logVerbose(
         `Send blocked by policy for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"}`,
@@ -517,7 +540,9 @@ export async function dispatchReplyFromConfig(params: {
     const isNativeTelegramVerbose =
       nativeTelegramVerboseLevel !== undefined && nativeTelegramVerboseLevel !== "off";
     const shouldSendToolSummaries =
-      ctx.ChatType !== "group" && (ctx.CommandSource !== "native" || isNativeTelegramVerbose);
+      !sourceReplyPolicy.suppressAutomaticSourceDelivery &&
+      ctx.ChatType !== "group" &&
+      (ctx.CommandSource !== "native" || isNativeTelegramVerbose);
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
@@ -554,6 +579,9 @@ export async function dispatchReplyFromConfig(params: {
           payload,
         })
       ) {
+        return null;
+      }
+      if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         return null;
       }
       if (shouldSendToolSummaries) {
@@ -595,7 +623,7 @@ export async function dispatchReplyFromConfig(params: {
     };
     const typing = resolveRunTypingPolicy({
       requestedPolicy: params.replyOptions?.typingPolicy,
-      suppressTyping: params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
+      suppressTyping: sourceReplyPolicy.suppressTyping,
       originatingChannel,
       systemEvent: shouldRouteToOriginating,
     });
@@ -604,6 +632,7 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
+        sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
@@ -652,6 +681,9 @@ export async function dispatchReplyFromConfig(params: {
               inboundAudio,
               ttsAuto: sessionTtsAuto,
             });
+            if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
+              return;
+            }
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
@@ -708,6 +740,9 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
+      if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
+        continue;
+      }
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
         const result = await routeReply({
@@ -761,7 +796,9 @@ export async function dispatchReplyFromConfig(params: {
             mediaUrl: ttsSyntheticReply.mediaUrl,
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
-          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+          if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
+            // The model was instructed to use the message tool for visible output.
+          } else if (shouldRouteToOriginating && originatingChannel && originatingTo) {
             const result = await routeReply({
               payload: ttsOnlyPayload,
               channel: originatingChannel,

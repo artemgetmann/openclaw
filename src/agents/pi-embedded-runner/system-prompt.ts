@@ -1,5 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/types.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
@@ -44,6 +45,7 @@ export function buildEmbeddedSystemPrompt(params: {
     channelActions?: string[];
   };
   messageToolHints?: string[];
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sandboxInfo?: EmbeddedSandboxInfo;
   tools: AgentTool[];
   modelAliasLines: string[];
@@ -73,6 +75,7 @@ export function buildEmbeddedSystemPrompt(params: {
     acpEnabled: params.acpEnabled,
     runtimeInfo: params.runtimeInfo,
     messageToolHints: params.messageToolHints,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     sandboxInfo: params.sandboxInfo,
     toolNames: params.tools.map((tool) => tool.name),
     toolSummaries: buildToolSummaryMap(params.tools),

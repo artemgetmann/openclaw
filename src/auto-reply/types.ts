@@ -21,6 +21,8 @@ export type TypingPolicy =
   | "internal_webchat"
   | "heartbeat";
 
+export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -45,6 +47,11 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
+  /**
+   * Controls whether assistant replies are automatically delivered to the
+   * source conversation or must be sent through the message tool.
+   */
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */

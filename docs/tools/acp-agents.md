@@ -77,9 +77,9 @@ Required feature flags for thread-bound ACP:
 
 - `acp.enabled=true`
 - `acp.dispatch.enabled` is on by default (set `false` to pause ACP dispatch)
-- Channel-adapter ACP thread-spawn flag enabled (adapter-specific)
-  - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
-  - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
+- Channel-adapter thread session spawns enabled:
+  - Discord: `channels.discord.threadBindings.spawnSessions=true`
+  - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
 
 ### Thread supporting channels
 
@@ -374,8 +374,8 @@ Notes:
 
 - On non-thread binding surfaces, default behavior is effectively `off`.
 - Thread-bound spawn requires channel policy support:
-  - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
-  - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
+  - Discord: `channels.discord.threadBindings.spawnSessions=true`
+  - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
 
 ## ACP controls
 
@@ -492,7 +492,7 @@ Thread binding config is channel-adapter specific. Example for Discord:
     discord: {
       threadBindings: {
         enabled: true,
-        spawnAcpSessions: true,
+        spawnSessions: true,
       },
     },
   },
@@ -501,7 +501,7 @@ Thread binding config is channel-adapter specific. Example for Discord:
 
 If thread-bound ACP spawn does not work, verify the adapter feature flag first:
 
-- Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
+- Discord: `channels.discord.threadBindings.spawnSessions=true`
 
 See [Configuration Reference](/gateway/configuration-reference).
 

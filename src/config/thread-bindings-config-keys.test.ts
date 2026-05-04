@@ -143,4 +143,63 @@ describe("thread binding config keys", () => {
       "Removed channels.discord.accounts.beta.threadBindings.ttlHours (channels.discord.accounts.beta.threadBindings.idleHours already set).",
     );
   });
+
+  it("accepts unified spawnSessions and migrates legacy split spawn keys", () => {
+    const validation = validateConfigObjectRaw({
+      session: {
+        threadBindings: {
+          spawnSessions: true,
+        },
+      },
+      channels: {
+        telegram: {
+          threadBindings: {
+            spawnSessions: true,
+          },
+        },
+      },
+    });
+
+    expect(validation.ok).toBe(true);
+
+    const result = migrateLegacyConfig({
+      channels: {
+        discord: {
+          threadBindings: {
+            spawnSubagentSessions: false,
+            spawnAcpSessions: true,
+          },
+          accounts: {
+            work: {
+              threadBindings: {
+                spawnSessions: false,
+                spawnAcpSessions: true,
+              },
+            },
+          },
+        },
+        telegram: {
+          threadBindings: {
+            spawnAcpSessions: true,
+          },
+        },
+      },
+    });
+
+    expect(result.config?.channels?.discord?.threadBindings?.spawnSessions).toBe(true);
+    expect(
+      (result.config?.channels?.discord?.threadBindings as Record<string, unknown> | undefined)
+        ?.spawnAcpSessions,
+    ).toBeUndefined();
+    expect(result.config?.channels?.discord?.accounts?.work?.threadBindings?.spawnSessions).toBe(
+      false,
+    );
+    expect(result.config?.channels?.telegram?.threadBindings?.spawnSessions).toBe(true);
+    expect(result.changes).toContain(
+      "Moved channels.discord.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.threadBindings.spawnSessions.",
+    );
+    expect(result.changes).toContain(
+      "Removed channels.discord.accounts.work.threadBindings.spawnSubagentSessions/spawnAcpSessions (channels.discord.accounts.work.threadBindings.spawnSessions already set).",
+    );
+  });
 });

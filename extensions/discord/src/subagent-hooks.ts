@@ -31,10 +31,13 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
         baseThreadBindings?.enabled ??
         api.config.session?.threadBindings?.enabled ??
         true,
-      spawnSubagentSessions:
+      spawnSessions:
         accountThreadBindings?.spawnSubagentSessions ??
+        accountThreadBindings?.spawnSessions ??
         baseThreadBindings?.spawnSubagentSessions ??
-        false,
+        baseThreadBindings?.spawnSessions ??
+        api.config.session?.threadBindings?.spawnSessions ??
+        true,
     };
   };
 
@@ -56,11 +59,11 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
           "Discord thread bindings are disabled (set channels.discord.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).",
       };
     }
-    if (!threadBindingFlags.spawnSubagentSessions) {
+    if (!threadBindingFlags.spawnSessions) {
       return {
         status: "error" as const,
         error:
-          "Discord thread-bound subagent spawns are disabled for this account (set channels.discord.threadBindings.spawnSubagentSessions=true to enable).",
+          "Discord thread-bound session spawns are disabled for this account (set channels.discord.threadBindings.spawnSessions=true to enable).",
       };
     }
     try {

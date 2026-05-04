@@ -167,7 +167,7 @@ const baseCfg = {
     discord: {
       threadBindings: {
         enabled: true,
-        spawnAcpSessions: true,
+        spawnSessions: true,
       },
     },
   },
@@ -622,14 +622,14 @@ describe("/acp command", () => {
     expect(hoisted.ensureSessionMock).not.toHaveBeenCalled();
   });
 
-  it("rejects thread-bound ACP spawn when spawnAcpSessions is disabled", async () => {
+  it("rejects thread-bound ACP spawn when spawnSessions is disabled", async () => {
     const cfg = {
       ...baseCfg,
       channels: {
         discord: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: false,
+            spawnSessions: false,
           },
         },
       },
@@ -637,7 +637,7 @@ describe("/acp command", () => {
 
     const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
 
-    expect(result?.reply?.text).toContain("spawnAcpSessions=true");
+    expect(result?.reply?.text).toContain("spawnSessions=true");
     expect(hoisted.closeMock).toHaveBeenCalledTimes(1);
     expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
