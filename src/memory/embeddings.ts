@@ -36,7 +36,7 @@ export type EmbeddingProvider = {
 };
 
 export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
-export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
+export type EmbeddingProviderRequest = EmbeddingProviderId | "auto" | "none";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
 // Remote providers considered for auto-selection when provider === "auto".
@@ -170,6 +170,14 @@ export async function createEmbeddingProvider(
 ): Promise<EmbeddingProviderResult> {
   const requestedProvider = options.provider;
   const fallback = options.fallback;
+
+  if (requestedProvider === "none") {
+    return {
+      provider: null,
+      requestedProvider,
+      providerUnavailableReason: 'Memory search provider is set to "none".',
+    };
+  }
 
   const createProvider = async (id: EmbeddingProviderId) => {
     if (id === "local") {

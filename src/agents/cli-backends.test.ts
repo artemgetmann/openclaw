@@ -61,19 +61,47 @@ describe("resolveCliBackendConfig reliability merge", () => {
 });
 
 describe("resolveCliBackendConfig claude-cli defaults", () => {
-  it("uses non-interactive permission-mode defaults for fresh and resume args", () => {
+  it("uses upstream-style stream-json MCP defaults for fresh and resume args", () => {
     const resolved = resolveCliBackendConfig("claude-cli");
 
     expect(resolved).not.toBeNull();
-    expect(resolved?.config.args).toContain("--permission-mode");
-    expect(resolved?.config.args).toContain("bypassPermissions");
+    expect(resolved?.config.output).toBe("jsonl");
+    expect(resolved?.config.input).toBe("stdin");
+    expect(resolved?.config.liveSession).toBe("claude-stdio");
+    expect(resolved?.config.systemPromptFileArg).toBe("--append-system-prompt-file");
+    expect(resolved?.config.args).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--include-partial-messages",
+      "--verbose",
+      "--setting-sources",
+      "user",
+      "--permission-mode",
+      "bypassPermissions",
+      "--allowedTools",
+      "mcp__openclaw__*",
+    ]);
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
-    expect(resolved?.config.resumeArgs).toContain("--permission-mode");
-    expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
+    expect(resolved?.config.resumeArgs).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--include-partial-messages",
+      "--verbose",
+      "--setting-sources",
+      "user",
+      "--permission-mode",
+      "bypassPermissions",
+      "--allowedTools",
+      "mcp__openclaw__*",
+      "--resume",
+      "{sessionId}",
+    ]);
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
   });
 
-  it("retains default claude safety args when only command is overridden", () => {
+  it("retains default claude stream and MCP args when only command is overridden", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -90,10 +118,12 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved).not.toBeNull();
     expect(resolved?.config.command).toBe("/usr/local/bin/claude");
-    expect(resolved?.config.args).toContain("--permission-mode");
-    expect(resolved?.config.args).toContain("bypassPermissions");
-    expect(resolved?.config.resumeArgs).toContain("--permission-mode");
-    expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
+    expect(resolved?.config.args).toContain("--include-partial-messages");
+    expect(resolved?.config.args).toContain("--allowedTools");
+    expect(resolved?.config.args).toContain("mcp__openclaw__*");
+    expect(resolved?.config.resumeArgs).toContain("--include-partial-messages");
+    expect(resolved?.config.resumeArgs).toContain("--allowedTools");
+    expect(resolved?.config.resumeArgs).toContain("mcp__openclaw__*");
   });
 
   it("normalizes legacy skip-permissions overrides to permission-mode bypassPermissions", () => {

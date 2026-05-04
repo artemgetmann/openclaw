@@ -17,7 +17,7 @@ export type ResolvedMemorySearchConfig = {
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
   multimodal: MemoryMultimodalSettings;
-  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
+  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto" | "none";
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -167,6 +167,7 @@ function mergeConfig(
     provider === "voyage" ||
     provider === "mistral" ||
     provider === "ollama" ||
+    provider === "none" ||
     provider === "auto";
   const batch = {
     enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,

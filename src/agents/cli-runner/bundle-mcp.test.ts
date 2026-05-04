@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registry.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
-import { __testing as nativeMcpTesting } from "./native-mcp.js";
+import { __testing as nativeMcpTesting, OPENCLAW_NATIVE_MCP_CONFIG_ENV } from "./native-mcp.js";
 
 const tempDirs: string[] = [];
 
@@ -84,25 +84,33 @@ describe("prepareCliBundleMcpConfig", () => {
         const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
         expect(typeof generatedConfigPath).toBe("string");
         const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
-          mcpServers?: Record<string, { args?: string[]; env?: Record<string, string> }>;
+          mcpServers?: Record<
+            string,
+            { command?: string; args?: string[]; cwd?: string; env?: Record<string, string> }
+          >;
         };
         expect(raw.mcpServers?.bundleProbe?.args).toEqual([await fs.realpath(serverPath)]);
-        if (backendId === "claude-bridge") {
-          expect(raw.mcpServers?.openclawNativeTools?.args).toEqual([
-            "--import",
-            "tsx",
-            expect.stringMatching(/native-mcp-server\.ts$/),
-          ]);
-          expect(raw.mcpServers?.openclawNativeTools?.cwd).toBe(
-            nativeMcpTesting.resolveNativeOpenClawRepoRoot(),
-          );
-          expect(raw.mcpServers?.openclawNativeTools?.env).toEqual(
-            expect.objectContaining({
-              OPENCLAW_CONFIG_PATH: expect.stringMatching(/openclaw-native-mcp\.config\.json$/),
-              OPENCLAW_NATIVE_MCP_WORKSPACE_DIR: workspaceDir,
-            }),
-          );
-        } else {
+        const nativeServerKey = backendId === "claude-cli" ? "openclaw" : "openclawNativeTools";
+        expect(raw.mcpServers?.[nativeServerKey]?.command).toBe("/bin/sh");
+        expect(raw.mcpServers?.[nativeServerKey]?.args?.[0]).toBe("-lc");
+        expect(raw.mcpServers?.[nativeServerKey]?.args?.[1]).toContain(
+          nativeMcpTesting.resolveTsxLoaderPath(),
+        );
+        expect(raw.mcpServers?.[nativeServerKey]?.args?.[1]).toContain(
+          "openclaw-native-mcp-launcher.mjs",
+        );
+        expect(raw.mcpServers?.[nativeServerKey]?.cwd).toBe(
+          nativeMcpTesting.resolveNativeOpenClawRepoRoot(),
+        );
+        expect(raw.mcpServers?.[nativeServerKey]?.env).toEqual(
+          expect.objectContaining({
+            [OPENCLAW_NATIVE_MCP_CONFIG_ENV]: expect.stringMatching(
+              /openclaw-native-mcp\.config\.json$/,
+            ),
+            OPENCLAW_NATIVE_MCP_WORKSPACE_DIR: workspaceDir,
+          }),
+        );
+        if (backendId === "claude-cli") {
           expect(raw.mcpServers?.openclawNativeTools).toBeUndefined();
         }
 
@@ -132,12 +140,92 @@ describe("prepareCliBundleMcpConfig", () => {
       mcpServers?: Record<string, { command?: string; env?: Record<string, string> }>;
     };
 
-    expect(raw.mcpServers?.openclawNativeTools?.command).toBe(process.execPath);
+    expect(raw.mcpServers?.openclawNativeTools?.command).toBe("/bin/sh");
     expect(raw.mcpServers?.openclawNativeTools?.env).toEqual(
       expect.objectContaining({
         OPENCLAW_NATIVE_MCP_WORKSPACE_DIR: workspaceDir,
       }),
     );
+
+    await prepared.cleanup?.();
+  });
+
+  it("injects the native OpenClaw MCP server for claude-cli as server name openclaw", async () => {
+    const workspaceDir = await createTempDir("openclaw-cli-native-mcp-workspace-");
+
+    const prepared = await prepareCliBundleMcpConfig({
+      backendId: "claude-cli",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { command?: string; env?: Record<string, string> }>;
+    };
+
+    expect(raw.mcpServers?.openclaw?.command).toBe("/bin/sh");
+    expect(raw.mcpServers?.openclaw?.env).toEqual(
+      expect.objectContaining({
+        OPENCLAW_NATIVE_MCP_WORKSPACE_DIR: workspaceDir,
+      }),
+    );
+    expect(raw.mcpServers?.openclawNativeTools).toBeUndefined();
+
+    await prepared.cleanup?.();
+  });
+
+  it("prefers loopback OpenClaw MCP for claude-cli when provided", async () => {
+    const workspaceDir = await createTempDir("openclaw-cli-loopback-mcp-workspace-");
+
+    const prepared = await prepareCliBundleMcpConfig({
+      backendId: "claude-cli",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:12345/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+            },
+          },
+        },
+      },
+      env: {
+        OPENCLAW_MCP_TOKEN: "token",
+        OPENCLAW_MCP_SESSION_KEY: "agent:main:main",
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { type?: string; url?: string; command?: string }>;
+    };
+
+    expect(raw.mcpServers?.openclaw).toMatchObject({
+      type: "http",
+      url: "http://127.0.0.1:12345/mcp",
+    });
+    expect(raw.mcpServers?.openclaw?.command).toBeUndefined();
+    expect(raw.mcpServers?.openclawNativeTools).toBeUndefined();
+    expect(prepared.env).toMatchObject({
+      OPENCLAW_MCP_TOKEN: "token",
+      OPENCLAW_MCP_SESSION_KEY: "agent:main:main",
+    });
+    expect(prepared.mcpConfigHash).toBeTruthy();
+    expect(prepared.mcpResumeHash).toBeTruthy();
 
     await prepared.cleanup?.();
   });

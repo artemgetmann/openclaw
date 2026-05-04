@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runCliAgent } from "./cli-runner.js";
@@ -11,6 +12,20 @@ const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
 const bridgeRunMock = vi.fn();
 const prepareCliBundleMcpConfigMock = vi.fn();
+const ZERO_TEST_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+  },
+};
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
@@ -28,6 +43,25 @@ vi.mock("../infra/system-events.js", () => ({
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+}));
+
+vi.mock("../gateway/mcp-http.js", () => ({
+  ensureMcpLoopbackServer: vi.fn(async () => ({ port: 9123, close: vi.fn() })),
+  getActiveMcpLoopbackRuntime: vi.fn(() => ({
+    port: 9123,
+    ownerToken: "owner-token",
+    nonOwnerToken: "non-owner-token",
+  })),
+  registerMcpLoopbackConfigOverride: vi.fn(() => vi.fn()),
+  createMcpLoopbackServerConfig: (port: number) => ({
+    mcpServers: {
+      openclaw: {
+        type: "http",
+        url: `http://127.0.0.1:${port}/mcp`,
+        headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+      },
+    },
+  }),
 }));
 
 vi.mock("./claude-bridge.js", () => ({
@@ -93,6 +127,46 @@ async function readTranscriptMessages(sessionFile: string) {
     )
     .filter((entry) => entry.type === "message")
     .map((entry) => entry.message);
+}
+
+function createTextClaudeCliConfig(): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        cliBackends: {
+          "claude-cli": {
+            command: "claude",
+            args: ["-p"],
+            resumeArgs: ["-p", "--resume", "{sessionId}"],
+            output: "text",
+            input: "arg",
+            modelArg: "--model",
+            sessionArg: "--session-id",
+            sessionMode: "always",
+            systemPromptArg: "--append-system-prompt",
+            systemPromptWhen: "first",
+            liveSession: undefined,
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function appendTranscriptMessages(
+  sessionFile: string,
+  messages: Array<Parameters<SessionManager["appendMessage"]>[0]>,
+) {
+  const sessionManager = SessionManager.open(sessionFile);
+  for (const message of messages) {
+    sessionManager.appendMessage(message);
+  }
+}
+
+function extractPromptArgFromSpawn(): string {
+  const input = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
+  const argv = input.argv ?? [];
+  return argv[argv.length - 1] ?? "";
 }
 
 describe("runCliAgent with process supervisor", () => {
@@ -170,6 +244,107 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
+  });
+
+  it("streams claude-cli stream-json text deltas through partial reply callbacks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-cli-bridge-prompt-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.md"),
+      "# AGENTS.md - Test Workspace\n\nThis full OpenClaw prompt content must not be inlined.\n",
+      "utf-8",
+    );
+    const stdout = [
+      JSON.stringify({ type: "init", session_id: "claude-session-1" }),
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: "Hello" },
+        },
+      }),
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: " there" },
+        },
+      }),
+      JSON.stringify({
+        type: "result",
+        session_id: "claude-session-1",
+        result: "Hello there",
+        usage: { input_tokens: 7, output_tokens: 2, cache_creation_input_tokens: 3 },
+      }),
+    ].join("\n");
+    supervisorSpawnMock.mockImplementationOnce(
+      async (input: { onStdout?: (chunk: string) => void }) => ({
+        runId: "run-supervisor",
+        pid: 1234,
+        startedAtMs: Date.now(),
+        stdin: {
+          write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+            input.onStdout?.(`${stdout}\n`);
+            cb?.();
+          }),
+          end: vi.fn(),
+        },
+        wait: vi.fn().mockImplementation(async () => {
+          await new Promise(() => {});
+          return {
+            reason: "exit",
+            exitCode: 0,
+            exitSignal: null,
+            durationMs: 50,
+            stdout,
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          };
+        }),
+        cancel: vi.fn(),
+      }),
+    );
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+
+    try {
+      const result = await runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir,
+        prompt: "hi",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-stream",
+        onAssistantMessageStart,
+        onPartialReply,
+      });
+
+      expect(result.payloads?.[0]?.text).toBe("Hello there");
+      expect(result.meta.agentMeta?.sessionId).toBe("claude-session-1");
+      expect(result.meta.agentMeta?.usage?.cacheWrite).toBe(3);
+      expect(result.meta.systemPromptReport?.injectedWorkspaceFiles).toEqual([]);
+      expect(result.meta.systemPromptReport?.systemPrompt.projectContextChars).toBe(0);
+      expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+      expect(onPartialReply.mock.calls).toEqual([[{ text: "Hello" }], [{ text: "Hello there" }]]);
+      const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+      const argv = spawnInput.argv ?? [];
+      const systemPromptIndex = argv.indexOf("--append-system-prompt");
+      expect(systemPromptIndex).toBeGreaterThanOrEqual(0);
+      const systemPrompt = argv[systemPromptIndex + 1] ?? "";
+      expect(systemPrompt).toContain(
+        "Your home is the runtime workspace at ~/.openclaw/workspace.",
+      );
+      expect(systemPrompt).toContain("~/.openclaw/workspace/AGENTS.md first");
+      expect(systemPrompt).not.toContain("# Project Context");
+      expect(systemPrompt).not.toContain("This full OpenClaw prompt content must not be inlined.");
+      expect(JSON.stringify(argv)).not.toContain("Tools are disabled");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("forwards streaming callbacks to the claude bridge backend", async () => {
@@ -441,6 +616,279 @@ describe("runCliAgent with process supervisor", () => {
           content: [{ type: "text", text: "stored nonce" }],
         }),
       ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("injects recent non-Claude shared transcript into a first claude-cli prompt", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-cli-replay-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    appendTranscriptMessages(sessionFile, [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Remember setup nonce CODEX-771." }],
+        timestamp: Date.now(),
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Stored CODEX-771 from Codex." }],
+        api: "openai-codex-responses",
+        provider: "codex-cli",
+        model: "gpt-5.5",
+        usage: ZERO_TEST_USAGE,
+        stopReason: "stop",
+        timestamp: Date.now() + 1,
+      },
+    ]);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "claude ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await runCliAgent({
+        sessionId: "s-claude-replay",
+        sessionFile,
+        workspaceDir: tempDir,
+        config: createTextClaudeCliConfig(),
+        prompt: "What was the setup nonce?",
+        provider: "claude-cli",
+        model: "haiku",
+        timeoutMs: 1_000,
+        runId: "run-claude-replay",
+      });
+
+      const prompt = extractPromptArgFromSpawn();
+      expect(prompt).toContain("Recent shared OpenClaw session history");
+      expect(prompt).toContain("User:\nRemember setup nonce CODEX-771.");
+      expect(prompt).toContain("Assistant (codex-cli/gpt-5.5):\nStored CODEX-771 from Codex.");
+      expect(prompt).toContain("Current user message:\nWhat was the setup nonce?");
+      expect(prompt.match(/What was the setup nonce\?/g)).toHaveLength(1);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps newest replay turns verbatim when older transcript turns are compacted", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-cli-replay-compact-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const originalReplayMaxChars = process.env.OPENCLAW_CLAUDE_CLI_TRANSCRIPT_REPLAY_MAX_CHARS;
+    process.env.OPENCLAW_CLAUDE_CLI_TRANSCRIPT_REPLAY_MAX_CHARS = "2200";
+    appendTranscriptMessages(sessionFile, [
+      {
+        role: "user",
+        content: [{ type: "text", text: `Older setup ${"old ".repeat(700)}` }],
+        timestamp: Date.now(),
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `Older Codex reply ${"noise ".repeat(700)}` }],
+        api: "openai-codex-responses",
+        provider: "codex-cli",
+        model: "gpt-5.5",
+        usage: ZERO_TEST_USAGE,
+        stopReason: "stop",
+        timestamp: Date.now() + 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Newest user nonce KEEP-NEWEST-42." }],
+        timestamp: Date.now() + 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Newest assistant answer KEEP-NEWEST-42." }],
+        api: "openai-codex-responses",
+        provider: "codex-cli",
+        model: "gpt-5.5",
+        usage: ZERO_TEST_USAGE,
+        stopReason: "stop",
+        timestamp: Date.now() + 3,
+      },
+    ]);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "claude ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await runCliAgent({
+        sessionId: "s-claude-replay-compact",
+        sessionFile,
+        workspaceDir: tempDir,
+        config: createTextClaudeCliConfig(),
+        prompt: "Use the newest nonce.",
+        provider: "claude-cli",
+        model: "haiku",
+        timeoutMs: 1_000,
+        runId: "run-claude-replay-compact",
+      });
+
+      const prompt = extractPromptArgFromSpawn();
+      expect(prompt).toContain("Older turns compacted because the replay exceeded the budget");
+      expect(prompt).toContain("User:\nNewest user nonce KEEP-NEWEST-42.");
+      expect(prompt).toContain(
+        "Assistant (codex-cli/gpt-5.5):\nNewest assistant answer KEEP-NEWEST-42.",
+      );
+    } finally {
+      if (originalReplayMaxChars === undefined) {
+        delete process.env.OPENCLAW_CLAUDE_CLI_TRANSCRIPT_REPLAY_MAX_CHARS;
+      } else {
+        process.env.OPENCLAW_CLAUDE_CLI_TRANSCRIPT_REPLAY_MAX_CHARS = originalReplayMaxChars;
+      }
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("truncates huge tool results in claude-cli shared transcript replay", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-cli-replay-tool-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    appendTranscriptMessages(sessionFile, [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Run the large tool." }],
+        timestamp: Date.now(),
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "tool-call-1",
+            name: "read",
+            arguments: { path: "large.log" },
+          },
+        ],
+        api: "openai-codex-responses",
+        provider: "codex-cli",
+        model: "gpt-5.5",
+        usage: ZERO_TEST_USAGE,
+        stopReason: "toolUse",
+        timestamp: Date.now() + 1,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool-call-1",
+        toolName: "read",
+        content: [{ type: "text", text: `TOOL-HEAD ${"x".repeat(5_000)} TOOL-TAIL` }],
+        isError: false,
+        timestamp: Date.now() + 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Tool result reviewed." }],
+        api: "openai-codex-responses",
+        provider: "codex-cli",
+        model: "gpt-5.5",
+        usage: ZERO_TEST_USAGE,
+        stopReason: "stop",
+        timestamp: Date.now() + 3,
+      },
+    ]);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "claude ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await runCliAgent({
+        sessionId: "s-claude-replay-tool",
+        sessionFile,
+        workspaceDir: tempDir,
+        config: createTextClaudeCliConfig(),
+        prompt: "What did the tool show?",
+        provider: "claude-cli",
+        model: "haiku",
+        timeoutMs: 1_000,
+        runId: "run-claude-replay-tool",
+      });
+
+      const prompt = extractPromptArgFromSpawn();
+      expect(prompt).toContain("[tool request omitted: read]");
+      expect(prompt).toContain("Tool result (read):\nTOOL-HEAD");
+      expect(prompt).toContain("[tool output truncated: omitted");
+      expect(prompt).not.toContain("TOOL-TAIL");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not inject replay into a resumed claude-cli follow-up with only Claude-native history", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-cli-native-resume-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    appendTranscriptMessages(sessionFile, [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Claude-native setup." }],
+        timestamp: Date.now(),
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Claude-native answer." }],
+        api: "anthropic-messages",
+        provider: "claude-cli",
+        model: "haiku",
+        usage: ZERO_TEST_USAGE,
+        stopReason: "stop",
+        timestamp: Date.now() + 1,
+      },
+    ]);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "claude resumed ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await runCliAgent({
+        sessionId: "s-claude-native-resume",
+        sessionFile,
+        workspaceDir: tempDir,
+        config: createTextClaudeCliConfig(),
+        prompt: "Continue natively.",
+        provider: "claude-cli",
+        model: "haiku",
+        timeoutMs: 1_000,
+        runId: "run-claude-native-resume",
+        cliSessionId: "claude-native-session",
+      });
+
+      const prompt = extractPromptArgFromSpawn();
+      expect(prompt).toBe("Continue natively.");
+      expect(prompt).not.toContain("Recent shared OpenClaw session history");
+      expect(prompt).not.toContain("Claude-native answer.");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

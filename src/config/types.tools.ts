@@ -334,7 +334,7 @@ export type MemorySearchConfig = {
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;

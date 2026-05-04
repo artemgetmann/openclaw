@@ -38,6 +38,13 @@ export type CliOutput = {
   usage?: CliUsage;
 };
 
+export type CliStreamingDelta = {
+  text: string;
+  delta: string;
+  sessionId?: string;
+  usage?: CliUsage;
+};
+
 export function buildSystemPrompt(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -122,7 +129,8 @@ function toUsage(raw: Record<string, unknown>): CliUsage | undefined {
   const output = pick("output_tokens") ?? pick("outputTokens");
   const cacheRead =
     pick("cache_read_input_tokens") ?? pick("cached_input_tokens") ?? pick("cacheRead");
-  const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
+  const cacheWrite =
+    pick("cache_creation_input_tokens") ?? pick("cache_write_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
   if (!input && !output && !cacheRead && !cacheWrite && !total) {
     return undefined;
@@ -145,6 +153,12 @@ function collectText(value: unknown): string {
   }
   if (typeof value.text === "string") {
     return value.text;
+  }
+  if (typeof value.result === "string") {
+    return value.result;
+  }
+  if (typeof value.response === "string") {
+    return value.response;
   }
   if (typeof value.content === "string") {
     return value.content;
@@ -177,7 +191,40 @@ function pickSessionId(
   return undefined;
 }
 
-export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {
+function isClaudeStreamJsonBackend(backend: CliBackendConfig, providerId?: string): boolean {
+  if (providerId?.trim().toLowerCase() === "claude-cli") {
+    return true;
+  }
+  return (
+    (backend as CliBackendConfig & { jsonlDialect?: string }).jsonlDialect === "claude-stream-json"
+  );
+}
+
+function unwrapNestedClaudeResultText(raw: string): string {
+  let text = raw;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith("{")) {
+      return text;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (!isRecord(parsed) || parsed.type !== "result" || typeof parsed.result !== "string") {
+        return text;
+      }
+      text = parsed.result;
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
+export function parseCliJson(
+  raw: string,
+  backend: CliBackendConfig,
+  providerId?: string,
+): CliOutput | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -198,10 +245,147 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
     collectText(parsed.content) ||
     collectText(parsed.result) ||
     collectText(parsed);
-  return { text: text.trim(), sessionId, usage };
+  const normalizedText =
+    isClaudeStreamJsonBackend(backend, providerId) && typeof parsed.result === "string"
+      ? unwrapNestedClaudeResultText(text)
+      : text;
+  return { text: normalizedText.trim(), sessionId, usage };
 }
 
-export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput | null {
+function parseClaudeStreamJsonResult(params: {
+  backend: CliBackendConfig;
+  providerId?: string;
+  parsed: Record<string, unknown>;
+  sessionId?: string;
+  usage?: CliUsage;
+}): CliOutput | null {
+  if (!isClaudeStreamJsonBackend(params.backend, params.providerId)) {
+    return null;
+  }
+  if (params.parsed.type !== "result" || typeof params.parsed.result !== "string") {
+    return null;
+  }
+  return {
+    text: unwrapNestedClaudeResultText(params.parsed.result).trim(),
+    sessionId: params.sessionId,
+    usage: params.usage,
+  };
+}
+
+function parseClaudeStreamingDelta(params: {
+  backend: CliBackendConfig;
+  providerId?: string;
+  parsed: Record<string, unknown>;
+  textSoFar: string;
+  sessionId?: string;
+  usage?: CliUsage;
+}): CliStreamingDelta | null {
+  if (!isClaudeStreamJsonBackend(params.backend, params.providerId)) {
+    return null;
+  }
+  if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
+    return null;
+  }
+  const event = params.parsed.event;
+  if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
+    return null;
+  }
+  const delta = event.delta;
+  if (delta.type !== "text_delta" || typeof delta.text !== "string" || !delta.text) {
+    return null;
+  }
+  return {
+    text: `${params.textSoFar}${delta.text}`,
+    delta: delta.text,
+    sessionId: params.sessionId,
+    usage: params.usage,
+  };
+}
+
+export function createCliJsonlStreamingParser(params: {
+  backend: CliBackendConfig;
+  providerId?: string;
+  onAssistantDelta: (delta: CliStreamingDelta) => void;
+}) {
+  let lineBuffer = "";
+  let assistantText = "";
+  let sessionId: string | undefined;
+  let usage: CliUsage | undefined;
+
+  const handleLine = (line: string) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (!isRecord(parsed)) {
+      return;
+    }
+    sessionId = pickSessionId(parsed, params.backend) ?? sessionId;
+    if (isRecord(parsed.usage)) {
+      usage = toUsage(parsed.usage) ?? usage;
+    }
+
+    // Claude stream-json exposes first visible text before the final result
+    // event. Keep the parser stateful so partial callbacks get full text plus
+    // the newest delta without waiting for process exit.
+    const delta = parseClaudeStreamingDelta({
+      backend: params.backend,
+      providerId: params.providerId,
+      parsed,
+      textSoFar: assistantText,
+      sessionId,
+      usage,
+    });
+    if (!delta) {
+      return;
+    }
+    assistantText = delta.text;
+    params.onAssistantDelta(delta);
+  };
+
+  const flushLines = (flushPartial: boolean) => {
+    while (true) {
+      const newlineIndex = lineBuffer.indexOf("\n");
+      if (newlineIndex < 0) {
+        break;
+      }
+      const line = lineBuffer.slice(0, newlineIndex).trim();
+      lineBuffer = lineBuffer.slice(newlineIndex + 1);
+      if (line) {
+        handleLine(line);
+      }
+    }
+    if (!flushPartial) {
+      return;
+    }
+    const tail = lineBuffer.trim();
+    lineBuffer = "";
+    if (tail) {
+      handleLine(tail);
+    }
+  };
+
+  return {
+    push(chunk: string) {
+      if (!chunk) {
+        return;
+      }
+      lineBuffer += chunk;
+      flushLines(false);
+    },
+    finish() {
+      flushLines(true);
+    },
+  };
+}
+
+export function parseCliJsonl(
+  raw: string,
+  backend: CliBackendConfig,
+  providerId?: string,
+): CliOutput | null {
   const lines = raw
     .split(/\r?\n/g)
     .map((line) => line.trim())
@@ -230,6 +414,22 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
     }
     if (isRecord(parsed.usage)) {
       usage = toUsage(parsed.usage) ?? usage;
+    }
+    const claudeResult = parseClaudeStreamJsonResult({
+      backend,
+      providerId,
+      parsed,
+      sessionId,
+      usage,
+    });
+    if (claudeResult) {
+      return claudeResult;
+    }
+    const directText =
+      collectText(parsed.message) || collectText(parsed.content) || collectText(parsed.result);
+    if (directText) {
+      texts.push(directText);
+      continue;
     }
     const item = isRecord(parsed.item) ? parsed.item : null;
     if (item && typeof item.text === "string") {
