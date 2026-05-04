@@ -81,6 +81,17 @@ generate_appcast \
   --link "$FEED_URL" \
   "$TMP_DIR"
 
-cp -f "$TMP_DIR/appcast.xml" "$APPCAST_OUTPUT"
+GENERATED_APPCAST="$TMP_DIR/appcast.xml"
+if [[ ! -f "$GENERATED_APPCAST" ]]; then
+  GENERATED_APPCAST="$TMP_DIR/$(basename "$APPCAST_OUTPUT")"
+fi
+if [[ ! -f "$GENERATED_APPCAST" ]]; then
+  echo "ERROR: Sparkle did not generate expected appcast output." >&2
+  echo "Expected either:" >&2
+  echo "  $TMP_DIR/appcast.xml" >&2
+  echo "  $TMP_DIR/$(basename "$APPCAST_OUTPUT")" >&2
+  exit 1
+fi
+cp -f "$GENERATED_APPCAST" "$APPCAST_OUTPUT"
 
 echo "Appcast generated ($APPCAST_OUTPUT). Upload alongside $ZIP at $FEED_URL"
