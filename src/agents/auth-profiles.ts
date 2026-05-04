@@ -30,6 +30,7 @@ export {
   ensureAuthProfileStore,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
   replaceRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStore,
   saveAuthProfileStore,

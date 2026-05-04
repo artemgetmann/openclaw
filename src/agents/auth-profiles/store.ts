@@ -14,6 +14,7 @@ type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
   readOnly?: boolean;
+  syncExternalCliCredentials?: boolean;
 };
 
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
@@ -26,8 +27,8 @@ function isExternalCliAuthSyncDisabled(): boolean {
   return process.env.OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC === "1";
 }
 
-function syncExternalCliCredentialsIfEnabled(store: AuthProfileStore): boolean {
-  if (isExternalCliAuthSyncDisabled()) {
+function syncExternalCliCredentialsIfEnabled(store: AuthProfileStore, enabled: boolean): boolean {
+  if (!enabled || isExternalCliAuthSyncDisabled()) {
     return false;
   }
   return syncExternalCliCredentials(store);
@@ -389,12 +390,13 @@ function loadAuthProfileStoreForAgent(
   options?: LoadAuthProfileStoreOptions,
 ): AuthProfileStore {
   const readOnly = options?.readOnly === true;
+  const syncExternalProfiles = options?.syncExternalCliCredentials !== false;
   const authPath = resolveAuthStorePath(agentDir);
   const asStore = loadCoercedStore(authPath);
   if (asStore) {
     // Runtime secret activation must remain read-only:
     // sync external CLI credentials in-memory, but never persist while readOnly.
-    const synced = syncExternalCliCredentialsIfEnabled(asStore);
+    const synced = syncExternalCliCredentialsIfEnabled(asStore, syncExternalProfiles);
     if (synced && !readOnly) {
       saveJsonFile(authPath, asStore);
     }
@@ -426,7 +428,7 @@ function loadAuthProfileStoreForAgent(
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
   // Keep external CLI credentials visible in runtime even during read-only loads.
-  const syncedCli = syncExternalCliCredentialsIfEnabled(store);
+  const syncedCli = syncExternalCliCredentialsIfEnabled(store, syncExternalProfiles);
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
   const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth || syncedCli);
   if (shouldWrite) {
@@ -470,6 +472,16 @@ export function loadAuthProfileStoreForRuntime(
 
 export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
   return loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, allowKeychainPrompt: false });
+}
+
+// Startup preflight uses this lean path to skip CLI-derived overlays while still reading
+// the on-disk auth store and legacy OAuth material needed for runtime recovery.
+export function loadAuthProfileStoreWithoutExternalProfiles(agentDir?: string): AuthProfileStore {
+  return loadAuthProfileStoreForRuntime(agentDir, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+    syncExternalCliCredentials: false,
+  });
 }
 
 export function ensureAuthProfileStore(
