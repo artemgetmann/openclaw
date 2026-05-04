@@ -9,6 +9,13 @@ type OpenAIReasoningEffort = "low" | "medium" | "high";
 
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
+const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
+  "max_output_tokens",
+  "metadata",
+  "prompt_cache_retention",
+  "service_tier",
+  "temperature",
+] as const;
 
 function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
@@ -39,6 +46,51 @@ function isOpenAIPublicApiBaseUrl(baseUrl: unknown): boolean {
     return new URL(baseUrl).hostname.toLowerCase() === "api.openai.com";
   } catch {
     return baseUrl.toLowerCase().includes("api.openai.com");
+  }
+}
+
+function isNativeOpenAICodexResponsesBaseUrl(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return false;
+  }
+
+  try {
+    const url = new URL(baseUrl);
+    const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.hostname.toLowerCase() === "chatgpt.com" &&
+      ["/backend-api", "/backend-api/v1", "/backend-api/codex", "/backend-api/codex/v1"].includes(
+        pathname,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function usesNativeOpenAICodexResponsesBackend(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  return (
+    model.provider === "openai-codex" &&
+    model.api === "openai-codex-responses" &&
+    isNativeOpenAICodexResponsesBaseUrl(model.baseUrl)
+  );
+}
+
+export function sanitizeOpenAICodexResponsesPayload(
+  model: { api?: unknown; provider?: unknown; baseUrl?: unknown },
+  payload: unknown,
+): void {
+  if (!payload || typeof payload !== "object" || !usesNativeOpenAICodexResponsesBackend(model)) {
+    return;
+  }
+  const payloadObj = payload as Record<string, unknown>;
+  for (const key of OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS) {
+    delete payloadObj[key];
   }
 }
 
@@ -253,6 +305,28 @@ function applyOpenAIFastModePayloadOverrides(params: {
   }
 }
 
+export function createOpenAIAttributionHeadersWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.provider !== "openai-codex") {
+      return underlying(model, context, options);
+    }
+
+    // Preserve the current stream function so auth/runtime wrappers keep their
+    // OAuth injection. Attribution is only a header mutation at this boundary.
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        originator: "openclaw",
+        "User-Agent": "openclaw",
+      },
+    });
+  };
+}
+
 export function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -282,6 +356,22 @@ export function createOpenAIResponsesContextManagementWrapper(
             compactThreshold,
           });
         }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
+export function createOpenAICodexResponsesPayloadSanitizerWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        sanitizeOpenAICodexResponsesPayload(model, payload);
         return originalOnPayload?.(payload, model);
       },
     });

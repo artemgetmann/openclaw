@@ -36,24 +36,27 @@ describe("provider catalog contract", () => {
     });
   });
 
-  it.each(["gpt-5.3-codex", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-codex-max"])(
-    "keeps stale codex model suppression wired through the provider runtime for %s",
-    (modelId) => {
-      expect(
-        resolveProviderBuiltInModelSuppression({
+  it.each([
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-mini",
+    "gpt-5.1-codex-max",
+  ])("keeps stale codex model suppression wired through the provider runtime for %s", (modelId) => {
+    expect(
+      resolveProviderBuiltInModelSuppression({
+        env: process.env,
+        context: {
           env: process.env,
-          context: {
-            env: process.env,
-            provider: "openai-codex",
-            modelId,
-          },
-        }),
-      ).toMatchObject({
-        suppress: true,
-        errorMessage: expect.stringContaining(`openai-codex/${modelId}`),
-      });
-    },
-  );
+          provider: "openai-codex",
+          modelId,
+        },
+      }),
+    ).toMatchObject({
+      suppress: true,
+      errorMessage: expect.stringContaining(`openai-codex/${modelId}`),
+    });
+  });
 
   it("keeps openai-codex spark visible while stale 5.1 codex models are suppressed", () => {
     expect(
@@ -88,7 +91,6 @@ describe("provider catalog contract", () => {
       { provider: "openai", id: "gpt-5.4-pro", name: "GPT-5.4 Pro" },
       { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
-      { provider: "openai-codex", id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
       {
         provider: "openai-codex",
         id: "gpt-5.3-codex-spark",

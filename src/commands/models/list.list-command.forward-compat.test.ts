@@ -274,7 +274,6 @@ describe("modelsListCommand forward-compat", () => {
       expect(mocks.printModelTable).toHaveBeenCalled();
       expect(lastPrintedRows<{ key: string }>()).toEqual([
         expect.objectContaining({ key: "openai-codex/gpt-5.3-codex-spark" }),
-        expect.objectContaining({ key: "openai-codex/gpt-5.4-mini" }),
       ]);
     });
   });
