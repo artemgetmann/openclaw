@@ -78,6 +78,29 @@ describe("createGatewaySecretsActivationController", () => {
     },
   );
 
+  it("keeps startup activation on the overlay-capable auth store path", async () => {
+    const prepareSecretsRuntimeSnapshot = vi.fn(async ({ config }) =>
+      createPreparedSnapshot(config),
+    );
+    const controller = createGatewaySecretsActivationController({
+      prepareSecretsRuntimeSnapshot,
+      activateRuntimeSnapshot: vi.fn(),
+      onAuthSurfaceDiagnostics: vi.fn(),
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      emitStateEvent: vi.fn(),
+    });
+
+    await controller.activateRuntimeSecrets({}, { reason: "startup", activate: true });
+
+    expect(prepareSecretsRuntimeSnapshot).toHaveBeenCalledWith({
+      config: {},
+    });
+  });
+
   it("emits degraded only once across repeated non-startup failures", async () => {
     const emitStateEvent = vi.fn();
     const log = {

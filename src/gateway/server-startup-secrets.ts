@@ -51,7 +51,9 @@ export function createGatewaySecretsActivationController(
       try {
         // Startup and restart-check preflight should stay off the slow overlay path so
         // readiness reflects persisted state instead of waiting for external CLI sync.
-        const startupPreflight = params.reason === "startup" || params.reason === "restart-check";
+        // Actual activation paths, including startup auth bootstrap, keep overlay sync.
+        const startupPreflight =
+          !params.activate && (params.reason === "startup" || params.reason === "restart-check");
         const prepared = await deps.prepareSecretsRuntimeSnapshot({
           config,
           ...(startupPreflight
