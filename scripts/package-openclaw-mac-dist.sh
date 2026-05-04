@@ -237,6 +237,15 @@ fi
 
 consumer_sparkle_release_gate
 
+# Stale release artifacts under dist/ can get copied into the bundled runtime
+# before the fresh app is assembled. Remove only mac release outputs here; JS
+# build outputs under dist/ are still needed by the packaged CLI/runtime.
+rm -f \
+  "$ROOT_DIR"/dist/"$APP_NAME"*.zip \
+  "$ROOT_DIR"/dist/"$APP_NAME"*.dmg \
+  "$ROOT_DIR"/dist/"$PRODUCT"*.dSYM.zip \
+  "$ROOT_DIR"/dist/*appcast*.xml
+
 APP_NAME="$APP_NAME" \
 APP_BUNDLE_NAME="$APP_BUNDLE_NAME" \
 BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
