@@ -16,12 +16,27 @@ import {
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 
 export type GatewayScopedToolSurface = "http" | "loopback";
+
+function shouldLogToolResolution(): boolean {
+  return (
+    isTruthyEnvValue(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT) ||
+    isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG)
+  );
+}
+
+function logToolResolution(step: string, details: Record<string, unknown>): void {
+  if (!shouldLogToolResolution()) {
+    return;
+  }
+  console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
+}
 
 export function resolveGatewayScopedTools(params: {
   cfg: OpenClawConfig;
@@ -32,6 +47,10 @@ export function resolveGatewayScopedTools(params: {
   excludeToolNames?: Iterable<string>;
   senderIsOwner?: boolean;
 }) {
+  logToolResolution("tool-resolution-policy-start", {
+    sessionKey: params.sessionKey,
+    surface: params.surface ?? "http",
+  });
   const {
     agentId,
     globalPolicy,
@@ -43,6 +62,10 @@ export function resolveGatewayScopedTools(params: {
     profileAlsoAllow,
     providerProfileAlsoAllow,
   } = resolveEffectiveToolPolicy({ config: params.cfg, sessionKey: params.sessionKey });
+  logToolResolution("tool-resolution-policy-end", {
+    sessionKey: params.sessionKey,
+    agentId,
+  });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
@@ -64,6 +87,10 @@ export function resolveGatewayScopedTools(params: {
     agentId ?? resolveDefaultAgentId(params.cfg),
   );
 
+  logToolResolution("tool-resolution-create-tools-start", {
+    sessionKey: params.sessionKey,
+    workspaceDir,
+  });
   const allTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     agentChannel: params.messageProvider ?? undefined,
@@ -71,6 +98,7 @@ export function resolveGatewayScopedTools(params: {
     senderIsOwner: params.senderIsOwner,
     config: params.cfg,
     workspaceDir,
+    disablePluginTools: params.surface === "loopback",
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,
       providerProfilePolicy,
@@ -82,7 +110,15 @@ export function resolveGatewayScopedTools(params: {
       subagentPolicy,
     ]),
   });
+  logToolResolution("tool-resolution-create-tools-end", {
+    sessionKey: params.sessionKey,
+    toolCount: allTools.length,
+  });
 
+  logToolResolution("tool-resolution-policy-filter-start", {
+    sessionKey: params.sessionKey,
+    toolCount: allTools.length,
+  });
   const policyFiltered = applyToolPolicyPipeline({
     tools: allTools,
     toolMeta: (tool: AnyAgentTool) => getPluginToolMeta(tool),
@@ -102,6 +138,10 @@ export function resolveGatewayScopedTools(params: {
       }),
       { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
+  });
+  logToolResolution("tool-resolution-policy-filter-end", {
+    sessionKey: params.sessionKey,
+    toolCount: policyFiltered.length,
   });
 
   const surface = params.surface ?? "http";

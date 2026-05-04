@@ -15,6 +15,7 @@ import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { createMemoryGetTool, createMemorySearchTool } from "./tools/memory-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createMonitorTool } from "./tools/monitor-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -80,6 +81,8 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
+    /** If true, skip plugin discovery and return core OpenClaw tools only. */
+    disablePluginTools?: boolean;
     /** Trusted sender id from inbound context (not tool args). */
     requesterSenderId?: string | null;
     /** Whether the requesting sender is an owner. */
@@ -245,6 +248,22 @@ export function createOpenClawTools(
   ];
 
   traceOpenClawToolStage("openclaw-tools-pre-plugin-tools");
+  if (options?.disablePluginTools) {
+    traceOpenClawToolStage("openclaw-tools-plugin-tools-disabled");
+    const memorySearchTool = createMemorySearchTool({
+      config: options?.config,
+      agentSessionKey: options?.agentSessionKey,
+    });
+    const memoryGetTool = createMemoryGetTool({
+      config: options?.config,
+      agentSessionKey: options?.agentSessionKey,
+    });
+    return [
+      ...tools,
+      ...(memorySearchTool ? [memorySearchTool] : []),
+      ...(memoryGetTool ? [memoryGetTool] : []),
+    ];
+  }
   const pluginTools = resolvePluginTools({
     context: {
       config: options?.config,

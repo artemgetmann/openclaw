@@ -156,6 +156,9 @@ function createConfig(workspaceDir: string): OpenClawConfig {
         ask: "off",
       },
     },
+    plugins: {
+      enabled: false,
+    },
   };
 }
 

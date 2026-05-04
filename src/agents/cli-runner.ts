@@ -953,6 +953,7 @@ export async function runCliAgent(params: {
     tools: [],
   });
 
+  let preparedBackendCleanupOwnedByLiveSession = false;
   // Helper function to execute CLI with given session ID
   const executeCliWithSession = async (
     cliSessionIdToUse?: string,
@@ -1114,23 +1115,38 @@ export async function runCliAgent(params: {
           cliSessionId: useResume ? resolvedSessionId : undefined,
         });
 
-        if (
-          shouldUseClaudeLiveSession({
-            backendId: backendResolved.id,
-            backend,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: params.agentId,
-            workspaceDir,
-            provider: params.provider,
-            modelId,
-            normalizedModel,
-            timeoutMs: params.timeoutMs,
-            systemPrompt,
-            mcpConfigHash: preparedBackend.mcpConfigHash,
-            mcpResumeHash: preparedBackend.mcpResumeHash,
-          })
-        ) {
+        const useClaudeLiveSession = shouldUseClaudeLiveSession({
+          backendId: backendResolved.id,
+          backend,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          workspaceDir,
+          provider: params.provider,
+          modelId,
+          normalizedModel,
+          timeoutMs: params.timeoutMs,
+          systemPrompt,
+          mcpConfigHash: preparedBackend.mcpConfigHash,
+          mcpResumeHash: preparedBackend.mcpResumeHash,
+        });
+        if (isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG)) {
+          log.info(
+            `claude-live: decision useLive=${useClaudeLiveSession} backendId=${backendResolved.id} liveSession=${
+              backend.liveSession ?? "none"
+            } input=${backend.input ?? "none"} output=${backend.output ?? "none"} timeoutMs=${
+              params.timeoutMs
+            } noOutputTimeoutMs=${noOutputTimeoutMs}`,
+          );
+        }
+        if (useClaudeLiveSession) {
+          // Warm Claude processes can keep reading the generated MCP config
+          // after this turn. Handing cleanup to the live-session owner keeps
+          // that temp file alive until the process is closed or replaced.
+          preparedBackendCleanupOwnedByLiveSession = true;
+          if (isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG)) {
+            log.info(`claude-live: invoking live turn session=${params.sessionId}`);
+          }
           const liveResult = await runClaudeLiveSessionTurn({
             context: {
               backendId: backendResolved.id,
@@ -1361,7 +1377,9 @@ export async function runCliAgent(params: {
     }
   } finally {
     unregisterMcpLoopbackConfigOverride?.();
-    await preparedBackend.cleanup?.();
+    if (!preparedBackendCleanupOwnedByLiveSession) {
+      await preparedBackend.cleanup?.();
+    }
   }
 }
 

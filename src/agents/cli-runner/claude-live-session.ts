@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import type { CliBackendConfig } from "../../config/types.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ManagedRun, ProcessSupervisor } from "../../process/supervisor/types.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
@@ -9,6 +11,8 @@ import {
   type CliOutput,
   type CliStreamingDelta,
 } from "./helpers.js";
+
+const log = createSubsystemLogger("agent/claude-live");
 
 type ClaudeLiveContext = {
   backendId: string;
@@ -73,6 +77,31 @@ const CLAUDE_LIVE_MAX_TURN_RAW_CHARS = 2 * 1024 * 1024;
 const CLAUDE_LIVE_MAX_TURN_LINES = 5_000;
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, Promise<ClaudeLiveSession>>();
+
+function shouldDebugClaudeLiveSession(): boolean {
+  return isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG);
+}
+
+function debugClaudeLiveSession(message: string): void {
+  if (!shouldDebugClaudeLiveSession()) {
+    return;
+  }
+  log.info(`claude-live: ${message}`);
+}
+
+function formatDebugError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "unknown error";
+  }
+}
 
 function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -185,6 +214,10 @@ function buildClaudeLiveKey(context: ClaudeLiveContext): string {
   )}`;
 }
 
+function buildClaudeLiveScopeKey(key: string): string {
+  return `claude-live:${key}`;
+}
+
 function buildClaudeLiveFingerprint(params: {
   context: ClaudeLiveContext;
   argv: string[];
@@ -283,6 +316,9 @@ function finishTurn(session: ClaudeLiveSession, output: CliOutput): void {
   if (!turn) {
     return;
   }
+  debugClaudeLiveSession(
+    `finish-turn key=${session.key} sessionId=${turn.sessionId ?? "unknown"} rawLines=${turn.rawLines.length}`,
+  );
   clearTurnTimers(turn);
   turn.streamingParser.finish();
   session.currentTurn = null;
@@ -295,6 +331,7 @@ function failTurn(session: ClaudeLiveSession, error: unknown): void {
   if (!turn) {
     return;
   }
+  debugClaudeLiveSession(`fail-turn key=${session.key} error=${formatDebugError(error)}`);
   clearTurnTimers(turn);
   turn.streamingParser.finish();
   session.currentTurn = null;
@@ -315,8 +352,19 @@ function closeLiveSession(
   error?: unknown,
 ): void {
   if (session.closing) {
+    // A process-exit/cancel race can mark the session as closing before the
+    // watchdog observes the active turn. Still reject that turn so callers are
+    // not left awaiting output from a process that is already being torn down.
+    if (error) {
+      failTurn(session, error);
+    }
     return;
   }
+  debugClaudeLiveSession(
+    `close-session key=${session.key} reason=${reason} pid=${session.managedRun.pid ?? "unknown"} error=${
+      error ? formatDebugError(error) : "none"
+    }`,
+  );
   session.closing = true;
   if (session.idleTimer) {
     clearTimeout(session.idleTimer);
@@ -361,6 +409,66 @@ function createOutputLimitError(session: ClaudeLiveSession, message: string): Fa
   });
 }
 
+function createStartupTimeoutError(context: ClaudeLiveContext, timeoutMs: number): FailoverError {
+  return new FailoverError(
+    `Claude CLI live session did not start within ${Math.round(timeoutMs / 1000)}s and was terminated.`,
+    {
+      reason: "timeout",
+      provider: context.provider,
+      model: context.modelId,
+      status: resolveFailoverStatus("timeout"),
+    },
+  );
+}
+
+async function awaitClaudeLiveSessionStartup(params: {
+  key: string;
+  context: ClaudeLiveContext;
+  supervisor: ProcessSupervisor;
+  promise: Promise<ClaudeLiveSession>;
+  startupTimeoutMs: number;
+  cleanup: () => Promise<void>;
+}): Promise<ClaudeLiveSession> {
+  let timeout: NodeJS.Timeout | null = null;
+  let timedOut = false;
+  try {
+    return await Promise.race([
+      params.promise,
+      new Promise<never>((_resolve, reject) => {
+        debugClaudeLiveSession(
+          `startup-timer-armed key=${params.key} timeoutMs=${params.startupTimeoutMs}`,
+        );
+        timeout = setTimeout(() => {
+          timedOut = true;
+          const error = createStartupTimeoutError(params.context, params.startupTimeoutMs);
+          debugClaudeLiveSession(
+            `startup-timer-fired key=${params.key} timeoutMs=${params.startupTimeoutMs}`,
+          );
+          if (liveSessionCreates.get(params.key) === params.promise) {
+            liveSessionCreates.delete(params.key);
+          }
+          // Creation can wedge before turn timers exist. Cancel the known
+          // supervisor scope and close any late-resolving session immediately.
+          params.supervisor.cancelScope(buildClaudeLiveScopeKey(params.key), "no-output-timeout");
+          void params.cleanup();
+          void params.promise.then(
+            (session) => closeLiveSession(session, "abort", error),
+            () => {},
+          );
+          reject(error);
+        }, params.startupTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    if (timedOut && liveSessionCreates.get(params.key) === params.promise) {
+      liveSessionCreates.delete(params.key);
+    }
+  }
+}
+
 function resetNoOutputTimer(session: ClaudeLiveSession): void {
   const turn = session.currentTurn;
   if (!turn) {
@@ -370,6 +478,9 @@ function resetNoOutputTimer(session: ClaudeLiveSession): void {
     clearTimeout(turn.noOutputTimer);
   }
   turn.noOutputTimer = setTimeout(() => {
+    debugClaudeLiveSession(
+      `no-output-timer-fired key=${session.key} timeoutMs=${session.noOutputTimeoutMs}`,
+    );
     closeLiveSession(
       session,
       "abort",
@@ -550,12 +661,17 @@ async function writeTurnInput(session: ClaudeLiveSession, prompt: string): Promi
   if (!stdin) {
     throw new Error("Claude CLI live session stdin is unavailable");
   }
+  debugClaudeLiveSession(`stdin-write-start key=${session.key} promptChars=${prompt.length}`);
   await new Promise<void>((resolve, reject) => {
     stdin.write(createClaudeUserInputMessage(prompt), (error) => {
       if (error) {
+        debugClaudeLiveSession(
+          `stdin-write-callback key=${session.key} error=${formatDebugError(error)}`,
+        );
         reject(error);
         return;
       }
+      debugClaudeLiveSession(`stdin-write-callback key=${session.key} ok=true`);
       resolve();
     });
   });
@@ -572,10 +688,13 @@ async function createClaudeLiveSession(params: {
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveSession> {
   let session: ClaudeLiveSession | null = null;
+  debugClaudeLiveSession(
+    `create-session-spawn-start key=${params.key} timeoutMs=${params.noOutputTimeoutMs}`,
+  );
   const managedRun = await params.supervisor.spawn({
     sessionId: params.context.sessionId,
     backendId: params.context.backendId,
-    scopeKey: `claude-live:${params.key}`,
+    scopeKey: buildClaudeLiveScopeKey(params.key),
     replaceExistingScope: true,
     mode: "child",
     argv: params.argv,
@@ -584,11 +703,13 @@ async function createClaudeLiveSession(params: {
     stdinMode: "pipe-open",
     captureOutput: false,
     onStdout: (chunk) => {
+      debugClaudeLiveSession(`stdout-chunk key=${params.key} chars=${chunk.length}`);
       if (session) {
         handleClaudeStdout(session, chunk);
       }
     },
     onStderr: (chunk) => {
+      debugClaudeLiveSession(`stderr-chunk key=${params.key} chars=${chunk.length}`);
       if (!session) {
         return;
       }
@@ -604,6 +725,11 @@ async function createClaudeLiveSession(params: {
       resetNoOutputTimer(session);
     },
   });
+  debugClaudeLiveSession(
+    `create-session-spawn-resolved key=${params.key} runId=${managedRun.runId} pid=${
+      managedRun.pid ?? "unknown"
+    } stdin=${managedRun.stdin ? "yes" : "no"}`,
+  );
   session = {
     key: params.key,
     fingerprint: params.fingerprint,
@@ -620,10 +746,23 @@ async function createClaudeLiveSession(params: {
     closing: false,
   };
   void managedRun.wait().then(
-    (exit) => handleClaudeExit(session, exit.exitCode),
-    (error) => closeLiveSession(session, "abort", error),
+    (exit) => {
+      debugClaudeLiveSession(
+        `process-wait-resolved key=${params.key} reason=${exit.reason} exitCode=${
+          exit.exitCode ?? "null"
+        }`,
+      );
+      handleClaudeExit(session, exit.exitCode);
+    },
+    (error) => {
+      debugClaudeLiveSession(
+        `process-wait-rejected key=${params.key} error=${formatDebugError(error)}`,
+      );
+      closeLiveSession(session, "abort", error);
+    },
   );
   liveSessions.set(params.key, session);
+  debugClaudeLiveSession(`create-session-ready key=${params.key}`);
   return session;
 }
 
@@ -651,6 +790,9 @@ function createTurn(params: {
     reject: params.reject,
   };
   turn.noOutputTimer = setTimeout(() => {
+    debugClaudeLiveSession(
+      `turn-no-output-timer-fired key=${params.session.key} timeoutMs=${params.noOutputTimeoutMs}`,
+    );
     closeLiveSession(
       params.session,
       "abort",
@@ -661,6 +803,9 @@ function createTurn(params: {
     );
   }, params.noOutputTimeoutMs);
   turn.timeoutTimer = setTimeout(() => {
+    debugClaudeLiveSession(
+      `turn-overall-timer-fired key=${params.session.key} timeoutMs=${params.context.timeoutMs}`,
+    );
     closeLiveSession(
       params.session,
       "abort",
@@ -714,6 +859,10 @@ export async function runClaudeLiveSessionTurn(params: {
   cleanup: () => Promise<void>;
 }): Promise<{ output: CliOutput }> {
   const key = buildClaudeLiveKey(params.context);
+  const startupTimeoutMs = Math.min(params.noOutputTimeoutMs, params.context.timeoutMs);
+  debugClaudeLiveSession(
+    `run-enter key=${key} sessionId=${params.context.sessionId} useResume=${params.useResume} timeoutMs=${params.context.timeoutMs} noOutputTimeoutMs=${params.noOutputTimeoutMs} startupTimeoutMs=${startupTimeoutMs}`,
+  );
   const argv = [
     params.context.backend.command,
     ...buildClaudeLiveArgs({
@@ -738,6 +887,7 @@ export async function runClaudeLiveSessionTurn(params: {
 
   let session = liveSessions.get(key) ?? null;
   if (session && session.fingerprint !== fingerprint) {
+    debugClaudeLiveSession(`fingerprint-mismatch-restart key=${key}`);
     closeLiveSession(session, "restart");
     session = null;
   }
@@ -751,8 +901,16 @@ export async function runClaudeLiveSessionTurn(params: {
   if (!session) {
     const pendingSession = liveSessionCreates.get(key);
     if (pendingSession) {
+      debugClaudeLiveSession(`await-pending-session key=${key}`);
       try {
-        session = await pendingSession;
+        session = await awaitClaudeLiveSessionStartup({
+          key,
+          context: params.context,
+          supervisor: params.getProcessSupervisor(),
+          promise: pendingSession,
+          startupTimeoutMs,
+          cleanup,
+        });
       } catch (error) {
         await cleanup();
         throw error;
@@ -765,6 +923,7 @@ export async function runClaudeLiveSessionTurn(params: {
       }
     }
     if (!session) {
+      debugClaudeLiveSession(`create-new-session key=${key}`);
       const createSession = createClaudeLiveSession({
         context: params.context,
         argv,
@@ -781,7 +940,14 @@ export async function runClaudeLiveSessionTurn(params: {
       });
       liveSessionCreates.set(key, createSession);
       try {
-        session = await createSession;
+        session = await awaitClaudeLiveSessionStartup({
+          key,
+          context: params.context,
+          supervisor: params.getProcessSupervisor(),
+          promise: createSession,
+          startupTimeoutMs,
+          cleanup,
+        });
       } catch (error) {
         await cleanup();
         throw error;
@@ -790,6 +956,7 @@ export async function runClaudeLiveSessionTurn(params: {
   }
 
   if (cleanupTurnArtifacts && session) {
+    debugClaudeLiveSession(`cleanup-turn-artifacts key=${key}`);
     await cleanup();
     if (session.idleTimer) {
       clearTimeout(session.idleTimer);
@@ -807,6 +974,7 @@ export async function runClaudeLiveSessionTurn(params: {
   const liveSession = session;
   liveSession.noOutputTimeoutMs = params.noOutputTimeoutMs;
   liveSession.stderr = "";
+  debugClaudeLiveSession(`about-to-create-turn key=${key}`);
 
   const outputPromise = new Promise<CliOutput>((resolve, reject) => {
     liveSession.currentTurn = createTurn({
@@ -818,6 +986,11 @@ export async function runClaudeLiveSessionTurn(params: {
       reject,
     });
   });
+  debugClaudeLiveSession(
+    `turn-created key=${key} pid=${liveSession.managedRun.pid ?? "unknown"} timeoutMs=${
+      params.context.timeoutMs
+    } noOutputTimeoutMs=${params.noOutputTimeoutMs}`,
+  );
   const abort = () => closeLiveSession(liveSession, "abort", createAbortError());
   let replyBackendCompleted = false;
   const replyBackendHandle: ReplyBackendHandle | undefined = params.context.replyOperation
@@ -840,6 +1013,9 @@ export async function runClaudeLiveSessionTurn(params: {
         return;
       }
       await writeTurnInput(liveSession, params.prompt);
+      debugClaudeLiveSession(
+        `stdin-write-done key=${key} pid=${liveSession.managedRun.pid ?? "unknown"}`,
+      );
     })();
     void writePromise.catch((error) => {
       closeLiveSession(liveSession, "abort", error);

@@ -99,12 +99,20 @@ export async function startMcpLoopbackServer(port = 0): Promise<McpLoopbackServe
     if (!auth) {
       return;
     }
+    if (auth.kind === "handled") {
+      return;
+    }
 
     const requestAbort = createRequestAbortSignal(req, res);
     void (async () => {
       try {
         const body = await readMcpHttpBody(req);
         const parsed: JsonRpcRequest | JsonRpcRequest[] = JSON.parse(body);
+        const messages = Array.isArray(parsed) ? parsed : [parsed];
+        logMcpLoopbackTraffic("parsed", {
+          batchSize: messages.length,
+          methods: messages.map((message) => message.method),
+        });
         const cfg =
           resolveMcpLoopbackConfigOverride({
             ownerToken,
@@ -113,30 +121,51 @@ export async function startMcpLoopbackServer(port = 0): Promise<McpLoopbackServe
             rawSessionKey: getHeader(req, "x-session-key"),
           }) ?? loadConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
-        const scopedTools = toolCache.resolve({
-          cfg,
-          sessionKey: requestContext.sessionKey,
-          messageProvider: requestContext.messageProvider,
-          accountId: requestContext.accountId,
-          senderIsOwner: requestContext.senderIsOwner,
-        });
-
-        const messages = Array.isArray(parsed) ? parsed : [parsed];
         logMcpLoopbackTraffic("request", {
           batchSize: messages.length,
           methods: messages.map((message) => message.method),
           sessionKey: requestContext.sessionKey,
           senderIsOwner: requestContext.senderIsOwner,
-          toolCount: scopedTools.toolSchema.length,
+          toolResolution: messages.some(
+            (message) => message.method === "tools/list" || message.method === "tools/call",
+          )
+            ? "needed"
+            : "skipped",
         });
+        let scopedTools: ReturnType<McpLoopbackToolCache["resolve"]> | null = null;
+        const getScopedTools = () => {
+          if (scopedTools) {
+            return scopedTools;
+          }
+          logMcpLoopbackTraffic("tool-resolve-start", {
+            sessionKey: requestContext.sessionKey,
+            senderIsOwner: requestContext.senderIsOwner,
+          });
+          scopedTools = toolCache.resolve({
+            cfg,
+            sessionKey: requestContext.sessionKey,
+            messageProvider: requestContext.messageProvider,
+            accountId: requestContext.accountId,
+            senderIsOwner: requestContext.senderIsOwner,
+          });
+          logMcpLoopbackTraffic("tool-resolve-end", {
+            sessionKey: requestContext.sessionKey,
+            toolCount: scopedTools.toolSchema.length,
+          });
+          return scopedTools;
+        };
         const responses: object[] = [];
         for (const message of messages) {
+          const toolsForMessage =
+            message.method === "tools/list" || message.method === "tools/call"
+              ? getScopedTools()
+              : null;
           const response = await handleMcpJsonRpc({
             message,
-            tools: scopedTools.tools,
-            toolSchema: scopedTools.toolSchema,
+            tools: toolsForMessage?.tools ?? [],
+            toolSchema: toolsForMessage?.toolSchema ?? [],
             hookContext: {
-              agentId: scopedTools.agentId,
+              agentId: toolsForMessage?.agentId,
               sessionKey: requestContext.sessionKey,
             },
             signal: requestAbort.signal,

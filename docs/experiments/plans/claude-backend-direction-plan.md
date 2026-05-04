@@ -340,12 +340,25 @@ Latest focused result:
 - Result after watchdog fix: the same strict smoke now fails cleanly with `FailoverError: CLI produced no output for 192s and was terminated.`
 - Follow-up bisect result: the no-output failure is not specific to `memory_get`, `haiku`, or the indexed-memory prompt. A new `memory-indexed-search` smoke also no-outputed on both `haiku` and `sonnet`, and a new no-tool `temp-config-echo` smoke also no-outputed.
 - Scoped loopback config checkpoint: replaced the smoke's process-wide `OPENCLAW_CONFIG_PATH` swap with a scoped in-memory MCP loopback config override experiment. Unit coverage passed, but the live `temp-config-echo` smoke still failed after MCP `initialize` returned OK and before Claude sent `notifications/initialized`, `tools/list`, or assistant output.
+- Fresh continuation finding: the passing `memory` smoke and failing `temp-config-echo`/`memory-chain` paths generate the same Claude MCP overlay shape. The written `openclaw-smoke-config.json` is not read by the product path; `runCliAgent` receives the in-memory config object directly.
+- Fresh bug fixed in this spike: warm Claude live sessions now own the generated MCP temp-dir cleanup. The outer `runCliAgent` cleanup was deleting the temp `mcp.json` after the first successful live turn even though the warm Claude process can stay alive and reuse that config path.
+- Fresh live probe result after warming this worktree with `pnpm install --frozen-lockfile`: `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 OPENCLAW_CLAUDE_CLI_LOG_OUTPUT=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode temp-config-echo --model haiku --timeout-ms 45000` printed the Claude argv, then wedged past the 45s requested timeout and had to be killed manually. No `mcp-loopback` request logs appeared in this run.
+- Follow-up fix: live Claude startup is now guarded by the same no-output budget, active turns are rejected during close races, and debug logs show spawn/stdin/stdout/timeout lifecycle checkpoints.
+- Follow-up fix: loopback MCP now accepts Claude CLI's authenticated `GET /mcp` `text/event-stream` probe and delays expensive tool resolution until `tools/list` or `tools/call`.
+- Follow-up fix: loopback tool resolution skips plugin discovery and keeps built-in memory tools available. This prevents plugin startup from blocking Claude parity smokes that only need OpenClaw's core loopback surface.
+- `temp-config-echo` is now green with live Claude CLI: `gtimeout -k 5s 40s env OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 OPENCLAW_CLAUDE_CLI_LOG_OUTPUT=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode temp-config-echo --model haiku --timeout-ms 20000` passed in 13.4s with `TEMP_CONFIG_ECHO_OK`.
+- Strict `memory-chain` first moved from no-output hang to a normal model/tool result failure: one run completed but returned `MEMORY_CHAIN_SEARCH_EMPTY`.
+- Strict `memory-chain` rerun is green with live Claude CLI: `gtimeout -k 5s 100s env OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1 OPENCLAW_CLAUDE_CLI_LOG_OUTPUT=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode memory-chain --model haiku --timeout-ms 70000` passed in 10.5s, called `memory_search`, then `memory_get`, and returned the exact nonce plus fresh memory needle without direct-path fallback.
+- Strict `memory-chain` repeated green without debug logging: `gtimeout -k 5s 100s env OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode memory-chain --model haiku --timeout-ms 70000` passed in 12.9s with `MEMORY_CHAIN_MCP_OK`.
+- `temp-config-echo` repeated green without debug logging: `gtimeout -k 5s 60s env OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode temp-config-echo --model haiku --timeout-ms 30000` passed in 5.8s with `TEMP_CONFIG_ECHO_OK`.
+- Focused verification is green: `pnpm exec vitest run src/agents/cli-runner/claude-live-session.test.ts src/gateway/mcp-http.test.ts src/gateway/tool-resolution.test.ts src/gateway/mcp-http.loopback-runtime.test.ts src/agents/cli-runner.test.ts src/agents/claude-cli-runner.test.ts --pool=forks --maxWorkers=1` passed 6 files / 40 tests.
+- Repo typecheck is not green: `gtimeout -k 5s 120s pnpm tsgo` failed on existing unrelated errors outside this slice, including stale test fixtures, voice-call import drift, and pre-existing memory provider `"none"` type drift.
 
 Decision:
 
-- Do not mark memory-chain parity green yet.
-- The remaining blocker is no longer "fresh memory file cannot be indexed," "timeout does not fire," or "memory_get specifically fails"; it is "Claude CLI produces no output for temp-config-shaped runs after MCP initialize."
-- Next suspect: generated Claude MCP config/session setup or warm-session reuse around strict temp-config runs.
+- Mark the transport/no-output blocker fixed for this spike.
+- Mark strict memory-chain green: after one completed model-variance failure, two consecutive live runs passed, including one without debug logging.
+- Remaining risk is no longer a stuck backend. It is model compliance variance on the strict two-tool prompt.
 
 ### Slice 3: Warm Claude CLI spike
 
@@ -427,7 +440,8 @@ Current pass/fail:
 - cross-backend `/codex -> Claude` context: pass after Shared Transcript Replay
 - same live process reuse on same-model follow-up: pass
 - warm latency: pass for the current `haiku` smoke; follow-up was materially faster after PID reuse
-- strict `memory_search -> memory_get` without direct fallback: red; deterministic FTS-only preflight works, and the watchdog now terminates the live Claude CLI turn cleanly, but Claude still produces no output for that turn
+- strict `memory_search -> memory_get` without direct fallback: pass; two consecutive live runs passed with both tool calls, exact nonce, exact fresh needle, and no direct-path fallback, after one prior completed run returned `MEMORY_CHAIN_SEARCH_EMPTY`
+- temp-config/no-tool echo: pass; latest live run returned `TEMP_CONFIG_ECHO_OK` instead of wedging
 
 ### Slice 4: Product decision
 
@@ -508,6 +522,6 @@ Tests run in this slice:
 
 Next:
 
-1. debug why Claude CLI produces no output for temp-config-shaped runs after MCP `initialize` even when no tools are requested
-2. rerun strict `memory_search -> memory_get` without direct fallback after the no-output cause is fixed
-3. keep PR #586 draft until that strict memory-chain gate is green or explicitly accepted as a follow-up blocker
+1. decide whether loopback's plugin-free core tool surface is the intended product behavior for Claude CLI MCP parity, or narrow it to generated CLI loopback config only
+2. review the spike diff for debug-log volume and test scope before committing
+3. keep PR #586 draft until the implementation fix is reviewed and committed with the green smoke evidence

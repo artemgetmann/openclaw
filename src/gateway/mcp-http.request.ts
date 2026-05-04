@@ -17,6 +17,10 @@ export type McpRequestContext = {
   senderIsOwner: boolean;
 };
 
+export type McpLoopbackValidationResult =
+  | { kind: "json-rpc"; senderIsOwner: boolean }
+  | { kind: "handled" };
+
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -52,12 +56,19 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   }).ok;
 }
 
+function acceptsEventStream(req: IncomingMessage): boolean {
+  return (getHeader(req, "accept") ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .some((entry) => entry === "text/event-stream" || entry.startsWith("text/event-stream;"));
+}
+
 export function validateMcpLoopbackRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   ownerToken: string;
   nonOwnerToken: string;
-}): { senderIsOwner: boolean } | null {
+}): McpLoopbackValidationResult | null {
   let url: URL;
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
@@ -69,6 +80,11 @@ export function validateMcpLoopbackRequest(params: {
   }
 
   if (params.req.method === "GET" && url.pathname.startsWith("/.well-known/")) {
+    logMcpLoopbackHttp("reject", {
+      reason: "well_known_not_found",
+      method: params.req.method ?? "",
+      path: url.pathname,
+    });
     params.res.writeHead(404);
     params.res.end();
     return null;
@@ -85,16 +101,14 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  if (params.req.method !== "POST") {
-    logMcpLoopbackHttp("reject", {
-      reason: "method_not_allowed",
-      method: params.req.method ?? "",
-      path: url.pathname,
-    });
-    params.res.writeHead(405, { Allow: "POST" });
-    params.res.end();
-    return null;
-  }
+  logMcpLoopbackHttp("incoming", {
+    method: params.req.method ?? "",
+    path: url.pathname,
+    accept: getHeader(params.req, "accept") ?? "",
+    contentType: getHeader(params.req, "content-type") ?? "",
+    transferEncoding: getHeader(params.req, "transfer-encoding") ?? "",
+    contentLength: getHeader(params.req, "content-length") ?? "",
+  });
 
   if (rejectsBrowserLoopbackRequest(params.req)) {
     logMcpLoopbackHttp("reject", {
@@ -122,6 +136,41 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
+  if (params.req.method === "GET" && acceptsEventStream(params.req)) {
+    logMcpLoopbackHttp("sse-open", {
+      method: params.req.method ?? "",
+      path: url.pathname,
+    });
+    params.res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    });
+    params.res.write(": openclaw mcp loopback ready\n\n");
+    params.req.resume();
+    params.req.once("close", () => {
+      logMcpLoopbackHttp("sse-close", {
+        method: params.req.method ?? "",
+        path: url.pathname,
+      });
+      if (!params.res.writableEnded) {
+        params.res.end();
+      }
+    });
+    return { kind: "handled" };
+  }
+
+  if (params.req.method !== "POST") {
+    logMcpLoopbackHttp("reject", {
+      reason: "method_not_allowed",
+      method: params.req.method ?? "",
+      path: url.pathname,
+    });
+    params.res.writeHead(405, { Allow: "GET, POST" });
+    params.res.end();
+    return null;
+  }
+
   const contentType = getHeader(params.req, "content-type") ?? "";
   if (!contentType.startsWith("application/json")) {
     logMcpLoopbackHttp("reject", {
@@ -134,15 +183,24 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return { senderIsOwner };
+  return { kind: "json-rpc", senderIsOwner };
 }
 
 export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
   return await new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let received = 0;
+    logMcpLoopbackHttp("body-start", {
+      method: req.method ?? "",
+      contentLength: getHeader(req, "content-length") ?? "",
+      transferEncoding: getHeader(req, "transfer-encoding") ?? "",
+    });
     req.on("data", (chunk: Buffer) => {
       received += chunk.length;
+      logMcpLoopbackHttp("body-chunk", {
+        bytes: chunk.length,
+        received,
+      });
       if (received > MAX_MCP_BODY_BYTES) {
         req.destroy();
         reject(new Error(`Request body exceeds ${MAX_MCP_BODY_BYTES} bytes`));
@@ -150,7 +208,10 @@ export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+    req.on("end", () => {
+      logMcpLoopbackHttp("body-end", { received });
+      resolve(Buffer.concat(chunks).toString("utf-8"));
+    });
     req.on("error", reject);
   });
 }
