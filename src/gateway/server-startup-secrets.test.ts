@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PreparedSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createGatewaySecretsActivationController } from "./server-startup-secrets.js";
@@ -48,6 +49,56 @@ describe("createGatewaySecretsActivationController", () => {
 
     expect(log.error).toHaveBeenCalledWith("[SECRETS_RELOADER_DEGRADED] Error: boom");
     expect(emitStateEvent).not.toHaveBeenCalled();
+  });
+
+  it.each(["startup", "restart-check"] as const)(
+    "uses persisted auth stores only during %s preflight",
+    async (reason) => {
+      const prepareSecretsRuntimeSnapshot = vi.fn(async ({ config }) =>
+        createPreparedSnapshot(config),
+      );
+      const controller = createGatewaySecretsActivationController({
+        prepareSecretsRuntimeSnapshot,
+        activateRuntimeSnapshot: vi.fn(),
+        onAuthSurfaceDiagnostics: vi.fn(),
+        log: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        emitStateEvent: vi.fn(),
+      });
+
+      await controller.activateRuntimeSecrets({}, { reason, activate: false });
+
+      expect(prepareSecretsRuntimeSnapshot).toHaveBeenCalledWith({
+        config: {},
+        loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
+      });
+    },
+  );
+
+  it("keeps startup activation on the overlay-capable auth store path", async () => {
+    const prepareSecretsRuntimeSnapshot = vi.fn(async ({ config }) =>
+      createPreparedSnapshot(config),
+    );
+    const controller = createGatewaySecretsActivationController({
+      prepareSecretsRuntimeSnapshot,
+      activateRuntimeSnapshot: vi.fn(),
+      onAuthSurfaceDiagnostics: vi.fn(),
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      emitStateEvent: vi.fn(),
+    });
+
+    await controller.activateRuntimeSecrets({}, { reason: "startup", activate: true });
+
+    expect(prepareSecretsRuntimeSnapshot).toHaveBeenCalledWith({
+      config: {},
+    });
   });
 
   it("emits degraded only once across repeated non-startup failures", async () => {

@@ -1,3 +1,7 @@
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  type AuthProfileStore,
+} from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PreparedSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 
@@ -7,6 +11,7 @@ type SecretsActivationReason = "startup" | "reload" | "restart-check";
 type GatewaySecretsActivationControllerDeps = {
   prepareSecretsRuntimeSnapshot: (params: {
     config: OpenClawConfig;
+    loadAuthStore?: (agentDir?: string) => AuthProfileStore;
   }) => Promise<PreparedSecretsRuntimeSnapshot>;
   activateRuntimeSnapshot: (snapshot: PreparedSecretsRuntimeSnapshot) => void;
   onAuthSurfaceDiagnostics: (snapshot: PreparedSecretsRuntimeSnapshot) => void;
@@ -44,7 +49,17 @@ export function createGatewaySecretsActivationController(
   ): Promise<PreparedSecretsRuntimeSnapshot> =>
     await runWithActivationLock(async () => {
       try {
-        const prepared = await deps.prepareSecretsRuntimeSnapshot({ config });
+        // Startup and restart-check preflight should stay off the slow overlay path so
+        // readiness reflects persisted state instead of waiting for external CLI sync.
+        // Actual activation paths, including startup auth bootstrap, keep overlay sync.
+        const startupPreflight =
+          !params.activate && (params.reason === "startup" || params.reason === "restart-check");
+        const prepared = await deps.prepareSecretsRuntimeSnapshot({
+          config,
+          ...(startupPreflight
+            ? { loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles }
+            : {}),
+        });
         if (params.activate) {
           deps.activateRuntimeSnapshot(prepared);
           deps.onAuthSurfaceDiagnostics(prepared);
