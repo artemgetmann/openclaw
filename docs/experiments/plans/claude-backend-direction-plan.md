@@ -358,7 +358,9 @@ Decision:
 
 - Mark the transport/no-output blocker fixed for this spike.
 - Mark strict memory-chain green: after one completed model-variance failure, two consecutive live runs passed, including one without debug logging.
-- Remaining risk is no longer a stuck backend. It is model compliance variance on the strict two-tool prompt.
+- PR #586 merged this core Claude CLI parity slice into `main` as `df4eb194b38d69d50df10a2be5667fc56db54646`.
+- Remaining risk is no longer a stuck backend. It is model compliance variance on the strict two-tool prompt plus a known tool-surface gap: Claude CLI loopback currently exposes core OpenClaw tools without plugin-tool discovery.
+- Plugin-tool parity is an explicit follow-up, not a merge blocker for PR #586. The next slice should make enabled plugin tools available to Claude CLI only after plugin discovery is bounded so it can never block MCP `initialize`, `tools/list`, or Claude startup.
 
 ### Slice 3: Warm Claude CLI spike
 
@@ -522,6 +524,7 @@ Tests run in this slice:
 
 Next:
 
-1. decide whether loopback's plugin-free core tool surface is the intended product behavior for Claude CLI MCP parity, or narrow it to generated CLI loopback config only
-2. review the spike diff for debug-log volume and test scope before committing
-3. keep PR #586 draft until the implementation fix is reviewed and committed with the green smoke evidence
+1. Start a fresh worktree from `main` for Claude CLI plugin-tool parity.
+2. Map exact plugin-tool semantics first: normal Codex/OpenAI PI runner can include plugin tools through `createOpenClawTools` and `resolvePluginTools`; Claude CLI loopback now intentionally skips that path for core parity.
+3. Implement bounded plugin discovery/cache/fallback so Claude CLI can expose enabled plugin tools without plugin discovery ever blocking MCP `initialize`, `tools/list`, or live Claude startup.
+4. Add a proof that plugin discovery timeout/failure still returns core tools and logs plugin-tool unavailability instead of hanging.
