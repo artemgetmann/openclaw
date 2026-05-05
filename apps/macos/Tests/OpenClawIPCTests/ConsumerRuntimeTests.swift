@@ -14,6 +14,7 @@ import Testing
             "OPENCLAW_HOME": nil,
             "OPENCLAW_STATE_DIR": nil,
             "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": nil,
             "OPENCLAW_GATEWAY_PORT": nil,
             "OPENCLAW_GATEWAY_BIND": nil,
             "OPENCLAW_LOG_DIR": nil,
@@ -36,6 +37,7 @@ import Testing
             "OPENCLAW_HOME": nil,
             "OPENCLAW_STATE_DIR": nil,
             "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": nil,
             "OPENCLAW_GATEWAY_PORT": nil,
             "OPENCLAW_GATEWAY_BIND": nil,
             "OPENCLAW_LOG_DIR": nil,
@@ -58,6 +60,7 @@ import Testing
             "OPENCLAW_HOME": nil,
             "OPENCLAW_STATE_DIR": nil,
             "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": nil,
             "OPENCLAW_GATEWAY_PORT": nil,
             "OPENCLAW_GATEWAY_BIND": nil,
             "OPENCLAW_LOG_DIR": nil,
@@ -72,6 +75,32 @@ import Testing
             #expect(gateway?["port"] as? Int == 18_789)
             #expect(gateway?["bind"] as? String == "loopback")
             #expect(OpenClawEnv.path("OPENCLAW_LAUNCHD_LABEL") == "ai.openclaw.gateway")
+            #expect(OpenClawEnv.path("OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH") == ConsumerRuntime.configURL.path)
+        }
+    }
+
+    @Test func `consumer bootstrap omits canonical shared marker for isolated instances`() async throws {
+        let homeURL = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        await TestIsolation.withIsolatedState(env: [
+            ConsumerInstance.envKey: "visible-surface-parity",
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": homeURL.path,
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_HOME": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": "/stale/shared/openclaw.json",
+            "OPENCLAW_GATEWAY_PORT": nil,
+            "OPENCLAW_GATEWAY_BIND": nil,
+            "OPENCLAW_LOG_DIR": nil,
+            "OPENCLAW_LAUNCHD_LABEL": nil,
+        ]) {
+            ConsumerRuntime.bootstrapProcessEnvironment()
+
+            #expect(OpenClawEnv.path("OPENCLAW_PROFILE") == "consumer-visible-surface-parity")
+            #expect(OpenClawEnv.path("OPENCLAW_CONFIG_PATH") == ConsumerRuntime.configURL.path)
+            #expect(OpenClawEnv.path("OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH") == nil)
         }
     }
 }

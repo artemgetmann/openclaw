@@ -482,6 +482,50 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
     );
   });
 
+  it("allows isolated consumer runtime configs from feature worktrees", async () => {
+    const home = makeTempDir();
+    const canonicalRepo = path.join(home, "Programming_Projects", "openclaw");
+    const isolatedConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "OpenClaw",
+      "instances",
+      "visible-surface-parity",
+      ".openclaw",
+      "openclaw.json",
+    );
+    fs.mkdirSync(canonicalRepo, { recursive: true });
+    fs.writeFileSync(path.join(canonicalRepo, "package.json"), '{"name":"openclaw"}\n', "utf8");
+    fs.mkdirSync(path.dirname(isolatedConfigPath), { recursive: true });
+    fs.writeFileSync(isolatedConfigPath, "{}\n", "utf8");
+
+    const result = await runGatewayStartupRuntimePolicyPhase({
+      context: createGatewayStartupContext(createSnapshot({ path: isolatedConfigPath })),
+      isDiagnosticsEnabled: () => false,
+      startDiagnosticHeartbeat: vi.fn(),
+      isRestartEnabled: () => false,
+      setGatewaySigusr1RestartPolicy: vi.fn(),
+      setPreRestartDeferralCheck: vi.fn(),
+      getPendingWorkCount: () => 0,
+      seedControlUiAllowedOrigins: async (config) => config,
+      env: {
+        HOME: home,
+        OPENCLAW_PROFILE: "consumer-visible-surface-parity",
+        OPENCLAW_CONFIG_PATH: isolatedConfigPath,
+      },
+      runtimeFingerprint: {
+        branch: "codex/visible-surface-parity",
+        worktree: path.join(home, "Programming_Projects", "openclaw", ".worktrees", "lane"),
+        stateDir: path.dirname(isolatedConfigPath),
+        configPath: isolatedConfigPath,
+        serviceLabel: "ai.openclaw.consumer.visible-surface-parity.gateway",
+      },
+    });
+
+    expect(result.diagnosticsEnabled).toBe(false);
+  });
+
   it("allows the canonical shared runtime from the sacred main checkout", async () => {
     const home = makeTempDir();
     const canonicalRepo = path.join(home, "Programming_Projects", "openclaw");

@@ -164,11 +164,147 @@ export const AgentsFilesSetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ModelsListParamsSchema = Type.Object({}, { additionalProperties: false });
+export const ModelsListParamsSchema = Type.Object(
+  {
+    all: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
 
 export const ModelsListResultSchema = Type.Object(
   {
     models: Type.Array(ModelChoiceSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsSetParamsSchema = Type.Object(
+  {
+    model: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsSetResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    model: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsReadinessParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const ModelsReadinessProbeSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    model: Type.Optional(NonEmptyString),
+    profileId: Type.Optional(NonEmptyString),
+    label: NonEmptyString,
+    source: Type.Union([Type.Literal("profile"), Type.Literal("env"), Type.Literal("models.json")]),
+    mode: Type.Optional(Type.String()),
+    status: Type.Union([
+      Type.Literal("ok"),
+      Type.Literal("auth"),
+      Type.Literal("rate_limit"),
+      Type.Literal("billing"),
+      Type.Literal("timeout"),
+      Type.Literal("format"),
+      Type.Literal("unknown"),
+      Type.Literal("no_model"),
+    ]),
+    reasonCode: Type.Optional(Type.String()),
+    error: Type.Optional(Type.String()),
+    latencyMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsReadinessResultSchema = Type.Object(
+  {
+    status: Type.Union([Type.Literal("ready"), Type.Literal("blocked"), Type.Literal("checking")]),
+    mode: Type.Union([Type.Literal("managed"), Type.Literal("byok")]),
+    defaultModel: NonEmptyString,
+    configPath: NonEmptyString,
+    stateDir: NonEmptyString,
+    agentDir: NonEmptyString,
+    authMode: Type.Union([Type.Literal("shared"), Type.Literal("byok")]),
+    sharedProfileId: Type.Optional(NonEmptyString),
+    reasonCodes: Type.Array(
+      Type.Union([
+        Type.Literal("wrong_state_dir"),
+        Type.Literal("missing_auth"),
+        Type.Literal("probe_auth_failed"),
+        Type.Literal("probe_rate_limited"),
+        Type.Literal("probe_billing_failed"),
+        Type.Literal("probe_timeout"),
+        Type.Literal("probe_no_model"),
+        Type.Literal("probe_unknown"),
+      ]),
+    ),
+    summary: Type.String(),
+    actions: Type.Array(Type.String()),
+    byokAvailable: Type.Boolean(),
+    voiceStatus: Type.Union([Type.Literal("ready"), Type.Literal("blocked")]),
+    voiceSummary: Type.String(),
+    voiceActions: Type.Array(Type.String()),
+    lastProbeAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    probeLatencyMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    probe: Type.Optional(ModelsReadinessProbeSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ConsumerAuthInputKindSchema = Type.Union([
+  Type.Literal("none"),
+  Type.Literal("api_key"),
+  Type.Literal("token"),
+]);
+
+export const ModelsAuthListParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const ModelsAuthOptionSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    providerId: NonEmptyString,
+    providerLabel: NonEmptyString,
+    title: NonEmptyString,
+    detail: NonEmptyString,
+    inputKind: ConsumerAuthInputKindSchema,
+    submitLabel: NonEmptyString,
+    inputLabel: Type.Optional(NonEmptyString),
+    inputHelp: Type.Optional(Type.String()),
+    inputPlaceholder: Type.Optional(Type.String()),
+    methodKind: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsAuthListResultSchema = Type.Object(
+  {
+    options: Type.Array(ModelsAuthOptionSchema),
+    activeOptionId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsAuthApplyParamsSchema = Type.Object(
+  {
+    optionId: NonEmptyString,
+    secret: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsAuthApplyResultSchema = Type.Object(
+  {
+    optionId: NonEmptyString,
+    providerId: NonEmptyString,
+    methodId: NonEmptyString,
+    defaultModel: Type.Optional(NonEmptyString),
+    notes: Type.Array(Type.String()),
+    profileIds: Type.Array(NonEmptyString),
+    readiness: ModelsReadinessResultSchema,
   },
   { additionalProperties: false },
 );

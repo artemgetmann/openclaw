@@ -2,6 +2,20 @@ import OpenClawProtocol
 import SwiftUI
 
 extension ChannelsSettings {
+    private var consumerTelegramOwnershipIssue: String? {
+        guard self.isConsumerSimpleTelegramPath else { return nil }
+        guard !self.store.isPreview else { return nil }
+        return GatewayLaunchAgentManager.runtimeOwnershipBlockerMessage()
+    }
+
+    private var isConsumerSimpleTelegramPath: Bool {
+        AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
+    }
+
+    var consumerTelegramBotUsername: String? {
+        self.store.consumerTelegramBotUsername()
+    }
+
     private func channelStatus<T: Decodable>(
         _ id: String,
         as type: T.Type) -> T?
@@ -105,8 +119,14 @@ extension ChannelsSettings {
     }
 
     var telegramTint: Color {
+        if self.consumerTelegramOwnershipIssue != nil {
+            return .orange
+        }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
-        else { return .secondary }
+        else {
+            guard self.store.consumerTelegramLooksLive() else { return .secondary }
+            return self.store.consumerTelegramReadyForFirstTask() ? .green : .orange
+        }
         return self.configuredChannelTint(
             configured: status.configured,
             running: status.running,
@@ -164,8 +184,28 @@ extension ChannelsSettings {
     }
 
     var telegramSummary: String {
+        if self.consumerTelegramOwnershipIssue != nil {
+            return "Needs attention"
+        }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
-        else { return "Checking…" }
+        else {
+            if self.store.consumerTelegramConflictMessage(self.store.telegramSetupStatus) != nil {
+                return "Busy elsewhere"
+            }
+            if self.isConsumerSimpleTelegramPath {
+                if self.store.consumerTelegramReadyForFirstTask() { return "Live" }
+                if self.store.consumerTelegramLooksLive() { return "Verify first task" }
+                return "Setup needed"
+            }
+            return "Checking…"
+        }
+        if self.isConsumerSimpleTelegramPath {
+            if self.store.consumerTelegramConflictMessage(status.lastError) != nil { return "Busy elsewhere" }
+            if self.store.consumerTelegramReadyForFirstTask() { return "Live" }
+            if self.store.consumerTelegramLooksLive() { return "Verify first task" }
+            if status.configured { return "Setup complete" }
+            return "Setup needed"
+        }
         return self.configuredChannelSummary(configured: status.configured, running: status.running)
     }
 
@@ -225,8 +265,28 @@ extension ChannelsSettings {
     }
 
     var telegramDetails: String? {
+        if let ownershipIssue = self.consumerTelegramOwnershipIssue {
+            return ownershipIssue
+        }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
-        else { return nil }
+        else {
+            if let conflict = self.store.consumerTelegramConflictMessage(self.store.telegramSetupStatus) {
+                return conflict
+            }
+            if let gate = self.store.consumerTelegramAccessGateMessage(self.store.telegramSetupStatus) {
+                return gate
+            }
+            if let status = self.store.telegramSetupStatus, !status.isEmpty {
+                return status
+            }
+            return nil
+        }
+        if let conflict = self.store.consumerTelegramConflictMessage(status.lastError) {
+            return conflict
+        }
+        if let gate = self.store.consumerTelegramAccessGateMessage(status.lastError) {
+            return gate
+        }
         var lines: [String] = []
         if let source = status.tokenSource {
             lines.append("Token source: \(source)")
@@ -331,8 +391,11 @@ extension ChannelsSettings {
     }
 
     var orderedChannels: [ChannelItem] {
-        let fallback = ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage"]
-        let order = self.store.snapshot?.channelOrder ?? fallback
+        let fallback = AppFlavor.current.isConsumer
+            ? ["telegram", "whatsapp", "discord", "googlechat", "slack", "signal", "imessage"]
+            : ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage"]
+        let snapshotOrder = self.store.snapshot?.channelOrder ?? []
+        let order = snapshotOrder.isEmpty ? fallback : snapshotOrder
         let channels = order.enumerated().map { index, id in
             ChannelItem(
                 id: id,
@@ -341,12 +404,23 @@ extension ChannelsSettings {
                 systemImage: self.resolveChannelSystemImage(id),
                 sortOrder: index)
         }
-        return channels.sorted { lhs, rhs in
+        let sorted = channels.sorted { lhs, rhs in
             let lhsEnabled = self.channelEnabled(lhs)
             let rhsEnabled = self.channelEnabled(rhs)
             if lhsEnabled != rhsEnabled { return lhsEnabled && !rhsEnabled }
             return lhs.sortOrder < rhs.sortOrder
         }
+
+        guard AppFlavor.current.isConsumer,
+              !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
+        else {
+            return sorted
+        }
+
+        // The consumer path is deliberately Telegram-first. Advanced keeps the
+        // full catalog visible without forcing first-run users through it.
+        let simplified = sorted.filter { $0.id == "telegram" }
+        return simplified.isEmpty ? sorted : simplified
     }
 
     var enabledChannels: [ChannelItem] {
@@ -374,6 +448,11 @@ extension ChannelsSettings {
         let connected = status?["connected"]?.boolValue ?? false
         let accountActive = self.store.snapshot?.channelAccounts[channel.id]?.contains(
             where: { $0.configured == true || $0.running == true || $0.connected == true }) ?? false
+        if channel.id == "telegram", !configured, !running, !connected, !accountActive,
+           self.store.consumerTelegramLooksLive()
+        {
+            return true
+        }
         return configured || running || connected || accountActive
     }
 
@@ -381,6 +460,21 @@ extension ChannelsSettings {
     func channelSection(_ channel: ChannelItem) -> some View {
         if channel.id == "whatsapp" {
             self.whatsAppSection
+        } else if channel.id == "telegram" {
+            if AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey) {
+                // A configured bot is not enough; keep setup visible until one
+                // real Telegram task has completed on this Mac.
+                if self.store.consumerTelegramReadyForFirstTask() {
+                    self.consumerTelegramLiveSection
+                } else {
+                    self.telegramSetupSection
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 16) {
+                    self.telegramSetupSection
+                    self.genericChannelSection(channel)
+                }
+            }
         } else {
             self.genericChannelSection(channel)
         }

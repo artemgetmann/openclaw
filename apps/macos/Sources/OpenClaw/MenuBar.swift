@@ -154,7 +154,11 @@ struct OpenClawApp: App {
         handler.translatesAutoresizingMaskIntoConstraints = false
         handler.onLeftClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemClick")
-            self.toggleWebChatPanel()
+            if AppFlavor.current.isConsumer {
+                SettingsWindowOpener.shared.open(tab: .general)
+            } else {
+                self.toggleWebChatPanel()
+            }
         }
         handler.onRightClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
@@ -248,7 +252,10 @@ private final class StatusItemMouseHandlerView: NSView {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app.delegate")
+    private static let showVisibleSurfaceNotification = Notification.Name("ai.openclaw.consumer.showVisibleSurface")
     private var state: AppState?
+    private var consumerReopenObserver: NSObjectProtocol?
+    private var visibleSurfaceRecoveryTask: Task<Void, Never>?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     let updaterController: UpdaterProviding = makeUpdaterController()
 
@@ -263,11 +270,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
         if self.isDuplicateInstance() {
+            self.signalExistingConsumerInstanceToShowVisibleSurface()
             NSApp.terminate(nil)
             return
         }
         self.state = AppStateStore.shared
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
+        self.installVisibleSurfaceObserverIfNeeded()
         if let state {
             Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
         }
@@ -297,7 +306,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @MainActor
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard Self.shouldHandleConsumerReopen(
+            isConsumer: AppFlavor.current.isConsumer,
+            hasVisibleWindows: flag)
+        else { return true }
+        self.requestVisibleSurface(reason: "reopen")
+        return true
+    }
+
+    @MainActor
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard Self.shouldRecoverVisibleSurfaceOnActivation(
+            isConsumer: AppFlavor.current.isConsumer,
+            hasVisibleContentWindow: SettingsWindowOpener.hasVisibleContentWindow(),
+            hasVisibleOnboardingWindow: Self.hasVisibleOnboardingWindow())
+        else { return }
+
+        Self.logger.info("consumer app became active without a visible surface")
+        self.requestVisibleSurface(reason: "became-active")
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        self.visibleSurfaceRecoveryTask?.cancel()
+        if let observer = self.consumerReopenObserver {
+            DistributedNotificationCenter.default().removeObserver(observer)
+            self.consumerReopenObserver = nil
+        }
         PresenceReporter.shared.stop()
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
@@ -315,23 +351,189 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func scheduleFirstRunOnboardingIfNeeded() {
+        let shouldShow = self.shouldShowOnboarding()
+        guard AppFlavor.current.isConsumer else {
+            guard shouldShow else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                OnboardingController.shared.show()
+            }
+            return
+        }
+        guard Self.shouldScheduleInitialVisibleSurface(
+            isConsumer: true,
+            onboardingPending: shouldShow,
+            didLaunchFromFinder: self.didLaunchFromFinder)
+        else { return }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            self.requestVisibleSurface(reason: "initial-launch")
+        }
+    }
+
+    private func shouldShowOnboarding() -> Bool {
         if ConsumerSetupResumePreflight.completeIfExistingSetupLooksUsable() {
             Self.logger.info("consumer setup resume preflight completed; onboarding suppressed")
-            return
+            return false
         }
 
         let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
-        let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
-        guard shouldShow else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            OnboardingController.shared.show()
-        }
+        return seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
+    }
+
+    private var didLaunchFromFinder: Bool {
+        CommandLine.arguments.contains(where: { $0.hasPrefix("-psn_") })
     }
 
     private func isDuplicateInstance() -> Bool {
         guard let bundleID = Bundle.main.bundleIdentifier else { return false }
         let running = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleID }
         return running.count > 1
+    }
+
+    private func installVisibleSurfaceObserverIfNeeded() {
+        guard AppFlavor.current.isConsumer else { return }
+        guard self.consumerReopenObserver == nil else { return }
+        let bundleID = Bundle.main.bundleIdentifier
+        Self.logger.info("installing consumer visible-surface observer bundleID=\(bundleID ?? "missing", privacy: .public)")
+        self.consumerReopenObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Self.showVisibleSurfaceNotification,
+            object: bundleID,
+            queue: .main)
+        { [weak self] _ in
+            Task { @MainActor [weak self] in
+                Self.logger.info("received consumer visible-surface request from duplicate instance")
+                self?.requestVisibleSurface(reason: "duplicate-instance")
+            }
+        }
+    }
+
+    private func signalExistingConsumerInstanceToShowVisibleSurface() {
+        guard AppFlavor.current.isConsumer, let bundleID = Bundle.main.bundleIdentifier else { return }
+        Self.logger.info("signaling existing consumer instance to show visible surface")
+        DistributedNotificationCenter.default().postNotificationName(
+            Self.showVisibleSurfaceNotification,
+            object: bundleID,
+            userInfo: nil,
+            options: [.deliverImmediately])
+    }
+
+    func showVisibleSurface(preferredSettingsTab: SettingsTab? = nil) {
+        guard AppFlavor.current.isConsumer else { return }
+        if self.shouldShowOnboarding() {
+            Self.logger.info("opening onboarding window")
+            OnboardingController.shared.show()
+            return
+        }
+
+        Self.logger.info("opening settings window")
+        SettingsWindowOpener.shared.open(tab: preferredSettingsTab ?? .general)
+    }
+
+    @MainActor
+    func requestVisibleSurface(reason: String, preferredSettingsTab: SettingsTab? = nil) {
+        self.showVisibleSurface(preferredSettingsTab: preferredSettingsTab)
+        self.scheduleVisibleSurfaceRecovery(
+            reason: reason,
+            preferredSettingsTab: preferredSettingsTab,
+            attemptsRemaining: 4)
+    }
+
+    @MainActor
+    private func scheduleVisibleSurfaceRecovery(
+        reason: String,
+        preferredSettingsTab: SettingsTab?,
+        attemptsRemaining: Int)
+    {
+        self.visibleSurfaceRecoveryTask?.cancel()
+        guard Self.shouldRetryVisibleSurfaceRecovery(
+            hasVisibleContentWindow: SettingsWindowOpener.hasVisibleContentWindow(),
+            hasVisibleOnboardingWindow: Self.hasVisibleOnboardingWindow(),
+            attemptsRemaining: attemptsRemaining)
+        else { return }
+
+        // A consumer launch can activate the app before AppKit has produced a
+        // usable settings/onboarding window. Retry the surface request briefly
+        // so Dock clicks and duplicate launches do not strand the user in a
+        // menu-bar-only app.
+        self.visibleSurfaceRecoveryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: .milliseconds(350))
+            guard Self.shouldRetryVisibleSurfaceRecovery(
+                hasVisibleContentWindow: SettingsWindowOpener.hasVisibleContentWindow(),
+                hasVisibleOnboardingWindow: Self.hasVisibleOnboardingWindow(),
+                attemptsRemaining: attemptsRemaining)
+            else { return }
+            Self.logger.info(
+                "consumer visible surface still missing after \(reason, privacy: .public); retrying (\(attemptsRemaining, privacy: .public) left)")
+            self.showVisibleSurface(preferredSettingsTab: preferredSettingsTab)
+            self.scheduleVisibleSurfaceRecovery(
+                reason: reason,
+                preferredSettingsTab: preferredSettingsTab,
+                attemptsRemaining: attemptsRemaining - 1)
+        }
+    }
+
+    static func shouldScheduleInitialVisibleSurface(
+        isConsumer: Bool,
+        onboardingPending: Bool,
+        didLaunchFromFinder: Bool) -> Bool
+    {
+        isConsumer && (onboardingPending || didLaunchFromFinder)
+    }
+
+    static func shouldHandleConsumerReopen(isConsumer: Bool, hasVisibleWindows: Bool) -> Bool {
+        isConsumer && !hasVisibleWindows
+    }
+
+    static func shouldRecoverVisibleSurfaceOnActivation(
+        isConsumer: Bool,
+        hasVisibleContentWindow: Bool,
+        hasVisibleOnboardingWindow: Bool) -> Bool
+    {
+        isConsumer &&
+            !Self.hasVisibleConsumerSurface(
+                hasVisibleContentWindow: hasVisibleContentWindow,
+                hasVisibleOnboardingWindow: hasVisibleOnboardingWindow)
+    }
+
+    static func hasVisibleConsumerSurface(hasVisibleContentWindow: Bool, hasVisibleOnboardingWindow: Bool) -> Bool {
+        hasVisibleContentWindow || hasVisibleOnboardingWindow
+    }
+
+    static func shouldRetryVisibleSurfaceRecovery(
+        hasVisibleContentWindow: Bool,
+        hasVisibleOnboardingWindow: Bool,
+        attemptsRemaining: Int) -> Bool
+    {
+        attemptsRemaining > 0 &&
+            !Self.hasVisibleConsumerSurface(
+                hasVisibleContentWindow: hasVisibleContentWindow,
+                hasVisibleOnboardingWindow: hasVisibleOnboardingWindow)
+    }
+
+    private static func hasVisibleOnboardingWindow() -> Bool {
+        NSApp.windows.contains { window in
+            Self.isVisibleOnboardingWindowCandidate(
+                title: window.title,
+                isVisible: window.isVisible,
+                frameWidth: window.frame.width,
+                frameHeight: window.frame.height)
+        }
+    }
+
+    static func isVisibleOnboardingWindowCandidate(
+        title: String,
+        isVisible: Bool,
+        frameWidth: CGFloat,
+        frameHeight: CGFloat) -> Bool
+    {
+        // Current main does not expose OnboardingController's private NSWindow.
+        // The onboarding title plus real window geometry is enough to avoid
+        // retrying when the welcome surface is already onscreen.
+        isVisible &&
+            title == UIStrings.welcomeTitle &&
+            frameWidth > 1 &&
+            frameHeight > 1
     }
 }
 

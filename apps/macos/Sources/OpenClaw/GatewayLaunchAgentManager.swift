@@ -220,12 +220,17 @@ enum GatewayLaunchAgentManager {
         // was started with Homebrew Node. Node path is not ownership. Runtime/config
         // paths are ownership, so only attach when the launchd job is already pinned
         // to the same state root and config file this app would manage.
+        let expectedCanonicalConfigPath = ConsumerRuntime.canonicalSharedGatewayConfigPath
+        let actualCanonicalConfigPath = env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty
+
         return snapshot.port == identity.gatewayPort &&
             (snapshot.bind ?? identity.gatewayBind).lowercased() == identity.gatewayBind.lowercased() &&
             env["OPENCLAW_HOME"] == identity.runtimeRootURL.path &&
             env["OPENCLAW_STATE_DIR"] == identity.stateDirURL.path &&
             env["OPENCLAW_CONFIG_PATH"] == identity.configURL.path &&
-            env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] == identity.configURL.path
+            actualCanonicalConfigPath == expectedCanonicalConfigPath
     }
 
     private static func shouldPreserveLoadedConsumerGatewayOnStop() async -> Bool {
@@ -448,7 +453,9 @@ extension GatewayLaunchAgentManager {
         env["OPENCLAW_HOME"] = identity.runtimeRootURL.path
         env["OPENCLAW_STATE_DIR"] = identity.stateDirURL.path
         env["OPENCLAW_CONFIG_PATH"] = identity.configURL.path
-        env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] = identity.configURL.path
+        if let canonicalSharedGatewayConfigPath = ConsumerRuntime.canonicalSharedGatewayConfigPath {
+            env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] = canonicalSharedGatewayConfigPath
+        }
         env["OPENCLAW_GATEWAY_PORT"] = "\(identity.gatewayPort)"
         env["OPENCLAW_GATEWAY_BIND"] = identity.gatewayBind
         env["OPENCLAW_LOG_DIR"] = identity.logsDirURL.path

@@ -25,6 +25,12 @@ enum LaunchAgentManager {
         }
     }
 
+    static func registerForNextLogin(bundlePath: String) async {
+        // First-run consumer default should write the durable login item without
+        // kickstarting a second app copy during onboarding/settings bootstrap.
+        self.writePlist(bundlePath: bundlePath)
+    }
+
     static func launchAgentEnvironment(
         base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String]
     {
@@ -34,7 +40,6 @@ enum LaunchAgentManager {
             "OPENCLAW_HOME": ConsumerRuntime.runtimeRootURL.path,
             "OPENCLAW_STATE_DIR": ConsumerRuntime.stateDirURL.path,
             "OPENCLAW_CONFIG_PATH": ConsumerRuntime.configURL.path,
-            "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": ConsumerRuntime.configURL.path,
             "OPENCLAW_GATEWAY_PORT": ConsumerRuntime.gatewayPort.description,
             "OPENCLAW_GATEWAY_BIND": ConsumerRuntime.gatewayBind,
             "OPENCLAW_LOG_DIR": ConsumerRuntime.logsDirURL.path,
@@ -44,6 +49,9 @@ enum LaunchAgentManager {
         ]
         if let id = ConsumerInstance.current.id {
             env[ConsumerInstance.envKey] = id
+        }
+        if let canonicalSharedGatewayConfigPath = ConsumerRuntime.canonicalSharedGatewayConfigPath {
+            env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] = canonicalSharedGatewayConfigPath
         }
         ConsumerRuntime.applyInheritedToolIsolationEnvironment(to: &env, base: base)
         return env

@@ -32,11 +32,13 @@ struct SettingsRootView: View {
                     .tabItem { Label("General", systemImage: "gearshape") }
                     .tag(SettingsTab.general)
 
-                if self.showsAdvancedSettings {
-                    ChannelsSettings()
-                        .tabItem { Label("Channels", systemImage: "link") }
-                        .tag(SettingsTab.channels)
+                // Channels is a day-1 consumer surface, not an advanced
+                // operator control. Standard builds also keep it visible.
+                ChannelsSettings()
+                    .tabItem { Label("Channels", systemImage: "link") }
+                    .tag(SettingsTab.channels)
 
+                if self.showsAdvancedSettings {
                     VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
                         .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
                         .tag(SettingsTab.voiceWake)
@@ -82,6 +84,7 @@ struct SettingsRootView: View {
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 22)
+        .background(SettingsWindowVisibilityBridge())
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
@@ -183,6 +186,37 @@ struct SettingsRootView: View {
     }
 }
 
+// SwiftUI can create Settings behind another Space for menu-bar accessory apps.
+// The tiny AppKit bridge reasserts "this is the user-facing surface" whenever
+// the Settings scene attaches.
+private struct SettingsWindowVisibilityBridge: NSViewRepresentable {
+    func makeNSView(context _: Context) -> SettingsWindowBridgeView {
+        SettingsWindowBridgeView()
+    }
+
+    func updateNSView(_: SettingsWindowBridgeView, context _: Context) {}
+}
+
+private final class SettingsWindowBridgeView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window = self.window else { return }
+        DispatchQueue.main.async {
+            Self.configure(window: window)
+        }
+    }
+
+    private static func configure(window: NSWindow) {
+        DockIconManager.shared.temporarilyShowDock()
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.collectionBehavior.insert(.fullScreenAuxiliary)
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
 enum SettingsTab: CaseIterable {
     case general, channels, skills, sessions, cron, config, instances, voiceWake, permissions, debug, about
     static let windowWidth: CGFloat = 824 // wider
@@ -230,9 +264,9 @@ extension SettingsRootView {
         // We keep the deeper tabs in the binary so advanced users can reveal them
         // without forcing a second app codebase.
         let advancedVisible = !isConsumer || showAdvancedSettings
-        var tabs: [SettingsTab] = [.general]
+        var tabs: [SettingsTab] = [.general, .channels]
         if advancedVisible {
-            tabs += [.channels, .voiceWake, .config, .instances, .sessions, .cron, .skills]
+            tabs += [.voiceWake, .config, .instances, .sessions, .cron, .skills]
         }
         tabs += [.permissions]
         if advancedVisible, debugPaneEnabled {
