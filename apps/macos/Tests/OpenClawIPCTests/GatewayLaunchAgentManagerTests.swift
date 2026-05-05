@@ -319,7 +319,7 @@ struct GatewayLaunchAgentManagerTests {
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: home) }
 
-        try await TestIsolation.withEnvValues([
+        await TestIsolation.withEnvValues([
             "OPENCLAW_APP_VARIANT": "consumer",
             "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
             "OPENCLAW_TEST": "1",
@@ -338,6 +338,75 @@ struct GatewayLaunchAgentManagerTests {
     }
 
     @MainActor
+    @Test func `daemon command environment omits canonical marker for isolated consumer instances`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: home) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: "visible-surface-parity",
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": home.path,
+        ]) {
+            let env = GatewayLaunchAgentManager.daemonCommandEnvironment(
+                base: ["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": "/stale/shared/openclaw.json"],
+                projectRootHint: nil)
+            let expectedConfig = home
+                .appendingPathComponent(
+                    "Library/Application Support/OpenClaw/instances/visible-surface-parity/.openclaw/openclaw.json")
+                .path
+
+            #expect(env["OPENCLAW_CONFIG_PATH"] == expectedConfig)
+            #expect(env["OPENCLAW_LAUNCHD_LABEL"] == "ai.openclaw.consumer.visible-surface-parity.gateway")
+            #expect(env["OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH"] == nil)
+        }
+    }
+
+    @MainActor
+    @Test func `isolated consumer launch agent matches without canonical shared marker`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let plistURL = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-launchd-\(UUID().uuidString).plist")
+        defer {
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: plistURL)
+        }
+
+        try await TestIsolation.withIsolatedState(env: [
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: "visible-surface-parity",
+            "OPENCLAW_TEST": "1",
+            "OPENCLAW_TEST_HOME": home.path,
+        ]) {
+            let identity = RuntimeIdentity.current
+            let plist: [String: Any] = [
+                "ProgramArguments": [
+                    "/usr/bin/node",
+                    "/tmp/openclaw/dist/index.js",
+                    "gateway",
+                    "--port",
+                    "\(identity.gatewayPort)",
+                    "--bind",
+                    identity.gatewayBind,
+                ],
+                "EnvironmentVariables": [
+                    "OPENCLAW_HOME": identity.runtimeRootURL.path,
+                    "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
+                    "OPENCLAW_CONFIG_PATH": identity.configURL.path,
+                ],
+            ]
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: plistURL, options: [.atomic])
+
+            let snapshot = try #require(LaunchAgentPlist.snapshot(url: plistURL))
+
+            #expect(GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime(snapshot: snapshot))
+        }
+    }
+
+    @MainActor
     @Test func `launchd ensure attaches healthy canonical gateway without reinstall`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
@@ -346,6 +415,7 @@ struct GatewayLaunchAgentManagerTests {
         try await TestIsolation.withIsolatedState(
             env: [
                 "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
             ])

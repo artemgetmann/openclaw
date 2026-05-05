@@ -20,10 +20,13 @@ final class SettingsWindowOpener {
         self.openSettingsAction = openSettings
     }
 
-    func open() {
+    func open(tab: SettingsTab? = nil) {
+        DockIconManager.shared.temporarilyShowDock()
         NSApp.activate(ignoringOtherApps: true)
         if let openSettingsAction {
             openSettingsAction()
+            self.selectTab(tab)
+            self.ensureVisibleContentWindow()
             return
         }
 
@@ -32,5 +35,74 @@ final class SettingsWindowOpener {
         if !didOpen {
             _ = NSApp.sendAction(#selector(SettingsWindowMenuActions.showPreferencesWindow(_:)), to: nil, from: nil)
         }
+        self.selectTab(tab)
+        self.ensureVisibleContentWindow()
+    }
+
+    // Opening Settings is async when SwiftUI has to create the scene. Queue the
+    // tab switch so the new SettingsRootView can subscribe before selection.
+    private func selectTab(_ tab: SettingsTab?) {
+        guard let tab else { return }
+        SettingsTabRouter.request(tab)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
+        }
+    }
+
+    // Accessory apps can activate before SwiftUI's Settings window is frontmost.
+    // Re-focus over a few run-loop ticks so left-click/menu actions recover from
+    // stale hidden windows without needing a second user click.
+    private func ensureVisibleContentWindow() {
+        for attempt in 0..<4 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (0.12 * Double(attempt))) {
+                Self.focusVisibleContentWindow()
+            }
+        }
+    }
+
+    @MainActor
+    private static func focusVisibleContentWindow() {
+        DockIconManager.shared.temporarilyShowDock()
+        NSApp.activate(ignoringOtherApps: true)
+        guard let window = self.contentWindows().first else { return }
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+    }
+
+    private static func contentWindows() -> [NSWindow] {
+        NSApp.windows.filter { window in
+            self.isContentWindowCandidate(window)
+        }
+    }
+
+    static func hasVisibleContentWindow() -> Bool {
+        self.contentWindows().contains { $0.isVisible }
+    }
+
+    static func isContentWindowCandidate(_ window: NSWindow) -> Bool {
+        self.isContentWindowCandidate(
+            frameWidth: window.frame.width,
+            frameHeight: window.frame.height,
+            isPanel: window.isKind(of: NSPanel.self),
+            className: "\(type(of: window))",
+            hasContentView: window.contentView != nil,
+            hasContentViewController: window.contentViewController != nil)
+    }
+
+    static func isContentWindowCandidate(
+        frameWidth: CGFloat,
+        frameHeight: CGFloat,
+        isPanel: Bool,
+        className: String,
+        hasContentView: Bool,
+        hasContentViewController: Bool
+    ) -> Bool {
+        guard frameWidth > 1, frameHeight > 1 else { return false }
+        guard !isPanel else { return false }
+        guard className != "NSPopupMenuWindow" else { return false }
+
+        // SwiftUI Settings scenes are real windows, but AppKit does not promise
+        // a contentViewController. Content view presence is enough to re-raise.
+        return hasContentView || hasContentViewController
     }
 }

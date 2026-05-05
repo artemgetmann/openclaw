@@ -136,7 +136,21 @@ import {
   type LogsTailResult,
   LogsTailResultSchema,
   type ModelsListParams,
+  type ModelsAuthApplyParams,
+  ModelsAuthApplyParamsSchema,
+  type ModelsAuthApplyResult,
+  ModelsAuthApplyResultSchema,
+  type ModelsAuthListParams,
+  ModelsAuthListParamsSchema,
+  type ModelsAuthListResult,
+  ModelsAuthListResultSchema,
   ModelsListParamsSchema,
+  type ModelsSetParams,
+  ModelsSetParamsSchema,
+  type ModelsSetResult,
+  ModelsSetResultSchema,
+  type ModelsReadinessParams,
+  ModelsReadinessParamsSchema,
   MonitorRecordSchema,
   MonitorListParamsSchema,
   MonitorGetParamsSchema,
@@ -368,6 +382,23 @@ export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
   ChannelsLogoutParamsSchema,
 );
 export const validateModelsListParams = ajv.compile<ModelsListParams>(ModelsListParamsSchema);
+export const validateModelsAuthListParams = ajv.compile<ModelsAuthListParams>(
+  ModelsAuthListParamsSchema,
+);
+export const validateModelsAuthListResult = ajv.compile<ModelsAuthListResult>(
+  ModelsAuthListResultSchema,
+);
+export const validateModelsAuthApplyParams = ajv.compile<ModelsAuthApplyParams>(
+  ModelsAuthApplyParamsSchema,
+);
+export const validateModelsAuthApplyResult = ajv.compile<ModelsAuthApplyResult>(
+  ModelsAuthApplyResultSchema,
+);
+export const validateModelsSetParams = ajv.compile<ModelsSetParams>(ModelsSetParamsSchema);
+export const validateModelsSetResult = ajv.compile<ModelsSetResult>(ModelsSetResultSchema);
+export const validateModelsReadinessParams = ajv.compile<ModelsReadinessParams>(
+  ModelsReadinessParamsSchema,
+);
 export const validateSkillsStatusParams = ajv.compile<SkillsStatusParams>(SkillsStatusParamsSchema);
 export const validateToolsCatalogParams = ajv.compile<ToolsCatalogParams>(ToolsCatalogParamsSchema);
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);

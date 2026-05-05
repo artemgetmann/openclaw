@@ -100,6 +100,12 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `consumer defaults keep dock icon visible unless user changed it`() {
+        #expect(AppState.defaultShowDockIcon(storedValue: nil, isConsumer: true))
+        #expect(!AppState.defaultShowDockIcon(storedValue: false, isConsumer: true))
+        #expect(!AppState.defaultShowDockIcon(storedValue: nil, isConsumer: false))
+    }
+
     @Test func `general settings exercises branches`() {
         GeneralSettings.exerciseForTesting()
     }
@@ -147,12 +153,12 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
-    @Test func `consumer settings hide advanced tabs by default`() {
+    @Test func `consumer settings expose channels but hide advanced tabs by default`() {
         let tabs = SettingsRootView.visibleTabs(
             isConsumer: true,
             showAdvancedSettings: false,
             debugPaneEnabled: true)
-        #expect(tabs == [.general, .permissions, .about])
+        #expect(tabs == [.general, .channels, .permissions, .about])
     }
 
     @Test func `consumer advanced settings reveal hidden tabs`() {
@@ -163,6 +169,129 @@ struct SettingsViewSmokeTests {
         #expect(tabs.contains(.channels))
         #expect(tabs.contains(.skills))
         #expect(tabs.contains(.debug))
+    }
+
+    @Test func `settings window opener recognizes real content windows`() {
+        #expect(SettingsWindowOpener.isContentWindowCandidate(
+            frameWidth: SettingsTab.windowWidth,
+            frameHeight: SettingsTab.windowHeight,
+            isPanel: false,
+            className: "SwiftUI.AppKitWindow",
+            hasContentView: true,
+            hasContentViewController: false))
+        #expect(!SettingsWindowOpener.isContentWindowCandidate(
+            frameWidth: 1,
+            frameHeight: SettingsTab.windowHeight,
+            isPanel: false,
+            className: "SwiftUI.AppKitWindow",
+            hasContentView: true,
+            hasContentViewController: false))
+        #expect(!SettingsWindowOpener.isContentWindowCandidate(
+            frameWidth: SettingsTab.windowWidth,
+            frameHeight: SettingsTab.windowHeight,
+            isPanel: true,
+            className: "NSPanel",
+            hasContentView: true,
+            hasContentViewController: false))
+        #expect(!SettingsWindowOpener.isContentWindowCandidate(
+            frameWidth: SettingsTab.windowWidth,
+            frameHeight: SettingsTab.windowHeight,
+            isPanel: false,
+            className: "NSPopupMenuWindow",
+            hasContentView: true,
+            hasContentViewController: false))
+    }
+
+    @Test func `consumer app delegate schedules launch surface only when useful`() {
+        #expect(AppDelegate.shouldScheduleInitialVisibleSurface(
+            isConsumer: true,
+            onboardingPending: true,
+            didLaunchFromFinder: false))
+        #expect(AppDelegate.shouldScheduleInitialVisibleSurface(
+            isConsumer: true,
+            onboardingPending: false,
+            didLaunchFromFinder: true))
+        #expect(!AppDelegate.shouldScheduleInitialVisibleSurface(
+            isConsumer: true,
+            onboardingPending: false,
+            didLaunchFromFinder: false))
+        #expect(!AppDelegate.shouldScheduleInitialVisibleSurface(
+            isConsumer: false,
+            onboardingPending: true,
+            didLaunchFromFinder: true))
+    }
+
+    @Test func `consumer app delegate requests surface on reopen without windows`() {
+        #expect(AppDelegate.shouldHandleConsumerReopen(
+            isConsumer: true,
+            hasVisibleWindows: false))
+        #expect(!AppDelegate.shouldHandleConsumerReopen(
+            isConsumer: true,
+            hasVisibleWindows: true))
+        #expect(!AppDelegate.shouldHandleConsumerReopen(
+            isConsumer: false,
+            hasVisibleWindows: false))
+    }
+
+    @Test func `consumer app delegate recovers activation only without visible surface`() {
+        #expect(AppDelegate.shouldRecoverVisibleSurfaceOnActivation(
+            isConsumer: true,
+            hasVisibleContentWindow: false,
+            hasVisibleOnboardingWindow: false))
+        #expect(!AppDelegate.shouldRecoverVisibleSurfaceOnActivation(
+            isConsumer: true,
+            hasVisibleContentWindow: true,
+            hasVisibleOnboardingWindow: false))
+        #expect(!AppDelegate.shouldRecoverVisibleSurfaceOnActivation(
+            isConsumer: true,
+            hasVisibleContentWindow: false,
+            hasVisibleOnboardingWindow: true))
+        #expect(!AppDelegate.shouldRecoverVisibleSurfaceOnActivation(
+            isConsumer: false,
+            hasVisibleContentWindow: false,
+            hasVisibleOnboardingWindow: false))
+    }
+
+    @Test func `consumer app delegate retries until a visible surface exists`() {
+        #expect(AppDelegate.shouldRetryVisibleSurfaceRecovery(
+            hasVisibleContentWindow: false,
+            hasVisibleOnboardingWindow: false,
+            attemptsRemaining: 1))
+        #expect(!AppDelegate.shouldRetryVisibleSurfaceRecovery(
+            hasVisibleContentWindow: true,
+            hasVisibleOnboardingWindow: false,
+            attemptsRemaining: 1))
+        #expect(!AppDelegate.shouldRetryVisibleSurfaceRecovery(
+            hasVisibleContentWindow: false,
+            hasVisibleOnboardingWindow: true,
+            attemptsRemaining: 1))
+        #expect(!AppDelegate.shouldRetryVisibleSurfaceRecovery(
+            hasVisibleContentWindow: false,
+            hasVisibleOnboardingWindow: false,
+            attemptsRemaining: 0))
+    }
+
+    @Test func `consumer app delegate recognizes visible onboarding windows`() {
+        #expect(AppDelegate.isVisibleOnboardingWindowCandidate(
+            title: UIStrings.welcomeTitle,
+            isVisible: true,
+            frameWidth: OnboardingView.windowWidth,
+            frameHeight: OnboardingView.windowHeight))
+        #expect(!AppDelegate.isVisibleOnboardingWindowCandidate(
+            title: UIStrings.welcomeTitle,
+            isVisible: false,
+            frameWidth: OnboardingView.windowWidth,
+            frameHeight: OnboardingView.windowHeight))
+        #expect(!AppDelegate.isVisibleOnboardingWindowCandidate(
+            title: "Settings",
+            isVisible: true,
+            frameWidth: OnboardingView.windowWidth,
+            frameHeight: OnboardingView.windowHeight))
+        #expect(!AppDelegate.isVisibleOnboardingWindowCandidate(
+            title: UIStrings.welcomeTitle,
+            isVisible: true,
+            frameWidth: 1,
+            frameHeight: OnboardingView.windowHeight))
     }
 
     @Test func `about settings builds body`() {

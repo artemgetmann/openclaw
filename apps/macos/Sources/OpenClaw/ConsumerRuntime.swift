@@ -60,6 +60,15 @@ enum ConsumerRuntime {
         self.identity.gatewayLaunchdLabel
     }
 
+    static var canonicalSharedGatewayConfigPath: String? {
+        let identity = self.identity
+        // This marker means "protect the default shared gateway config", not
+        // "this runtime has a config file". Isolated consumer instances must
+        // leave it unset so the JS preflight treats them as tester lanes.
+        guard identity.gatewayLaunchdLabel == "ai.openclaw.gateway" else { return nil }
+        return identity.configURL.path
+    }
+
     static var appLaunchAgentPlistURL: URL {
         OpenClawHome.currentURL
             .appendingPathComponent("Library/LaunchAgents/\(self.launchdLabel).plist")
@@ -84,7 +93,9 @@ enum ConsumerRuntime {
         self.setEnv("OPENCLAW_HOME", value: identity.runtimeRootURL.path)
         self.setEnv("OPENCLAW_STATE_DIR", value: identity.stateDirURL.path)
         self.setEnv("OPENCLAW_CONFIG_PATH", value: identity.configURL.path)
-        self.setEnv("OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH", value: identity.configURL.path)
+        self.setOptionalEnv(
+            "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH",
+            value: self.canonicalSharedGatewayConfigPath)
         self.setEnv("OPENCLAW_GATEWAY_PORT", value: String(identity.gatewayPort))
         self.setEnv("OPENCLAW_GATEWAY_BIND", value: identity.gatewayBind)
         self.setEnv("OPENCLAW_LOG_DIR", value: identity.logsDirURL.path)
@@ -130,6 +141,14 @@ enum ConsumerRuntime {
 
     private static func setEnv(_ key: String, value: String) {
         setenv(key, value, 1)
+    }
+
+    private static func setOptionalEnv(_ key: String, value: String?) {
+        if let value {
+            setenv(key, value, 1)
+        } else {
+            unsetenv(key)
+        }
     }
 
     private static func setDefaultEnv(_ key: String, value: String) {

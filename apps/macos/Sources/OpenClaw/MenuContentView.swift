@@ -108,18 +108,17 @@ struct MenuContent: View {
 
     @ViewBuilder
     private var consumerActions: some View {
-        Button {
-            Task { @MainActor in
-                let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                WebChatManager.shared.show(sessionKey: sessionKey)
-            }
-        } label: {
-            Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
-        }
         Button("Settings…") { self.open(tab: .general) }
             .keyboardShortcut(",", modifiers: [.command])
+        Button {
+            self.state.isPaused.toggle()
+        } label: {
+            Label(
+                self.state.isPaused ? "Resume AI Operator" : "Stop AI Operator",
+                systemImage: self.state.isPaused ? "play.fill" : "pause.fill")
+        }
         Button("About \(AppFlavor.current.appName)") { self.open(tab: .about) }
-        Button("Quit \(AppFlavor.current.appName)") { NSApplication.shared.terminate(nil) }
+        Button("Quit App Only") { NSApplication.shared.terminate(nil) }
     }
 
     @ViewBuilder
@@ -360,12 +359,7 @@ struct MenuContent: View {
     }
 
     private func open(tab: SettingsTab) {
-        SettingsTabRouter.request(tab)
-        NSApp.activate(ignoringOtherApps: true)
-        self.openSettings()
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
-        }
+        SettingsWindowOpener.shared.open(tab: tab)
     }
 
     @MainActor

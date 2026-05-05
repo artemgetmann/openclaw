@@ -27,7 +27,7 @@ enum OpenClawEnv {
 enum OpenClawPaths {
     private static let configPathEnv = ["OPENCLAW_CONFIG_PATH"]
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
-    private static let runtimeMigrationEnv = "OPENCLAW_MIGRATE_APP_RUNTIME"
+    private static let runtimeMigrationDisableEnv = "OPENCLAW_DISABLE_APP_RUNTIME_MIGRATION"
 
     private static func legacyStateDirURL(home: URL) -> URL {
         home.appendingPathComponent(".openclaw", isDirectory: true)
@@ -71,7 +71,7 @@ enum OpenClawPaths {
         fileManager: FileManager = .default)
     {
         guard AppFlavor.current.isConsumer else { return }
-        guard self.runtimeMigrationRequested() else { return }
+        guard !self.runtimeMigrationDisabled() else { return }
 
         let destination = identity.stateDirURL
         let destinationConfig = destination.appendingPathComponent("openclaw.json")
@@ -93,8 +93,8 @@ enum OpenClawPaths {
         }
     }
 
-    private static func runtimeMigrationRequested() -> Bool {
-        guard let raw = OpenClawEnv.path(self.runtimeMigrationEnv)?.lowercased() else {
+    private static func runtimeMigrationDisabled() -> Bool {
+        guard let raw = OpenClawEnv.path(self.runtimeMigrationDisableEnv)?.lowercased() else {
             return false
         }
         return ["1", "true", "yes", "on"].contains(raw)
@@ -107,8 +107,8 @@ enum OpenClawPaths {
             ]
         }
         return [
-            self.legacyStateDirURL(home: home),
             self.previousConsumerStateDirURL(home: home, instanceID: nil),
+            self.legacyStateDirURL(home: home),
         ]
     }
 

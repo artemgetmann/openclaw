@@ -106,8 +106,14 @@ struct GeneralSettings: View {
                 Spacer(minLength: 12)
                 HStack {
                     Spacer()
-                    Button("Quit \(AppFlavor.current.appName)") { NSApp.terminate(nil) }
+                    Button(self.isConsumer ? "Quit App Only" : "Quit \(AppFlavor.current.appName)") { NSApp.terminate(nil) }
                         .buttonStyle(.borderedProminent)
+                }
+                if self.isConsumer {
+                    Text("Quitting closes the app, but your AI operator keeps running until you pause it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -138,17 +144,14 @@ struct GeneralSettings: View {
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
-                    SettingsToggleRow(
-                        title: "\(AppFlavor.current.appName) active",
-                        subtitle: "Pause to stop your AI operator on this Mac.",
-                        binding: self.activeBinding)
+                    self.consumerPauseControl
 
                     self.browserSection
                     self.modelSection
 
                     SettingsToggleRow(
                         title: "Launch at login",
-                        subtitle: "Automatically start OpenClaw after you sign in.",
+                        subtitle: "Automatically start \(AppFlavor.current.appName) after you sign in.",
                         binding: self.$state.launchAtLogin)
 
                     SettingsToggleRow(
@@ -165,9 +168,13 @@ struct GeneralSettings: View {
                 Spacer(minLength: 12)
                 HStack {
                     Spacer()
-                    Button("Quit \(AppFlavor.current.appName)") { NSApp.terminate(nil) }
+                    Button("Quit App Only") { NSApp.terminate(nil) }
                         .buttonStyle(.borderedProminent)
                 }
+                Text("Quitting closes the app, but your AI operator keeps running until you pause it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 22)
@@ -220,6 +227,37 @@ struct GeneralSettings: View {
         Binding(
             get: { !self.state.isPaused },
             set: { self.state.isPaused = !$0 })
+    }
+
+    private var consumerPauseControl: some View {
+        let isPaused = self.state.isPaused
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Operator")
+                .font(.title3.weight(.semibold))
+            Text(isPaused
+                ? "Your AI operator is paused."
+                : "Stop or resume your AI operator without digging through Advanced settings.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // The simple consumer surface needs an unmistakable active-state
+            // control. The checkbox remains in Advanced for operator-style use.
+            Button {
+                self.state.isPaused.toggle()
+            } label: {
+                Label(
+                    isPaused ? "Resume AI Operator" : "Stop AI Operator",
+                    systemImage: isPaused ? "play.fill" : "pause.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(isPaused ? .accentColor : .red)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor)))
     }
 
     private var connectionSection: some View {

@@ -1,6 +1,11 @@
+import AppKit
 import SwiftUI
 
 extension ChannelsSettings {
+    private var isConsumerSimpleTelegramPath: Bool {
+        AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
+    }
+
     func formSection(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         GroupBox(title) {
             VStack(alignment: .leading, spacing: 10) {
@@ -20,7 +25,7 @@ extension ChannelsSettings {
                 .disabled(self.store.whatsappBusy)
             }
 
-            if channel.id == "telegram" {
+            if channel.id == "telegram", !self.isConsumerSimpleTelegramPath {
                 Button("Logout") {
                     Task { await self.store.logoutTelegram() }
                 }
@@ -28,17 +33,19 @@ extension ChannelsSettings {
                 .disabled(self.store.telegramBusy)
             }
 
-            Button {
-                Task { await self.store.refresh(probe: true) }
-            } label: {
-                if self.store.isRefreshing {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Refresh")
+            if !(channel.id == "telegram" && self.isConsumerSimpleTelegramPath) {
+                Button {
+                    Task { await self.store.refresh(probe: true) }
+                } label: {
+                    if self.store.isRefreshing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Refresh")
+                    }
                 }
+                .buttonStyle(.bordered)
+                .disabled(self.store.isRefreshing)
             }
-            .buttonStyle(.bordered)
-            .disabled(self.store.isRefreshing)
         }
         .controlSize(.small)
     }
