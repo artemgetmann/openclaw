@@ -83,6 +83,8 @@ export function createOpenClawTools(
     disableMessageTool?: boolean;
     /** If true, skip plugin discovery and return core OpenClaw tools only. */
     disablePluginTools?: boolean;
+    /** If true, plugin tools may only come from the already-initialized global plugin registry. */
+    pluginToolGlobalRegistryOnly?: boolean;
     /** Trusted sender id from inbound context (not tool args). */
     requesterSenderId?: string | null;
     /** Whether the requesting sender is an owner. */
@@ -283,8 +285,31 @@ export function createOpenClawTools(
     },
     existingToolNames: new Set(tools.map((tool) => tool.name)),
     toolAllowlist: options?.pluginToolAllowlist,
+    globalRegistryOnly: options?.pluginToolGlobalRegistryOnly,
   });
   traceOpenClawToolStage(`openclaw-tools-post-plugin-tools count=${pluginTools.length}`);
+
+  if (options?.pluginToolGlobalRegistryOnly) {
+    const toolNames = new Set([...tools, ...pluginTools].map((tool) => tool.name));
+    const memorySearchTool = toolNames.has("memory_search")
+      ? null
+      : createMemorySearchTool({
+          config: options?.config,
+          agentSessionKey: options?.agentSessionKey,
+        });
+    const memoryGetTool = toolNames.has("memory_get")
+      ? null
+      : createMemoryGetTool({
+          config: options?.config,
+          agentSessionKey: options?.agentSessionKey,
+        });
+    return [
+      ...tools,
+      ...pluginTools,
+      ...(memorySearchTool ? [memorySearchTool] : []),
+      ...(memoryGetTool ? [memoryGetTool] : []),
+    ];
+  }
 
   return [...tools, ...pluginTools];
 }

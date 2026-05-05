@@ -195,4 +195,17 @@ describe("resolvePluginTools optional tools", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["message_plugin"]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
+
+  it("does not load plugins when restricted to an absent global registry", () => {
+    setOptionalDemoRegistry();
+
+    const tools = resolvePluginTools({
+      context: createContext() as never,
+      globalRegistryOnly: true,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expect(tools).toHaveLength(0);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
 });

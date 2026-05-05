@@ -359,8 +359,32 @@ Decision:
 - Mark the transport/no-output blocker fixed for this spike.
 - Mark strict memory-chain green: after one completed model-variance failure, two consecutive live runs passed, including one without debug logging.
 - PR #586 merged this core Claude CLI parity slice into `main` as `df4eb194b38d69d50df10a2be5667fc56db54646`.
-- Remaining risk is no longer a stuck backend. It is model compliance variance on the strict two-tool prompt plus a known tool-surface gap: Claude CLI loopback currently exposes core OpenClaw tools without plugin-tool discovery.
-- Plugin-tool parity is an explicit follow-up, not a merge blocker for PR #586. The next slice should make enabled plugin tools available to Claude CLI only after plugin discovery is bounded so it can never block MCP `initialize`, `tools/list`, or Claude startup.
+- Remaining risk is no longer a stuck backend. It is model compliance variance on the strict two-tool prompt plus the narrower rule for plugin tools: Claude CLI loopback can expose plugin tools only from the already-initialized plugin registry.
+- Plugin-tool parity follow-up is now implemented as a bounded registry-only path. Loopback MCP `tools/list` must never start plugin discovery/loading; if the registry is absent, it returns core tools plus memory fallback.
+
+### Slice 2b: Claude CLI plugin-tool parity
+
+Status: implemented and validated for the bounded loopback path.
+
+What changed:
+
+- `resolvePluginTools` gained a registry-only mode for call paths that must not discover or load plugins.
+- `createOpenClawTools` can request plugin tools from only the already-initialized global plugin registry.
+- Gateway loopback tool resolution now uses that registry-only path instead of disabling plugin tools entirely.
+- `memory_search` and `memory_get` remain available as loopback fallback tools when plugin registry tools do not provide them.
+
+Proof:
+
+- Focused tests passed: `pnpm exec vitest run --config vitest.unit.config.ts src/plugins/tools.optional.test.ts src/gateway/tool-resolution.test.ts` passed 1 file / 9 tests under the unit config.
+- Gateway-focused tests passed: `pnpm exec vitest run --config vitest.gateway.config.ts src/gateway/tool-resolution.test.ts` passed 1 file / 2 tests.
+- Format and whitespace checks passed: `pnpm exec oxfmt --check src/plugins/tools.ts src/agents/openclaw-tools.ts src/gateway/tool-resolution.ts src/plugins/tools.optional.test.ts src/gateway/tool-resolution.test.ts` and `git diff --check`.
+- Direct HTTP MCP loopback smoke passed in-process with a pre-initialized plugin registry: `tools/list` returned `sessions_list`, `memory_search`, and a harmless preloaded plugin tool; `tools/call` returned `LOOPBACK_PLUGIN_TOOL_OK`; the stage log contained plugin-tool registry stages and no `plugin-loader-*` stages.
+- Independent worker smoke with a trap plugin passed: plugin tool present, native `exec` excluded, and the discovery marker file stayed absent.
+
+Scope boundary:
+
+- This slice prevents plugin discovery/import/register from blocking MCP `initialize`, `tools/list`, `tools/call`, or Claude startup.
+- It does not add an async timeout around already-registered plugin tool factories. If an already-loaded plugin factory hangs, that is a later plugin runtime hardening slice.
 
 ### Slice 3: Warm Claude CLI spike
 
@@ -524,7 +548,6 @@ Tests run in this slice:
 
 Next:
 
-1. Start a fresh worktree from `main` for Claude CLI plugin-tool parity.
-2. Map exact plugin-tool semantics first: normal Codex/OpenAI PI runner can include plugin tools through `createOpenClawTools` and `resolvePluginTools`; Claude CLI loopback now intentionally skips that path for core parity.
-3. Implement bounded plugin discovery/cache/fallback so Claude CLI can expose enabled plugin tools without plugin discovery ever blocking MCP `initialize`, `tools/list`, or live Claude startup.
-4. Add a proof that plugin discovery timeout/failure still returns core tools and logs plugin-tool unavailability instead of hanging.
+1. Open the Claude CLI plugin-tool parity PR from `codex/claude-cli-plugin-tool-parity`.
+2. Keep the PR scope bounded to registry-only plugin exposure and non-blocking loopback behavior.
+3. Defer already-loaded plugin factory timeout hardening unless a real plugin factory hang appears in live traffic.
