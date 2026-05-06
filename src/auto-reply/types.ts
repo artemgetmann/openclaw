@@ -70,6 +70,12 @@ export type GetReplyOptions = {
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
   disableBlockStreaming?: boolean;
+  /**
+   * Allows assistant-authored block replies through even when regular block
+   * streaming is disabled. Channels with editable progress previews use this
+   * to show short agent narration without enabling tool/debug stream spam.
+   */
+  allowBlockReplyWhenStreamingDisabled?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;
   /** If provided, only load these skills for this session (empty = no skills). */

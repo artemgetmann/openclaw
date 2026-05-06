@@ -535,40 +535,51 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
 
     if (allowPreviewUpdateForNonFinal && canEditViaPreview) {
-      if (isDraftPreviewLane(lane)) {
-        // DM draft flow has no message_id to edit; updates are sent via sendMessageDraft.
-        // Only mark as updated when the draft flush actually emits an update.
+      if (lane.lastPartialText === text) {
+        params.markDelivered();
+        params.log(`telegram: ${laneName} non-final preview duplicate retained`);
+        return "preview-updated";
+      }
+      const hasEditablePreview = typeof lane.stream?.messageId() === "number";
+      if (isDraftPreviewLane(lane) || !hasEditablePreview) {
+        // Non-final assistant narration should materialize through the stream
+        // itself when there is no editable preview yet. That lets short
+        // progress create the first visible preview instead of falling back to
+        // a separate chat message.
         const previewRevisionBeforeFlush = lane.stream?.previewRevision?.() ?? 0;
         lane.stream?.update(text);
         await params.flushDraftLane(lane);
         const previewUpdated = (lane.stream?.previewRevision?.() ?? 0) > previewRevisionBeforeFlush;
-        if (!previewUpdated) {
-          params.log(
-            `telegram: ${laneName} draft preview update not emitted; falling back to standard send`,
-          );
-          const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
-          return delivered ? "sent" : "skipped";
+        if (previewUpdated) {
+          lane.lastPartialText = text;
+          lane.hasStreamedMessage = true;
+          params.markDelivered();
+          params.log(`telegram: ${laneName} non-final preview updated`);
+          return "preview-updated";
         }
-        lane.lastPartialText = text;
-        params.markDelivered();
-        return "preview-updated";
-      }
-      const updated = await tryUpdatePreviewForLane({
-        lane,
-        laneName,
-        text,
-        previewButtons,
-        stopBeforeEdit: false,
-        updateLaneSnapshot: true,
-        skipRegressive: "always",
-        context: "update",
-      });
-      if (updated === "edited") {
-        return "preview-updated";
+        params.log(`telegram: ${laneName} non-final preview update not emitted; falling back`);
+      } else {
+        const updated = await tryUpdatePreviewForLane({
+          lane,
+          laneName,
+          text,
+          previewButtons,
+          stopBeforeEdit: false,
+          updateLaneSnapshot: true,
+          skipRegressive: "always",
+          context: "update",
+        });
+        if (updated === "edited") {
+          params.log(`telegram: ${laneName} message preview updated`);
+          return "preview-updated";
+        }
       }
     }
 
     const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+    if (infoKind !== "final") {
+      params.log(`telegram: ${laneName} non-final payload ${delivered ? "sent" : "dropped"}`);
+    }
     return delivered ? "sent" : "skipped";
   };
 }

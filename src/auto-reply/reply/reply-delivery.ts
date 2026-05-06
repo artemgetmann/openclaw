@@ -68,6 +68,7 @@ export function createBlockReplyDeliveryHandler(params: {
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
   typingSignals: TypingSignaler;
   blockStreamingEnabled: boolean;
+  allowBlockReplyWhenStreamingDisabled?: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
 }): (payload: ReplyPayload) => Promise<void> {
@@ -128,6 +129,12 @@ export function createBlockReplyDeliveryHandler(params: {
     } else if (params.blockStreamingEnabled) {
       // Send directly when flushing before tool execution (no pipeline but streaming enabled).
       // Track sent key to avoid duplicate in final payloads.
+      params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
+      await params.onBlockReply(blockPayload);
+    } else if (params.allowBlockReplyWhenStreamingDisabled) {
+      // Some channels disable regular block streaming because they use a single
+      // editable progress preview. Still pass assistant-authored block text
+      // through that preview lane; verbose/tool callbacks remain separately gated.
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
       await params.onBlockReply(blockPayload);
     }

@@ -932,6 +932,43 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("does not let native Telegram verbose-off suppress assistant-authored block progress", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      CommandSource: "native",
+      SessionKey: "telegram:slash:progress",
+      CommandTargetSessionKey: "agent:main:telegram:direct:progress",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: "First result is in..." });
+      await opts?.onToolResult?.({ text: "🔧 exec: ls" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "First result is in..." }),
+    );
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "🔧 exec: ls" }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
   it("sends native Telegram tool traces when verbose is on", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
