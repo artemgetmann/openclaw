@@ -19,7 +19,7 @@ import { persistAbortTargetEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
 
-type AbortTarget = {
+export type AbortTarget = {
   entry?: SessionEntry;
   key?: string;
   sessionId?: string;
@@ -86,6 +86,27 @@ async function applyAbortTarget(params: {
   }
 }
 
+export async function abortReplyWorkForCommandTarget(
+  params: Parameters<CommandHandler>[0],
+  options?: { logLabel?: string },
+): Promise<AbortTarget> {
+  const abortTarget = resolveAbortTarget({
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+  });
+  const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
+  if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+    const logLabel = options?.logLabel?.trim() || "abort";
+    logVerbose(
+      `${logLabel}: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+    );
+  }
+  await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
+  return abortTarget;
+}
+
 function buildAbortTargetApplyParams(
   params: Parameters<CommandHandler>[0],
   abortTarget: AbortTarget,
@@ -114,19 +135,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   if (unauthorizedStop) {
     return unauthorizedStop;
   }
-  const abortTarget = resolveAbortTarget({
-    ctx: params.ctx,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-  });
-  const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
-  if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-    logVerbose(
-      `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-    );
-  }
-  await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
+  const abortTarget = await abortReplyWorkForCommandTarget(params, { logLabel: "stop" });
 
   // Trigger internal hook for stop command
   const hookEvent = createInternalHookEvent(

@@ -32,6 +32,9 @@ const commandQueueMocks = vi.hoisted(() => ({
 vi.mock("../../process/command-queue.js", () => commandQueueMocks);
 
 const subagentRegistryMocks = vi.hoisted(() => ({
+  listSubagentRunsForController: vi.fn<(controllerSessionKey: string) => SubagentRunRecord[]>(
+    () => [],
+  ),
   listSubagentRunsForRequester: vi.fn<(requesterSessionKey: string) => SubagentRunRecord[]>(
     () => [],
   ),
@@ -39,6 +42,7 @@ const subagentRegistryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/subagent-registry.js", () => ({
+  listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForController,
   listSubagentRunsForRequester: subagentRegistryMocks.listSubagentRunsForRequester,
   markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
 }));
