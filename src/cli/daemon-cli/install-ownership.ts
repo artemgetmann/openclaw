@@ -68,6 +68,28 @@ function resolveCanonicalSharedGatewayEntrypoint(env: GatewayServiceEnv): string
   return null;
 }
 
+function isPackagedConsumerGatewayEntrypoint(entrypoint: string | null): boolean {
+  const normalized = normalizePathForComparison(entrypoint);
+  if (!normalized) {
+    return false;
+  }
+
+  // The consolidated consumer app is now allowed to own the canonical
+  // ai.openclaw.gateway service. Keep this narrow so arbitrary worktrees still
+  // cannot replace the shared gateway by pointing at any dist/index.js.
+  const expectedSuffix = path.join(
+    "Contents",
+    "Resources",
+    "OpenClawRuntime",
+    "openclaw",
+    "dist",
+    "index.js",
+  );
+  return (
+    normalized.includes(`${path.sep}OpenClaw.app${path.sep}`) && normalized.endsWith(expectedSuffix)
+  );
+}
+
 function buildOwnershipSnapshot(args: {
   programArguments: string[];
   workingDirectory?: string;
@@ -158,7 +180,10 @@ export async function detectSharedGatewayInstallOwnershipConflict(args: {
   const canonicalEntrypoint = resolveCanonicalSharedGatewayEntrypoint(args.env);
   if (canonicalEntrypoint) {
     const requestedEntrypoint = normalizePathForComparison(proposed.entrypoint);
-    if (requestedEntrypoint !== canonicalEntrypoint) {
+    if (
+      requestedEntrypoint !== canonicalEntrypoint &&
+      !isPackagedConsumerGatewayEntrypoint(proposed.entrypoint)
+    ) {
       return {
         message:
           "Gateway install blocked: the default shared gateway service must target the canonical main runtime.",
