@@ -266,6 +266,52 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("streams short assistant-authored progress blocks into the answer preview", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "I'm splitting this in parallel..." },
+        { kind: "block" },
+      );
+      await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "2001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).toHaveBeenCalledWith("I'm splitting this in parallel...");
+    expect(draftStream.flush).toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "I'm splitting this in parallel..." })],
+      }),
+    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 2001, "Done.", expect.any(Object));
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("keeps tool/debug payloads off the answer preview lane", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "🔧 exec: ls" }, { kind: "tool" });
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 exec: ls");
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "🔧 exec: ls" })],
+      }),
+    );
+  });
+
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
