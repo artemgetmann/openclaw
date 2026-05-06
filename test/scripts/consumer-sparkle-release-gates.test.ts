@@ -5,6 +5,14 @@ import { describe, expect, it } from "vitest";
 const root = process.cwd();
 
 describe("consumer Sparkle release gates", () => {
+  it("keeps package-mac-app Sparkle feed detection portable to macOS Bash 3.2", () => {
+    const script = fs.readFileSync(path.join(root, "scripts", "package-mac-app.sh"), "utf8");
+
+    expect(script).not.toContain("[[ -v SPARKLE_FEED_URL ]]");
+    expect(script).toContain('if [[ "${SPARKLE_FEED_URL+x}" == x ]]');
+    expect(script).toContain('SPARKLE_FEED_URL="${SPARKLE_FEED_URL}"');
+  });
+
   it("keeps notarized consumer distribution blocked without a feed and production key", () => {
     const script = fs.readFileSync(
       path.join(root, "scripts", "package-openclaw-mac-dist.sh"),

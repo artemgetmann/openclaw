@@ -317,7 +317,10 @@ default_sparkle_feed_url_for_bundle() {
   esac
 }
 
-if [[ -v SPARKLE_FEED_URL ]]; then
+# macOS still ships Bash 3.2, which does not support `[[ -v name ]]`.
+# `${name+x}` preserves the release contract: unset falls back to the
+# bundle default, while set-but-empty intentionally keeps updates disabled.
+if [[ "${SPARKLE_FEED_URL+x}" == x ]]; then
   SPARKLE_FEED_URL="${SPARKLE_FEED_URL}"
 else
   SPARKLE_FEED_URL="$(default_sparkle_feed_url_for_bundle "$BUNDLE_ID")"
