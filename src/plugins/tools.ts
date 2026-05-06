@@ -78,6 +78,8 @@ export function resolvePluginTools(params: {
   existingToolNames?: Set<string>;
   toolAllowlist?: string[];
   suppressNameConflicts?: boolean;
+  /** If true, never discover/load plugins from this call path; only reuse an initialized registry. */
+  globalRegistryOnly?: boolean;
   env?: NodeJS.ProcessEnv;
 }): AnyAgentTool[] {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
@@ -95,6 +97,10 @@ export function resolvePluginTools(params: {
   // Agent runtime paths eagerly bootstrap plugins before tool construction, so reusing the
   // global registry avoids a second full discovery/import/register pass on the same turn.
   tracePluginToolStage("plugin-tools-pre-registry");
+  if (!globalRegistry && params.globalRegistryOnly) {
+    tracePluginToolStage("plugin-tools-global-registry-missing");
+    return [];
+  }
   const registry =
     globalRegistry ??
     loadOpenClawPlugins({
