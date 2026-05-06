@@ -642,6 +642,33 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toEqual([]);
   });
 
+  it("allows packaged consumer app runtime to install the shared LaunchAgent", async () => {
+    const canonicalMain = makeTempDir();
+    const appRuntime = path.join(
+      makeTempDir(),
+      "Applications",
+      "OpenClaw.app",
+      "Contents",
+      "Resources",
+      "OpenClawRuntime",
+      "openclaw",
+    );
+    fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(appRuntime);
+
+    await installLaunchAgent({
+      env: {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_MAIN_REPO: canonicalMain,
+      },
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      workingDirectory: appRuntime,
+    });
+
+    expect(state.launchctlCalls.length).toBeGreaterThan(0);
+  });
+
   it("blocks shared LaunchAgent restart from outside canonical main", async () => {
     const canonicalMain = makeTempDir();
     fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
