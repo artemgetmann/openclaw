@@ -246,6 +246,29 @@ import Testing
         }
     }
 
+    @Test func `consumer bundled runtime wins over stale project root override`() throws {
+        let staleRepoRoot = try makeTempDirForTests()
+        let bundledRuntimeRoot = try makeTempDirForTests()
+
+        for root in [staleRepoRoot, bundledRuntimeRoot] {
+            try "{\n  \"name\": \"openclaw\"\n}\n".write(
+                to: root.appendingPathComponent("package.json"),
+                atomically: true,
+                encoding: .utf8)
+            let distEntry = root.appendingPathComponent("dist/index.js")
+            try FileManager().createDirectory(
+                at: distEntry.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try "export {}\n".write(to: distEntry, atomically: true, encoding: .utf8)
+        }
+
+        CommandResolver.setProjectRoot(staleRepoRoot.path)
+
+        let resolvedRoot = CommandResolver.projectRoot(preferredBundledRuntimeRoot: bundledRuntimeRoot)
+
+        #expect(resolvedRoot.path == bundledRuntimeRoot.path)
+    }
+
     @Test func `falls back to pnpm`() throws {
         let defaults = self.makeLocalDefaults()
         let (tmp, pnpmPath) = try self.makeProjectRootWithPnpm()

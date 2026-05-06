@@ -48,6 +48,21 @@ enum CommandResolver {
     }
 
     static func projectRoot() -> URL {
+        self.projectRoot(preferredBundledRuntimeRoot: self.consumerBundledRuntimeProjectRoot())
+    }
+
+    static func projectRoot(preferredBundledRuntimeRoot: URL?) -> URL {
+        // Consumer packages carry the runtime they should operate. A stale
+        // developer default from a prior source-checkout smoke must not make
+        // the visible app believe the gateway should still point at the repo.
+        if AppFlavor.current.isConsumer,
+           let preferredBundledRuntimeRoot,
+           self.isRepoRoot(preferredBundledRuntimeRoot),
+           self.gatewayEntrypoint(in: preferredBundledRuntimeRoot) != nil
+        {
+            return preferredBundledRuntimeRoot
+        }
+
         if let stored = UserDefaults.standard.string(forKey: self.projectRootDefaultsKey),
            let url = self.expandPath(stored),
            self.isRepoRoot(url)
@@ -66,6 +81,12 @@ enum CommandResolver {
             return fallback
         }
         return home
+    }
+
+    private static func consumerBundledRuntimeProjectRoot() -> URL? {
+        guard AppFlavor.current.isConsumer else { return nil }
+        guard let resourceURL = ConsumerBundledRuntime.resourceURL() else { return nil }
+        return resourceURL.appendingPathComponent("openclaw", isDirectory: true)
     }
 
     static func setProjectRoot(_ path: String) {
