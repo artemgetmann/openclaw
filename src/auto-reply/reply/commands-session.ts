@@ -27,7 +27,11 @@ import {
   resolveChannelAccountId,
   resolveCommandSurfaceChannel,
 } from "./channel-context.js";
-import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
+import {
+  abortReplyWorkForCommandTarget,
+  handleAbortTrigger,
+  handleStopCommand,
+} from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 import { resolveTelegramConversationId } from "./telegram-context.js";
@@ -700,6 +704,9 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  // Treat /restart like an explicit interruption first so the active reply run
+  // cannot keep emitting watchdog/progress output while the restart is pending.
+  await abortReplyWorkForCommandTarget(params, { logLabel: "restart" });
   const commandSurface = resolveCommandSurfaceChannel(params);
   const preferLocalScriptRestart =
     process.platform === "darwin" &&

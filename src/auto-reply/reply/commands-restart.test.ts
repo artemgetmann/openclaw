@@ -6,6 +6,7 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 const scheduleGatewaySigusr1RestartMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
 const isSafeLocalRestartScriptAvailableMock = vi.hoisted(() => vi.fn());
+const abortReplyWorkForCommandTargetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/restart.js", () => ({
   isSafeLocalRestartScriptAvailable: (...args: unknown[]) =>
@@ -13,6 +14,15 @@ vi.mock("../../infra/restart.js", () => ({
   scheduleGatewaySigusr1Restart: (...args: unknown[]) => scheduleGatewaySigusr1RestartMock(...args),
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
 }));
+
+vi.mock("./commands-session-abort.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./commands-session-abort.js")>();
+  return {
+    ...actual,
+    abortReplyWorkForCommandTarget: (...args: unknown[]) =>
+      abortReplyWorkForCommandTargetMock(...args),
+  };
+});
 
 const { handleRestartCommand } = await import("./commands-session.js");
 
@@ -41,6 +51,7 @@ beforeEach(() => {
   isSafeLocalRestartScriptAvailableMock.mockReset();
   scheduleGatewaySigusr1RestartMock.mockReset();
   triggerOpenClawRestartMock.mockReset();
+  abortReplyWorkForCommandTargetMock.mockReset();
   isSafeLocalRestartScriptAvailableMock.mockReturnValue(false);
 });
 
@@ -58,15 +69,27 @@ describe("handleRestartCommand", () => {
     async (surface) => {
       setPlatform("darwin");
       isSafeLocalRestartScriptAvailableMock.mockReturnValue(true);
+      const callOrder: string[] = [];
 
       vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
         signal === "SIGUSR1" ? 1 : 0,
       );
+      abortReplyWorkForCommandTargetMock.mockImplementation(async () => {
+        callOrder.push("abort");
+      });
 
       triggerOpenClawRestartMock.mockReturnValue({
         ok: true,
         method: "launchctl",
         detail: "scheduled local restart script: /tmp/openclaw-restart-local-gateway.sh",
+      });
+      triggerOpenClawRestartMock.mockImplementation(() => {
+        callOrder.push("script");
+        return {
+          ok: true,
+          method: "launchctl",
+          detail: "scheduled local restart script: /tmp/openclaw-restart-local-gateway.sh",
+        };
       });
 
       const result = await handleRestartCommand(
@@ -78,6 +101,8 @@ describe("handleRestartCommand", () => {
         true,
       );
 
+      expect(callOrder).toEqual(["abort", "script"]);
+      expect(abortReplyWorkForCommandTargetMock).toHaveBeenCalledTimes(1);
       expect(triggerOpenClawRestartMock).toHaveBeenCalledWith({ preferLocalScript: true });
       expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
       expect(result?.reply?.text).toContain("local restart script");
@@ -87,10 +112,17 @@ describe("handleRestartCommand", () => {
   it("uses in-process SIGUSR1 scheduling for empty/unknown surfaces", async () => {
     setPlatform("darwin");
     isSafeLocalRestartScriptAvailableMock.mockReturnValue(true);
+    const callOrder: string[] = [];
 
     vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
       signal === "SIGUSR1" ? 1 : 0,
     );
+    abortReplyWorkForCommandTargetMock.mockImplementation(async () => {
+      callOrder.push("abort");
+    });
+    scheduleGatewaySigusr1RestartMock.mockImplementation(() => {
+      callOrder.push("schedule");
+    });
 
     const result = await handleRestartCommand(
       buildParams("/restart", {
@@ -101,6 +133,8 @@ describe("handleRestartCommand", () => {
       true,
     );
 
+    expect(callOrder).toEqual(["abort", "schedule"]);
+    expect(abortReplyWorkForCommandTargetMock).toHaveBeenCalledTimes(1);
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({ reason: "/restart" });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(result?.reply?.text).toContain("SIGUSR1");
@@ -109,9 +143,16 @@ describe("handleRestartCommand", () => {
   it("keeps SIGUSR1 path for Telegram when no local script is configured", async () => {
     setPlatform("darwin");
     isSafeLocalRestartScriptAvailableMock.mockReturnValue(false);
+    const callOrder: string[] = [];
     vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
       signal === "SIGUSR1" ? 1 : 0,
     );
+    abortReplyWorkForCommandTargetMock.mockImplementation(async () => {
+      callOrder.push("abort");
+    });
+    scheduleGatewaySigusr1RestartMock.mockImplementation(() => {
+      callOrder.push("schedule");
+    });
 
     const result = await handleRestartCommand(
       buildParams("/restart", {
@@ -122,6 +163,8 @@ describe("handleRestartCommand", () => {
       true,
     );
 
+    expect(callOrder).toEqual(["abort", "schedule"]);
+    expect(abortReplyWorkForCommandTargetMock).toHaveBeenCalledTimes(1);
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({ reason: "/restart" });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(result?.reply?.text).toContain("SIGUSR1");
