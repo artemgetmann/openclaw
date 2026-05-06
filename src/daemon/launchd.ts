@@ -64,6 +64,20 @@ function isPathInside(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function isPackagedConsumerRuntimePath(candidate: string | null): boolean {
+  if (!candidate) {
+    return false;
+  }
+
+  // The consolidated shipping app owns the default consumer gateway from its
+  // bundled runtime. Keep the exception narrow so random worktrees still cannot
+  // manage ai.openclaw.gateway from outside the canonical main checkout.
+  const expectedSuffix = path.join("Contents", "Resources", "OpenClawRuntime", "openclaw");
+  return (
+    candidate.includes(`${path.sep}OpenClaw.app${path.sep}`) && candidate.endsWith(expectedSuffix)
+  );
+}
+
 function assertCanonicalSharedLaunchAgentContext(args: {
   env: GatewayServiceEnv;
   action: string;
@@ -80,6 +94,9 @@ function assertCanonicalSharedLaunchAgentContext(args: {
 
   const normalizedCwd = normalizePathForComparison(args.cwd ?? process.cwd());
   if (normalizedCwd && isPathInside(canonicalMainRepo, normalizedCwd)) {
+    return;
+  }
+  if (isPackagedConsumerRuntimePath(normalizedCwd)) {
     return;
   }
 
