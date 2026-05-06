@@ -260,8 +260,6 @@ export async function runAgentTurnWithFallback(params: {
             normalizeMediaPaths: normalizeReplyMediaPaths,
             typingSignals: params.typingSignals,
             blockStreamingEnabled: params.blockStreamingEnabled,
-            allowBlockReplyWhenStreamingDisabled:
-              params.opts?.allowBlockReplyWhenStreamingDisabled === true,
             blockReplyPipeline,
             directlySentBlockKeys,
           })

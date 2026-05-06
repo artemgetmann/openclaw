@@ -2300,30 +2300,6 @@ describe("runReplyAgent reply liveness", () => {
     expect(result).toBeUndefined();
   });
 
-  it("can pass assistant-authored block progress through when regular block streaming is disabled", async () => {
-    const onBlockReply = vi.fn();
-    runEmbeddedPiAgentMock.mockImplementationOnce(
-      async (params: { onBlockReply?: (payload: { text?: string }) => Promise<void> | void }) => {
-        await params.onBlockReply?.({ text: "First result is in..." });
-        return { payloads: [{ text: "Done." }], meta: {} };
-      },
-    );
-
-    const result = await createRun({
-      opts: {
-        onBlockReply,
-        allowBlockReplyWhenStreamingDisabled: true,
-      },
-      blockStreamingEnabled: false,
-    });
-
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "First result is in..." }),
-      undefined,
-    );
-    expect(result).toMatchObject({ text: "Done." });
-  });
-
   it("does not add empty-final fallback after a partial reply already streamed", async () => {
     const onPartialReply = vi.fn();
     runEmbeddedPiAgentMock.mockImplementationOnce(
