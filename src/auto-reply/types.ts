@@ -5,6 +5,10 @@ import type { TypingController } from "./reply/typing.js";
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  /** True when this block is only visible progress; the final answer is still owed. */
+  previewOnly?: boolean;
+  /** True when this delivery must not suppress matching final reply payloads. */
+  finalDeliveryOwed?: boolean;
 };
 
 /** Context passed to onModelSelected callback with actual model used. */
@@ -70,6 +74,12 @@ export type GetReplyOptions = {
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
   disableBlockStreaming?: boolean;
+  /**
+   * Allows assistant-authored block replies through even when regular block
+   * streaming is disabled. Channels with editable progress previews use this
+   * to show short agent narration without treating it as final delivery.
+   */
+  allowBlockReplyWhenStreamingDisabled?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;
   /** If provided, only load these skills for this session (empty = no skills). */
@@ -100,4 +110,9 @@ export type ReplyPayload = {
   isReasoning?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
+  /** Delivery metadata used by channels to distinguish progress from final content. */
+  delivery?: {
+    previewOnly?: boolean;
+    finalDeliveryOwed?: boolean;
+  };
 };
