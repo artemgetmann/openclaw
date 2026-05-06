@@ -45,8 +45,6 @@ struct GatewayLaunchAgentManagerTests {
     @Test func `enable skips loaded matching launch agent`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-root-\(UUID().uuidString)", isDirectory: true)
         let installedRoot = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-installed-\(UUID().uuidString)", isDirectory: true)
         let entrypoint = installedRoot.appendingPathComponent("dist/index.js")
@@ -54,13 +52,11 @@ struct GatewayLaunchAgentManagerTests {
             .appendingPathComponent("Library/LaunchAgents/ai.openclaw.gateway.plist")
         try FileManager().createDirectory(at: entrypoint.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager().createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
         try Data().write(to: entrypoint)
-        try Data().write(to: root.appendingPathComponent("package.json"))
-        try Data().write(to: root.appendingPathComponent("openclaw.mjs"))
+        try Data().write(to: installedRoot.appendingPathComponent("package.json"))
+        try Data().write(to: installedRoot.appendingPathComponent("openclaw.mjs"))
         defer {
             try? FileManager().removeItem(at: home)
-            try? FileManager().removeItem(at: root)
             try? FileManager().removeItem(at: installedRoot)
         }
 
@@ -81,7 +77,7 @@ struct GatewayLaunchAgentManagerTests {
                 "OPENCLAW_TEST_HOME": home.path,
             ],
             defaults: [
-                "openclaw.gatewayProjectRootPath": root.path,
+                "openclaw.gatewayProjectRootPath": installedRoot.path,
             ])
         {
             let identity = RuntimeIdentity.current
@@ -407,10 +403,29 @@ struct GatewayLaunchAgentManagerTests {
     }
 
     @MainActor
-    @Test func `launchd ensure attaches healthy canonical gateway without reinstall`() async throws {
+    @Test func `launchd ensure repairs healthy gateway with stale source entrypoint`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager().removeItem(at: home) }
+        let packagedRoot = FileManager().temporaryDirectory
+            .appendingPathComponent("OpenClaw.app/Contents/Resources/OpenClawRuntime/openclaw", isDirectory: true)
+        let staleRoot = FileManager().temporaryDirectory
+            .appendingPathComponent("source-openclaw-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: packagedRoot)
+            try? FileManager().removeItem(at: staleRoot)
+        }
+
+        try FileManager().createDirectory(
+            at: packagedRoot.appendingPathComponent("dist", isDirectory: true),
+            withIntermediateDirectories: true)
+        try FileManager().createDirectory(
+            at: staleRoot.appendingPathComponent("dist", isDirectory: true),
+            withIntermediateDirectories: true)
+        try Data().write(to: packagedRoot.appendingPathComponent("dist/index.js"))
+        try Data().write(to: packagedRoot.appendingPathComponent("package.json"))
+        try Data().write(to: packagedRoot.appendingPathComponent("openclaw.mjs"))
+        try Data().write(to: staleRoot.appendingPathComponent("dist/index.js"))
 
         try await TestIsolation.withIsolatedState(
             env: [
@@ -418,6 +433,9 @@ struct GatewayLaunchAgentManagerTests {
                 ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": packagedRoot.path,
             ])
         {
             let identity = RuntimeIdentity.current
@@ -429,7 +447,93 @@ struct GatewayLaunchAgentManagerTests {
             let plist: [String: Any] = [
                 "ProgramArguments": [
                     "/opt/homebrew/opt/node/bin/node",
-                    "/Users/user/Programming_Projects/openclaw/dist/index.js",
+                    staleRoot.appendingPathComponent("dist/index.js").path,
+                    "gateway",
+                    "--port",
+                    "\(identity.gatewayPort)",
+                    "--bind",
+                    identity.gatewayBind,
+                ],
+                "EnvironmentVariables": [
+                    "OPENCLAW_HOME": identity.runtimeRootURL.path,
+                    "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
+                    "OPENCLAW_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                ],
+            ]
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: plistURL, options: [.atomic])
+
+            var daemonCalls: [[String]] = []
+            GatewayLaunchAgentManager._setTestingHooks(
+                launchAgentWriteDisabled: { false },
+                readDaemonLoaded: { true },
+                runDaemonCommand: { args, _, _ in
+                    daemonCalls.append(args)
+                    return nil
+                })
+            let manager = GatewayProcessManager.shared
+            manager.setTestingStatus(.starting)
+            defer {
+                GatewayLaunchAgentManager._clearTestingHooks()
+                manager.setTestingConnection(nil)
+                manager.setTestingStatus(.stopped)
+                manager.setTestingDesiredActive(false)
+            }
+
+            await manager.ensureLaunchAgentEnabledIfNeeded()
+
+            #expect(daemonCalls == [[
+                "install",
+                "--force",
+                "--allow-shared-service-takeover",
+                "--port",
+                "\(identity.gatewayPort)",
+                "--runtime",
+                "node",
+            ]])
+        }
+    }
+
+    @MainActor
+    @Test func `launchd ensure attaches healthy packaged gateway without reinstall`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let packagedRoot = FileManager().temporaryDirectory
+            .appendingPathComponent("OpenClaw.app/Contents/Resources/OpenClawRuntime/openclaw", isDirectory: true)
+        defer {
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: packagedRoot)
+        }
+
+        try FileManager().createDirectory(
+            at: packagedRoot.appendingPathComponent("dist", isDirectory: true),
+            withIntermediateDirectories: true)
+        try Data().write(to: packagedRoot.appendingPathComponent("dist/index.js"))
+        try Data().write(to: packagedRoot.appendingPathComponent("package.json"))
+        try Data().write(to: packagedRoot.appendingPathComponent("openclaw.mjs"))
+
+        try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": packagedRoot.path,
+            ])
+        {
+            let identity = RuntimeIdentity.current
+            let plistURL = home
+                .appendingPathComponent("Library/LaunchAgents/\(identity.gatewayLaunchdLabel).plist")
+            try FileManager().createDirectory(
+                at: plistURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let plist: [String: Any] = [
+                "ProgramArguments": [
+                    "/opt/homebrew/opt/node/bin/node",
+                    packagedRoot.appendingPathComponent("dist/index.js").path,
                     "gateway",
                     "--port",
                     "\(identity.gatewayPort)",

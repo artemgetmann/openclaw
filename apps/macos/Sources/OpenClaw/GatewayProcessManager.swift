@@ -93,8 +93,6 @@ final class GatewayProcessManager {
         if await self.shouldAttachInsteadOfEnableLaunchd() {
             return
         }
-        let enabled = await GatewayLaunchAgentManager.isLoaded()
-        guard !enabled else { return }
         let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()
         self.appendLog("[gateway] auto-enabling launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
@@ -251,14 +249,17 @@ final class GatewayProcessManager {
     // MARK: - Internals
 
     private func shouldAttachInsteadOfEnableLaunchd() async -> Bool {
+        guard GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime() else { return false }
+        // A healthy gateway is not enough on first launch. If the plist still
+        // points at a source checkout, attaching would strand the packaged app
+        // on stale code and skip the only automatic repair chance.
+        guard GatewayLaunchAgentManager.currentEntrypointOwnership().matchesCurrentEntrypoint else { return false }
         switch self.status {
         case .attachedExisting, .running:
             return true
         case .failed, .starting, .stopped:
             break
         }
-
-        guard GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime() else { return false }
         do {
             let data = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
             let port = GatewayEnvironment.gatewayPort()
@@ -280,9 +281,20 @@ final class GatewayProcessManager {
         }
     }
 
+    private func launchAgentNeedsEntrypointRepair() -> Bool {
+        guard let snapshot = GatewayLaunchAgentManager.launchdConfigSnapshot() else { return false }
+        guard GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime(snapshot: snapshot) else { return false }
+        return !GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot).matchesCurrentEntrypoint
+    }
+
     /// Attempt to connect to an already-running gateway on the configured port.
     /// If successful, mark status as attached and skip spawning a new process.
     private func attachExistingGatewayIfAvailable() async -> Bool {
+        // Replacement installs need the first active app launch to repair the
+        // canonical LaunchAgent. Attaching to a healthy stale service here would
+        // strand the packaged app on the source-checkout entrypoint.
+        guard !self.launchAgentNeedsEntrypointRepair() else { return false }
+
         let port = GatewayEnvironment.gatewayPort()
         let instance = await PortGuardian.shared.describe(port: port)
         let instanceText = instance.map { self.describe(instance: $0) }

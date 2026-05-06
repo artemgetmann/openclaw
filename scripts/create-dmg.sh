@@ -89,6 +89,13 @@ DMG_SIZE_MB=$((APP_SIZE_MB + DMG_CREATE_HEADROOM_MB))
 DMG_RW_PATH="${OUT_PATH%.dmg}-rw.dmg"
 rm -f "$DMG_RW_PATH" "$OUT_PATH"
 
+diagnose_missing_rw_image() {
+  local stage="$1"
+  echo "ERROR: DMG RW image missing after $stage: $DMG_RW_PATH" >&2
+  echo "Directory contents:" >&2
+  ls -la "$(dirname "$DMG_RW_PATH")" >&2 || true
+}
+
 hdiutil create \
   -volname "$DMG_VOLUME_NAME" \
   -srcfolder "$DMG_TEMP" \
@@ -96,6 +103,11 @@ hdiutil create \
   -format UDRW \
   -size "${DMG_SIZE_MB}m" \
   "$DMG_RW_PATH"
+
+if [[ ! -f "$DMG_RW_PATH" ]]; then
+  diagnose_missing_rw_image "hdiutil create"
+  exit 1
+fi
 
 MOUNT_POINT="/Volumes/$DMG_VOLUME_NAME"
 if [[ -d "$MOUNT_POINT" ]]; then
@@ -166,6 +178,17 @@ for i in {1..5}; do
   sleep 2
 done
 
+if hdiutil info | grep -F "$MOUNT_POINT" >/dev/null 2>&1; then
+  echo "ERROR: DMG mount point still attached after retries: $MOUNT_POINT" >&2
+  hdiutil info | grep -F -C 3 "$MOUNT_POINT" >&2 || true
+  exit 1
+fi
+
+if [[ ! -f "$DMG_RW_PATH" ]]; then
+  diagnose_missing_rw_image "detach"
+  exit 1
+fi
+
 hdiutil resize -limits "$DMG_RW_PATH" >/tmp/openclaw-dmg-limits.txt 2>/dev/null || true
 MIN_SECTORS="$(tail -n 1 /tmp/openclaw-dmg-limits.txt 2>/dev/null | awk '{print $1}')"
 rm -f /tmp/openclaw-dmg-limits.txt
@@ -173,6 +196,11 @@ if [[ "$MIN_SECTORS" =~ ^[0-9]+$ ]] && [[ "$DMG_EXTRA_SECTORS" =~ ^[0-9]+$ ]]; t
   TARGET_SECTORS=$((MIN_SECTORS + DMG_EXTRA_SECTORS))
   echo "Shrinking RW image: min sectors=$MIN_SECTORS (+$DMG_EXTRA_SECTORS) -> $TARGET_SECTORS"
   hdiutil resize -sectors "$TARGET_SECTORS" "$DMG_RW_PATH" >/dev/null 2>&1 || true
+fi
+
+if [[ ! -f "$DMG_RW_PATH" ]]; then
+  diagnose_missing_rw_image "resize"
+  exit 1
 fi
 
 hdiutil convert "$DMG_RW_PATH" -format ULMO -o "$OUT_PATH" -ov

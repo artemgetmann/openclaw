@@ -284,10 +284,12 @@ extension GatewayLaunchAgentManager {
         let loaded = await self.readDaemonLoaded()
         let snapshot = self.launchdConfigSnapshot()
         let launchAgentMatchesCurrentRuntime = self.launchAgentMatchesCurrentRuntime(snapshot: snapshot)
+        let launchAgentMatchesCurrentEntrypoint = self.launchAgentMatchesCurrentEntrypoint(snapshot: snapshot)
         let action = self.computeDesiredEnableAction(
             loaded: loaded,
             hasPlist: snapshot != nil,
-            launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime)
+            launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime,
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
         switch action {
         case .noop:
             // A normal enable request means "make sure the service exists". If the
@@ -491,9 +493,14 @@ extension GatewayLaunchAgentManager {
     private static func computeDesiredEnableAction(
         loaded: Bool?,
         hasPlist: Bool,
-        launchAgentMatchesCurrentRuntime: Bool = true) -> DesiredAction
+        launchAgentMatchesCurrentRuntime: Bool = true,
+        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
     {
+        // Enable/first-launch is the repair path. Runtime ownership protects the
+        // user's app-owned state, but entrypoint ownership decides whether the
+        // loaded job actually boots this app's bundled runtime.
         if hasPlist, !launchAgentMatchesCurrentRuntime { return .install }
+        if hasPlist, !launchAgentMatchesCurrentEntrypoint { return .install }
         if loaded == true { return .noop }
         if loaded == false, hasPlist { return .start }
         if loaded == nil, hasPlist { return .start }
@@ -550,12 +557,14 @@ extension GatewayLaunchAgentManager {
     static func _testDesiredEnableAction(
         loaded: Bool?,
         hasPlist: Bool,
-        launchAgentMatchesCurrentRuntime: Bool = true) -> DesiredAction
+        launchAgentMatchesCurrentRuntime: Bool = true,
+        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
     {
         self.computeDesiredEnableAction(
             loaded: loaded,
             hasPlist: hasPlist,
-            launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime)
+            launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime,
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
     }
 
     static func _testShouldTreatBringupResultAsReady(_ payload: String) -> Bool {
