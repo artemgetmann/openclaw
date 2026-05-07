@@ -53,10 +53,11 @@ function normalizePathForComparison(filePath: string | null | undefined): string
 }
 
 function isDefaultSharedLaunchAgentTarget(env: GatewayServiceEnv): boolean {
-  return (
-    !env.OPENCLAW_LAUNCHD_LABEL?.trim() &&
-    resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE) === GATEWAY_LAUNCH_AGENT_LABEL
-  );
+  const explicitLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  if (explicitLabel) {
+    return explicitLabel === GATEWAY_LAUNCH_AGENT_LABEL;
+  }
+  return resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE) === GATEWAY_LAUNCH_AGENT_LABEL;
 }
 
 function isPathInside(root: string, candidate: string): boolean {
@@ -74,7 +75,19 @@ function isPackagedConsumerRuntimePath(candidate: string | null): boolean {
   // manage ai.openclaw.gateway from outside the canonical main checkout.
   const expectedSuffix = path.join("Contents", "Resources", "OpenClawRuntime", "openclaw");
   return (
-    candidate.includes(`${path.sep}OpenClaw.app${path.sep}`) && candidate.endsWith(expectedSuffix)
+    candidate.includes(`${path.sep}OpenClaw.app${path.sep}`) && candidate.includes(expectedSuffix)
+  );
+}
+
+function commandUsesPackagedConsumerRuntime(args: {
+  programArguments?: string[];
+  workingDirectory?: string;
+}): boolean {
+  if (isPackagedConsumerRuntimePath(normalizePathForComparison(args.workingDirectory))) {
+    return true;
+  }
+  return (args.programArguments ?? []).some((arg) =>
+    isPackagedConsumerRuntimePath(normalizePathForComparison(arg)),
   );
 }
 
@@ -82,6 +95,7 @@ function assertCanonicalSharedLaunchAgentContext(args: {
   env: GatewayServiceEnv;
   action: string;
   cwd?: string;
+  programArguments?: string[];
 }): void {
   if (!isDefaultSharedLaunchAgentTarget(args.env)) {
     return;
@@ -96,7 +110,15 @@ function assertCanonicalSharedLaunchAgentContext(args: {
   if (normalizedCwd && isPathInside(canonicalMainRepo, normalizedCwd)) {
     return;
   }
-  if (isPackagedConsumerRuntimePath(normalizedCwd)) {
+  // Packaged replacement installs may be invoked with an app-owned entrypoint
+  // while the inherited cwd is still "/" or another launcher directory. The
+  // command itself is the authority for whether this is the signed app runtime.
+  if (
+    commandUsesPackagedConsumerRuntime({
+      programArguments: args.programArguments,
+      workingDirectory: normalizedCwd,
+    })
+  ) {
     return;
   }
 
@@ -122,10 +144,19 @@ function resolveSharedGatewayWatchdogScript(env: GatewayServiceEnv): string {
 async function installSharedGatewayWatchdogLaunchAgent(args: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
+  programArguments?: string[];
+  workingDirectory?: string;
 }): Promise<void> {
   // Only the canonical shared service gets an always-on watchdog. Isolated
   // profiles are expected to be disposable and should not auto-reclaim prod.
   if (!isDefaultSharedLaunchAgentTarget(args.env)) {
+    return;
+  }
+
+  // A packaged Consumer replacement intentionally owns ai.openclaw.gateway from
+  // inside /Applications/OpenClaw.app. Reinstalling the source-checkout watchdog
+  // here would immediately "repair" the service back to the stale repo entrypoint.
+  if (commandUsesPackagedConsumerRuntime(args)) {
     return;
   }
 
@@ -730,12 +761,14 @@ export async function installLaunchAgent({
     env: serviceEnv,
     action: "LaunchAgent install",
     cwd: workingDirectory,
+    programArguments,
   });
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(serviceEnv);
   await ensureSecureDirectory(logDir);
 
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  await bootoutSharedGatewayWatchdogLaunchAgent(serviceEnv);
   for (const legacyLabel of resolveLegacyGatewayLaunchAgentLabels(serviceEnv.OPENCLAW_PROFILE)) {
     const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(serviceEnv, legacyLabel);
     await execLaunchctl(["bootout", domain, legacyPlistPath]);
@@ -793,7 +826,12 @@ export async function installLaunchAgent({
     ],
     { leadingBlankLine: true },
   );
-  await installSharedGatewayWatchdogLaunchAgent({ env: serviceEnv, stdout });
+  await installSharedGatewayWatchdogLaunchAgent({
+    env: serviceEnv,
+    stdout,
+    programArguments,
+    workingDirectory,
+  });
   return { plistPath };
 }
 

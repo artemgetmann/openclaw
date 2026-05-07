@@ -669,6 +669,48 @@ describe("launchd install", () => {
     expect(state.launchctlCalls.length).toBeGreaterThan(0);
   });
 
+  it("allows packaged consumer entrypoint to repair shared LaunchAgent without reinstalling source watchdog", async () => {
+    const canonicalMain = makeTempDir();
+    const appRuntime = path.join(
+      makeTempDir(),
+      "Applications",
+      "OpenClaw.app",
+      "Contents",
+      "Resources",
+      "OpenClawRuntime",
+      "openclaw",
+    );
+    const appEntrypoint = path.join(appRuntime, "dist", "index.js");
+    fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/");
+
+    await installLaunchAgent({
+      env: {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_MAIN_REPO: canonicalMain,
+      },
+      stdout: new PassThrough(),
+      programArguments: ["node", appEntrypoint, "gateway", "--port", "18789"],
+    });
+
+    expect(
+      state.launchctlCalls.some(
+        (call) =>
+          call[0] === "bootout" &&
+          call.some((part) => part.includes(GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL)),
+      ),
+    ).toBe(true);
+    expect(state.files.has(resolveWatchdogPlistPath({ HOME: "/Users/test" }))).toBe(false);
+    expect(
+      state.launchctlCalls.some(
+        (call) =>
+          call[0] === "bootstrap" &&
+          call.some((part) => part.includes(GATEWAY_WATCHDOG_LAUNCH_AGENT_LABEL)),
+      ),
+    ).toBe(false);
+  });
+
   it("blocks shared LaunchAgent restart from outside canonical main", async () => {
     const canonicalMain = makeTempDir();
     fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
