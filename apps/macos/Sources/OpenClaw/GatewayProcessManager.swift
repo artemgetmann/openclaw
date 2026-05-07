@@ -283,8 +283,12 @@ final class GatewayProcessManager {
 
     private func launchAgentNeedsEntrypointRepair() -> Bool {
         guard let snapshot = GatewayLaunchAgentManager.launchdConfigSnapshot() else { return false }
-        guard GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime(snapshot: snapshot) else { return false }
-        return !GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot).matchesCurrentEntrypoint
+        let ownership = GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot)
+        // Entrypoint ownership is independent from runtime-state ownership. A stale
+        // source LaunchAgent can fail the runtime check and still be the canonical
+        // label that this app must repair before it attaches to a healthy port.
+        guard ownership.expectedEntrypoint != nil else { return false }
+        return !ownership.matchesCurrentEntrypoint
     }
 
     /// Attempt to connect to an already-running gateway on the configured port.
@@ -535,6 +539,10 @@ extension GatewayProcessManager {
 
     func setTestingStatus(_ status: Status) {
         self.status = status
+    }
+
+    func testingLaunchAgentNeedsEntrypointRepair() -> Bool {
+        self.launchAgentNeedsEntrypointRepair()
     }
 }
 #endif
