@@ -932,53 +932,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps native Telegram preview block progress separate from final TTS text", async () => {
-    setNoAbort();
-    ttsMocks.state.synthesizeFinalAudio = true;
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "off",
-      ttsAuto: "always",
-    };
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "direct",
-      CommandSource: "native",
-      SessionKey: "telegram:slash:progress",
-      CommandTargetSessionKey: "agent:main:telegram:direct:progress",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onBlockReply?.({
-        text: "Done.",
-        delivery: { previewOnly: true, finalDeliveryOwed: true },
-      });
-      return { text: "Done." } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
-
-    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Done.",
-        delivery: { previewOnly: true, finalDeliveryOwed: true },
-      }),
-    );
-    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload).toMatchObject({
-      text: "Done.",
-      mediaUrl: "https://example.com/tts-synth.opus",
-      audioAsVoice: true,
-    });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
   it("sends native Telegram tool traces when verbose is on", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

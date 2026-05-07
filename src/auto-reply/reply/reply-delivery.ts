@@ -68,7 +68,6 @@ export function createBlockReplyDeliveryHandler(params: {
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
   typingSignals: TypingSignaler;
   blockStreamingEnabled: boolean;
-  allowBlockReplyWhenStreamingDisabled?: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
 }): (payload: ReplyPayload) => Promise<void> {
@@ -131,21 +130,6 @@ export function createBlockReplyDeliveryHandler(params: {
       // Track sent key to avoid duplicate in final payloads.
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
       await params.onBlockReply(blockPayload);
-    } else if (params.allowBlockReplyWhenStreamingDisabled) {
-      // Telegram can disable regular block streaming while still using one
-      // editable progress preview. This is visible progress only: do not add
-      // the block key to final dedupe, or matching final text/TTS can vanish.
-      await params.onBlockReply(
-        {
-          ...blockPayload,
-          delivery: {
-            ...blockPayload.delivery,
-            previewOnly: true,
-            finalDeliveryOwed: true,
-          },
-        },
-        { previewOnly: true, finalDeliveryOwed: true },
-      );
     }
     // When streaming is disabled entirely, blocks are accumulated in final text instead.
   };
