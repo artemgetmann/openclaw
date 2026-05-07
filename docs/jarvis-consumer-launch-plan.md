@@ -516,7 +516,7 @@ Investigation task:
 
 P0 blockers before public strangers:
 
-- [ ] Apple signing/notarization or at minimum a much less terrifying install path.
+- [x] Apple signing/notarization for `v2026.3.14` macOS release.
 - [ ] Remove bundled founder keys from public builds or route them through managed backend.
 - [ ] Account login/trial/subscription state.
 - [ ] Update mechanism.
@@ -636,7 +636,7 @@ Build the commercial spine first:
 - [ ] Implement account login + 14-day trial.
 - [ ] Implement license check + offline grace.
 - [ ] Implement update check/install path.
-- [ ] Sign/notarize macOS app.
+- [x] Sign/notarize macOS app for `v2026.3.14`.
 - [ ] Remove or proxy all founder keys.
 - [ ] Define self-modification boundaries: normal mode, guarded mode, developer mode, fork mode.
 - [ ] Define config/defaults update policy: migrate/merge without clobbering user config.
