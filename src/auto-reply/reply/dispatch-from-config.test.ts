@@ -1175,6 +1175,88 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("keeps accumulated block text on synthetic TTS finals", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: "PROGRESS visible answer" });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "PROGRESS visible answer",
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
+  it("keeps ACP accumulated block text on synthetic TTS finals", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "FINAL visible answer" },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "write a test",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "FINAL visible answer",
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
@@ -1767,7 +1849,7 @@ describe("dispatchReplyFromConfig", () => {
     const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
-    expect(finalPayload?.text).toBeUndefined();
+    expect(finalPayload?.text).toBe("Hello from ACP streaming.");
   });
 
   it("routes ACP block output to originating channel without parent dispatcher duplicates", async () => {
