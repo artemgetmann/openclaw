@@ -57,17 +57,6 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 /** Minimum chars before sending first streaming message (improves push notification UX). */
 const DRAFT_MIN_INITIAL_CHARS = 12;
 const DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW = 1;
-const TELEGRAM_PROGRESS_LOG_PREVIEW_CHARS = 96;
-
-function formatTelegramProgressLogPreview(text: string | undefined): string {
-  const normalized = text?.replace(/\s+/g, " ").trim() ?? "";
-  if (!normalized) {
-    return "<empty>";
-  }
-  return normalized.length > TELEGRAM_PROGRESS_LOG_PREVIEW_CHARS
-    ? `${normalized.slice(0, TELEGRAM_PROGRESS_LOG_PREVIEW_CHARS)}...`
-    : normalized;
-}
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -328,11 +317,6 @@ export const dispatchTelegramMessage = async ({
     lane.lastPartialText = "";
     lane.hasStreamedMessage = false;
   };
-  const logAnswerProgressDraft = (event: string, text?: string) => {
-    logVerbose(
-      `telegram: answer progress draft ${event} chat=${chatId} thread=${threadSpec?.id ?? "none"} preview="${formatTelegramProgressLogPreview(text)}"`,
-    );
-  };
   const rotateAnswerLaneForNewAssistantMessage = async () => {
     let didForceNewMessage = false;
     if (answerLane.hasStreamedMessage) {
@@ -367,9 +351,6 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     if (text === lane.lastPartialText) {
-      if (lane === answerLane) {
-        logAnswerProgressDraft("dropped duplicate", text);
-      }
       return;
     }
     // Mark that we've received streaming content (for forceNewMessage decision).
@@ -386,9 +367,6 @@ export const dispatchTelegramMessage = async ({
     }
     lane.lastPartialText = text;
     laneStream.update(text);
-    if (lane === answerLane) {
-      logAnswerProgressDraft("buffered partial", text);
-    }
   };
   const ingestDraftLaneSegments = async (text: string | undefined) => {
     const split = splitTextIntoLaneSegments(text);
@@ -683,18 +661,8 @@ export const dispatchTelegramMessage = async ({
               payload,
               infoKind: info.kind,
               previewButtons,
-              // Assistant-authored answer blocks are progress narration. They
-              // belong in the editable preview, but final text is still owed.
-              allowPreviewUpdateForNonFinal:
-                segment.lane === "reasoning" ||
-                (segment.lane === "answer" && info.kind === "block"),
-              previewOnlyFinalDeliveryOwed:
-                payload.delivery?.previewOnly === true &&
-                payload.delivery?.finalDeliveryOwed === true,
+              allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
             });
-            if (segment.lane === "answer" && info.kind === "block") {
-              logAnswerProgressDraft(`block ${result}`, segment.text);
-            }
             if (segment.lane === "reasoning") {
               if (result !== "skipped") {
                 reasoningStepState.noteReasoningDelivered();
@@ -756,7 +724,6 @@ export const dispatchTelegramMessage = async ({
       replyOptions: {
         skillFilter,
         disableBlockStreaming,
-        allowBlockReplyWhenStreamingDisabled: Boolean(answerLane.stream),
         onToolResult: (payload) =>
           enqueueDraftLaneEvent(async () => {
             await sendToolPayload(payload);

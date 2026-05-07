@@ -659,8 +659,6 @@ export async function dispatchReplyFromConfig(params: {
         },
         onBlockReply: (payload: ReplyPayload, context) => {
           const run = async () => {
-            const isPreviewOnlyProgress =
-              payload.delivery?.previewOnly === true || context?.previewOnly === true;
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
@@ -676,18 +674,7 @@ export async function dispatchReplyFromConfig(params: {
               blockCount++;
             }
             const ttsPayload = await maybeApplyTtsToPayload({
-              payload: isPreviewOnlyProgress
-                ? {
-                    ...payload,
-                    delivery: {
-                      ...payload.delivery,
-                      previewOnly: true,
-                      finalDeliveryOwed:
-                        payload.delivery?.finalDeliveryOwed === true ||
-                        context?.finalDeliveryOwed === true,
-                    },
-                  }
-                : payload,
+              payload,
               cfg,
               channel: ttsChannel,
               kind: "block",
