@@ -789,18 +789,17 @@ export async function dispatchReplyFromConfig(params: {
           inboundAudio,
           ttsAuto: sessionTtsAuto,
         });
-        // Only send if TTS was actually applied (mediaUrl exists)
+        // Only send if TTS was actually applied (mediaUrl exists).
         if (ttsSyntheticReply.mediaUrl) {
-          // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
-          const ttsOnlyPayload: ReplyPayload = {
-            mediaUrl: ttsSyntheticReply.mediaUrl,
-            audioAsVoice: ttsSyntheticReply.audioAsVoice,
-          };
+          // Preserve the visible text as the media caption. Telegram users
+          // otherwise see a voice-only final after the progress preview, which
+          // makes the agent look like it dropped the answer.
+          const ttsFinalPayload: ReplyPayload = ttsSyntheticReply;
           if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
             // The model was instructed to use the message tool for visible output.
           } else if (shouldRouteToOriginating && originatingChannel && originatingTo) {
             const result = await routeReply({
-              payload: ttsOnlyPayload,
+              payload: ttsFinalPayload,
               channel: originatingChannel,
               to: originatingTo,
               sessionKey: ctx.SessionKey,
@@ -820,7 +819,7 @@ export async function dispatchReplyFromConfig(params: {
               );
             }
           } else {
-            const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
+            const didQueue = dispatcher.sendFinalReply(ttsFinalPayload);
             queuedFinal = didQueue || queuedFinal;
           }
         }

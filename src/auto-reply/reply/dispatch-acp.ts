@@ -325,10 +325,7 @@ export async function tryDispatchAcpReply(params: {
           ttsAuto: params.sessionTtsAuto,
         });
         if (ttsSyntheticReply.mediaUrl) {
-          const delivered = await delivery.deliver("final", {
-            mediaUrl: ttsSyntheticReply.mediaUrl,
-            audioAsVoice: ttsSyntheticReply.audioAsVoice,
-          });
+          const delivered = await delivery.deliver("final", ttsSyntheticReply);
           queuedFinal = queuedFinal || delivered;
         }
       } catch (err) {
