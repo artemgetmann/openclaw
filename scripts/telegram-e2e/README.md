@@ -1,6 +1,7 @@
-# Telegram Thread Model Inheritance E2E
+# Telegram Live E2E Harness
 
-Goal: run live Telegram end-to-end checks for thread model inheritance without re-discovering setup every time.
+Goal: run reusable live Telegram end-to-end checks without re-discovering
+runtime ownership, tester-bot assignment, or userbot setup every time.
 
 For Telegram thread model inheritance, manual Telegram verification is the
 release gate. The probe/runner is support tooling and should not block closure
@@ -19,6 +20,61 @@ Before you trust any live result, prove the lane is clean:
 
 If you skip this, Telegram `getUpdates` conflicts can make another checkout
 answer your messages and waste an hour on fake regressions.
+
+## Reusable harness runbook
+
+Use this when a lane needs live Telegram proof.
+
+### Tester bot pool
+
+- `.env.bots` is the local tester-bot pool. Each non-comment
+  `BOT_TOKEN=...` entry is one tester-only bot token.
+- `bash scripts/assign-bot.sh` claims one eligible token for the current
+  worktree and writes it to `.env.local` as `TELEGRAM_BOT_TOKEN`.
+- The assigner skips tokens that are already claimed by other active worktrees
+  or reserved by the stable/main Telegram config.
+- If no token is available, release an unused lane with
+  `bash scripts/telegram-live-runtime.sh release` or add another tester-only bot.
+
+One active Telegram runtime lane equals one exclusive tester bot token. Do not
+run two live runtimes against the same bot. Telegram Bot API polling is
+single-owner, so token sharing creates false failures instead of useful signal.
+
+### Baseline vs feature scenarios
+
+Run the baseline first:
+
+```bash
+pnpm openclaw:local telegram smoke baseline --json
+```
+
+Baseline proves wiring only: current branch, runtime ownership, tester bot
+claim, gateway health, userbot session, and a basic send/read/wait loop.
+
+A baseline pass is not merge proof. It says the lane can talk to Telegram; it
+does not prove the feature under review works. After baseline passes, run the
+smallest feature-specific scenario that matches the change:
+
+```bash
+pnpm openclaw:local telegram scenario tts-final-caption --json
+pnpm openclaw:local telegram scenario progress-long-task --json
+pnpm openclaw:local telegram scenario progress-plus-tts --json
+```
+
+- `tts-final-caption`: proves the final visible caption/answer behavior after
+  TTS output.
+- `progress-long-task`: proves progress updates during a long-running task and
+  a final answer after cleanup.
+- `progress-plus-tts`: proves progress updates plus final TTS output behavior.
+
+When the lane is done, release the runtime and tester-bot claim:
+
+```bash
+bash scripts/telegram-live-runtime.sh release
+```
+
+## Thread model inheritance checklist
+
 This validates:
 
 1. Group forum topics: `/model` in topic A becomes default for newly created topic B in the same group.

@@ -34,7 +34,14 @@ and more reliable default.
 - For each new worktree:
   - Copy `.env.bots` from the main checkout if needed
   - Run `bash scripts/assign-bot.sh`
-- Each worktree gets its own test bot. Do not reuse production tokens.
+- `.env.bots` is the tester-bot pool. Each `BOT_TOKEN=...` entry is one
+  tester-only bot that can be claimed by one active worktree lane.
+- `bash scripts/assign-bot.sh` writes the lane claim into `.env.local` as
+  `TELEGRAM_BOT_TOKEN`, skips tokens reserved by the stable/main config, and
+  refuses to continue when the pool is exhausted.
+- One active Telegram runtime lane equals one exclusive tester bot token. Do
+  not share a bot token across two live runtimes; Telegram long-polling is
+  single-owner and the loser will produce fake failures.
 - Worktree tester baselines strip inherited Telegram secrets on purpose. If the
   source config had named Telegram accounts, the bootstrap writes non-secret
   strip metadata to the baseline `auth-sync.json`, and
@@ -48,6 +55,19 @@ and more reliable default.
   - `pnpm openclaw:local telegram doctor --chat @jarvis_tester_1_bot`
   - `pnpm openclaw:local telegram runtime ensure`
   - `pnpm openclaw:local telegram smoke dm-reply --chat @jarvis_tester_1_bot --json`
+- Reusable live E2E harness:
+  - `pnpm openclaw:local telegram smoke baseline --json`
+    - Wiring proof only: runtime ownership, bot claim, userbot session, send/read/wait.
+    - A baseline pass is not merge proof for a feature change.
+  - `pnpm openclaw:local telegram scenario tts-final-caption --json`
+    - Feature-specific proof for final caption behavior after TTS output.
+  - `pnpm openclaw:local telegram scenario progress-long-task --json`
+    - Feature-specific proof for progress updates during a long task.
+  - `pnpm openclaw:local telegram scenario progress-plus-tts --json`
+    - Feature-specific proof for progress updates plus TTS final output.
+  - Run baseline first to prove the lane is wired, then run the smallest
+    feature-specific scenario that matches the code change.
+  - Release the lane when done: `bash scripts/telegram-live-runtime.sh release`.
 - User E2E operator path:
   - Start broad triage with `pnpm openclaw:local telegram-user inbox --json`
   - Use `pnpm openclaw:local telegram-user inbox --unread --json` for unread-only sweeps
