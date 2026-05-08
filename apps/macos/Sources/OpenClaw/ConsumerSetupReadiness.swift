@@ -406,7 +406,7 @@ final class ConsumerModelSetupModel {
 
     func refresh() async {
         self.phase = .checking
-        self.statusLine = "Checking OpenClaw's AI access…"
+        self.statusLine = "Checking \(AppFlavor.current.appName)'s AI access…"
         self.failureKind = nil
 
         if ProcessInfo.processInfo.environment["OPENCLAW_SKIP_RUNTIME_OWNERSHIP_BLOCKER"] != "1",
@@ -716,7 +716,7 @@ final class ConsumerModelSetupModel {
         }
 
         if readiness.mode == "managed", readiness.probe?.provider == "openai-codex" {
-            self.activeAccessTitle = "OpenClaw-managed ChatGPT / Codex"
+            self.activeAccessTitle = "\(AppFlavor.current.appName)-managed ChatGPT / Codex"
             self.activeAccessDetail = "Shared founder auth is active for this runtime."
             return
         }
@@ -798,17 +798,17 @@ final class ConsumerModelSetupModel {
 
     private static func consumerFriendlyReadinessError(_ error: Error) -> String {
         if error is ReadinessProbeTimeoutError {
-            return "OpenClaw could not check AI access yet. The operator may still be starting up. Try again in a moment."
+            return "\(AppFlavor.current.appName) could not check AI access yet. The operator may still be starting up. Try again in a moment."
         }
 
         let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !detail.isEmpty else {
-            return "OpenClaw could not check AI access yet. Try again in a moment."
+            return "\(AppFlavor.current.appName) could not check AI access yet. Try again in a moment."
         }
 
         if Self.consumerAccessFailureKind(for: error) == .gatewayUnreachable
         {
-            return "OpenClaw could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."
+            return "\(AppFlavor.current.appName) could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."
         }
 
         return detail
@@ -907,7 +907,7 @@ final class ConsumerModelSetupModel {
 
 private struct ReadinessProbeTimeoutError: LocalizedError, Sendable {
     var errorDescription: String? {
-        "OpenClaw's AI access check timed out."
+        "\(AppFlavor.current.appName)'s AI access check timed out."
     }
 }
 
@@ -975,23 +975,31 @@ struct ConsumerModelsReadinessPayload: Decodable {
 
     var consumerFailureMessage: String {
         if self.status == "ready" {
-            return "OpenClaw's AI access is ready."
+            return "\(AppFlavor.current.appName)'s AI access is ready."
         }
         // Consumer onboarding needs a plain-English blocker. The gateway already
         // computed the truthful live-probe summary, so surface that instead of
         // re-deriving auth state from stale local snapshots.
         let trimmedSummary = self.summary.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedSummary.isEmpty {
-            return trimmedSummary
+            return self.consumerProductSummary(trimmedSummary)
         }
         switch self.consumerFailureKind {
         case .gatewayUnreachable:
-            return "OpenClaw could not reach the local consumer gateway yet."
+            return "\(AppFlavor.current.appName) could not reach the local consumer gateway yet."
         case .providerAuthFailed:
-            return "OpenClaw could not verify a usable AI account for this runtime yet."
+            return "\(AppFlavor.current.appName) could not verify a usable AI account for this runtime yet."
         case .readinessFailed:
-            return "OpenClaw reached the AI provider, but it is not ready yet."
+            return "\(AppFlavor.current.appName) reached the AI provider, but it is not ready yet."
         }
+    }
+
+    private func consumerProductSummary(_ summary: String) -> String {
+        let appName = AppFlavor.current.appName
+        return summary
+            .replacingOccurrences(of: "OpenClaw-managed", with: "\(appName)-managed")
+            .replacingOccurrences(of: "OpenClaw's", with: "\(appName)'s")
+            .replacingOccurrences(of: "OpenClaw ", with: "\(appName) ")
     }
 }
 
@@ -1110,7 +1118,7 @@ extension BrowserSetupModel {
         if let expectedProfile {
             let persistedProfile = self.persistedConsumerBrowserSourceProfileName() ?? ""
             if persistedProfile != expectedProfile.directoryName {
-                return "OpenClaw saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."
+                return "\(AppFlavor.current.appName) saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."
             }
         }
 
@@ -1146,7 +1154,7 @@ extension BrowserSetupModel {
             if !result.success {
                 let message = ConsumerSetupCommandRunner.bestEffortMessage(for: result)
                 if ConsumerSetupCommandRunner.isDiskFullFailure(message) {
-                    return "This Mac is out of disk space, so OpenClaw could not finish browser setup. Free some space and try again."
+                    return "This Mac is out of disk space, so \(AppFlavor.current.appName) could not finish browser setup. Free some space and try again."
                 }
                 if ConsumerSetupCommandRunner.isTransientBrowserStatusFailure(message) &&
                     nowImpl().addingTimeInterval(1) < deadline
@@ -1154,14 +1162,14 @@ extension BrowserSetupModel {
                     await sleepImpl(retryIntervalNanos)
                     continue
                 }
-                return "OpenClaw saved the Chrome profile, but browser readiness failed. \(message)"
+                return "\(AppFlavor.current.appName) saved the Chrome profile, but browser readiness failed. \(message)"
             }
 
             let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let data = stdout.data(using: .utf8),
                   let payload = try? JSONDecoder().decode(ConsumerBrowserStatusPayload.self, from: data)
             else {
-                return "OpenClaw saved the Chrome profile, but browser readiness returned unreadable output."
+                return "\(AppFlavor.current.appName) saved the Chrome profile, but browser readiness returned unreadable output."
             }
             if payload.enabled == false {
                 return "Browser control is disabled in config. Re-enable it and try again."
@@ -1169,10 +1177,10 @@ extension BrowserSetupModel {
             if let detectError = payload.detectError?.trimmingCharacters(in: .whitespacesAndNewlines),
                !detectError.isEmpty
             {
-                return "OpenClaw saved the Chrome profile, but could not prepare Chrome on this Mac: \(detectError)"
+                return "\(AppFlavor.current.appName) saved the Chrome profile, but could not prepare Chrome on this Mac: \(detectError)"
             }
             if payload.chosenBrowser == nil && payload.detectedBrowser == nil && payload.detectedExecutablePath == nil {
-                return "OpenClaw saved the Chrome profile, but Chrome still does not look ready on this Mac."
+                return "\(AppFlavor.current.appName) saved the Chrome profile, but Chrome still does not look ready on this Mac."
             }
             return nil
         }
@@ -1198,14 +1206,14 @@ struct ConsumerModelSetupCardContent: View {
                 HStack(spacing: 10) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(self.model.statusLine ?? "Checking OpenClaw's AI access…")
+                    Text(self.model.statusLine ?? "Checking \(AppFlavor.current.appName)'s AI access…")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             case let .ready(modelRef):
                 self.callout(
                     title: "AI is ready",
-                    body: "OpenClaw is ready to run the first delegated task on \(modelRef).")
+                    body: "\(AppFlavor.current.appName) is ready to run the first delegated task on \(modelRef).")
             case let .failed(message):
                 self.failureCallout(message: message)
             }
@@ -1257,7 +1265,7 @@ struct ConsumerModelSetupCardContent: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Model")
                 .font(.subheadline.weight(.semibold))
-            Text("Pick a small curated default model for this runtime. OpenClaw will re-check readiness after you switch.")
+            Text("Pick a small curated default model for this runtime. \(AppFlavor.current.appName) will re-check readiness after you switch.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1370,7 +1378,7 @@ struct ConsumerModelSetupCardContent: View {
             Text(
                 isReady
                     ? "You’re already ready to run tasks. Change this only if you want a different provider, subscription, setup token, or API key. Credentials stay in this runtime’s local auth state, not in the app bundle."
-                    : "Choose how OpenClaw should use your own subscription, setup token, or API key. Credentials stay in this runtime’s local auth state, not in the app bundle.")
+                    : "Choose how \(AppFlavor.current.appName) should use your own subscription, setup token, or API key. Credentials stay in this runtime’s local auth state, not in the app bundle.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

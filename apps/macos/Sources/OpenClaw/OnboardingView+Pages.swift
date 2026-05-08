@@ -47,7 +47,7 @@ extension OnboardingView {
                     .font(.largeTitle.weight(.semibold))
                 Text(
                     AppFlavor.current.isConsumer
-                        ? "OpenClaw is a personal AI operator for this Mac. Setup takes about two minutes. First we’ll connect Chrome."
+                        ? "\(AppFlavor.current.appName) is a personal AI operator for this Mac. Setup takes about two minutes. First we’ll connect Chrome."
                         : "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
@@ -83,7 +83,7 @@ extension OnboardingView {
                                     // The actual setup work starts after the user presses Continue.
                                     self.featureRow(
                                         title: "Connect Chrome",
-                                        subtitle: "Pick the Chrome profile OpenClaw should use for browser work.",
+                                        subtitle: "Pick the Chrome profile \(AppFlavor.current.appName) should use for browser work.",
                                         systemImage: "globe")
                                     self.featureRow(
                                         title: "Confirm AI access",
@@ -91,7 +91,7 @@ extension OnboardingView {
                                         systemImage: "sparkles")
                                     self.featureRow(
                                         title: "Grant Mac permissions",
-                                        subtitle: "OpenClaw asks only for the permissions that would otherwise break real tasks later.",
+                                        subtitle: "\(AppFlavor.current.appName) asks only for the permissions that would otherwise break real tasks later.",
                                         systemImage: "lock.shield")
                                     self.featureRow(
                                         title: "Verify Telegram",
@@ -111,7 +111,7 @@ extension OnboardingView {
     func consumerSetupPage() -> some View {
         self.onboardingPage {
             VStack(spacing: 22) {
-                Text("Set up OpenClaw")
+                Text("Set up \(AppFlavor.current.appName)")
                     .font(.largeTitle.weight(.semibold))
                 Text("Connect Chrome first, then confirm Mac permissions, AI access, and Telegram.")
                     .font(.body)
@@ -154,7 +154,7 @@ extension OnboardingView {
                             Text("Mac permissions and AI access come next")
                                 .font(.headline)
                             Text(
-                                "Finish Chrome first, then OpenClaw will guide you through the remaining setup in order.")
+                                "Finish Chrome first, then \(AppFlavor.current.appName) will guide you through the remaining setup in order.")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -174,7 +174,7 @@ extension OnboardingView {
             Text(
                 AppFlavor.current.isConsumer
                     ? "The default is this Mac. That keeps setup fast and makes the app feel like your own operator instead of a server console."
-                    : "OpenClaw uses a single Gateway that stays running. Pick this Mac, connect to a discovered gateway nearby, or configure later.")
+                    : "\(AppFlavor.current.appName) uses a single Gateway that stays running. Pick this Mac, connect to a discovered gateway nearby, or configure later.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -704,7 +704,7 @@ extension OnboardingView {
             Text(
                 AppFlavor.current.isConsumer
                     ? "These permissions let your AI operator help on this Mac when you ask it to."
-                    : "These macOS permissions let OpenClaw automate apps and capture context on this Mac.")
+                    : "These macOS permissions let \(AppFlavor.current.appName) automate apps and capture context on this Mac.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -805,7 +805,7 @@ extension OnboardingView {
             Text("Agent workspace")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "OpenClaw runs the agent from a dedicated workspace so it can load `AGENTS.md` " +
+                "\(AppFlavor.current.appName) runs the agent from a dedicated workspace so it can load `AGENTS.md` " +
                     "and write files there without mixing into your other projects.")
                 .font(.body)
                 .foregroundStyle(.secondary)

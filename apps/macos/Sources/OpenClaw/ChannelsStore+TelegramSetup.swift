@@ -328,13 +328,13 @@ extension ChannelsStore {
             || ((replayResult.replyCompleted ?? replayResult.replyStarted) && replayResult.error == nil)
         if replayCompleted {
             return dm.senderUsername.map {
-                "Connected to @\($0). OpenClaw finished the first Telegram task on this Mac."
-            } ?? "Telegram setup is finished. OpenClaw finished the first Telegram task on this Mac."
+                "Connected to @\($0). \(AppFlavor.current.appName) finished the first Telegram task on this Mac."
+            } ?? "Telegram setup is finished. \(AppFlavor.current.appName) finished the first Telegram task on this Mac."
         }
         if let error = replayResult.error {
-            return "Telegram setup is saved, but OpenClaw could not finish the first Telegram task. \(error)"
+            return "Telegram setup is saved, but \(AppFlavor.current.appName) could not finish the first Telegram task. \(error)"
         }
-        return "Telegram setup is saved, but OpenClaw could not confirm that the first Telegram task finished."
+        return "Telegram setup is saved, but \(AppFlavor.current.appName) could not confirm that the first Telegram task finished."
     }
 
     private func telegramCaptureFailureStatusAfterTimeout() -> String? {
@@ -714,7 +714,7 @@ private enum TelegramBootstrapPersistenceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .persistedConfigMismatch:
-            "Telegram setup found your message, but OpenClaw could not persist the final config. Please try again."
+            "Telegram setup found your message, but \(AppFlavor.current.appName) could not persist the final config. Please try again."
         }
     }
 }

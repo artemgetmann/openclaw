@@ -50,10 +50,10 @@ consumer_instance_gateway_port() {
 consumer_instance_app_name() {
   local normalized="${1:-}"
   if [[ -z "$normalized" ]]; then
-    printf 'OpenClaw'
+    printf 'Jarvis'
     return
   fi
-  printf 'OpenClaw (%s)' "$normalized"
+  printf 'Jarvis (%s)' "$normalized"
 }
 
 consumer_instance_stable_tcc_identity_enabled() {
@@ -75,7 +75,7 @@ consumer_instance_display_name() {
   # packaged app identity to collapse back to the stable debug app when local QA
   # explicitly opts in to that mode.
   if consumer_instance_stable_tcc_identity_enabled; then
-    printf 'OpenClaw'
+    printf 'Jarvis'
     return
   fi
   consumer_instance_app_name "$normalized"

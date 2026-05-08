@@ -272,13 +272,13 @@ struct BrowserSetupSupportTests {
                 verifySelectionReadiness: { _ in
                     verificationAttempts += 1
                     if verificationAttempts == 1 {
-                        return "OpenClaw saved the Chrome profile, but browser readiness failed. command failed"
+                        return "Jarvis saved the Chrome profile, but browser readiness failed. command failed"
                     }
                     return nil
                 })
 
             await model.refresh()
-            #expect(model.phase == .failed("OpenClaw saved the Chrome profile, but browser readiness failed. command failed"))
+            #expect(model.phase == .failed("Jarvis saved the Chrome profile, but browser readiness failed. command failed"))
 
             await model.retryTransientFailureIfNeeded()
 
@@ -317,13 +317,13 @@ struct BrowserSetupSupportTests {
                 verifySelectionReadiness: { _ in
                     verificationAttempts += 1
                     if verificationAttempts == 1 {
-                        return "OpenClaw saved the Chrome profile, but browser readiness failed. gateway timeout after 45000ms"
+                        return "Jarvis saved the Chrome profile, but browser readiness failed. gateway timeout after 45000ms"
                     }
                     return nil
                 })
 
             await model.refresh()
-            #expect(model.phase == .failed("OpenClaw saved the Chrome profile, but browser readiness failed. gateway timeout after 45000ms"))
+            #expect(model.phase == .failed("Jarvis saved the Chrome profile, but browser readiness failed. gateway timeout after 45000ms"))
 
             await model.retryTransientFailureAfterGatewayStatusChange(.running(details: "port 33054"))
 
@@ -361,16 +361,16 @@ struct BrowserSetupSupportTests {
                 loadProfiles: { [selected] },
                 verifySelectionReadiness: { _ in
                     verificationAttempts += 1
-                    return "OpenClaw saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."
+                    return "Jarvis saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."
                 })
 
             await model.refresh()
-            #expect(model.phase == .failed("OpenClaw saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."))
+            #expect(model.phase == .failed("Jarvis saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."))
 
             await model.retryTransientFailureIfNeeded()
 
             #expect(verificationAttempts == 1)
-            #expect(model.phase == .failed("OpenClaw saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."))
+            #expect(model.phase == .failed("Jarvis saved the wrong Chrome profile. Choose your profile again so browser tasks use the right session."))
         }
     }
 
@@ -668,7 +668,7 @@ struct BrowserSetupSupportTests {
 
             #expect(
                 result ==
-                    "This Mac is out of disk space, so OpenClaw could not finish browser setup. Free some space and try again.")
+                    "This Mac is out of disk space, so Jarvis could not finish browser setup. Free some space and try again.")
         }
     }
 

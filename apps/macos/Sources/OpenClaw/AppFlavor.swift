@@ -42,7 +42,7 @@ enum AppFlavor: String {
         case .standard:
             "OpenClaw"
         case .consumer:
-            "OpenClaw"
+            "Jarvis"
         }
     }
 

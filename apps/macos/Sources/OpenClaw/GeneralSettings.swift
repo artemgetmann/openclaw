@@ -54,7 +54,7 @@ struct GeneralSettings: View {
 
                     SettingsToggleRow(
                         title: "Launch at login",
-                        subtitle: "Automatically start OpenClaw after you sign in.",
+                        subtitle: "Automatically start \(AppFlavor.current.appName) after you sign in.",
                         binding: self.$state.launchAtLogin)
 
                     SettingsToggleRow(
@@ -135,7 +135,7 @@ struct GeneralSettings: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("OpenClaw runs quietly in your menu bar.")
+                    Text("\(AppFlavor.current.appName) runs quietly in your menu bar.")
                         .font(.title3.weight(.semibold))
                     Text("Keep the basics here. Anything technical stays out of the way unless you explicitly ask for it.")
                         .font(.callout)
@@ -186,7 +186,7 @@ struct GeneralSettings: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Browser")
                 .font(.title3.weight(.semibold))
-            Text("OpenClaw uses your live Chrome session for logged-in sites and keeps its own browser lane available for clean public-site tasks.")
+            Text("\(AppFlavor.current.appName) uses your live Chrome session for logged-in sites and keeps its own browser lane available for clean public-site tasks.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

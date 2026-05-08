@@ -119,7 +119,7 @@ struct OpenClawConfigFileTests {
             "OPENCLAW_CONSUMER_INSTANCE_ID": nil,
         ]) {
             #expect(AppFlavor.current == .consumer)
-            #expect(AppFlavor.current.appName == "OpenClaw")
+            #expect(AppFlavor.current.appName == "Jarvis")
             #expect(OpenClawConfigFile.stateDirURL().path.contains("Library/Application Support/OpenClaw/.openclaw"))
         }
 

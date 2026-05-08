@@ -38,7 +38,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Connect Telegram")
                         .font(.headline)
-                    Text("Setup only counts as done after OpenClaw finishes one real Telegram task from this Mac.")
+                    Text("Setup only counts as done after \(AppFlavor.current.appName) finishes one real Telegram task from this Mac.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -58,8 +58,8 @@ struct ConsumerTelegramSetupCardContent: View {
             self.callout(
                 title: "Telegram verified",
                 body: self.store.consumerTelegramBotUsername().map {
-                    "Connected as @\($0). OpenClaw already finished a Telegram task on this Mac."
-                } ?? "Telegram is connected and OpenClaw already finished a Telegram task on this Mac.")
+                    "Connected as @\($0). \(AppFlavor.current.appName) already finished a Telegram task on this Mac."
+                } ?? "Telegram is connected and \(AppFlavor.current.appName) already finished a Telegram task on this Mac.")
 
             if let username = self.store.consumerTelegramBotUsername() {
                 Button("Open your bot") {
@@ -82,8 +82,8 @@ struct ConsumerTelegramSetupCardContent: View {
             self.callout(
                 title: self.store.consumerTelegramLooksLive() ? "One task left" : "Use your own Telegram bot",
                 body: self.store.consumerTelegramLooksLive()
-                    ? "The bot is connected, but onboarding is not complete until OpenClaw answers one Telegram task end-to-end on this Mac."
-                    : "Create a bot in BotFather, verify the token here, then send the first task you want OpenClaw to handle.")
+                    ? "The bot is connected, but onboarding is not complete until \(AppFlavor.current.appName) answers one Telegram task end-to-end on this Mac."
+                    : "Create a bot in BotFather, verify the token here, then send the first task you want \(AppFlavor.current.appName) to handle.")
 
             Text("1. Open @BotFather, send /newbot, choose a name + username, then copy the full token BotFather gives you.")
                 .font(.callout)
