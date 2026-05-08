@@ -6,13 +6,14 @@ private typealias SnapshotAnyCodable = OpenClaw.AnyCodable
 
 private func makeConsumerTelegramSnapshot(
     running: Bool,
-    inboundAt: Double,
-    outboundAt: Double,
+    inboundAt: Double?,
+    outboundAt: Double?,
+    snapshotTs: Double = 1_700_000_180,
     botId: Int = 123,
     username: String = "openclawbot"
 ) -> ChannelsStatusSnapshot {
     ChannelsStatusSnapshot(
-        ts: 1_700_000_000_000,
+        ts: snapshotTs,
         channelOrder: ["telegram"],
         channelLabels: ["telegram": "Telegram"],
         channelDetailLabels: nil,
@@ -154,17 +155,18 @@ struct TelegramSetupBootstrapTests {
             "OPENCLAW_APP_VARIANT": "consumer",
         ]) {
             let store = ChannelsStore(isPreview: true)
+            store.clearConsumerTelegramFirstTaskVerified()
             store.telegramSetupBotId = 8_582_422_927
             store.telegramSetupBotUsername = "jarvis_consumer_smoke_2_bot"
             store.telegramSetupStatus =
                 "Telegram setup is saved, but OpenClaw could not finish the first Telegram task. OpenClaw started the first Telegram task, but the setup handoff timed out before completion was confirmed."
-            store.telegramSetupBaselineInboundAt = 1_000
-            store.telegramSetupBaselineOutboundAt = 1_000
+            store.telegramSetupBaselineInboundAt = 1_700_000_000
+            store.telegramSetupBaselineOutboundAt = 1_700_000_000
 
             let snapshot = makeConsumerTelegramSnapshot(
                 running: true,
-                inboundAt: 1_000,
-                outboundAt: 1_500,
+                inboundAt: 1_700_000_000,
+                outboundAt: 1_700_000_060,
                 botId: 8_582_422_927,
                 username: "jarvis_consumer_smoke_2_bot")
 
@@ -173,6 +175,84 @@ struct TelegramSetupBootstrapTests {
 
             #expect(store.consumerTelegramFirstTaskVerified)
             #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. First task verified.")
+        }
+    }
+
+    @Test func `stale invalid-token status clears once live telegram activity proves the first task`() async throws {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.clearConsumerTelegramFirstTaskVerified()
+            store.telegramSetupBotId = 8_582_422_927
+            store.telegramSetupBotUsername = "jarvis_consumer_smoke_2_bot"
+            store.telegramSetupStatus = "Invalid Telegram token."
+
+            let snapshot = makeConsumerTelegramSnapshot(
+                running: true,
+                inboundAt: 1_700_000_000,
+                outboundAt: 1_700_000_090,
+                snapshotTs: 1_700_000_150,
+                botId: 8_582_422_927,
+                username: "jarvis_consumer_smoke_2_bot")
+
+            store.snapshot = snapshot
+            store._testReconcileTelegramSetupProgress(with: snapshot)
+
+            #expect(store.consumerTelegramFirstTaskVerified)
+            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. First task verified.")
+        }
+    }
+
+    @Test func `live telegram activity does not verify without an outbound bot reply`() async throws {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.clearConsumerTelegramFirstTaskVerified()
+            store.telegramSetupBotId = 8_582_422_927
+            store.telegramSetupBotUsername = "jarvis_consumer_smoke_2_bot"
+            store.telegramSetupStatus = "Invalid Telegram token."
+
+            let snapshot = makeConsumerTelegramSnapshot(
+                running: true,
+                inboundAt: 1_700_000_000,
+                outboundAt: nil,
+                snapshotTs: 1_700_000_060,
+                botId: 8_582_422_927,
+                username: "jarvis_consumer_smoke_2_bot")
+
+            store.snapshot = snapshot
+
+            #expect(!store.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible())
+            #expect(store.telegramSetupStatus == "Invalid Telegram token.")
+            #expect(!store.consumerTelegramFirstTaskVerified)
+        }
+    }
+
+    @Test func `live telegram activity does not verify when the bot reply predates the user dm`() async throws {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.clearConsumerTelegramFirstTaskVerified()
+            store.telegramSetupBotId = 8_582_422_927
+            store.telegramSetupBotUsername = "jarvis_consumer_smoke_2_bot"
+            store.telegramSetupStatus = "Invalid Telegram token."
+
+            let snapshot = makeConsumerTelegramSnapshot(
+                running: true,
+                inboundAt: 1_700_000_090,
+                outboundAt: 1_700_000_000,
+                snapshotTs: 1_700_000_120,
+                botId: 8_582_422_927,
+                username: "jarvis_consumer_smoke_2_bot")
+
+            store.snapshot = snapshot
+
+            #expect(!store.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible())
+            #expect(store.telegramSetupStatus == "Invalid Telegram token.")
+            #expect(!store.consumerTelegramFirstTaskVerified)
         }
     }
 

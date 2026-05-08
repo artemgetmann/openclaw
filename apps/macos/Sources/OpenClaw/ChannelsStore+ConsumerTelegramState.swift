@@ -7,6 +7,7 @@ private struct ConsumerTelegramConfigFallback {
 
 extension ChannelsStore {
     static let consumerTelegramBotUsernameDefaultsKey = "OpenClawConsumerTelegramBotUsername"
+    private static let consumerTelegramFirstTaskActivityRecencyWindow: Double = 24 * 60 * 60
 
     static func consumerTelegramFirstTaskVerificationDefaultsKey(
         instanceId: String? = ConsumerInstance.current.id
@@ -62,36 +63,62 @@ extension ChannelsStore {
         self.telegramSetupBaselineOutboundAt = self.consumerTelegramLatestOutboundAt()
     }
 
+    private func consumerTelegramNormalizeTimestamp(_ value: Double) -> Double {
+        // Gateway snapshots can surface timestamps in seconds or milliseconds.
+        // Normalize both shapes so the verification rule stays conservative
+        // without becoming format-sensitive.
+        value > 10_000_000_000 ? value / 1_000 : value
+    }
+
+    private func consumerTelegramHasRecentPairedActivity(
+        inboundAt: Double,
+        outboundAt: Double
+    ) -> Bool {
+        let inbound = self.consumerTelegramNormalizeTimestamp(inboundAt)
+        let outbound = self.consumerTelegramNormalizeTimestamp(outboundAt)
+        guard outbound >= inbound else { return false }
+
+        // Require the user DM and bot reply to land close together. This keeps
+        // stale historical traffic from auto-promoting a fresh setup screen.
+        guard outbound - inbound <= Self.consumerTelegramFirstTaskActivityRecencyWindow else {
+            return false
+        }
+
+        if let snapshotAt = self.snapshot?.ts {
+            let snapshot = self.consumerTelegramNormalizeTimestamp(snapshotAt)
+            guard snapshot >= outbound else { return false }
+            return snapshot - outbound <= Self.consumerTelegramFirstTaskActivityRecencyWindow
+        }
+
+        return true
+    }
+
     func consumerTelegramCanVerifyFirstTaskFromActivity() -> Bool {
         let latestInboundAt = self.consumerTelegramLatestInboundAt()
         let latestOutboundAt = self.consumerTelegramLatestOutboundAt()
-        let inboundAdvanced: Bool
-        if let baselineInboundAt = self.telegramSetupBaselineInboundAt,
-           let latestInboundAt
-        {
-            inboundAdvanced = latestInboundAt > baselineInboundAt
-        } else {
-            inboundAdvanced = false
-        }
 
-        let outboundAdvanced: Bool
-        if let baselineOutboundAt = self.telegramSetupBaselineOutboundAt,
+        if let baselineInboundAt = self.telegramSetupBaselineInboundAt,
+           let baselineOutboundAt = self.telegramSetupBaselineOutboundAt,
+           let latestInboundAt,
            let latestOutboundAt
         {
-            outboundAdvanced = latestOutboundAt > baselineOutboundAt
-        } else {
-            outboundAdvanced = false
-        }
-
-        if self.telegramSetupBaselineOutboundAt == nil,
-           let baselineInboundAt = self.telegramSetupBaselineInboundAt,
-           let latestActivityAt = self.consumerTelegramLatestActivityAt(),
-           latestActivityAt > baselineInboundAt
+            let inboundAdvanced = latestInboundAt > baselineInboundAt
+            let outboundAdvanced = latestOutboundAt > baselineOutboundAt
+            if inboundAdvanced || outboundAdvanced {
+                return true
+            }
+        } else if self.telegramSetupBaselineOutboundAt == nil,
+                  let baselineInboundAt = self.telegramSetupBaselineInboundAt,
+                  let latestActivityAt = self.consumerTelegramLatestActivityAt(),
+                  latestActivityAt > baselineInboundAt
         {
             return true
         }
 
-        return inboundAdvanced || outboundAdvanced
+        guard let latestInboundAt, let latestOutboundAt else { return false }
+        return self.consumerTelegramHasRecentPairedActivity(
+            inboundAt: latestInboundAt,
+            outboundAt: latestOutboundAt)
     }
 
     @discardableResult
@@ -129,9 +156,7 @@ extension ChannelsStore {
             fallback.lockedSenderId != nil ||
             self.telegramSetupFirstSenderId != nil ||
             account?.allowFrom?.isEmpty == false
-        let hasActivityEvidence =
-            self.consumerTelegramLatestInboundAt() != nil ||
-            self.consumerTelegramLatestOutboundAt() != nil
+        let hasActivityEvidence = self.consumerTelegramCanVerifyFirstTaskFromActivity()
         guard hasSenderEvidence || hasActivityEvidence else { return false }
 
         self.markConsumerTelegramFirstTaskVerified()

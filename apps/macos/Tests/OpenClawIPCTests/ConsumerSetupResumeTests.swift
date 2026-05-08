@@ -72,19 +72,20 @@ struct ConsumerSetupResumeTests {
             defaults.set(profile.displayName, forKey: browserSelectedChromeProfileNameKey)
 
             let channels = ChannelsStore(isPreview: true)
+            channels.telegramSetupStatus = "Invalid Telegram token."
             channels._testApplyLoadedConfigRoot([
                 "channels": [
                     "telegram": [
                         "enabled": true,
                         "botToken": "123456:abc",
-                        "allowFrom": ["42"],
                     ],
                 ],
             ])
             channels.snapshot = makeResumeTelegramSnapshot(
                 running: true,
-                inboundAt: 1_000,
-                outboundAt: 1_500,
+                inboundAt: 1_700_000_000,
+                outboundAt: 1_700_000_075,
+                snapshotTs: 1_700_000_150,
                 botId: 123456)
 
             let model = ConsumerSetupResumeModel(
@@ -107,6 +108,7 @@ struct ConsumerSetupResumeTests {
 
             #expect(decision == .complete)
             #expect(channels.consumerTelegramFirstTaskVerified)
+            #expect(channels.telegramSetupStatus == "Telegram bot is live as @openclawbot. First task verified from existing setup.")
         }
     }
 
@@ -269,12 +271,13 @@ struct ConsumerSetupResumeTests {
 
 private func makeResumeTelegramSnapshot(
     running: Bool,
-    inboundAt: Double,
-    outboundAt: Double,
+    inboundAt: Double?,
+    outboundAt: Double?,
+    snapshotTs: Double = 1_700_000_180,
     botId: Int
 ) -> ChannelsStatusSnapshot {
     ChannelsStatusSnapshot(
-        ts: 1_700_000_000_000,
+        ts: snapshotTs,
         channelOrder: ["telegram"],
         channelLabels: ["telegram": "Telegram"],
         channelDetailLabels: nil,
