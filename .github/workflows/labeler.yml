@@ -628,6 +628,7 @@ jobs:
             core.info(`Processed ${processed} pull requests.`);
 
   label-issues:
+    if: github.event_name == 'issues'
     permissions:
       issues: write
     runs-on: blacksmith-16vcpu-ubuntu-2404
