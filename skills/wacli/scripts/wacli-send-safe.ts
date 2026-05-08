@@ -35,6 +35,7 @@ type LiveStatus = {
   ownerCommandMatches?: boolean;
   lockHeldByOwner?: boolean;
   lockPid?: number;
+  lockPidRunning?: boolean;
   connected?: boolean;
   message?: string;
   forcedStop?: boolean;
@@ -334,6 +335,35 @@ async function readOwnerStatus(
   return parseJson<LiveStatus>(result.stdout);
 }
 
+function isOwnerReleaseSuccessful(status: LiveStatus | undefined, stoppedPid?: number) {
+  if (status?.ownerRunning === true) {
+    return false;
+  }
+
+  if (status?.lockPid == null) {
+    return true;
+  }
+
+  if (
+    typeof stoppedPid === "number" &&
+    status.lockPid === stoppedPid &&
+    status.lockPidRunning !== true
+  ) {
+    return true;
+  }
+
+  return status.lockPidRunning === false;
+}
+
+function isLiveUnrelatedLock(status: LiveStatus | undefined, stoppedPid?: number) {
+  return (
+    status?.ownerRunning !== true &&
+    typeof status?.lockPid === "number" &&
+    status.lockPidRunning === true &&
+    (typeof stoppedPid !== "number" || status.lockPid !== stoppedPid)
+  );
+}
+
 async function runLiveCommand(
   action: "stop" | "ensure",
   flags: Flags,
@@ -352,12 +382,19 @@ async function runLiveCommand(
   return parseJson<LiveStatus>(result.stdout);
 }
 
-async function waitForOwnerRelease(flags: Flags, deps: Pick<Deps, "runCommand" | "sleep">) {
+async function waitForOwnerRelease(
+  flags: Flags,
+  deps: Pick<Deps, "runCommand" | "sleep">,
+  stoppedPid?: number,
+) {
   const deadline = Date.now() + flags.graceMs;
   let lastStatus = await readOwnerStatus(flags, deps);
 
   while (Date.now() <= deadline) {
-    if (lastStatus?.ownerRunning !== true && lastStatus?.lockPid == null) {
+    if (isOwnerReleaseSuccessful(lastStatus, stoppedPid)) {
+      return lastStatus;
+    }
+    if (isLiveUnrelatedLock(lastStatus, stoppedPid)) {
       return lastStatus;
     }
     await deps.sleep(250);
@@ -498,13 +535,14 @@ async function runOwnerSafeSend(flags: Flags, depsOverrides?: Partial<Deps>): Pr
   let sendResult: CommandResult | undefined;
   let sendRaw = "";
   let ownerStop: LiveStatus | undefined;
+  let pauseFailureReport: SendReport | undefined;
 
   if (shouldPauseOwner) {
     ownerStop = await runLiveCommand("stop", flags, deps);
-    const releaseStatus = await waitForOwnerRelease(flags, deps);
-    ownerPaused = releaseStatus?.ownerRunning !== true && releaseStatus?.lockPid == null;
+    const releaseStatus = await waitForOwnerRelease(flags, deps, ownerStop?.stoppedPid);
+    ownerPaused = isOwnerReleaseSuccessful(releaseStatus, ownerStop?.stoppedPid);
     if (!ownerPaused) {
-      return {
+      pauseFailureReport = {
         ok: false,
         status: "failed",
         command: flags.command,
@@ -526,20 +564,27 @@ async function runOwnerSafeSend(flags: Flags, depsOverrides?: Partial<Deps>): Pr
   }
 
   try {
-    sendResult = await sendOnce(flags, deps);
-    sendRaw = `${sendResult.stdout}\n${sendResult.stderr}`;
-
-    if (!sendResult.ok && shouldPauseOwner && containsLockError(sendRaw)) {
-      retryAttempted = true;
-      await waitForOwnerRelease(flags, deps);
+    if (!pauseFailureReport) {
       sendResult = await sendOnce(flags, deps);
       sendRaw = `${sendResult.stdout}\n${sendResult.stderr}`;
+
+      if (!sendResult.ok && shouldPauseOwner && containsLockError(sendRaw)) {
+        retryAttempted = true;
+        await waitForOwnerRelease(flags, deps, ownerStop?.stoppedPid);
+        sendResult = await sendOnce(flags, deps);
+        sendRaw = `${sendResult.stdout}\n${sendResult.stderr}`;
+      }
     }
   } finally {
-    if (ownerPaused) {
+    if (ownerStop?.stoppedPid != null) {
       const restored = await runLiveCommand("ensure", flags, deps);
       ownerRestored = Boolean(restored?.connected || restored?.ownerRunning);
     }
+  }
+
+  if (pauseFailureReport) {
+    pauseFailureReport.ownerRestored = ownerRestored;
+    return pauseFailureReport;
   }
 
   if (!sendResult) {
