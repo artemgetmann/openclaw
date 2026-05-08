@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 type SendCommand = "text" | "file";
 
@@ -659,8 +660,21 @@ async function main() {
   process.exit(report.ok ? 0 : 1);
 }
 
-const entrypoint = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
-if (import.meta.url === entrypoint) {
+function isEntrypoint(): boolean {
+  if (!process.argv[1]) {
+    return false;
+  }
+  try {
+    return (
+      fs.realpathSync(path.resolve(process.argv[1])) ===
+      fs.realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
+if (isEntrypoint()) {
   main().catch((error) => {
     const scriptName = path.basename(process.argv[1] ?? "wacli-send-safe.ts");
     console.error(`${scriptName}: ${String(error)}`);
