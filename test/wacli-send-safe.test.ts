@@ -80,7 +80,7 @@ describe("wacli-send-safe", () => {
     ]);
   });
 
-  it("pauses and restores the recorded owner around a send", async () => {
+  it("treats a stale dead lock as released and restores the owner around a send", async () => {
     const calls: Array<[string, string[]]> = [];
     let statusCalls = 0;
     const runCommand = vi.fn(async (command: string, args: string[]) => {
@@ -95,6 +95,7 @@ describe("wacli-send-safe", () => {
               ownerRunning: true,
               ownerCommandMatches: true,
               lockHeldByOwner: true,
+              lockPidRunning: true,
               connected: true,
             }),
             stderr: "",
@@ -109,6 +110,8 @@ describe("wacli-send-safe", () => {
               ownerRunning: false,
               ownerCommandMatches: true,
               lockHeldByOwner: false,
+              lockPid: 123,
+              lockPidRunning: false,
               connected: false,
             }),
             stderr: "",
@@ -122,6 +125,7 @@ describe("wacli-send-safe", () => {
             ownerRunning: true,
             ownerCommandMatches: true,
             lockHeldByOwner: true,
+            lockPidRunning: true,
             connected: true,
           }),
           stderr: "",
@@ -136,6 +140,9 @@ describe("wacli-send-safe", () => {
             ownerRunning: false,
             ownerCommandMatches: true,
             lockHeldByOwner: false,
+            stoppedPid: 123,
+            pidFileRemoved: true,
+            lockPidRunning: false,
             connected: false,
           }),
           stderr: "",
@@ -190,6 +197,109 @@ describe("wacli-send-safe", () => {
       "send",
       "ensure",
       "status",
+    ]);
+  });
+
+  it("restores the owner even when a live unrelated lock blocks the send", async () => {
+    const calls: Array<[string, string[]]> = [];
+    let statusCalls = 0;
+    const runCommand = vi.fn(async (command: string, args: string[]) => {
+      calls.push([command, args]);
+      if (args[0] === "status") {
+        statusCalls += 1;
+        if (statusCalls === 1) {
+          return {
+            ok: true,
+            exitCode: 0,
+            stdout: JSON.stringify({
+              ownerRunning: true,
+              ownerCommandMatches: true,
+              lockHeldByOwner: true,
+              lockPidRunning: true,
+              connected: true,
+            }),
+            stderr: "",
+            timedOut: false,
+          };
+        }
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: JSON.stringify({
+            ownerRunning: false,
+            ownerCommandMatches: true,
+            lockHeldByOwner: false,
+            lockPid: 999,
+            lockPidRunning: true,
+            connected: false,
+          }),
+          stderr: "",
+          timedOut: false,
+        };
+      }
+      if (args[0] === "stop") {
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: JSON.stringify({
+            ownerRunning: false,
+            ownerCommandMatches: true,
+            lockHeldByOwner: false,
+            lockPidRunning: true,
+            stoppedPid: 123,
+            pidFileRemoved: true,
+            connected: false,
+          }),
+          stderr: "",
+          timedOut: false,
+        };
+      }
+      if (args[0] === "ensure") {
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: JSON.stringify({
+            ownerRunning: true,
+            ownerCommandMatches: true,
+            lockHeldByOwner: true,
+            lockPidRunning: true,
+            connected: true,
+          }),
+          stderr: "",
+          timedOut: false,
+        };
+      }
+      return {
+        ok: true,
+        exitCode: 0,
+        stdout: "Sent to 48100060180533@lid (id 3BEC123)",
+        stderr: "",
+        timedOut: false,
+      };
+    });
+    const verifySend = vi.fn(async () => ({
+      status: "verified_local" as const,
+      chatJid: "48100060180533@lid",
+      messageId: "3BEC123",
+    }));
+
+    const report = await runOwnerSafeSend(makeFlags(), {
+      runCommand,
+      sleep: async () => undefined,
+      verifySend,
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.status).toBe("failed");
+    expect(report.ownerPaused).toBe(false);
+    expect(report.ownerRestored).toBe(true);
+    expect(report.message).toContain("Failed to pause the recorded wacli sync owner");
+    expect(verifySend).not.toHaveBeenCalled();
+    expect(calls.map(([, args]) => (args[0] === "--store" ? args[2] : args[0]))).toEqual([
+      "status",
+      "stop",
+      "status",
+      "ensure",
     ]);
   });
 

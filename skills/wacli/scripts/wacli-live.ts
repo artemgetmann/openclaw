@@ -42,6 +42,7 @@ type LiveStatus = {
   ownerCommandMatches: boolean;
   lockInfo?: string;
   lockPid?: number;
+  lockPidRunning?: boolean;
   lockHeldByOwner: boolean;
   lastLifecycleEvent?: LifecycleEvent;
   connected: boolean;
@@ -276,6 +277,8 @@ async function collectStatus(flags: Flags): Promise<LiveStatus> {
   const ownerCommandMatches =
     ownerRunning && ownerPid ? await commandMatchesExpected(ownerPid) : false;
   const lockInfo = await readLockInfo(flags.storeDir);
+  const lockPidRunning =
+    typeof lockInfo.pid === "number" && lockInfo.pid > 0 ? processExists(lockInfo.pid) : undefined;
   const logTail = await readLogTail(files.logPath, flags.tailLines);
   const lastLifecycleEvent = inferLifecycleEvent(logTail);
   const lockHeldByOwner =
@@ -308,6 +311,7 @@ async function collectStatus(flags: Flags): Promise<LiveStatus> {
     ownerCommandMatches,
     lockInfo: lockInfo.raw,
     lockPid: lockInfo.pid,
+    lockPidRunning,
     lockHeldByOwner,
     lastLifecycleEvent,
     connected,
@@ -402,6 +406,26 @@ async function stopOwner(flags: Flags): Promise<LiveStatus> {
   } else if (ownerPid) {
     stopReason = "not_running";
   }
+
+  // The owner lock can lag behind the process exit. Give it a short window to
+  // disappear, then remove only stale locks that are definitely not live.
+  const lockDeadline = Date.now() + Math.min(flags.graceMs, 1_000);
+  for (;;) {
+    const lockInfo = await readLockInfo(flags.storeDir);
+    if (typeof lockInfo.pid !== "number") {
+      break;
+    }
+    const lockPidRunning = processExists(lockInfo.pid);
+    if (!lockPidRunning) {
+      await fsp.rm(path.join(flags.storeDir, "LOCK"), { force: true });
+      break;
+    }
+    if (Date.now() > lockDeadline) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
   await fsp.rm(files.pidPath, { force: true });
   const status = await collectStatus(flags);
   status.stoppedPid = stoppedPid;
