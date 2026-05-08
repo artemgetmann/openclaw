@@ -236,7 +236,11 @@ enum GatewayLaunchAgentManager {
     private static func shouldPreserveLoadedConsumerGatewayOnStop() async -> Bool {
         guard AppFlavor.current.isConsumer else { return false }
         guard await self.isLoaded() else { return false }
-        return self.launchAgentMatchesCurrentRuntime()
+        guard self.launchAgentMatchesCurrentRuntime() else { return false }
+        // Stop preservation is only safe when the loaded service boots this app's
+        // current runtime. Preserving a stale source entrypoint keeps replacement
+        // installs pinned to old code even though the state/config paths match.
+        return self.currentEntrypointOwnership().matchesCurrentEntrypoint
     }
 }
 
