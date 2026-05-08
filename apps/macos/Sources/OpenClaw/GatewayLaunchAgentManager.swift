@@ -289,11 +289,14 @@ extension GatewayLaunchAgentManager {
         let snapshot = self.launchdConfigSnapshot()
         let launchAgentMatchesCurrentRuntime = self.launchAgentMatchesCurrentRuntime(snapshot: snapshot)
         let launchAgentMatchesCurrentEntrypoint = self.launchAgentMatchesCurrentEntrypoint(snapshot: snapshot)
+        let launchAgentMatchesCurrentServiceVersion = self.launchAgentMatchesCurrentServiceVersion(
+            snapshot: snapshot)
         let action = self.computeDesiredEnableAction(
             loaded: loaded,
             hasPlist: snapshot != nil,
             launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime,
-            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint,
+            launchAgentMatchesCurrentServiceVersion: launchAgentMatchesCurrentServiceVersion)
         switch action {
         case .noop:
             // A normal enable request means "make sure the service exists". If the
@@ -357,6 +360,26 @@ extension GatewayLaunchAgentManager {
     private static func launchAgentMatchesCurrentEntrypoint(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
         let ownership = self.currentEntrypointOwnership(snapshot: snapshot)
         return ownership.matchesCurrentEntrypoint
+    }
+
+    private static func launchAgentMatchesCurrentServiceVersion(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
+        guard let expected = self.currentServiceVersionString() else { return true }
+        guard let actual = snapshot?.environment["OPENCLAW_SERVICE_VERSION"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty
+        else {
+            return true
+        }
+        return self.normalizedVersionString(actual) == self.normalizedVersionString(expected)
+    }
+
+    static func currentServiceVersionString() -> String? {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return version?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+    }
+
+    private static func normalizedVersionString(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "^v", with: "", options: .regularExpression)
     }
 
     private static func resolveLaunchAgentEntrypoint(from snapshot: LaunchAgentPlistSnapshot?) -> String? {
@@ -498,13 +521,17 @@ extension GatewayLaunchAgentManager {
         loaded: Bool?,
         hasPlist: Bool,
         launchAgentMatchesCurrentRuntime: Bool = true,
-        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
+        launchAgentMatchesCurrentEntrypoint: Bool = true,
+        launchAgentMatchesCurrentServiceVersion: Bool = true) -> DesiredAction
     {
         // Enable/first-launch is the repair path. Runtime ownership protects the
         // user's app-owned state, but entrypoint ownership decides whether the
         // loaded job actually boots this app's bundled runtime.
         if hasPlist, !launchAgentMatchesCurrentRuntime { return .install }
         if hasPlist, !launchAgentMatchesCurrentEntrypoint { return .install }
+        // Sparkle can refresh the bundle while launchd keeps the old env block alive.
+        // If the service version is stale, reinstall so launchd rewrites that block.
+        if hasPlist, !launchAgentMatchesCurrentServiceVersion { return .install }
         if loaded == true { return .noop }
         if loaded == false, hasPlist { return .start }
         if loaded == nil, hasPlist { return .start }
@@ -562,13 +589,15 @@ extension GatewayLaunchAgentManager {
         loaded: Bool?,
         hasPlist: Bool,
         launchAgentMatchesCurrentRuntime: Bool = true,
-        launchAgentMatchesCurrentEntrypoint: Bool = true) -> DesiredAction
+        launchAgentMatchesCurrentEntrypoint: Bool = true,
+        launchAgentMatchesCurrentServiceVersion: Bool = true) -> DesiredAction
     {
         self.computeDesiredEnableAction(
             loaded: loaded,
             hasPlist: hasPlist,
             launchAgentMatchesCurrentRuntime: launchAgentMatchesCurrentRuntime,
-            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint)
+            launchAgentMatchesCurrentEntrypoint: launchAgentMatchesCurrentEntrypoint,
+            launchAgentMatchesCurrentServiceVersion: launchAgentMatchesCurrentServiceVersion)
     }
 
     static func _testShouldTreatBringupResultAsReady(_ payload: String) -> Bool {
