@@ -42,6 +42,13 @@ struct GatewayLaunchAgentManagerTests {
         #expect(snapshot.bind == nil)
     }
 
+    @Test func `enable reinstalls loaded launch agent when service version is stale`() {
+        #expect(GatewayLaunchAgentManager._testDesiredEnableAction(
+            loaded: true,
+            hasPlist: true,
+            launchAgentMatchesCurrentServiceVersion: false) == .install)
+    }
+
     @Test func `enable skips loaded matching launch agent`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
