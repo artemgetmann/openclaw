@@ -36,16 +36,18 @@ Read this before doing consumer-product work in this repo.
 - Main/consumer consolidation and retirement:
   - `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
   - `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
-- Historical execution plan:
-  - `docs/consumer/openclaw-consumer-execution-spec.md`
+- Launch/business plan:
+  - `docs/research/jarvis-consumer-launch-plan.md`
+- Archived execution docs:
+  - `docs/consumer/archive/openclaw-consumer-execution-spec.md`
+  - `docs/consumer/archive/consumer-execution-tracker.md`
+  - `docs/consumer/archive/openclaw-consumer-brutal-execution-board.md`
 - Sprint kickoff prompt:
   - `docs/consumer/CODEX-PROMPT.md`
 - GTM and packaging direction:
   - `docs/consumer/openclaw-consumer-go-to-market-plan.md`
 - Hosted architecture decision:
   - `docs/consumer/openclaw-consumer-hosted-architecture-decision.md`
-- Execution board:
-  - `docs/consumer/openclaw-consumer-brutal-execution-board.md`
 - Investor context:
   - `docs/consumer/openclaw-consumer-investor-brief-1page.md`
 - Deferred GUI-control decision:

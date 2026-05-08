@@ -12,8 +12,9 @@ Read `CONSUMER.md` in the repo root first — it has full context on what we're 
 
 Read `docs/consumer/openclaw-main-consumer-consolidation-plan.md` and
 `docs/consumer/openclaw-main-consumer-divergence-tracker.md` for the current
-main-first plan. Read `docs/consumer/openclaw-consumer-execution-spec.md` only
-as historical product context.
+main-first plan. Read
+`docs/consumer/archive/openclaw-consumer-execution-spec.md` only as historical
+product context.
 
 **Your job for this session is to continue the consumer browser decision work without reopening already-settled debates.**
 

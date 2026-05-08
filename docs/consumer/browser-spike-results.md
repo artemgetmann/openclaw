@@ -7,9 +7,9 @@ Status: In progress
 ## References
 
 - `CONSUMER.md`
-- `docs/consumer/openclaw-consumer-execution-spec.md`
+- `docs/consumer/archive/openclaw-consumer-execution-spec.md`
 - `docs/consumer/CODEX-PROMPT.md`
-- `docs/consumer/consumer-execution-tracker.md`
+- `docs/consumer/archive/consumer-execution-tracker.md`
 
 ## Baseline snapshot
 
