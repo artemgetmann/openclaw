@@ -2,19 +2,21 @@
 
 Last updated: 2026-05-02
 Owner: consumer execution team
-Status: Historical tracker; use current consolidation docs for branch routing
+Status: ARCHIVED historical tracker. Do not use this as the active master
+tracker.
 
-## Source of truth
+## Current Source Of Truth
 
 Use these documents in this order when there is any ambiguity:
 
 1. `CONSUMER.md` (current branch identity, north star, boundaries)
-2. `docs/consumer/openclaw-main-consumer-consolidation-plan.md` (main/consumer consolidation status)
-3. `docs/consumer/openclaw-main-consumer-divergence-tracker.md` (completed vs remaining consolidation slices)
-4. `docs/consumer/openclaw-consumer-execution-spec.md` (historical week-1 product intent)
-5. `docs/consumer/CODEX-PROMPT.md` (browser-spike task framing)
-6. `docs/consumer/openclaw-consumer-brutal-execution-board.md` (30-day cadence)
-7. `docs/consumer/openclaw-consumer-go-to-market-plan.md` (architecture and launch context)
+2. `docs/consumer/openclaw-main-consumer-consolidation-plan.md` (current main/consumer consolidation and release state)
+3. `docs/consumer/openclaw-main-consumer-divergence-tracker.md` (current completed vs remaining consolidation slices)
+4. `docs/research/jarvis-consumer-launch-plan.md` (launch/business blockers: account, license, backend, packaging, onboarding)
+
+The rest of this file is preserved for the March browser sprint and old
+execution-lane context. It contains stale workstream ownership and should not be
+used for current release or launch prioritization.
 
 ## Locked decisions
 
@@ -50,9 +52,10 @@ Use these documents in this order when there is any ambiguity:
   - how the app should explain cloned-browser behavior and isolation in Apple-simple language
   - whether setup should be app-driven, agent-guided, or a hybrid
 
-## Workstream registry (single source)
+## Archived Workstream Registry
 
-This file is the only master tracker. Do not create per-worktree tracker copies.
+Historical note: this was once the browser-sprint master tracker. It is no
+longer the active tracker.
 
 - All delegated branches should start from `origin/main`.
 - Each delegated workstream owns one scoped branch and one PR.
