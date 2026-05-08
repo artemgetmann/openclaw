@@ -162,6 +162,10 @@ Send
 - Text: `skills/wacli/scripts/wacli-send-safe.sh text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
 - Group: `skills/wacli/scripts/wacli-send-safe.sh text --to "1234567890-123456789@g.us" --message "Running 5 min late."`
 - File: `skills/wacli/scripts/wacli-send-safe.sh file --to "+14155551212" --file /path/agenda.pdf --caption "Agenda"`
+- A successful safe-send means WhatsApp accepted the outbound attempt. Only call
+  it locally verified when the helper reports `verification.status` as
+  `verified_local`; otherwise open the chat or use a manual `wa.me` fallback
+  before claiming delivery or thread proof.
 - Low-level fallback: `wacli send text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
 
 Monitor-driven reply send pattern
