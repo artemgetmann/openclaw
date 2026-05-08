@@ -6,9 +6,14 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type { RuntimeEnv } from "../runtime.js";
-import { runTelegramUserPrecheck, runTelegramUserSend } from "../telegram-user/backend.js";
+import {
+  runTelegramUserPrecheck,
+  runTelegramUserRead,
+  runTelegramUserSend,
+} from "../telegram-user/backend.js";
 import type {
   TelegramUserPrecheck,
+  TelegramUserReadResult,
   TelegramUserSendResult,
   TelegramUserWaitResult,
 } from "../telegram-user/types.js";
@@ -62,7 +67,7 @@ type TelegramDoctorReport = {
 
 type TelegramSmokeProof = {
   ok: boolean;
-  scenario: "dm-reply";
+  scenario: "dm-reply" | "baseline";
   branch: string | null;
   runtime_worktree: string | null;
   runtime_commit: string | null;
@@ -84,6 +89,45 @@ type TelegramSmokeProof = {
   reply_sender_id?: number | null;
   reply_to_msg_id?: number | null;
   reply_to_top_id?: number | null;
+};
+
+type TelegramE2eScenarioName = "tts-final-caption" | "progress-long-task" | "progress-plus-tts";
+
+type TelegramBaselineProof = TelegramSmokeProof & {
+  scenario: "baseline";
+  baseline: "pass" | "fail";
+  featureScenario: "not_run";
+  mergeReadiness: "insufficient";
+};
+
+type TelegramScenarioProof = {
+  ok: boolean;
+  scenario: TelegramE2eScenarioName;
+  branch: string | null;
+  runtime_worktree: string | null;
+  runtime_commit: string | null;
+  runtime_pid: number | null;
+  runtime_port: number | null;
+  runtime_health: "pass" | "fail";
+  current_lane_bot: string | null;
+  chat: string | null;
+  topic_id: number | null;
+  sent_message_id: number | null;
+  progress_message_ids: number[];
+  final_message_id: number | null;
+  message_ids: number[];
+  matched_by: string | null;
+  elapsed_ms: number;
+  pass_fail_reason: string;
+  failure_reason: string | null;
+  failure_reasons: string[];
+  artifact_path: string | null;
+  featureScenario: TelegramE2eScenarioName;
+  mergeReadiness: "sufficient" | "insufficient";
+  final_visible_text: string | null;
+  empty_voice_only_final_detected: boolean;
+  final_answer_present_after_cleanup: boolean | null;
+  progress_texts: string[];
 };
 
 type TelegramSmokeReplyClassification = {
@@ -367,6 +411,7 @@ export const telegramCommandDeps = {
     }
   },
   runTelegramUserPrecheck,
+  runTelegramUserRead,
   runTelegramUserSend,
   runTelegramUserWait,
 };
@@ -527,6 +572,70 @@ export async function telegramSmokeDmReplyCommand(
   logTelegramPayload(runtime, proof, Boolean(opts.json), renderSmokeText);
   if (!proof.ok) {
     throw new Error(proof.failure_reason ?? "telegram_smoke_dm_reply_failed");
+  }
+}
+
+export async function telegramSmokeBaselineCommand(
+  opts: {
+    chat?: string;
+    envFile?: string;
+    json?: boolean;
+    message?: string;
+    session?: string;
+    text?: string;
+    timeout?: number | string;
+    topicId?: number | string;
+  },
+  runtime: RuntimeEnv,
+) {
+  const proof = await runTelegramBaselineSmoke(opts);
+  logTelegramPayload(runtime, proof, Boolean(opts.json), renderBaselineText);
+  if (!proof.ok) {
+    throw new Error(proof.failure_reason ?? "telegram_smoke_baseline_failed");
+  }
+}
+
+export async function telegramScenarioTtsFinalCaptionCommand(
+  opts: TelegramScenarioCommandOptions,
+  runtime: RuntimeEnv,
+) {
+  await runTelegramScenarioCommand("tts-final-caption", opts, runtime);
+}
+
+export async function telegramScenarioProgressLongTaskCommand(
+  opts: TelegramScenarioCommandOptions,
+  runtime: RuntimeEnv,
+) {
+  await runTelegramScenarioCommand("progress-long-task", opts, runtime);
+}
+
+export async function telegramScenarioProgressPlusTtsCommand(
+  opts: TelegramScenarioCommandOptions,
+  runtime: RuntimeEnv,
+) {
+  await runTelegramScenarioCommand("progress-plus-tts", opts, runtime);
+}
+
+type TelegramScenarioCommandOptions = {
+  chat?: string;
+  envFile?: string;
+  json?: boolean;
+  message?: string;
+  session?: string;
+  text?: string;
+  timeout?: number | string;
+  topicId?: number | string;
+};
+
+async function runTelegramScenarioCommand(
+  scenario: TelegramE2eScenarioName,
+  opts: TelegramScenarioCommandOptions,
+  runtime: RuntimeEnv,
+) {
+  const proof = await runTelegramFeatureScenario(scenario, opts);
+  logTelegramPayload(runtime, proof, Boolean(opts.json), renderScenarioText);
+  if (!proof.ok) {
+    throw new Error(proof.failure_reason ?? `telegram_scenario_${scenario}_failed`);
   }
 }
 
@@ -800,6 +909,299 @@ function buildTelegramSmokeProof(params: {
   };
 }
 
+async function runTelegramBaselineSmoke(opts: {
+  chat?: string;
+  envFile?: string;
+  message?: string;
+  session?: string;
+  text?: string;
+  timeout?: number | string;
+  topicId?: number | string;
+}): Promise<TelegramBaselineProof> {
+  const runtimeReport = await buildTelegramRuntimeReport("ensure");
+  const chat = cleanString(opts.chat) ?? runtimeReport.current_lane_bot;
+  const proof = await runDmReplySmoke({
+    chat,
+    envFile: cleanString(opts.envFile),
+    message:
+      cleanString(opts.message) ??
+      cleanString(opts.text) ??
+      `openclaw-telegram-baseline ${telegramCommandDeps.now()} reply with one short sentence`,
+    scenario: "baseline",
+    session: cleanString(opts.session),
+    timeoutSeconds: parseOptionalPositiveInt(opts.timeout) ?? 120,
+    topicId: parseOptionalPositiveInt(opts.topicId),
+  });
+
+  const failureReasons = [...runtimeReport.failure_reasons, ...proof.failure_reasons].filter(
+    Boolean,
+  );
+  const ok = runtimeReport.ok && proof.ok;
+  const failureReason =
+    runtimeReport.failure_reason ?? proof.failure_reason ?? (ok ? null : "baseline_failed");
+
+  return {
+    ...proof,
+    ok,
+    scenario: "baseline",
+    baseline: ok ? "pass" : "fail",
+    featureScenario: "not_run",
+    mergeReadiness: "insufficient",
+    runtime_commit: proof.runtime_commit ?? runtimeReport.runtime_commit,
+    runtime_pid: proof.runtime_pid ?? runtimeReport.runtime_pid,
+    runtime_port: proof.runtime_port ?? runtimeReport.runtime_port,
+    current_lane_bot: proof.current_lane_bot ?? runtimeReport.current_lane_bot,
+    failure_reason: failureReason,
+    failure_reasons: failureReasons.length > 0 ? failureReasons : proof.failure_reasons,
+  };
+}
+
+async function runDmReplySmoke(params: {
+  chat: string | null;
+  envFile: string | null;
+  message: string;
+  scenario: "dm-reply" | "baseline";
+  session: string | null;
+  timeoutSeconds: number;
+  topicId: number | null;
+}): Promise<TelegramSmokeProof> {
+  if (!params.chat) {
+    throw new Error("claimed_tester_bot_unresolved");
+  }
+
+  const startedAt = telegramCommandDeps.now();
+  const repoContext = await telegramCommandDeps.resolveRepoContext();
+  let proof: TelegramSmokeProof = {
+    ok: false,
+    scenario: "dm-reply",
+    branch: repoContext.branch,
+    runtime_worktree: repoContext.worktree,
+    runtime_commit: repoContext.commit,
+    runtime_pid: null,
+    runtime_port: null,
+    current_lane_bot: null,
+    chat: params.chat,
+    topic_id: params.topicId,
+    sent_message_id: null,
+    reply_message_id: null,
+    matched_by: null,
+    elapsed_ms: 0,
+    failure_reason: null,
+    failure_reasons: [],
+    artifact_path: null,
+  };
+
+  try {
+    const doctor = await buildTelegramDoctorReport({
+      chat: params.chat,
+      envFile: params.envFile,
+      session: params.session,
+      topicId: params.topicId,
+    });
+    proof = {
+      ...proof,
+      branch: doctor.branch,
+      runtime_worktree: doctor.runtime_worktree,
+      runtime_commit: doctor.runtime_commit,
+      runtime_pid: doctor.runtime_pid,
+      runtime_port: doctor.runtime_port,
+      current_lane_bot: doctor.current_lane_bot,
+      failure_reason: doctor.failure_reason,
+      failure_reasons: doctor.failure_reasons,
+    };
+    if (!doctor.ok || !doctor.resolved_chat) {
+      throw new Error(doctor.failure_reason ?? "telegram_doctor_failed");
+    }
+
+    const sendResult = await telegramCommandDeps.runTelegramUserSend({
+      chat: params.chat,
+      envFile: params.envFile ?? undefined,
+      message: params.message,
+      session: params.session ?? undefined,
+    });
+    const waitResult = await telegramCommandDeps.runTelegramUserWait({
+      chat: params.chat,
+      afterId: sendResult.message.message_id,
+      contains: "",
+      envFile: params.envFile ?? undefined,
+      senderId: doctor.resolved_chat.chat_id ?? 0,
+      session: params.session ?? undefined,
+      threadAnchor: params.topicId ?? undefined,
+      timeoutMs: params.timeoutSeconds * 1000,
+    });
+
+    proof = buildTelegramSmokeProof({
+      branch: doctor.branch,
+      chat: params.chat,
+      currentLaneBot: doctor.current_lane_bot,
+      doctor,
+      elapsedMs: telegramCommandDeps.now() - startedAt,
+      runtimeCommit: doctor.runtime_commit,
+      runtimePid: doctor.runtime_pid,
+      runtimePort: doctor.runtime_port,
+      runtimeWorktree: doctor.runtime_worktree,
+      sendResult,
+      waitResult,
+    });
+  } catch (error) {
+    proof = {
+      ...proof,
+      elapsed_ms: telegramCommandDeps.now() - startedAt,
+      failure_reason: cleanFailureReason(error),
+      failure_reasons: [cleanFailureReason(error)],
+    };
+  } finally {
+    const artifactPath = await writeTelegramSmokeArtifact(repoContext.repoRoot, {
+      ...proof,
+      scenario: params.scenario,
+    });
+    proof = {
+      ...proof,
+      artifact_path: artifactPath,
+    };
+  }
+
+  return proof;
+}
+
+async function runTelegramFeatureScenario(
+  scenario: TelegramE2eScenarioName,
+  opts: TelegramScenarioCommandOptions,
+): Promise<TelegramScenarioProof> {
+  const startedAt = telegramCommandDeps.now();
+  const runtimeReport = await buildTelegramRuntimeReport("ensure");
+  const chat = cleanString(opts.chat) ?? runtimeReport.current_lane_bot;
+  const timeoutSeconds = parseOptionalPositiveInt(opts.timeout) ?? 180;
+  const topicId = parseOptionalPositiveInt(opts.topicId);
+  const envFile = cleanString(opts.envFile);
+  const session = cleanString(opts.session);
+  const requestedMessage = cleanString(opts.message) ?? cleanString(opts.text);
+  const repoContext = await telegramCommandDeps.resolveRepoContext();
+
+  let proof: TelegramScenarioProof = {
+    ok: false,
+    scenario,
+    branch: runtimeReport.branch ?? repoContext.branch,
+    runtime_worktree: runtimeReport.runtime_worktree ?? repoContext.worktree,
+    runtime_commit: runtimeReport.runtime_commit ?? repoContext.commit,
+    runtime_pid: runtimeReport.runtime_pid,
+    runtime_port: runtimeReport.runtime_port,
+    runtime_health: runtimeReport.ok ? "pass" : "fail",
+    current_lane_bot: runtimeReport.current_lane_bot,
+    chat,
+    topic_id: topicId,
+    sent_message_id: null,
+    progress_message_ids: [],
+    final_message_id: null,
+    message_ids: [],
+    matched_by: null,
+    elapsed_ms: 0,
+    pass_fail_reason: runtimeReport.failure_reason ?? "not_run",
+    failure_reason: runtimeReport.failure_reason,
+    failure_reasons: [...runtimeReport.failure_reasons],
+    artifact_path: null,
+    featureScenario: scenario,
+    mergeReadiness: "insufficient",
+    final_visible_text: null,
+    empty_voice_only_final_detected: false,
+    final_answer_present_after_cleanup: null,
+    progress_texts: [],
+  };
+
+  try {
+    if (!runtimeReport.ok) {
+      throw new Error(runtimeReport.failure_reason ?? "telegram_runtime_ensure_failed");
+    }
+    if (!chat) {
+      throw new Error("claimed_tester_bot_unresolved");
+    }
+
+    const doctor = await buildTelegramDoctorReport({ chat, envFile, session, topicId });
+    proof = {
+      ...proof,
+      branch: doctor.branch,
+      runtime_worktree: doctor.runtime_worktree,
+      runtime_commit: doctor.runtime_commit,
+      runtime_pid: doctor.runtime_pid,
+      runtime_port: doctor.runtime_port,
+      runtime_health: doctor.checks.gateway.ok ? "pass" : "fail",
+      current_lane_bot: doctor.current_lane_bot,
+      failure_reason: doctor.failure_reason,
+      failure_reasons: doctor.failure_reasons,
+    };
+    if (!doctor.ok || !doctor.resolved_chat) {
+      throw new Error(doctor.failure_reason ?? "telegram_doctor_failed");
+    }
+
+    const marker = `OC_E2E_${scenario.replace(/-/g, "_").toUpperCase()}_${telegramCommandDeps.newRunId()}`;
+    if (scenario === "tts-final-caption" || scenario === "progress-plus-tts") {
+      await sendAndWaitForAnyReply({
+        chat,
+        envFile,
+        message: "/tts on",
+        senderId: doctor.resolved_chat.chat_id ?? 0,
+        session,
+        timeoutMs: 45_000,
+        topicId,
+      });
+    }
+
+    const message = requestedMessage ?? defaultTelegramScenarioMessage(scenario, marker);
+    const sendResult = await telegramCommandDeps.runTelegramUserSend({
+      chat,
+      envFile: envFile ?? undefined,
+      message,
+      session: session ?? undefined,
+    });
+    const waitResult = await telegramCommandDeps.runTelegramUserWait({
+      chat,
+      afterId: sendResult.message.message_id,
+      contains: marker,
+      envFile: envFile ?? undefined,
+      senderId: doctor.resolved_chat.chat_id ?? 0,
+      session: session ?? undefined,
+      threadAnchor: topicId ?? undefined,
+      timeoutMs: timeoutSeconds * 1000,
+    });
+    const readResult = await telegramCommandDeps.runTelegramUserRead({
+      afterId: sendResult.message.message_id,
+      chat,
+      envFile: envFile ?? undefined,
+      limit: 80,
+      session: session ?? undefined,
+    });
+
+    proof = classifyTelegramFeatureScenario({
+      chat,
+      doctor,
+      elapsedMs: telegramCommandDeps.now() - startedAt,
+      marker,
+      readResult,
+      scenario,
+      sendResult,
+      waitResult,
+    });
+  } catch (error) {
+    const reason = cleanFailureReason(error);
+    proof = {
+      ...proof,
+      elapsed_ms: telegramCommandDeps.now() - startedAt,
+      failure_reason: reason,
+      failure_reasons: [...new Set([...proof.failure_reasons, reason])],
+      pass_fail_reason: reason,
+      mergeReadiness: "insufficient",
+    };
+  } finally {
+    const artifactPath = await writeTelegramScenarioArtifact(repoContext.repoRoot, proof);
+    proof = {
+      ...proof,
+      artifact_path: artifactPath,
+    };
+  }
+
+  return proof;
+}
+
 function classifyTelegramSmokeReply(
   text: string | null | undefined,
 ): TelegramSmokeReplyClassification {
@@ -849,12 +1251,178 @@ function classifyTelegramSmokeReply(
   };
 }
 
+async function sendAndWaitForAnyReply(params: {
+  chat: string;
+  envFile: string | null;
+  message: string;
+  senderId: number;
+  session: string | null;
+  timeoutMs: number;
+  topicId: number | null;
+}) {
+  const sendResult = await telegramCommandDeps.runTelegramUserSend({
+    chat: params.chat,
+    envFile: params.envFile ?? undefined,
+    message: params.message,
+    session: params.session ?? undefined,
+  });
+  return telegramCommandDeps.runTelegramUserWait({
+    chat: params.chat,
+    afterId: sendResult.message.message_id,
+    contains: "",
+    envFile: params.envFile ?? undefined,
+    senderId: params.senderId,
+    session: params.session ?? undefined,
+    threadAnchor: params.topicId ?? undefined,
+    timeoutMs: params.timeoutMs,
+  });
+}
+
+function defaultTelegramScenarioMessage(scenario: TelegramE2eScenarioName, marker: string) {
+  if (scenario === "tts-final-caption") {
+    return [
+      "Reply with a final voice/TTS answer if TTS is enabled.",
+      `The visible final text or caption must include exactly this marker: ${marker}.`,
+      "Keep the answer under 80 words.",
+    ].join(" ");
+  }
+  if (scenario === "progress-long-task") {
+    return [
+      "Do a visible multi-step answer before the final response.",
+      "Send meaningful progress about the model/agent work before the final answer.",
+      `The final answer must include exactly this marker: ${marker}.`,
+      "Do not use only the phrase Still working.",
+    ].join(" ");
+  }
+  return [
+    "Use visible progress before the final response, then produce a final voice/TTS answer if TTS is enabled.",
+    `The visible final text or caption must include exactly this marker: ${marker}.`,
+    "Keep the final answer under 80 words.",
+  ].join(" ");
+}
+
+function classifyTelegramFeatureScenario(params: {
+  chat: string;
+  doctor: TelegramDoctorReport;
+  elapsedMs: number;
+  marker: string;
+  readResult: TelegramUserReadResult;
+  scenario: TelegramE2eScenarioName;
+  sendResult: TelegramUserSendResult;
+  waitResult: TelegramUserWaitResult;
+}): TelegramScenarioProof {
+  const botId = params.doctor.resolved_chat?.chat_id ?? 0;
+  const botMessages = params.readResult.messages
+    .filter((message) => message.sender_id === botId)
+    .filter((message) => message.message_id > params.sendResult.message.message_id)
+    .toSorted((a, b) => a.message_id - b.message_id);
+  const finalMessage =
+    botMessages.find((message) => message.message_id === params.waitResult.matched.message_id) ??
+    params.waitResult.matched;
+  const progressMessages = botMessages.filter(
+    (message) =>
+      message.message_id < finalMessage.message_id &&
+      Boolean(cleanString(message.text)) &&
+      !message.text.includes(params.marker),
+  );
+  const finalVisibleText = cleanString(finalMessage.text);
+  const emptyVoiceOnlyFinalDetected = !finalVisibleText;
+  const progressTexts = progressMessages
+    .map((message) => cleanString(message.text))
+    .filter((text): text is string => Boolean(text));
+  const hasMeaningfulProgress = progressTexts.some((text) => !isWatchdogOnlyProgress(text));
+  const requiresProgress =
+    params.scenario === "progress-long-task" || params.scenario === "progress-plus-tts";
+  const requiresTtsCaption =
+    params.scenario === "tts-final-caption" || params.scenario === "progress-plus-tts";
+  const ttsCaptionOk =
+    !requiresTtsCaption ||
+    (Boolean(finalVisibleText?.includes(params.marker)) && !emptyVoiceOnlyFinalDetected);
+  const progressOk = !requiresProgress || hasMeaningfulProgress;
+  const finalAnswerPresentInReadback = botMessages.some(
+    (message) => message.message_id === finalMessage.message_id,
+  );
+  const finalAnswerPresentAfterCleanup =
+    params.scenario === "progress-plus-tts" ? finalAnswerPresentInReadback : null;
+  const previewCleanupOk = params.scenario !== "progress-plus-tts" || finalAnswerPresentInReadback;
+  const ok = ttsCaptionOk && progressOk && previewCleanupOk;
+  const failureReasons = [
+    ttsCaptionOk ? null : "final_tts_visible_text_missing",
+    progressOk ? null : "meaningful_progress_missing",
+    previewCleanupOk ? null : "final_answer_deleted_after_preview_cleanup",
+  ].filter((reason): reason is string => Boolean(reason));
+
+  return {
+    ok,
+    scenario: params.scenario,
+    branch: params.doctor.branch,
+    runtime_worktree: params.doctor.runtime_worktree,
+    runtime_commit: params.doctor.runtime_commit,
+    runtime_pid: params.doctor.runtime_pid,
+    runtime_port: params.doctor.runtime_port,
+    runtime_health: params.doctor.checks.gateway.ok ? "pass" : "fail",
+    current_lane_bot: params.doctor.current_lane_bot,
+    chat: params.chat,
+    topic_id:
+      params.waitResult.matched.direct_messages_topic?.topic_id ??
+      params.waitResult.matched.direct_messages_topic_id ??
+      params.doctor.topic_id,
+    sent_message_id: params.sendResult.message.message_id,
+    progress_message_ids: progressMessages.map((message) => message.message_id),
+    final_message_id: finalMessage.message_id,
+    message_ids: uniquePositiveNumbers([
+      params.sendResult.message.message_id,
+      finalMessage.message_id,
+      ...botMessages.map((message) => message.message_id),
+    ]),
+    matched_by: params.waitResult.matched_by,
+    elapsed_ms: params.elapsedMs,
+    pass_fail_reason: ok ? "pass" : (failureReasons[0] ?? "scenario_failed"),
+    failure_reason: ok ? null : (failureReasons[0] ?? "scenario_failed"),
+    failure_reasons: failureReasons,
+    artifact_path: null,
+    featureScenario: params.scenario,
+    mergeReadiness: ok ? "sufficient" : "insufficient",
+    final_visible_text: finalVisibleText,
+    empty_voice_only_final_detected: emptyVoiceOnlyFinalDetected,
+    final_answer_present_after_cleanup: finalAnswerPresentAfterCleanup,
+    progress_texts: progressTexts,
+  };
+}
+
+function isWatchdogOnlyProgress(text: string) {
+  const normalized = text.trim().toLowerCase();
+  return (
+    normalized === "still working." ||
+    normalized === "still working..." ||
+    normalized === "still working on it. this is taking longer than usual."
+  );
+}
+
+function uniquePositiveNumbers(values: number[]) {
+  return [...new Set(values.filter((value) => Number.isFinite(value) && value > 0))];
+}
+
 async function writeTelegramSmokeArtifact(
   repoRoot: string,
   proof: TelegramSmokeProof,
 ): Promise<string> {
   // Write an artifact for both pass and fail cases so every smoke run leaves a
   // durable proof record instead of forcing operators to scrape terminal logs.
+  const artifactPath = buildTelegramSmokeArtifactPath(
+    repoRoot,
+    proof.scenario,
+    telegramCommandDeps.newRunId(),
+    new Date(telegramCommandDeps.now()),
+  );
+  await telegramCommandDeps.writeFile(artifactPath, `${JSON.stringify(proof, null, 2)}\n`);
+  return artifactPath;
+}
+
+async function writeTelegramScenarioArtifact(
+  repoRoot: string,
+  proof: TelegramScenarioProof,
+): Promise<string> {
   const artifactPath = buildTelegramSmokeArtifactPath(
     repoRoot,
     proof.scenario,
@@ -930,6 +1498,52 @@ function renderSmokeText(report: TelegramSmokeProof): string {
   ];
   if (report.reply_text) {
     lines.push(`reply_text=${report.reply_text}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function renderBaselineText(report: TelegramBaselineProof): string {
+  const lines = [
+    report.ok
+      ? "Telegram smoke baseline ok."
+      : `Telegram smoke baseline failed. failure_reason=${report.failure_reason ?? "unknown"}`,
+    `baseline=${report.baseline}`,
+    `featureScenario=${report.featureScenario}`,
+    `mergeReadiness=${report.mergeReadiness}`,
+    `artifact_path=${report.artifact_path ?? "-"}`,
+    `branch=${report.branch ?? "-"}`,
+    `runtime_worktree=${report.runtime_worktree ?? "-"}`,
+    `runtime_commit=${report.runtime_commit ?? "-"}`,
+    `runtime_health=${report.ok ? "pass" : "fail"}`,
+    `current_lane_bot=${report.current_lane_bot ?? "-"}`,
+    `sent_message_id=${report.sent_message_id ?? "-"}`,
+    `reply_message_id=${report.reply_message_id ?? "-"}`,
+    `pass_fail_reason=${report.failure_reason ?? "pass"}`,
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+function renderScenarioText(report: TelegramScenarioProof): string {
+  const lines = [
+    report.ok
+      ? `Telegram scenario ${report.scenario} ok.`
+      : `Telegram scenario ${report.scenario} failed. failure_reason=${report.failure_reason ?? "unknown"}`,
+    `featureScenario=${report.featureScenario}`,
+    `mergeReadiness=${report.mergeReadiness}`,
+    `artifact_path=${report.artifact_path ?? "-"}`,
+    `branch=${report.branch ?? "-"}`,
+    `runtime_worktree=${report.runtime_worktree ?? "-"}`,
+    `runtime_commit=${report.runtime_commit ?? "-"}`,
+    `runtime_health=${report.runtime_health}`,
+    `current_lane_bot=${report.current_lane_bot ?? "-"}`,
+    `sent_message_id=${report.sent_message_id ?? "-"}`,
+    `progress_message_ids=${report.progress_message_ids.join(",") || "-"}`,
+    `final_message_id=${report.final_message_id ?? "-"}`,
+    `message_ids=${report.message_ids.join(",") || "-"}`,
+    `pass_fail_reason=${report.pass_fail_reason}`,
+  ];
+  if (report.final_visible_text) {
+    lines.push(`final_visible_text=${report.final_visible_text}`);
   }
   return `${lines.join("\n")}\n`;
 }
