@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { requireNodeSqlite } from "../../../src/memory/sqlite.js";
 
 type SendCommand = "text" | "file";
 
@@ -41,6 +42,18 @@ type LiveStatus = {
   stopReason?: string;
 };
 
+type SendReceipt = {
+  chatJid?: string;
+  messageId?: string;
+};
+
+type SendVerification = {
+  status: "verified_local" | "unverified";
+  chatJid?: string;
+  messageId?: string;
+  reason?: string;
+};
+
 type SendReport = {
   ok: boolean;
   status: "sent" | "sent_with_owner_restored" | "sent_with_restore_warning" | "failed";
@@ -57,6 +70,7 @@ type SendReport = {
     stderr: string;
     timedOut: boolean;
   };
+  verification: SendVerification;
   retryAttempted: boolean;
   message: string;
   error?: string;
@@ -65,6 +79,7 @@ type SendReport = {
 type Deps = {
   runCommand: typeof runCommand;
   sleep: (ms: number) => Promise<void>;
+  verifySend: typeof verifyAcceptedSendInLocalHistory;
 };
 
 function usage() {
@@ -260,6 +275,32 @@ function parseJson<T>(raw: string): T | undefined {
   return JSON.parse(trimmed) as T;
 }
 
+function parseSendReceipt(stdout: string, stderr = ""): SendReceipt {
+  const raw = `${stdout}\n${stderr}`;
+
+  // wacli can emit structured JSON. Treat `sent:true` as acceptance only, then
+  // extract the returned target/id so the local DB can prove whether history saw it.
+  for (const candidate of [stdout, stderr, ...raw.split(/\r?\n/)]) {
+    try {
+      const parsed = parseJson<{ sent?: unknown; to?: unknown; id?: unknown }>(candidate);
+      if (parsed?.sent === true && typeof parsed.to === "string" && typeof parsed.id === "string") {
+        return { chatJid: parsed.to, messageId: parsed.id };
+      }
+    } catch {
+      // Human output is the common path; malformed/non-JSON lines are expected.
+    }
+  }
+
+  const humanMatch = raw.match(/\bSent\s+to\s+(\S+)\s+\(id\s+([^)]+)\)/i);
+  if (!humanMatch) {
+    return {};
+  }
+  return {
+    chatJid: humanMatch[1],
+    messageId: humanMatch[2],
+  };
+}
+
 function containsLockError(raw: string) {
   return raw.toLowerCase().includes("store is locked");
 }
@@ -329,20 +370,124 @@ async function sendOnce(flags: Flags, deps: Pick<Deps, "runCommand">) {
   return await deps.runCommand("wacli", buildSendArgs(flags), flags.timeoutMs);
 }
 
-function buildSuccessMessage(flags: Flags, ownerPaused: boolean, ownerRestored: boolean) {
-  if (!ownerPaused) {
-    return `Sent WhatsApp ${flags.command}.`;
+async function verifyAcceptedSendInLocalHistory(params: {
+  storeDir: string;
+  stdout: string;
+  stderr: string;
+}): Promise<SendVerification> {
+  const receipt = parseSendReceipt(params.stdout, params.stderr);
+  if (!receipt.chatJid || !receipt.messageId) {
+    return {
+      status: "unverified",
+      reason: "wacli send output did not include a chat JID and message ID to verify.",
+    };
   }
-  if (ownerRestored) {
-    return `Paused the live sync owner, sent the WhatsApp ${flags.command}, and restored the owner.`;
+
+  const dbPath = path.join(params.storeDir, "wacli.db");
+  const { DatabaseSync } = requireNodeSqlite();
+  let db: InstanceType<typeof DatabaseSync> | undefined;
+
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    db.exec("PRAGMA busy_timeout = 1000");
+    const row = db
+      .prepare(
+        `SELECT 1
+         FROM messages
+         WHERE chat_jid = ?
+           AND msg_id = ?
+           AND from_me = 1
+         LIMIT 1`,
+      )
+      .get(receipt.chatJid, receipt.messageId);
+
+    if (row) {
+      return {
+        status: "verified_local",
+        chatJid: receipt.chatJid,
+        messageId: receipt.messageId,
+      };
+    }
+
+    return {
+      status: "unverified",
+      chatJid: receipt.chatJid,
+      messageId: receipt.messageId,
+      reason: `No matching outbound row found in ${dbPath}.`,
+    };
+  } catch (error) {
+    return {
+      status: "unverified",
+      chatJid: receipt.chatJid,
+      messageId: receipt.messageId,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    db?.close();
   }
-  return `Paused the live sync owner and sent the WhatsApp ${flags.command}, but restoring the owner needs attention.`;
 }
 
-async function runOwnerSafeSend(
+function buildSuccessMessage(
   flags: Flags,
-  deps: Deps = { runCommand, sleep },
-): Promise<SendReport> {
+  ownerPaused: boolean,
+  ownerRestored: boolean,
+  verification: SendVerification,
+) {
+  const acceptedPrefix = ownerPaused
+    ? ownerRestored
+      ? `Paused the live sync owner, accepted the WhatsApp ${flags.command}, and restored the owner`
+      : `Paused the live sync owner and accepted the WhatsApp ${flags.command}, but restoring the owner needs attention`
+    : `Accepted WhatsApp ${flags.command}`;
+
+  if (verification.status === "verified_local") {
+    return `${acceptedPrefix} and verified it in local history.`;
+  }
+
+  const reason = verification.reason ? ` Reason: ${verification.reason}` : "";
+  return `${acceptedPrefix}, but it was not verified in local history.${reason} Open the WhatsApp chat or use a wa.me fallback manually before claiming delivery or thread proof.`;
+}
+
+function unverified(reason: string): SendVerification {
+  return { status: "unverified", reason };
+}
+
+function defaultDeps(): Deps {
+  return { runCommand, sleep, verifySend: verifyAcceptedSendInLocalHistory };
+}
+
+function mergeDeps(overrides: Partial<Deps>): Deps {
+  return {
+    runCommand,
+    sleep,
+    verifySend: verifyAcceptedSendInLocalHistory,
+    ...overrides,
+  };
+}
+
+function emptySendResult() {
+  return { exitCode: null, stdout: "", stderr: "", timedOut: false };
+}
+
+function failedPauseVerification() {
+  return unverified(
+    "Send was not attempted because the recorded wacli sync owner could not be paused.",
+  );
+}
+
+function failedSendVerification() {
+  return unverified("Raw wacli send failed before local history verification.");
+}
+
+function missingSendResultVerification() {
+  return unverified("Raw wacli send did not produce a result.");
+}
+
+function resolveDeps(deps: Partial<Deps> | undefined): Deps {
+  return deps ? mergeDeps(deps) : defaultDeps();
+}
+
+async function runOwnerSafeSend(flags: Flags, depsOverrides?: Partial<Deps>): Promise<SendReport> {
+  const deps = resolveDeps(depsOverrides);
   const ownerBefore = await readOwnerStatus(flags, deps);
   const shouldPauseOwner =
     ownerBefore?.ownerRunning === true && ownerBefore.ownerCommandMatches === true;
@@ -368,7 +513,8 @@ async function runOwnerSafeSend(
         ownerRestored: false,
         ownerBefore,
         ownerStop,
-        send: { exitCode: null, stdout: "", stderr: "", timedOut: false },
+        send: emptySendResult(),
+        verification: failedPauseVerification(),
         retryAttempted: false,
         message: "Failed to pause the recorded wacli sync owner before sending.",
         error:
@@ -405,7 +551,8 @@ async function runOwnerSafeSend(
       ownerPaused,
       ownerRestored,
       ownerBefore,
-      send: { exitCode: null, stdout: "", stderr: "", timedOut: false },
+      send: emptySendResult(),
+      verification: missingSendResultVerification(),
       retryAttempted,
       message: "WhatsApp send did not start.",
       error: "No send result was produced.",
@@ -428,6 +575,7 @@ async function runOwnerSafeSend(
         stderr: sendResult.stderr,
         timedOut: sendResult.timedOut,
       },
+      verification: failedSendVerification(),
       retryAttempted,
       message: containsLockError(sendRaw)
         ? "WhatsApp send failed because the store is still locked."
@@ -446,6 +594,11 @@ async function runOwnerSafeSend(
       : ownerPaused && !ownerRestored
         ? "sent_with_restore_warning"
         : "sent";
+  const verification = await deps.verifySend({
+    storeDir: flags.storeDir,
+    stdout: sendResult.stdout,
+    stderr: sendResult.stderr,
+  });
 
   return {
     ok: true,
@@ -463,8 +616,9 @@ async function runOwnerSafeSend(
       stderr: sendResult.stderr,
       timedOut: sendResult.timedOut,
     },
+    verification,
     retryAttempted,
-    message: buildSuccessMessage(flags, ownerPaused, ownerRestored),
+    message: buildSuccessMessage(flags, ownerPaused, ownerRestored, verification),
   };
 }
 
@@ -478,6 +632,16 @@ function emit(report: SendReport, asJson: boolean) {
   console.log(`owner_paused=${String(report.ownerPaused)}`);
   console.log(`owner_restored=${String(report.ownerRestored)}`);
   console.log(`retry_attempted=${String(report.retryAttempted)}`);
+  console.log(`verification_status=${report.verification.status}`);
+  if (report.verification.chatJid) {
+    console.log(`verification_chat_jid=${report.verification.chatJid}`);
+  }
+  if (report.verification.messageId) {
+    console.log(`verification_message_id=${report.verification.messageId}`);
+  }
+  if (report.verification.reason) {
+    console.log(`verification_reason=${report.verification.reason}`);
+  }
   if (report.ownerStop?.forcedStop) {
     console.log("owner_stop_forced=true");
   }
@@ -505,5 +669,12 @@ if (import.meta.url === entrypoint) {
   });
 }
 
-export { buildSendArgs, containsLockError, parseArgs, runOwnerSafeSend };
-export type { Flags, LiveStatus, SendReport };
+export {
+  buildSendArgs,
+  containsLockError,
+  parseArgs,
+  parseSendReceipt,
+  runOwnerSafeSend,
+  verifyAcceptedSendInLocalHistory,
+};
+export type { Flags, LiveStatus, SendReceipt, SendReport, SendVerification };
