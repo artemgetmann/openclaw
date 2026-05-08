@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { requireNodeSqlite } from "../../../src/memory/sqlite.js";
 
 type SendCommand = "text" | "file";
 
@@ -384,7 +384,6 @@ async function verifyAcceptedSendInLocalHistory(params: {
   }
 
   const dbPath = path.join(params.storeDir, "wacli.db");
-  const { DatabaseSync } = requireNodeSqlite();
   let db: InstanceType<typeof DatabaseSync> | undefined;
 
   try {
