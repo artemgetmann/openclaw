@@ -6,7 +6,7 @@ struct SettingsRootView: View {
     @Bindable var state: AppState
     private let permissionMonitor = PermissionMonitor.shared
     @State private var monitoringPermissions = false
-    @State private var selectedTab: SettingsTab = .general
+    @State private var selectedTab: SettingsTab? = .general
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
     private let isPreview = ProcessInfo.processInfo.isPreview
@@ -18,8 +18,11 @@ struct SettingsRootView: View {
         self._selectedTab = State(initialValue: initialTab ?? .general)
     }
 
-    private var showsAdvancedSettings: Bool {
-        !AppFlavor.current.isConsumer || self.state.showAdvancedSettings
+    private var visibleTabs: [SettingsTab] {
+        Self.visibleTabs(
+            isConsumer: AppFlavor.current.isConsumer,
+            showAdvancedSettings: self.state.showAdvancedSettings,
+            debugPaneEnabled: self.state.debugPaneEnabled)
     }
 
     var body: some View {
@@ -27,59 +30,16 @@ struct SettingsRootView: View {
             if self.isNixMode {
                 self.nixManagedBanner
             }
-            TabView(selection: self.$selectedTab) {
-                GeneralSettings(state: self.state)
-                    .tabItem { Label("General", systemImage: "gearshape") }
-                    .tag(SettingsTab.general)
-
-                // Channels is a day-1 consumer surface, not an advanced
-                // operator control. Standard builds also keep it visible.
-                ChannelsSettings()
-                    .tabItem { Label("Channels", systemImage: "link") }
-                    .tag(SettingsTab.channels)
-
-                if self.showsAdvancedSettings {
-                    VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
-                        .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
-                        .tag(SettingsTab.voiceWake)
-
-                    ConfigSettings()
-                        .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
-                        .tag(SettingsTab.config)
-
-                    InstancesSettings()
-                        .tabItem { Label("Instances", systemImage: "network") }
-                        .tag(SettingsTab.instances)
-
-                    SessionsSettings()
-                        .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
-                        .tag(SettingsTab.sessions)
-
-                    CronSettings()
-                        .tabItem { Label("Cron", systemImage: "calendar") }
-                        .tag(SettingsTab.cron)
-
-                    SkillsSettings(state: self.state)
-                        .tabItem { Label("Skills", systemImage: "sparkles") }
-                        .tag(SettingsTab.skills)
+            NavigationSplitView {
+                List(self.visibleTabs, id: \.self, selection: self.$selectedTab) { tab in
+                    Label(tab.title, systemImage: tab.systemImage)
+                        .tag(tab as SettingsTab?)
                 }
-
-                PermissionsSettings(
-                    status: self.permissionMonitor.status,
-                    refresh: self.refreshPerms,
-                    showOnboarding: { DebugActions.restartOnboarding() })
-                    .tabItem { Label("Permissions", systemImage: "lock.shield") }
-                    .tag(SettingsTab.permissions)
-
-                if self.state.debugPaneEnabled, self.showsAdvancedSettings {
-                    DebugSettings(state: self.state)
-                        .tabItem { Label("Debug", systemImage: "ant") }
-                        .tag(SettingsTab.debug)
-                }
-
-                AboutSettings(updater: self.updater)
-                    .tabItem { Label("About", systemImage: "info.circle") }
-                    .tag(SettingsTab.about)
+                .listStyle(.sidebar)
+                .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 230)
+            } detail: {
+                self.settingsView(for: self.selectedTab ?? .general)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .padding(.horizontal, 28)
@@ -90,7 +50,7 @@ struct SettingsRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
-                    self.selectedTab = tab
+                    self.selectedTab = self.validTab(for: tab)
                 }
             }
         }
@@ -98,15 +58,19 @@ struct SettingsRootView: View {
             if let pending = SettingsTabRouter.consumePending() {
                 self.selectedTab = self.validTab(for: pending)
             }
-            self.updatePermissionMonitoring(for: self.selectedTab)
+            self.selectedTab = self.validTab(for: self.selectedTab ?? .general)
+            self.updatePermissionMonitoring(for: self.selectedTab ?? .general)
         }
         .onChange(of: self.state.debugPaneEnabled) { _, enabled in
             if !enabled, self.selectedTab == .debug {
                 self.selectedTab = .general
             }
         }
+        .onChange(of: self.state.showAdvancedSettings) { _, _ in
+            self.selectedTab = self.validTab(for: self.selectedTab ?? .general)
+        }
         .onChange(of: self.selectedTab) { _, newValue in
-            self.updatePermissionMonitoring(for: newValue)
+            self.updatePermissionMonitoring(for: newValue ?? .general)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             guard self.selectedTab == .permissions else { return }
@@ -120,6 +84,41 @@ struct SettingsRootView: View {
         .task(id: self.state.connectionMode) {
             guard !self.isPreview else { return }
             await self.refreshSnapshotPaths()
+        }
+    }
+
+    @ViewBuilder
+    private func settingsView(for tab: SettingsTab) -> some View {
+        switch tab {
+        case .general:
+            GeneralSettings(state: self.state)
+        case .channels:
+            ChannelsSettings()
+        case .browser:
+            BrowserSettings()
+        case .aiAccess:
+            AIAccessSettings()
+        case .voiceWake:
+            VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
+        case .config:
+            ConfigSettings()
+        case .instances:
+            InstancesSettings()
+        case .sessions:
+            SessionsSettings()
+        case .cron:
+            CronSettings()
+        case .skills:
+            SkillsSettings(state: self.state)
+        case .permissions:
+            PermissionsSettings(
+                status: self.permissionMonitor.status,
+                refresh: self.refreshPerms,
+                showOnboarding: { DebugActions.restartOnboarding() })
+        case .debug:
+            DebugSettings(state: self.state)
+        case .about:
+            AboutSettings(updater: self.updater)
         }
     }
 
@@ -218,13 +217,15 @@ private final class SettingsWindowBridgeView: NSView {
 }
 
 enum SettingsTab: CaseIterable {
-    case general, channels, skills, sessions, cron, config, instances, voiceWake, permissions, debug, about
+    case general, channels, browser, aiAccess, skills, sessions, cron, config, instances, voiceWake, permissions, debug, about
     static let windowWidth: CGFloat = 824 // wider
     static let windowHeight: CGFloat = 790 // +10% (more room)
     var title: String {
         switch self {
         case .general: "General"
         case .channels: "Channels"
+        case .browser: "Browser"
+        case .aiAccess: "AI access"
         case .skills: "Skills"
         case .sessions: "Sessions"
         case .cron: "Cron"
@@ -241,6 +242,8 @@ enum SettingsTab: CaseIterable {
         switch self {
         case .general: "gearshape"
         case .channels: "link"
+        case .browser: "globe"
+        case .aiAccess: "brain.head.profile"
         case .skills: "sparkles"
         case .sessions: "clock.arrow.circlepath"
         case .cron: "calendar"
@@ -264,7 +267,7 @@ extension SettingsRootView {
         // We keep the deeper tabs in the binary so advanced users can reveal them
         // without forcing a second app codebase.
         let advancedVisible = !isConsumer || showAdvancedSettings
-        var tabs: [SettingsTab] = [.general, .channels]
+        var tabs: [SettingsTab] = [.general, .channels, .browser, .aiAccess]
         if advancedVisible {
             tabs += [.voiceWake, .config, .instances, .sessions, .cron, .skills]
         }

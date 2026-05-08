@@ -100,6 +100,16 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `browser settings builds body`() {
+        let view = BrowserSettings()
+        _ = view.body
+    }
+
+    @Test func `ai access settings builds body`() {
+        let view = AIAccessSettings()
+        _ = view.body
+    }
+
     @Test func `consumer defaults keep dock icon visible unless user changed it`() {
         #expect(AppState.defaultShowDockIcon(storedValue: nil, isConsumer: true))
         #expect(!AppState.defaultShowDockIcon(storedValue: false, isConsumer: true))
@@ -153,12 +163,12 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
-    @Test func `consumer settings expose channels but hide advanced tabs by default`() {
+    @Test func `consumer settings expose day one tabs but hide advanced tabs by default`() {
         let tabs = SettingsRootView.visibleTabs(
             isConsumer: true,
             showAdvancedSettings: false,
             debugPaneEnabled: true)
-        #expect(tabs == [.general, .channels, .permissions, .about])
+        #expect(tabs == [.general, .channels, .browser, .aiAccess, .permissions, .about])
     }
 
     @Test func `consumer advanced settings reveal hidden tabs`() {
