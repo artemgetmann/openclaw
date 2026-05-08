@@ -60,19 +60,22 @@ are not the default place to implement P0 launch work.
 - #615: bundled app runtime root preference
 - #620: automatic packaged gateway LaunchAgent replacement repair
 - #625: packaged gateway source-attach bypass repair
+- #634: Channels tab first-task verifier auto-marks verified from recent live
+  Telegram activity
 - #638: LaunchAgent service-version drift repair
 
 ## Queue Now
 
-1. Recut the next public artifact from post-#638 `main` if broad distribution
-   should include the LaunchAgent service-version repair. Public `v2026.3.15`
-   still contains the old behavior.
-2. Run an interactive Sparkle UI smoke if the product claim needs the exact
+1. Fast rebuild/relaunch the installed app from post-#634 code, then run a
+   Computer Use Channels tab smoke. #634 fixed the false Telegram verifier
+   state in code, but `/Applications/OpenClaw.app` still needs a rebuilt app
+   before claiming the literal GUI path.
+2. Recut the next public artifact from post-#638/#634 `main` before broad
+   distribution. Public `v2026.3.15` still contains the old service-version
+   repair predicate and the pre-#634 Channels tab verifier behavior.
+3. Run an interactive Sparkle UI smoke if the product claim needs the exact
    dialog path. Deterministic Sparkle update completion from `v2026.3.14` to
    `v2026.3.15` already passed.
-3. Run a visual GUI smoke for the SwiftUI Channels tab `Verify first task`
-   button path if the product claim needs the exact UI click. The real Telegram
-   behavioral roundtrip is already proven.
 4. Keep account/license/backend work and public package/secrets audit open.
 
 ## External Release Lane
@@ -136,9 +139,15 @@ published artifact provenance instead of duplicating the work here.
   - matched reply id: `48671`
   - reply text: `OK FIRSTTASK-20260508T062445Z`
 - GUI caveat:
-  - the literal SwiftUI Channels tab `Verify first task` button path was not
-    visually clicked
-  - only the real Telegram DM behavior is proven
+  - #634 merged as `5515ce9c4373d7056b6c961c654c25c3490804b1` and fixes the
+    false Channels tab Telegram verifier state by auto-marking first-task
+    verified from recent live activity
+  - #634 validation passed:
+    `swift test --filter TelegramSetupBootstrapTests`,
+    `swift test --filter ConsumerSetupResumeTests`, and `git diff --check`
+  - `/Applications/OpenClaw.app` still needs a fast rebuild/relaunch or a
+    release recut from current `main`, followed by visual Channels tab smoke,
+    before claiming the installed-app GUI path
 
 ## Things We Should Stop Saying
 
@@ -150,6 +159,9 @@ published artifact provenance instead of duplicating the work here.
 - Stop saying Developer ID notarization, public installed-release smoke, or
   Sparkle update completion remains open for `v2026.3.15`; those gates passed.
   Only literal interactive Sparkle dialog visual proof remains open/optional.
+- Stop describing the Channels tab blocker as only an unimplemented or
+  unclicked verifier button. #634 merged the code fix; the remaining gap is
+  installed-app visual proof after rebuild/release recut.
 - Stop implying the final product is two apps: `OpenClaw` and
   `OpenClaw Consumer`.
 - Stop treating the visible app rename as blocked. The visible rename is done;
