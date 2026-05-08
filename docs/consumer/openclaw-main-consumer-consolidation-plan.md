@@ -98,8 +98,12 @@ claims tied to the published release rather than an older tag.
 Real Telegram behavioral verification is complete: a live DM to
 `@Jarvis_cl4w_bot` sent `FIRSTTASK-20260508T062445Z` and received
 `OK FIRSTTASK-20260508T062445Z` from the bot in the same DM. This proves the
-actual Telegram request/response path. The literal SwiftUI Channels tab button
-was not visually clicked, so keep GUI wording precise.
+actual Telegram request/response path. PR #634 merged as
+`5515ce9c4373d7056b6c961c654c25c3490804b1` and fixes the false Channels tab
+Telegram verifier state by auto-marking first-task verified from recent live
+activity. The installed `/Applications/OpenClaw.app` still needs a fast
+rebuild/relaunch or release recut from current `main`, then a visual Channels
+tab smoke, before claiming the literal GUI path.
 
 Sparkle live update-path verification and notarized public release rebuild are
 owned by the separate Sparkle/release lane. Do not duplicate that work from this
@@ -137,25 +141,27 @@ Do not fully retire `openclaw-consumer` until all of these are true:
 
 ## Next Implementation Slices
 
-### 1. Interactive Sparkle UI smoke
+### 1. Fast rebuild/relaunch and Channels tab smoke
+
+Fast rebuild/relaunch the installed app from post-#634 code, then run a
+Computer Use smoke against the SwiftUI Channels tab. The code fix is merged and
+tested, but the literal installed-app GUI path remains unproven until
+`/Applications/OpenClaw.app` is rebuilt or replaced from current `main`.
+
+### 2. Recut from post-#638/#634 `main`
+
+#638 fixes the stale LaunchAgent `OPENCLAW_SERVICE_VERSION` env observed after
+the public `v2026.3.14` -> `v2026.3.15` Sparkle update. #634 fixes the stale
+Channels tab first-task verifier state. Both fixes are in `main`, but not in
+the already-published `v2026.3.15` artifacts. Recut before broad distribution
+if the release claim includes either repaired behavior.
+
+### 3. Interactive Sparkle UI smoke
 
 Sparkle update completion from the public `v2026.3.14` build to `v2026.3.15`
 passed through a deterministic non-UI Sparkle proof. The remaining optional gate
 is observing the literal Sparkle dialog path if the product claim requires that
 exact UI.
-
-### 2. GUI Channels tab smoke
-
-The real Telegram behavioral gate passed through a direct DM roundtrip. The
-literal SwiftUI Channels tab `Verify first task` click still needs a visual GUI
-smoke if the product claim requires that exact button path.
-
-### 3. Recut from post-#638 `main`
-
-#638 fixes the stale LaunchAgent `OPENCLAW_SERVICE_VERSION` env observed after
-the public `v2026.3.14` -> `v2026.3.15` Sparkle update. That fix is in `main`,
-but not in the already-published `v2026.3.15` artifacts. Recut before broad
-distribution if the release claim includes repaired service-version metadata.
 
 ### 4. Account, license, backend, and public package audit
 
@@ -198,8 +204,11 @@ A live Telegram DM proof passed against `@Jarvis_cl4w_bot`:
 - reply text: `OK FIRSTTASK-20260508T062445Z`
 
 Status: behavioral Telegram request/response gate complete. The exact SwiftUI
-Channels tab button path was not visually clicked, so do not claim that GUI
-path until a visual smoke covers it.
+Channels tab path has a merged code fix in #634, validated by
+`swift test --filter TelegramSetupBootstrapTests`,
+`swift test --filter ConsumerSetupResumeTests`, and `git diff --check`.
+Do not claim installed-app GUI proof until a rebuilt/recut
+`/Applications/OpenClaw.app` passes visual Channels tab smoke.
 
 ### Full distribution packaging repair
 
