@@ -38,6 +38,8 @@ Read this before doing consumer-product work in this repo.
   - `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
 - Launch/business plan:
   - `docs/research/jarvis-consumer-launch-plan.md`
+- Launch package:
+  - `docs/consumer/jarvis-launch-package.md`
 - Archived execution docs:
   - `docs/consumer/archive/openclaw-consumer-execution-spec.md`
   - `docs/consumer/archive/consumer-execution-tracker.md`

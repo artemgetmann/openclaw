@@ -34,6 +34,7 @@ This section is the implementation-oriented summary. If a coding agent needs one
 12. **Operator education:** teach users that agents work best through clear natural-language delegation. The website/GitHub should say: tell Jarvis what you want, be specific, give preferences, correct it like a human assistant.
 13. **Bootstrap/setup:** initial setup needs redesign around first value. Reduce steps, simplify copy, make blockers obvious, and avoid developer jargon.
 14. **Distribution:** start with GitHub/Reddit plus a downloadable signed/notarized macOS app. Website comes when the message and install flow are proven.
+15. **Commercial package:** v1 public pricing is **Jarvis Core at $19/mo** and **Jarvis Plus at $39/mo**. Core is BYOK. Plus adds a managed utility budget but still expects BYOK primary model access. **Jarvis Managed AI at $99/mo** is invite-only until backend cost controls are proven. Details live in `docs/consumer/jarvis-launch-package.md`.
 
 ## 1. Positioning
 
@@ -295,13 +296,15 @@ Do **not** over-engineer a perfect billing/rate-limit system before distribution
 
 The v1 backend should implement simple hard caps and monthly counters, not a beautiful metering cathedral.
 
-## 6. Pricing recommendation
+## 6. Pricing decision
 
-Initial public pricing:
+Initial public pricing is now decided for launch copy. Keep the public README
+simple: Core and Plus only. Managed AI can stay invite-only until the backend
+has real usage data.
 
 ### Jarvis Core — $19/mo
 
-For power users.
+For power users who prefer BYOK.
 
 Includes:
 
@@ -312,9 +315,9 @@ Includes:
 - BYO tool keys where needed
 - community/self-serve support
 
-### Jarvis Core + Managed Utilities — $29/mo or $39/mo
+### Jarvis Plus — $39/mo
 
-Potential middle tier.
+For users who do not want to configure every utility key.
 
 Includes Core plus small managed utility budget:
 
@@ -327,7 +330,7 @@ Includes Core plus small managed utility budget:
 
 This is useful for less technical users who do not want to configure 6 keys, but it must have limits.
 
-Suggested phrasing: “Includes managed voice/search/tools for normal personal use.”
+Suggested phrasing: "Includes managed voice/search/tools for normal personal use."
 
 High-cost features should be plan-gated with simple allowances instead of complex credits at launch:
 
@@ -337,9 +340,10 @@ High-cost features should be plan-gated with simple allowances instead of comple
 
 If users need more, push them to a higher plan. Do not start with a complicated credits store unless usage data proves it is necessary.
 
-### Jarvis Managed AI — $79/mo or $99/mo
+### Jarvis Managed AI — $99/mo
 
-For non-technical users who want everything to just work.
+For non-technical users who want everything to just work. This is invite-only
+at launch until usage economics are proven.
 
 Includes:
 
@@ -659,8 +663,8 @@ Deployment/security boundary:
 
 - [x] Finalize plan decisions in this document.
 - [x] Audit all bundled/secrets/config surfaces enough to block public packages from shipping founder/provider keys; landed in PR #565.
-- [ ] Decide exact plan names and prices.
 - [x] Implement beta email activation + 14-day trial. Minimal email activation is implemented in the Jarvis backend/client contract for controlled beta account/device/trial tracking. This is not production auth: first activation returns an account token, repeated activation for the same email fails closed, and reinstall/account recovery waits for OTP/magic-code verification. Do not add passwords; Google Auth remains a later optional hardening slice.
+- [x] Decide exact plan names and prices. See `docs/consumer/jarvis-launch-package.md`.
 - [x] Implement license check + offline grace. Contract MVP exists in PR #560; Neon persistence landed in PR #569.
 - [ ] Implement update check/install path. Current next main lane with signing/notarization.
 - [ ] Sign/notarize macOS app.
@@ -669,8 +673,8 @@ Deployment/security boundary:
 - [ ] Define config/defaults update policy: migrate/merge without clobbering user config.
 - [ ] Define bundled skill vs workspace skill update policy.
 - [ ] Audit and simplify user-facing skill/tool names.
-- [ ] Create GitHub README launch page.
-- [ ] Record 60-second demo.
+- [x] Create GitHub README launch page outline. See `docs/consumer/jarvis-launch-package.md`.
+- [x] Draft 60-second demo script. See `docs/consumer/jarvis-launch-package.md`.
 
 ### P1 — First public launch
 
@@ -691,9 +695,9 @@ Deployment/security boundary:
 ## 15. Open decisions
 
 - [ ] Exact license: open source but what license?
-- [ ] Is Jarvis Core $19 or $29?
-- [ ] Is there a $29/$39 managed utilities tier, or only Core + Managed AI?
-- [ ] What are exact managed fair-use limits?
+- [x] Is Jarvis Core $19 or $29? Decision: $19/mo.
+- [x] Is there a $29/$39 managed utilities tier, or only Core + Managed AI? Decision: Jarvis Plus at $39/mo.
+- [x] What are exact managed fair-use limits? Initial v1 limits are defined in `docs/consumer/jarvis-launch-package.md`.
 - [ ] What is the first official distribution surface: GitHub Releases only, or GitHub + minimal website?
 - [ ] Use Sparkle/Electron updater/custom updater?
 - [ ] Keep OpenClaw name internally or fully rename everything?
