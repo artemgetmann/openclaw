@@ -48,7 +48,7 @@ enum CommandResolver {
     }
 
     static func projectRoot() -> URL {
-        self.projectRoot(preferredBundledRuntimeRoot: self.consumerBundledRuntimeProjectRoot())
+        self.projectRoot(preferredBundledRuntimeRoot: self.bundledConsumerRuntimeProjectRoot())
     }
 
     static func projectRoot(preferredBundledRuntimeRoot: URL?) -> URL {
@@ -83,14 +83,18 @@ enum CommandResolver {
         return home
     }
 
-    private static func consumerBundledRuntimeProjectRoot() -> URL? {
+    static func bundledConsumerRuntimeProjectRoot() -> URL? {
         guard AppFlavor.current.isConsumer else { return nil }
         guard let resourceURL = ConsumerBundledRuntime.resourceURL() else { return nil }
-        return resourceURL.appendingPathComponent("openclaw", isDirectory: true)
+        let root = resourceURL.appendingPathComponent("openclaw", isDirectory: true)
+        // Only advertise the packaged root once it can actually boot the gateway.
+        // A partial or malformed bundle should fall back to the source/dev paths.
+        guard self.isRepoRoot(root), self.gatewayEntrypoint(in: root) != nil else { return nil }
+        return root
     }
 
     static func bundledConsumerRuntimeEntrypoint() -> String? {
-        guard let root = self.consumerBundledRuntimeProjectRoot() else { return nil }
+        guard let root = self.bundledConsumerRuntimeProjectRoot() else { return nil }
         let entrypoint = root.appendingPathComponent("dist/index.js").path
         return FileManager.default.isReadableFile(atPath: entrypoint) ? entrypoint : nil
     }
@@ -105,6 +109,14 @@ enum CommandResolver {
 
     static func canonicalGatewayProjectRoot(projectRoot: URL? = nil) -> URL {
         let resolvedRoot = projectRoot ?? self.projectRoot()
+        // A packaged app built inside a worktree contains ".worktrees" in its
+        // bundle path. Do not strip that bundled runtime back to the source clone.
+        if let bundledRoot = self.bundledConsumerRuntimeProjectRoot(),
+           resolvedRoot.standardizedFileURL == bundledRoot.standardizedFileURL
+        {
+            return resolvedRoot
+        }
+
         let pathComponents = resolvedRoot.pathComponents
         guard let worktreesIndex = pathComponents.firstIndex(of: ".worktrees"), worktreesIndex > 0 else {
             return resolvedRoot
@@ -124,6 +136,15 @@ enum CommandResolver {
     static func projectRootEnvironmentHint() -> String? {
         let root = self.projectRoot()
         return self.isRepoRoot(root) ? root.path : nil
+    }
+
+    static func daemonProjectRootEnvironmentHint() -> String? {
+        // The CLI install command snapshots OPENCLAW_FORK_ROOT into launchd.
+        // For packaged consumer apps, that must be the bundled runtime root.
+        if let bundledRoot = self.bundledConsumerRuntimeProjectRoot() {
+            return bundledRoot.path
+        }
+        return self.projectRootEnvironmentHint()
     }
 
     static func preferredPaths() -> [String] {

@@ -435,8 +435,7 @@ extension GatewayLaunchAgentManager {
             configRoot: ["gateway": ["mode": "local"]],
             projectRoot: gatewayRoot)
         let env = self.daemonCommandEnvironment(
-            base: ProcessInfo.processInfo.environment,
-            projectRootHint: CommandResolver.projectRootEnvironmentHint())
+            base: ProcessInfo.processInfo.environment)
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
         let parsed = self.parseDaemonJson(from: response.stdout) ?? self.parseDaemonJson(from: response.stderr)
         let ok = parsed?.object["ok"] as? Bool
@@ -474,7 +473,7 @@ extension GatewayLaunchAgentManager {
 
     static func daemonCommandEnvironment(
         base: [String: String],
-        projectRootHint: String?) -> [String: String]
+        projectRootHint: String? = CommandResolver.daemonProjectRootEnvironmentHint()) -> [String: String]
     {
         let identity = RuntimeIdentity.current
         let instance = ConsumerInstance.current
