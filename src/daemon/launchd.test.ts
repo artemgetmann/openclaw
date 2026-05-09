@@ -642,6 +642,58 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toEqual([]);
   });
 
+  it("allows shared LaunchAgent install from normal subdirectories of canonical main", async () => {
+    const canonicalMain = makeTempDir();
+    const subdir = path.join(canonicalMain, "scripts");
+    fs.mkdirSync(subdir, { recursive: true });
+    fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(subdir);
+
+    await installLaunchAgent({
+      env: {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_MAIN_REPO: canonicalMain,
+      },
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      workingDirectory: subdir,
+    });
+
+    expect(state.launchctlCalls.length).toBeGreaterThan(0);
+  });
+
+  it("blocks shared LaunchAgent install and restart from repo-owned feature worktrees", async () => {
+    const canonicalMain = makeTempDir();
+    const lane = path.join(canonicalMain, ".worktrees", "lane");
+    fs.mkdirSync(lane, { recursive: true });
+    fs.writeFileSync(path.join(canonicalMain, ".git"), "gitdir: /tmp/fake\n", "utf8");
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(lane);
+
+    await expect(
+      installLaunchAgent({
+        env: {
+          ...createDefaultLaunchdEnv(),
+          OPENCLAW_MAIN_REPO: canonicalMain,
+        },
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+        workingDirectory: lane,
+      }),
+    ).rejects.toThrow("feature worktrees");
+
+    await expect(
+      restartLaunchAgent({
+        env: {
+          ...createDefaultLaunchdEnv(),
+          OPENCLAW_MAIN_REPO: canonicalMain,
+        },
+        stdout: new PassThrough(),
+      }),
+    ).rejects.toThrow("feature worktrees");
+
+    expect(state.launchctlCalls).toEqual([]);
+  });
+
   it("allows packaged consumer app runtime to install the shared LaunchAgent", async () => {
     const canonicalMain = makeTempDir();
     const appRuntime = path.join(

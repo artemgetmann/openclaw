@@ -10,6 +10,7 @@ import {
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import {
   resolveRuntimeFingerprint,
   type RuntimeFingerprint,
@@ -472,6 +473,17 @@ function buildNoncanonicalSharedRuntimeMessage(params: {
   ].join("\n");
 }
 
+function isDefaultSharedServiceIdentity(params: {
+  env: NodeJS.ProcessEnv;
+  runtimeFingerprint: RuntimeFingerprint;
+}): boolean {
+  const explicitLabel = params.env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const fingerprintLabel = params.runtimeFingerprint.serviceLabel?.trim();
+  return (
+    explicitLabel === GATEWAY_LAUNCH_AGENT_LABEL || fingerprintLabel === GATEWAY_LAUNCH_AGENT_LABEL
+  );
+}
+
 /**
  * Startup phase: apply runtime policies derived from resolved startup config.
  */
@@ -487,8 +499,12 @@ export async function runGatewayStartupRuntimePolicyPhase(
       deps.context.preflightSnapshot.path,
       env,
     );
+    const defaultSharedServiceIdentity = isDefaultSharedServiceIdentity({
+      env,
+      runtimeFingerprint,
+    });
     const noncanonicalSharedRuntime =
-      canonicalSharedConfig &&
+      (canonicalSharedConfig || defaultSharedServiceIdentity) &&
       canonicalMainRepo &&
       normalizePathForComparison(runtimeFingerprint.worktree) !==
         normalizePathForComparison(canonicalMainRepo);

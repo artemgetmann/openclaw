@@ -482,6 +482,55 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
     );
   });
 
+  it("refuses shared LaunchAgent identity from feature worktrees even with noncanonical app-support config", async () => {
+    const home = makeTempDir();
+    const canonicalRepo = path.join(home, "Programming_Projects", "openclaw");
+    const appSupportConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "OpenClaw",
+      ".openclaw",
+      "openclaw.json",
+    );
+    fs.mkdirSync(canonicalRepo, { recursive: true });
+    fs.writeFileSync(path.join(canonicalRepo, "package.json"), '{"name":"openclaw"}\n', "utf8");
+    fs.mkdirSync(path.dirname(appSupportConfigPath), { recursive: true });
+    fs.writeFileSync(appSupportConfigPath, "{}\n", "utf8");
+
+    await expect(
+      runGatewayStartupRuntimePolicyPhase({
+        context: createGatewayStartupContext(createSnapshot({ path: appSupportConfigPath })),
+        isDiagnosticsEnabled: () => false,
+        startDiagnosticHeartbeat: vi.fn(),
+        isRestartEnabled: () => false,
+        setGatewaySigusr1RestartPolicy: vi.fn(),
+        setPreRestartDeferralCheck: vi.fn(),
+        getPendingWorkCount: () => 0,
+        seedControlUiAllowedOrigins: async (config) => config,
+        env: {
+          HOME: home,
+          OPENCLAW_CONFIG_PATH: appSupportConfigPath,
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        },
+        runtimeFingerprint: {
+          branch: "codex/feature-runtime",
+          worktree: path.join(home, "Programming_Projects", "openclaw", ".worktrees", "lane"),
+          stateDir: path.dirname(appSupportConfigPath),
+          configPath: appSupportConfigPath,
+          serviceLabel: "ai.openclaw.gateway",
+        },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "runtime_policy",
+        message: expect.stringContaining(
+          "Refusing to start the default shared gateway runtime from a non-canonical checkout.",
+        ),
+      }),
+    );
+  });
+
   it("allows isolated consumer runtime configs from feature worktrees", async () => {
     const home = makeTempDir();
     const canonicalRepo = path.join(home, "Programming_Projects", "openclaw");
@@ -584,6 +633,49 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
         worktree: path.join(home, "Programming_Projects", "openclaw", ".worktrees", "lane"),
         stateDir: path.join(home, ".openclaw"),
         configPath: sharedConfigPath,
+        serviceLabel: "ai.openclaw.gateway",
+      },
+    });
+
+    expect(result.diagnosticsEnabled).toBe(false);
+  });
+
+  it("allows explicit break-glass override for shared LaunchAgent identity with noncanonical config", async () => {
+    const home = makeTempDir();
+    const canonicalRepo = path.join(home, "Programming_Projects", "openclaw");
+    const appSupportConfigPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "OpenClaw",
+      ".openclaw",
+      "openclaw.json",
+    );
+    fs.mkdirSync(canonicalRepo, { recursive: true });
+    fs.writeFileSync(path.join(canonicalRepo, "package.json"), '{"name":"openclaw"}\n', "utf8");
+    fs.mkdirSync(path.dirname(appSupportConfigPath), { recursive: true });
+    fs.writeFileSync(appSupportConfigPath, "{}\n", "utf8");
+
+    const result = await runGatewayStartupRuntimePolicyPhase({
+      context: createGatewayStartupContext(createSnapshot({ path: appSupportConfigPath })),
+      isDiagnosticsEnabled: () => false,
+      startDiagnosticHeartbeat: vi.fn(),
+      isRestartEnabled: () => false,
+      setGatewaySigusr1RestartPolicy: vi.fn(),
+      setPreRestartDeferralCheck: vi.fn(),
+      getPendingWorkCount: () => 0,
+      seedControlUiAllowedOrigins: async (config) => config,
+      env: {
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: appSupportConfigPath,
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_ALLOW_NONCANONICAL_SHARED_RUNTIME: "1",
+      },
+      runtimeFingerprint: {
+        branch: "codex/feature-runtime",
+        worktree: path.join(home, "Programming_Projects", "openclaw", ".worktrees", "lane"),
+        stateDir: path.dirname(appSupportConfigPath),
+        configPath: appSupportConfigPath,
         serviceLabel: "ai.openclaw.gateway",
       },
     });
