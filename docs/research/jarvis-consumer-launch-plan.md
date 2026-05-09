@@ -34,7 +34,8 @@ This section is the implementation-oriented summary. If a coding agent needs one
 12. **Operator education:** teach users that agents work best through clear natural-language delegation. The website/GitHub should say: tell Jarvis what you want, be specific, give preferences, correct it like a human assistant.
 13. **Bootstrap/setup:** initial setup needs redesign around first value. Reduce steps, simplify copy, make blockers obvious, and avoid developer jargon.
 14. **Distribution:** start with GitHub/Reddit plus a downloadable signed/notarized macOS app. Website comes when the message and install flow are proven.
-15. **Commercial package:** v1 public pricing is **Jarvis Core at $19/mo** and **Jarvis Plus at $39/mo**. Core is BYOK. Plus adds a managed utility budget but still expects BYOK primary model access. **Jarvis Managed AI at $99/mo** is invite-only until backend cost controls are proven. Details live in `docs/consumer/jarvis-launch-package.md`.
+15. **Brand:** public consumer brand is **Jarvis** from the start. OpenClaw remains technical/developer/powered-by language only. Visible app/artifact naming should move to Jarvis soon, but bundle ID, runtime identity, update feed identity, and deeper internal renames are a separate migration task.
+16. **Commercial package:** v1 public pricing is **Jarvis Managed at $99/mo** for the main consumer path and **Jarvis Core at $19/mo** for advanced BYOK users. Managed uses backend-held founder/provider keys and metered fair-use limits. Raw provider keys must not ship in the app. Details live in `docs/consumer/jarvis-launch-package.md`.
 
 ## 1. Positioning
 
@@ -298,39 +299,31 @@ The v1 backend should implement simple hard caps and monthly counters, not a bea
 
 ## 6. Pricing decision
 
-Initial public pricing is now decided for launch copy. Keep the public README
-simple: Core and Plus only. Managed AI can stay invite-only until the backend
-has real usage data.
+Initial public pricing is now decided for launch copy. Lead with the managed
+consumer path. BYOK is secondary for advanced users.
 
-### Jarvis Core — $19/mo
+### Jarvis Managed — $99/mo
 
-For power users who prefer BYOK.
+For normal consumers who want Jarvis to just work.
 
 Includes:
 
 - local app
-- updates
+- signed, verified updates
 - Telegram/local assistant runtime
-- BYO model keys/subscriptions
-- BYO tool keys where needed
-- community/self-serve support
-
-### Jarvis Plus — $39/mo
-
-For users who do not want to configure every utility key.
-
-Includes Core plus small managed utility budget:
-
+- managed model access through the Jarvis backend
 - speech-to-text
 - basic TTS
 - limited high-quality TTS, then fallback to cheaper/free Edge TTS
 - basic search/scraping/maps quota
 - limited image generation allowance, if economics work
+- priority onboarding support for early customers
 - video generation later, heavily limited or higher-tier only
 
-This is useful for less technical users who do not want to configure 6 keys, but it must have limits.
+This is the main consumer promise. Founder/provider keys must live server-side
+behind the Jarvis backend, never bundled in the app.
 
-Suggested phrasing: "Includes managed voice/search/tools for normal personal use."
+Suggested phrasing: "Includes managed AI, voice, search, and tools for normal personal use."
 
 High-cost features should be plan-gated with simple allowances instead of complex credits at launch:
 
@@ -340,17 +333,18 @@ High-cost features should be plan-gated with simple allowances instead of comple
 
 If users need more, push them to a higher plan. Do not start with a complicated credits store unless usage data proves it is necessary.
 
-### Jarvis Managed AI — $99/mo
+### Jarvis Core — $19/mo
 
-For non-technical users who want everything to just work. This is invite-only
-at launch until usage economics are proven.
+For advanced users who prefer BYOK or user-owned subscription login paths.
 
 Includes:
 
-- managed model access
-- managed voice/search/scraping/maps/image budgets
-- fair-use limits
-- upgrade path for heavy users
+- local app
+- signed, verified updates
+- Telegram/local assistant runtime
+- BYO model keys/subscriptions
+- BYO tool keys where needed
+- community/self-serve support
 
 ### Jarvis Founder / Concierge — $149-$299+/mo later
 
@@ -367,7 +361,7 @@ Recommended trial:
 
 - 14 days, not 30
 - requires account login
-- maybe no credit card for GitHub/Reddit early beta, but require account activation
+- no credit card for GitHub/Reddit early beta, but require account activation
 - later: credit-card trial if paid ads begin
 
 Why 14 days:
@@ -414,7 +408,7 @@ P0 requirements:
 - updater shows changelog
 - update process backs up config first
 
-Possible implementation choices:
+Possible implementation choices for developer docs:
 
 - Sparkle updater for macOS if the app stack supports it
 - Electron autoUpdater if Electron path is retained
@@ -427,6 +421,12 @@ Subscription enforcement through updates:
 - managed API access can be revoked server-side regardless of local app version
 
 Hard truth: for open source, preventing unpaid users from running old code is not worth the war. Control the hosted services and updates. That is the sane leverage point.
+
+Consumer update copy should stay Apple-style:
+
+> Jarvis keeps itself up to date with signed, verified updates. Your setup,
+> preferences, and local data stay in place. Jarvis tells you what is changing
+> before updates.
 
 ## 9. Distribution strategy
 
@@ -476,20 +476,24 @@ Do not build a giant marketing site now. One strong landing page is enough.
 
 ## 10. Branding/repo consolidation
 
-Decision direction:
+Decision:
 
-- [ ] OpenClaw consumer becomes Jarvis.
-- [ ] OpenClaw + OpenClaw Consumer become one repository and one macOS application.
-- [ ] Branding changes across CLI, documentation, app UI, package names, website, and onboarding.
+- [x] Public product brand is Jarvis from the start.
+- [x] OpenClaw can appear as technical/developer/powered-by language only.
+- [x] Public-facing app/docs should move toward Jarvis now.
+- [x] App visible name/artifact should become Jarvis soon.
+- [ ] Bundle ID/runtime/update identity/internal renames are a separate migration task.
 
 Open question:
 
 - [ ] Preserve OpenClaw as engine/internal name, expose Jarvis as product name?
 
-Recommended answer:
+Implementation boundary:
 
-- Product name: Jarvis
-- Engine/framework name: OpenClaw can remain inside docs/code for technical users, but user-facing experience should say Jarvis.
+- Product name: Jarvis.
+- Engine/framework/repo language: OpenClaw.
+- Do not imply bundle ID, runtime identity, update feed identity, or internal
+  package names have already been renamed.
 
 ### 10.1 User-facing capability names
 
@@ -521,7 +525,7 @@ Investigation task:
 P0 blockers before public strangers:
 
 - [ ] Apple signing/notarization or at minimum a much less terrifying install path.
-- [ ] Remove bundled founder keys from public builds or route them through managed backend.
+- [x] Remove bundled founder keys from public builds or route them through managed backend.
 - [ ] Account login/trial/subscription state.
 - [ ] Update mechanism.
 - [ ] Cleaner permissions flow.
@@ -688,19 +692,19 @@ Deployment/security boundary:
 
 - [ ] Website + Stripe checkout.
 - [ ] Paid ads only after activation is good.
-- [ ] Managed AI tier.
+- [ ] Managed usage scale-up from the initial consumer plan.
 - [ ] Concierge/pro tier.
 - [ ] Business/team features.
 
 ## 15. Open decisions
 
 - [ ] Exact license: open source but what license?
-- [x] Is Jarvis Core $19 or $29? Decision: $19/mo.
-- [x] Is there a $29/$39 managed utilities tier, or only Core + Managed AI? Decision: Jarvis Plus at $39/mo.
+- [x] Is Jarvis Core $19 or $29? Decision: $19/mo as the advanced BYOK plan.
+- [x] Is there a $29/$39 managed utilities tier, or only Core + Managed AI? Decision: no Plus tier for launch; Jarvis Managed at $99/mo is the main consumer plan.
 - [x] What are exact managed fair-use limits? Initial v1 limits are defined in `docs/consumer/jarvis-launch-package.md`.
 - [ ] What is the first official distribution surface: GitHub Releases only, or GitHub + minimal website?
 - [ ] Use Sparkle/Electron updater/custom updater?
-- [ ] Keep OpenClaw name internally or fully rename everything?
+- [x] Keep OpenClaw name internally or fully rename everything? Decision: Jarvis public brand now; OpenClaw technical/developer language remains until a separate internals migration.
 
 ## Sources checked
 

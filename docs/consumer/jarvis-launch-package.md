@@ -7,19 +7,30 @@ Last updated: 2026-05-09
 This document turns the launch plan into decisions that can be shipped into the
 GitHub README, release notes, pricing copy, and the first 60-second demo.
 
+## Brand and rename boundary
+
+Jarvis is the public consumer brand from the start. OpenClaw can appear as
+technical, developer, repo, or "powered by OpenClaw" language only.
+
+Public-facing app/docs should move toward Jarvis now. The visible app name and
+release artifacts should become Jarvis soon, but bundle ID, runtime identity,
+update feed identity, and deeper internal renames are a separate migration
+task. Do not imply those internals are already renamed.
+
 ## v1 commercial decision
 
-Launch with two public plans and one invite-only plan.
+Launch with managed service as the main consumer path and BYOK as the advanced
+escape hatch.
 
-| Plan                     | Price    | Buyer                         | Public at launch | Main boundary                                      |
-| ------------------------ | -------- | ----------------------------- | ---------------- | -------------------------------------------------- |
-| Jarvis Core              | $19/mo   | technical and power users     | yes              | BYOK model and tool providers                      |
-| Jarvis Plus              | $39/mo   | users who hate API-key setup  | yes              | BYOK model, managed utility budget                 |
-| Jarvis Managed AI        | $99/mo   | non-technical early customers | invite-only      | managed model plus managed utility fair-use budget |
-| Jarvis Founder Concierge | $299/mo+ | high-touch pilot customers    | no               | onboarding, workflow setup, priority support       |
+| Plan                     | Price    | Buyer                      | Public at launch | Main boundary                                |
+| ------------------------ | -------- | -------------------------- | ---------------- | -------------------------------------------- |
+| Jarvis Managed           | $99/mo   | normal consumers           | yes              | managed model and utility budget             |
+| Jarvis Core              | $19/mo   | technical and power users  | yes              | BYOK model and tool providers                |
+| Jarvis Founder Concierge | $299/mo+ | high-touch pilot customers | no               | onboarding, workflow setup, priority support |
 
-The public launch page should show Core and Plus. Managed AI can be mentioned
-as "early access" only if the backend controls and cost caps are ready.
+The public launch page should lead with Jarvis Managed because the consumer
+promise is "it just works." Jarvis Core exists for advanced users who want to
+bring their own model keys, provider accounts, or subscription logins.
 Founder Concierge is sales-led and should not clutter the README.
 
 ## Trial and account rules
@@ -36,12 +47,51 @@ Founder Concierge is sales-led and should not clutter the README.
 
 ## Entitlement boundaries
 
+### Jarvis Managed
+
+Managed is the main consumer plan.
+
+Managed includes:
+
+- signed/notarized Jarvis app downloads while subscription is active
+- automatic signed, verified updates while subscription is active
+- local-first Jarvis runtime on the user's Mac
+- Telegram assistant setup
+- managed model access through Jarvis backend-held provider keys
+- managed voice/search/scraping/maps/image utility budget
+- bundled official skills and workflows
+- visibility/logging controls
+- priority onboarding support for early customers
+
+Initial monthly fair-use allowance:
+
+- managed model service-cost cap: $45/user/month
+- speech-to-text: 1,000 minutes
+- standard text-to-speech: 1,000,000 characters
+- high-quality TTS: 500 messages or equivalent cap
+- search and maps: 5,000 combined requests
+- scraping: 2,000 pages
+- image generation: 100 images
+
+Managed backend guardrails:
+
+- managed usage must go through the Jarvis backend
+- raw founder/provider keys must never be packaged inside the app
+- raw founder/provider keys must never be sent to the app
+- backend limits must be configurable without an app update
+- Jarvis must stop, degrade, or request approval before it burns past the cap
+- no video generation in v1
+
+Unlimited managed AI at consumer pricing is a margin trap. Do not ship it.
+
 ### Jarvis Core
+
+Core is the advanced BYOK plan.
 
 Core includes:
 
 - signed/notarized macOS app downloads while subscription is active
-- automatic updates while subscription is active
+- automatic signed, verified updates while subscription is active
 - local-first Jarvis runtime on the user's Mac
 - Telegram assistant setup
 - bundled official skills and workflows
@@ -59,63 +109,17 @@ Core does not include:
 - priority support
 - done-for-you workflow setup
 
-### Jarvis Plus
-
-Plus includes everything in Core plus a managed utility budget for normal
-personal use.
-
-Plus still expects the user to bring their primary model access at v1. This is
-the sane middle ground: it removes the six-key setup pain without pretending
-heavy AI model usage fits inside a $39 subscription.
-
-Included monthly managed utility allowances:
-
-- speech-to-text: 300 minutes
-- standard text-to-speech: 250,000 characters
-- high-quality TTS: 100 messages or equivalent cap
-- search and maps: 1,000 combined requests
-- scraping: 500 pages
-- image generation: 25 images
-
-Plus backend guardrails:
-
-- hard service-cost cap: $8/user/month unless Artem manually raises it
-- abuse/rate cap: backend configurable without app update
-- overflow: ask user to add BYOK keys, upgrade, or wait until next cycle
-- no video generation in v1
-
-### Jarvis Managed AI
-
-Managed AI is invite-only until real usage data proves the economics.
-
-Managed AI includes:
-
-- managed model access
-- managed utility budget
-- higher fair-use limits
-- priority onboarding support
-
-Initial monthly fair-use allowance:
-
-- managed model service-cost cap: $45/user/month
-- speech-to-text: 1,000 minutes
-- standard text-to-speech: 1,000,000 characters
-- high-quality TTS: 500 messages or equivalent cap
-- search and maps: 5,000 combined requests
-- scraping: 2,000 pages
-- image generation: 100 images
-
-Managed AI must stop, degrade, or request approval before it burns past the cap.
-Unlimited managed AI at consumer pricing is a margin trap. Do not ship it.
-
 ## BYOK versus managed boundary
 
 Plain English:
 
 - BYOK means the user brings their own provider accounts and pays those
-  providers directly.
+  providers directly. It is advanced, not the main launch promise.
 - Managed means Jarvis uses backend-owned provider access and meters usage per
-  Jarvis account.
+  Jarvis account. It is the main consumer path.
+- User-owned subscription login means Jarvis uses a user's existing provider
+  login where supported. Treat it like an advanced BYOK path, not as managed
+  provider access.
 
 BYOK call path:
 
@@ -131,11 +135,11 @@ User -> Jarvis app -> Jarvis backend -> provider API
 
 Rules:
 
-- Core users are BYOK by default.
-- Plus users are BYOK for primary models and managed for limited utilities.
-- Managed AI users are managed for primary models and utilities.
+- Jarvis Managed users are managed for primary models and utilities.
+- Jarvis Core users are BYOK by default.
 - Raw managed provider keys must never be packaged inside the app.
 - Raw managed provider keys must never be sent to the app.
+- Founder/provider keys live server-side only.
 - BYOK provider keys stay local unless the user explicitly opts into a future
   sync/diagnostic flow.
 - The backend tracks monthly counters and spend estimates per Jarvis account.
@@ -189,43 +193,49 @@ Recommended demo:
 
 Use only the public plans:
 
-| Plan        | Price  | Best for                 | Included provider usage             |
-| ----------- | ------ | ------------------------ | ----------------------------------- |
-| Jarvis Core | $19/mo | power users              | BYOK                                |
-| Jarvis Plus | $39/mo | fewer keys, easier setup | managed utilities, BYOK model usage |
+| Plan           | Price  | Best for         | Included provider usage                      |
+| -------------- | ------ | ---------------- | -------------------------------------------- |
+| Jarvis Managed | $99/mo | normal consumers | managed models and utilities                 |
+| Jarvis Core    | $19/mo | advanced users   | BYOK keys and user-owned subscription logins |
 
 Copy:
 
-> Start with a 14-day trial. Core is for people who prefer their own provider
-> keys. Plus removes most utility-key setup for normal personal use. Managed AI
-> is invite-only while we tune cost controls.
+> Start with a 14-day no-card trial during the early GitHub/Reddit beta.
+> Managed is the main consumer plan: Jarvis uses backend-held provider access so
+> setup stays simple. Core is the advanced BYOK plan for people who want to use
+> their own provider keys or subscription logins.
 
 ### Local-first trust block
 
 Say this directly:
 
 > Jarvis runs on your Mac because your real work lives there: browser sessions,
-> files, apps, permissions, project tools, and local context. Managed services
-> are optional and metered. BYOK users can keep provider usage local.
+> files, apps, permissions, project tools, and local context. Managed provider
+> access is metered through the Jarvis backend. Advanced BYOK users can keep
+> provider usage local.
 
 ### Honest limitations
 
 - macOS first
 - Telegram first
 - setup is improving fast, but early users should expect sharp edges
-- some integrations require user-owned accounts or API keys
+- Core/BYOK users must bring their own provider keys or subscription logins
 - third-party skills can run code and should be treated as untrusted until
   reviewed
-- managed AI is invite-only until usage economics are proven
+- visible app/artifact naming is moving to Jarvis, but internal runtime/update
+  identities need a separate migration
 
 ### Roadmap
 
 - smoother account login and trial activation
 - cleaner Telegram setup
-- automatic signed updates
+- Apple-style signed, verified updates that keep setup, preferences, and local
+  data in place
 - better first-run permission copy
-- managed utility tier hardening
+- managed usage cap hardening
 - skill audit and safer third-party skill install flow
+- visible app/artifact rename to Jarvis without breaking bundle/runtime/update
+  identity
 - website after GitHub/Reddit signal
 
 ## 60-second demo script
@@ -281,8 +291,9 @@ Show final Telegram answer:
 
 Close:
 
-> "Jarvis is open source, Mac-first, and built for delegation. Start with Core
-> if you bring your own keys, or Plus if you want managed utilities included."
+> "Jarvis is open source, Mac-first, and built for delegation. Start with
+> Managed if you want it to just work, or Core if you want to bring your own
+> provider access."
 
 ## Launch copy snippets
 
@@ -299,15 +310,11 @@ One-line product description:
 
 Pricing one-liner:
 
-> Core is $19/mo for BYOK power users. Plus is $39/mo with managed utilities for
-> normal personal use.
+> Managed is $99/mo for the simple consumer path. Core is $19/mo for advanced
+> BYOK users.
 
 ## Open Artem decisions
 
-- Confirm whether the product name is Jarvis for public launch while OpenClaw
-  remains the engine/repo name.
-- Confirm whether Managed AI should be visible as invite-only in the README or
-  hidden until backend cost data exists.
-- Confirm whether the first public trial should require no credit card for all
-  users or only for GitHub/Reddit beta cohorts.
+- Confirm exact public wording for "powered by OpenClaw" in developer-facing
+  surfaces.
 - Confirm exact launch artifact name once the next signed build is cut.

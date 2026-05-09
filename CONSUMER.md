@@ -1,10 +1,12 @@
-# OpenClaw Consumer Product
+# Jarvis Consumer Product
 
 Read this before doing consumer-product work in this repo.
 
 ## What this repo context means
 
-- This checkout is being used for the OpenClaw consumer product.
+- This checkout is being used for the Jarvis consumer product.
+- OpenClaw is the technical engine/repo language; do not frame it as the
+  consumer brand unless the user explicitly asks.
 - Treat consumer-product work as separate from upstream `openclaw/openclaw` maintainer flow.
 - Default stance: consumer-product work lives in this fork unless the user explicitly asks for upstream work.
 
