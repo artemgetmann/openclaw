@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import { loadConfig } from "../../config/config.js";
 import type { CronJobCreate } from "../../cron/types.js";
-import { resolveMonitorWatchDelivery } from "../../monitor/delivery.js";
+import {
+  resolveMonitorOriginDelivery,
+  resolveMonitorWatchDelivery,
+} from "../../monitor/delivery.js";
 import { seedMonitorSession } from "../../monitor/session.js";
 import {
   createMonitorRecord,
@@ -31,29 +34,6 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 function resolveStorePath(cronStorePath: string) {
   return resolveMonitorStorePath({ cronStorePath });
-}
-
-function resolveMonitorDelivery(
-  originDelivery: CronJobCreate["delivery"] | undefined,
-): CronJobCreate["delivery"] | undefined {
-  if (!originDelivery) {
-    return undefined;
-  }
-  if (originDelivery.mode === "webhook" || originDelivery.mode === "none") {
-    return originDelivery;
-  }
-  // CLI-origin monitors do not have a channel/to target. In that case the
-  // wake should still run and write into the durable origin session instead of
-  // forcing a broken channel-style announce delivery.
-  if (!originDelivery.channel && !originDelivery.to) {
-    return undefined;
-  }
-  return {
-    mode: "announce",
-    channel: originDelivery.channel,
-    to: originDelivery.to,
-    accountId: originDelivery.accountId,
-  };
 }
 
 export const monitorHandlers: GatewayRequestHandlers = {
@@ -138,7 +118,10 @@ export const monitorHandlers: GatewayRequestHandlers = {
       requestKey: `monitor:${monitorId}`,
       mainKey: cfg.session?.mainKey,
     });
-    const cronDelivery = resolveMonitorDelivery(p.originDelivery);
+    const cronDelivery = resolveMonitorOriginDelivery({
+      originSessionKey: p.originSessionKey,
+      originDelivery: p.originDelivery,
+    });
     const cronJob: CronJobCreate = {
       name: p.name?.trim() || `${p.sourceType.trim()} monitor`,
       enabled: true,

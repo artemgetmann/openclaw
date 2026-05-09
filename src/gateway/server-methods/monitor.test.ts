@@ -199,6 +199,49 @@ describe("monitor gateway handlers", () => {
     );
   });
 
+  it("derives telegram topic routing from the origin session key when the stored delivery is bare", async () => {
+    const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
+
+    await monitorHandlers["monitor.create"]({
+      params: {
+        instructions: "Watch this Telegram topic for replies.",
+        agentId: "main",
+        originSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+        originDelivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:-1001234567890",
+          accountId: "default",
+        },
+        sourceType: "gmail",
+        sourceTarget: { account: "me@example.com", threadId: "thread-topic" },
+        cadence: { kind: "every", everyMs: 300_000 },
+      },
+      respond: respond as never,
+      context: {
+        cronStorePath,
+        cron: {
+          add: cronAdd,
+          update: cronUpdate,
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-topic-bare", method: "monitor.create" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(cronAdd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delivery: expect.objectContaining({
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:-1001234567890:topic:99",
+          accountId: "default",
+        }),
+      }),
+    );
+  });
+
   it("resolves watched-surface delivery for auto_send channel monitors", async () => {
     const { respond, cronAdd, cronUpdate, cronStorePath } = createInvokeContext();
 

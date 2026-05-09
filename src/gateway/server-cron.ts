@@ -358,6 +358,7 @@ export function buildGatewayCronService(params: {
       });
       const monitorExecution = resolveMonitorExecutionPlan({
         actionPolicy: monitor.actionPolicy,
+        originSessionKey: monitor.originSessionKey,
         sourceType: monitor.sourceType,
         sourceTarget: monitor.sourceTarget,
         originDelivery: monitor.originDelivery,
