@@ -51,6 +51,7 @@ describe("resolveGatewayProgramArguments", () => {
       "--port",
       "18789",
     ]);
+    expect(result.workingDirectory).toBe(path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw"));
   });
 
   it("prefers symlinked path over realpath for stable service config", async () => {
@@ -71,6 +72,9 @@ describe("resolveGatewayProgramArguments", () => {
     // Should use the symlinked path, not the realpath-resolved versioned path
     expect(result.programArguments[1]).toBe(symlinkPath);
     expect(result.programArguments[1]).not.toContain("@2026.1.21-2");
+    expect(result.workingDirectory).toBe(
+      path.resolve("/Users/test/Library/pnpm/global/5/node_modules/openclaw"),
+    );
   });
 
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
@@ -94,6 +98,51 @@ describe("resolveGatewayProgramArguments", () => {
       "--port",
       "18789",
     ]);
+    expect(result.workingDirectory).toBe(path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw"));
+  });
+
+  it("sets package root as working directory for explicit node runtime services", async () => {
+    const entryPath = path.resolve("/repo/dist/index.js");
+    process.argv = ["/opt/homebrew/opt/node@22/bin/node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({
+      nodePath: "/opt/homebrew/opt/node@22/bin/node",
+      port: 18789,
+      runtime: "node",
+    });
+
+    expect(result.programArguments).toEqual([
+      "/opt/homebrew/opt/node@22/bin/node",
+      entryPath,
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+    expect(result.workingDirectory).toBe(path.resolve("/repo"));
+  });
+
+  it("sets package root as working directory for non-dev bun runtime services", async () => {
+    const entryPath = path.resolve("/repo/dist/index.js");
+    process.argv = ["/usr/local/bin/node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+    childProcessMocks.execFileSync.mockReturnValue("/usr/local/bin/bun\n");
+
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      runtime: "bun",
+    });
+
+    expect(result.programArguments).toEqual([
+      "/usr/local/bin/bun",
+      entryPath,
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+    expect(result.workingDirectory).toBe(path.resolve("/repo"));
   });
 
   it("uses src/entry.ts for bun dev mode", async () => {

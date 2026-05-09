@@ -128,6 +128,19 @@ function resolveRepoRootForDev(): string {
   return parts.slice(0, srcIndex).join(path.sep);
 }
 
+function resolveWorkingDirectoryForServiceEntrypoint(
+  cliEntrypointPath: string,
+): string | undefined {
+  const distDir = path.dirname(cliEntrypointPath);
+  if (path.basename(distDir) !== "dist") {
+    return undefined;
+  }
+  // LaunchAgents do not inherit a useful cwd. Running bundled code from `/`
+  // can make relative runtime probes crawl or miss package-local assets, so
+  // keep managed services rooted at the package/repo that owns `dist`.
+  return path.dirname(distDir);
+}
+
 async function resolveBunPath(): Promise<string> {
   const bunPath = await resolveBinaryPath("bun");
   return bunPath;
@@ -174,6 +187,7 @@ async function resolveCliProgramArguments(params: {
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [nodePath, cliEntrypointPath, ...params.args],
+      workingDirectory: resolveWorkingDirectoryForServiceEntrypoint(cliEntrypointPath),
     };
   }
 
@@ -193,6 +207,7 @@ async function resolveCliProgramArguments(params: {
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [bunPath, cliEntrypointPath, ...params.args],
+      workingDirectory: resolveWorkingDirectoryForServiceEntrypoint(cliEntrypointPath),
     };
   }
 
@@ -201,6 +216,7 @@ async function resolveCliProgramArguments(params: {
       const cliEntrypointPath = await resolveCliEntrypointPathForService();
       return {
         programArguments: [execPath, cliEntrypointPath, ...params.args],
+        workingDirectory: resolveWorkingDirectoryForServiceEntrypoint(cliEntrypointPath),
       };
     } catch (error) {
       // If running under bun or another runtime that can execute TS directly
