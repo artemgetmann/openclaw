@@ -184,8 +184,90 @@ function resolveOriginDelivery(originDelivery: CronDelivery | undefined): CronDe
   };
 }
 
+function readTelegramTopicRoute(
+  originSessionKey: string | undefined,
+): { to: string; topicId: string } | undefined {
+  if (!originSessionKey) {
+    return undefined;
+  }
+  const topicMarker = ":topic:";
+  const topicIndex = originSessionKey.lastIndexOf(topicMarker);
+  if (topicIndex === -1) {
+    return undefined;
+  }
+  const topicId = originSessionKey.slice(topicIndex + topicMarker.length).trim();
+  if (!topicId) {
+    return undefined;
+  }
+
+  const beforeTopic = originSessionKey.slice(0, topicIndex);
+  const telegramMarker = ":telegram:";
+  const telegramIndex = beforeTopic.lastIndexOf(telegramMarker);
+  if (telegramIndex === -1) {
+    return undefined;
+  }
+
+  const parts = beforeTopic
+    .slice(telegramIndex + telegramMarker.length)
+    .split(":")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const to = parts.at(-1);
+  return to ? { to, topicId } : undefined;
+}
+
+function stripTelegramTargetPrefix(to: string): string {
+  return to.startsWith("telegram:") ? to.slice("telegram:".length) : to;
+}
+
+function isTelegramTopicQualifiedTarget(to: string): boolean {
+  return /:topic:[^:]+$/i.test(to) || /^telegram:[^:]+:topic:[^:]+$/i.test(to);
+}
+
+function appendTelegramTopicSuffix(params: {
+  to: string;
+  originTarget: string;
+  topicId: string;
+}): string {
+  if (isTelegramTopicQualifiedTarget(params.to)) {
+    return params.to;
+  }
+  if (stripTelegramTargetPrefix(params.to) !== params.originTarget) {
+    return params.to;
+  }
+  return `${params.to}:topic:${params.topicId}`;
+}
+
+export function resolveMonitorOriginDelivery(params: {
+  originSessionKey?: string;
+  originDelivery?: CronDelivery;
+}): CronDelivery | undefined {
+  const originDelivery = resolveOriginDelivery(params.originDelivery);
+  if (!originDelivery) {
+    return undefined;
+  }
+
+  const topicRoute =
+    originDelivery.channel === "telegram"
+      ? readTelegramTopicRoute(params.originSessionKey)
+      : undefined;
+  if (!topicRoute || !originDelivery.to) {
+    return originDelivery;
+  }
+
+  return {
+    ...originDelivery,
+    to: appendTelegramTopicSuffix({
+      to: originDelivery.to,
+      originTarget: topicRoute.to,
+      topicId: topicRoute.topicId,
+    }),
+  };
+}
+
 export function resolveMonitorRunDelivery(params: {
   actionPolicy: MonitorActionPolicy;
+  originSessionKey?: string;
   originDelivery?: CronDelivery;
   watchDelivery?: CronDelivery;
 }): {
@@ -205,7 +287,10 @@ export function resolveMonitorRunDelivery(params: {
   }
 
   return {
-    delivery: resolveOriginDelivery(params.originDelivery),
+    delivery: resolveMonitorOriginDelivery({
+      originSessionKey: params.originSessionKey,
+      originDelivery: params.originDelivery,
+    }),
     deliveryPromptMode: "summary",
     watchDeliveryConfigured,
   };
@@ -213,6 +298,7 @@ export function resolveMonitorRunDelivery(params: {
 
 export function resolveMonitorExecutionPlan(params: {
   actionPolicy: MonitorActionPolicy;
+  originSessionKey?: string;
   sourceType: string;
   sourceTarget: MonitorSourceTarget;
   originDelivery?: CronDelivery;
@@ -223,7 +309,10 @@ export function resolveMonitorExecutionPlan(params: {
     sourceTarget: params.sourceTarget,
     explicitWatchDelivery: params.watchDelivery,
   });
-  const originDelivery = resolveOriginDelivery(params.originDelivery);
+  const originDelivery = resolveMonitorOriginDelivery({
+    originSessionKey: params.originSessionKey,
+    originDelivery: params.originDelivery,
+  });
   const watchDeliveryConfigured = Boolean(actionTarget ?? params.watchDelivery);
 
   // Monitor auto-send should behave like a normal turn: the agent gets the

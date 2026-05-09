@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveMonitorActionTarget,
   resolveMonitorExecutionPlan,
+  resolveMonitorOriginDelivery,
   resolveMonitorWatchDelivery,
 } from "./delivery.js";
 
@@ -107,6 +108,96 @@ describe("resolveMonitorExecutionPlan", () => {
       deliveryContract: "cron-owned",
       watchDeliveryConfigured: true,
       requireExplicitMessageTarget: false,
+    });
+  });
+
+  it("restores telegram topic routing from the origin session key when the stored delivery lost it", () => {
+    expect(
+      resolveMonitorExecutionPlan({
+        actionPolicy: "notify_only",
+        originSessionKey: "agent:main:telegram:group:-1003783709877:topic:10272",
+        sourceType: "whatsapp",
+        sourceTarget: { target: "74333133234289@lid" },
+        originDelivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:-1003783709877",
+          accountId: "default",
+        },
+      }),
+    ).toEqual({
+      actionTarget: { kind: "message", channel: "whatsapp", to: "74333133234289@lid" },
+      originDelivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:-1003783709877:topic:10272",
+        accountId: "default",
+      },
+      fallbackDelivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:-1003783709877:topic:10272",
+        accountId: "default",
+      },
+      deliveryPromptMode: "summary",
+      deliveryContract: "cron-owned",
+      watchDeliveryConfigured: true,
+      requireExplicitMessageTarget: false,
+    });
+  });
+
+  it("leaves non-telegram origin delivery alone even when the session key has a topic suffix", () => {
+    expect(
+      resolveMonitorOriginDelivery({
+        originSessionKey: "agent:main:telegram:group:-1003783709877:topic:10272",
+        originDelivery: {
+          mode: "announce",
+          channel: "whatsapp",
+          to: "74333133234289@lid",
+          accountId: "default",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "whatsapp",
+      to: "74333133234289@lid",
+      accountId: "default",
+    });
+  });
+
+  it("does not append a topic when telegram delivery points at a different chat", () => {
+    expect(
+      resolveMonitorOriginDelivery({
+        originSessionKey: "agent:main:telegram:group:-1003783709877:topic:10272",
+        originDelivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "1336356696",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "1336356696",
+      accountId: undefined,
+    });
+  });
+
+  it("does not double-append a topic-qualified telegram target", () => {
+    expect(
+      resolveMonitorOriginDelivery({
+        originSessionKey: "agent:main:telegram:group:-1003783709877:topic:10272",
+        originDelivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:-1003783709877:topic:10272",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:-1003783709877:topic:10272",
+      accountId: undefined,
     });
   });
 
