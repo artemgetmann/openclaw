@@ -5,6 +5,7 @@ import {
   buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,
+  __testing,
   runCapability,
 } from "./runner.js";
 
@@ -56,5 +57,20 @@ describe("runCapability image skip", () => {
     } finally {
       await cache.cleanup();
     }
+  });
+
+  it("returns no explicit image models when every entry is generation-only", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "openai/gpt-image-2",
+            fallbacks: ["openai/gpt-image-3"],
+          },
+        },
+      },
+    };
+
+    expect(__testing.resolveImageModelFromAgentDefaults(cfg)).toEqual([]);
   });
 });

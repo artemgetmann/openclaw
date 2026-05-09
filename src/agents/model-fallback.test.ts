@@ -1407,11 +1407,11 @@ describe("runWithImageModelFallback", () => {
       agents: {
         defaults: {
           imageModel: {
-            primary: "openai/gpt-image-1",
+            primary: "openai/gpt-5-mini",
             fallbacks: ["google/gemini-2.5-flash-image-preview"],
           },
           models: {
-            "openai/gpt-image-1": {},
+            "openai/gpt-5-mini": {},
           },
         },
       },
@@ -1428,9 +1428,31 @@ describe("runWithImageModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
-      ["openai", "gpt-image-1"],
+      ["openai", "gpt-5-mini"],
       ["google", "gemini-2.5-flash-image-preview"],
     ]);
+  });
+
+  it("skips OpenAI image-generation models when reading images", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "openai/gpt-image-2",
+            fallbacks: ["openai/gpt-5-mini"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("ok");
+
+    const result = await runWithImageModelFallback({
+      cfg,
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([["openai", "gpt-5-mini"]]);
   });
 });
 

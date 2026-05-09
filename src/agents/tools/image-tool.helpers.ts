@@ -8,6 +8,34 @@ import { extractAssistantText } from "../pi-embedded-utils.js";
 
 export type ImageModelConfig = { primary?: string; fallbacks?: string[] };
 
+function parseModelRef(ref: string): { provider: string; model: string } | null {
+  const slashIdx = ref.indexOf("/");
+  if (slashIdx <= 0 || slashIdx >= ref.length - 1) {
+    return null;
+  }
+  const provider = ref.slice(0, slashIdx).trim().toLowerCase();
+  const model = ref
+    .slice(slashIdx + 1)
+    .trim()
+    .toLowerCase();
+  if (!provider || !model) {
+    return null;
+  }
+  return { provider, model };
+}
+
+/**
+ * OpenAI image-generation models are not usable for image understanding.
+ * Keep this check narrow so we only exclude the known generation-only family.
+ */
+export function isImageGenerationOnlyModelRef(ref: string): boolean {
+  const parsed = parseModelRef(ref.trim());
+  if (!parsed) {
+    return false;
+  }
+  return parsed.provider === "openai" && parsed.model.startsWith("gpt-image-");
+}
+
 export function decodeDataUrl(dataUrl: string): {
   buffer: Buffer;
   mimeType: string;
@@ -57,9 +85,13 @@ export function coerceImageAssistantText(params: {
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.imageModel);
   const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.imageModel);
+  const refs = [primary?.trim(), ...fallbacks]
+    .map((ref) => ref?.trim() ?? "")
+    .filter(Boolean)
+    .filter((ref) => !isImageGenerationOnlyModelRef(ref));
   return {
-    ...(primary?.trim() ? { primary: primary.trim() } : {}),
-    ...(fallbacks.length > 0 ? { fallbacks } : {}),
+    ...(refs[0] ? { primary: refs[0] } : {}),
+    ...(refs.length > 1 ? { fallbacks: refs.slice(1) } : {}),
   };
 }
 
