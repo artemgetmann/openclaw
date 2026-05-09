@@ -89,6 +89,12 @@ enum CommandResolver {
         return resourceURL.appendingPathComponent("openclaw", isDirectory: true)
     }
 
+    static func bundledConsumerRuntimeEntrypoint() -> String? {
+        guard let root = self.consumerBundledRuntimeProjectRoot() else { return nil }
+        let entrypoint = root.appendingPathComponent("dist/index.js").path
+        return FileManager.default.isReadableFile(atPath: entrypoint) ? entrypoint : nil
+    }
+
     static func setProjectRoot(_ path: String) {
         UserDefaults.standard.set(path, forKey: self.projectRootDefaultsKey)
     }

@@ -49,6 +49,163 @@ struct GatewayLaunchAgentManagerTests {
             launchAgentMatchesCurrentServiceVersion: false) == .install)
     }
 
+    @MainActor
+    @Test func `packaged consumer ownership expects bundled runtime over stale source default`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let bundled = try self.makeBundledRuntime()
+        let staleSourceRoot = try self.makeRepoRoot(named: "source-openclaw-\(UUID().uuidString)")
+        defer {
+            ConsumerBundledRuntime._clearTestingResourceURL()
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: bundled.resourceRoot.deletingLastPathComponent())
+            try? FileManager().removeItem(at: staleSourceRoot)
+        }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": staleSourceRoot.path,
+            ])
+        {
+            ConsumerBundledRuntime._setTestingResourceURL(bundled.resourceRoot)
+            let sourceEntrypoint = staleSourceRoot.appendingPathComponent("dist/index.js").path
+            let snapshot = LaunchAgentPlistSnapshot(
+                programArguments: ["/usr/bin/node", sourceEntrypoint, "gateway"],
+                environment: [:],
+                stdoutPath: nil,
+                stderrPath: nil,
+                port: nil,
+                bind: nil,
+                token: nil,
+                password: nil)
+
+            let ownership = GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot)
+
+            #expect(ownership.expectedEntrypoint == bundled.projectRoot.appendingPathComponent("dist/index.js").path)
+            #expect(ownership.actualEntrypoint == sourceEntrypoint)
+            #expect(!ownership.matchesCurrentEntrypoint)
+        }
+    }
+
+    @MainActor
+    @Test func `enable installs when packaged app finds source checkout entrypoint`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let bundled = try self.makeBundledRuntime()
+        let staleSourceRoot = try self.makeRepoRoot(named: "source-openclaw-\(UUID().uuidString)")
+        let plistURL = home
+            .appendingPathComponent("Library/LaunchAgents/ai.openclaw.gateway.plist")
+        defer {
+            ConsumerBundledRuntime._clearTestingResourceURL()
+            GatewayLaunchAgentManager._clearTestingHooks()
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: bundled.resourceRoot.deletingLastPathComponent())
+            try? FileManager().removeItem(at: staleSourceRoot)
+        }
+
+        var calls: [[String]] = []
+        GatewayLaunchAgentManager._setTestingHooks(
+            launchAgentWriteDisabled: { false },
+            readDaemonLoaded: { true },
+            runDaemonCommand: { args, _, _ in
+                calls.append(args)
+                return nil
+            })
+
+        try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": staleSourceRoot.path,
+            ])
+        {
+            ConsumerBundledRuntime._setTestingResourceURL(bundled.resourceRoot)
+            let identity = RuntimeIdentity.current
+            let plist: [String: Any] = [
+                "ProgramArguments": [
+                    "/usr/bin/node",
+                    staleSourceRoot.appendingPathComponent("dist/index.js").path,
+                    "gateway",
+                    "--port",
+                    "\(identity.gatewayPort)",
+                    "--bind",
+                    identity.gatewayBind,
+                ],
+                "EnvironmentVariables": [
+                    "OPENCLAW_HOME": identity.runtimeRootURL.path,
+                    "OPENCLAW_STATE_DIR": identity.stateDirURL.path,
+                    "OPENCLAW_CONFIG_PATH": identity.configURL.path,
+                    "OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH": identity.configURL.path,
+                ],
+            ]
+            try FileManager().createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: plistURL, options: [.atomic])
+
+            let error = await GatewayLaunchAgentManager.set(
+                enabled: true,
+                bundlePath: "/Applications/OpenClaw.app",
+                port: identity.gatewayPort)
+
+            #expect(error == nil)
+            #expect(calls == [[
+                "install",
+                "--force",
+                "--allow-shared-service-takeover",
+                "--port",
+                "\(identity.gatewayPort)",
+                "--runtime",
+                "node",
+            ]])
+        }
+    }
+
+    @MainActor
+    @Test func `source launch agent ownership still uses configured project root`() async throws {
+        let sourceRoot = try self.makeRepoRoot(named: "source-openclaw-\(UUID().uuidString)")
+        defer {
+            ConsumerBundledRuntime._clearTestingResourceURL()
+            try? FileManager().removeItem(at: sourceRoot)
+        }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                "OPENCLAW_TEST": "1",
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": sourceRoot.path,
+            ])
+        {
+            let entrypoint = sourceRoot.appendingPathComponent("dist/index.js").path
+            let snapshot = LaunchAgentPlistSnapshot(
+                programArguments: ["/usr/bin/node", entrypoint, "gateway"],
+                environment: [:],
+                stdoutPath: nil,
+                stderrPath: nil,
+                port: nil,
+                bind: nil,
+                token: nil,
+                password: nil)
+
+            let ownership = GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot)
+
+            #expect(ownership.expectedEntrypoint == entrypoint)
+            #expect(ownership.actualEntrypoint == entrypoint)
+            #expect(ownership.matchesCurrentEntrypoint)
+        }
+    }
+
     @Test func `enable skips loaded matching launch agent`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
@@ -684,6 +841,38 @@ struct GatewayLaunchAgentManagerTests {
 }
 
 extension GatewayLaunchAgentManagerTests {
+    private func makeRepoRoot(named name: String) throws -> URL {
+        let root = FileManager().temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+        try FileManager().createDirectory(
+            at: root.appendingPathComponent("dist", isDirectory: true),
+            withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent("dist/index.js"))
+        try Data().write(to: root.appendingPathComponent("package.json"))
+        try Data().write(to: root.appendingPathComponent("openclaw.mjs"))
+        return root
+    }
+
+    private func makeBundledRuntime() throws -> (resourceRoot: URL, projectRoot: URL) {
+        let appRoot = FileManager().temporaryDirectory
+            .appendingPathComponent("OpenClaw.app-\(UUID().uuidString)", isDirectory: true)
+        let resourceRoot = appRoot
+            .appendingPathComponent("Contents/Resources/OpenClawRuntime", isDirectory: true)
+        let projectRoot = resourceRoot.appendingPathComponent("openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: resourceRoot, withIntermediateDirectories: true)
+        _ = try self.makeRepoRoot(at: projectRoot)
+        return (resourceRoot, projectRoot)
+    }
+
+    private func makeRepoRoot(at root: URL) throws -> URL {
+        try FileManager().createDirectory(
+            at: root.appendingPathComponent("dist", isDirectory: true),
+            withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent("dist/index.js"))
+        try Data().write(to: root.appendingPathComponent("package.json"))
+        try Data().write(to: root.appendingPathComponent("openclaw.mjs"))
+        return root
+    }
+
     private func repoRoot(filePath: StaticString = #filePath) -> URL {
         let fileURL = URL(fileURLWithPath: "\(filePath)")
         return fileURL

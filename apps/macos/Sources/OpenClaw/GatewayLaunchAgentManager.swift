@@ -190,9 +190,7 @@ enum GatewayLaunchAgentManager {
 
     static func currentEntrypointOwnership(snapshot: LaunchAgentPlistSnapshot? = nil) -> EntrypointOwnership {
         let resolvedSnapshot = snapshot ?? self.launchdConfigSnapshot()
-        let expectedEntrypoint = CommandResolver.projectRootEnvironmentHint().flatMap { expectedRoot in
-            CommandResolver.gatewayEntrypoint(in: URL(fileURLWithPath: expectedRoot, isDirectory: true))
-        }
+        let expectedEntrypoint = self.expectedLaunchAgentEntrypoint()
         let actualEntrypoint = self.resolveLaunchAgentEntrypoint(from: resolvedSnapshot)
         return EntrypointOwnership(
             expectedEntrypoint: expectedEntrypoint,
@@ -360,6 +358,16 @@ extension GatewayLaunchAgentManager {
     private static func launchAgentMatchesCurrentEntrypoint(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
         let ownership = self.currentEntrypointOwnership(snapshot: snapshot)
         return ownership.matchesCurrentEntrypoint
+    }
+
+    private static func expectedLaunchAgentEntrypoint() -> String? {
+        if let bundledEntrypoint = CommandResolver.bundledConsumerRuntimeEntrypoint() {
+            return bundledEntrypoint
+        }
+
+        return CommandResolver.projectRootEnvironmentHint().flatMap { expectedRoot in
+            CommandResolver.gatewayEntrypoint(in: URL(fileURLWithPath: expectedRoot, isDirectory: true))
+        }
     }
 
     private static func launchAgentMatchesCurrentServiceVersion(snapshot: LaunchAgentPlistSnapshot?) -> Bool {

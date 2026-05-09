@@ -4,6 +4,9 @@ import OSLog
 
 enum ConsumerBundledRuntime {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "consumer.bundled-runtime")
+    #if DEBUG
+    private nonisolated(unsafe) static var testResourceURLHook: (() -> URL?)?
+    #endif
 
     static let resourceDirectoryName = "OpenClawRuntime"
 
@@ -60,6 +63,11 @@ enum ConsumerBundledRuntime {
     }
 
     static func resourceURL(bundle: Bundle = .main) -> URL? {
+        #if DEBUG
+        if let hook = self.testResourceURLHook {
+            return hook()
+        }
+        #endif
         let resourceURL = bundle.resourceURL?.appendingPathComponent(self.resourceDirectoryName, isDirectory: true)
         guard let resourceURL, FileManager.default.fileExists(atPath: resourceURL.path) else {
             return nil
@@ -398,3 +406,15 @@ enum ConsumerBundledRuntime {
         )
     }
 }
+
+#if DEBUG
+extension ConsumerBundledRuntime {
+    static func _setTestingResourceURL(_ resourceURL: URL?) {
+        self.testResourceURLHook = { resourceURL }
+    }
+
+    static func _clearTestingResourceURL() {
+        self.testResourceURLHook = nil
+    }
+}
+#endif
