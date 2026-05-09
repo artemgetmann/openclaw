@@ -94,6 +94,41 @@ struct GatewayLaunchAgentManagerTests {
     }
 
     @MainActor
+    @Test func `daemon install environment prefers packaged bundled runtime over stale source default`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let sourceRoot = try self.makeRepoRoot(named: "source-openclaw-\(UUID().uuidString)")
+        let worktreeBundle = try self.makeBundledRuntimeInsideWorktree()
+        defer {
+            ConsumerBundledRuntime._clearTestingResourceURL()
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: sourceRoot)
+            try? FileManager().removeItem(at: worktreeBundle.repoRoot)
+        }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": sourceRoot.path,
+            ])
+        {
+            ConsumerBundledRuntime._setTestingResourceURL(worktreeBundle.resourceRoot)
+
+            let env = GatewayLaunchAgentManager.daemonCommandEnvironment(base: [:])
+
+            #expect(CommandResolver.daemonProjectRootEnvironmentHint() == worktreeBundle.projectRoot.path)
+            #expect(CommandResolver.canonicalGatewayProjectRoot().path == worktreeBundle.projectRoot.path)
+            #expect(env["OPENCLAW_FORK_ROOT"] == worktreeBundle.projectRoot.path)
+            #expect(env["OPENCLAW_FORK_ROOT"] != sourceRoot.path)
+        }
+    }
+
+    @MainActor
     @Test func `enable installs when packaged app finds source checkout entrypoint`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
@@ -861,6 +896,19 @@ extension GatewayLaunchAgentManagerTests {
         try FileManager().createDirectory(at: resourceRoot, withIntermediateDirectories: true)
         _ = try self.makeRepoRoot(at: projectRoot)
         return (resourceRoot, projectRoot)
+    }
+
+    private func makeBundledRuntimeInsideWorktree() throws -> (repoRoot: URL, resourceRoot: URL, projectRoot: URL) {
+        let repoRoot = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-packaged-root-\(UUID().uuidString)", isDirectory: true)
+        let appRoot = repoRoot
+            .appendingPathComponent(".worktrees/gui-smoke/dist/OpenClaw.app", isDirectory: true)
+        let resourceRoot = appRoot
+            .appendingPathComponent("Contents/Resources/OpenClawRuntime", isDirectory: true)
+        let projectRoot = resourceRoot.appendingPathComponent("openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: resourceRoot, withIntermediateDirectories: true)
+        _ = try self.makeRepoRoot(at: projectRoot)
+        return (repoRoot, resourceRoot, projectRoot)
     }
 
     private func makeRepoRoot(at root: URL) throws -> URL {

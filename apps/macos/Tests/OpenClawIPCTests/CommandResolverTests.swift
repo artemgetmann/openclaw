@@ -255,6 +255,10 @@ import Testing
                 to: root.appendingPathComponent("package.json"),
                 atomically: true,
                 encoding: .utf8)
+            try "export {}\n".write(
+                to: root.appendingPathComponent("openclaw.mjs"),
+                atomically: true,
+                encoding: .utf8)
             let distEntry = root.appendingPathComponent("dist/index.js")
             try FileManager().createDirectory(
                 at: distEntry.deletingLastPathComponent(),
