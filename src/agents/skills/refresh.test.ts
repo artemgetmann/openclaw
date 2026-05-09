@@ -1,5 +1,5 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const watchMock = vi.fn(() => ({
   on: vi.fn(),
@@ -15,6 +15,10 @@ vi.mock("chokidar", () => {
 describe("ensureSkillsWatcher", () => {
   beforeEach(() => {
     watchMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("seeds a non-zero snapshot version the first time a watcher is ensured", async () => {
@@ -80,5 +84,22 @@ describe("ensureSkillsWatcher", () => {
     // Should NOT ignore normal skill files
     expect(ignored.some((re) => re.test("/tmp/.hidden/skills/index.md"))).toBe(false);
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/my-skill/SKILL.md"))).toBe(false);
+  });
+
+  it("watches bundled skills so app updates invalidate cached skill snapshots", async () => {
+    vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", "/tmp/openclaw-bundled-skills");
+    const mod = await import("./refresh.js");
+    mod.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace-bundled-watch" });
+
+    const firstCall = (watchMock.mock.calls as unknown as Array<[string[]]>)[0];
+    const targets = firstCall?.[0] ?? [];
+    const posix = (p: string) => p.replaceAll("\\", "/");
+
+    expect(targets).toEqual(
+      expect.arrayContaining([
+        posix(path.join("/tmp/openclaw-bundled-skills", "SKILL.md")),
+        posix(path.join("/tmp/openclaw-bundled-skills", "*", "SKILL.md")),
+      ]),
+    );
   });
 });
