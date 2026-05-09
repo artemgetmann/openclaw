@@ -135,6 +135,8 @@ const JarvisSchema = z
         baseUrl: HttpUrlSchema.optional(),
         accessToken: SecretInputSchema.optional().register(sensitive),
         deviceId: z.string().min(1).optional(),
+        accountAccessToken: SecretInputSchema.optional().register(sensitive),
+        accountEmail: z.string().email().optional(),
         timeoutMs: z.number().int().positive().max(120000).optional(),
       })
       .strict()

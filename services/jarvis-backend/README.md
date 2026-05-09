@@ -23,6 +23,7 @@ The source can be public. The hosted environment cannot be.
 ## Endpoints
 
 - `GET /healthz` - public health check with provider presence booleans only.
+- `POST /v1/account/login` - activates/reuses an email beta account and links the device to its 14-day trial.
 - `POST /v1/device/register` - creates or reuses a durable device/license row.
 - `POST /v1/license/status` - returns persisted trial/license status for a device.
 - `POST /v1/admin/devices/{device_id}/license` - manual beta support override.
@@ -51,6 +52,14 @@ resetting the trial. Production refuses register/status/admin persistence
 requests when `JARVIS_BACKEND_ENV=production` and `NEON_DATABASE_URL` is missing
 because Render web-service filesystems are ephemeral.
 
+`/v1/account/login` is the first beta account activation path. It normalizes an
+email address, creates or reuses a durable account row, links the current device
+license row to that account, and returns an account access token plus the same
+license response shape used by `/v1/license/status`. This is enough for account
+and trial tracking, but it is not inbox-verified identity; replace or harden it
+with Google/email-link auth before trusting it for abuse-sensitive production
+flows.
+
 Local development and tests fall back to SQLite when `NEON_DATABASE_URL` is not
 set. Do not use that fallback for hosted beta users.
 
@@ -71,9 +80,9 @@ Render owns production secret values:
   backend token or Neon URL is missing.
 
 Do not add a Render persistent disk to `jarvis-backend` for account/license
-state. Neon/Postgres is the durable store for production. Google Auth, user
-accounts, billing, and richer account linking are later slices; this service
-currently persists device/license rows only.
+state. Neon/Postgres is the durable store for production. Google Auth, billing,
+and richer account linking are later slices; this service currently persists
+beta account rows and device/license rows only.
 
 ## Run Locally
 

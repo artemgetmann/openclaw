@@ -49,10 +49,109 @@ describe("createJarvisBackendClient", () => {
     await expect(client.getLicenseStatus({ appVersion: "1.2.3" })).resolves.toEqual({
       state: "trial_active",
       managedServicesMode: "license-only",
+      deviceId: undefined,
+      trialStartedAt: undefined,
       trialEndsAt: "2026-05-15T00:00:00.000Z",
       licenseEndsAt: undefined,
       offlineGraceEndsAt: undefined,
       accountId: undefined,
+      managedServicesEnabled: undefined,
+    });
+  });
+
+  it("activates an account trial and returns the issued account token", async () => {
+    const fetchResponse = vi.fn(async (params) => {
+      expect(params.url).toBe("https://jarvis.example/v1/account/login");
+      expect(params.init.headers.Authorization).toBe("Bearer backend-token");
+      expect(JSON.parse(params.init.body)).toEqual({
+        email: "founder@example.com",
+        appVersion: "1.2.3",
+        deviceId: "device-1",
+      });
+      return await params.onResponse(
+        new Response(
+          JSON.stringify({
+            accountId: "acct_123",
+            email: "founder@example.com",
+            accountAccessToken: "jat_account_token",
+            license: {
+              state: "trial_active",
+              deviceId: "device-1",
+              accountId: "acct_123",
+              trialStartedAt: "2026-05-01T00:00:00.000Z",
+              trialEndsAt: "2026-05-15T00:00:00.000Z",
+              offlineGraceEndsAt: "2026-05-18T00:00:00.000Z",
+              managedServicesEnabled: true,
+            },
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    const client = createJarvisBackendClient(
+      {
+        jarvis: {
+          backend: {
+            baseUrl: "https://jarvis.example",
+            accessToken: "backend-token",
+            deviceId: "device-1",
+          },
+          managedServices: { mode: "license-only" },
+        },
+      },
+      { fetchResponse },
+    );
+
+    await expect(
+      client.activateTrial({ email: " founder@example.com ", appVersion: "1.2.3" }),
+    ).resolves.toEqual({
+      accountId: "acct_123",
+      email: "founder@example.com",
+      accountAccessToken: "jat_account_token",
+      license: {
+        state: "trial_active",
+        managedServicesMode: "license-only",
+        deviceId: "device-1",
+        trialStartedAt: "2026-05-01T00:00:00.000Z",
+        trialEndsAt: "2026-05-15T00:00:00.000Z",
+        licenseEndsAt: undefined,
+        offlineGraceEndsAt: "2026-05-18T00:00:00.000Z",
+        accountId: "acct_123",
+        managedServicesEnabled: true,
+      },
+    });
+  });
+
+  it("sends the stored account token with license checks", async () => {
+    const fetchResponse = vi.fn(async (params) => {
+      expect(JSON.parse(params.init.body)).toEqual({
+        accountAccessToken: "jat_account_token",
+        appVersion: undefined,
+        deviceId: "device-1",
+      });
+      return await params.onResponse(
+        new Response(JSON.stringify({ state: "trial_active", accountId: "acct_123" }), {
+          status: 200,
+        }),
+      );
+    });
+    const client = createJarvisBackendClient(
+      {
+        jarvis: {
+          backend: {
+            baseUrl: "https://jarvis.example",
+            deviceId: "device-1",
+            accountAccessToken: "jat_account_token",
+          },
+          managedServices: { mode: "license-only" },
+        },
+      },
+      { fetchResponse },
+    );
+
+    await expect(client.getLicenseStatus()).resolves.toMatchObject({
+      state: "trial_active",
+      accountId: "acct_123",
     });
   });
 

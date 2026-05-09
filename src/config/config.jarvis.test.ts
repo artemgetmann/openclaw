@@ -29,6 +29,12 @@ describe("Jarvis commercial backend config", () => {
           baseUrl: "https://jarvis.example",
           accessToken: { source: "env", provider: "default", id: "JARVIS_ACCESS_TOKEN" },
           deviceId: "device-1",
+          accountAccessToken: {
+            source: "env",
+            provider: "default",
+            id: "JARVIS_ACCOUNT_ACCESS_TOKEN",
+          },
+          accountEmail: "founder@example.com",
           timeoutMs: 5000,
         },
         managedServices: {
