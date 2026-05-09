@@ -8,6 +8,7 @@ import {
   loadModelCatalog,
   modelSupportsVision,
 } from "../agents/model-catalog.js";
+import { isImageGenerationOnlyModelRef } from "../agents/tools/image-tool.helpers.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -441,11 +442,15 @@ function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstan
       refs.push(fb.trim());
     }
   }
-  if (refs.length === 0) {
+  // Generation-only image models can appear in user config, but they are not
+  // valid for image understanding. Drop them here so auto-selection can fall
+  // through to real vision-capable providers.
+  const filteredRefs = refs.filter((ref) => !isImageGenerationOnlyModelRef(ref));
+  if (filteredRefs.length === 0) {
     return [];
   }
   const entries: MediaUnderstandingModelConfig[] = [];
-  for (const ref of refs) {
+  for (const ref of filteredRefs) {
     const slashIdx = ref.indexOf("/");
     if (slashIdx <= 0 || slashIdx >= ref.length - 1) {
       continue;
@@ -458,6 +463,10 @@ function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstan
   }
   return entries;
 }
+
+export const __testing = {
+  resolveImageModelFromAgentDefaults,
+} as const;
 
 async function resolveAutoEntries(params: {
   cfg: OpenClawConfig;

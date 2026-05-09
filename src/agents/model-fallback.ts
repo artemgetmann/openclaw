@@ -31,6 +31,7 @@ import {
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+import { isImageGenerationOnlyModelRef } from "./tools/image-tool.helpers.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -220,6 +221,12 @@ function resolveImageFallbackCandidates(params: {
     createModelCandidateCollector(allowlist);
 
   const addRaw = (raw: string, opts?: { allowlist?: boolean }) => {
+    // `agents.defaults.imageModel` is for reading images. Generation-only
+    // models such as OpenAI gpt-image-* belong under imageGenerationModel and
+    // must not enter the vision fallback loop.
+    if (isImageGenerationOnlyModelRef(raw)) {
+      return;
+    }
     const resolved = resolveModelRefFromString({
       raw: String(raw ?? ""),
       defaultProvider: params.defaultProvider,
