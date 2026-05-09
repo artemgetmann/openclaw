@@ -292,7 +292,7 @@ describe("ensureAgentWorkspace", () => {
     ).resolves.toContain("# custom");
   });
 
-  it("refreshes stale managed workspace skills when the bundled tree changes", async () => {
+  it("refreshes stale unmarked bundled workspace skill shadows when the bundled tree changes", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
     const bundledSkillsDir = path.join(workspaceDir, ".bundled");
     const workspaceSkillDir = path.join(workspaceDir, "skills", "wacli");
@@ -315,7 +315,7 @@ describe("ensureAgentWorkspace", () => {
     await writeSkill({
       dir: workspaceSkillDir,
       name: "wacli",
-      description: "Stale workspace wacli",
+      description: "Bundled wacli",
       metadata: '{"openclaw":{"requires":{"bins":["./scripts/wacli-send-safe.ts"]}}}',
       body: "# Stale workspace wacli\nOld rule\n",
     });
@@ -325,13 +325,6 @@ describe("ensureAgentWorkspace", () => {
       "export const stale = true;\n",
       "utf-8",
     );
-    await fs.mkdir(path.join(workspaceSkillDir, ".clawhub"), { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceSkillDir, ".clawhub", "origin.json"),
-      JSON.stringify({ slug: "wacli", version: 1 }),
-      "utf-8",
-    );
-
     await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir }, async () => {
       await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
     });

@@ -346,6 +346,18 @@ function relativeRequiredBinsFromSkill(raw: string): string[] {
     .toSorted();
 }
 
+function bundledShadowFrontmatterMatches(
+  workspaceSkillRaw: string,
+  bundledSkillRaw: string,
+): boolean {
+  const workspaceFrontmatter = parseFrontmatter(workspaceSkillRaw);
+  const bundledFrontmatter = parseFrontmatter(bundledSkillRaw);
+  const identityKeys = ["name", "description", "homepage", "metadata"] as const;
+  return identityKeys.every(
+    (key) => (workspaceFrontmatter[key] ?? "").trim() === (bundledFrontmatter[key] ?? "").trim(),
+  );
+}
+
 async function hasMissingRelativeRequiredBins(
   skillDir: string,
   requiredBins: string[],
@@ -384,6 +396,37 @@ async function legacyWorkspaceSkillLooksBundled(params: {
   if (workspaceRelativeBins.length === 0 && bundledRelativeBins.length > 0) {
     return true;
   }
+  if (workspaceRelativeBins.length === 0) {
+    return false;
+  }
+
+  return (
+    workspaceRelativeBins.length === bundledRelativeBins.length &&
+    workspaceRelativeBins.every((bin, index) => bin === bundledRelativeBins[index])
+  );
+}
+
+async function unmarkedWorkspaceSkillLooksBundled(params: {
+  workspaceSkillPath: string;
+  bundledSkillPath: string;
+}): Promise<boolean> {
+  let workspaceSkillRaw = "";
+  let bundledSkillRaw = "";
+  try {
+    [workspaceSkillRaw, bundledSkillRaw] = await Promise.all([
+      fs.readFile(params.workspaceSkillPath, "utf-8"),
+      fs.readFile(params.bundledSkillPath, "utf-8"),
+    ]);
+  } catch {
+    return false;
+  }
+
+  if (!bundledShadowFrontmatterMatches(workspaceSkillRaw, bundledSkillRaw)) {
+    return false;
+  }
+
+  const workspaceRelativeBins = relativeRequiredBinsFromSkill(workspaceSkillRaw);
+  const bundledRelativeBins = relativeRequiredBinsFromSkill(bundledSkillRaw);
   if (workspaceRelativeBins.length === 0) {
     return false;
   }
@@ -437,6 +480,11 @@ async function refreshLegacyBundledWorkspaceSkills(workspaceDir: string): Promis
       (hasLegacyOrigin &&
         (await legacyWorkspaceSkillLooksBundled({
           workspaceSkillDir: skillDir,
+          workspaceSkillPath: skillPath,
+          bundledSkillPath,
+        }))) ||
+      (!hasLegacyOrigin &&
+        (await unmarkedWorkspaceSkillLooksBundled({
           workspaceSkillPath: skillPath,
           bundledSkillPath,
         })));
