@@ -57,6 +57,20 @@ function resolveRepoRootFromGatewayProgram(params: {
   return undefined;
 }
 
+function normalizeMainRepoRootForDefaultSharedInstall(
+  repoRoot: string | undefined,
+): string | undefined {
+  const trimmed = repoRoot?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  // Repo-owned feature lanes live at <mainRepo>/.worktrees/<lane>. The default
+  // shared service must remember <mainRepo>, never the temporary lane, or later
+  // runtime ownership checks will bless the wrong checkout as canonical.
+  return trimmed.replace(/[\\/]\.worktrees[\\/].*$/, "");
+}
+
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -99,10 +113,16 @@ export async function buildGatewayInstallPlan(params: {
   if (isDefaultSharedGatewayServiceEnv(serviceEnvironment)) {
     serviceEnvironment.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH ??=
       serviceEnvironment.OPENCLAW_CONFIG_PATH;
-    serviceEnvironment.OPENCLAW_MAIN_REPO ??= resolveRepoRootFromGatewayProgram({
-      programArguments,
-      workingDirectory,
-    });
+    const resolvedMainRepo = normalizeMainRepoRootForDefaultSharedInstall(
+      serviceEnvironment.OPENCLAW_MAIN_REPO ??
+        resolveRepoRootFromGatewayProgram({
+          programArguments,
+          workingDirectory,
+        }),
+    );
+    if (resolvedMainRepo) {
+      serviceEnvironment.OPENCLAW_MAIN_REPO = resolvedMainRepo;
+    }
   }
 
   // Persist only daemon-owned env here. Provider keys/tokens and config.env are

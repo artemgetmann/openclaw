@@ -65,6 +65,11 @@ function isPathInside(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function isRepoOwnedWorktreePath(canonicalMainRepo: string, candidate: string): boolean {
+  const worktreesRoot = path.join(canonicalMainRepo, ".worktrees");
+  return isPathInside(worktreesRoot, candidate);
+}
+
 function isPackagedConsumerRuntimePath(candidate: string | null): boolean {
   if (!candidate) {
     return false;
@@ -107,9 +112,6 @@ function assertCanonicalSharedLaunchAgentContext(args: {
   }
 
   const normalizedCwd = normalizePathForComparison(args.cwd ?? process.cwd());
-  if (normalizedCwd && isPathInside(canonicalMainRepo, normalizedCwd)) {
-    return;
-  }
   // Packaged replacement installs may be invoked with an app-owned entrypoint
   // while the inherited cwd is still "/" or another launcher directory. The
   // command itself is the authority for whether this is the signed app runtime.
@@ -119,6 +121,19 @@ function assertCanonicalSharedLaunchAgentContext(args: {
       workingDirectory: normalizedCwd,
     })
   ) {
+    return;
+  }
+
+  if (normalizedCwd && isRepoOwnedWorktreePath(canonicalMainRepo, normalizedCwd)) {
+    throw new Error(
+      `${args.action} blocked: feature worktrees under ${path.join(
+        canonicalMainRepo,
+        ".worktrees",
+      )} cannot manage the default shared LaunchAgent. Use the canonical main checkout (${canonicalMainRepo}) or an isolated --profile runtime instead.`,
+    );
+  }
+
+  if (normalizedCwd && isPathInside(canonicalMainRepo, normalizedCwd)) {
     return;
   }
 

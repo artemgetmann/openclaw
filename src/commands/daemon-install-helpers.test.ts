@@ -258,6 +258,26 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_MAIN_REPO).toBe("/Users/me/Programming_Projects/openclaw");
   });
 
+  it("canonicalizes repo-owned worktree paths before persisting OPENCLAW_MAIN_REPO", async () => {
+    mockNodeGatewayPlanFixture({
+      workingDirectory: "/Users/me/Programming_Projects/openclaw/.worktrees/lane",
+      serviceEnvironment: {
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_CONFIG_PATH:
+          "/Users/me/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 18789,
+      runtime: "node",
+    });
+
+    expect(plan.environment.OPENCLAW_MAIN_REPO).toBe("/Users/me/Programming_Projects/openclaw");
+    expect(plan.environment.OPENCLAW_MAIN_REPO).not.toContain(".worktrees/lane");
+  });
+
   it("does not assign canonical shared gateway markers to isolated profile services", async () => {
     mockNodeGatewayPlanFixture({
       workingDirectory: undefined,
