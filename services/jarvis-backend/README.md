@@ -52,13 +52,19 @@ resetting the trial. Production refuses register/status/admin persistence
 requests when `JARVIS_BACKEND_ENV=production` and `NEON_DATABASE_URL` is missing
 because Render web-service filesystems are ephemeral.
 
-`/v1/account/login` is the first beta account activation path. It normalizes an
-email address, creates or reuses a durable account row, links the current device
-license row to that account, and returns an account access token plus the same
-license response shape used by `/v1/license/status`. This is enough for account
-and trial tracking, but it is not inbox-verified identity; replace or harden it
-with Google/email-link auth before trusting it for abuse-sensitive production
-flows.
+`/v1/account/login` is the first **beta email activation** path. It normalizes
+an email address, creates or reuses a durable account row, links the current
+device license row to that account, and returns an account access token plus the
+same license response shape used by `/v1/license/status`. This is enough for
+controlled-beta account and trial tracking, but it is not inbox-verified
+identity and must not be described as production auth.
+
+Security caveat: before OTP or magic-code verification exists, anyone can type
+someone else's email. That does not grant mailbox access or access to a verified
+third-party account, but it can pollute account identity/trial ownership and can
+reuse the beta account token for that email. The next auth-hardening slice should
+replace this with email OTP/magic-code verification before broader distribution
+or abuse-sensitive billing/entitlement decisions.
 
 Local development and tests fall back to SQLite when `NEON_DATABASE_URL` is not
 set. Do not use that fallback for hosted beta users.
