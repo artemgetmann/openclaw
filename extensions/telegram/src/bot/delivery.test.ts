@@ -1,5 +1,9 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getChannelActivity,
+  resetChannelActivityForTest,
+} from "../../../../src/infra/channel-activity.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import { deliverReplies } from "./delivery.js";
 
@@ -118,6 +122,7 @@ function createVoiceFailureHarness(params: {
 
 describe("deliverReplies", () => {
   beforeEach(() => {
+    resetChannelActivityForTest();
     loadWebMedia.mockClear();
     triggerInternalHook.mockReset();
     messageHookRunner.hasHooks.mockReset();
@@ -209,6 +214,48 @@ describe("deliverReplies", () => {
         conversationId: "123",
       }),
     );
+  });
+
+  it("records one outbound activity timestamp after a successful reply payload", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValueOnce(111).mockReturnValueOnce(222);
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      accountId: "work",
+      replies: [{ text: "chunk-one\n\nchunk-two" }],
+      runtime,
+      bot,
+      textLimit: 12,
+    });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(getChannelActivity({ channel: "telegram", accountId: "work" })).toEqual({
+      inboundAt: null,
+      outboundAt: 111,
+    });
+    dateNow.mockRestore();
+  });
+
+  it("does not record outbound activity when reply delivery fails", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockRejectedValue(new Error("send failed"));
+    const bot = createBot({ sendMessage });
+
+    await expect(
+      deliverWith({
+        accountId: "work",
+        replies: [{ text: "hello" }],
+        runtime,
+        bot,
+      }),
+    ).rejects.toThrow("send failed");
+
+    expect(getChannelActivity({ channel: "telegram", accountId: "work" })).toEqual({
+      inboundAt: null,
+      outboundAt: null,
+    });
   });
 
   it("emits internal message:sent when session hook context is available", async () => {

@@ -15,6 +15,7 @@ import {
   toPluginMessageContext,
   toPluginMessageSentEvent,
 } from "../../../../src/hooks/message-hook-mappers.js";
+import { recordChannelActivity } from "../../../../src/infra/channel-activity.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { buildOutboundMediaLoadOptions } from "../../../../src/media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../../../src/media/mime.js";
@@ -715,6 +716,15 @@ export async function deliverReplies(params: {
           sessionKey: params.sessionKeyForInternalHooks,
           messageThreadId:
             typeof params.thread?.id === "number" ? Math.trunc(params.thread.id) : undefined,
+        });
+      }
+      if (progress.deliveredCount > deliveredCountBeforeReply) {
+        // Record one outbound activity timestamp per reply payload, not per Telegram
+        // API message, because long replies can split into multiple chunks.
+        recordChannelActivity({
+          channel: "telegram",
+          accountId: params.accountId,
+          direction: "outbound",
         });
       }
 

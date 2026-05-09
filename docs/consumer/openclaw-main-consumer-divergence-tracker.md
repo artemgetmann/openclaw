@@ -1,6 +1,6 @@
 # OpenClaw Main / Consumer Divergence Tracker
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 This tracker exists to prevent redoing consolidation work that already landed.
 If a slice is marked completed here, future agents should treat it as `main`
@@ -63,16 +63,21 @@ are not the default place to implement P0 launch work.
 - #634: Channels tab first-task verifier auto-marks verified from recent live
   Telegram activity
 - #638: LaunchAgent service-version drift repair
+- #641: docs refresh for post-#634 consolidation truth
 
 ## Queue Now
 
-1. Fast rebuild/relaunch the installed app from post-#634 code, then run a
-   Computer Use Channels tab smoke. #634 fixed the false Telegram verifier
-   state in code, but `/Applications/OpenClaw.app` still needs a rebuilt app
-   before claiming the literal GUI path.
-2. Recut the next public artifact from post-#638/#634 `main` before broad
+1. Fix/prove packaged LaunchAgent takeover, then rerun the Computer Use
+   Channels tab smoke. PR #645
+   (`https://github.com/artemgetmann/openclaw/pull/645`) records outbound
+   activity after successful Telegram reply delivery, and focused tests passed
+   after rebase. The default installed app at `15e000a19c` is running, but
+   `ai.openclaw.gateway` still points at the source-checkout runtime.
+2. Recut the next public artifact from current `main`/newer before broad
    distribution. Public `v2026.3.15` still contains the old service-version
-   repair predicate and the pre-#634 Channels tab verifier behavior.
+   repair predicate and the pre-#634 Channels tab verifier behavior, and public
+   artifacts do not contain PR #645. Recut only after #645 merges and the
+   LaunchAgent/default installed-app proof issue is handled.
 3. Run an interactive Sparkle UI smoke if the product claim needs the exact
    dialog path. Deterministic Sparkle update completion from `v2026.3.14` to
    `v2026.3.15` already passed.
@@ -145,9 +150,77 @@ published artifact provenance instead of duplicating the work here.
   - #634 validation passed:
     `swift test --filter TelegramSetupBootstrapTests`,
     `swift test --filter ConsumerSetupResumeTests`, and `git diff --check`
-  - `/Applications/OpenClaw.app` still needs a fast rebuild/relaunch or a
-    release recut from current `main`, followed by visual Channels tab smoke,
-    before claiming the installed-app GUI path
+  - Later current-main installed-app smoke showed this was not enough: the GUI
+    path still failed because channel status did not advance `lastOutboundAt`
+    after a real bot reply.
+  - Local root-cause fix: `extensions/telegram/src/bot/delivery.replies.ts`
+    records outbound activity once after a reply payload is delivered.
+    `extensions/telegram/src/bot/delivery.test.ts` proves successful
+    `deliverReplies` records outbound activity for `accountId`, while failed
+    sends do not. Focused proof passed:
+    `pnpm exec vitest run --config vitest.config.ts extensions/telegram/src/bot/delivery.test.ts src/infra/channel-activity.test.ts`
+    = 2 files / 37 tests passed, plus `git diff --check`.
+
+## Current-Main GUI Smoke: Installed Path Failed
+
+- Worktree state: fast-forwarded to `origin/main` at
+  `9d64a4ea5942cf1bb71a618fce081f35e14c8119`.
+- Docs baseline: PR #641 had already merged as
+  `fd441d61358c97303c3119c6c3bcf439792d145b`, recording post-#634 truth.
+- Wrong first target: isolated instance `gui-verify-20260508` built and
+  launched `dist/OpenClaw (gui-verify-20260508).app` at `fd441d6135`, and
+  `/healthz` on `39388` eventually returned live. Do not count this as a
+  product pass because the isolated config had no Telegram config and its
+  LaunchAgent used a source-checkout entrypoint.
+- Correct local target: default-identity current-main bundle built at
+  `dist/OpenClaw.app`, copied over `/Applications/OpenClaw.app`, and reported
+  `OpenClawGitCommit` `fd441d6135` with bundle id
+  `ai.openclaw.consumer.mac`. This was a local smoke replacement, not
+  notarized/public release provenance.
+- Runtime proof: default `ai.openclaw.gateway` pointed at
+  `/Applications/OpenClaw.app/Contents/Resources/OpenClawRuntime/openclaw/dist/index.js`;
+  `/healthz` on `18789` returned `{"ok":true,"status":"live"}`.
+- GUI result: Computer Use Channels tab still showed `Telegram, Verify first
+task` and `One task left`. This is a FAIL for the installed-app GUI path, not
+  a stale-app-build caveat.
+- Root cause evidence: `channels status --json` showed the default Telegram
+  account remained running/configured with `lastInboundAt=1778243885824` and
+  `lastOutboundAt=1778236247270`, so outbound was older than inbound by about
+  `-7638554ms`. The GUI auto-verify code correctly refuses to promote in that
+  state.
+- Live Telegram proof: `@Jarvis_cl4w_bot` received
+  `OK GUIVERIFY-20260508T122756Z` as message `48740` and replied
+  `OK GUIVERIFY-20260508T122756Z` as message `48741`. Channel status still did
+  not advance `lastOutboundAt`.
+- Root cause: Telegram bot auto-replies bypassed `sendMessageTelegram`, so
+  successful bot replies were not recorded into `lastOutboundAt`.
+- PR #645:
+  `https://github.com/artemgetmann/openclaw/pull/645`. Branch commit and
+  installed local app commit are `15e000a19c`. Reply delivery now records
+  outbound activity after successful payload delivery. Failed sends do not
+  record activity. Focused tests after rebase passed:
+  `pnpm exec vitest run --config vitest.config.ts extensions/telegram/src/bot/delivery.test.ts src/infra/channel-activity.test.ts`
+  = 2 files / 37 tests.
+- New packaged proof blocker: branch-isolated debug app
+  `dist/OpenClaw (consolidation-gui-smoke-20260508).app` used bundle id
+  `ai.openclaw.consumer.mac.debug.consolidation-gui-smoke-20260508` on port
+  `24529`, but Gatekeeper rejected it because it was unnotarized and it was the
+  wrong default GUI proof target. The default bundle then installed as
+  `/Applications/OpenClaw.app` with plist `OpenClawGitCommit=15e000a19c`,
+  bundle id `ai.openclaw.consumer.mac`, and variant `consumer`.
+- Runtime blocker: `/Applications/OpenClaw.app` was running, but
+  `launchctl print gui/$(id -u)/ai.openclaw.gateway` still showed
+  `ProgramArguments[1]` `/Users/user/Programming_Projects/openclaw/dist/index.js`
+  and `OPENCLAW_MAIN_REPO=/Users/user/Programming_Projects/openclaw`. `/healthz`
+  on `18789` was live, but it proved the source-checkout runtime, not
+  `/Applications/OpenClaw.app/Contents/Resources/OpenClawRuntime/openclaw/dist/index.js`.
+- Remaining gate: fix/prove packaged LaunchAgent repair, then rerun the GUI
+  Channels smoke. Do not claim installed-app GUI proof until the LaunchAgent
+  points at the packaged runtime and the Channels tab auto-promotes after a live
+  Telegram reply.
+- Release caveat: public release lane remains separate. Public artifacts must
+  be recut from `main` after #645 merges and after the LaunchAgent/default
+  installed-app proof issue is handled.
 
 ## Things We Should Stop Saying
 
@@ -159,9 +232,11 @@ published artifact provenance instead of duplicating the work here.
 - Stop saying Developer ID notarization, public installed-release smoke, or
   Sparkle update completion remains open for `v2026.3.15`; those gates passed.
   Only literal interactive Sparkle dialog visual proof remains open/optional.
-- Stop describing the Channels tab blocker as only an unimplemented or
-  unclicked verifier button. #634 merged the code fix; the remaining gap is
-  installed-app visual proof after rebuild/release recut.
+- Stop describing the Channels tab blocker as only an unimplemented verifier,
+  an unclicked verifier button, a stale installed app, or an unfixed telemetry
+  root cause. #634 merged the SwiftUI verifier fix, PR #645 fixes the outbound
+  activity gap, and the latest blocker is LaunchAgent packaged-entrypoint
+  takeover for the default installed app.
 - Stop implying the final product is two apps: `OpenClaw` and
   `OpenClaw Consumer`.
 - Stop treating the visible app rename as blocked. The visible rename is done;
