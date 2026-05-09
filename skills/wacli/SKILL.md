@@ -166,7 +166,11 @@ Send
   it locally verified when the helper reports `verification.status` as
   `verified_local`; otherwise open the chat or use a manual `wa.me` fallback
   before claiming delivery or thread proof.
-- Low-level fallback: `wacli send text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
+- Raw `wacli send ...` is not allowed for real external contacts after safe-send
+  failure. Use it only for self-chat/test contacts or with explicit break-glass
+  approval.
+- Raw send fallback for self-chat/test only:
+  `wacli send text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
 
 Monitor-driven reply send pattern
 

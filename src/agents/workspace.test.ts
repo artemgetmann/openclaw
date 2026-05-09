@@ -73,6 +73,21 @@ function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   expect(names).not.toContain("MEMORY.md");
 }
 
+async function readWorkspaceSkillMarker(skillDir: string): Promise<{
+  version: number;
+  source: string;
+  bundledTreeHash: string;
+  updatedAt: string;
+}> {
+  const raw = await fs.readFile(path.join(skillDir, ".openclaw-skill.json"), "utf-8");
+  return JSON.parse(raw) as {
+    version: number;
+    source: string;
+    bundledTreeHash: string;
+    updatedAt: string;
+  };
+}
+
 describe("ensureAgentWorkspace", () => {
   it("creates BOOTSTRAP.md and records a seeded marker for brand new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
@@ -224,9 +239,12 @@ describe("ensureAgentWorkspace", () => {
     ).rejects.toMatchObject({
       code: "ENOENT",
     });
+    const marker = await readWorkspaceSkillMarker(workspaceSkillDir);
+    expect(marker.source).toBe("openclaw-bundled");
+    expect(marker.bundledTreeHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it("preserves modern workspace skills even when a bundled skill with the same name exists", async () => {
+  it("preserves custom workspace skills even when a bundled skill with the same name exists", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
     const bundledSkillsDir = path.join(workspaceDir, ".bundled");
     const workspaceSkillDir = path.join(workspaceDir, "skills", "wacli");
@@ -272,6 +290,66 @@ describe("ensureAgentWorkspace", () => {
     await expect(
       fs.readFile(path.join(workspaceSkillDir, "scripts", "custom.sh"), "utf-8"),
     ).resolves.toContain("# custom");
+  });
+
+  it("refreshes stale managed workspace skills when the bundled tree changes", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
+    const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+    const workspaceSkillDir = path.join(workspaceDir, "skills", "wacli");
+    const bundledSkillDir = path.join(bundledSkillsDir, "wacli");
+
+    await writeSkill({
+      dir: bundledSkillDir,
+      name: "wacli",
+      description: "Bundled wacli",
+      metadata: '{"openclaw":{"requires":{"bins":["./scripts/wacli-send-safe.ts"]}}}',
+      body: "# Bundled wacli\nBundled rule\n",
+    });
+    await fs.mkdir(path.join(bundledSkillDir, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(bundledSkillDir, "scripts", "wacli-send-safe.ts"),
+      "export const bundled = true;\n",
+      "utf-8",
+    );
+
+    await writeSkill({
+      dir: workspaceSkillDir,
+      name: "wacli",
+      description: "Stale workspace wacli",
+      metadata: '{"openclaw":{"requires":{"bins":["./scripts/wacli-send-safe.ts"]}}}',
+      body: "# Stale workspace wacli\nOld rule\n",
+    });
+    await fs.mkdir(path.join(workspaceSkillDir, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceSkillDir, "scripts", "wacli-send-safe.ts"),
+      "export const stale = true;\n",
+      "utf-8",
+    );
+    await fs.mkdir(path.join(workspaceSkillDir, ".clawhub"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceSkillDir, ".clawhub", "origin.json"),
+      JSON.stringify({ slug: "wacli", version: 1 }),
+      "utf-8",
+    );
+
+    await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir }, async () => {
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
+    });
+
+    await expect(
+      fs.readFile(path.join(workspaceSkillDir, "scripts", "wacli-send-safe.ts"), "utf-8"),
+    ).resolves.toContain("bundled = true");
+    await expect(fs.readFile(path.join(workspaceSkillDir, "SKILL.md"), "utf-8")).resolves.toContain(
+      "Bundled rule",
+    );
+    await expect(
+      fs.access(path.join(workspaceSkillDir, ".clawhub", "origin.json")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const marker = await readWorkspaceSkillMarker(workspaceSkillDir);
+    expect(marker.source).toBe("openclaw-bundled");
+    expect(marker.bundledTreeHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("repairs half-updated workspace skills when declared helper scripts are missing", async () => {

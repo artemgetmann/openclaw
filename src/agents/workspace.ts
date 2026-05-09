@@ -1,9 +1,11 @@
+import crypto from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -37,10 +39,13 @@ const DAILY_MEMORY_DIRNAME = "memory";
 const WORKSPACE_STATE_DIRNAME = ".openclaw";
 const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_STATE_VERSION = 1;
+const WORKSPACE_SKILL_MARKER_FILENAME = ".openclaw-skill.json";
+const WORKSPACE_SKILL_MANAGED_SOURCE = "openclaw-bundled";
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
 const MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES = 2 * 1024 * 1024;
+const workspaceLogger = createSubsystemLogger("workspace");
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
@@ -211,6 +216,184 @@ function resolveWorkspaceStatePath(dir: string): string {
   return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
 }
 
+type ManagedWorkspaceSkillMarker = {
+  version: 1;
+  source: typeof WORKSPACE_SKILL_MANAGED_SOURCE;
+  bundledTreeHash: string;
+  updatedAt: string;
+};
+
+function resolveWorkspaceSkillMarkerPath(skillDir: string): string {
+  return path.join(skillDir, WORKSPACE_SKILL_MARKER_FILENAME);
+}
+
+function shouldIgnoreWorkspaceSkillTreeEntry(entryName: string): boolean {
+  return entryName === ".clawhub" || entryName === WORKSPACE_SKILL_MARKER_FILENAME;
+}
+
+async function hashWorkspaceSkillTree(dir: string): Promise<string> {
+  const hash = crypto.createHash("sha256");
+
+  const walk = async (currentDir: string, relativeDir: string): Promise<void> => {
+    let entries: Array<{
+      name: string;
+      isDirectory(): boolean;
+      isFile(): boolean;
+      isSymbolicLink(): boolean;
+    }>;
+    try {
+      entries = (await fs.readdir(currentDir, {
+        encoding: "utf8",
+        withFileTypes: true,
+      })) as Array<{
+        name: string;
+        isDirectory(): boolean;
+        isFile(): boolean;
+        isSymbolicLink(): boolean;
+      }>;
+    } catch {
+      return;
+    }
+
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      if (shouldIgnoreWorkspaceSkillTreeEntry(entry.name)) {
+        continue;
+      }
+
+      const entryRelativePath = relativeDir ? path.posix.join(relativeDir, entry.name) : entry.name;
+      const entryPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        hash.update(`dir:${entryRelativePath}\n`);
+        await walk(entryPath, entryRelativePath);
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        hash.update(`symlink:${entryRelativePath}\n`);
+        try {
+          hash.update(await fs.readlink(entryPath));
+        } catch {
+          // Ignore broken links while still keeping the traversal deterministic.
+        }
+        hash.update("\n");
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      hash.update(`file:${entryRelativePath}\n`);
+      hash.update(await fs.readFile(entryPath));
+      hash.update("\n");
+    }
+  };
+
+  await walk(dir, "");
+  return hash.digest("hex");
+}
+
+async function readManagedWorkspaceSkillMarker(
+  skillDir: string,
+): Promise<ManagedWorkspaceSkillMarker | null> {
+  const markerPath = resolveWorkspaceSkillMarkerPath(skillDir);
+  try {
+    const raw = await fs.readFile(markerPath, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<ManagedWorkspaceSkillMarker> | null;
+    if (
+      parsed &&
+      parsed.version === 1 &&
+      parsed.source === WORKSPACE_SKILL_MANAGED_SOURCE &&
+      typeof parsed.bundledTreeHash === "string" &&
+      parsed.bundledTreeHash.trim().length > 0 &&
+      typeof parsed.updatedAt === "string" &&
+      parsed.updatedAt.trim().length > 0
+    ) {
+      return {
+        version: 1,
+        source: WORKSPACE_SKILL_MANAGED_SOURCE,
+        bundledTreeHash: parsed.bundledTreeHash,
+        updatedAt: parsed.updatedAt,
+      };
+    }
+    return null;
+  } catch (error) {
+    const anyErr = error as { code?: string };
+    if (anyErr.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function writeManagedWorkspaceSkillMarker(
+  skillDir: string,
+  bundledTreeHash: string,
+): Promise<void> {
+  const markerPath = resolveWorkspaceSkillMarkerPath(skillDir);
+  const payload: ManagedWorkspaceSkillMarker = {
+    version: 1,
+    source: WORKSPACE_SKILL_MANAGED_SOURCE,
+    bundledTreeHash,
+    updatedAt: new Date().toISOString(),
+  };
+  await fs.writeFile(markerPath, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf-8" });
+}
+
+function relativeRequiredBinsFromSkill(raw: string): string[] {
+  const metadata = resolveOpenClawMetadata(parseFrontmatter(raw));
+  return (metadata?.requires?.bins ?? [])
+    .filter((bin): bin is string => typeof bin === "string" && bin.startsWith("./"))
+    .toSorted();
+}
+
+async function hasMissingRelativeRequiredBins(
+  skillDir: string,
+  requiredBins: string[],
+): Promise<boolean> {
+  if (requiredBins.length === 0) {
+    return false;
+  }
+  const missing = await Promise.all(
+    requiredBins.map(async (bin) => !(await fileExists(path.join(skillDir, bin)))),
+  );
+  return missing.some(Boolean);
+}
+
+async function legacyWorkspaceSkillLooksBundled(params: {
+  workspaceSkillDir: string;
+  workspaceSkillPath: string;
+  bundledSkillPath: string;
+}): Promise<boolean> {
+  let workspaceSkillRaw = "";
+  let bundledSkillRaw = "";
+  try {
+    [workspaceSkillRaw, bundledSkillRaw] = await Promise.all([
+      fs.readFile(params.workspaceSkillPath, "utf-8"),
+      fs.readFile(params.bundledSkillPath, "utf-8"),
+    ]);
+  } catch {
+    return false;
+  }
+
+  const workspaceRelativeBins = relativeRequiredBinsFromSkill(workspaceSkillRaw);
+  if (await hasMissingRelativeRequiredBins(params.workspaceSkillDir, workspaceRelativeBins)) {
+    return true;
+  }
+
+  const bundledRelativeBins = relativeRequiredBinsFromSkill(bundledSkillRaw);
+  if (workspaceRelativeBins.length === 0 && bundledRelativeBins.length > 0) {
+    return true;
+  }
+  if (workspaceRelativeBins.length === 0) {
+    return false;
+  }
+
+  return (
+    workspaceRelativeBins.length === bundledRelativeBins.length &&
+    workspaceRelativeBins.every((bin, index) => bin === bundledRelativeBins[index])
+  );
+}
+
 async function refreshLegacyBundledWorkspaceSkills(workspaceDir: string): Promise<void> {
   const bundledSkillsDir = resolveBundledSkillsDir();
   if (!bundledSkillsDir) {
@@ -239,50 +422,50 @@ async function refreshLegacyBundledWorkspaceSkills(workspaceDir: string): Promis
     const bundledSkillDir = path.join(bundledSkillsDir, entry.name);
     const bundledSkillPath = path.join(bundledSkillDir, "SKILL.md");
 
-    const [hasWorkspaceSkill, hasLegacyOrigin, hasBundledSkill] = await Promise.all([
+    const [hasWorkspaceSkill, hasBundledSkill] = await Promise.all([
       fileExists(skillPath),
-      fileExists(legacyOriginPath),
       fileExists(bundledSkillPath),
     ]);
-    if (!hasWorkspaceSkill || !hasLegacyOrigin || !hasBundledSkill) {
+    if (!hasWorkspaceSkill || !hasBundledSkill) {
       continue;
     }
 
-    let workspaceSkillRaw = "";
-    try {
-      workspaceSkillRaw = await fs.readFile(skillPath, "utf-8");
-    } catch {
+    const managedMarker = await readManagedWorkspaceSkillMarker(skillDir);
+    const hasLegacyOrigin = await fileExists(legacyOriginPath);
+    const isManagedWorkspaceSkill =
+      managedMarker !== null ||
+      (hasLegacyOrigin &&
+        (await legacyWorkspaceSkillLooksBundled({
+          workspaceSkillDir: skillDir,
+          workspaceSkillPath: skillPath,
+          bundledSkillPath,
+        })));
+    if (!isManagedWorkspaceSkill) {
       continue;
     }
 
-    // Preserve modern OpenClaw-aware workspace skills. Only replace legacy
-    // ClawHub/Clawdbot installs that shadow bundled skills but do not expose
-    // current OpenClaw metadata/helper scripts.
-    const workspaceMetadata = resolveOpenClawMetadata(parseFrontmatter(workspaceSkillRaw));
-    const relativeRequiredBins = (workspaceMetadata?.requires?.bins ?? []).filter((bin) =>
-      typeof bin === "string" ? bin.startsWith("./") : false,
-    );
-    const missingRelativeRequiredBins =
-      relativeRequiredBins.length > 0
-        ? (
-            await Promise.all(
-              relativeRequiredBins.map(
-                async (bin) => !(await fileExists(path.join(skillDir, bin))),
-              ),
-            )
-          ).some(Boolean)
-        : false;
+    const bundledTreeHash = await hashWorkspaceSkillTree(bundledSkillDir);
+    const workspaceTreeHash = await hashWorkspaceSkillTree(skillDir);
+    const treeMatchesBundled = workspaceTreeHash === bundledTreeHash;
 
-    // Preserve modern OpenClaw-aware workspace skills only when their declared
-    // relative helper commands actually exist. If the workspace copy references
-    // helper scripts that are missing on disk, replace it from bundled so
-    // runtime-relative `skills/<name>/...` commands become executable again.
-    if (workspaceMetadata && !missingRelativeRequiredBins) {
+    if (treeMatchesBundled) {
+      if (!managedMarker || managedMarker.bundledTreeHash !== bundledTreeHash) {
+        await writeManagedWorkspaceSkillMarker(skillDir, bundledTreeHash);
+        await fs.rm(legacyOriginPath, { force: true }).catch(() => {});
+      }
       continue;
     }
 
     await fs.rm(skillDir, { recursive: true, force: true });
     await fs.cp(bundledSkillDir, skillDir, { recursive: true, force: true });
+    await writeManagedWorkspaceSkillMarker(skillDir, bundledTreeHash);
+    await fs.rm(legacyOriginPath, { force: true }).catch(() => {});
+    workspaceLogger.info("Refreshed managed workspace skill from bundled tree.", {
+      skill: entry.name,
+      skillDir,
+      bundledTreeHash,
+      workspaceTreeHash,
+    });
   }
 }
 
