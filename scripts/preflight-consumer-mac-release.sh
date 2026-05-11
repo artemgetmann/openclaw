@@ -6,6 +6,7 @@ set -euo pipefail
 # print certificate private material, notary secrets, or Sparkle key contents.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/release-env.sh"
 DEFAULT_SPARKLE_KEY="AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI="
 FAILED=0
 
@@ -143,6 +144,7 @@ check_sparkle_tools() {
 
 printf 'Consumer macOS release credential preflight\n'
 printf 'No secret values will be printed.\n\n'
+printf 'Release env file: %s\n\n' "$(openclaw_release_env_file)"
 
 check_developer_id
 check_notary_tooling
@@ -157,6 +159,8 @@ if [[ "$FAILED" -eq 0 ]]; then
   printf 'Ready: required release credential inputs are present.\n'
 else
   printf 'Not ready: fix the missing items above before notarized Consumer distribution.\n'
+  printf '\n'
+  openclaw_release_env_hint
 fi
 
 exit "$FAILED"

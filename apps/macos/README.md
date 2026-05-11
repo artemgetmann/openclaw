@@ -95,13 +95,15 @@ generic upstream OpenClaw appcast.
 bash scripts/preflight-consumer-mac-release.sh
 ```
 
-Set release credentials with real values in your local shell or password
-manager-backed environment. Keep private key files outside the repo.
+Set release credentials with real values in your local shell, or put non-secret
+release settings and secret file pointers in the deterministic local env file:
+`~/Library/Application Support/OpenClaw/release.env`. Keep actual notary
+credentials in Keychain and private key files outside the repo.
 
 ```bash
 export SPARKLE_FEED_URL="https://example.com/openclaw-consumer/appcast.xml"
 export SPARKLE_PUBLIC_ED_KEY="<consumer Sparkle public EdDSA key>"
-export SPARKLE_PRIVATE_KEY_FILE="$HOME/.config/openclaw/sparkle-consumer-private-key"
+export SPARKLE_PRIVATE_KEY_FILE="$HOME/Library/Application Support/OpenClaw/release/sparkle-consumer-private-key"
 export NOTARYTOOL_PROFILE="<keychain notary profile>"
 
 bash scripts/package-openclaw-mac-dist.sh
@@ -169,6 +171,27 @@ SPARKLE_APPCAST_OUTPUT="dist/openclaw-consumer-appcast.xml" \
 bash scripts/make_appcast.sh "dist/OpenClaw.zip"
 SPARKLE_EXPECTED_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
 bash scripts/verify-consumer-mac-app.sh --release "dist/OpenClaw.app"
+```
+
+For slow notarization queues, submit and poll as separate steps instead of
+blocking the whole release lane:
+
+```bash
+ditto -c -k --sequesterRsrc --keepParent \
+  "dist/OpenClaw.app" \
+  "dist/OpenClaw-${APP_VERSION}.notary.zip"
+
+STAPLE_APP_PATH="dist/OpenClaw.app" \
+bash scripts/notarize-mac-artifact.sh \
+  --submit-only \
+  --receipt "dist/OpenClaw.app.notary.env" \
+  "dist/OpenClaw-${APP_VERSION}.notary.zip"
+
+source "dist/OpenClaw.app.notary.env"
+bash scripts/notarize-mac-artifact.sh \
+  --poll "$NOTARY_SUBMISSION_ID" \
+  --artifact "$NOTARY_ARTIFACT" \
+  --staple-app "$NOTARY_STAPLE_APP_PATH"
 ```
 
 ## Signing behavior

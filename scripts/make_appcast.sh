@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+source "$ROOT/scripts/lib/release-env.sh"
 ZIP=${1:?"Usage: $0 OpenClaw-<ver>.zip"}
 APP_NAME=${SPARKLE_APP_NAME:-OpenClaw}
 DEFAULT_FEED_URL="https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml"
