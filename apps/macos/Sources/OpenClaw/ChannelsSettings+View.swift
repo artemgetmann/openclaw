@@ -2,10 +2,7 @@ import SwiftUI
 
 extension ChannelsSettings {
     var body: some View {
-        HStack(spacing: 0) {
-            self.sidebar
-            self.detail
-        }
+        self.content
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             self.store.start()
@@ -15,6 +12,41 @@ extension ChannelsSettings {
             self.ensureSelection()
         }
         .onDisappear { self.store.stop() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if Self.usesSingleChannelSettingsLayout(
+            isConsumer: AppFlavor.current.isConsumer,
+            showAdvancedSettings: UserDefaults.standard.bool(forKey: showAdvancedSettingsKey),
+            channelCount: self.orderedChannels.count)
+        {
+            self.singleChannelDetail
+        } else {
+            HStack(spacing: 0) {
+                self.sidebar
+                self.detail
+            }
+        }
+    }
+
+    private var singleChannelDetail: some View {
+        Group {
+            if let channel = self.selectedChannel ?? self.orderedChannels.first {
+                self.channelDetail(channel)
+            } else {
+                self.emptyDetail
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    static func usesSingleChannelSettingsLayout(
+        isConsumer: Bool,
+        showAdvancedSettings: Bool,
+        channelCount: Int) -> Bool
+    {
+        isConsumer && !showAdvancedSettings && channelCount <= 1
     }
 
     private var sidebar: some View {

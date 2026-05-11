@@ -6,15 +6,6 @@ struct BrowserSettings: View {
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Browser")
-                        .font(.title3.weight(.semibold))
-                    Text("OpenClaw uses your live Chrome session for logged-in sites and keeps its own browser lane available for clean public-site tasks.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
                 BrowserSetupCardContent(model: self.browserSetup, presentation: .settings)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
