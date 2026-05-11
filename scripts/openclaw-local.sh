@@ -65,6 +65,16 @@ read_last_env_value() {
   printf '%s' "$last_value"
 }
 
+has_explicit_runtime_selector() {
+  [[ -n "${OPENCLAW_CONSUMER_INSTANCE_ID:-}" ]] || \
+    [[ -n "${OPENCLAW_HOME:-}" ]] || \
+    [[ -n "${OPENCLAW_LAUNCHD_LABEL:-}" ]] || \
+    [[ -n "${OPENCLAW_PROFILE:-}" ]] || \
+    [[ -n "${OPENCLAW_STATE_DIR:-}" ]] || \
+    [[ -n "${OPENCLAW_CONFIG_PATH:-}" ]] || \
+    [[ -n "${OPENCLAW_GATEWAY_PORT:-}" ]]
+}
+
 if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
@@ -109,6 +119,19 @@ if [[ -f "$DEV_ENV_FILE" ]]; then
   if [[ -n "$lane_gateway_port" ]]; then
     export OPENCLAW_GATEWAY_PORT="$lane_gateway_port"
   fi
+fi
+
+if [[ -z "$lane_state_dir" && -z "$lane_config_path" && -z "$lane_gateway_port" ]] && \
+  ! has_explicit_runtime_selector && \
+  [[ "$(worktree_guard_sacred_home_clone_role "$ROOT" 2>/dev/null || true)" == "main" ]]; then
+  # The default shared macOS gateway is app-owned even when it runs code from
+  # the sacred main checkout. Keep `pnpm openclaw:local config ...` and status
+  # probes pointed at the same config root as the LaunchAgent so smoke setup
+  # cannot silently edit ~/.openclaw while the live bot reads Application
+  # Support/OpenClaw.
+  export OPENCLAW_HOME="$HOME/Library/Application Support/OpenClaw"
+  export OPENCLAW_STATE_DIR="$OPENCLAW_HOME/.openclaw"
+  export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
 fi
 
 RAW_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
