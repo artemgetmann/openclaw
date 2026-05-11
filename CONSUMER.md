@@ -35,13 +35,13 @@ Read this before doing consumer-product work in this repo.
 
 ## Load the right doc for the task
 
-- Main/consumer consolidation and retirement:
-  - `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
-  - `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
-- Launch/business plan:
+- Active launch/main tracker:
   - `docs/research/jarvis-consumer-launch-plan.md`
 - Launch package:
   - `docs/consumer/jarvis-launch-package.md`
+- Historical consolidation proof, not active task boards:
+  - `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
+  - `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
 - Archived execution docs:
   - `docs/consumer/archive/openclaw-consumer-execution-spec.md`
   - `docs/consumer/archive/consumer-execution-tracker.md`
