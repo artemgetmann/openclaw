@@ -11,6 +11,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
+source "$ROOT_DIR/scripts/lib/release-env.sh"
 BUILD_CONFIG="${BUILD_CONFIG:-release}"
 APP_NAME="${APP_NAME:-OpenClaw}"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"

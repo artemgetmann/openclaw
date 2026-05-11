@@ -1,6 +1,6 @@
 # OpenClaw Main / Consumer Divergence Tracker
 
-Last updated: 2026-05-10
+Last updated: 2026-05-11
 
 This tracker exists to prevent redoing consolidation work that already landed.
 If a slice is marked completed here, future agents should treat it as `main`
@@ -28,7 +28,7 @@ are not the default place to implement P0 launch work.
 | Bundle id / TCC migration             | Deferred                            | Current Consumer bundle identity is preserved for continuity.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Decide separately from visible rename. Changing bundle id can reset permissions and create support churn.                                                                                                    |
 | `openclaw-consumer` branch retirement | Completed                           | Main has the code needed to stop using the consumer checkout for new implementation. Existing-user and isolated fresh-user main-built smokes passed. Older docs/workflows now label the old branch as historical or emergency-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Keep fallback available only for emergency recovery.                                                                                                                                                         |
 | Consumer packaging wrappers           | Completed                           | `scripts/package-openclaw-mac-dist.sh` is the canonical main-built shipping command. `scripts/package-consumer-mac-dist.sh` remains as a compatibility wrapper for old automation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Keep compatibility wrapper behavior unless a later cleanup deliberately removes it.                                                                                                                          |
-| Overlay/defaults policy               | Mostly completed                    | Core runtime/setup is shared. Telegram `/model` starts with Claude, ChatGPT, and More. #592 added the simplified family-first picker; #594 polished labels after live feedback by capitalizing `GPT`, removing duplicate/noisy ChatGPT rows, and using product-facing Claude labels such as `Sonnet 4.6`. Fresh consumer configs get broad useful bundled skills by default, and model-facing skills remain visible when setup/auth/bins are missing.                                                                                                                                                                                                                                                                                                                                 | Keep future onboarding presentation defaults explicit instead of scattering product conditionals.                                                                                                            |
+| Overlay/defaults policy               | Mostly completed                    | Core runtime/setup is shared. Telegram `/model` starts with Claude, ChatGPT, and More. #592 added the simplified family-first picker; #594 polished labels after live feedback by capitalizing `GPT`, removing duplicate/noisy ChatGPT rows, and using product-facing Claude labels such as `Sonnet 4.6`. Fresh consumer configs get broad useful bundled skills by default, and model-facing skills remain visible when setup/auth/bins are missing.                                                                                                                                                                                                                                                                                                                                 | Keep future onboarding presentation defaults explicit instead of scattering product conditionals. This is hygiene, not a release blocker.                                                                    |
 | Branch/workflow docs                  | Completed                           | Primary and older workflow docs now target `main` for consumer/product work and treat `openclaw-consumer` as historical or legacy/emergency fallback.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Keep future docs aligned with the main-first workflow.                                                                                                                                                       |
 
 ## Completed PRs To Build From
@@ -70,25 +70,25 @@ are not the default place to implement P0 launch work.
 
 ## Queue Now
 
-1. Publish the verified `v2026.3.15` recut after explicit approval. The local
-   handoff artifacts were rebuilt from current `main` at
-   `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`, version `2026.3.15`, build
-   `2026031590`, and passed app/DMG notarization, stapling, Gatekeeper, and
-   Sparkle appcast generation. Until upload/replacement happens, the public
-   GitHub release still points at the old `205d5f596602ff82270b1af5a3de24c33c32b532`
-   asset provenance.
-2. Split release packaging into build, submit, poll, staple, and final-verify
-   commands. The current `notarytool submit --wait` flow blocks the whole agent
-   lane while Apple performs server-side analysis; record submission IDs and
-   poll with `xcrun notarytool info <submission-id> --keychain-profile
-openclaw-consumer` instead.
-3. Add a local release-env loader or documented shell snippet for
-   `NOTARYTOOL_PROFILE`, Sparkle feed URL, public key, private-key path, and
-   Sparkle tool `PATH` without printing secret values.
-4. Run an interactive Sparkle UI smoke if the product claim needs the exact
+1. Use the deterministic release lane for the final package. Release scripts now
+   support a local release-env file rooted under
+   `~/Library/Application Support/OpenClaw/` for non-secret paths, with secrets
+   kept in Keychain, plus explicit submit/poll/staple notarization steps so the
+   agent lane does not block blindly on Apple's queue.
+2. Publish the verified final recut only after the app work is done and
+   final release approval is explicit. The local handoff artifacts were rebuilt
+   from current `main` at `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`, version
+   `2026.3.15`, build `2026031590`, and passed app/DMG notarization, stapling,
+   Gatekeeper, and Sparkle appcast generation. Until upload/replacement happens,
+   the public GitHub release still points at the old
+   `205d5f596602ff82270b1af5a3de24c33c32b532` asset provenance.
+3. Run an interactive Sparkle UI smoke only if the product claim needs the exact
    dialog path. Deterministic Sparkle update completion from `v2026.3.14` to
-   `v2026.3.15` already passed.
-5. Keep account/license/backend work and public package/secrets audit open.
+   `v2026.3.15` already passed, so this is optional/final.
+4. Keep account/license/backend/public package audit open as a separate launch
+   audit. This is likely owned by the main/pane-6 launch plan, not the release
+   automation lane.
+5. Keep overlay/defaults cleanup as non-urgent hygiene, not a release blocker.
 
 ## External Release Lane
 
@@ -99,7 +99,8 @@ of duplicating packaging work.
 
 Latest release-lane truth: local signed/notarized/Sparkle handoff artifacts are
 ready from `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`, but the public GitHub
-release has not yet been replaced/uploaded with those assets.
+release has not yet been replaced/uploaded with those assets. Public upload is
+deferred until the app work is done and final release approval is explicit.
 
 ## Release Proof: v2026.3.15
 
@@ -119,7 +120,7 @@ release has not yet been replaced/uploaded with those assets.
 - Installed-release smoke: passed from the public `v2026.3.15` DMG
 - Sparkle update completion: passed from public `v2026.3.14` to `v2026.3.15`
   through Sparkle's non-UI installer path
-- Sparkle interactive dialog visual proof: still open/optional
+- Sparkle interactive dialog visual proof: still open and treated as optional/final
 
 ## Local Recut Proof: v2026.3.15
 
@@ -145,7 +146,7 @@ release has not yet been replaced/uploaded with those assets.
     `a03e414223f969a41afeffa4c7ab3a85f30618546564941db58deb28b70b1f5e`
 
 Status: local recut is complete. Public release replacement is still pending
-explicit approval/upload.
+final approval after the app work is done.
 
 ## Public v2026.3.15 Installed Smoke
 
@@ -318,7 +319,7 @@ task` and `One task left`. This is a FAIL for the installed-app GUI path, not
   installed-app LaunchAgent repair has local proof.
 - Stop saying Developer ID notarization, public installed-release smoke, or
   Sparkle update completion remains open for `v2026.3.15`; those gates passed.
-  Only literal interactive Sparkle dialog visual proof remains open/optional.
+  Only literal interactive Sparkle dialog visual proof remains optional/final.
 - Stop describing the Channels tab blocker as unproven. #634 merged the SwiftUI
   verifier fix, #645 merged the outbound activity gap fix, #650 merged stale
   entrypoint mismatch detection, and #651 merged packaged-root preservation.

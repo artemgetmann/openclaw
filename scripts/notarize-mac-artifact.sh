@@ -5,6 +5,8 @@ set -euo pipefail
 #
 # Usage:
 #   STAPLE_APP_PATH=dist/OpenClaw.app scripts/notarize-mac-artifact.sh <artifact>
+#   STAPLE_APP_PATH=dist/OpenClaw.app scripts/notarize-mac-artifact.sh --submit-only --receipt dist/app.notary.env <artifact>
+#   scripts/notarize-mac-artifact.sh --poll <submission-id> --artifact dist/OpenClaw.dmg
 #
 # Auth (pick one):
 #   NOTARYTOOL_PROFILE   keychain profile created via `xcrun notarytool store-credentials`
@@ -12,15 +14,90 @@ set -euo pipefail
 #   NOTARYTOOL_KEY_ID    API key ID
 #   NOTARYTOOL_ISSUER    API issuer ID
 
-ARTIFACT="${1:-}"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/release-env.sh"
+
+MODE="wait"
+ARTIFACT=""
+SUBMISSION_ID=""
+RECEIPT_PATH=""
 STAPLE_APP_PATH="${STAPLE_APP_PATH:-}"
 
-if [[ -z "$ARTIFACT" ]]; then
-  echo "Usage: $0 <artifact>" >&2
-  exit 1
-fi
-if [[ ! -e "$ARTIFACT" ]]; then
-  echo "Error: artifact not found: $ARTIFACT" >&2
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/notarize-mac-artifact.sh <artifact>
+  scripts/notarize-mac-artifact.sh --submit-only [--receipt path] <artifact>
+  scripts/notarize-mac-artifact.sh --poll <submission-id> --artifact <artifact> [--staple-app app]
+
+Default mode submits with --wait, then staples DMG/PKG artifacts and
+STAPLE_APP_PATH when supplied. --submit-only records the submission ID and exits
+without blocking on Apple's notarization queue. --poll checks one submission and
+staples only after Apple reports Accepted.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --submit-only)
+      MODE="submit-only"
+      shift
+      ;;
+    --poll)
+      MODE="poll"
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --poll requires a submission ID." >&2
+        exit 1
+      fi
+      SUBMISSION_ID="$2"
+      shift 2
+      ;;
+    --artifact)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --artifact requires a path." >&2
+        exit 1
+      fi
+      ARTIFACT="$2"
+      shift 2
+      ;;
+    --receipt)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --receipt requires a path." >&2
+        exit 1
+      fi
+      RECEIPT_PATH="$2"
+      shift 2
+      ;;
+    --staple-app)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --staple-app requires a path." >&2
+        exit 1
+      fi
+      STAPLE_APP_PATH="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --*)
+      echo "Error: unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+    *)
+      if [[ -n "$ARTIFACT" ]]; then
+        echo "Error: multiple artifacts supplied: $ARTIFACT and $1" >&2
+        exit 1
+      fi
+      ARTIFACT="$1"
+      shift
+      ;;
+  esac
+done
+
+if [[ "$MODE" != "poll" && -z "$ARTIFACT" ]]; then
+  usage >&2
   exit 1
 fi
 
@@ -36,30 +113,125 @@ elif [[ -n "${NOTARYTOOL_KEY:-}" && -n "${NOTARYTOOL_KEY_ID:-}" && -n "${NOTARYT
   auth_args+=(--key "$NOTARYTOOL_KEY" --key-id "$NOTARYTOOL_KEY_ID" --issuer "$NOTARYTOOL_ISSUER")
 else
   echo "Error: Notary auth missing. Set NOTARYTOOL_PROFILE or NOTARYTOOL_KEY/NOTARYTOOL_KEY_ID/NOTARYTOOL_ISSUER." >&2
+  echo >&2
+  openclaw_release_env_hint >&2
+  exit 1
+fi
+
+json_field() {
+  local field="$1"
+  /usr/bin/sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" \
+    | /usr/bin/head -n 1
+}
+
+notary_status() {
+  json_field "status"
+}
+
+notary_id() {
+  json_field "id"
+}
+
+staple_outputs() {
+  case "$ARTIFACT" in
+    *.dmg|*.pkg)
+      if [[ ! -e "$ARTIFACT" ]]; then
+        echo "Error: artifact not found for stapling: $ARTIFACT" >&2
+        exit 1
+      fi
+      echo "📌 Stapling artifact: $ARTIFACT"
+      xcrun stapler staple "$ARTIFACT"
+      xcrun stapler validate "$ARTIFACT"
+      ;;
+    *)
+      ;;
+  esac
+
+  if [[ -n "$STAPLE_APP_PATH" ]]; then
+    if [[ -d "$STAPLE_APP_PATH" ]]; then
+      echo "📌 Stapling app: $STAPLE_APP_PATH"
+      xcrun stapler staple "$STAPLE_APP_PATH"
+      xcrun stapler validate "$STAPLE_APP_PATH"
+    else
+      echo "Warn: STAPLE_APP_PATH not found: $STAPLE_APP_PATH" >&2
+    fi
+  fi
+}
+
+write_receipt() {
+  local submission_id="$1"
+  local receipt_path="${RECEIPT_PATH:-${ARTIFACT}.notary.env}"
+
+  mkdir -p "$(dirname "$receipt_path")"
+  {
+    printf 'NOTARY_SUBMISSION_ID=%q\n' "$submission_id"
+    printf 'NOTARY_ARTIFACT=%q\n' "$ARTIFACT"
+    printf 'NOTARY_STAPLE_APP_PATH=%q\n' "$STAPLE_APP_PATH"
+    printf 'NOTARY_CREATED_AT=%q\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  } >"$receipt_path"
+
+  echo "🧾 Notary receipt: $receipt_path"
+}
+
+if [[ "$MODE" == "poll" ]]; then
+  if [[ -z "$SUBMISSION_ID" ]]; then
+    echo "Error: --poll requires a submission ID." >&2
+    exit 1
+  fi
+
+  echo "🧾 Checking notarization: $SUBMISSION_ID"
+  info_json="$(xcrun notarytool info "$SUBMISSION_ID" "${auth_args[@]}" --output-format json)"
+  status="$(printf '%s\n' "$info_json" | notary_status)"
+
+  if [[ -z "$status" ]]; then
+    echo "$info_json" >&2
+    echo "Error: could not parse notarization status." >&2
+    exit 1
+  fi
+
+  echo "notary_status=$status"
+  case "$status" in
+    Accepted)
+      staple_outputs
+      echo "✅ Notarization accepted"
+      exit 0
+      ;;
+    Invalid|Rejected)
+      echo "$info_json" >&2
+      echo "Error: notarization failed. Fetch the log with:" >&2
+      echo "  xcrun notarytool log $SUBMISSION_ID <auth args>" >&2
+      exit 1
+      ;;
+    *)
+      echo "Notarization is still pending; rerun the poll command later." >&2
+      exit 2
+      ;;
+  esac
+fi
+
+if [[ ! -e "$ARTIFACT" ]]; then
+  echo "Error: artifact not found: $ARTIFACT" >&2
   exit 1
 fi
 
 echo "🧾 Notarizing: $ARTIFACT"
-xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --wait
-
-case "$ARTIFACT" in
-  *.dmg|*.pkg)
-    echo "📌 Stapling artifact: $ARTIFACT"
-    xcrun stapler staple "$ARTIFACT"
-    xcrun stapler validate "$ARTIFACT"
-    ;;
-  *)
-    ;;
-esac
-
-if [[ -n "$STAPLE_APP_PATH" ]]; then
-  if [[ -d "$STAPLE_APP_PATH" ]]; then
-    echo "📌 Stapling app: $STAPLE_APP_PATH"
-    xcrun stapler staple "$STAPLE_APP_PATH"
-    xcrun stapler validate "$STAPLE_APP_PATH"
-  else
-    echo "Warn: STAPLE_APP_PATH not found: $STAPLE_APP_PATH" >&2
+if [[ "$MODE" == "submit-only" ]]; then
+  submit_json="$(xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --output-format json)"
+  submission_id="$(printf '%s\n' "$submit_json" | notary_id)"
+  if [[ -z "$submission_id" ]]; then
+    echo "$submit_json" >&2
+    echo "Error: could not parse notary submission ID." >&2
+    exit 1
   fi
+
+  echo "notary_submission_id=$submission_id"
+  write_receipt "$submission_id"
+  echo "Poll later with:"
+  echo "  scripts/notarize-mac-artifact.sh --poll $submission_id --artifact '$ARTIFACT'"
+  exit 0
 fi
+
+xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --wait
+staple_outputs
 
 echo "✅ Notarization complete"

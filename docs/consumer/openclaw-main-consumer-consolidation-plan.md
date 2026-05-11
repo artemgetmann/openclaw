@@ -1,6 +1,6 @@
 # OpenClaw Main + Consumer Consolidation Plan
 
-Last updated: 2026-05-10
+Last updated: 2026-05-11
 
 ## North Star
 
@@ -74,7 +74,7 @@ This proves the full DMG/ZIP packaging path from `main` completed for
 Installed-release smoke from the published `v2026.3.15` DMG passed. Sparkle
 non-UI update completion from the public `v2026.3.14` build to `v2026.3.15`
 passed through Sparkle's update installer path. The interactive Sparkle dialog
-itself was not visually verified.
+itself was not visually verified; that smoke stays optional/final.
 
 PR #620 fixed automatic packaged gateway LaunchAgent replacement repair. PR
 #625 then fixed the remaining source-attach bypass where a packaged app could
@@ -152,7 +152,7 @@ when packaging is invoked from a temp worktree. Override with
 | Packaging from main                 | Local recut complete for v2026.3.15 | `main` produced the signed/notarized public `v2026.3.15` release from `205d5f596602ff82270b1af5a3de24c33c32b532`; that public asset is now stale for latest provenance. A fresh local recut from `1ec69a58fd441e1c63a91e5af4468fd6fe53f272` produced `OpenClaw.dmg`, `OpenClaw.zip`, `openclaw-consumer-appcast.xml`, and `OpenClaw-2026.3.15.dSYM.zip` under `dist/release-handoff/`. App and DMG notarization passed, stapling passed, and Gatekeeper accepted both as Notarized Developer ID. Codesign retry and DMG conversion blockers are fixed. The canonical command remains `scripts/package-openclaw-mac-dist.sh`; `scripts/package-consumer-mac-dist.sh` remains a compatibility wrapper. Public DMG install smoke and deterministic Sparkle non-UI update completion passed for the currently published asset.                                                                                                                                      | Upload/replace public `v2026.3.15` release assets from the verified handoff set, then rerun public install/update smoke if distribution claims require it. Interactive Sparkle dialog visual proof remains optional. |
 | App name / bundle identity          | Completed for visible name          | Release packaging now ships as `OpenClaw.app` / `OpenClaw.dmg` / `OpenClaw.zip` while preserving `ai.openclaw.consumer.mac`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Bundle-id migration needs a stronger reason and a migration plan.                                                                                                                                                    |
 | `openclaw-consumer` retirement      | Completed for normal workflow       | `main` is now the target for new work. Consumer branch is no longer the default implementation surface. Existing-user and isolated fresh-user main-built app smokes passed. Older docs/workflows now label the old branch as historical or emergency-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Keep `openclaw-consumer` only as an emergency fallback.                                                                                                                                                              |
-| Overlay/defaults contract           | Mostly completed                    | Core setup/runtime pieces are shared. Telegram `/model` now starts with Claude, ChatGPT, and More. Model labels were polished after live feedback: `GPT` is capitalized, duplicate/noisy ChatGPT entries are removed, and Claude family labels use product-facing names such as `Sonnet 4.6`. Fresh consumer configs get broad useful bundled skills by default, and model-facing skills remain visible when setup/auth is missing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Keep future onboarding presentation defaults explicit instead of scattering product conditionals.                                                                                                                    |
+| Overlay/defaults contract           | Mostly completed                    | Core setup/runtime pieces are shared. Telegram `/model` now starts with Claude, ChatGPT, and More. Model labels were polished after live feedback: `GPT` is capitalized, duplicate/noisy ChatGPT entries are removed, and Claude family labels use product-facing names such as `Sonnet 4.6`. Fresh consumer configs get broad useful bundled skills by default, and model-facing skills remain visible when setup/auth is missing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Keep future onboarding presentation defaults explicit instead of scattering product conditionals. This is hygiene, not a release blocker.                                                                            |
 | Docs / workflow cleanup             | Completed                           | Primary and older workflow docs now point normal consumer work at `main` and label `codex/consumer-openclaw-project` as historical or emergency-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Keep future docs aligned with the main-first workflow.                                                                                                                                                               |
 
 ## Retirement Gate
@@ -168,7 +168,20 @@ Do not fully retire `openclaw-consumer` until all of these are true:
 
 ## Next Implementation Slices
 
-### 1. Publish the verified `v2026.3.15` recut
+### 1. Use the deterministic release lane for the final package
+
+The manual release recut proved the flow, but it also exposed a workflow bug:
+`notarytool submit --wait` can block the whole agent lane while Apple performs
+server-side analysis. The release scripts now have deterministic release-env
+loading plus explicit submit/poll/staple support; use that flow for the final
+package instead of rediscovering credentials or blocking blindly.
+
+Release env defaults to
+`~/Library/Application Support/OpenClaw/release.env` for non-secret settings and
+secret file pointers. Secrets stay in Keychain [Apple's encrypted credential
+store], not in `~/.openclaw`.
+
+### 2. Publish the verified final recut
 
 #638 fixes the stale LaunchAgent `OPENCLAW_SERVICE_VERSION` env observed after
 the public `v2026.3.14` -> `v2026.3.15` Sparkle update. #634 fixes the stale
@@ -178,38 +191,30 @@ packaged runtime root preservation during gateway install/restart. A local
 release recut from `1ec69a58fd441e1c63a91e5af4468fd6fe53f272` now includes
 those fixes and passed notarization/Gatekeeper verification.
 
-Next action is deliberate publication: replace/upload `OpenClaw.dmg`,
-`OpenClaw.zip`, `OpenClaw-2026.3.15.dSYM.zip`, and
-`openclaw-consumer-appcast.xml` on the public `v2026.3.15` release only after
-explicit approval. Until then, the public GitHub release still points at the old
-`205d5f596602ff82270b1af5a3de24c33c32b532` asset provenance.
+Public upload is deferred until the app work is done and final release approval
+is explicit. Only then should a fresh `OpenClaw.dmg`, `OpenClaw.zip`,
+`OpenClaw-2026.3.15.dSYM.zip`, and `openclaw-consumer-appcast.xml` replace the
+public `v2026.3.15` assets. Until then, the public GitHub release still points
+at the old `205d5f596602ff82270b1af5a3de24c33c32b532` asset provenance.
 
-### 2. Interactive Sparkle UI smoke
+### 3. Interactive Sparkle UI smoke
 
 Sparkle update completion from the public `v2026.3.14` build to `v2026.3.15`
-passed through a deterministic non-UI Sparkle proof. The remaining optional gate
-is observing the literal Sparkle dialog path if the product claim requires that
-exact UI.
+passed through a deterministic non-UI Sparkle proof. The remaining dialog-path
+smoke is optional/final, only if the product claim needs that exact UI.
 
-### 3. Release-lane automation cleanup
+### 4. Launch audit handoff
 
-The manual release recut proved the flow, but it also exposed a workflow bug:
-`notarytool submit --wait` blocks the whole agent lane while Apple performs
-server-side analysis. Future release work should split build, submit, poll,
-staple, and final verification into separate commands. Submit should record the
-notary submission IDs, then a small poll/staple step should use
-`xcrun notarytool info <submission-id> --keychain-profile openclaw-consumer`
-instead of holding the whole packaging script hostage.
+Keep the commercial spine open as a separate launch audit: account/trial/license
+state, backend-managed surfaces, bundled secrets/config audit, and public
+package audit. This is likely owned by the main/pane-6 launch plan, not this
+release-automation slice.
 
-Also add a local release-env loader or documented shell snippet that exports the
-notary profile, Sparkle feed URL, public key, private-key path, and Sparkle tool
-`PATH` without printing secret values.
+### 5. Overlay/defaults hygiene
 
-### 4. Account, license, backend, and public package audit
-
-Keep the commercial spine open: account/trial/license state, backend-managed
-surfaces, bundled secrets/config audit, and public package audit before broader
-distribution.
+Keep future onboarding presentation defaults explicit instead of scattering
+product conditionals. This cleanup is useful, but it is non-urgent hygiene and
+not a release blocker.
 
 ## Completed Implementation Slices
 
