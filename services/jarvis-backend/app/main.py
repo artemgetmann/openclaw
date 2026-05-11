@@ -207,7 +207,8 @@ async def account_login(
 
     email = _normalize_email(request.email)
     store = get_license_store(settings)
-    account = store.upsert_account(email=email)
+    created = store.create_account_for_activation(email=email)
+    account = created.account
     record = store.register_or_get_device(
         device_id=request.deviceId,
         account_id=account.account_id,
@@ -218,7 +219,7 @@ async def account_login(
     return AccountLoginResponse(
         accountId=account.account_id,
         email=account.email,
-        accountAccessToken=account.account_access_token,
+        accountAccessToken=created.account_access_token,
         license=_license_response(record, _utcnow(), settings),
     )
 
@@ -358,8 +359,14 @@ class AccountRecord(BaseModel):
 
     account_id: str
     email: str
-    account_access_token: str
     created_at: datetime
+
+
+class CreatedAccountRecord(BaseModel):
+    """Account creation result that includes the one-time raw bearer token."""
+
+    account: AccountRecord
+    account_access_token: str
 
 
 class LicenseStore(Protocol):
@@ -376,8 +383,8 @@ class LicenseStore(Protocol):
     ) -> LicenseRecord:
         """Create or refresh a device row without resetting its trial clock."""
 
-    def upsert_account(self, *, email: str) -> AccountRecord:
-        """Create or reuse a beta account row for account-linked trials."""
+    def create_account_for_activation(self, *, email: str) -> CreatedAccountRecord:
+        """Create a new beta account and return the raw token exactly once."""
 
     def get_account_by_access_token(self, *, account_access_token: str) -> AccountRecord | None:
         """Resolve a previously issued account token without exposing secrets."""
@@ -480,55 +487,64 @@ class SQLiteLicenseStore:
 
         return _record_from_row(row)
 
-    def upsert_account(self, *, email: str) -> AccountRecord:
+    def create_account_for_activation(self, *, email: str) -> CreatedAccountRecord:
         """
-        Create a stable beta account without needing production credentials.
+        Create a stable beta account without treating email as authentication.
 
-        The access token is generated once and reused on repeated beta login so
-        reinstalling the app does not strand a user in a duplicate account row.
+        The raw token is returned only for the first activation. Until an OTP or
+        magic-code recovery flow exists, repeated activation for the same email
+        fails closed instead of handing a durable bearer token to whoever typed
+        that email.
         """
 
         account_id = _account_id_for_email(email)
+        account_access_token = _new_account_access_token()
+        account_access_token_hash = _account_access_token_digest(account_access_token)
         now = _utcnow()
 
         with self._connect() as connection:
             self._ensure_schema(connection)
-            connection.execute(
-                """
-                INSERT INTO accounts (
-                    account_id,
-                    email,
-                    account_access_token,
-                    created_at,
-                    updated_at
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO accounts (
+                        account_id,
+                        email,
+                        account_access_token_hash,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        account_id,
+                        email,
+                        account_access_token_hash,
+                        _format_dt(now),
+                        _format_dt(now),
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(email) DO UPDATE SET
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    account_id,
-                    email,
-                    _new_account_access_token(),
-                    _format_dt(now),
-                    _format_dt(now),
-                ),
-            )
+            except sqlite3.IntegrityError as exc:
+                raise _account_activation_conflict() from exc
             row = connection.execute(
                 "SELECT * FROM accounts WHERE email = ?",
                 (email,),
             ).fetchone()
 
-        return _account_from_row(row)
+        return CreatedAccountRecord(
+            account=_account_from_row(row),
+            account_access_token=account_access_token,
+        )
 
     def get_account_by_access_token(self, *, account_access_token: str) -> AccountRecord | None:
-        """Look up the account token returned by `/v1/account/login`."""
+        """Look up the account token digest returned by first beta activation."""
 
+        account_access_token_hash = _account_access_token_digest(account_access_token)
         with self._connect() as connection:
             self._ensure_schema(connection)
             row = connection.execute(
-                "SELECT * FROM accounts WHERE account_access_token = ?",
-                (account_access_token,),
+                "SELECT * FROM accounts WHERE account_access_token_hash = ?",
+                (account_access_token_hash,),
             ).fetchone()
 
         return _account_from_row(row) if row else None
@@ -579,7 +595,7 @@ class SQLiteLicenseStore:
             CREATE TABLE IF NOT EXISTS accounts (
                 account_id TEXT PRIMARY KEY,
                 email TEXT NOT NULL UNIQUE,
-                account_access_token TEXT NOT NULL UNIQUE,
+                account_access_token_hash TEXT NOT NULL UNIQUE,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
@@ -674,50 +690,58 @@ class PostgresLicenseStore:
 
         return _record_from_row(row)
 
-    def upsert_account(self, *, email: str) -> AccountRecord:
-        """Create or reuse a production beta account in Neon/Postgres."""
+    def create_account_for_activation(self, *, email: str) -> CreatedAccountRecord:
+        """Create a production beta account and return its raw token once."""
 
         account_id = _account_id_for_email(email)
+        account_access_token = _new_account_access_token()
+        account_access_token_hash = _account_access_token_digest(account_access_token)
         now = _utcnow()
 
         with self._connect() as connection:
             self._ensure_schema(connection)
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO accounts (
-                        account_id,
-                        email,
-                        account_access_token,
-                        created_at,
-                        updated_at
+                try:
+                    cursor.execute(
+                        """
+                        INSERT INTO accounts (
+                            account_id,
+                            email,
+                            account_access_token_hash,
+                            created_at,
+                            updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            account_id,
+                            email,
+                            account_access_token_hash,
+                            now,
+                            now,
+                        ),
                     )
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT(email) DO UPDATE SET
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        account_id,
-                        email,
-                        _new_account_access_token(),
-                        now,
-                        now,
-                    ),
-                )
+                except psycopg2.IntegrityError as exc:
+                    connection.rollback()
+                    raise _account_activation_conflict() from exc
                 cursor.execute("SELECT * FROM accounts WHERE email = %s", (email,))
                 row = cursor.fetchone()
 
-        return _account_from_row(row)
+        return CreatedAccountRecord(
+            account=_account_from_row(row),
+            account_access_token=account_access_token,
+        )
 
     def get_account_by_access_token(self, *, account_access_token: str) -> AccountRecord | None:
-        """Resolve the beta account token from Neon/Postgres."""
+        """Resolve the beta account token digest from Neon/Postgres."""
 
+        account_access_token_hash = _account_access_token_digest(account_access_token)
         with self._connect() as connection:
             self._ensure_schema(connection)
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
-                    "SELECT * FROM accounts WHERE account_access_token = %s",
-                    (account_access_token,),
+                    "SELECT * FROM accounts WHERE account_access_token_hash = %s",
+                    (account_access_token_hash,),
                 )
                 row = cursor.fetchone()
 
@@ -769,7 +793,7 @@ class PostgresLicenseStore:
                 CREATE TABLE IF NOT EXISTS accounts (
                     account_id TEXT PRIMARY KEY,
                     email TEXT NOT NULL UNIQUE,
-                    account_access_token TEXT NOT NULL UNIQUE,
+                    account_access_token_hash TEXT NOT NULL UNIQUE,
                     created_at TIMESTAMPTZ NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
@@ -855,6 +879,24 @@ def _new_account_access_token() -> str:
     return f"jat_{secrets.token_urlsafe(32)}"
 
 
+def _account_access_token_digest(account_access_token: str) -> str:
+    """Hash account bearer tokens so persistence never stores reusable raw tokens."""
+
+    return hashlib.sha256(account_access_token.encode("utf-8")).hexdigest()
+
+
+def _account_activation_conflict() -> HTTPException:
+    """Return the controlled-beta recovery boundary for an already-used email."""
+
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Account activation already exists for this email. "
+            "Account recovery requires a future OTP or magic-code flow."
+        ),
+    )
+
+
 def _account_id_from_access_token(
     store: LicenseStore,
     account_access_token: str | None,
@@ -937,6 +979,5 @@ def _account_from_row(row: sqlite3.Row | dict[str, Any] | None) -> AccountRecord
     return AccountRecord(
         account_id=_read_row_value(row, "account_id"),
         email=_read_row_value(row, "email"),
-        account_access_token=_read_row_value(row, "account_access_token"),
         created_at=_parse_dt(_read_row_value(row, "created_at")),
     )

@@ -23,7 +23,7 @@ The source can be public. The hosted environment cannot be.
 ## Endpoints
 
 - `GET /healthz` - public health check with provider presence booleans only.
-- `POST /v1/account/login` - activates/reuses an email beta account and links the device to its 14-day trial.
+- `POST /v1/account/login` - first-time beta email activation that links the device to a 14-day trial.
 - `POST /v1/device/register` - creates or reuses a durable device/license row.
 - `POST /v1/license/status` - returns persisted trial/license status for a device.
 - `POST /v1/admin/devices/{device_id}/license` - manual beta support override.
@@ -53,18 +53,22 @@ requests when `JARVIS_BACKEND_ENV=production` and `NEON_DATABASE_URL` is missing
 because Render web-service filesystems are ephemeral.
 
 `/v1/account/login` is the first **beta email activation** path. It normalizes
-an email address, creates or reuses a durable account row, links the current
-device license row to that account, and returns an account access token plus the
-same license response shape used by `/v1/license/status`. This is enough for
-controlled-beta account and trial tracking, but it is not inbox-verified
+an email address, creates a durable account row, links the current device
+license row to that account, and returns an account access token plus the same
+license response shape used by `/v1/license/status`. Existing email activation
+fails closed with `409` until account recovery is implemented. This is enough
+for controlled-beta account and trial tracking, but it is not inbox-verified
 identity and must not be described as production auth.
 
 Security caveat: before OTP or magic-code verification exists, anyone can type
 someone else's email. That does not grant mailbox access or access to a verified
 third-party account, but it can pollute account identity/trial ownership and can
-reuse the beta account token for that email. The next auth-hardening slice should
-replace this with email OTP/magic-code verification before broader distribution
-or abuse-sensitive billing/entitlement decisions.
+block the real owner from activating that same email until manual support or
+OTP/magic-code recovery exists. Raw account tokens are returned only on first
+activation and stored only as hashes. The next auth-hardening slice should
+replace this with email OTP/magic-code verification before reinstall/recovery,
+broader distribution, or abuse-sensitive billing/entitlement decisions. Do not
+add passwords to this beta path.
 
 Local development and tests fall back to SQLite when `NEON_DATABASE_URL` is not
 set. Do not use that fallback for hosted beta users.
