@@ -718,8 +718,8 @@ Progress:
 The active owner for these items is this launch plan. The retired consolidation
 docs remain historical proof only:
 
-- `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
-- `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
+- `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md`
+- `docs/consumer/archive/openclaw-main-consumer-divergence-tracker.md`
 
 | Item                                             | Owner                                     | Status                            | Launch-plan handling                                                                                                                                                                                                                                                                                 |
 | ------------------------------------------------ | ----------------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

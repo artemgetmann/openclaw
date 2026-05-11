@@ -6,9 +6,9 @@
 > Current source of truth:
 >
 > - `CONSUMER.md`
-> - `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
-> - `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
 > - `docs/research/jarvis-consumer-launch-plan.md`
+> - `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md`
+> - `docs/consumer/archive/openclaw-main-consumer-divergence-tracker.md`
 >
 > This document is preserved for product intent and early sprint context. Do not
 > use its old branch-routing instructions for new work.
