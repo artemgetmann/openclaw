@@ -2,8 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DEFAULT_DMG="/Users/user/Programming_Projects/openclaw/dist/consumer-handoff/OpenClaw.dmg"
-LEGACY_ROOT_DMG="/Users/user/Programming_Projects/openclaw/OpenClaw.dmg"
+DEFAULT_DMG="/Users/user/Programming_Projects/openclaw/dist/consumer-handoff/Jarvis.dmg"
+LEGACY_ROOT_DMG="/Users/user/Programming_Projects/openclaw/Jarvis.dmg"
+LEGACY_OPENCLAW_DMG="/Users/user/Programming_Projects/openclaw/OpenClaw.dmg"
 
 APP_PATH=""
 DMG_PATH=""
@@ -16,7 +17,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/smoke-consumer-fresh-user-mac-app.sh [--dmg <path> | --app <path>] [--timeout <seconds>] [--keep-artifacts] [--quit-existing-app]
 
-Runs the packaged OpenClaw macOS consumer app against an isolated fake home and
+Runs the packaged Jarvis macOS consumer app against an isolated fake home and
 instance id. This is the closest non-admin fresh-user smoke: it avoids the real
 user's OpenClaw config/runtime while proving bundled runtime bootstrap, isolated
 gateway startup, and first-run onboarding visibility from clean state.
@@ -73,8 +74,10 @@ if [[ -z "$APP_PATH" && -z "$DMG_PATH" ]]; then
     DMG_PATH="$DEFAULT_DMG"
   elif [[ -f "$LEGACY_ROOT_DMG" ]]; then
     DMG_PATH="$LEGACY_ROOT_DMG"
+  elif [[ -f "$LEGACY_OPENCLAW_DMG" ]]; then
+    DMG_PATH="$LEGACY_OPENCLAW_DMG"
   else
-    APP_PATH="$ROOT_DIR/dist/OpenClaw.app"
+    APP_PATH="$ROOT_DIR/dist/Jarvis.app"
   fi
 fi
 
@@ -126,7 +129,7 @@ wait_for_health() {
 
 read_onboarding_windows() {
   # CGWindowList does not require Accessibility permission, unlike System Events.
-  swift -e 'import CoreGraphics; let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []; for w in list { let owner = w[kCGWindowOwnerName as String] as? String ?? ""; let name = w[kCGWindowName as String] as? String ?? ""; if owner == "OpenClaw" || owner == "OpenClaw Consumer" || name.contains("OpenClaw") { print(name.isEmpty ? "<untitled>" : name) } }' 2>/dev/null || true
+  swift -e 'import CoreGraphics; let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []; for w in list { let owner = w[kCGWindowOwnerName as String] as? String ?? ""; let name = w[kCGWindowName as String] as? String ?? ""; if owner == "Jarvis" || owner == "OpenClaw" || owner == "OpenClaw Consumer" || name.contains("Jarvis") || name.contains("OpenClaw") { print(name.isEmpty ? "<untitled>" : name) } }' 2>/dev/null || true
 }
 
 running_same_bundle_pids() {
@@ -224,7 +227,7 @@ BUNDLE_ID="$(plist_value "$INFO_PLIST" "CFBundleIdentifier")"
 VARIANT="$(plist_value "$INFO_PLIST" "OpenClawAppVariant")"
 COMMIT="$(plist_value "$INFO_PLIST" "OpenClawGitCommit")"
 
-if [[ "$DISPLAY_NAME" != "OpenClaw" || "$VARIANT" != "consumer" ]]; then
+if [[ "$DISPLAY_NAME" != "Jarvis" || "$VARIANT" != "consumer" ]]; then
   echo "ERROR: refusing to smoke unexpected app bundle" >&2
   echo "display_name=$DISPLAY_NAME" >&2
   echo "variant=$VARIANT" >&2
@@ -238,7 +241,7 @@ while IFS= read -r pid; do
 done < <(running_same_bundle_pids "$BUNDLE_ID")
 if [[ "${#EXISTING_APP_PIDS[@]}" -gt 0 ]]; then
   if [[ "$QUIT_EXISTING_APP" != "1" ]]; then
-    echo "ERROR: another OpenClaw consumer app is already running with the same bundle identity" >&2
+    echo "ERROR: another Jarvis/OpenClaw consumer app is already running with the same bundle identity" >&2
     echo "existing_app_pids=${EXISTING_APP_PIDS[*]}" >&2
     echo "rerun_with=--quit-existing-app" >&2
     exit 1
@@ -290,7 +293,7 @@ wait_for_health "$GATEWAY_PORT" "$DEADLINE" || {
 }
 
 WINDOW_TITLES="$(read_onboarding_windows)"
-if [[ "$WINDOW_TITLES" != *"Welcome to OpenClaw"* ]]; then
+if [[ "$WINDOW_TITLES" != *"Welcome to Jarvis"* ]]; then
   echo "ERROR: onboarding window was not observed" >&2
   echo "observed_window_titles=${WINDOW_TITLES:-<none_or_not_authorized>}" >&2
   exit 1

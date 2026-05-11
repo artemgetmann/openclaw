@@ -126,8 +126,16 @@ if [[ "${SKIP_DMG_STYLE:-0}" != "1" ]]; then
     echo "WARN: DMG background missing: $DMG_BACKGROUND_SMALL / $DMG_BACKGROUND_PATH" >&2
   fi
 
-  # Volume icon: reuse the app icon if available.
-  ICON_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns"
+  # Volume icon: reuse the exact app icon from the staged bundle so Jarvis
+  # drops do not accidentally keep an OpenClaw-branded disk image.
+  ICON_BASENAME=$(/usr/libexec/PlistBuddy -c "Print CFBundleIconFile" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "")
+  ICON_BASENAME="${ICON_BASENAME%.icns}"
+  ICON_SRC=""
+  if [[ -n "$ICON_BASENAME" && -f "$APP_PATH/Contents/Resources/${ICON_BASENAME}.icns" ]]; then
+    ICON_SRC="$APP_PATH/Contents/Resources/${ICON_BASENAME}.icns"
+  elif [[ -f "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns" ]]; then
+    ICON_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns"
+  fi
   if [[ -f "$ICON_SRC" ]]; then
     cp "$ICON_SRC" "$MOUNT_POINT/.VolumeIcon.icns"
     if command -v SetFile >/dev/null 2>&1; then
