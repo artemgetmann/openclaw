@@ -676,7 +676,7 @@ Build the commercial spine first:
 2. no leaked founder keys — package guard done in PR #565
 3. account login and 14-day trial activation — beta contract done in PR #647
 4. pricing/plan names, launch README outline, and 60-second demo — drafted in PR #646
-5. production Render service configuration with real env values
+5. production Render service configuration with durable account/license state
 6. usage counters for backend-managed utilities/fallback
 7. subscription/trial-gated update entitlement UX
 8. GitHub README as landing page
@@ -696,7 +696,7 @@ Current implementation order:
 5. Signing/notarization + updater proof. Public `v2026.3.15` shipped signed/notarized; Sparkle non-UI update completion passed.
 6. Beta account activation + 14-day trial. Done in PR #647.
 7. Pricing/plan names, launch README outline, and 60-second demo. Drafted in PR #646.
-8. Production Render service configuration with real env values. Next after this checkpoint unless explicitly paused.
+8. Production Render service creation + partial env configuration. Done on 2026-05-11; Neon persistence remains the blocker.
 
 Progress:
 
@@ -711,9 +711,9 @@ Progress:
 - [x] Launch package/pricing/README/demo draft landed in PR #646.
 - [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
 - [ ] Subscription/trial-gated update entitlement UX is production-ready.
-- [ ] Render service is created and configured with production env values.
+- [ ] Render service has durable production account/license persistence.
 
-Verified Render truth as of 2026-05-11:
+Verified Render truth as of 2026-05-11 before backend creation:
 
 - Render workspace `My Workspace` has no service pointing at
   `https://github.com/artemgetmann/openclaw` or `services/jarvis-backend`.
@@ -724,6 +724,37 @@ Verified Render truth as of 2026-05-11:
 - The macOS backend service still needs to be created from this repo's root
   `render.yaml` `jarvis-backend` service and configured with production env
   values before a notarized Jarvis package can point at it.
+
+Verified Render backend state as of 2026-05-11 after service creation:
+
+- Created Render web service `jarvis-backend` in workspace `My Workspace`.
+- Service ID: `srv-d80sqc8g4nts738v1j80`.
+- URL: `https://jarvis-backend-klvq.onrender.com`.
+- Region: `virginia`.
+- Plan: `starter`.
+- Repo/branch: `https://github.com/artemgetmann/openclaw` `main`.
+- Build command: `cd services/jarvis-backend && pip install -r requirements.txt`.
+- Start command: `cd services/jarvis-backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+- Deploy `dep-d80ssrlckfvc73de5vtg` is live from commit
+  `d367eebb295bef6072de1e057bc22a544a5102e0`.
+- `GET /healthz` returns 200 with `service=jarvis-backend`,
+  `environment=production`, `providers.openai=true`, and
+  `providers.anthropic=false`.
+- `POST /v1/managed/utilities/smoke` returns 200 with the backend token,
+  proving the managed utility contract is live and provider keys are
+  server-held.
+- `POST /v1/license/status` returns 503
+  `NEON_DATABASE_URL is required for production persistence`, which is the
+  expected fail-closed state until Neon is configured.
+- `JARVIS_BACKEND_API_TOKEN` was generated and stored outside Git in local
+  macOS Keychain under service `Jarvis Render Backend`, account
+  `JARVIS_BACKEND_API_TOKEN`.
+
+Remaining backend blocker:
+
+- Configure `NEON_DATABASE_URL` server-side in Render, redeploy, then re-run
+  account activation and license status probes. Do not package this as a
+  sendable beta until that passes.
 
 ### Imported from retired consolidation trackers
 
