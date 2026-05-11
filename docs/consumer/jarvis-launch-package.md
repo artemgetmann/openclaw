@@ -2,7 +2,7 @@
 
 Status: v1 launch package draft
 Owner: Artem
-Last updated: 2026-05-09
+Last updated: 2026-05-11
 
 This document turns the launch plan into decisions that can be shipped into the
 GitHub README, release notes, pricing copy, and the first 60-second demo.
@@ -16,6 +16,28 @@ Public-facing app/docs should move toward Jarvis now. The visible app name and
 release artifacts should become Jarvis soon, but bundle ID, runtime identity,
 update feed identity, and deeper internal renames are a separate migration
 task. Do not imply those internals are already renamed.
+
+## Backend deployment status
+
+Current beta backend:
+
+- Render service: `jarvis-backend`
+- Service ID: `srv-d80sqc8g4nts738v1j80`
+- URL: `https://jarvis-backend-klvq.onrender.com`
+- Region/plan: `virginia` / `starter`
+- Source: `https://github.com/artemgetmann/openclaw` on `main`
+
+Verified on 2026-05-11:
+
+- `/healthz` is live and reports production mode.
+- OpenAI is configured server-side.
+- Anthropic is not configured yet.
+- The managed utility smoke endpoint works with the backend token.
+- Account/license persistence is not ready until `NEON_DATABASE_URL` is
+  configured in Render and the account/license probes pass.
+
+Do not package this as a sendable beta until account activation and license
+status are proved against this service with durable Neon persistence.
 
 ## v1 commercial decision
 
