@@ -434,7 +434,8 @@ Important nuance for open source:
 
 ## 8. Updates outside the App Store
 
-This is missing from the old plan and is P0.
+This was missing from the old plan and remains P0, but the first
+signing/notarization/update proof is no longer blank.
 
 Jarvis needs an updater because App Store approval is too slow and the first launch should be direct download/GitHub.
 
@@ -446,19 +447,18 @@ App checks Jarvis backend -> sees latest version -> downloads signed/notarized u
 
 P0 requirements:
 
-- signed + notarized macOS builds
-- update manifest hosted on backend/GitHub Releases
+- [x] signed + notarized macOS builds for public `v2026.3.15`
+- [x] update manifest hosted through GitHub Releases/appcast for `v2026.3.15`
 - app checks latest version on launch and periodically
 - user can click “Update”
 - update gated by subscription/trial status
 - updater shows changelog
 - update process backs up config first
 
-Possible implementation choices for developer docs:
+Implementation choice for developer docs:
 
-- Sparkle updater for macOS if the app stack supports it
-- Electron autoUpdater if Electron path is retained
-- custom update manifest + download/install script only if faster and reliable
+- Sparkle is the current macOS update path. Do not reopen Electron/custom updater
+  unless Sparkle blocks a hard requirement.
 
 Subscription enforcement through updates:
 
@@ -570,10 +570,12 @@ Investigation task:
 
 P0 blockers before public strangers:
 
-- [ ] Apple signing/notarization or at minimum a much less terrifying install path.
+- [x] Apple signing/notarization and public DMG install smoke for `v2026.3.15`.
 - [x] Remove bundled founder keys from public builds or route them through managed backend.
-- [ ] Account login/trial/subscription state.
-- [ ] Update mechanism.
+- [x] Beta account activation and 14-day trial contract.
+- [x] Baseline Sparkle update mechanism proof.
+- [ ] Production Render service/env configuration.
+- [ ] Subscription/trial-gated update entitlement UX.
 - [ ] Cleaner permissions flow.
 - [ ] Cleaner browser connect flow.
 - [ ] Better copywriting for every step.
@@ -670,15 +672,16 @@ Do not overbuild the website first.
 
 Build the commercial spine first:
 
-1. signed/notarized downloadable app
-2. signing/notarization
-3. update mechanism
-4. account login and trial/license status
-5. no leaked founder keys
-6. managed/BYOK switch
-7. GitHub README as landing page
-8. Reddit launch
-9. website after signal
+1. signed/notarized downloadable app — done for public `v2026.3.15`
+2. no leaked founder keys — package guard done in PR #565
+3. account login and 14-day trial activation — beta contract done in PR #647
+4. pricing/plan names, launch README outline, and 60-second demo — drafted in PR #646
+5. production Render service configuration with real env values
+6. usage counters for backend-managed utilities/fallback
+7. subscription/trial-gated update entitlement UX
+8. GitHub README as landing page
+9. Reddit launch
+10. website after signal
 
 ## 14. Immediate execution roadmap
 
@@ -690,7 +693,10 @@ Current implementation order:
 2. Private Render deploy path for the backend. Done in PR #561.
 3. Secrets/public-package audit guard. Done in PR #565.
 4. Account/license persistence. Done in PR #569.
-5. Signing/notarization + updater. Current next main lane.
+5. Signing/notarization + updater proof. Public `v2026.3.15` shipped signed/notarized; Sparkle non-UI update completion passed.
+6. Beta account activation + 14-day trial. Done in PR #647.
+7. Pricing/plan names, launch README outline, and 60-second demo. Drafted in PR #646.
+8. Production Render service configuration with real env values. Next after this checkpoint unless explicitly paused.
 
 Progress:
 
@@ -699,7 +705,12 @@ Progress:
 - [x] Render deploy guardrails / backend Render service path landed in PR #561.
 - [x] Secrets/public-package audit guard prevents public builds from shipping founder/provider keys; landed in PR #565.
 - [x] Account/license persistence replaces stateless trial responses; Neon-backed persistence landed in PR #569.
-- [ ] Signing/notarization + updater are production-ready.
+- [x] Signing/notarization completed for public `v2026.3.15`.
+- [x] Sparkle non-UI update completion passed from public `v2026.3.14` to `v2026.3.15`.
+- [x] Beta email activation + 14-day trial landed in PR #647.
+- [x] Launch package/pricing/README/demo draft landed in PR #646.
+- [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
+- [ ] Subscription/trial-gated update entitlement UX is production-ready.
 - [ ] Render service is created and configured with production env values.
 
 Deployment/security boundary:
@@ -718,8 +729,10 @@ Deployment/security boundary:
 - [x] Implement beta email activation + 14-day trial. Minimal email activation is implemented in the Jarvis backend/client contract for controlled beta account/device/trial tracking. This is not production auth: first activation returns an account token, repeated activation for the same email fails closed, and reinstall/account recovery waits for OTP/magic-code verification. Do not add passwords; Google Auth remains a later optional hardening slice.
 - [x] Decide exact plan names and prices. See `docs/consumer/jarvis-launch-package.md`.
 - [x] Implement license check + offline grace. Contract MVP exists in PR #560; Neon persistence landed in PR #569.
-- [ ] Implement update check/install path. Current next main lane with signing/notarization.
-- [ ] Sign/notarize macOS app.
+- [x] Implement and prove baseline update check/install path through Sparkle non-UI update completion.
+- [x] Sign/notarize macOS app for public `v2026.3.15`.
+- [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
+- [ ] Implement subscription/trial-gated update entitlement UX.
 - [x] Remove or proxy all founder keys from public builds. Backend/proxy contract exists in PR #560; public-package audit guard landed in PR #565.
 - [ ] Define self-modification boundaries: normal mode, guarded mode, developer mode, fork mode.
 - [ ] Define config/defaults update policy: migrate/merge without clobbering user config.
