@@ -115,6 +115,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "jarvis.backend.baseUrl": "Jarvis Backend URL",
   "jarvis.backend.accessToken": "Jarvis Backend Access Token",
   "jarvis.backend.deviceId": "Jarvis Device ID",
+  "jarvis.backend.accountAccessToken": "Jarvis Account Access Token",
+  "jarvis.backend.accountEmail": "Jarvis Account Email",
   "jarvis.backend.timeoutMs": "Jarvis Backend Timeout (ms)",
   "jarvis.managedServices": "Jarvis Managed Services",
   "jarvis.managedServices.mode": "Jarvis Managed Services Mode",

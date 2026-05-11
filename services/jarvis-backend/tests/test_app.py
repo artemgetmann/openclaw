@@ -1,4 +1,5 @@
 import os
+import sqlite3
 
 from fastapi.testclient import TestClient
 import pytest
@@ -72,6 +73,116 @@ def test_device_registration_reuses_persisted_trial_dates(monkeypatch):
     assert second.json()["registered_at"] == first.json()["registered_at"]
     assert second.json()["license"]["trialStartedAt"] == first.json()["license"]["trialStartedAt"]
     assert second.json()["license"]["trialEndsAt"] == first.json()["license"]["trialEndsAt"]
+
+
+def test_account_login_activates_trial_and_links_device(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_TRIAL_DAYS", "14")
+    reset_settings()
+    client = TestClient(app)
+
+    activated = client.post(
+        "/v1/account/login",
+        json={
+            "email": " Founder@Example.com ",
+            "deviceId": "device-account",
+            "appVersion": "0.1.0",
+            "platform": "macos",
+        },
+    )
+    status = client.post(
+        "/v1/license/status",
+        json={
+            "deviceId": "device-account",
+            "accountAccessToken": activated.json()["accountAccessToken"],
+        },
+    )
+
+    assert activated.status_code == 200
+    activated_body = activated.json()
+    assert activated_body["email"] == "founder@example.com"
+    assert activated_body["accountId"].startswith("acct_")
+    assert activated_body["accountAccessToken"].startswith("jat_")
+    assert activated_body["license"]["state"] == "trial_active"
+    assert activated_body["license"]["accountId"] == activated_body["accountId"]
+    assert status.status_code == 200
+    assert status.json()["accountId"] == activated_body["accountId"]
+    assert status.json()["trialEndsAt"] == activated_body["license"]["trialEndsAt"]
+
+    db_path = os.environ["JARVIS_BACKEND_DB_PATH"]
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT account_access_token_hash FROM accounts WHERE email = ?",
+            ("founder@example.com",),
+        ).fetchone()
+    assert row is not None
+    assert row[0] != activated_body["accountAccessToken"]
+    assert len(row[0]) == 64
+
+
+def test_account_login_existing_email_fails_closed_without_returning_token(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    reset_settings()
+    client = TestClient(app)
+
+    first = client.post(
+        "/v1/account/login",
+        json={"email": "founder@example.com", "deviceId": "device-repeat", "appVersion": "0.1.0"},
+    )
+    second = client.post(
+        "/v1/account/login",
+        json={"email": "founder@example.com", "deviceId": "device-repeat", "appVersion": "0.2.0"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert "accountAccessToken" not in second.text
+    assert second.json()["detail"] == (
+        "Account activation already exists for this email. "
+        "Account recovery requires a future OTP or magic-code flow."
+    )
+
+
+def test_license_status_rejects_invalid_account_token(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    reset_settings()
+
+    response = TestClient(app).post(
+        "/v1/license/status",
+        json={"deviceId": "device-status", "accountAccessToken": "not-a-real-account-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid account access token"
+
+
+def test_invalid_account_token_does_not_mutate_existing_device_link(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    reset_settings()
+    client = TestClient(app)
+
+    activated = client.post(
+        "/v1/account/login",
+        json={"email": "founder@example.com", "deviceId": "device-linked", "appVersion": "0.1.0"},
+    )
+    blocked = client.post(
+        "/v1/license/status",
+        json={
+            "deviceId": "device-linked",
+            "accountAccessToken": "not-a-real-account-token",
+            "appVersion": "0.2.0",
+        },
+    )
+    legacy_status = client.post(
+        "/v1/license/status",
+        json={"deviceId": "device-linked", "appVersion": "0.3.0"},
+    )
+
+    assert activated.status_code == 200
+    assert blocked.status_code == 401
+    assert legacy_status.status_code == 200
+    assert legacy_status.json()["accountId"] == activated.json()["accountId"]
+    assert legacy_status.json()["trialStartedAt"] == activated.json()["license"]["trialStartedAt"]
 
 
 def test_license_status_uses_existing_trial_record(monkeypatch):

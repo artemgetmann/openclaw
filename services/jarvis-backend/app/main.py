@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -106,7 +108,22 @@ class DeviceRegisterResponse(BaseModel):
     license: "LicenseStatusResponse"
 
 
+class AccountLoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    deviceId: str = Field(min_length=8, max_length=128)
+    appVersion: str | None = Field(default=None, max_length=64)
+    platform: str = Field(default="macos", max_length=32)
+
+
+class AccountLoginResponse(BaseModel):
+    accountId: str
+    email: str
+    accountAccessToken: str
+    license: "LicenseStatusResponse"
+
+
 class LicenseStatusRequest(BaseModel):
+    accountAccessToken: str | None = Field(default=None, min_length=16, max_length=256)
     appVersion: str | None = Field(default=None, max_length=64)
     deviceId: str = Field(min_length=8, max_length=128)
 
@@ -114,6 +131,7 @@ class LicenseStatusRequest(BaseModel):
 class LicenseStatusResponse(BaseModel):
     state: Literal["trial_active", "trial_expired", "licensed", "expired", "unknown"]
     deviceId: str
+    accountId: str | None = None
     trialStartedAt: datetime
     trialEndsAt: datetime
     offlineGraceEndsAt: datetime
@@ -170,6 +188,43 @@ async def healthz(settings: Settings = Depends(get_settings)) -> HealthResponse:
 
 
 @app.post(
+    "/v1/account/login",
+    response_model=AccountLoginResponse,
+    dependencies=[Depends(require_api_token)],
+)
+async def account_login(
+    request: AccountLoginRequest,
+    settings: Settings = Depends(get_settings),
+) -> AccountLoginResponse:
+    """
+    Activate the beta trial for a real account identity and device.
+
+    This is intentionally email-based for the first self-serve beta. It is not
+    proof of inbox ownership; it creates the durable account/device/trial link
+    that Google/OAuth or billing can harden later without changing the app's
+    entitlement response shape.
+    """
+
+    email = _normalize_email(request.email)
+    store = get_license_store(settings)
+    created = store.create_account_for_activation(email=email)
+    account = created.account
+    record = store.register_or_get_device(
+        device_id=request.deviceId,
+        account_id=account.account_id,
+        app_version=request.appVersion,
+        platform=request.platform,
+        settings=settings,
+    )
+    return AccountLoginResponse(
+        accountId=account.account_id,
+        email=account.email,
+        accountAccessToken=created.account_access_token,
+        license=_license_response(record, _utcnow(), settings),
+    )
+
+
+@app.post(
     "/v1/device/register",
     response_model=DeviceRegisterResponse,
     dependencies=[Depends(require_api_token)],
@@ -189,6 +244,7 @@ async def register_device(
     store = get_license_store(settings)
     record = store.register_or_get_device(
         device_id=request.device_id,
+        account_id=None,
         app_version=request.app_version,
         platform=request.platform,
         settings=settings,
@@ -212,8 +268,10 @@ async def license_status(
     """Return current license state for a device using persisted trial policy."""
 
     store = get_license_store(settings)
+    account_id = _account_id_from_access_token(store, request.accountAccessToken)
     record = store.register_or_get_device(
         device_id=request.deviceId,
+        account_id=account_id,
         app_version=request.appVersion,
         platform="macos",
         settings=settings,
@@ -243,6 +301,7 @@ async def admin_update_license(
     store = get_license_store(settings)
     record = store.register_or_get_device(
         device_id=device_id,
+        account_id=None,
         app_version=None,
         platform="macos",
         settings=settings,
@@ -295,6 +354,21 @@ class LicenseRecord(BaseModel):
     license_state: Literal["trial_active", "licensed", "expired"]
 
 
+class AccountRecord(BaseModel):
+    """Persistent beta account row used to attach devices to a trial owner."""
+
+    account_id: str
+    email: str
+    created_at: datetime
+
+
+class CreatedAccountRecord(BaseModel):
+    """Account creation result that includes the one-time raw bearer token."""
+
+    account: AccountRecord
+    account_access_token: str
+
+
 class LicenseStore(Protocol):
     """Persistence contract shared by local SQLite and production Neon stores."""
 
@@ -302,11 +376,18 @@ class LicenseStore(Protocol):
         self,
         *,
         device_id: str,
+        account_id: str | None,
         app_version: str | None,
         platform: str,
         settings: Settings,
     ) -> LicenseRecord:
         """Create or refresh a device row without resetting its trial clock."""
+
+    def create_account_for_activation(self, *, email: str) -> CreatedAccountRecord:
+        """Create a new beta account and return the raw token exactly once."""
+
+    def get_account_by_access_token(self, *, account_access_token: str) -> AccountRecord | None:
+        """Resolve a previously issued account token without exposing secrets."""
 
     def update_license_state(
         self,
@@ -348,6 +429,7 @@ class SQLiteLicenseStore:
         self,
         *,
         device_id: str,
+        account_id: str | None,
         app_version: str | None,
         platform: str,
         settings: Settings,
@@ -379,14 +461,16 @@ class SQLiteLicenseStore:
                     offline_grace_ends_at,
                     license_state
                 )
-                VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'trial_active')
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'trial_active')
                 ON CONFLICT(device_id) DO UPDATE SET
+                    account_id = COALESCE(excluded.account_id, account_id),
                     app_version = COALESCE(excluded.app_version, app_version),
                     platform = excluded.platform,
                     updated_at = ?
                 """,
                 (
                     device_id,
+                    account_id,
                     app_version,
                     platform,
                     _format_dt(now),
@@ -402,6 +486,68 @@ class SQLiteLicenseStore:
             ).fetchone()
 
         return _record_from_row(row)
+
+    def create_account_for_activation(self, *, email: str) -> CreatedAccountRecord:
+        """
+        Create a stable beta account without treating email as authentication.
+
+        The raw token is returned only for the first activation. Until an OTP or
+        magic-code recovery flow exists, repeated activation for the same email
+        fails closed instead of handing a durable bearer token to whoever typed
+        that email.
+        """
+
+        account_id = _account_id_for_email(email)
+        account_access_token = _new_account_access_token()
+        account_access_token_hash = _account_access_token_digest(account_access_token)
+        now = _utcnow()
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO accounts (
+                        account_id,
+                        email,
+                        account_access_token_hash,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        account_id,
+                        email,
+                        account_access_token_hash,
+                        _format_dt(now),
+                        _format_dt(now),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise _account_activation_conflict() from exc
+            row = connection.execute(
+                "SELECT * FROM accounts WHERE email = ?",
+                (email,),
+            ).fetchone()
+
+        return CreatedAccountRecord(
+            account=_account_from_row(row),
+            account_access_token=account_access_token,
+        )
+
+    def get_account_by_access_token(self, *, account_access_token: str) -> AccountRecord | None:
+        """Look up the account token digest returned by first beta activation."""
+
+        account_access_token_hash = _account_access_token_digest(account_access_token)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM accounts WHERE account_access_token_hash = ?",
+                (account_access_token_hash,),
+            ).fetchone()
+
+        return _account_from_row(row) if row else None
 
     def update_license_state(
         self,
@@ -446,6 +592,17 @@ class SQLiteLicenseStore:
 
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS accounts (
+                account_id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                account_access_token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS device_licenses (
                 device_id TEXT PRIMARY KEY,
                 account_id TEXT,
@@ -474,6 +631,7 @@ class PostgresLicenseStore:
         self,
         *,
         device_id: str,
+        account_id: str | None,
         app_version: str | None,
         platform: str,
         settings: Settings,
@@ -505,14 +663,16 @@ class PostgresLicenseStore:
                         offline_grace_ends_at,
                         license_state
                     )
-                    VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, 'trial_active')
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'trial_active')
                     ON CONFLICT(device_id) DO UPDATE SET
+                        account_id = COALESCE(excluded.account_id, device_licenses.account_id),
                         app_version = COALESCE(excluded.app_version, device_licenses.app_version),
                         platform = excluded.platform,
                         updated_at = %s
                     """,
                     (
                         device_id,
+                        account_id,
                         app_version,
                         platform,
                         now,
@@ -529,6 +689,63 @@ class PostgresLicenseStore:
                 row = cursor.fetchone()
 
         return _record_from_row(row)
+
+    def create_account_for_activation(self, *, email: str) -> CreatedAccountRecord:
+        """Create a production beta account and return its raw token once."""
+
+        account_id = _account_id_for_email(email)
+        account_access_token = _new_account_access_token()
+        account_access_token_hash = _account_access_token_digest(account_access_token)
+        now = _utcnow()
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                try:
+                    cursor.execute(
+                        """
+                        INSERT INTO accounts (
+                            account_id,
+                            email,
+                            account_access_token_hash,
+                            created_at,
+                            updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            account_id,
+                            email,
+                            account_access_token_hash,
+                            now,
+                            now,
+                        ),
+                    )
+                except psycopg2.IntegrityError as exc:
+                    connection.rollback()
+                    raise _account_activation_conflict() from exc
+                cursor.execute("SELECT * FROM accounts WHERE email = %s", (email,))
+                row = cursor.fetchone()
+
+        return CreatedAccountRecord(
+            account=_account_from_row(row),
+            account_access_token=account_access_token,
+        )
+
+    def get_account_by_access_token(self, *, account_access_token: str) -> AccountRecord | None:
+        """Resolve the beta account token digest from Neon/Postgres."""
+
+        account_access_token_hash = _account_access_token_digest(account_access_token)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    "SELECT * FROM accounts WHERE account_access_token_hash = %s",
+                    (account_access_token_hash,),
+                )
+                row = cursor.fetchone()
+
+        return _account_from_row(row) if row else None
 
     def update_license_state(
         self,
@@ -573,6 +790,17 @@ class PostgresLicenseStore:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
+                CREATE TABLE IF NOT EXISTS accounts (
+                    account_id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL UNIQUE,
+                    account_access_token_hash TEXT NOT NULL UNIQUE,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS device_licenses (
                     device_id TEXT PRIMARY KEY,
                     account_id TEXT,
@@ -613,11 +841,78 @@ def _license_response(
     return LicenseStatusResponse(
         state=state,
         deviceId=record.device_id,
+        accountId=record.account_id,
         trialStartedAt=record.trial_started_at,
         trialEndsAt=record.trial_ends_at,
         offlineGraceEndsAt=record.offline_grace_ends_at,
         managedServicesEnabled=managed_services_enabled,
     )
+
+
+def _normalize_email(email: str) -> str:
+    """
+    Normalize beta account email enough for durable lookup.
+
+    This deliberately avoids adding `email-validator` as a dependency. OAuth or
+    email-link verification can own stricter mailbox validation later.
+    """
+
+    normalized = email.strip().lower()
+    if "@" not in normalized or normalized.startswith("@") or normalized.endswith("@"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Valid account email is required",
+        )
+    return normalized
+
+
+def _account_id_for_email(email: str) -> str:
+    """Derive a stable opaque id from normalized email without storing raw email in ids."""
+
+    digest = hashlib.sha256(email.encode("utf-8")).hexdigest()[:24]
+    return f"acct_{digest}"
+
+
+def _new_account_access_token() -> str:
+    """Issue a local beta token; callers must treat it like a password."""
+
+    return f"jat_{secrets.token_urlsafe(32)}"
+
+
+def _account_access_token_digest(account_access_token: str) -> str:
+    """Hash account bearer tokens so persistence never stores reusable raw tokens."""
+
+    return hashlib.sha256(account_access_token.encode("utf-8")).hexdigest()
+
+
+def _account_activation_conflict() -> HTTPException:
+    """Return the controlled-beta recovery boundary for an already-used email."""
+
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Account activation already exists for this email. "
+            "Account recovery requires a future OTP or magic-code flow."
+        ),
+    )
+
+
+def _account_id_from_access_token(
+    store: LicenseStore,
+    account_access_token: str | None,
+) -> str | None:
+    """Resolve optional account context for status checks and fail closed on bad tokens."""
+
+    if not account_access_token:
+        return None
+
+    account = store.get_account_by_access_token(account_access_token=account_access_token)
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid account access token",
+        )
+    return account.account_id
 
 
 def _provider_presence(settings: Settings) -> dict[str, bool]:
@@ -672,4 +967,17 @@ def _record_from_row(row: sqlite3.Row | dict[str, Any] | None) -> LicenseRecord:
         trial_ends_at=_parse_dt(_read_row_value(row, "trial_ends_at")),
         offline_grace_ends_at=_parse_dt(_read_row_value(row, "offline_grace_ends_at")),
         license_state=_read_row_value(row, "license_state"),
+    )
+
+
+def _account_from_row(row: sqlite3.Row | dict[str, Any] | None) -> AccountRecord:
+    """Convert a database row to the typed beta account record model."""
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Account record not found")
+
+    return AccountRecord(
+        account_id=_read_row_value(row, "account_id"),
+        email=_read_row_value(row, "email"),
+        created_at=_parse_dt(_read_row_value(row, "created_at")),
     )

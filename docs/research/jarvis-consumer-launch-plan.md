@@ -660,7 +660,7 @@ Deployment/security boundary:
 - [x] Finalize plan decisions in this document.
 - [x] Audit all bundled/secrets/config surfaces enough to block public packages from shipping founder/provider keys; landed in PR #565.
 - [ ] Decide exact plan names and prices.
-- [ ] Implement account login + 14-day trial. Google Auth/account login should run as a parallel investigation if low-effort; do not block signing/notarization + updater on auth polish.
+- [x] Implement beta email activation + 14-day trial. Minimal email activation is implemented in the Jarvis backend/client contract for controlled beta account/device/trial tracking. This is not production auth: first activation returns an account token, repeated activation for the same email fails closed, and reinstall/account recovery waits for OTP/magic-code verification. Do not add passwords; Google Auth remains a later optional hardening slice.
 - [x] Implement license check + offline grace. Contract MVP exists in PR #560; Neon persistence landed in PR #569.
 - [ ] Implement update check/install path. Current next main lane with signing/notarization.
 - [ ] Sign/notarize macOS app.
