@@ -30,7 +30,8 @@ For linked worktrees, prefer the scoped launchers instead of relying on the shar
 scripts/package-mac-app.sh
 ```
 
-Creates `dist/OpenClaw.app` and signs it via `scripts/codesign-mac-app.sh`.
+Creates `dist/Jarvis.app` for consumer builds or `dist/OpenClaw.app` for
+standard builds, then signs it via `scripts/codesign-mac-app.sh`.
 
 ## Consumer build
 
@@ -71,13 +72,17 @@ that handoff path with `OPENCLAW_CONSUMER_DIST_HANDOFF_DIR=/path`, or set it to
 `0` to skip the copy.
 
 The user-facing consumer distribution now ships with the visible product name
-`OpenClaw.app` / `OpenClaw.dmg` / `OpenClaw.zip` while preserving the existing
+`Jarvis.app` / `Jarvis.dmg` / `Jarvis.zip` while preserving the existing
 consumer bundle id for continuity:
 
 - bundle identifier: `ai.openclaw.consumer.mac`
+- executable: `OpenClaw`
+- URL scheme: `openclaw-consumer`
 - state dir: `~/Library/Application Support/OpenClaw/.openclaw`
 - local gateway port: `18789`
 - gateway launch label: `ai.openclaw.gateway`
+- app icon: `Jarvis.icns` when that approved asset exists, otherwise the
+  packaging scripts keep using `OpenClaw.icns` and print a warning
 
 If `verify-consumer-mac-app.sh` passes but `spctl` still rejects the app, that
 means the bundle assembly is fine and the remaining friction is distribution
@@ -141,7 +146,7 @@ Developer ID:
 
 ```bash
 SPARKLE_EXPECTED_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
-bash scripts/verify-consumer-mac-app.sh --release "dist/OpenClaw.app"
+bash scripts/verify-consumer-mac-app.sh --release "dist/Jarvis.app"
 ```
 
 Generate the Consumer appcast from the clean artifact name by supplying the
@@ -149,12 +154,12 @@ release version. The default output stays beside the zip for non-OpenClaw app
 names unless `SPARKLE_APPCAST_OUTPUT` points somewhere else.
 
 ```bash
-SPARKLE_APP_NAME="OpenClaw" \
+SPARKLE_APP_NAME="Jarvis" \
 SPARKLE_RELEASE_VERSION="$APP_VERSION" \
 SPARKLE_FEED_URL="$SPARKLE_FEED_URL" \
-SPARKLE_DOWNLOAD_URL_PREFIX="https://example.com/openclaw-consumer/releases/${APP_VERSION}/" \
-SPARKLE_APPCAST_OUTPUT="dist/openclaw-consumer-appcast.xml" \
-bash scripts/make_appcast.sh "dist/OpenClaw.zip"
+SPARKLE_DOWNLOAD_URL_PREFIX="https://example.com/jarvis/releases/${APP_VERSION}/" \
+SPARKLE_APPCAST_OUTPUT="dist/jarvis-appcast.xml" \
+bash scripts/make_appcast.sh "dist/Jarvis.zip"
 ```
 
 Real notarized release sequence:
@@ -162,15 +167,15 @@ Real notarized release sequence:
 ```bash
 bash scripts/preflight-consumer-mac-release.sh
 bash scripts/package-openclaw-mac-dist.sh
-APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' 'dist/OpenClaw.app/Contents/Info.plist')"
-SPARKLE_APP_NAME="OpenClaw" \
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' 'dist/Jarvis.app/Contents/Info.plist')"
+SPARKLE_APP_NAME="Jarvis" \
 SPARKLE_RELEASE_VERSION="$APP_VERSION" \
 SPARKLE_FEED_URL="$SPARKLE_FEED_URL" \
-SPARKLE_DOWNLOAD_URL_PREFIX="https://example.com/openclaw-consumer/releases/${APP_VERSION}/" \
-SPARKLE_APPCAST_OUTPUT="dist/openclaw-consumer-appcast.xml" \
-bash scripts/make_appcast.sh "dist/OpenClaw.zip"
+SPARKLE_DOWNLOAD_URL_PREFIX="https://example.com/jarvis/releases/${APP_VERSION}/" \
+SPARKLE_APPCAST_OUTPUT="dist/jarvis-appcast.xml" \
+bash scripts/make_appcast.sh "dist/Jarvis.zip"
 SPARKLE_EXPECTED_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
-bash scripts/verify-consumer-mac-app.sh --release "dist/OpenClaw.app"
+bash scripts/verify-consumer-mac-app.sh --release "dist/Jarvis.app"
 ```
 
 For slow notarization queues, submit and poll as separate steps instead of
@@ -178,16 +183,16 @@ blocking the whole release lane:
 
 ```bash
 ditto -c -k --sequesterRsrc --keepParent \
-  "dist/OpenClaw.app" \
-  "dist/OpenClaw-${APP_VERSION}.notary.zip"
+  "dist/Jarvis.app" \
+  "dist/Jarvis-${APP_VERSION}.notary.zip"
 
-STAPLE_APP_PATH="dist/OpenClaw.app" \
+STAPLE_APP_PATH="dist/Jarvis.app" \
 bash scripts/notarize-mac-artifact.sh \
   --submit-only \
-  --receipt "dist/OpenClaw.app.notary.env" \
-  "dist/OpenClaw-${APP_VERSION}.notary.zip"
+  --receipt "dist/Jarvis.app.notary.env" \
+  "dist/Jarvis-${APP_VERSION}.notary.zip"
 
-source "dist/OpenClaw.app.notary.env"
+source "dist/Jarvis.app.notary.env"
 bash scripts/notarize-mac-artifact.sh \
   --poll "$NOTARY_SUBMISSION_ID" \
   --artifact "$NOTARY_ARTIFACT" \

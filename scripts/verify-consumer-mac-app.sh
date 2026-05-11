@@ -128,6 +128,7 @@ assert_required_templates() {
 
 actual_name="$(plist_print CFBundleDisplayName)"
 actual_bundle_id="$(plist_print CFBundleIdentifier)"
+actual_icon_file="$(plist_print CFBundleIconFile)"
 actual_variant="$(plist_print OpenClawAppVariant)"
 actual_instance_id="$(/usr/libexec/PlistBuddy -c "Print :OpenClawConsumerInstanceID" "$INFO_PLIST" 2>/dev/null || true)"
 actual_url_scheme="$(/usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes:0:CFBundleURLSchemes:0" "$INFO_PLIST" 2>/dev/null || true)"
@@ -172,6 +173,12 @@ fi
 
 if [[ "$actual_url_scheme" != "$EXPECTED_URL_SCHEME" ]]; then
   echo "ERROR: expected URL scheme '$EXPECTED_URL_SCHEME', got '$actual_url_scheme'" >&2
+  exit 1
+fi
+
+actual_icon_basename="${actual_icon_file%.icns}"
+if [[ -z "$actual_icon_basename" || ! -f "$APP_PATH/Contents/Resources/${actual_icon_basename}.icns" ]]; then
+  echo "ERROR: bundled app icon missing for CFBundleIconFile '$actual_icon_file'" >&2
   exit 1
 fi
 
@@ -311,6 +318,7 @@ echo "Consumer app verification passed:"
 echo "  path=$APP_PATH"
 echo "  display_name=$actual_name"
 echo "  bundle_id=$actual_bundle_id"
+echo "  icon_file=$actual_icon_file"
 echo "  variant=$actual_variant"
 echo "  instance_id=${EFFECTIVE_INSTANCE_ID:-default}"
 echo "  url_scheme=$actual_url_scheme"

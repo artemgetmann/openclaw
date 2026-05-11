@@ -73,6 +73,29 @@ CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
   "MEMORY.md"
 )
 
+resolve_app_icon_basename() {
+  local explicit_icon="${APP_ICON_BASENAME:-}"
+  local resource_dir="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources"
+
+  if [[ -n "$explicit_icon" ]]; then
+    printf '%s\n' "${explicit_icon%.icns}"
+    return 0
+  fi
+
+  # Jarvis is the consumer-facing product, so a checked-in Jarvis.icns should
+  # become the app and DMG icon automatically. Until design supplies that asset,
+  # keep packaging sendable by falling back to the existing OpenClaw icon.
+  if [[ "$APP_VARIANT" == "consumer" && -f "$resource_dir/Jarvis.icns" ]]; then
+    printf 'Jarvis\n'
+    return 0
+  fi
+
+  if [[ "$APP_VARIANT" == "consumer" ]]; then
+    echo "WARN: Jarvis.icns is missing; packaging will keep the OpenClaw icon for now." >&2
+  fi
+  printf 'OpenClaw\n'
+}
+
 consumer_packaging_env_candidates() {
   # Keep secrets machine-local: explicit override first, then the consumer-home
   # shared file, then the optional fallback outside the worktree.
@@ -1067,6 +1090,8 @@ cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BUNDLE_ID}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleName ${APP_NAME}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${APP_NAME}" "$APP_ROOT/Contents/Info.plist" || true
+APP_ICON_BASENAME="$(resolve_app_icon_basename)"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIconFile ${APP_ICON_BASENAME}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :NSUserNotificationUsageDescription ${APP_NAME} needs notification permission to show alerts for agent actions." "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :NSScreenCaptureDescription ${APP_NAME} captures the screen when the agent needs screenshots for context." "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :NSCameraUsageDescription ${APP_NAME} can capture photos or short video clips when requested by the agent." "$APP_ROOT/Contents/Info.plist" || true
@@ -1145,7 +1170,13 @@ else
 fi
 
 echo "🖼  Copying app icon"
-cp "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns" "$APP_ROOT/Contents/Resources/OpenClaw.icns"
+APP_ICON_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/${APP_ICON_BASENAME}.icns"
+if [[ ! -f "$APP_ICON_SRC" ]]; then
+  echo "ERROR: app icon resource missing: $APP_ICON_SRC" >&2
+  echo "Set APP_ICON_BASENAME to an existing .icns resource or add ${APP_ICON_BASENAME}.icns." >&2
+  exit 1
+fi
+cp "$APP_ICON_SRC" "$APP_ROOT/Contents/Resources/${APP_ICON_BASENAME}.icns"
 
 echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
