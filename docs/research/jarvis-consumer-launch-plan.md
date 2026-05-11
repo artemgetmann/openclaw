@@ -34,6 +34,8 @@ This section is the implementation-oriented summary. If a coding agent needs one
 12. **Operator education:** teach users that agents work best through clear natural-language delegation. The website/GitHub should say: tell Jarvis what you want, be specific, give preferences, correct it like a human assistant.
 13. **Bootstrap/setup:** initial setup needs redesign around first value. Reduce steps, simplify copy, make blockers obvious, and avoid developer jargon.
 14. **Distribution:** start with GitHub/Reddit plus a downloadable signed/notarized macOS app. Website comes when the message and install flow are proven.
+15. **Brand:** public consumer brand is **Jarvis** from the start. OpenClaw remains technical/developer/powered-by language only. Visible app/artifact naming should move to Jarvis soon, but bundle ID, runtime identity, update feed identity, and deeper internal renames are a separate migration task.
+16. **Commercial package:** v1 public pricing is **Jarvis Personal at $99/mo** for the main consumer path and **Jarvis Core at $19/mo** for advanced raw BYOK API-key users. Primary model usage should use user subscription/login where supported. Backend-held founder/provider keys are for capped managed utilities, onboarding fallback, controlled beta support, and non-model tool surfaces. Raw provider keys must not ship in the app or be sent to the app. Details live in `docs/consumer/jarvis-launch-package.md`.
 
 ## 1. Positioning
 
@@ -124,7 +126,20 @@ Decision direction:
 
 ## 3. Monetization model
 
-Two primary options for v1:
+The v1 consumer model has one preferred model path and two support paths.
+
+Preferred model path:
+
+- user subscription/login where supported, such as ChatGPT, Claude, or other
+  provider subscription surfaces
+- keeps primary model cost with the user
+- avoids raw API-key setup for normal users
+
+Support paths:
+
+- backend-held founder/provider keys for capped managed utilities, onboarding
+  fallback, controlled beta support, and non-model tool surfaces
+- raw BYOK API keys for advanced users who want provider/API control
 
 ### Option A — BYO Everything / Power User Plan
 
@@ -154,13 +169,14 @@ Recommended price:
 
 This is the lowest-cost, lowest-risk tier for Artem. It is also more acceptable to power users because they often prefer controlling their own providers.
 
-### Option B — Managed Plan
+### Option B — Personal Plan
 
-Jarvis provides the keys/services behind the scenes.
+Jarvis uses user subscription/login for primary model usage where supported,
+then provides capped managed utilities and fallback support behind the scenes.
 
 This includes some or all of:
 
-- model access
+- provider subscription/login setup help
 - speech-to-text
 - text-to-speech
 - Brave-like search
@@ -171,11 +187,13 @@ This includes some or all of:
 
 Recommended price:
 
-- $49/mo minimum if it includes light managed AI/tool usage
-- $79-$99/mo if it includes meaningful model usage
+- $99/mo for the main consumer path with subscription-login model usage and
+  capped managed utilities/fallback
 - higher tier later for heavy users or business workflows
 
-Hard opinion: do not offer unlimited managed AI/tool usage at $20/mo. That is how you build a product where your best users bankrupt you. Usage limits can be simple and invisible at first, but they must exist.
+Hard opinion: do not offer unlimited backend-paid model/tool usage at consumer
+pricing. That is how you build a product where your best users bankrupt you.
+Usage limits can be simple and invisible at first, but they must exist.
 
 ## 4. API key strategy
 
@@ -212,13 +230,37 @@ Bundling a shared key directly in the app is acceptable only as a short private-
 
 If the app contains the key, motivated users can extract it. For public launch, managed provider access should go through a Jarvis backend proxy or signed short-lived credentials with scope/limits.
 
-## 5. Managed usage control
+## 5. Provider usage control
 
-Decision: **managed users use Jarvis backend provider keys; BYOK users use their own local provider keys directly.**
+Decision: **primary model usage should use user subscription/login where
+supported. Jarvis backend provider keys are for capped managed utilities,
+onboarding fallback, controlled beta support, and non-model tool surfaces. BYOK
+raw API keys are advanced and stay local by default.**
 
-### 5.1 Managed users
+### 5.1 User subscription/login model path
 
-For managed users, Jarvis should use service-level provider keys on the backend, for example:
+For primary model usage, Jarvis should prefer the user's own provider
+subscription or logged-in provider account where supported. Examples include
+ChatGPT, Claude, and similar subscription/login surfaces.
+
+The model path is:
+
+```text
+User -> local Jarvis app/browser session -> provider subscription/login
+```
+
+Why:
+
+- keeps primary model cost with the user
+- avoids raw API-key setup for normal users
+- reduces backend cost exposure
+- matches the "runs on your Mac" product story
+
+### 5.2 Backend-managed utilities and fallback
+
+For managed utilities, onboarding fallback, controlled beta support, and
+non-model tool surfaces, Jarvis can use service-level provider keys on the
+backend, for example:
 
 - `BRAVE_API_KEY`
 - `FIRECRAWL_API_KEY`
@@ -226,7 +268,8 @@ For managed users, Jarvis should use service-level provider keys on the backend,
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 
-The app should not receive these raw keys. The call path is:
+The app should not receive these raw keys. The backend-held keys are not the
+primary model path. The call path is:
 
 ```text
 User -> Jarvis app -> Jarvis backend -> Brave/Firecrawl/Google/OpenAI/Gemini/etc.
@@ -248,9 +291,9 @@ video_generations_used
 monthly_spend_estimate
 ```
 
-This gives per-user control without needing real provider API keys per customer.
+This gives per-user control without exposing founder/provider keys in the app.
 
-For managed users, Jarvis must control:
+For backend-managed utility/fallback usage, Jarvis must control:
 
 - requests per user
 - spend per user
@@ -260,9 +303,11 @@ For managed users, Jarvis must control:
 - monthly fair-use thresholds
 - upgrade prompts
 
-### 5.2 BYOK users
+### 5.3 BYOK raw API-key users
 
-For BYOK users, Jarvis should not proxy or manage their provider usage by default. The whole point of BYOK is that the user owns the keys and calls.
+For BYOK raw API-key users, Jarvis should not proxy or manage their provider
+usage by default. The whole point of raw BYOK is that the user owns the keys
+and calls.
 
 Power users can enter their own provider keys locally:
 
@@ -282,7 +327,7 @@ User -> local Jarvis app -> provider APIs directly
 
 Jarvis may still offer optional diagnostics or config validation, but cost control is the user's responsibility.
 
-### 5.3 Rate-limit philosophy for v1
+### 5.4 Rate-limit philosophy for v1
 
 Do **not** over-engineer a perfect billing/rate-limit system before distribution. That is premature.
 
@@ -295,39 +340,36 @@ Do **not** over-engineer a perfect billing/rate-limit system before distribution
 
 The v1 backend should implement simple hard caps and monthly counters, not a beautiful metering cathedral.
 
-## 6. Pricing recommendation
+## 6. Pricing decision
 
-Initial public pricing:
+Initial public pricing is now decided for launch copy. Lead with the
+subscription-login consumer path plus capped managed utilities. Raw BYOK API
+keys are secondary for advanced users.
 
-### Jarvis Core — $19/mo
+### Jarvis Personal — $99/mo
 
-For power users.
+For normal consumers who want Jarvis to just work.
 
 Includes:
 
 - local app
-- updates
+- signed, verified updates
 - Telegram/local assistant runtime
-- BYO model keys/subscriptions
-- BYO tool keys where needed
-- community/self-serve support
-
-### Jarvis Core + Managed Utilities — $29/mo or $39/mo
-
-Potential middle tier.
-
-Includes Core plus small managed utility budget:
-
+- preferred model access through user subscription/login where supported
 - speech-to-text
 - basic TTS
 - limited high-quality TTS, then fallback to cheaper/free Edge TTS
 - basic search/scraping/maps quota
 - limited image generation allowance, if economics work
+- priority onboarding support for early customers
 - video generation later, heavily limited or higher-tier only
 
-This is useful for less technical users who do not want to configure 6 keys, but it must have limits.
+This is the main consumer promise. Backend-held founder/provider keys are for
+capped utilities, onboarding fallback, controlled beta support, and non-model
+tool surfaces. They must live server-side, never bundled in the app or sent to
+the app.
 
-Suggested phrasing: “Includes managed voice/search/tools for normal personal use.”
+Suggested phrasing: "Use your provider subscriptions where supported, with managed voice, search, and tools for normal personal use."
 
 High-cost features should be plan-gated with simple allowances instead of complex credits at launch:
 
@@ -337,16 +379,18 @@ High-cost features should be plan-gated with simple allowances instead of comple
 
 If users need more, push them to a higher plan. Do not start with a complicated credits store unless usage data proves it is necessary.
 
-### Jarvis Managed AI — $79/mo or $99/mo
+### Jarvis Core — $19/mo
 
-For non-technical users who want everything to just work.
+For advanced users who prefer raw BYOK API keys.
 
 Includes:
 
-- managed model access
-- managed voice/search/scraping/maps/image budgets
-- fair-use limits
-- upgrade path for heavy users
+- local app
+- signed, verified updates
+- Telegram/local assistant runtime
+- BYO raw model API keys
+- BYO tool keys where needed
+- community/self-serve support
 
 ### Jarvis Founder / Concierge — $149-$299+/mo later
 
@@ -363,7 +407,7 @@ Recommended trial:
 
 - 14 days, not 30
 - requires account login
-- maybe no credit card for GitHub/Reddit early beta, but require account activation
+- no credit card for GitHub/Reddit early beta, but require account activation
 - later: credit-card trial if paid ads begin
 
 Why 14 days:
@@ -410,7 +454,7 @@ P0 requirements:
 - updater shows changelog
 - update process backs up config first
 
-Possible implementation choices:
+Possible implementation choices for developer docs:
 
 - Sparkle updater for macOS if the app stack supports it
 - Electron autoUpdater if Electron path is retained
@@ -423,6 +467,12 @@ Subscription enforcement through updates:
 - managed API access can be revoked server-side regardless of local app version
 
 Hard truth: for open source, preventing unpaid users from running old code is not worth the war. Control the hosted services and updates. That is the sane leverage point.
+
+Consumer update copy should stay Apple-style:
+
+> Jarvis keeps itself up to date with signed, verified updates. Your setup,
+> preferences, and local data stay in place. Jarvis tells you what is changing
+> before updates.
 
 ## 9. Distribution strategy
 
@@ -472,20 +522,24 @@ Do not build a giant marketing site now. One strong landing page is enough.
 
 ## 10. Branding/repo consolidation
 
-Decision direction:
+Decision:
 
-- [ ] OpenClaw consumer becomes Jarvis.
-- [ ] OpenClaw + OpenClaw Consumer become one repository and one macOS application.
-- [ ] Branding changes across CLI, documentation, app UI, package names, website, and onboarding.
+- [x] Public product brand is Jarvis from the start.
+- [x] OpenClaw can appear as technical/developer/powered-by language only.
+- [x] Public-facing app/docs should move toward Jarvis now.
+- [x] App visible name/artifact should become Jarvis soon.
+- [ ] Bundle ID/runtime/update identity/internal renames are a separate migration task.
 
 Open question:
 
 - [ ] Preserve OpenClaw as engine/internal name, expose Jarvis as product name?
 
-Recommended answer:
+Implementation boundary:
 
-- Product name: Jarvis
-- Engine/framework name: OpenClaw can remain inside docs/code for technical users, but user-facing experience should say Jarvis.
+- Product name: Jarvis.
+- Engine/framework/repo language: OpenClaw.
+- Do not imply bundle ID, runtime identity, update feed identity, or internal
+  package names have already been renamed.
 
 ### 10.1 User-facing capability names
 
@@ -517,7 +571,7 @@ Investigation task:
 P0 blockers before public strangers:
 
 - [ ] Apple signing/notarization or at minimum a much less terrifying install path.
-- [ ] Remove bundled founder keys from public builds or route them through managed backend.
+- [x] Remove bundled founder keys from public builds or route them through managed backend.
 - [ ] Account login/trial/subscription state.
 - [ ] Update mechanism.
 - [ ] Cleaner permissions flow.
@@ -652,15 +706,17 @@ Deployment/security boundary:
 
 - Backend source may stay open source.
 - Production provider keys, backend tokens, customer license/account state, billing credentials, signing identities, and database URLs must stay outside Git.
-- BYOK/local users do not need the backend; managed users opt into Jarvis-hosted backend usage.
+- Subscription-login and local raw BYOK model users do not need the backend for
+  primary model usage; backend-managed utilities/fallback opt into
+  Jarvis-hosted usage.
 - Self-hosters can run the same backend with their own env vars.
 
 ### P0 — Before wider strangers
 
 - [x] Finalize plan decisions in this document.
 - [x] Audit all bundled/secrets/config surfaces enough to block public packages from shipping founder/provider keys; landed in PR #565.
-- [ ] Decide exact plan names and prices.
 - [x] Implement beta email activation + 14-day trial. Minimal email activation is implemented in the Jarvis backend/client contract for controlled beta account/device/trial tracking. This is not production auth: first activation returns an account token, repeated activation for the same email fails closed, and reinstall/account recovery waits for OTP/magic-code verification. Do not add passwords; Google Auth remains a later optional hardening slice.
+- [x] Decide exact plan names and prices. See `docs/consumer/jarvis-launch-package.md`.
 - [x] Implement license check + offline grace. Contract MVP exists in PR #560; Neon persistence landed in PR #569.
 - [ ] Implement update check/install path. Current next main lane with signing/notarization.
 - [ ] Sign/notarize macOS app.
@@ -669,8 +725,8 @@ Deployment/security boundary:
 - [ ] Define config/defaults update policy: migrate/merge without clobbering user config.
 - [ ] Define bundled skill vs workspace skill update policy.
 - [ ] Audit and simplify user-facing skill/tool names.
-- [ ] Create GitHub README launch page.
-- [ ] Record 60-second demo.
+- [x] Create GitHub README launch page outline. See `docs/consumer/jarvis-launch-package.md`.
+- [x] Draft 60-second demo script. See `docs/consumer/jarvis-launch-package.md`.
 
 ### P1 — First public launch
 
@@ -684,19 +740,19 @@ Deployment/security boundary:
 
 - [ ] Website + Stripe checkout.
 - [ ] Paid ads only after activation is good.
-- [ ] Managed AI tier.
+- [ ] Managed utility/fallback scale-up from the initial consumer plan.
 - [ ] Concierge/pro tier.
 - [ ] Business/team features.
 
 ## 15. Open decisions
 
 - [ ] Exact license: open source but what license?
-- [ ] Is Jarvis Core $19 or $29?
-- [ ] Is there a $29/$39 managed utilities tier, or only Core + Managed AI?
-- [ ] What are exact managed fair-use limits?
+- [x] Is Jarvis Core $19 or $29? Decision: $19/mo as the advanced BYOK plan.
+- [x] Is there a $29/$39 managed utilities tier, or only Core + Personal? Decision: no Plus tier for launch; Jarvis Personal at $99/mo is the main consumer plan, with subscription-login model usage plus capped managed utilities/fallback.
+- [x] What are exact managed fair-use limits? Initial v1 limits are defined in `docs/consumer/jarvis-launch-package.md`.
 - [ ] What is the first official distribution surface: GitHub Releases only, or GitHub + minimal website?
 - [ ] Use Sparkle/Electron updater/custom updater?
-- [ ] Keep OpenClaw name internally or fully rename everything?
+- [x] Keep OpenClaw name internally or fully rename everything? Decision: Jarvis public brand now; OpenClaw technical/developer language remains until a separate internals migration.
 
 ## Sources checked
 
