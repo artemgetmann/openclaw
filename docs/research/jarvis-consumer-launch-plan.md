@@ -713,6 +713,24 @@ Progress:
 - [ ] Subscription/trial-gated update entitlement UX is production-ready.
 - [ ] Render service is created and configured with production env values.
 
+### Imported from retired consolidation trackers
+
+The active owner for these items is this launch plan. The retired consolidation
+docs remain historical proof only:
+
+- `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
+- `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
+
+| Item                                             | Owner                                     | Status                            | Launch-plan handling                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------ | ----------------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Final package through deterministic release lane | Release lane from current `main`          | Open, only when app work is ready | Use PR #658 release automation. Release env path is `~/Library/Application Support/OpenClaw/release.env`. Keep secrets in Keychain or outside repo. Use async notarization submit/poll/staple flow; do not block blindly on Apple's queue.                                                           |
+| Public `v2026.3.15` asset replacement            | Release lane with explicit Artem approval | Open, approval-gated              | Current public assets still point at old provenance `205d5f596602ff82270b1af5a3de24c33c32b532`. Prior local recut proof existed from `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`; if app work continues, recut again from final `main` before uploading.                                              |
+| Release assets involved                          | Release lane                              | Open, approval-gated              | Replace/upload only after explicit approval: `OpenClaw.dmg`, `OpenClaw.zip`, `OpenClaw-2026.3.15.dSYM.zip`, and `openclaw-consumer-appcast.xml`.                                                                                                                                                     |
+| Optional Sparkle dialog smoke                    | Release/GUI smoke lane                    | Optional                          | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                                                              |
+| Launch audit                                     | Launch/commercial readiness lane          | Open                              | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                              |
+| Overlay/defaults hygiene                         | Future product/platform lane              | Deferred, non-blocking            | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                                                                |
+| Bundle ID migration                              | Separate migration lane only              | Deferred                          | Visible product naming can move toward Jarvis, but the current visible app artifact is still `OpenClaw.app` and internal bundle id/runtime/update identity stay preserved until there is a deliberate migration plan. Changing bundle id can reset macOS permissions/state and create support churn. |
+
 Deployment/security boundary:
 
 - Backend source may stay open source.

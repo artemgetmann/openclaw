@@ -1,5 +1,12 @@
 # OpenClaw Main + Consumer Consolidation Plan
 
+> Retired as an active tracker on 2026-05-11. Consumer/main consolidation is
+> completed for normal workflow: new consumer-product work targets `main`, and
+> `openclaw-consumer` / `codex/consumer-openclaw-project` are legacy/emergency
+> fallback only. Remaining launch and release work now lives in
+> `docs/research/jarvis-consumer-launch-plan.md`. Keep this document as
+> historical proof; do not use it as a live task board.
+
 Last updated: 2026-05-11
 
 ## North Star
@@ -60,7 +67,7 @@ TCC permissions and update identity.
 
 The signed macOS release is real and public:
 
-- release: https://github.com/artemgetmann/openclaw/releases/tag/v2026.3.15
+- release: <https://github.com/artemgetmann/openclaw/releases/tag/v2026.3.15>
 - release tag target: `205d5f596602ff82270b1af5a3de24c33c32b532`
 - assets: `OpenClaw.dmg`, `OpenClaw.zip`,
   `openclaw-consumer-appcast.xml`, `OpenClaw-2026.3.15.dSYM.zip`
@@ -76,8 +83,8 @@ non-UI update completion from the public `v2026.3.14` build to `v2026.3.15`
 passed through Sparkle's update installer path. The interactive Sparkle dialog
 itself was not visually verified; that smoke stays optional/final.
 
-PR #620 fixed automatic packaged gateway LaunchAgent replacement repair. PR
-#625 then fixed the remaining source-attach bypass where a packaged app could
+PR #620 fixed automatic packaged gateway LaunchAgent replacement repair.
+PR #625 fixed the remaining source-attach bypass where a packaged app could
 accept a healthy gateway still carrying stale source-checkout runtime
 environment. Local replacement proof started from a stale `ai.openclaw.gateway`
 plist pointing at
@@ -157,7 +164,7 @@ when packaging is invoked from a temp worktree. Override with
 
 ## Retirement Gate
 
-Do not fully retire `openclaw-consumer` until all of these are true:
+Retirement gate is complete for normal workflow:
 
 - [x] Main-built app smoke passes for an existing user setup.
 - [x] Main-built app smoke passes for an isolated fresh setup path.
@@ -166,7 +173,11 @@ Do not fully retire `openclaw-consumer` until all of these are true:
 - [x] Conservative visible product rename to `OpenClaw.app` is implemented
       without changing runtime/gateway identity.
 
-## Next Implementation Slices
+## Historical Implementation Slices Imported To Launch Plan
+
+These items have been imported into
+`docs/research/jarvis-consumer-launch-plan.md`. They remain below as proof and
+background, not as this document's active queue.
 
 ### 1. Use the deterministic release lane for the final package
 
@@ -183,7 +194,7 @@ store], not in `~/.openclaw`.
 
 ### 2. Publish the verified final recut
 
-#638 fixes the stale LaunchAgent `OPENCLAW_SERVICE_VERSION` env observed after
+PR #638 fixes the stale LaunchAgent `OPENCLAW_SERVICE_VERSION` env observed after
 the public `v2026.3.14` -> `v2026.3.15` Sparkle update. #634 fixes the stale
 Channels tab first-task verifier state, #645 fixes the outbound activity
 telemetry gap, #650 fixes stale entrypoint mismatch detection, and #651 fixes

@@ -1,5 +1,12 @@
 # OpenClaw Main / Consumer Divergence Tracker
 
+> Retired as an active tracker on 2026-05-11. Consumer/main consolidation is
+> completed for normal workflow: new consumer-product work targets `main`, and
+> `openclaw-consumer` / `codex/consumer-openclaw-project` are legacy/emergency
+> fallback only. Remaining launch and release work now lives in
+> `docs/research/jarvis-consumer-launch-plan.md`. Keep this document as
+> historical proof; do not use it as a live task board.
+
 Last updated: 2026-05-11
 
 This tracker exists to prevent redoing consolidation work that already landed.
@@ -68,7 +75,11 @@ are not the default place to implement P0 launch work.
 - #650: stale LaunchAgent entrypoint mismatch detection
 - #651: preserve packaged runtime roots during gateway install/restart
 
-## Queue Now
+## Historical Queue Imported To Launch Plan
+
+These items have been imported into
+`docs/research/jarvis-consumer-launch-plan.md`. They remain below as proof and
+background, not as this document's active queue.
 
 1. Use the deterministic release lane for the final package. Release scripts now
    support a local release-env file rooted under
@@ -104,7 +115,7 @@ deferred until the app work is done and final release approval is explicit.
 
 ## Release Proof: v2026.3.15
 
-- Release: https://github.com/artemgetmann/openclaw/releases/tag/v2026.3.15
+- Release: <https://github.com/artemgetmann/openclaw/releases/tag/v2026.3.15>
 - Release tag target: `205d5f596602ff82270b1af5a3de24c33c32b532`
 - Public appcast resolves to `v2026.3.15`
 - Release assets:
@@ -162,7 +173,7 @@ final approval after the app work is done.
 
 ## Post-#625 Local Proof
 
-- PR: https://github.com/artemgetmann/openclaw/pull/625
+- PR: <https://github.com/artemgetmann/openclaw/pull/625>
 - Merge commit: `5ce43d8538e223db4390733c01611f0684d12541`
 - Rebuilt branch artifact commit before squash merge:
   `fe05c860a87411709effdf83050c1bae2ad601cd`
