@@ -166,7 +166,24 @@ function hasExplicitRuntimeSelector(env: Record<string, string | undefined>): bo
   return RUNTIME_SELECTOR_ENV_KEYS.some((key) => Boolean(env[key]?.trim()));
 }
 
-function shouldAdoptCanonicalConsumerServiceEnv(params: {
+function isCanonicalAppOwnedDefaultServiceEnv(serviceEnv: Record<string, string>): boolean {
+  const launchdLabel = serviceEnv.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const home = serviceEnv.OPENCLAW_HOME?.trim();
+  const stateDir = serviceEnv.OPENCLAW_STATE_DIR?.trim();
+  const configPath = serviceEnv.OPENCLAW_CONFIG_PATH?.trim();
+  if (launchdLabel !== "ai.openclaw.gateway" || !home || !stateDir || !configPath) {
+    return false;
+  }
+
+  // The shared macOS runtime is app-owned even when it is backed by the
+  // sacred main checkout. In that mode the LaunchAgent intentionally points at
+  // ~/Library/Application Support/OpenClaw/.openclaw, so an unscoped status
+  // command should inspect the loaded service env instead of inventing
+  // ~/.openclaw as the expected config root.
+  return stateDir === `${home}/.openclaw` && configPath === `${stateDir}/openclaw.json`;
+}
+
+function shouldAdoptCanonicalServiceEnv(params: {
   rawEnv: Record<string, string | undefined>;
   serviceEnv?: Record<string, string>;
 }): boolean {
@@ -177,12 +194,15 @@ function shouldAdoptCanonicalConsumerServiceEnv(params: {
   if (!serviceEnv) {
     return false;
   }
-  return (
+  if (
     serviceEnv.OPENCLAW_PROFILE?.trim() === "consumer" &&
     serviceEnv.OPENCLAW_LAUNCHD_LABEL?.trim() === "ai.openclaw.gateway" &&
     Boolean(serviceEnv.OPENCLAW_STATE_DIR?.trim()) &&
     Boolean(serviceEnv.OPENCLAW_CONFIG_PATH?.trim())
-  );
+  ) {
+    return true;
+  }
+  return isCanonicalAppOwnedDefaultServiceEnv(serviceEnv);
 }
 
 function parseGatewaySecretRefPathFromError(error: unknown): string | null {
@@ -331,7 +351,7 @@ export async function gatherDaemonStatus(
   const rawEnv = process.env as Record<string, string | undefined>;
   const shellCliEnv = resolveGatewayRuntimeIdentityEnv(rawEnv);
   const command = await service.readCommand(shellCliEnv as NodeJS.ProcessEnv).catch(() => null);
-  const cliEnv = shouldAdoptCanonicalConsumerServiceEnv({
+  const cliEnv = shouldAdoptCanonicalServiceEnv({
     rawEnv,
     serviceEnv: command?.environment,
   })
