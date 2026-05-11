@@ -470,7 +470,7 @@ struct ConsumerCorePermissionsSection: View {
                 .font(.headline)
             Text(
                 self.presentation == .onboarding
-                    ? "Grant these now so the first real task does not fail later when OpenClaw needs to control apps, capture the screen, or use your location."
+                    ? "Grant these now so the first real task does not fail later when \(AppFlavor.current.appName) needs to control apps, capture the screen, or use your location."
                     : "If macOS loses track of one of the core permissions later, recover it here.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -507,7 +507,7 @@ struct ConsumerCorePermissionsSection: View {
     private func genericDetailText(for capability: Capability) -> String? {
         switch capability {
         case .appleScript:
-            return "macOS will ask the first time OpenClaw tries to control another app."
+            return "macOS will ask the first time \(AppFlavor.current.appName) tries to control another app."
         case .location:
             return "Needed for requests like 'find a cafe near me' so the agent can use this Mac's location."
         default:

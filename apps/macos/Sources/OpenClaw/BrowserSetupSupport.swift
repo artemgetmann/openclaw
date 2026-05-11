@@ -45,11 +45,11 @@ enum BrowserRuntimeFailureTemplateKind: CaseIterable {
     var body: String {
         switch self {
         case .publicTaskFallback:
-            return "If a page does not need your account, OpenClaw can still open it in its own browser and tell you what happened."
+            return "If a page does not need your account, \(AppFlavor.current.appName) can still open it in its own browser and tell you what happened."
         case .signedInTaskStopped:
-            return "If a task needs one of your logged-in sites, OpenClaw stops and explains the problem instead of guessing."
+            return "If a task needs one of your logged-in sites, \(AppFlavor.current.appName) stops and explains the problem instead of guessing."
         case .signInRequired:
-            return "If a site needs you to log in, OpenClaw opens the page and waits for you."
+            return "If a site needs you to log in, \(AppFlavor.current.appName) opens the page and waits for you."
         }
     }
 }
@@ -343,7 +343,7 @@ final class BrowserSetupModel {
                 return
             }
             self.phase = .ready(selected)
-            self.statusLine = "Connected to \(selected.displayName). OpenClaw can use your live Chrome tabs for signed-in tasks and its own browser when needed."
+            self.statusLine = "Connected to \(selected.displayName). \(AppFlavor.current.appName) can use your live Chrome tabs for signed-in tasks and its own browser when needed."
             self.lastAutoRecoveryFailureMessage = nil
             return
         }
@@ -356,7 +356,7 @@ final class BrowserSetupModel {
         }
 
         self.phase = .choose(profiles)
-        self.statusLine = "Choose the Chrome profile OpenClaw should use."
+        self.statusLine = "Choose the Chrome profile \(AppFlavor.current.appName) should use."
         self.lastAutoRecoveryFailureMessage = nil
     }
 
@@ -366,8 +366,8 @@ final class BrowserSetupModel {
         defer { self.isApplyingSelection = false }
 
         guard self.persistSelection(profile) else {
-            self.phase = .failed("OpenClaw could not save your Chrome profile inside this instance.")
-            self.statusLine = "OpenClaw could not save your Chrome profile."
+            self.phase = .failed("\(AppFlavor.current.appName) could not save your Chrome profile inside this instance.")
+            self.statusLine = "\(AppFlavor.current.appName) could not save your Chrome profile."
             return
         }
         self.persistSelectionToConfig(profile)
@@ -379,7 +379,7 @@ final class BrowserSetupModel {
             return
         }
         self.phase = .ready(profile)
-        self.statusLine = "Connected to \(profile.displayName). OpenClaw can use your live Chrome tabs for signed-in tasks and its own browser when needed."
+        self.statusLine = "Connected to \(profile.displayName). \(AppFlavor.current.appName) can use your live Chrome tabs for signed-in tasks and its own browser when needed."
         self.lastAutoRecoveryFailureMessage = nil
     }
 
@@ -392,7 +392,7 @@ final class BrowserSetupModel {
             self.statusLine = "We found one Chrome profile."
         } else if !self.detectedProfiles.isEmpty {
             self.phase = .choose(self.detectedProfiles)
-            self.statusLine = "Choose the Chrome profile OpenClaw should use."
+            self.statusLine = "Choose the Chrome profile \(AppFlavor.current.appName) should use."
         } else {
             self.phase = .idle
             self.statusLine = nil

@@ -216,8 +216,8 @@ struct ConsumerSetupReadinessTests {
         await model.refresh()
 
         #expect(!model.isComplete)
-        #expect(model.phase == .failed("OpenClaw-managed AI is configured, but the shared auth is no longer usable."))
-        #expect(model.statusLine == "OpenClaw-managed AI is configured, but the shared auth is no longer usable.")
+        #expect(model.phase == .failed("Jarvis-managed AI is configured, but the shared auth is no longer usable."))
+        #expect(model.statusLine == "Jarvis-managed AI is configured, but the shared auth is no longer usable.")
         #expect(model.authSectionExpanded)
         #expect(model.failureKind == .providerAuthFailed)
         #expect(!model.canRestartOperator)
@@ -238,7 +238,7 @@ struct ConsumerSetupReadinessTests {
         await model.refresh()
 
         #expect(model.failureKind == .providerAuthFailed)
-        #expect(model.phase == .failed("OpenClaw-managed AI is selected, but the canonical shared auth profile is missing from this consumer runtime."))
+        #expect(model.phase == .failed("Jarvis-managed AI is selected, but the canonical shared auth profile is missing from this consumer runtime."))
         #expect(!model.canRestartOperator)
     }
 
@@ -257,7 +257,7 @@ struct ConsumerSetupReadinessTests {
         await model.refresh()
 
         #expect(model.failureKind == .readinessFailed)
-        #expect(model.phase == .failed("OpenClaw-managed AI did not answer the readiness probe in time."))
+        #expect(model.phase == .failed("Jarvis-managed AI did not answer the readiness probe in time."))
         #expect(model.canRestartOperator)
     }
 
@@ -298,7 +298,7 @@ struct ConsumerSetupReadinessTests {
             })
 
         await model.refresh()
-        #expect(model.phase == .failed("OpenClaw-managed AI is configured, but the shared auth is no longer usable."))
+        #expect(model.phase == .failed("Jarvis-managed AI is configured, but the shared auth is no longer usable."))
 
         await model.refreshOnAppActivationIfNeeded()
 
@@ -328,7 +328,7 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "OpenClaw could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."))
+                    "Jarvis could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."))
 
         await model.refreshIfNeeded()
 
@@ -502,7 +502,7 @@ struct ConsumerSetupReadinessTests {
         await model.submitSelectedAuth()
 
         #expect(!model.isComplete)
-        #expect(model.phase == ConsumerModelSetupModel.Phase.failed("OpenClaw-managed AI is configured, but the shared auth is no longer usable."))
+        #expect(model.phase == ConsumerModelSetupModel.Phase.failed("Jarvis-managed AI is configured, but the shared auth is no longer usable."))
         #expect(model.authError == "bad key")
     }
 
@@ -525,10 +525,10 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "OpenClaw could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."))
+                    "Jarvis could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."))
         #expect(
             model.statusLine
-                == "OpenClaw could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again.")
+                == "Jarvis could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again.")
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.canRestartOperator)
     }

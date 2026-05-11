@@ -8,13 +8,18 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
-APP_NAME="${APP_NAME:-OpenClaw}"
+APP_VARIANT="${APP_VARIANT:-consumer}"
+if [[ "$APP_VARIANT" == "consumer" ]]; then
+  DEFAULT_APP_NAME="Jarvis"
+else
+  DEFAULT_APP_NAME="OpenClaw"
+fi
+APP_NAME="${APP_NAME:-$DEFAULT_APP_NAME}"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"
 APP_ROOT="$ROOT_DIR/dist/${APP_BUNDLE_NAME}"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.consumer.mac.debug}"
-APP_VARIANT="${APP_VARIANT:-consumer}"
 APP_INSTANCE_ID="${APP_INSTANCE_ID:-}"
 URL_SCHEME="${URL_SCHEME:-openclaw-consumer}"
 if [[ "$APP_VARIANT" == "consumer" ]]; then
@@ -1062,6 +1067,16 @@ cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BUNDLE_ID}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleName ${APP_NAME}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${APP_NAME}" "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :NSUserNotificationUsageDescription ${APP_NAME} needs notification permission to show alerts for agent actions." "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :NSScreenCaptureDescription ${APP_NAME} captures the screen when the agent needs screenshots for context." "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :NSCameraUsageDescription ${APP_NAME} can capture photos or short video clips when requested by the agent." "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :NSLocationAlwaysAndWhenInUseUsageDescription ${APP_NAME} can share your location when requested by the agent." "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :NSLocationUsageDescription ${APP_NAME} can share your location when requested by the agent." "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :NSLocationWhenInUseUsageDescription ${APP_NAME} can share your location when requested by the agent." "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :NSMicrophoneUsageDescription ${APP_NAME} needs the mic for Voice Wake tests and agent audio capture." "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :NSSpeechRecognitionUsageDescription ${APP_NAME} uses speech recognition to detect your Voice Wake trigger phrase." "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :NSAppleEventsUsageDescription ${APP_NAME} needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions." "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :NSRemindersUsageDescription ${APP_NAME} can access Reminders when requested by the agent for the apple-reminders skill." "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${APP_BUILD}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :OpenClawAppVariant ${APP_VARIANT}" "$APP_ROOT/Contents/Info.plist" || true

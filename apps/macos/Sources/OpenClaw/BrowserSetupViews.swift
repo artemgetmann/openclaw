@@ -48,7 +48,7 @@ struct BrowserSetupCardContent: View {
             Text(self.presentation == .onboarding ? "Connect your Chrome" : "Browser")
                 .font(.headline)
             Text(
-                "OpenClaw uses a separate copy of your Chrome profile so it can work with your sessions without touching your active browsing.")
+                "\(AppFlavor.current.appName) uses a separate copy of your Chrome profile so it can work with your sessions without touching your active browsing.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -86,7 +86,7 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "Open Chrome once first",
-                body: "Google Chrome is installed, but OpenClaw needs a signed-in Chrome profile before browser setup can continue. Open Chrome, sign in, then click Check Again.")
+                body: "Google Chrome is installed, but \(AppFlavor.current.appName) needs a signed-in Chrome profile before browser setup can continue. Open Chrome, sign in, then click Check Again.")
 
             HStack(spacing: 10) {
                 Button("Open Chrome") {
@@ -106,7 +106,7 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "We found your Chrome profile",
-                body: "OpenClaw will use a separate copy of this profile. Your regular Chrome windows stay untouched.")
+                body: "\(AppFlavor.current.appName) will use a separate copy of this profile. Your regular Chrome windows stay untouched.")
 
             self.profileCard(profile, selected: true, action: nil)
 
@@ -129,7 +129,7 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "Choose a Chrome profile",
-                body: "Pick the Chrome profile OpenClaw should copy into its own browser window. You should not need to inspect any Chrome settings or filesystem paths.")
+                body: "Pick the Chrome profile \(AppFlavor.current.appName) should copy into its own browser window. You should not need to inspect any Chrome settings or filesystem paths.")
 
             ForEach(profiles) { profile in
                 self.profileCard(profile, selected: false) {
@@ -148,7 +148,7 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "Chrome connected",
-                body: "OpenClaw can now use \(profile.displayName) for browser tasks on this Mac. If a site needs your account, OpenClaw will open the page and wait for you to sign in.")
+                body: "\(AppFlavor.current.appName) can now use \(profile.displayName) for browser tasks on this Mac. If a site needs your account, \(AppFlavor.current.appName) will open the page and wait for you to sign in.")
 
             self.profileCard(profile, selected: true, action: nil)
 

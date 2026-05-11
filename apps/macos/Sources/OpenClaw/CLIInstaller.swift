@@ -2,8 +2,9 @@ import Foundation
 
 @MainActor
 enum CLIInstaller {
-    private static let missingBundledRuntimeMessage =
-        "This OpenClaw build is missing its bundled local runtime. Re-download the app bundle."
+    private static var missingBundledRuntimeMessage: String {
+        "This \(AppFlavor.current.appName) build is missing its bundled local runtime. Re-download the app bundle."
+    }
 
     enum EnsureResult: Equatable {
         case alreadyInstalled(String)
@@ -62,7 +63,7 @@ enum CLIInstaller {
         if let location = self.installedLocation(fileManager: fileManager) {
             return .installed(location)
         }
-        return .failed("OpenClaw could not install its local helper.")
+        return .failed("\(AppFlavor.current.appName) could not install its local helper.")
     }
 
     static func install(statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async {
@@ -97,7 +98,7 @@ enum CLIInstaller {
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void)
         async -> EnsureResult
     {
-        await statusHandler("Repairing OpenClaw from the packaged app...")
+        await statusHandler("Repairing \(AppFlavor.current.appName) from the packaged app...")
 
         guard let resourceURL = ConsumerBundledRuntime.resourceURL(bundle: bundle) else {
             await statusHandler("Repair failed: \(self.missingBundledRuntimeMessage)")
@@ -116,7 +117,7 @@ enum CLIInstaller {
         }
 
         if let location = self.consumerInstalledLocation(fileManager: fileManager) {
-            await statusHandler("OpenClaw is ready on this Mac.")
+            await statusHandler("\(AppFlavor.current.appName) is ready on this Mac.")
             return .installed(location)
         }
 

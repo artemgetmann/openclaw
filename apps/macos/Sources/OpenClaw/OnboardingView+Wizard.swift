@@ -34,7 +34,7 @@ extension OnboardingView {
         guard AppFlavor.current.isConsumer else { return "Setup Wizard" }
         if self.onboardingWizard.errorMessage != nil { return "Something went wrong" }
         if self.onboardingWizard.isComplete { return "You're all set" }
-        return "Setting up OpenClaw"
+        return "Setting up \(AppFlavor.current.appName)"
     }
 
     private var wizardSubtitle: String {
@@ -42,10 +42,10 @@ extension OnboardingView {
             return "Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI."
         }
         if self.onboardingWizard.errorMessage != nil {
-            return "OpenClaw couldn’t finish setup."
+            return "\(AppFlavor.current.appName) couldn’t finish setup."
         }
         if self.onboardingWizard.isComplete {
-            return "OpenClaw is ready. Click Finish to continue."
+            return "\(AppFlavor.current.appName) is ready. Click Finish to continue."
         }
         return "This usually takes a moment."
     }
@@ -74,14 +74,15 @@ struct OnboardingWizardCardContent: View {
     }
 
     private func consumerErrorMessage(for error: String) -> String {
+        let appName = AppFlavor.current.appName
         let lower = error.lowercased()
         if lower.contains("gateway did not become ready") {
-            return "OpenClaw couldn’t finish setup. Try again."
+            return "\(appName) couldn’t finish setup. Try again."
         }
         if lower.contains("wizard session lost") {
             return "Setup was interrupted. Try again."
         }
-        return "OpenClaw couldn’t finish setup. Try again."
+        return "\(appName) couldn’t finish setup. Try again."
     }
 
     var body: some View {
@@ -105,7 +106,7 @@ struct OnboardingWizardCardContent: View {
         case .starting:
             HStack(spacing: 8) {
                 ProgressView()
-                Text(self.isConsumer ? "Getting OpenClaw ready…" : "Starting wizard…")
+                Text(self.isConsumer ? "Getting \(AppFlavor.current.appName) ready…" : "Starting wizard…")
                     .foregroundStyle(.secondary)
             }
         case let .step(step):
@@ -117,10 +118,10 @@ struct OnboardingWizardCardContent: View {
             }
             .id(step.id)
         case .complete:
-            Text(self.isConsumer ? "OpenClaw is ready." : "Wizard complete. Continue to the next step.")
+            Text(self.isConsumer ? "\(AppFlavor.current.appName) is ready." : "Wizard complete. Continue to the next step.")
                 .font(.headline)
         case .waiting:
-            Text(self.isConsumer ? "Getting OpenClaw ready…" : "Waiting for wizard…")
+            Text(self.isConsumer ? "Getting \(AppFlavor.current.appName) ready…" : "Waiting for wizard…")
                 .foregroundStyle(.secondary)
         }
     }

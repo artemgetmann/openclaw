@@ -175,6 +175,7 @@ extension ChannelsStore {
             || self.telegramSetupStatus == "Waiting for your first Telegram task..."
             || self.telegramSetupStatus == "Saving Telegram setup..."
             || self.telegramSetupStatus?.hasPrefix("Token verified") == true
+            || self.telegramSetupStatus?.hasPrefix("Telegram setup is saved, but \(AppFlavor.current.appName) could not") == true
             || self.telegramSetupStatus?.hasPrefix("Telegram setup is saved, but OpenClaw could not") == true
 
         if shouldRefreshStatus || activityConfirmed {
