@@ -40,8 +40,8 @@ Read this before doing consumer-product work in this repo.
 - Launch package:
   - `docs/consumer/jarvis-launch-package.md`
 - Historical consolidation proof, not active task boards:
-  - `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
-  - `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
+  - `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md`
+  - `docs/consumer/archive/openclaw-main-consumer-divergence-tracker.md`
 - Archived execution docs:
   - `docs/consumer/archive/openclaw-consumer-execution-spec.md`
   - `docs/consumer/archive/consumer-execution-tracker.md`

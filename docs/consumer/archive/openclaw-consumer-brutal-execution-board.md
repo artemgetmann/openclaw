@@ -1,5 +1,7 @@
 # OpenClaw Consumer Wrapper — Brutal Execution Board (30 Days)
 
+<!-- markdownlint-disable MD024 -->
+
 > Archived: this 30-day board is preserved for historical launch cadence only.
 > It does not reflect the current post-#634/#638/#639 release state or the
 > `v2026.3.15` artifact status.
@@ -7,11 +9,11 @@
 > Current sources of truth:
 >
 > - Product identity and doc routing: `CONSUMER.md`
-> - Consolidation/release state:
->   `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
-> - Completed vs remaining consolidation slices:
->   `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
-> - Launch/business blockers:
+> - Historical consolidation/release proof:
+>   `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md`
+> - Historical completed-vs-remaining consolidation slices:
+>   `docs/consumer/archive/openclaw-main-consumer-divergence-tracker.md`
+> - Active launch/business blockers:
 >   `docs/research/jarvis-consumer-launch-plan.md`
 
 ## Operating Rule

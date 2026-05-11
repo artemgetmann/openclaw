@@ -10,9 +10,9 @@ tracker.
 Use these documents in this order when there is any ambiguity:
 
 1. `CONSUMER.md` (current branch identity, north star, boundaries)
-2. `docs/consumer/openclaw-main-consumer-consolidation-plan.md` (current main/consumer consolidation and release state)
-3. `docs/consumer/openclaw-main-consumer-divergence-tracker.md` (current completed vs remaining consolidation slices)
-4. `docs/research/jarvis-consumer-launch-plan.md` (launch/business blockers: account, license, backend, packaging, onboarding)
+2. `docs/research/jarvis-consumer-launch-plan.md` (active launch/business blockers: account, license, backend, packaging, onboarding)
+3. `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md` (historical main/consumer consolidation and release proof)
+4. `docs/consumer/archive/openclaw-main-consumer-divergence-tracker.md` (historical completed vs remaining consolidation slices)
 
 The rest of this file is preserved for the March browser sprint and old
 execution-lane context. It contains stale workstream ownership and should not be

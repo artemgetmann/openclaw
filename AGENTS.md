@@ -45,8 +45,8 @@
 
 - Product context and current priorities:
   - `CONSUMER.md`
-  - `docs/consumer/openclaw-main-consumer-consolidation-plan.md`
-  - `docs/consumer/openclaw-main-consumer-divergence-tracker.md`
+  - `docs/research/jarvis-consumer-launch-plan.md`
+  - `docs/consumer/jarvis-launch-package.md`
   - `docs/consumer/openclaw-consumer-execution-spec.md`
 - Branching, PR targets, commits, GitHub footguns:
   - `docs/agent-guides/workflow.md`

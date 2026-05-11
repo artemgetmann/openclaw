@@ -10,9 +10,9 @@ We are building the OpenClaw consumer product from this repo's `main` branch.
 
 Read `CONSUMER.md` in the repo root first — it has full context on what we're building, the design philosophy, branch rules, and what's in/out of scope.
 
-Read `docs/consumer/openclaw-main-consumer-consolidation-plan.md` and
-`docs/consumer/openclaw-main-consumer-divergence-tracker.md` for the current
-main-first plan. Read
+Read `docs/research/jarvis-consumer-launch-plan.md` for the current launch/main
+plan. The retired consolidation proof docs now live under
+`docs/consumer/archive/`; do not use them as active task boards. Read
 `docs/consumer/archive/openclaw-consumer-execution-spec.md` only as historical
 product context.
 
