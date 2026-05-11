@@ -713,6 +713,18 @@ Progress:
 - [ ] Subscription/trial-gated update entitlement UX is production-ready.
 - [ ] Render service is created and configured with production env values.
 
+Verified Render truth as of 2026-05-11:
+
+- Render workspace `My Workspace` has no service pointing at
+  `https://github.com/artemgetmann/openclaw` or `services/jarvis-backend`.
+- Existing `jarvis-api` and `jarvis-frontend` services point at
+  `https://github.com/artemgetmann/jarvis-voice-ai`, not this repo.
+- `https://jarvis-api-n70e.onrender.com/health` returns healthy for the legacy
+  voice API, but this is not the Jarvis macOS backend contract.
+- The macOS backend service still needs to be created from this repo's root
+  `render.yaml` `jarvis-backend` service and configured with production env
+  values before a notarized Jarvis package can point at it.
+
 ### Imported from retired consolidation trackers
 
 The active owner for these items is this launch plan. The retired consolidation
