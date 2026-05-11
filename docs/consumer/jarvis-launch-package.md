@@ -19,18 +19,20 @@ task. Do not imply those internals are already renamed.
 
 ## v1 commercial decision
 
-Launch with managed service as the main consumer path and BYOK as the advanced
-escape hatch.
+Launch with Jarvis Personal as the main consumer path. Model usage should use
+the user's provider subscription/login where supported. Backend-held
+founder/provider keys are limited to managed utilities, onboarding fallback,
+controlled beta support, and non-model tool surfaces.
 
-| Plan                     | Price    | Buyer                      | Public at launch | Main boundary                                |
-| ------------------------ | -------- | -------------------------- | ---------------- | -------------------------------------------- |
-| Jarvis Managed           | $99/mo   | normal consumers           | yes              | managed model and utility budget             |
-| Jarvis Core              | $19/mo   | technical and power users  | yes              | BYOK model and tool providers                |
-| Jarvis Founder Concierge | $299/mo+ | high-touch pilot customers | no               | onboarding, workflow setup, priority support |
+| Plan                     | Price    | Buyer                      | Public at launch | Main boundary                                   |
+| ------------------------ | -------- | -------------------------- | ---------------- | ----------------------------------------------- |
+| Jarvis Personal          | $99/mo   | normal consumers           | yes              | subscription-login models plus capped utilities |
+| Jarvis Core              | $19/mo   | technical and power users  | yes              | BYOK raw API keys and advanced provider setup   |
+| Jarvis Founder Concierge | $299/mo+ | high-touch pilot customers | no               | onboarding, workflow setup, priority support    |
 
-The public launch page should lead with Jarvis Managed because the consumer
+The public launch page should lead with Jarvis Personal because the consumer
 promise is "it just works." Jarvis Core exists for advanced users who want to
-bring their own model keys, provider accounts, or subscription logins.
+bring raw API keys or own more of the provider setup.
 Founder Concierge is sales-led and should not clutter the README.
 
 ## Trial and account rules
@@ -47,25 +49,26 @@ Founder Concierge is sales-led and should not clutter the README.
 
 ## Entitlement boundaries
 
-### Jarvis Managed
+### Jarvis Personal
 
-Managed is the main consumer plan.
+Personal is the main consumer plan.
 
-Managed includes:
+Personal includes:
 
 - signed/notarized Jarvis app downloads while subscription is active
 - automatic signed, verified updates while subscription is active
 - local-first Jarvis runtime on the user's Mac
 - Telegram assistant setup
-- managed model access through Jarvis backend-held provider keys
-- managed voice/search/scraping/maps/image utility budget
+- preferred model access through the user's local provider subscription/login
+  where supported
+- capped managed utilities for voice/search/scraping/maps/image generation
 - bundled official skills and workflows
 - visibility/logging controls
 - priority onboarding support for early customers
 
 Initial monthly fair-use allowance:
 
-- managed model service-cost cap: $45/user/month
+- backend-managed utility/service-cost cap: $45/user/month
 - speech-to-text: 1,000 minutes
 - standard text-to-speech: 1,000,000 characters
 - high-quality TTS: 500 messages or equivalent cap
@@ -73,16 +76,18 @@ Initial monthly fair-use allowance:
 - scraping: 2,000 pages
 - image generation: 100 images
 
-Managed backend guardrails:
+Backend-managed utility guardrails:
 
-- managed usage must go through the Jarvis backend
+- managed utilities and fallback support must go through the Jarvis backend
 - raw founder/provider keys must never be packaged inside the app
 - raw founder/provider keys must never be sent to the app
 - backend limits must be configurable without an app update
-- Jarvis must stop, degrade, or request approval before it burns past the cap
+- Jarvis must stop, degrade, or request approval before backend-managed usage
+  burns past the cap
 - no video generation in v1
 
-Unlimited managed AI at consumer pricing is a margin trap. Do not ship it.
+Unlimited backend-paid model usage at consumer pricing is a margin trap. Do
+not ship it.
 
 ### Jarvis Core
 
@@ -97,37 +102,39 @@ Core includes:
 - bundled official skills and workflows
 - visibility/logging controls
 - community or self-serve support
-- BYO model keys or subscriptions
+- BYO raw model API keys when subscription/login is unavailable or unwanted
 - BYO utility keys for search, scraping, maps, speech, image, and other costly
   provider surfaces
 
 Core does not include:
 
-- managed model usage
+- backend-paid model usage
 - managed Brave/Search, Firecrawl, Google Maps, OpenAI, Gemini, or other shared
   provider usage
 - priority support
 - done-for-you workflow setup
 
-## BYOK versus managed boundary
+## Provider access boundary
 
 Plain English:
 
-- BYOK means the user brings their own provider accounts and pays those
-  providers directly. It is advanced, not the main launch promise.
-- Managed means Jarvis uses backend-owned provider access and meters usage per
-  Jarvis account. It is the main consumer path.
 - User-owned subscription login means Jarvis uses a user's existing provider
-  login where supported. Treat it like an advanced BYOK path, not as managed
-  provider access.
+  subscription or logged-in provider account where supported. This is the
+  preferred model path because it keeps model costs with the user while avoiding
+  raw API-key setup.
+- Backend-managed utilities mean Jarvis uses server-side provider access for
+  capped non-model surfaces, onboarding fallback, controlled beta support, and
+  utility workflows.
+- BYOK raw API keys mean the user manually enters provider API keys. This is an
+  advanced escape hatch, not the default consumer path.
 
-BYOK call path:
+User subscription/login model path:
 
 ```text
-User -> local Jarvis app -> provider API
+User -> local Jarvis app/browser session -> provider subscription/login
 ```
 
-Managed call path:
+Backend-managed utility/fallback path:
 
 ```text
 User -> Jarvis app -> Jarvis backend -> provider API
@@ -135,15 +142,19 @@ User -> Jarvis app -> Jarvis backend -> provider API
 
 Rules:
 
-- Jarvis Managed users are managed for primary models and utilities.
-- Jarvis Core users are BYOK by default.
+- Primary model usage should use user subscription/login where supported.
+- Backend-held founder/provider keys are for limited utilities, onboarding
+  fallback, controlled beta support, and non-model tool surfaces.
+- Jarvis Core users can use raw BYOK API keys for models/tools when they prefer
+  that path or when subscription login is not supported.
 - Raw managed provider keys must never be packaged inside the app.
 - Raw managed provider keys must never be sent to the app.
 - Founder/provider keys live server-side only.
 - BYOK provider keys stay local unless the user explicitly opts into a future
   sync/diagnostic flow.
-- The backend tracks monthly counters and spend estimates per Jarvis account.
-- The backend can pause managed usage independently of local runtime access.
+- The backend tracks monthly counters and spend estimates for backend-managed
+  utilities/fallback.
+- The backend can pause managed utilities independently of local runtime access.
 
 ## GitHub README launch outline
 
@@ -193,33 +204,36 @@ Recommended demo:
 
 Use only the public plans:
 
-| Plan           | Price  | Best for         | Included provider usage                      |
-| -------------- | ------ | ---------------- | -------------------------------------------- |
-| Jarvis Managed | $99/mo | normal consumers | managed models and utilities                 |
-| Jarvis Core    | $19/mo | advanced users   | BYOK keys and user-owned subscription logins |
+| Plan            | Price  | Best for         | Included provider usage                         |
+| --------------- | ------ | ---------------- | ----------------------------------------------- |
+| Jarvis Personal | $99/mo | normal consumers | subscription-login models plus capped utilities |
+| Jarvis Core     | $19/mo | advanced users   | BYOK raw API keys and advanced provider setup   |
 
 Copy:
 
 > Start with a 14-day no-card trial during the early GitHub/Reddit beta.
-> Managed is the main consumer plan: Jarvis uses backend-held provider access so
-> setup stays simple. Core is the advanced BYOK plan for people who want to use
-> their own provider keys or subscription logins.
+> Personal is the main consumer plan: use your existing provider subscriptions
+> where supported, while Jarvis covers capped utilities and setup fallback
+> through the backend. Core is the advanced BYOK plan for people who want raw
+> API-key control.
 
 ### Local-first trust block
 
 Say this directly:
 
 > Jarvis runs on your Mac because your real work lives there: browser sessions,
-> files, apps, permissions, project tools, and local context. Managed provider
-> access is metered through the Jarvis backend. Advanced BYOK users can keep
-> provider usage local.
+> files, apps, permissions, project tools, and local context. Model usage should
+> use your provider subscription/login where supported. Capped utilities and
+> fallback support are metered through the Jarvis backend. Advanced BYOK users
+> can keep raw API-key usage local.
 
 ### Honest limitations
 
 - macOS first
 - Telegram first
 - setup is improving fast, but early users should expect sharp edges
-- Core/BYOK users must bring their own provider keys or subscription logins
+- primary model subscription/login support depends on each provider surface
+- Core/BYOK users must bring their own raw provider keys
 - third-party skills can run code and should be treated as untrusted until
   reviewed
 - visible app/artifact naming is moving to Jarvis, but internal runtime/update
@@ -232,7 +246,7 @@ Say this directly:
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
 - better first-run permission copy
-- managed usage cap hardening
+- backend-managed utility cap hardening
 - skill audit and safer third-party skill install flow
 - visible app/artifact rename to Jarvis without breaking bundle/runtime/update
   identity
@@ -292,8 +306,8 @@ Show final Telegram answer:
 Close:
 
 > "Jarvis is open source, Mac-first, and built for delegation. Start with
-> Managed if you want it to just work, or Core if you want to bring your own
-> provider access."
+> Personal if you want the normal consumer path, or Core if you want raw
+> API-key control."
 
 ## Launch copy snippets
 
@@ -310,8 +324,8 @@ One-line product description:
 
 Pricing one-liner:
 
-> Managed is $99/mo for the simple consumer path. Core is $19/mo for advanced
-> BYOK users.
+> Personal is $99/mo for the simple consumer path. Core is $19/mo for advanced
+> BYOK raw API-key users.
 
 ## Open Artem decisions
 
