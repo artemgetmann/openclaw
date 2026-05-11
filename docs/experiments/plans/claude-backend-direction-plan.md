@@ -364,7 +364,7 @@ Decision:
 
 ### Slice 2b: Claude CLI plugin-tool parity
 
-Status: implemented and validated for the bounded loopback path.
+Status: merged and validated for the bounded loopback path.
 
 What changed:
 
@@ -375,16 +375,24 @@ What changed:
 
 Proof:
 
+- PR #607 merged this slice into `main` as `8c4dde95d02e4ec6efc92e911de6e2edf8fef70f`.
 - Focused tests passed: `pnpm exec vitest run --config vitest.unit.config.ts src/plugins/tools.optional.test.ts src/gateway/tool-resolution.test.ts` passed 1 file / 9 tests under the unit config.
 - Gateway-focused tests passed: `pnpm exec vitest run --config vitest.gateway.config.ts src/gateway/tool-resolution.test.ts` passed 1 file / 2 tests.
 - Format and whitespace checks passed: `pnpm exec oxfmt --check src/plugins/tools.ts src/agents/openclaw-tools.ts src/gateway/tool-resolution.ts src/plugins/tools.optional.test.ts src/gateway/tool-resolution.test.ts` and `git diff --check`.
 - Direct HTTP MCP loopback smoke passed in-process with a pre-initialized plugin registry: `tools/list` returned `sessions_list`, `memory_search`, and a harmless preloaded plugin tool; `tools/call` returned `LOOPBACK_PLUGIN_TOOL_OK`; the stage log contained plugin-tool registry stages and no `plugin-loader-*` stages.
 - Independent worker smoke with a trap plugin passed: plugin tool present, native `exec` excluded, and the discovery marker file stayed absent.
+- Post-merge focused rerun on `main` passed: `pnpm exec vitest run --config vitest.unit.config.ts src/plugins/tools.optional.test.ts src/gateway/tool-resolution.test.ts --pool=forks --maxWorkers=1` passed 1 file / 9 tests.
+- Post-merge live Claude CLI smoke passed: `gtimeout -k 5s 70s env OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode temp-config-echo --model haiku --timeout-ms 30000` returned `TEMP_CONFIG_ECHO_OK` in 9.8s.
+- Post-merge live Telegram proof passed against `@Jarvis_cl4w_bot` after temporarily allowlisting `claude-cli/haiku`: `/model claude-cli/haiku` was accepted, the prompt forced `sessions_list`, the gateway logged `[agent/claude-cli] cli exec: provider=claude-cli model=haiku`, and the bot replied `CLAUDE_CLI_LOOPBACK_OK provider=claude-cli tool=sessions_list`.
+- Post-merge live Telegram plugin-tool proof passed against `@Jarvis_cl4w_bot` after temporarily enabling `plugins.entries.diffs.enabled` and allowlisting `claude-cli/haiku`: the prompt forced the harmless `diffs` tool with `mode="view"`, the gateway logged `[agent/claude-cli] cli exec: provider=claude-cli model=haiku`, and the bot replied `DIFFS_PLUGIN_TOOL_OK tool=diffs mode=view viewerUrl=http://127.0.0.1:18789/plugins/diffs/view/12a47ff63044c794dfb1/be08ccdf327406dfdf4270e28af2ae111f2e171d61421835`.
+- Cleanup after live proof completed: Telegram session was reset to default `openai-codex/gpt-5.4`, `plugins.entries.diffs.enabled` was restored to `false`, and the temporary `agents.defaults.models[claude-cli/haiku]` config key was removed from both the user CLI config and the app-owned gateway config.
 
 Scope boundary:
 
 - This slice prevents plugin discovery/import/register from blocking MCP `initialize`, `tools/list`, `tools/call`, or Claude startup.
 - It does not add an async timeout around already-registered plugin tool factories. If an already-loaded plugin factory hangs, that is a later plugin runtime hardening slice.
+- The real plugin-tool Telegram proof used `diffs` as a deliberately enabled harmless tool-bearing plugin. It did not prove Brave because the current app-owned config loads Brave as a web-search provider, not as a harmless registered agent tool.
+- Local runtime caveat: the machine currently has split CLI/service config paths (`~/.openclaw/openclaw.json` for some CLI commands, app-owned `~/Library/Application Support/OpenClaw/.openclaw/openclaw.json` for the LaunchAgent). The proof worked only after applying the temporary smoke config to the relevant runtime config paths; this is an ops/config hygiene issue, not a Claude plugin-tool parity blocker.
 
 ### Slice 3: Warm Claude CLI spike
 
@@ -462,6 +470,8 @@ Current pass/fail:
 
 - session continuity: pass
 - loopback MCP memory/browser tools: pass for `memory_search`, `memory_get`, `memory_search -> memory_get` with direct path fallback, `browser.status`, `browser.tabs`, and `browser.open -> browser.snapshot`
+- loopback MCP core tool through actual Telegram: pass for Claude CLI calling `sessions_list` via `@Jarvis_cl4w_bot`
+- real enabled plugin tool through actual Telegram: pass for Claude CLI calling the deliberately enabled `diffs` plugin tool via `@Jarvis_cl4w_bot`
 - browser open+snapshot: pass
 - cross-backend `/codex -> Claude` context: pass after Shared Transcript Replay
 - same live process reuse on same-model follow-up: pass
@@ -548,6 +558,6 @@ Tests run in this slice:
 
 Next:
 
-1. Open the Claude CLI plugin-tool parity PR from `codex/claude-cli-plugin-tool-parity`.
-2. Keep the PR scope bounded to registry-only plugin exposure and non-blocking loopback behavior.
+1. Decide whether `claude-cli/*` should remain hidden by default or become a selectable Telegram model lane now that core loopback and real plugin-tool proofs are green.
+2. Fix the local CLI/service config-path split so runtime validation commands and the LaunchAgent report the same config root without smoke-specific env overrides.
 3. Defer already-loaded plugin factory timeout hardening unless a real plugin factory hang appears in live traffic.
