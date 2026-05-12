@@ -527,8 +527,11 @@ Decision:
 - [x] Public product brand is Jarvis from the start.
 - [x] OpenClaw can appear as technical/developer/powered-by language only.
 - [x] Public-facing app/docs should move toward Jarvis now.
-- [x] App visible name/artifacts/icon use Jarvis.
-- [ ] Bundle ID/runtime/update identity/internal renames are a separate migration task.
+- [x] App visible name, release artifacts, and app icon use Jarvis.
+- [x] Bundle ID/runtime/update identity intentionally stay on
+      `ai.openclaw.consumer.mac` and OpenClaw paths for the beta package.
+- [ ] Bundle ID/runtime/update identity/internal renames remain a separate
+      migration task after beta package proof.
 
 Open question:
 
@@ -539,7 +542,8 @@ Implementation boundary:
 - Product name: Jarvis.
 - Engine/framework/repo language: OpenClaw.
 - Do not imply bundle ID, runtime identity, update feed identity, or internal
-  package names have already been renamed.
+  package names have already been renamed. Preserving those identities avoids
+  resetting macOS permissions/state during the beta package lane.
 
 ### 10.1 User-facing capability names
 
@@ -672,7 +676,9 @@ Do not overbuild the website first.
 
 Build the commercial spine first:
 
-1. signed/notarized downloadable app — done for public `v2026.3.15`
+1. signed/notarized downloadable app — prior public `v2026.3.15` proof exists;
+   current Jarvis-branded recut is Developer ID signed but still blocked on
+   notary Keychain setup
 2. no leaked founder keys — package guard done in PR #565
 3. account login and 14-day trial activation — beta contract done in PR #647
 4. pricing/plan names, launch README outline, and 60-second demo — drafted in PR #646
@@ -696,7 +702,14 @@ Current implementation order:
 5. Signing/notarization + updater proof. Public `v2026.3.15` shipped signed/notarized; Sparkle non-UI update completion passed.
 6. Beta account activation + 14-day trial. Done in PR #647.
 7. Pricing/plan names, launch README outline, and 60-second demo. Drafted in PR #646.
-8. Production Render service creation + partial env configuration. Done on 2026-05-11; Neon persistence remains the blocker.
+8. Production Render service creation + production env/account/license smoke.
+   Done on 2026-05-12; Neon persistence is configured.
+9. Jarvis visible app/artifact/icon branding. Done; bundle ID/runtime/update
+   identity migration is deferred.
+10. Machine-level release env. Done for non-secret Sparkle config at
+    `~/Library/Application Support/OpenClaw/release.env`.
+11. Notary profile Keychain setup. Open; current blocker for a trusted beta
+    package.
 
 Progress:
 
@@ -716,6 +729,14 @@ Progress:
 - [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
 - [ ] Subscription/trial-gated update entitlement UX is production-ready.
 - [x] Render service has durable production account/license persistence.
+- [x] Jarvis visible app name, release artifacts, and app icon are in place.
+- [x] Non-secret Sparkle release config is machine-level at
+      `~/Library/Application Support/OpenClaw/release.env` so release worktrees
+      and chats inherit the same values.
+- [ ] Store Apple notary credentials in Keychain as
+      `NOTARYTOOL_PROFILE="Jarvis Notary"` or an equivalent profile name.
+      Until this exists, current artifacts are Developer ID signed but
+      Gatekeeper rejects them as Unnotarized Developer ID.
 
 Remaining Settings/UI polish after PR #628:
 
@@ -783,15 +804,16 @@ docs remain historical proof only:
 - `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md`
 - `docs/consumer/archive/openclaw-main-consumer-divergence-tracker.md`
 
-| Item                                             | Owner                                     | Status                            | Launch-plan handling                                                                                                                                                                                                                                    |
-| ------------------------------------------------ | ----------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Final package through deterministic release lane | Release lane from current `main`          | Open, only when app work is ready | Use PR #658 release automation. Release env path is `~/Library/Application Support/OpenClaw/release.env`. Keep secrets in Keychain or outside repo. Use async notarization submit/poll/staple flow; do not block blindly on Apple's queue.              |
-| Public `v2026.3.15` asset replacement            | Release lane with explicit Artem approval | Open, approval-gated              | Current public assets still point at old provenance `205d5f596602ff82270b1af5a3de24c33c32b532`. Prior local recut proof existed from `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`; if app work continues, recut again from final `main` before uploading. |
-| Release assets involved                          | Release lane                              | Open, approval-gated              | Replace/upload only after explicit approval: `Jarvis.dmg`, `Jarvis.zip`, the dSYM zip, and the Jarvis appcast generated for the consumer feed.                                                                                                          |
-| Optional Sparkle dialog smoke                    | Release/GUI smoke lane                    | Optional                          | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                 |
-| Launch audit                                     | Launch/commercial readiness lane          | Open                              | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                 |
-| Overlay/defaults hygiene                         | Future product/platform lane              | Deferred, non-blocking            | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                   |
-| Bundle ID migration                              | Separate migration lane only              | Deferred                          | Visible product naming can move to `Jarvis.app`, but internal bundle id/runtime/update identity stay preserved until there is a deliberate migration plan. Changing bundle id can reset macOS permissions/state and create support churn.               |
+| Item                                             | Owner                                     | Status                          | Launch-plan handling                                                                                                                                                                                                                                    |
+| ------------------------------------------------ | ----------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Final package through deterministic release lane | Release lane from current `main`          | Open, blocked on notary profile | Use PR #658 automation. Release env is `~/Library/Application Support/OpenClaw/release.env`. Store `NOTARYTOOL_PROFILE="Jarvis Notary"` or equivalent in Keychain. Until then, Developer ID artifacts fail Gatekeeper as Unnotarized.                   |
+| Public `v2026.3.15` asset replacement            | Release lane with explicit Artem approval | Open, approval-gated            | Current public assets still point at old provenance `205d5f596602ff82270b1af5a3de24c33c32b532`. Prior local recut proof existed from `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`; if app work continues, recut again from final `main` before uploading. |
+| Release assets involved                          | Release lane                              | Open, approval-gated            | Replace/upload only after explicit approval: `Jarvis.dmg`, `Jarvis.zip`, the dSYM zip, and the Jarvis appcast generated for the consumer feed.                                                                                                          |
+| Optional Sparkle dialog smoke                    | Release/GUI smoke lane                    | Optional                        | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                 |
+| Launch audit                                     | Launch/commercial readiness lane          | Open                            | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                 |
+| Overlay/defaults hygiene                         | Future product/platform lane              | Deferred, non-blocking          | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                   |
+| Bundle ID migration                              | Separate migration lane only              | Deferred                        | Visible product naming can move to `Jarvis.app`, but internal bundle id/runtime/update identity stay preserved until there is a deliberate migration plan. Changing bundle id can reset macOS permissions/state and create support churn.               |
+| Old app/dist/worktree cleanup                    | Cleanup lane                              | Lower priority                  | Cleanup of old OpenClaw apps and worktree `dist` bundles is useful hygiene, but it is lower priority than proving the notarized Jarvis beta package.                                                                                                    |
 
 Deployment/security boundary:
 
@@ -811,6 +833,11 @@ Deployment/security boundary:
 - [x] Implement license check + offline grace. Contract MVP exists in PR #560; Neon persistence landed in PR #569.
 - [x] Implement and prove baseline update check/install path through Sparkle non-UI update completion.
 - [x] Sign/notarize macOS app for public `v2026.3.15`.
+- [x] Move non-secret Sparkle release config to machine-level
+      `~/Library/Application Support/OpenClaw/release.env`.
+- [ ] Store the Apple notary profile in Keychain as
+      `NOTARYTOOL_PROFILE="Jarvis Notary"` or equivalent; this is the current
+      package trust blocker.
 - [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
 - [ ] Implement subscription/trial-gated update entitlement UX.
 - [x] Remove or proxy all founder keys from public builds. Backend/proxy contract exists in PR #560; public-package audit guard landed in PR #565.
