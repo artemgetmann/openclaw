@@ -31,7 +31,7 @@ extension ChannelsStore {
             self.applyLoadedConfigRoot(
                 root,
                 status: snap.valid == false
-                    ? "Config invalid; fix it in ~/.openclaw/openclaw.json."
+                    ? "Config invalid; fix it in \(AgentWorkspace.displayPath(for: OpenClawPaths.configURL))."
                     : nil)
         } catch {
             self.configStatus = error.localizedDescription

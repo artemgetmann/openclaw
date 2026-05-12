@@ -70,9 +70,9 @@ Not done:
 - Monitor creation is not deduplicated yet.
 - Oversized raw tool outputs are not yet moved into structured artifacts with
   compact evidence pointers.
-- The `~/.openclaw/openclaw.json` legacy/default CLI config path is still in
-  use by docs and some non-app flows; do not delete it until that split is
-  documented or migrated.
+- The `~/.openclaw/openclaw.json` legacy/default CLI config path still belongs
+  in CLI/dev docs. Packaged/shared Jarvis docs and app copy should name the
+  active Application Support config instead.
 - Reply-message metadata, where Telegram replies directly to a monitor update
   carry the exact `monitorId`, is intentionally deferred until current behavior
   proves insufficient.
@@ -251,9 +251,8 @@ job. Allow explicit advanced override for separate monitors.
 
 ## Open Questions
 
-1. Should `~/.openclaw/openclaw.json` stay as a supported CLI/dev default, or
-   should docs/code migrate harder toward Application Support for app-owned
-   runtimes?
+1. Should `~/.openclaw/openclaw.json` stay as a supported CLI/dev default after
+   packaged/shared Jarvis copy has moved to the Application Support config?
 2. Should monitor status continue through `lastCheckpoint`, a separate registry
    field, or both?
 3. How often does current natural-language monitor routing become ambiguous in

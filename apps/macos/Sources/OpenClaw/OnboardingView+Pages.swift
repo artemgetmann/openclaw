@@ -865,7 +865,7 @@ extension OnboardingView {
                                     let saved = await self.saveAgentWorkspace(AgentWorkspace.displayPath(for: url))
                                     if saved {
                                         self.workspaceStatus =
-                                            "Saved to ~/.openclaw/openclaw.json (agents.defaults.workspace)"
+                                            "Saved to \(AgentWorkspace.displayPath(for: OpenClawPaths.configURL)) (agents.defaults.workspace)"
                                     }
                                 }
                             }
