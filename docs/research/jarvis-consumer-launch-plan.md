@@ -681,10 +681,11 @@ Do not overbuild the website first.
 
 Build the commercial spine first:
 
-1. signed/notarized downloadable app for the 3 trusted waiting testers — prior
-   public `v2026.3.15` proof exists; current Jarvis-branded recut keeps
-   `ai.openclaw.consumer.mac`/OpenClaw runtime identity and is Developer ID
-   signed but still blocked on notary Keychain setup
+1. signed/notarized downloadable app for the 3 trusted waiting testers — done
+   locally on 2026-05-12 from current `main` as `Jarvis.app`, `Jarvis.dmg`,
+   `Jarvis.zip`, and `jarvis-appcast.xml`; this trusted-tester recut keeps
+   `ai.openclaw.consumer.mac`/OpenClaw runtime identity by deliberate 80/20
+   decision
 2. no leaked founder keys — package guard done in PR #565
 3. account login and 14-day trial activation — beta contract done in PR #647
 4. pricing/plan names, launch README outline, and 60-second demo — drafted in PR #646
@@ -716,8 +717,11 @@ Current implementation order:
    Reddit/GitHub, public-ish beta, or a wider beta.
 10. Machine-level release env. Done for non-secret Sparkle config at
     `~/Library/Application Support/OpenClaw/release.env`.
-11. Notary profile Keychain setup. Open; current blocker for a trusted beta
-    package.
+11. Notary credentials. Unblocked for this local package, but the workflow is
+    too fragile because Apple ID app-specific password + Keychain profile auth
+    required Safari/2FA recovery and disappeared mid-run. Before the next
+    release lane, replace it with App Store Connect API key auth and async
+    submit/poll/staple receipts.
 
 Progress:
 
@@ -741,10 +745,13 @@ Progress:
 - [x] Non-secret Sparkle release config is machine-level at
       `~/Library/Application Support/OpenClaw/release.env` so release worktrees
       and chats inherit the same values.
-- [ ] Store Apple notary credentials in Keychain as
-      `NOTARYTOOL_PROFILE="Jarvis Notary"` or an equivalent profile name.
-      Until this exists, current artifacts are Developer ID signed but
-      Gatekeeper rejects them as Unnotarized Developer ID.
+- [x] Produce local Jarvis trusted-tester artifacts from current `main`:
+      `Jarvis.app`, `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`.
+      `Jarvis.app` and `Jarvis.dmg` pass Gatekeeper as Notarized Developer ID.
+- [ ] Replace Apple ID app-specific password / Keychain-profile notarization
+      with App Store Connect API key auth plus async submit/poll/staple receipts
+      before the next release lane. The current package is unblocked, but the
+      credential workflow is too slow and brittle for repeat use.
 
 Remaining Settings/UI polish after PR #628:
 
@@ -812,16 +819,16 @@ docs remain historical proof only:
 - `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md`
 - `docs/consumer/archive/openclaw-main-consumer-divergence-tracker.md`
 
-| Item                                             | Owner                                            | Status                          | Launch-plan handling                                                                                                                                                                                                                                                                                       |
-| ------------------------------------------------ | ------------------------------------------------ | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Final package through deterministic release lane | Release lane from current `main`                 | Open, blocked on notary profile | Use PR #658 automation. Release env is `~/Library/Application Support/OpenClaw/release.env`. Store `NOTARYTOOL_PROFILE="Jarvis Notary"` or equivalent in Keychain. Until then, Developer ID artifacts fail Gatekeeper as Unnotarized.                                                                      |
-| Public `v2026.3.15` asset replacement            | Release lane with explicit Artem approval        | Open, approval-gated            | Current public assets still point at old provenance `205d5f596602ff82270b1af5a3de24c33c32b532`. Prior local recut proof existed from `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`; if app work continues, recut again from final `main` before uploading.                                                    |
-| Release assets involved                          | Release lane                                     | Open, approval-gated            | Replace/upload only after explicit approval: `Jarvis.dmg`, `Jarvis.zip`, the dSYM zip, and the Jarvis appcast generated for the consumer feed.                                                                                                                                                             |
-| Optional Sparkle dialog smoke                    | Release/GUI smoke lane                           | Optional                        | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                                                                    |
-| Launch audit                                     | Launch/commercial readiness lane                 | Open                            | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                                    |
-| Overlay/defaults hygiene                         | Future product/platform lane                     | Deferred, non-blocking          | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                                                                      |
-| Bundle ID migration                              | Separate migration lane before public-ish launch | Required before wider beta      | Keep `ai.openclaw.consumer.mac` plus OpenClaw runtime/update paths only for the 3 trusted waiting testers. Before Reddit/GitHub, public-ish beta, or any wider beta, migrate to `ai.jarvis.mac` through a deliberate lane because permissions, state, LaunchAgents, and update continuity can be affected. |
-| Old app/dist/worktree cleanup                    | Cleanup lane                                     | Lower priority                  | Cleanup of old OpenClaw apps and worktree `dist` bundles is useful hygiene, but it is lower priority than proving the notarized Jarvis beta package.                                                                                                                                                       |
+| Item                                             | Owner                                            | Status                           | Launch-plan handling                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------ | ------------------------------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Final package through deterministic release lane | Release lane from current `main`                 | Done locally for trusted testers | Local 2026-05-12 Jarvis recut produced `Jarvis.app`, `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`; app and DMG pass Gatekeeper as Notarized Developer ID. Before the next repeatable release lane, replace Apple ID app-specific password / Keychain-profile auth with App Store Connect API key auth and async submit/poll/staple receipts. |
+| Public `v2026.3.15` asset replacement            | Release lane with explicit Artem approval        | Open, approval-gated             | Current public assets still point at old provenance `205d5f596602ff82270b1af5a3de24c33c32b532`. Prior local recut proof existed from `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`; if app work continues, recut again from final `main` before uploading.                                                                                              |
+| Release assets involved                          | Release lane                                     | Open, approval-gated             | Replace/upload only after explicit approval: `Jarvis.dmg`, `Jarvis.zip`, the dSYM zip, and the Jarvis appcast generated for the consumer feed.                                                                                                                                                                                                       |
+| Optional Sparkle dialog smoke                    | Release/GUI smoke lane                           | Optional                         | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                                                                                                              |
+| Launch audit                                     | Launch/commercial readiness lane                 | Open                             | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                                                                              |
+| Overlay/defaults hygiene                         | Future product/platform lane                     | Deferred, non-blocking           | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                                                                                                                |
+| Bundle ID migration                              | Separate migration lane before public-ish launch | Required before wider beta       | Keep `ai.openclaw.consumer.mac` plus OpenClaw runtime/update paths only for the 3 trusted waiting testers. Before Reddit/GitHub, public-ish beta, or any wider beta, migrate to `ai.jarvis.mac` through a deliberate lane because permissions, state, LaunchAgents, and update continuity can be affected.                                           |
+| Old app/dist/worktree cleanup                    | Cleanup lane                                     | Lower priority                   | Cleanup of old OpenClaw apps and worktree `dist` bundles is useful hygiene, but it is lower priority than proving the notarized Jarvis beta package.                                                                                                                                                                                                 |
 
 Deployment/security boundary:
 
@@ -843,9 +850,12 @@ Deployment/security boundary:
 - [x] Sign/notarize macOS app for public `v2026.3.15`.
 - [x] Move non-secret Sparkle release config to machine-level
       `~/Library/Application Support/OpenClaw/release.env`.
-- [ ] Store the Apple notary profile in Keychain as
-      `NOTARYTOOL_PROFILE="Jarvis Notary"` or equivalent; this is the current
-      package trust blocker.
+- [x] Produce notarized Jarvis trusted-tester app/DMG/ZIP/appcast from current
+      `main` while keeping `ai.openclaw.consumer.mac` for the 3 trusted waiting
+      testers.
+- [ ] Replace Apple ID app-specific password / Keychain-profile notarization
+      with App Store Connect API key auth plus async submit/poll/staple receipts
+      before the next release lane.
 - [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
 - [ ] Implement subscription/trial-gated update entitlement UX.
 - [x] Remove or proxy all founder keys from public builds. Backend/proxy contract exists in PR #560; public-package audit guard landed in PR #565.
