@@ -13,6 +13,7 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "summarize",
   "weather",
   "wacli",
+  "mcporter",
   "nano-banana-pro",
   "telegram-user",
   "notion",

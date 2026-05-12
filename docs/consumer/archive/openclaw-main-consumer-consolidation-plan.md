@@ -326,9 +326,9 @@ Bundled skills stay model-facing even when setup is missing. Missing auth,
 config, or binaries should route the model toward setup/explanation instead of
 hiding useful capability hints. Fresh consumer configs include `consumer-setup`,
 `apple-notes`, `apple-reminders`, `gog`, `goplaces`, `himalaya`, `peekaboo`,
-`summarize`, `weather`, `wacli`, `nano-banana-pro`, `telegram-user`, `notion`,
-`obsidian`, `things-mac`, `github`, `slack`, `discord`, `openai-image-gen`,
-`openai-whisper`, and `nano-pdf`.
+`summarize`, `weather`, `wacli`, `mcporter`, `nano-banana-pro`, `telegram-user`,
+`notion`, `obsidian`, `things-mac`, `github`, `slack`, `discord`,
+`openai-image-gen`, `openai-whisper`, and `nano-pdf`.
 
 Status: completed for the current model/skill default slice by #592 and #594.
 If the live Jarvis bot still shows stale model rows, treat that as runtime

@@ -26,7 +26,13 @@ describe("applyNonInteractiveSkillsConfig", () => {
 
     expect(next.skills?.allowBundled).toEqual([...CONSUMER_DEFAULT_BUNDLED_SKILLS]);
     expect(next.skills?.allowBundled).toEqual(
-      expect.arrayContaining(["consumer-setup", "nano-banana-pro", "telegram-user", "nano-pdf"]),
+      expect.arrayContaining([
+        "consumer-setup",
+        "mcporter",
+        "nano-banana-pro",
+        "telegram-user",
+        "nano-pdf",
+      ]),
     );
   });
 

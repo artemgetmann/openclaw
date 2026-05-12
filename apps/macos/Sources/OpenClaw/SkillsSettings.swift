@@ -39,7 +39,7 @@ struct SkillsSettings: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Skills")
                     .font(.headline)
-                Text("Skills are enabled when requirements are met (binaries, env, config).")
+                Text("Enable connected apps, local tools, and optional skills when their setup is ready.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
