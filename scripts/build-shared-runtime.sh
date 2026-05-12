@@ -27,6 +27,42 @@ describe_node() {
   printf '%s (%s)\n' "${version}" "${node_bin}"
 }
 
+shared_runtime_launch_agent_active() {
+  local expected_runtime="${ROOT}/dist/index.js"
+  local output=""
+
+  if ! command -v launchctl >/dev/null 2>&1; then
+    return 1
+  fi
+
+  output="$(launchctl print "gui/$(id -u)/ai.openclaw.gateway" 2>/dev/null || true)"
+  if [[ -z "${output}" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "${output}" | grep -F -q -- "${expected_runtime}" || return 1
+  printf '%s\n' "${output}" | grep -E -q '^[[:space:]]*state = running$' || return 1
+  printf '%s\n' "${output}" | grep -E -q '^[[:space:]]*pid = [0-9]+' || return 1
+}
+
+reject_live_shared_runtime_rebuild() {
+  if [[ "${OPENCLAW_ALLOW_LIVE_SHARED_RUNTIME_REBUILD:-}" == "1" ]]; then
+    return 0
+  fi
+
+  if ! shared_runtime_launch_agent_active; then
+    return 0
+  fi
+
+  cat >&2 <<EOF
+[build-shared-runtime] refusing to rebuild dist while the canonical shared gateway is running.
+[build-shared-runtime] rebuilding dist under a live Node process can delete hash-named chunks that the process will import later.
+[build-shared-runtime] use: bash scripts/gateway-recover-main.sh
+[build-shared-runtime] break glass only: OPENCLAW_ALLOW_LIVE_SHARED_RUNTIME_REBUILD=1 bash scripts/build-shared-runtime.sh
+EOF
+  return 1
+}
+
 print_shell_node_warning() {
   local expected_version="$1"
   local shell_node_bin="$2"
@@ -67,7 +103,9 @@ main() {
   log "running pnpm ${*:-build}"
 
   if [[ "$#" -eq 0 ]]; then
+    reject_live_shared_runtime_rebuild
     openclaw_run_repo_pnpm "${ROOT}" build
+    "${OPENCLAW_NODE_BIN}" "${ROOT}/scripts/check-dist-imports.mjs" "${ROOT}/dist"
     return 0
   fi
 
