@@ -34,7 +34,7 @@ This section is the implementation-oriented summary. If a coding agent needs one
 12. **Operator education:** teach users that agents work best through clear natural-language delegation. The website/GitHub should say: tell Jarvis what you want, be specific, give preferences, correct it like a human assistant.
 13. **Bootstrap/setup:** initial setup needs redesign around first value. Reduce steps, simplify copy, make blockers obvious, and avoid developer jargon.
 14. **Distribution:** start with GitHub/Reddit plus a downloadable signed/notarized macOS app. Website comes when the message and install flow are proven.
-15. **Brand:** public consumer brand is **Jarvis** from the start. OpenClaw remains technical/developer/powered-by language only. Visible app/artifact naming should move to Jarvis soon, but bundle ID, runtime identity, update feed identity, and deeper internal renames are a separate migration task.
+15. **Brand:** public consumer brand is **Jarvis** from the start. OpenClaw remains technical/developer/powered-by language only. Visible app/artifact naming and app icon now use Jarvis, but bundle ID, runtime identity, update feed identity, and deeper internal renames are a separate migration task.
 16. **Commercial package:** v1 public pricing is **Jarvis Personal at $99/mo** for the main consumer path and **Jarvis Core at $19/mo** for advanced raw BYOK API-key users. Primary model usage should use user subscription/login where supported. Backend-held founder/provider keys are for capped managed utilities, onboarding fallback, controlled beta support, and non-model tool surfaces. Raw provider keys must not ship in the app or be sent to the app. Details live in `docs/consumer/jarvis-launch-package.md`.
 
 ## 1. Positioning
@@ -527,7 +527,7 @@ Decision:
 - [x] Public product brand is Jarvis from the start.
 - [x] OpenClaw can appear as technical/developer/powered-by language only.
 - [x] Public-facing app/docs should move toward Jarvis now.
-- [x] App visible name/artifact should become Jarvis soon.
+- [x] App visible name/artifacts/icon use Jarvis.
 - [ ] Bundle ID/runtime/update identity/internal renames are a separate migration task.
 
 Open question:

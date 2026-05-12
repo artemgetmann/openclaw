@@ -59,6 +59,7 @@ let package = Package(
                 "Resources/Info.plist",
             ],
             resources: [
+                .copy("Resources/Jarvis.icns"),
                 .copy("Resources/OpenClaw.icns"),
                 .copy("Resources/DeviceModels"),
             ],
