@@ -208,7 +208,7 @@ async function resolveCronDeliveryContext(params: {
   };
 }
 
-function appendCronDeliveryInstruction(params: {
+export function appendCronDeliveryInstruction(params: {
   commandBody: string;
   deliveryRequested: boolean;
   deliveryPromptMode?: "summary" | "reply";
@@ -217,9 +217,9 @@ function appendCronDeliveryInstruction(params: {
     return params.commandBody;
   }
   if (params.deliveryPromptMode === "reply") {
-    return `${params.commandBody}\n\nReturn only the exact reply content to deliver automatically. Do not include monitoring narration, summaries, labels, markdown wrappers, or recipient notes. If no message should be sent, return exactly NO_REPLY.`.trim();
+    return `${params.commandBody}\n\nReturn only the exact reply content to deliver automatically. Write it like a direct reply, not a monitor note. Do not include monitoring narration, summaries, labels, markdown wrappers, or recipient notes. If no message should be sent, return exactly NO_REPLY.`.trim();
   }
-  return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+  return `${params.commandBody}\n\nWrite your response like an assistant talking to the user: natural, concise, and ready to send. Return plain text only. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
 export async function runCronIsolatedAgentTurn(params: {

@@ -39,9 +39,8 @@ function buildMonitorBootstrapPrompt(params: {
       ? params.watchDeliveryConfigured
         ? [
             "Watched-surface delivery is authorized and configured for this monitor.",
-            "When a wake decides the watched surface should be updated, prefer using the normal message tool against that watched target.",
-            "If you intentionally do not use the message tool on a wake, return only the exact reply content to send there.",
-            "Do not include monitoring summaries, labels, explanation, or 'Suggested reply'.",
+            "Reply only with the exact content that should be sent to the watched surface.",
+            "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply'.",
             "If no watched-surface reply should be sent on this wake, return exactly NO_REPLY.",
           ]
         : [
@@ -49,7 +48,11 @@ function buildMonitorBootstrapPrompt(params: {
             "Do not attempt autonomous delivery on the watched source until a watched-surface delivery target is configured.",
             "Report the missing delivery target through the origin chat instead.",
           ]
-      : ["Do not treat the watched source as the default delivery destination."]),
+      : [
+          "Do not treat the watched source as the default delivery destination.",
+          "Write origin-chat updates like an assistant talking to the user: natural, concise, and ready to send.",
+          "Buttons are shortcuts only; the natural-language path is the real interface.",
+        ]),
   ];
   return lines.join("\n");
 }

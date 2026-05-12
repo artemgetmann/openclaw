@@ -33,6 +33,7 @@ describe("buildMonitorWakeMessage", () => {
     expect(message).toContain(
       "Do not keep or re-mark the monitor completed solely because older checkpoint data looked settled.",
     );
+    expect(message).toContain("Write the update like an assistant talking to the user");
   });
 
   it("preserves the reopened-conversation regression contract for WhatsApp-like checkpoints", () => {
@@ -91,10 +92,10 @@ describe("buildMonitorWakeMessage", () => {
       "Watched-surface delivery is authorized and configured for this wake.",
     );
     expect(message).toContain(
-      "When the watched surface should be updated, prefer using the normal message tool against that watched target.",
+      "Reply only with the exact content that should be sent to the watched surface.",
     );
     expect(message).toContain(
-      "If you intentionally do not use the message tool, return only the exact reply content to send on the watched surface.",
+      "Do not add monitoring summaries, labels, explanations, markdown, or 'Suggested reply'.",
     );
     expect(message).toContain("return exactly NO_REPLY");
   });

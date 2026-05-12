@@ -395,7 +395,7 @@ describe("buildGatewayCronService", () => {
             }),
           }),
           message: expect.stringContaining(
-            "When the watched surface should be updated, prefer using the normal message tool against that watched target.",
+            "Reply only with the exact content that should be sent to the watched surface.",
           ),
         }),
       );
