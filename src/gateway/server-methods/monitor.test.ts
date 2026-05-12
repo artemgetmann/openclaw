@@ -32,8 +32,9 @@ type RespondCall = [boolean, unknown?, { code: string; message: string }?];
 
 function createInvokeContext() {
   const respond = vi.fn();
+  let cronAddCount = 0;
   const cronAdd = vi.fn(async (job: Record<string, unknown>) => ({
-    id: "cron-job-1",
+    id: `cron-job-${++cronAddCount}`,
     ...job,
     delivery: job.delivery,
   }));
@@ -45,6 +46,27 @@ function createInvokeContext() {
     cronUpdate,
     cronStorePath,
   };
+}
+
+async function invokeMonitorCreate(
+  invokeContext: ReturnType<typeof createInvokeContext>,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  await monitorHandlers["monitor.create"]({
+    params,
+    respond: invokeContext.respond as never,
+    context: {
+      cronStorePath: invokeContext.cronStorePath,
+      cron: {
+        add: invokeContext.cronAdd,
+        update: invokeContext.cronUpdate,
+      },
+    } as never,
+    client: null,
+    req: { type: "req", id: requestId, method: "monitor.create" },
+    isWebchatConnect: () => false,
+  });
 }
 
 describe("monitor gateway handlers", () => {
@@ -119,6 +141,115 @@ describe("monitor gateway handlers", () => {
       }),
     );
     expect(cronUpdate).not.toHaveBeenCalled();
+  });
+
+  it("returns the existing active monitor for duplicate normalized create requests", async () => {
+    const invokeContext = createInvokeContext();
+    const baseParams = {
+      instructions: "Watch the customer thread and draft a response.",
+      agentId: "main",
+      name: "Customer reply",
+      originSessionKey: "agent:main:telegram:direct:user-1",
+      sourceType: "gmail",
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "notify_draft",
+    };
+
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        ...baseParams,
+        sourceTarget: { threadId: "thread-1", account: "me@example.com" },
+      },
+      "req-dedupe-1",
+    );
+    await invokeMonitorCreate(
+      invokeContext,
+      {
+        ...baseParams,
+        sourceTarget: { account: "me@example.com", threadId: "thread-1" },
+      },
+      "req-dedupe-2",
+    );
+
+    const firstMonitor = invokeContext.respond.mock.calls[0]?.[1] as
+      | { monitorId: string; cronJobId: string }
+      | undefined;
+    const secondMonitor = invokeContext.respond.mock.calls[1]?.[1] as
+      | { monitorId: string; cronJobId: string }
+      | undefined;
+    expect(firstMonitor?.monitorId).toBeTruthy();
+    expect(secondMonitor).toEqual(firstMonitor);
+    expect(invokeContext.cronAdd).toHaveBeenCalledTimes(1);
+    expect(seedMonitorSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates a new monitor when the action policy differs", async () => {
+    const invokeContext = createInvokeContext();
+    const baseParams = {
+      instructions: "Watch the customer thread.",
+      agentId: "main",
+      name: "Customer reply",
+      originSessionKey: "agent:main:telegram:direct:user-1",
+      sourceType: "gmail",
+      sourceTarget: { account: "me@example.com", threadId: "thread-1" },
+      cadence: { kind: "every", everyMs: 300_000 },
+    };
+
+    await invokeMonitorCreate(
+      invokeContext,
+      { ...baseParams, actionPolicy: "notify_draft" },
+      "req-policy-1",
+    );
+    await invokeMonitorCreate(
+      invokeContext,
+      { ...baseParams, actionPolicy: "notify_only" },
+      "req-policy-2",
+    );
+
+    const firstMonitor = invokeContext.respond.mock.calls[0]?.[1] as
+      | { monitorId: string }
+      | undefined;
+    const secondMonitor = invokeContext.respond.mock.calls[1]?.[1] as
+      | { monitorId: string }
+      | undefined;
+    expect(secondMonitor?.monitorId).not.toBe(firstMonitor?.monitorId);
+    expect(invokeContext.cronAdd).toHaveBeenCalledTimes(2);
+    expect(seedMonitorSessionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("creates a new monitor when the purpose label differs", async () => {
+    const invokeContext = createInvokeContext();
+    const baseParams = {
+      instructions: "Watch the customer thread.",
+      agentId: "main",
+      originSessionKey: "agent:main:telegram:direct:user-1",
+      sourceType: "gmail",
+      sourceTarget: { account: "me@example.com", threadId: "thread-1" },
+      cadence: { kind: "every", everyMs: 300_000 },
+      actionPolicy: "notify_draft",
+    };
+
+    await invokeMonitorCreate(
+      invokeContext,
+      { ...baseParams, name: "Customer reply" },
+      "req-purpose-1",
+    );
+    await invokeMonitorCreate(
+      invokeContext,
+      { ...baseParams, name: "Escalation watch" },
+      "req-purpose-2",
+    );
+
+    const firstMonitor = invokeContext.respond.mock.calls[0]?.[1] as
+      | { monitorId: string }
+      | undefined;
+    const secondMonitor = invokeContext.respond.mock.calls[1]?.[1] as
+      | { monitorId: string }
+      | undefined;
+    expect(secondMonitor?.monitorId).not.toBe(firstMonitor?.monitorId);
+    expect(invokeContext.cronAdd).toHaveBeenCalledTimes(2);
+    expect(seedMonitorSessionMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not manufacture channel delivery for CLI-origin monitors", async () => {

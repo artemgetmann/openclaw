@@ -8,6 +8,7 @@ import {
 import { seedMonitorSession } from "../../monitor/session.js";
 import {
   createMonitorRecord,
+  findActiveMonitorByIdentity,
   findMonitor,
   loadMonitorStore,
   resolveMonitorStorePath,
@@ -106,6 +107,17 @@ export const monitorHandlers: GatewayRequestHandlers = {
     };
     const storePath = resolveStorePath(context.cronStorePath);
     const store = await loadMonitorStore(storePath);
+    const existingMonitor = findActiveMonitorByIdentity(store, {
+      agentId: p.agentId,
+      sourceType: p.sourceType,
+      sourceTarget: p.sourceTarget,
+      actionPolicy: p.actionPolicy,
+      purposeLabel: p.name,
+    });
+    if (existingMonitor) {
+      respond(true, existingMonitor, undefined);
+      return;
+    }
     const monitorId = crypto.randomBytes(12).toString("hex");
     const cfg = loadConfig();
     const watchDelivery = resolveMonitorWatchDelivery({
