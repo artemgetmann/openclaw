@@ -112,6 +112,7 @@ Personal includes:
 - automatic signed, verified updates while subscription is active
 - local-first Jarvis runtime on the user's Mac
 - Telegram assistant setup
+- connected apps, local tools, and allowed external tools where installed
 - preferred model access through the user's local provider subscription/login
   where supported
 - capped managed utilities for voice/search/scraping/maps/image generation
@@ -152,6 +153,7 @@ Core includes:
 - automatic signed, verified updates while subscription is active
 - local-first Jarvis runtime on the user's Mac
 - Telegram assistant setup
+- connected apps, local tools, and allowed external tools where installed
 - bundled official skills and workflows
 - visibility/logging controls
 - community or self-serve support
@@ -222,8 +224,8 @@ Headline:
 Subhead:
 
 > Talk to Jarvis in Telegram. It runs on your Mac, uses your apps and sessions,
-> and can handle real workflows across browser, files, messages, code, and
-> automations.
+> local tools, and allowed external tools, and can handle real workflows across
+> browser, files, messages, code, and automations.
 
 Primary buttons/links:
 
@@ -249,6 +251,7 @@ Recommended demo:
 - runs on your Mac
 - answers in Telegram
 - operates browser, files, apps, messages, code, and automations
+- uses connected apps, local tools, and allowed external tools where installed
 - remembers preferences and workflows
 - can be extended with official and user skills
 - keeps advanced customization available without forcing it into first setup
@@ -275,10 +278,11 @@ Copy:
 Say this directly:
 
 > Jarvis runs on your Mac because your real work lives there: browser sessions,
-> files, apps, permissions, project tools, and local context. Model usage should
-> use your provider subscription/login where supported. Capped utilities and
-> fallback support are metered through the Jarvis backend. Advanced BYOK users
-> can keep raw API-key usage local.
+> files, apps, permissions, project tools, and local context. It can also use
+> connected apps and external tools that you install and allow. Model usage
+> should use your provider subscription/login where supported. Capped utilities
+> and fallback support are metered through the Jarvis backend. Advanced BYOK
+> users can keep raw API-key usage local.
 
 ### Honest limitations
 
@@ -289,6 +293,7 @@ Say this directly:
 - Core/BYOK users must bring their own raw provider keys
 - third-party skills can run code and should be treated as untrusted until
   reviewed
+- external tools should be installed only from sources the user trusts
 - visible app/artifact/icon branding is Jarvis, but internal bundle/runtime/
   update identities stay on `ai.openclaw.consumer.mac` only for the 3 trusted
   waiting testers

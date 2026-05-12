@@ -434,6 +434,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       "summarize",
       "weather",
       "wacli",
+      "mcporter",
       "nano-banana-pro",
       "telegram-user",
       "notion",

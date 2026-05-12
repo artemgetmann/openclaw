@@ -45,6 +45,9 @@ They should come away knowing:
 - Mention built-in non-skill capabilities only when they are actually visible in
   the current runtime context, such as browser control, messaging, coding,
   document work, memory, charts/HTML output, or image generation/editing.
+- Mention connected apps, local tools, and MCP tool servers [external tool
+  connectors] only when they are installed, allowed, or clearly visible in the
+  current runtime.
 - Separate ready-now capabilities from setup-needed capabilities.
 - If something is installed but blocked by setup, say that directly instead of
   pretending it is fully available.
@@ -68,6 +71,8 @@ They should come away knowing:
   - data visualization / HTML outputs / PDF export
   - image understanding or image generation/editing
   - email / WhatsApp / Google / maps / reminders / notes
+  - MCP tool servers [external tool connectors] that the runtime has installed
+    and allowed
 - Then call out anything that still needs setup.
 - End with a few concrete example requests the user can try next.
 
@@ -90,6 +95,9 @@ They should come away knowing:
 - Prefer user outcomes over internal implementation detail. For example, say
   "I can help book flights or fill web forms in your browser" before explaining
   browser variants or technical routing.
+- For MCP tool servers [external tool connectors], keep the framing practical:
+  "I can use connected tools that are installed and allowed here." Then name the
+  useful outcome and any setup gap.
 
 ## Memory Section
 

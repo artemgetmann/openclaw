@@ -33,7 +33,8 @@ extension OnboardingView {
     }
 
     func welcomePage() -> some View {
-        let consumerSecurityCopy = "\(AppFlavor.current.appName) can take actions on your Mac when you allow it."
+        let consumerSecurityCopy =
+            "\(AppFlavor.current.appName) can use connected apps, local tools, MCP tool servers [external tool connectors], and Mac permissions when you allow it."
         let standardSecurityCopy =
             "The connected AI agent can trigger powerful actions on your Mac, " +
             "including running commands, reading/writing files, and capturing screenshots — " +
@@ -47,7 +48,7 @@ extension OnboardingView {
                     .font(.largeTitle.weight(.semibold))
                 Text(
                     AppFlavor.current.isConsumer
-                        ? "\(AppFlavor.current.appName) is a personal AI operator for this Mac. Setup takes about two minutes. First we’ll connect Chrome."
+                        ? "\(AppFlavor.current.appName) is a personal AI operator for this Mac. Setup takes about two minutes. First we’ll connect Chrome and local access."
                         : "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
@@ -91,7 +92,7 @@ extension OnboardingView {
                                         systemImage: "sparkles")
                                     self.featureRow(
                                         title: "Grant Mac permissions",
-                                        subtitle: "\(AppFlavor.current.appName) asks only for the permissions that would otherwise break real tasks later.",
+                                        subtitle: "\(AppFlavor.current.appName) asks only for app, tool, and Mac permissions that real tasks need.",
                                         systemImage: "lock.shield")
                                     self.featureRow(
                                         title: "Verify Telegram",
@@ -113,7 +114,7 @@ extension OnboardingView {
             VStack(spacing: 22) {
                 Text("Set up \(AppFlavor.current.appName)")
                     .font(.largeTitle.weight(.semibold))
-                Text("Connect Chrome first, then confirm Mac permissions, AI access, and Telegram.")
+                Text("Connect Chrome first, then confirm Mac permissions, local tools, AI access, and Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -703,8 +704,10 @@ extension OnboardingView {
                 .font(.largeTitle.weight(.semibold))
             Text(
                 AppFlavor.current.isConsumer
-                    ? "These permissions let your AI operator help on this Mac when you ask it to."
-                    : "These macOS permissions let \(AppFlavor.current.appName) automate apps and capture context on this Mac.")
+                    ? "These permissions let your AI operator use connected apps and local tools " +
+                    "when you ask it to."
+                    : "These macOS permissions let \(AppFlavor.current.appName) automate apps " +
+                    "and capture context on this Mac.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -961,7 +964,7 @@ extension OnboardingView {
                         systemImage: "rectangle.inset.filled.and.person.filled")
                     self.featureActionRow(
                         title: "Give your agent more powers",
-                        subtitle: "Enable optional skills from Settings → Skills.",
+                        subtitle: "Enable optional skills and connected tools from Settings → Skills.",
                         systemImage: "sparkles",
                         buttonTitle: "Open Settings → Skills")
                     {
