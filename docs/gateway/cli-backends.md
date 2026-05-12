@@ -1,24 +1,31 @@
 ---
-summary: "CLI backends: text-only fallback via local AI CLIs"
+summary: "CLI backends: local AI CLIs with Claude CLI loopback tool support"
 read_when:
   - You want a reliable fallback when API providers fail
   - You are running Claude Code CLI or other local AI CLIs and want to reuse them
-  - You need a text-only, tool-free path that still supports sessions and images
+  - You need local CLI sessions, image pass-through, or Claude CLI loopback tools
 title: "CLI Backends"
 ---
 
 # CLI backends (fallback runtime)
 
-OpenClaw can run **local AI CLIs** as a **text-only fallback** when API providers are down,
-rate-limited, or temporarily misbehaving. This is intentionally conservative:
+OpenClaw can run **local AI CLIs** when API providers are down, rate-limited,
+temporarily misbehaving, or when you want to reuse an authenticated local CLI.
 
-- **Tools are disabled** (no tool calls).
-- **Text in → text out** (reliable).
+Most generic CLI backends stay intentionally conservative:
+
+- **Text in -> text out** (reliable).
 - **Sessions are supported** (so follow-up turns stay coherent).
 - **Images can be passed through** if the CLI accepts image paths.
 
-This is designed as a **safety net** rather than a primary path. Use it when you
-want “always works” text responses without relying on external APIs.
+`claude-cli` is the exception: OpenClaw can attach its loopback MCP server so
+Claude Code can use shared OpenClaw tools such as memory, browser, web, session,
+and enabled plugin tools. Claude-native coding tools remain Claude-native; the
+loopback surface intentionally does not duplicate `exec`, `read`, `write`,
+`edit`, or `apply_patch`.
+
+Use generic CLI backends as a safety net. Use `claude-cli` when you want the
+Claude Code CLI with OpenClaw session continuity and shared tool parity.
 
 ## Beginner-friendly quick start
 
@@ -140,6 +147,11 @@ The provider id becomes the left side of your model ref:
 4. **Parses output** (JSON or plain text) and returns the final text.
 5. **Persists session ids** per backend, so follow-ups reuse the same CLI session.
 
+For `claude-cli`, OpenClaw also prepares an upstream-style MCP config that points
+Claude Code at the local OpenClaw loopback server. Tool resolution is bounded:
+startup and `tools/list` never perform plugin discovery, and plugin tools are
+exposed only from the already-initialized registry.
+
 ## Sessions
 
 - If the CLI supports sessions, set `sessionArg` (e.g. `--session-id`) or
@@ -208,9 +220,13 @@ Override only if needed (common: absolute `command` path).
 
 ## Limitations
 
-- **No OpenClaw tools** (the CLI backend never receives tool calls). Some CLIs
-  may still run their own agent tooling.
-- **No streaming** (CLI output is collected then returned).
+- Generic CLI backends do not receive OpenClaw tool calls. Some CLIs may still
+  run their own agent tooling.
+- `claude-cli` can receive OpenClaw loopback MCP tools, but it deliberately
+  keeps Claude-native coding tools native instead of duplicating them through
+  OpenClaw.
+- Streaming depends on the backend. `claude-cli` can stream JSONL deltas through
+  the product runner; generic backends may still collect output before returning.
 - **Structured outputs** depend on the CLI’s JSON format.
 - **Codex CLI sessions** resume via text output (no JSONL), which is less
   structured than the initial `--json` run. OpenClaw sessions still work

@@ -2,19 +2,17 @@
 
 ## TL;DR
 
-Prefer **Claude CLI as the long-term backend**, using the Bridge-safe prompt profile, upstream-style warm stdio sessions, and loopback OpenClaw MCP tools.
+Claude CLI is now the chosen long-term backend path.
 
-Do not delete Claude Bridge yet.
+The implementation has passed the practical parity gates: shared session
+continuity, memory tools, browser tools, plugin tools, warm-process reuse, and a
+single Codex/OpenAI-vs-Claude parity matrix.
 
-Use Bridge as the fallback and as prior art while we prove:
+Claude Bridge should remain only as legacy fallback/prior art unless a new
+product incident proves Claude CLI cannot satisfy a required workflow.
 
-1. Claude CLI has real tool parity
-2. Claude CLI has reliable memory/session continuity
-3. Claude CLI can be made warm enough that latency is acceptable
-
-If warm Claude CLI works, Bridge should become legacy or be removed.
-
-If warm Claude CLI cannot work, then harden Bridge with the same native MCP tool path.
+This document is ready to retire as an active plan after the parity-matrix
+script lands; keep it as evidence for the decision.
 
 The product goal is not "Claude works differently." The goal is:
 
@@ -478,13 +476,19 @@ Current pass/fail:
 - warm latency: pass for the current `haiku` smoke; follow-up was materially faster after PID reuse
 - strict `memory_search -> memory_get` without direct fallback: pass; two consecutive live runs passed with both tool calls, exact nonce, exact fresh needle, and no direct-path fallback, after one prior completed run returned `MEMORY_CHAIN_SEARCH_EMPTY`
 - temp-config/no-tool echo: pass; latest live run returned `TEMP_CONFIG_ECHO_OK` instead of wedging
+- unified parity matrix: pass; `OPENCLAW_CLI_BACKEND_PARITY_LIVE=1 node --import tsx scripts/smoke-cli-backend-parity.ts --model haiku --codex-model gpt-5.5 --timeout-ms 240000` passed all rows:
+  - `codex-context`: Codex returned `CODEX_CONTEXT_SET ...`, then Claude returned `CODEX_CONTEXT_SWITCH_OK ...`
+  - `memory-chain`: Claude used `memory_search`, then `memory_get`, and returned the indexed temp `MEMORY.md` needle
+  - `browser-open-snapshot`: Claude opened a temp page, snapshotted it, and returned the page marker
+  - `latency`: Claude reused the same session id and live process PID; follow-up total was `1854.2ms`
 
 ### Slice 4: Product decision
 
-Choose:
+Decision:
 
-- **Claude CLI wins** if warm CLI works or cold CLI is acceptable after parity proof.
-- **Bridge survives** only if Claude CLI cannot meet continuity/tool/browser/latency requirements.
+- **Claude CLI wins** for the current backend direction.
+- **Bridge survives** only as legacy fallback/prior art unless a new workflow
+  fails under Claude CLI.
 
 ---
 
@@ -558,6 +562,9 @@ Tests run in this slice:
 
 Next:
 
-1. Decide whether `claude-cli/*` should remain hidden by default or become a selectable Telegram model lane now that core loopback and real plugin-tool proofs are green.
-2. Fix the local CLI/service config-path split so runtime validation commands and the LaunchAgent report the same config root without smoke-specific env overrides.
-3. Defer already-loaded plugin factory timeout hardening unless a real plugin factory hang appears in live traffic.
+1. Land `scripts/smoke-cli-backend-parity.ts` as the reusable parity report.
+2. Retire this document from active planning to historical evidence.
+3. Decide product exposure separately: whether `claude-cli/*` should remain
+   hidden by default or become a selectable Telegram model lane.
+4. Defer already-loaded plugin factory timeout hardening unless a real plugin
+   factory hang appears in live traffic.
