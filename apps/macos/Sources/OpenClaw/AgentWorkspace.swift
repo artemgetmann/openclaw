@@ -268,7 +268,8 @@ enum AgentWorkspace {
         - Timezone (optional)
         - Notes
 
-        3) ~/.openclaw/openclaw.json
+        3) The active OpenClaw config file
+        Use OPENCLAW_CONFIG_PATH when it is set; otherwise use ~/.openclaw/openclaw.json.
         Set identity.name, identity.theme, identity.emoji to match IDENTITY.md.
 
         ## Cleanup

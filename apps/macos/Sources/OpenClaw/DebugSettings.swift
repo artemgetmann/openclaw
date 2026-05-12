@@ -426,7 +426,7 @@ struct DebugSettings: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             } else {
-                                Text("Used by the CLI session loader; stored in ~/.openclaw/openclaw.json.")
+                                Text("Used by the CLI session loader; stored in \(AgentWorkspace.displayPath(for: self.configURL())).")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
