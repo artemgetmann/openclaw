@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveSessionAgentId } from "../src/agents/agent-scope.js";
 import { runCliAgent } from "../src/agents/cli-runner.js";
 import {
@@ -19,6 +20,7 @@ import {
 import { getMemorySearchManager } from "../src/memory/index.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function hasFlag(flag: string): boolean {
   return process.argv.includes(flag);
@@ -65,6 +67,7 @@ function mode():
   | "browser"
   | "browser-tabs"
   | "browser-open-snapshot"
+  | "plugin-diffs"
   | "codex-context"
   | "latency"
   | "temp-config-echo"
@@ -79,6 +82,7 @@ function mode():
     raw === "browser" ||
     raw === "browser-tabs" ||
     raw === "browser-open-snapshot" ||
+    raw === "plugin-diffs" ||
     raw === "codex-context" ||
     raw === "latency" ||
     raw === "temp-config-echo" ||
@@ -106,7 +110,11 @@ function fingerprintHash(value: string | undefined): string | undefined {
   return value ? crypto.createHash("sha256").update(value).digest("hex") : undefined;
 }
 
-function createConfig(workspaceDir: string): OpenClawConfig {
+function createConfig(
+  workspaceDir: string,
+  options: { enableDiffsPlugin?: boolean } = {},
+): OpenClawConfig {
+  const diffsPluginRoot = path.join(REPO_ROOT, "extensions", "diffs");
   return {
     agents: {
       defaults: {
@@ -157,7 +165,28 @@ function createConfig(workspaceDir: string): OpenClawConfig {
       },
     },
     plugins: {
-      enabled: false,
+      enabled: options.enableDiffsPlugin === true,
+      ...(options.enableDiffsPlugin === true
+        ? {
+            allow: ["diffs"],
+            load: {
+              paths: [diffsPluginRoot],
+            },
+            entries: {
+              diffs: {
+                enabled: true,
+                hooks: {
+                  allowPromptInjection: false,
+                },
+                config: {
+                  defaults: {
+                    mode: "view",
+                  },
+                },
+              },
+            },
+          }
+        : {}),
     },
   };
 }
@@ -211,7 +240,9 @@ async function createSmokeContext() {
   const sessionId = `smoke:claude-cli-continuity:${randomUUID()}`;
   const sessionKey = `agent:claude-cli-continuity:${randomUUID()}`;
   const sessionFile = path.join(workspaceDir, "session.jsonl");
-  const config = createConfig(workspaceDir);
+  const config = createConfig(workspaceDir, {
+    enableDiffsPlugin: mode() === "plugin-diffs",
+  });
   const configPath = path.join(workspaceDir, "openclaw-smoke-config.json");
   await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
   return {
@@ -226,6 +257,37 @@ async function createSmokeContext() {
     configPath,
     config,
   };
+}
+
+function requireDiffsViewerProof(text: string): string {
+  const viewerUrl = text.match(/https?:\/\/\S+\/plugins\/diffs\/view\/\S+/)?.[0];
+  if (!viewerUrl) {
+    throw new Error(`Diffs plugin smoke did not return a diffs viewer URL. Text: ${text}`);
+  }
+  if (!text.includes("mode=view")) {
+    throw new Error(`Diffs plugin smoke did not report mode=view. Text: ${text}`);
+  }
+  return viewerUrl;
+}
+
+async function preloadDiffsPluginRegistry(ctx: {
+  config: OpenClawConfig;
+  workspaceDir: string;
+}): Promise<void> {
+  // The Claude loopback path is intentionally registry-only. Preload exactly the
+  // harmless diffs plugin here so the later tools/list/tools/call path never has
+  // to discover or import plugins during Claude startup.
+  // oxlint-disable-next-line typescript-eslint/no-implied-eval -- smoke-only dynamic import keeps targeted type checks from traversing every plugin source.
+  const runtimePluginsModule = (await Function(
+    "specifier",
+    "return import(specifier)",
+  )(new URL("../src/agents/runtime-plugins.js", import.meta.url).href)) as {
+    ensureRuntimePluginsLoaded(params: { config?: OpenClawConfig; workspaceDir?: string }): void;
+  };
+  runtimePluginsModule.ensureRuntimePluginsLoaded({
+    config: ctx.config,
+    workspaceDir: ctx.workspaceDir,
+  });
 }
 
 async function runAgentTurn(params: {
@@ -260,7 +322,7 @@ async function runAgentTurn(params: {
       assistantStartMs ??= Number(process.hrtime.bigint() - startedAt) / 1e6;
     },
     onPartialReply: ({ text }) => {
-      if (text.trim()) {
+      if (text?.trim()) {
         firstVisibleTextMs ??= Number(process.hrtime.bigint() - startedAt) / 1e6;
       }
     },
@@ -898,6 +960,64 @@ async function runBrowserOpenSnapshotSmoke(): Promise<void> {
   );
 }
 
+async function runPluginDiffsSmoke(): Promise<void> {
+  const ctx = await createSmokeContext();
+  await preloadDiffsPluginRegistry(ctx);
+  const diffNeedle = `DIFFS_PLUGIN_NEEDLE_${ctx.nonce}`;
+  const turn = await runAgentTurn({
+    ...ctx,
+    model: ctx.model,
+    runId: "smoke-claude-cli-plugin-diffs",
+    prompt: [
+      "You must use the directly available mcp__openclaw__diffs tool exactly once.",
+      'Call it with mode="view", path="smoke.txt", lang="text", title="Claude CLI diffs plugin smoke", before="alpha", and after="alpha\\nbeta".',
+      "Do not use ToolSearch, shell, filesystem, browser, web, memory, or session tools.",
+      "Only include DIFFS_PLUGIN_TOOL_OK if the diffs tool returned successfully.",
+      "If the diffs tool is unavailable or fails, reply with DIFFS_PLUGIN_TOOL_FAIL and the error summary instead.",
+      `On success, reply with one short sentence containing DIFFS_PLUGIN_TOOL_OK, the exact nonce ${ctx.nonce}, the exact marker ${diffNeedle}, tool=diffs, mode=view, and the returned viewer URL.`,
+    ].join("\n"),
+  });
+  const text = textFromResult(turn.result);
+  if (/DIFFS_PLUGIN_TOOL_FAIL|unavailable|not available|no such tool|error|failed/i.test(text)) {
+    throw new Error(`Diffs plugin smoke reported tool failure. Text: ${text}`);
+  }
+  if (
+    !text.includes("DIFFS_PLUGIN_TOOL_OK") ||
+    !text.includes(ctx.nonce) ||
+    !text.includes(diffNeedle) ||
+    !text.includes("tool=diffs")
+  ) {
+    throw new Error(`Diffs plugin smoke did not report expected marker. Text: ${text}`);
+  }
+  if (containsToolSubstitution(text)) {
+    throw new Error(`Diffs plugin smoke substituted another tool. Text: ${text}`);
+  }
+  const viewerUrl = requireDiffsViewerProof(text);
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        mode: "plugin-diffs",
+        provider: "claude-cli",
+        model: ctx.model,
+        workspaceDir: ctx.workspaceDir,
+        nonce: ctx.nonce,
+        diffNeedle,
+        tool: "diffs",
+        pluginMode: "view",
+        viewerUrl,
+        claudeSessionId: sessionIdFromResult(turn.result),
+        assistantStartMs: turn.assistantStartMs,
+        firstVisibleTextMs: turn.firstVisibleTextMs,
+        totalMs: turn.totalMs,
+        text,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 async function runWarmLatencySmoke(): Promise<void> {
   const ctx = await createSmokeContext();
   const turn1 = await runAgentTurn({
@@ -1086,6 +1206,10 @@ async function main(): Promise<void> {
   }
   if (selectedMode === "browser-open-snapshot") {
     await runBrowserOpenSnapshotSmoke();
+    return;
+  }
+  if (selectedMode === "plugin-diffs") {
+    await runPluginDiffsSmoke();
     return;
   }
   if (selectedMode === "codex-context") {
