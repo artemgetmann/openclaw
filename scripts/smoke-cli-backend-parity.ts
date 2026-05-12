@@ -6,7 +6,12 @@ import path from "node:path";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 
-type ScenarioId = "codex-context" | "memory-chain" | "browser-open-snapshot" | "latency";
+type ScenarioId =
+  | "codex-context"
+  | "memory-chain"
+  | "browser-open-snapshot"
+  | "plugin-diffs"
+  | "latency";
 
 type Scenario = {
   id: ScenarioId;
@@ -41,6 +46,11 @@ const SCENARIOS: Scenario[] = [
     id: "browser-open-snapshot",
     label: "Claude CLI browser open plus snapshot tool proof",
     mode: "browser-open-snapshot",
+  },
+  {
+    id: "plugin-diffs",
+    label: "Claude CLI diffs plugin tool proof",
+    mode: "plugin-diffs",
   },
   {
     id: "latency",
@@ -163,6 +173,10 @@ function summarizeChild(output: Record<string, unknown>): Record<string, unknown
     liveProcess: output.liveProcess,
     targetUrl: output.targetUrl,
     pageMarker: output.pageMarker,
+    diffNeedle: output.diffNeedle,
+    tool: output.tool,
+    pluginMode: output.pluginMode,
+    viewerUrl: output.viewerUrl,
     memoryNeedle: output.memoryNeedle,
     indexedMemoryPath: output.indexedMemoryPath,
     codex: output.codex,

@@ -383,6 +383,7 @@ Proof:
 - Post-merge live Claude CLI smoke passed: `gtimeout -k 5s 70s env OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode temp-config-echo --model haiku --timeout-ms 30000` returned `TEMP_CONFIG_ECHO_OK` in 9.8s.
 - Post-merge live Telegram proof passed against `@Jarvis_cl4w_bot` after temporarily allowlisting `claude-cli/haiku`: `/model claude-cli/haiku` was accepted, the prompt forced `sessions_list`, the gateway logged `[agent/claude-cli] cli exec: provider=claude-cli model=haiku`, and the bot replied `CLAUDE_CLI_LOOPBACK_OK provider=claude-cli tool=sessions_list`.
 - Post-merge live Telegram plugin-tool proof passed against `@Jarvis_cl4w_bot` after temporarily enabling `plugins.entries.diffs.enabled` and allowlisting `claude-cli/haiku`: the prompt forced the harmless `diffs` tool with `mode="view"`, the gateway logged `[agent/claude-cli] cli exec: provider=claude-cli model=haiku`, and the bot replied `DIFFS_PLUGIN_TOOL_OK tool=diffs mode=view viewerUrl=http://127.0.0.1:18789/plugins/diffs/view/12a47ff63044c794dfb1/be08ccdf327406dfdf4270e28af2ae111f2e171d61421835`.
+- CLI-only diffs plugin proof passed: `OPENCLAW_CLAUDE_CLI_CONTINUITY_LIVE=1 node --import tsx scripts/smoke-claude-cli-continuity.ts --mode plugin-diffs --model haiku --timeout-ms 240000` enabled only the `diffs` plugin in the temp smoke config, blocked prompt injection for that plugin entry, forced `mcp__openclaw__diffs` with `mode=view`, and returned `DIFFS_PLUGIN_TOOL_OK`, the nonce, `tool=diffs`, `mode=view`, and a `/plugins/diffs/view/` viewer URL in `11168.4ms`.
 - Cleanup after live proof completed: Telegram session was reset to default `openai-codex/gpt-5.4`, `plugins.entries.diffs.enabled` was restored to `false`, and the temporary `agents.defaults.models[claude-cli/haiku]` config key was removed from both the user CLI config and the app-owned gateway config.
 
 Scope boundary:
@@ -470,6 +471,7 @@ Current pass/fail:
 - loopback MCP memory/browser tools: pass for `memory_search`, `memory_get`, `memory_search -> memory_get` with direct path fallback, `browser.status`, `browser.tabs`, and `browser.open -> browser.snapshot`
 - loopback MCP core tool through actual Telegram: pass for Claude CLI calling `sessions_list` via `@Jarvis_cl4w_bot`
 - real enabled plugin tool through actual Telegram: pass for Claude CLI calling the deliberately enabled `diffs` plugin tool via `@Jarvis_cl4w_bot`
+- CLI-only plugin tool proof: pass for `plugin-diffs` in `scripts/smoke-claude-cli-continuity.ts`; unified parity matrix includes the scenario
 - browser open+snapshot: pass
 - cross-backend `/codex -> Claude` context: pass after Shared Transcript Replay
 - same live process reuse on same-model follow-up: pass
