@@ -359,6 +359,20 @@ describe("cron tool", () => {
     });
   });
 
+  it("infers account id from per-account direct session keys", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-account-direct",
+        agentSessionKey: "agent:main:telegram:tester-bot:direct:1336356696:thread:47986",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      accountId: "tester-bot",
+      to: "1336356696",
+    });
+  });
+
   it("infers delivery when delivery is null", async () => {
     expect(
       await executeAddAndReadDelivery({

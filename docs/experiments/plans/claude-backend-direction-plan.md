@@ -395,7 +395,7 @@ Scope boundary:
 
 ### Slice 2c: Tester Telegram visibility and feel probe
 
-Status: live tester-bot proof passed for model selection; prompt/source-of-truth parity has a new blocker.
+Status: live tester-bot proof passed for model selection; follow-up blocker fixes are implemented with focused unit coverage. Live tester rerun is still required before main-bot exposure.
 
 What was required in the isolated tester lane:
 
@@ -423,7 +423,7 @@ Prompt-behavior comparison:
   - claimed tools: `Yes, this chat currently has usable tools.`
   - coding-fix style: `Reproduce it, inspect the relevant code, make the smallest solid fix, then verify it.`
 
-New blocker from manual tester pass:
+Blocker found during manual tester pass:
 
 - A Claude CLI Telegram reply described memory as `/Users/user/.claude/projects/.../memory/` and described global instructions as `/Users/user/.claude/CLAUDE.md`.
 - That is the Claude Code user's native context, not the OpenClaw workspace bootstrap context.
@@ -431,6 +431,12 @@ New blocker from manual tester pass:
 - Code evidence: `src/agents/cli-runner.ts` currently uses the Bridge-safe prompt for `claude-cli` and skips `resolveBootstrapContextForRun`, so `AGENTS.md` / `MEMORY.md` are not injected on the Claude CLI path.
 - Code evidence: `src/agents/cli-backends.ts` currently passes `--setting-sources user` to Claude CLI, so Claude Code can still read user-level Claude context.
 - Readiness impact: do not expose `claude-cli/*` on the main bot until we either isolate Claude Code user context or prove the user-level context cannot override/confuse OpenClaw workspace identity.
+
+Follow-up fix:
+
+- `src/agents/cli-backends.ts` now defaults Claude CLI to `--setting-sources project,local` instead of `user`.
+- `src/agents/cli-runner.ts` still uses the Bridge-safe Claude prompt, but appends bounded OpenClaw workspace bootstrap files and explicitly says not to treat `~/.claude/CLAUDE.md` or `~/.claude/projects` as authoritative for this OpenClaw run.
+- Focused proof passed: `pnpm exec vitest run src/agents/cli-backends.test.ts src/agents/cli-runner.test.ts src/agents/claude-cli-runner.test.ts src/agents/tools/cron-tool.test.ts src/commands/models/consumer-auth.test.ts --pool=forks --maxWorkers=1` passed 5 files / 76 tests.
 
 Manual tester pass after source-path discovery:
 
@@ -444,12 +450,18 @@ Manual tester pass after source-path discovery:
 - Progress/status UX gap: Claude CLI streams helpful in-progress text, but interim browser/tool status appears to disappear once the final answer lands; Codex-style progress may preserve visibility but sends separate messages and creates notification spam. Product direction to evaluate: buffer progress updates, then include a compact progress transcript with the final answer in one bundled delivery.
 - Upstream progress UX reference: upstream `extensions/telegram/src/bot-message-dispatch.ts` already has a better seam that batches/dedupes tool-start progress lines into the editable answer draft lane and suppresses default tool-progress messages when preview streaming can handle them. Port that path instead of inventing a new Telegram progress system.
 
+Follow-up fixes:
+
+- Reminder targeting: `src/agents/tools/cron-tool.ts` now preserves inferred Telegram `accountId` from per-account session keys such as `agent:main:telegram:tester-bot:direct:<peer>:thread:<id>`. Focused cron coverage passed in the combined suite above. Live proof still needs an isolated tester reminder that verifies persisted `delivery.accountId`, cron run success, and Telegram arrival from the tester bot.
+- Progress/status UX: `extensions/telegram/src/bot-message-dispatch.ts` now batches text-only tool progress into the editable answer draft lane when preview streaming is available, dedupes adjacent repeats, and still sends media-bearing tool payloads normally. Focused proof passed: `pnpm vitest run extensions/telegram/src/bot-message-dispatch.test.ts --pool=forks --maxWorkers=1` passed 1 file / 72 tests.
+- Claude setup UX: `src/commands/models/consumer-auth.ts` now hides `anthropic-claude-cli` until the configured local `claude` command is executable and readable Claude auth exists. Direct apply fails with install/sign-in instructions when missing. This keeps Claude hidden/default-off without bundling Claude Code.
+
 Current read:
 
 - Claude CLI is operational in the tester Telegram lane, including direct `/model` switching and at least one real tool call.
-- The remaining question is no longer only product feel. Claude currently appears to have the wrong instruction/memory source in addition to a different tone.
-- Green enough to keep testing: model switching, recent-session continuity, fetch/browser, authenticated browser reads, and wacli are usable in the tester lane.
-- Not green enough for full main-bot exposure by default: prompt/source isolation, reminder/wakeup firing, and final-progress transcript behavior still need investigation or an explicit defer decision.
+- The prompt/source, reminder-targeting, progress-batching, and setup-detection fixes are implemented with focused tests.
+- Green enough to keep testing: model switching, recent-session continuity, fetch/browser, authenticated browser reads, wacli, and the patched blockers are usable in the tester lane after rerun.
+- Not green enough for full main-bot exposure by default until isolated tester live proof confirms source reporting, reminder delivery, and bundled progress behavior under the running Telegram runtime.
 
 ### Slice 3: Warm Claude CLI spike
 

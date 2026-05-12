@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   resolveDefaultAgentId,
   resolveAgentDir,
@@ -96,6 +98,7 @@ export type ApplyConsumerAuthParams = {
   resolveReadiness?: () => Promise<ModelsReadinessResult>;
   openUrl?: (url: string) => Promise<boolean | void>;
   readClaudeCliCredential?: ClaudeCliCredentialReader;
+  claudeCommandExists?: ClaudeCommandDetector;
 };
 
 export type ApplyConsumerAuthResult = {
@@ -114,6 +117,8 @@ type ClaudeCliCredentialReader = (options?: {
   platform?: NodeJS.Platform;
   homeDir?: string;
 }) => ClaudeCliCredential | null;
+
+type ClaudeCommandDetector = (command?: string) => boolean;
 
 const CONSUMER_AUTH_CHOICES: readonly ConsumerAuthChoiceDefinition[] = [
   {
@@ -155,11 +160,12 @@ const CONSUMER_AUTH_CHOICES: readonly ConsumerAuthChoiceDefinition[] = [
       "Use your Claude subscription via a setup token, or bring an Anthropic API key.",
     methodLabel: "Paste Claude setup token",
     methodDescription:
-      "Use your Claude subscription. Run `claude setup-token`, then paste the token here.",
+      "Use your Claude subscription. Install Claude Code if needed, run `claude` to sign in, then run `claude setup-token` and paste the token here.",
     kind: "token",
     defaultModel: "anthropic/claude-sonnet-4-6",
     credentialLabel: "Anthropic setup-token",
-    credentialHelp: "Generate it with `claude setup-token` on any machine.",
+    credentialHelp:
+      "Requires the local Claude Code `claude` command. Sign in with `claude`, then generate this with `claude setup-token`.",
     credentialPlaceholder: "sk-ant-...",
   },
   {
@@ -273,12 +279,47 @@ function resolveConsumerProviderChoice(
   return provider && method ? { provider, method } : null;
 }
 
-function isClaudeCliChoiceAvailable(reader: ClaudeCliCredentialReader): boolean {
-  if (process.platform === "darwin") {
-    // Consumer macOS should always offer the Claude subscription lane. The
-    // actual keychain check happens when the user clicks Continue so the app
-    // can prompt intentionally instead of hiding the option.
-    return true;
+function commandExistsOnPath(command: string): boolean {
+  if (command.includes("/") || path.isAbsolute(command)) {
+    try {
+      fs.accessSync(command, fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const pathValue = process.env.PATH ?? "";
+  const pathDirs = pathValue.split(path.delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    const candidate = path.join(dir, command);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return true;
+    } catch {
+      // LaunchAgent PATHs are often sparse; a miss in one directory is expected.
+    }
+  }
+  return false;
+}
+
+function defaultClaudeCommandDetector(command = "claude"): boolean {
+  return commandExistsOnPath(command);
+}
+
+function resolveClaudeCliCommand(cfg: OpenClawConfig): string {
+  return cfg.agents?.defaults?.cliBackends?.["claude-cli"]?.command?.trim() || "claude";
+}
+
+function isClaudeCliChoiceAvailable(
+  cfg: OpenClawConfig,
+  reader: ClaudeCliCredentialReader,
+  commandExists: ClaudeCommandDetector = defaultClaudeCommandDetector,
+): boolean {
+  // Product rule: Claude CLI is not bundled. Only surface the subscription lane
+  // after the user's Mac already has the local `claude` command and readable
+  // Claude auth. Setup-token/API-key paths remain visible for first-time setup.
+  if (!commandExists(resolveClaudeCliCommand(cfg))) {
+    return false;
   }
   return Boolean(
     reader({
@@ -509,6 +550,19 @@ function resolveClaudeCliCredentialOrThrow(params: {
   );
 }
 
+function assertClaudeCommandAvailable(
+  cfg: OpenClawConfig,
+  commandExists: ClaudeCommandDetector,
+): void {
+  const command = resolveClaudeCliCommand(cfg);
+  if (commandExists(command)) {
+    return;
+  }
+  throw new Error(
+    `Claude Code is not installed on this Mac yet. Install Claude Code so the \`${command}\` command is executable, run \`${command}\` to sign in, then check AI access again. Or use the Claude setup-token/API-key path.`,
+  );
+}
+
 function pinSelectedProfilesFirst(
   cfg: OpenClawConfig,
   params: {
@@ -584,6 +638,7 @@ export async function listConsumerAuthOptions(
     workspaceDir?: string;
     providers?: ProviderPlugin[];
     readClaudeCliCredential?: ClaudeCliCredentialReader;
+    claudeCommandExists?: ClaudeCommandDetector;
   } = {},
 ): Promise<ConsumerAuthListResult> {
   const cfg = params.config ?? (await loadValidConfigOrThrow());
@@ -602,12 +657,13 @@ export async function listConsumerAuthOptions(
       bundledProviderVitestCompat: true,
     });
   const readClaudeCliCredential = params.readClaudeCliCredential ?? readClaudeCliCredentialsCached;
+  const claudeCommandExists = params.claudeCommandExists ?? defaultClaudeCommandDetector;
 
   // Keep the consumer UI honest. Only surface shortlist entries whose provider
   // plugin/method still exists in this exact runtime.
   const available = CONSUMER_AUTH_CHOICES.filter((choice) => {
     if (choice.source === "claude_cli") {
-      return isClaudeCliChoiceAvailable(readClaudeCliCredential);
+      return isClaudeCliChoiceAvailable(cfg, readClaudeCliCredential, claudeCommandExists);
     }
     const resolved = resolveConsumerProviderChoice(providers, choice);
     return resolved?.provider.id === choice.providerId && resolved.method.id === choice.methodId;
@@ -652,6 +708,7 @@ export async function applyConsumerAuth(
   const notes: string[] = [];
   const runtime = params.runtime ?? buildConsumerRuntime(notes);
   const readClaudeCliCredential = params.readClaudeCliCredential ?? readClaudeCliCredentialsCached;
+  const claudeCommandExists = params.claudeCommandExists ?? defaultClaudeCommandDetector;
 
   await clearStaleProfileLockouts(choice.providerId, agentDir);
 
@@ -664,6 +721,7 @@ export async function applyConsumerAuth(
   let notesFromProvider: string[] = [];
 
   if (choice.source === "claude_cli") {
+    assertClaudeCommandAvailable(cfg, claudeCommandExists);
     const credential = resolveClaudeCliCredentialOrThrow({
       readCredential: readClaudeCliCredential,
     });
