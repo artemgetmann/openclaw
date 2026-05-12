@@ -1,6 +1,6 @@
 ---
 name: monitor-router
-description: "Route natural-language replies, status questions, and follow-up actions for OpenClaw/Jarvis active monitors. Use when a user asks about monitor status, replies to a recent monitor update, says an ambiguous follow-up like send it/ask her/stop that, wants to edit or approve a drafted monitor action, or asks to list/inspect active watched tasks. Use to resolve the right monitor from compact state, ask clarification when multiple monitors could match, and avoid relying on buttons or exact command words."
+description: "Route OpenClaw/Jarvis monitor status questions and natural-language follow-ups. Use when a user asks about active monitors, replies to a monitor update, or wants to send, edit, stop, approve, list, or inspect a watched task; resolve one clear monitor or ask a short clarification."
 ---
 
 # Monitor Router
