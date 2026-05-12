@@ -27,17 +27,20 @@ Current beta backend:
 - Region/plan: `virginia` / `starter`
 - Source: `https://github.com/artemgetmann/openclaw` on `main`
 
-Verified on 2026-05-11:
+Verified on 2026-05-12:
 
 - `/healthz` is live and reports production mode.
 - OpenAI is configured server-side.
 - Anthropic is not configured yet.
 - The managed utility smoke endpoint works with the backend token.
-- Account/license persistence is not ready until `NEON_DATABASE_URL` is
-  configured in Render and the account/license probes pass.
+- Neon persistence is configured server-side in Render.
+- Account activation creates a persisted 14-day trial.
+- License status succeeds for a valid account token.
+- Repeated activation for the same email fails closed with 409.
+- Invalid account access tokens reject with 401.
 
-Do not package this as a sendable beta until account activation and license
-status are proved against this service with durable Neon persistence.
+Backend/account persistence is ready for the next beta package smoke. Anthropic
+remains unset, so do not claim Anthropic-managed utility coverage yet.
 
 ## v1 commercial decision
 
