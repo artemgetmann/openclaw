@@ -12,10 +12,10 @@ GitHub README, release notes, pricing copy, and the first 60-second demo.
 Jarvis is the public consumer brand from the start. OpenClaw can appear as
 technical, developer, repo, or "powered by OpenClaw" language only.
 
-Public-facing app/docs should move toward Jarvis now. The visible app name and
-release artifacts should become Jarvis soon, but bundle ID, runtime identity,
-update feed identity, and deeper internal renames are a separate migration
-task. Do not imply those internals are already renamed.
+Public-facing app/docs, visible app name, release artifacts, and app icon are
+Jarvis now. Bundle ID, runtime identity, update feed identity, and deeper
+internal renames are a separate migration task. Do not imply those internals are
+already renamed.
 
 ## Backend deployment status
 
