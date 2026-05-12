@@ -6,7 +6,9 @@ import { expandHomePrefix } from "../infra/home-dir.js";
 import { CONFIG_DIR } from "../utils.js";
 import type {
   MonitorCreateInput,
+  MonitorActionPolicy,
   MonitorRecord,
+  MonitorSourceTarget,
   MonitorStoreFile,
   MonitorUpdatePatch,
 } from "./types.js";
@@ -15,6 +17,59 @@ export const DEFAULT_MONITOR_DIR = path.join(CONFIG_DIR, "monitors");
 export const DEFAULT_MONITOR_STORE_PATH = path.join(DEFAULT_MONITOR_DIR, "monitors.json");
 
 const serializedStoreCache = new Map<string, string>();
+
+type MonitorIdentityInput = {
+  agentId: string;
+  sourceType: string;
+  sourceTarget: MonitorSourceTarget;
+  actionPolicy?: MonitorActionPolicy;
+  purposeLabel?: string;
+};
+
+function normalizeIdentityValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeIdentityValue(item));
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .toSorted()
+        .map((key) => [key, normalizeIdentityValue(record[key])]),
+    );
+  }
+  return value;
+}
+
+export function createMonitorIdentityKey(input: MonitorIdentityInput): string {
+  // Keep identity intentionally narrow: this dedupes the same active watcher
+  // without merging different response policies or user-visible purposes.
+  return JSON.stringify({
+    agentId: input.agentId.trim(),
+    sourceType: input.sourceType.trim(),
+    sourceTarget: normalizeIdentityValue(input.sourceTarget),
+    actionPolicy: input.actionPolicy ?? "notify_draft",
+    purposeLabel: input.purposeLabel?.trim() ?? "",
+  });
+}
+
+export function findActiveMonitorByIdentity(
+  store: MonitorStoreFile,
+  input: MonitorIdentityInput,
+): MonitorRecord | undefined {
+  const identityKey = createMonitorIdentityKey(input);
+  return store.monitors.find(
+    (monitor) =>
+      monitor.status === "active" &&
+      createMonitorIdentityKey({
+        agentId: monitor.agentId,
+        sourceType: monitor.sourceType,
+        sourceTarget: monitor.sourceTarget,
+        actionPolicy: monitor.actionPolicy,
+        purposeLabel: monitor.name,
+      }) === identityKey,
+  );
+}
 
 export function resolveMonitorStorePath(opts?: { storePath?: string; cronStorePath?: string }) {
   const explicit = opts?.storePath?.trim();
