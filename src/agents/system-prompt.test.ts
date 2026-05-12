@@ -234,6 +234,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "For channel-specific monitoring or reply-detection jobs, read the matching skill and use its helper scripts/check commands instead of inventing raw discovery flows.",
     );
+    expect(prompt).toContain(
+      "For monitor-related replies or status questions, use the monitor-router skill",
+    );
+    expect(prompt).toContain("ask a short clarification before ambiguous external actions");
     expect(prompt).toContain("When creating a monitor, encode deterministic wake instructions.");
     expect(prompt).toContain("pin that exact command");
     expect(prompt).toContain("create the tiny check script during monitor setup");

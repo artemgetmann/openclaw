@@ -54,7 +54,13 @@ For monitor creation:
 - sourceType/sourceTarget identify what is being checked.
 - cadence is the cron schedule object for repeated wakes.
 - default actionPolicy is notify_draft.
-- default report route is the origin chat from the current session.`,
+- default report route is the origin chat from the current session.
+
+For monitor-related user replies/status:
+- use the monitor-router skill for natural-language routing.
+- use list/get to inspect candidate monitors before acting.
+- act only when exactly one monitor is clear; if multiple active monitors could match, ask a short clarification.
+- use update to persist compact status/checkpoint; keep raw evidence behind ids, paths, or refs.`,
     parameters: MonitorToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

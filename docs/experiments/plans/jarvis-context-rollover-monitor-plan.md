@@ -1,0 +1,234 @@
+# Jarvis Context Rollover and Monitor Continuity Plan
+
+Status: draft  
+Owner: Jarvis/OpenClaw runtime  
+Created: 2026-05-11
+
+## Problem
+
+Long Telegram topics can become too large for reliable agent work. In the May
+2026 Jarvis incident, the old Telegram topic kept receiving tool-heavy work,
+watchdog pings, WhatsApp monitor updates, and repeated retries until the model
+hit `context_length_exceeded`.
+
+The user-facing failure was simple: Jarvis felt slow, stuck, and confused.
+
+The design goal is also simple: users should not have to manage context windows.
+Jarvis should preserve continuity while keeping active working context small.
+
+## Current Evidence
+
+- OpenClaw already resolves context windows per model, not by one global token
+  limit.
+- Current compaction default reserve floor in code is `20000` tokens, but the
+  live Jarvis config had `reserveTokensFloor: 4000`.
+- Session pruning trims old tool results in memory for selected providers.
+- Tool-result truncation exists as overflow recovery.
+- After the latest pull, monitors have their own durable `monitorSessionKey`.
+- Monitor wakes now run against that monitor session with
+  `sessionDefaultResetMode: "manual"`, so monitor state can persist across
+  wakes.
+- Monitor status notes should read like a human assistant talking to the user,
+  not like a cron log.
+
+## Non-Goals
+
+- Do not build a perfect long-term memory architecture now.
+- Do not make users manually copy/paste summaries as the main consumer flow.
+- Do not hide raw debugging evidence permanently.
+- Do not force every monitor update to carry the entire origin conversation.
+
+## Design Principles
+
+1. Model-aware, not fixed-size.
+   - Use percentage of the current model context window.
+   - File size is only a secondary warning signal.
+
+2. Consumer UX first.
+   - Telegram and app users should see natural language continuity.
+   - Slash commands can exist for power users and emergency recovery.
+
+3. Separate thinking from notification.
+   - A monitor should keep its durable focused state in its own monitor session.
+   - The original chat can still receive concise status updates.
+
+4. Main chat must be able to ask about monitors.
+   - Monitor state cannot be hidden in a private silo.
+   - The main chat needs a cheap lookup path: "what is the status of Chloe?"
+
+5. Raw evidence stays available.
+   - Active prompt gets compact facts.
+   - Raw tool output/logs go to artifacts or session transcript references.
+
+## Proposed Product Model
+
+There are three layers:
+
+1. Main conversation
+   - Human-facing chat/topic.
+   - Good for planning, questions, and general coordination.
+
+2. Monitor session
+   - Focused durable task state.
+   - Example: "Watch Chloe / Arte Mont Kiara replies."
+   - Stores task, last seen message, last action, open question, and evidence
+     references.
+
+3. Monitor registry/state
+   - Machine-readable summary of all active monitors.
+   - Lets any chat ask "what's the Chloe status?" without loading the monitor's
+     full transcript.
+
+The key product rule:
+
+> Monitor work happens in the monitor session, but monitor status is readable
+> from the main chat.
+
+## Natural Language UX
+
+Avoid making buttons the primary flow.
+
+Good:
+
+> Chloe replied. She says 25 days is possible at RM2,800 all-in. I drafted a
+> reply asking for viewing today. Say "send it", "change it to ...", or "stop
+> watching Chloe".
+
+Power-user buttons may exist as shortcuts, but the natural-language path should
+work first:
+
+- "send it"
+- "change the reply to ..."
+- "stop this monitor"
+- "what's the status with Chloe?"
+- "show me all active apartment monitors"
+
+The intent should come from natural language, with deterministic tool safety
+behind it. Buttons are shortcuts, not the control surface.
+
+## Main Chat Status Lookup
+
+When the user asks the main chat about a monitored item, Jarvis should:
+
+1. Detect that the question is about an active monitor or watched contact.
+2. Read the monitor registry/state.
+3. If registry state is enough, answer directly.
+4. If more detail is needed, read the monitor session or raw evidence pointer.
+
+This avoids the brittle behavior where only the monitor session knows the truth.
+
+Current safety rail: plain Telegram replies still do not route to
+`monitorSessionKey` yet. That is a follow-up guardrail, not something this plan
+assumes is already live.
+
+## Monitor Router Module
+
+Keep the routing behavior modular:
+
+- Always-on system prompt: only a small pointer to the monitor routing rule.
+- Bundled skill: `skills/monitor-router/SKILL.md` owns the natural-language
+  workflow, ambiguity handling, and status-note style.
+- Monitor tool: exposes `list`, `get`, `update`, `stop`, and `create` so the
+  model can inspect compact state before acting.
+
+The core rule is intentionally simple: a natural-language reply can route to a
+monitor only when exactly one monitor is clear from the message, nearby status
+note, contact, source, or singular active candidate. If two monitors could
+match, Jarvis asks a short clarification instead of guessing.
+
+This avoids bloating the global system prompt while still making the behavior
+available anywhere monitors are used.
+
+## Rollover UX
+
+When a topic is getting heavy, Jarvis should not say "type /new and paste this"
+as the consumer path.
+
+Preferred UX:
+
+> This conversation is getting heavy, so I made a clean continuation point. I'll
+> continue from there.
+
+Then Jarvis creates or selects a fresh session and injects the compact handoff.
+
+Power-user fallback:
+
+- `/checkpoint`
+- `/compact`
+- `/new`
+
+## Context Thresholds
+
+Use model-aware triggers:
+
+- Warning/checkpoint at roughly 70-80% of resolved model context window.
+- Earlier trigger when there are repeated watchdog pings.
+- Earlier trigger after provider `context_length_exceeded`.
+- Earlier trigger when tool-result payloads dominate the session.
+- File size threshold can be secondary telemetry only.
+
+## Tool Output Policy
+
+Active prompt:
+
+- concise facts
+- decisions
+- latest status
+- ids/paths to raw evidence
+
+Artifacts/logs:
+
+- raw wacli JSON
+- browser snapshots
+- long command outputs
+- screenshots or media metadata
+
+The agent should be able to fetch raw evidence when debugging.
+
+## Monitor Deduplication
+
+Create an idempotency key from:
+
+- agentId
+- sourceType
+- normalized watched target/contact/thread
+- actionPolicy
+- optional purpose label
+
+If an active matching monitor exists, update it instead of creating another cron
+job. Allow explicit advanced override for separate monitors.
+
+## Open Questions
+
+1. What exact command/API should expose monitor status to the main chat?
+2. Should monitor status be written into `lastCheckpoint`, a separate registry
+   field, or both?
+3. How should plain Telegram replies to a monitor update be routed when there are
+   multiple active monitors in the same topic?
+4. What visual/natural-language treatment should Telegram use for rollover
+   messages?
+5. Should the macOS app show a "Continue Fresh" action, or should rollover be
+   completely automatic?
+
+## 80/20 Implementation Order
+
+1. Restore sane Jarvis compaction reserve floor.
+2. Add monitor status lookup from main chat.
+3. Improve monitor checkpoint fields so each wake has compact durable state.
+4. Add model-aware rollover warning/checkpoint.
+5. Deduplicate monitor creation.
+6. Move oversized raw tool output out of active prompt while keeping evidence
+   fetchable.
+7. Add consumer-friendly automatic rollover UX.
+
+## Validation Gates
+
+- A main Telegram topic can ask "what's the status with Chloe?" and Jarvis
+  answers from monitor state without loading the giant old topic.
+- A monitor wake uses the monitor session, not the origin topic session.
+- A monitor update delivered to Telegram remains concise.
+- A monitor status note reads like an assistant, not a cron banner.
+- A natural-language reply like "send it" works without requiring buttons.
+- Duplicate monitor creation returns or updates the existing monitor.
+- Raw evidence remains inspectable for debugging.
+- Context rollover creates a usable continuation without manual paste.

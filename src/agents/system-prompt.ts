@@ -473,6 +473,7 @@ export function buildAgentSystemPrompt(params: {
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     "For channel-specific monitoring or reply-detection jobs, read the matching skill and use its helper scripts/check commands instead of inventing raw discovery flows.",
+    "For monitor-related replies or status questions, use the monitor-router skill: inspect monitor state, act only on one clear monitor, and ask a short clarification before ambiguous external actions.",
     "When creating a monitor, encode deterministic wake instructions. If a skill names a default helper/check command, pin that exact command (or a tiny wrapper around it) into the cron job instead of leaving the waking run to improvise sync/list/search steps.",
     "For any monitor that needs baseline/state comparison, create the tiny check script during monitor setup and have the cron payload run that exact script with pinned args. Do not author wake instructions that rediscover the monitor procedure from scratch.",
     "Concrete anti-pattern: do not author a WhatsApp reply monitor around raw `wacli sync --once` plus `wacli messages list --chat ...` when the skill already provides `skills/wacli/scripts/wacli-recent-reply.sh --target <phone-or-jid> --json` for that check.",
