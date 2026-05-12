@@ -576,8 +576,8 @@ P0 blockers before public strangers:
 - [x] Baseline Sparkle update mechanism proof.
 - [ ] Production Render service/env configuration.
 - [ ] Subscription/trial-gated update entitlement UX.
-- [ ] Cleaner permissions flow.
-- [ ] Cleaner browser connect flow.
+- [ ] Cleaner settings/onboarding flow after the first-pass PR #628 settings
+      cleanup.
 - [ ] Better copywriting for every step.
 - [ ] Telegram setup simplification.
 
@@ -709,9 +709,20 @@ Progress:
 - [x] Sparkle non-UI update completion passed from public `v2026.3.14` to `v2026.3.15`.
 - [x] Beta email activation + 14-day trial landed in PR #647.
 - [x] Launch package/pricing/README/demo draft landed in PR #646.
+- [x] First-pass macOS Settings cleanup landed in PR #628. Settings now uses a
+      cleaner left-sidebar layout, Browser and AI access are top-level settings
+      sections, General is less cluttered, and the consumer Telegram Channels setup
+      no longer renders the cramped nested sidebar.
 - [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
 - [ ] Subscription/trial-gated update entitlement UX is production-ready.
 - [ ] Render service has durable production account/license persistence.
+
+Remaining Settings/UI polish after PR #628:
+
+- Reduce copy density and card heaviness inside Channels, AI access, and
+  Permissions.
+- Keep the next pass focused on beta onboarding clarity rather than a full
+  Liquid Glass redesign.
 
 Verified Render truth as of 2026-05-11 before backend creation:
 
