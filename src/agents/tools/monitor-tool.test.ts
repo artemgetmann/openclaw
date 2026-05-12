@@ -61,6 +61,17 @@ describe("monitor tool", () => {
     );
   });
 
+  it("describes natural-language monitor routing safety", () => {
+    const tool = createMonitorTool({ agentSessionKey: "agent:main:telegram:direct:19098680" });
+
+    expect(tool.description).toContain("monitor-router skill");
+    expect(tool.description).toContain("use list/get to inspect candidate monitors before acting");
+    expect(tool.description).toContain(
+      "if multiple active monitors could match, ask a short clarification",
+    );
+    expect(tool.description).toContain("keep raw evidence behind ids, paths, or refs");
+  });
+
   it("omits originDelivery when the origin session has no announce target", async () => {
     resolveAnnounceTargetMock.mockResolvedValueOnce(null);
     const tool = createMonitorTool({ agentSessionKey: "agent:main:main" });

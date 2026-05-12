@@ -121,6 +121,24 @@ Current safety rail: plain Telegram replies still do not route to
 `monitorSessionKey` yet. That is a follow-up guardrail, not something this plan
 assumes is already live.
 
+## Monitor Router Module
+
+Keep the routing behavior modular:
+
+- Always-on system prompt: only a small pointer to the monitor routing rule.
+- Bundled skill: `skills/monitor-router/SKILL.md` owns the natural-language
+  workflow, ambiguity handling, and status-note style.
+- Monitor tool: exposes `list`, `get`, `update`, `stop`, and `create` so the
+  model can inspect compact state before acting.
+
+The core rule is intentionally simple: a natural-language reply can route to a
+monitor only when exactly one monitor is clear from the message, nearby status
+note, contact, source, or singular active candidate. If two monitors could
+match, Jarvis asks a short clarification instead of guessing.
+
+This avoids bloating the global system prompt while still making the behavior
+available anywhere monitors are used.
+
 ## Rollover UX
 
 When a topic is getting heavy, Jarvis should not say "type /new and paste this"
