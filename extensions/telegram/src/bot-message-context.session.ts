@@ -18,6 +18,8 @@ import type {
   TelegramTopicConfig,
 } from "../../../src/config/types.js";
 import { logVerbose, shouldLogVerbose } from "../../../src/globals.js";
+import { loadMonitorStore, resolveMonitorStorePath } from "../../../src/monitor/store.js";
+import type { MonitorRecord } from "../../../src/monitor/types.js";
 import type { ResolvedAgentRoute } from "../../../src/routing/resolve-route.js";
 import { resolveInboundLastRouteSessionKey } from "../../../src/routing/resolve-route.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../src/security/dm-policy-shared.js";
@@ -37,6 +39,80 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+
+const MONITOR_CONTEXT_LIMIT = 5;
+const MONITOR_FIELD_LIMIT = 220;
+
+function compactMonitorField(value: unknown, maxChars = MONITOR_FIELD_LIMIT): string | undefined {
+  const text =
+    typeof value === "string"
+      ? value
+      : value && typeof value === "object"
+        ? JSON.stringify(value)
+        : undefined;
+  const normalized = text?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 1)}...` : normalized;
+}
+
+export function buildTelegramMonitorAwarenessNote(params: {
+  monitors: MonitorRecord[];
+  sessionKey: string;
+}): string | undefined {
+  const active = params.monitors
+    .filter(
+      (monitor) => monitor.status === "active" && monitor.originSessionKey === params.sessionKey,
+    )
+    .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+    .slice(0, MONITOR_CONTEXT_LIMIT);
+  if (active.length === 0) {
+    return undefined;
+  }
+
+  const lines = active.map((monitor) => {
+    const label = compactMonitorField(monitor.name) ?? monitor.monitorId;
+    const source = compactMonitorField(monitor.sourceTarget, 140);
+    const checkpoint = monitor.lastCheckpoint as Record<string, unknown> | undefined;
+    const summary = compactMonitorField(checkpoint?.summary ?? monitor.lastCheckpoint);
+    const nextStep = compactMonitorField(checkpoint?.suggestedNextStep);
+    const rawRef = compactMonitorField(checkpoint?.rawRef, 140);
+    return [
+      `- ${label} (monitorId=${monitor.monitorId})`,
+      source ? `source: ${source}` : undefined,
+      summary ? `last: ${summary}` : undefined,
+      nextStep ? `next: ${nextStep}` : undefined,
+      rawRef ? `rawRef: ${rawRef}` : undefined,
+    ]
+      .filter(Boolean)
+      .join("; ");
+  });
+
+  return [
+    "[Active monitor context]",
+    "These are compact status notes for monitors tied to this Telegram session. Use them before older chat memory when the user asks about watched people/tasks or replies to monitor updates.",
+    ...lines,
+    "[/Active monitor context]",
+  ].join("\n");
+}
+
+async function resolveTelegramMonitorAwarenessNote(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+}): Promise<string | undefined> {
+  try {
+    const storePath = resolveMonitorStorePath({ cronStorePath: params.cfg.cron?.store });
+    const store = await loadMonitorStore(storePath);
+    return buildTelegramMonitorAwarenessNote({
+      monitors: store.monitors,
+      sessionKey: params.sessionKey,
+    });
+  } catch (err) {
+    logVerbose(`telegram: failed loading monitor awareness context: ${String(err)}`);
+    return undefined;
+  }
+}
 
 export async function buildTelegramInboundContextPayload(params: {
   cfg: OpenClawConfig;
@@ -153,7 +229,14 @@ export async function buildTelegramInboundContextPayload(params: {
     previousTimestamp,
     envelope: envelopeOptions,
   });
-  let combinedBody = body;
+  // Put compact monitor state in the same turn as the user's Telegram message.
+  // This keeps natural-language replies grounded without stuffing monitor
+  // transcripts into the main chat or relying on the model to remember a tool call.
+  const monitorAwarenessNote = await resolveTelegramMonitorAwarenessNote({
+    cfg,
+    sessionKey: route.sessionKey,
+  });
+  let combinedBody = monitorAwarenessNote ? `${monitorAwarenessNote}\n\n${body}` : body;
   if (isGroup && historyKey && historyLimit > 0) {
     combinedBody = buildPendingHistoryContextFromMap({
       historyMap: groupHistories,

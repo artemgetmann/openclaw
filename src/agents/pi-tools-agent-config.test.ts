@@ -315,6 +315,34 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toEqual(["session_status"]);
   });
 
+  it("keeps monitor available for owner senders under the coding profile", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "coding",
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:telegram:direct:1336356696",
+      workspaceDir: "/tmp/test-monitor-owner",
+      agentDir: "/tmp/agent-monitor-owner",
+      messageProvider: "telegram",
+      senderIsOwner: true,
+    });
+    const nonOwnerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:telegram:direct:1336356696",
+      workspaceDir: "/tmp/test-monitor-non-owner",
+      agentDir: "/tmp/agent-monitor-non-owner",
+      messageProvider: "telegram",
+      senderIsOwner: false,
+    });
+
+    expect(ownerTools.map((t) => t.name)).toContain("monitor");
+    expect(nonOwnerTools.map((t) => t.name)).not.toContain("monitor");
+  });
+
   it("should allow different tool policies for different agents", () => {
     const cfg: OpenClawConfig = {
       agents: {

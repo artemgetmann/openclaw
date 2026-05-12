@@ -17,7 +17,8 @@ state and route actions to the right monitor.
 ## Workflow
 
 1. Read the recent user message and nearby monitor status notes.
-2. Use the `monitor` tool with `action: "list"` to find active candidates.
+2. For status questions about a watched person or task, use the `monitor` tool
+   with `action: "list"` before answering from old chat memory.
 3. Use `action: "get"` when one or more candidates need detail.
 4. Act only when the target monitor is clear from the contact, topic, source,
    nearby status note, or singular active candidate.

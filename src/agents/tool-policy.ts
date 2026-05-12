@@ -31,6 +31,7 @@ function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean):
 const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set<string>([
   "whatsapp_login",
   "cron",
+  "monitor",
   "gateway",
   "nodes",
 ]);

@@ -57,6 +57,7 @@ describe("tool-policy", () => {
     const coding = resolveToolProfilePolicy("coding");
     expect(coding?.allow).toContain("read");
     expect(coding?.allow).toContain("cron");
+    expect(coding?.allow).toContain("monitor");
     expect(coding?.allow).not.toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
@@ -65,6 +66,7 @@ describe("tool-policy", () => {
     const group = TOOL_GROUPS["group:openclaw"];
     expect(group).toContain("browser");
     expect(group).toContain("message");
+    expect(group).toContain("monitor");
     expect(group).toContain("subagents");
     expect(group).toContain("session_status");
     expect(group).toContain("tts");
@@ -79,6 +81,7 @@ describe("tool-policy", () => {
   it("identifies owner-only tools", () => {
     expect(isOwnerOnlyToolName("whatsapp_login")).toBe(true);
     expect(isOwnerOnlyToolName("cron")).toBe(true);
+    expect(isOwnerOnlyToolName("monitor")).toBe(true);
     expect(isOwnerOnlyToolName("gateway")).toBe(true);
     expect(isOwnerOnlyToolName("nodes")).toBe(true);
     expect(isOwnerOnlyToolName("read")).toBe(false);
