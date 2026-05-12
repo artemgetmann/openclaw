@@ -30,10 +30,17 @@ Jarvis should preserve continuity while keeping active working context small.
 - PR #677 exposed monitor state to Telegram-capable agents and injected compact
   active-monitor awareness into same-session Telegram turns. It merged at
   2026-05-12 16:54 Malaysia time.
+- PR #679 added model-aware context pressure warnings to status surfaces. It
+  merged on 2026-05-12.
+- PR #681 adds the first normal-chat checkpoint nudge when a session crosses
+  roughly 75% of the resolved context window. It is open for review.
 - After the latest pull, monitors have their own durable `monitorSessionKey`.
 - Monitor wakes now run against that monitor session with
   `sessionDefaultResetMode: "manual"`, so monitor state can persist across
   wakes.
+- The active packaged-app/shared gateway config is
+  `~/Library/Application Support/OpenClaw/.openclaw/openclaw.json`, not the
+  legacy CLI default `~/.openclaw/openclaw.json`.
 - Monitor status notes should read like a human assistant talking to the user,
   not like a cron log.
 
@@ -50,15 +57,22 @@ Done:
 - Isolated Telegram tester proof covered baseline delivery and the monitor
   status/route prompt path. The shared main Jarvis runtime still needs an
   explicit build/restart before this code is live there.
+- The bad `reserveTokensFloor: 4000` override was fixed to `20000` in both the
+  legacy CLI config and the app-owned Application Support config.
+- Status surfaces now warn at roughly 75% of the resolved model context window.
+- PR #681 is open with a one-time normal-chat context-pressure nudge. It does
+  not switch sessions automatically.
 
 Not done:
 
-- The live Jarvis runtime reserve-floor override still needs confirmation and,
-  if approved, correction from `4000` back toward the sane default.
-- There is no model-aware rollover/checkpoint trigger yet.
+- Merge and deploy PR #681 if review passes.
+- There is no automatic fresh-session rollover yet.
 - Monitor creation is not deduplicated yet.
 - Oversized raw tool outputs are not yet moved into structured artifacts with
   compact evidence pointers.
+- The `~/.openclaw/openclaw.json` legacy/default CLI config path is still in
+  use by docs and some non-app flows; do not delete it until that split is
+  documented or migrated.
 - Reply-message metadata, where Telegram replies directly to a monitor update
   carry the exact `monitorId`, is intentionally deferred until current behavior
   proves insufficient.
@@ -237,8 +251,9 @@ job. Allow explicit advanced override for separate monitors.
 
 ## Open Questions
 
-1. Should the live Jarvis config restore `reserveTokensFloor` from `4000` to the
-   default-range value before building the full rollover UX?
+1. Should `~/.openclaw/openclaw.json` stay as a supported CLI/dev default, or
+   should docs/code migrate harder toward Application Support for app-owned
+   runtimes?
 2. Should monitor status continue through `lastCheckpoint`, a separate registry
    field, or both?
 3. How often does current natural-language monitor routing become ambiguous in
@@ -250,17 +265,21 @@ job. Allow explicit advanced override for separate monitors.
 
 ## 80/20 Implementation Order
 
-1. Restore sane Jarvis compaction reserve floor.
+1. Restore sane Jarvis compaction reserve floor. Done on 2026-05-12 for both
+   `~/.openclaw/openclaw.json` and
+   `~/Library/Application Support/OpenClaw/.openclaw/openclaw.json`.
 2. Add monitor status lookup from main chat. Done in PR #677 for the 80/20
    Telegram path; deeper reply-message metadata is deferred.
 3. Improve monitor checkpoint fields so each wake has compact durable state.
    Partially done through durable `lastCheckpoint` plumbing; richer structured
    evidence fields remain.
-4. Add model-aware rollover warning/checkpoint.
+4. Add model-aware rollover warning/checkpoint. Status warning done in PR #679;
+   normal-chat nudge is open in PR #681.
 5. Deduplicate monitor creation.
 6. Move oversized raw tool output out of active prompt while keeping evidence
    fetchable.
-7. Add consumer-friendly automatic rollover UX.
+7. Add consumer-friendly automatic rollover UX after #681 has been reviewed in
+   real chat.
 
 ## Validation Gates
 
