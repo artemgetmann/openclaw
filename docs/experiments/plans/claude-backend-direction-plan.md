@@ -393,6 +393,64 @@ Scope boundary:
 - The real plugin-tool Telegram proof used `diffs` as a deliberately enabled harmless tool-bearing plugin. It did not prove Brave because the current app-owned config loads Brave as a web-search provider, not as a harmless registered agent tool.
 - Local runtime caveat: the machine currently has split CLI/service config paths (`~/.openclaw/openclaw.json` for some CLI commands, app-owned `~/Library/Application Support/OpenClaw/.openclaw/openclaw.json` for the LaunchAgent). The proof worked only after applying the temporary smoke config to the relevant runtime config paths; this is an ops/config hygiene issue, not a Claude plugin-tool parity blocker.
 
+### Slice 2c: Tester Telegram visibility and feel probe
+
+Status: live tester-bot proof passed for model selection; prompt/source-of-truth parity has a new blocker.
+
+What was required in the isolated tester lane:
+
+- `agents.defaults.models` had to explicitly include `claude-cli/haiku`, `claude-cli/sonnet`, and `claude-cli/opus`
+- `agents.defaults.cliBackends.claude-cli.command` had to be pinned to `/Users/user/.local/bin/claude`
+- the tester runtime had to be restarted from that patched isolated config; hot `ensure` alone was not enough once the runtime was already up
+
+Live Telegram proof on `@Artem_jarvis_email_bot`:
+
+- runtime ownership and tester-bot claim passed on branch `codex/claude-cli-plugin-proof-doc`
+- baseline DM smoke passed after approving Telegram pairing for user id `1336356696`
+- `/model claude-cli/haiku` initially failed with `Model "claude-cli/haiku" is not allowed`
+- after patching the isolated tester runtime config and restarting the runtime from that config, `/model claude-cli/haiku` succeeded with `Model set to claude-cli/haiku.`
+- `/status` then reported `Model: claude-cli/haiku`
+- Claude CLI answered a forced tool probe with a real observed path: `/Users/user/Library/Application Support/OpenClaw/instances/openclaw/.openclaw/workspace-consumer-openclaw`
+
+Prompt-behavior comparison:
+
+- Claude CLI parity probe reply:
+  - current model: `claude-haiku-4-5-20251001 (Haiku 4.5)`
+  - claimed tools: `Yes, full permissions for bash and MCP tools`
+  - coding-fix style: `Test first, fix in smallest steps, verify it works before moving on.`
+- Codex parity probe reply:
+  - current model: `openai-codex/gpt-5.4`
+  - claimed tools: `Yes, this chat currently has usable tools.`
+  - coding-fix style: `Reproduce it, inspect the relevant code, make the smallest solid fix, then verify it.`
+
+New blocker from manual tester pass:
+
+- A Claude CLI Telegram reply described memory as `/Users/user/.claude/projects/.../memory/` and described global instructions as `/Users/user/.claude/CLAUDE.md`.
+- That is the Claude Code user's native context, not the OpenClaw workspace bootstrap context.
+- Expected source of truth for this tester runtime is the OpenClaw workspace bootstrap at `/Users/user/Library/Application Support/OpenClaw/instances/openclaw/.openclaw/workspace-consumer-openclaw/AGENTS.md`, with workspace memory under the same OpenClaw workspace.
+- Code evidence: `src/agents/cli-runner.ts` currently uses the Bridge-safe prompt for `claude-cli` and skips `resolveBootstrapContextForRun`, so `AGENTS.md` / `MEMORY.md` are not injected on the Claude CLI path.
+- Code evidence: `src/agents/cli-backends.ts` currently passes `--setting-sources user` to Claude CLI, so Claude Code can still read user-level Claude context.
+- Readiness impact: do not expose `claude-cli/*` on the main bot until we either isolate Claude Code user context or prove the user-level context cannot override/confuse OpenClaw workspace identity.
+
+Manual tester pass after source-path discovery:
+
+- Cross-backend short-term session continuity passed: Codex remembered the last messages after resetting to default, and Claude CLI still saw recent session history after switching back from Codex.
+- Workspace directory reporting was correct in a later Claude CLI reply: `/Users/user/Library/Application Support/OpenClaw/instances/openclaw/.openclaw/workspace-consumer-openclaw`.
+- OpenClaw workspace files were visible but empty in the tester lane: `USER.md` and `TOOLS.md` were identified as scaffolding/templates. This may be tester-runtime state rather than a product-path failure; retest against the main bot/workspace after the prompt-source fix or controlled rollout.
+- Web fetch/browser path passed manually: `web_fetch` fetched `marketmirror.com` and `mindmirror.com`; Brave search was available as a tool path but reported missing `BRAVE_API_KEY` in this config.
+- Authenticated browser control passed manually: Claude CLI opened/read a Gmail message and used browser tooling to inspect a logged-in X profile.
+- WhatsApp send path passed manually with confirmation: Claude CLI found the target, asked before sending, and reported local verification after sending via the direct TypeScript path.
+- Reminder/wakeup path failed manually: Claude CLI said it scheduled a one-minute reminder via `ScheduleWakeup`, but no reminder arrived by 18:05. Treat reminder/cron/wakeup firing as a separate blocker to investigate before claiming full operational parity.
+- Progress/status UX gap: Claude CLI streams helpful in-progress text, but interim browser/tool status appears to disappear once the final answer lands; Codex-style progress may preserve visibility but sends separate messages and creates notification spam. Product direction to evaluate: buffer progress updates, then include a compact progress transcript with the final answer in one bundled delivery.
+- Upstream progress UX reference: upstream `extensions/telegram/src/bot-message-dispatch.ts` already has a better seam that batches/dedupes tool-start progress lines into the editable answer draft lane and suppresses default tool-progress messages when preview streaming can handle them. Port that path instead of inventing a new Telegram progress system.
+
+Current read:
+
+- Claude CLI is operational in the tester Telegram lane, including direct `/model` switching and at least one real tool call.
+- The remaining question is no longer only product feel. Claude currently appears to have the wrong instruction/memory source in addition to a different tone.
+- Green enough to keep testing: model switching, recent-session continuity, fetch/browser, authenticated browser reads, and wacli are usable in the tester lane.
+- Not green enough for full main-bot exposure by default: prompt/source isolation, reminder/wakeup firing, and final-progress transcript behavior still need investigation or an explicit defer decision.
+
 ### Slice 3: Warm Claude CLI spike
 
 Status: implemented and validated for same-process reuse on same-model follow-up.
