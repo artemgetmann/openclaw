@@ -210,6 +210,12 @@ export type SessionEntry = {
   fallbackNoticeSelectedModel?: string;
   fallbackNoticeActiveModel?: string;
   fallbackNoticeReason?: string;
+  /**
+   * Last time the auto-reply context-pressure nudge was shown.
+   * Paired with compaction count so it does not repeat every heavy turn.
+   */
+  contextPressureNoticeAt?: number;
+  contextPressureNoticeCompactionCount?: number;
   contextTokens?: number;
   compactionCount?: number;
   memoryFlushAt?: number;

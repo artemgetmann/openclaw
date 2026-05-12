@@ -4,12 +4,13 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
-import { hasNonzeroUsage } from "../../agents/usage.js";
+import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
+  resolveFreshSessionTotalTokens,
   type SessionEntry,
   updateSessionStore,
   updateSessionStoreEntry,
@@ -47,6 +48,10 @@ import {
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
+import {
+  buildContextPressureNoticeMarker,
+  resolveContextPressureNotice,
+} from "./context-pressure-notice.js";
 import {
   buildEmptyFinalFallbackPayload,
   shouldReturnEmptyFinalFallback,
@@ -736,6 +741,44 @@ export async function runReplyAgent(params: {
 
     if (verboseEnabled && activeIsNewSession) {
       verboseNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
+    }
+
+    const contextPressureTotalTokens =
+      promptTokens ??
+      deriveSessionTotalTokens({
+        usage: runResult.meta?.agentMeta?.lastCallUsage ?? usage,
+      }) ??
+      resolveFreshSessionTotalTokens(activeSessionEntry);
+    const contextPressureNotice = resolveContextPressureNotice({
+      sessionEntry: activeSessionEntry,
+      totalTokens: contextPressureTotalTokens,
+      contextTokens: contextTokensUsed,
+    });
+    if (contextPressureNotice && sessionKey && storePath) {
+      // Persist the marker before we prepend the notice so the next turn can
+      // suppress the same warning until compaction moves the session forward.
+      const noticeMarker = buildContextPressureNoticeMarker({
+        sessionEntry: activeSessionEntry,
+      });
+      const noticeAt = noticeMarker.contextPressureNoticeAt;
+      if (activeSessionEntry) {
+        activeSessionEntry.contextPressureNoticeAt = noticeAt;
+        activeSessionEntry.contextPressureNoticeCompactionCount =
+          noticeMarker.contextPressureNoticeCompactionCount;
+        activeSessionEntry.updatedAt = noticeAt;
+      }
+      if (activeSessionStore) {
+        activeSessionStore[sessionKey] = activeSessionEntry ?? activeSessionStore[sessionKey];
+      }
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({
+          contextPressureNoticeAt: noticeAt,
+          contextPressureNoticeCompactionCount: noticeMarker.contextPressureNoticeCompactionCount,
+        }),
+      });
+      runNotices.push({ text: contextPressureNotice });
     }
 
     if (fallbackTransition.fallbackTransitioned) {
