@@ -2,7 +2,7 @@
 
 Status: v1 launch package draft
 Owner: Artem
-Last updated: 2026-05-11
+Last updated: 2026-05-12
 
 This document turns the launch plan into decisions that can be shipped into the
 GitHub README, release notes, pricing copy, and the first 60-second demo.
@@ -14,8 +14,10 @@ technical, developer, repo, or "powered by OpenClaw" language only.
 
 Public-facing app/docs, visible app name, release artifacts, and app icon are
 Jarvis now. Bundle ID, runtime identity, update feed identity, and deeper
-internal renames are a separate migration task. Do not imply those internals are
-already renamed.
+internal renames intentionally stay on `ai.openclaw.consumer.mac` and OpenClaw
+paths for the beta package. Move those internals only in a separate migration
+lane, because changing them can reset macOS permissions/state and create
+support churn.
 
 ## Backend deployment status
 
@@ -41,6 +43,26 @@ Verified on 2026-05-12:
 
 Backend/account persistence is ready for the next beta package smoke. Anthropic
 remains unset, so do not claim Anthropic-managed utility coverage yet.
+
+## Release package status
+
+Current package truth:
+
+- Jarvis visible branding is in place for the app name, release artifacts, and
+  app icon.
+- Bundle ID/runtime/update identity remain `ai.openclaw.consumer.mac` and
+  OpenClaw paths by deliberate decision.
+- Non-secret Sparkle release config lives at
+  `~/Library/Application Support/OpenClaw/release.env` and should be inherited
+  by all worktrees/chats.
+- API token and Neon URL are stored outside Git in macOS Keychain.
+- Current artifacts are Developer ID signed, but Gatekeeper rejects them as
+  Unnotarized Developer ID until the Apple notary profile is stored in
+  Keychain as `NOTARYTOOL_PROFILE="Jarvis Notary"` or equivalent.
+- Bundle ID migration is not a beta package blocker; it belongs in a separate
+  migration lane.
+- Cleanup of old OpenClaw apps and worktree `dist` bundles is lower priority
+  than notarized Jarvis package proof.
 
 ## v1 commercial decision
 
@@ -261,8 +283,10 @@ Say this directly:
 - Core/BYOK users must bring their own raw provider keys
 - third-party skills can run code and should be treated as untrusted until
   reviewed
-- visible app/artifact naming is moving to Jarvis, but internal runtime/update
-  identities need a separate migration
+- visible app/artifact/icon branding is Jarvis, but internal bundle/runtime/
+  update identities need a separate migration
+- current Developer ID signed artifacts still need notarization before normal
+  Gatekeeper install trust
 
 ### Roadmap
 
@@ -270,11 +294,11 @@ Say this directly:
 - cleaner Telegram setup
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
+- Apple notary Keychain profile setup for the beta package
 - better first-run permission copy
 - backend-managed utility cap hardening
 - skill audit and safer third-party skill install flow
-- visible app/artifact rename to Jarvis without breaking bundle/runtime/update
-  identity
+- separate bundle ID/runtime/update identity migration after beta package proof
 - website after GitHub/Reddit signal
 
 ## 60-second demo script
