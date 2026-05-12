@@ -30,6 +30,23 @@ function createDefaultSessionStoreEntry() {
   };
 }
 
+function createPressureSessionStoreEntry() {
+  return {
+    updatedAt: Date.now() - 60_000,
+    verboseLevel: "on",
+    thinkingLevel: "low",
+    inputTokens: 5_000,
+    outputTokens: 2_500,
+    cacheRead: 2_000,
+    cacheWrite: 1_000,
+    totalTokens: 7_500,
+    contextTokens: 10_000,
+    model: "pi:opus",
+    sessionId: "pressure-123",
+    systemSent: true,
+  };
+}
+
 function createUnknownUsageSessionStore() {
   return {
     "+1000": {
@@ -483,6 +500,22 @@ describe("statusCommand", () => {
           line.includes("openclaw --profile isolated status --all"),
       ),
     ).toBe(true);
+  });
+
+  it("adds a context pressure warning near the resolved limit", async () => {
+    const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+    mocks.loadSessionStore.mockReturnValue({
+      "+1000": createPressureSessionStoreEntry(),
+    });
+
+    try {
+      const logs = await runStatusAndGetLogs();
+      expect(logs.some((line) => line.includes("checkpoint soon"))).toBe(true);
+    } finally {
+      if (originalLoadSessionStore) {
+        mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
+      }
+    }
   });
 
   it("shows gateway auth when reachable", async () => {

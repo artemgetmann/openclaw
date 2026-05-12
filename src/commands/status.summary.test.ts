@@ -82,6 +82,35 @@ describe("getStatusSummary", () => {
     vi.clearAllMocks();
   });
 
+  it("adds a context pressure suffix at the 75 percent threshold", async () => {
+    const { formatContextPressureSuffix } = await import("./status.summary.js");
+
+    expect(
+      formatContextPressureSuffix({
+        percentUsed: 74,
+        remainingTokens: 2_600,
+        contextTokens: 10_000,
+      }),
+    ).toBe("");
+    expect(
+      formatContextPressureSuffix({
+        percentUsed: 75,
+        remainingTokens: 2_500,
+        contextTokens: 10_000,
+      }),
+    ).toBe(" · ⚠️ checkpoint soon");
+    expect(
+      formatContextPressureSuffix(
+        {
+          percentUsed: 75,
+          remainingTokens: 2_500,
+          contextTokens: 10_000,
+        },
+        "detailed",
+      ),
+    ).toBe(" · ⚠️ getting heavy; checkpoint or continue fresh soon");
+  });
+
   it("includes runtimeVersion in the status payload", async () => {
     const { getStatusSummary } = await import("./status.summary.js");
 

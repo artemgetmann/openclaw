@@ -490,6 +490,21 @@ describe("buildStatusMessage", () => {
     expect(lines[contextIndex + 1]).toContain("Usage: Claude 80% left (5h)");
   });
 
+  it("adds a context pressure warning once the resolved window is about three quarters full", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-5", contextTokens: 32_000 },
+      sessionEntry: { sessionId: "heavy", updatedAt: 0, totalTokens: 24_000 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain(
+      "Context: 24k/32k (75%) · ⚠️ getting heavy; checkpoint or continue fresh soon",
+    );
+  });
+
   it("hides cost when not using an API key", () => {
     const text = buildStatusMessage({
       config: {

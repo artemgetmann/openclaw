@@ -11,6 +11,7 @@ import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
+import { formatContextPressureSuffix } from "../commands/status.summary.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -540,7 +541,20 @@ export function buildStatusMessage(args: StatusArgs): string {
     : undefined;
 
   const contextLine = [
-    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
+    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}${formatContextPressureSuffix(
+      {
+        percentUsed:
+          contextTokens && totalTokens != null
+            ? Math.round((totalTokens / contextTokens) * 100)
+            : null,
+        remainingTokens:
+          contextTokens != null && totalTokens != null
+            ? Math.max(0, contextTokens - totalTokens)
+            : null,
+        contextTokens,
+      },
+      "detailed",
+    )}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
     .filter(Boolean)
