@@ -574,7 +574,7 @@ P0 blockers before public strangers:
 - [x] Remove bundled founder keys from public builds or route them through managed backend.
 - [x] Beta account activation and 14-day trial contract.
 - [x] Baseline Sparkle update mechanism proof.
-- [ ] Production Render service/env configuration.
+- [x] Production Render service/env configuration.
 - [ ] Subscription/trial-gated update entitlement UX.
 - [ ] Cleaner settings/onboarding flow after the first-pass PR #628 settings
       cleanup.
@@ -715,7 +715,7 @@ Progress:
       no longer renders the cramped nested sidebar.
 - [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
 - [ ] Subscription/trial-gated update entitlement UX is production-ready.
-- [ ] Render service has durable production account/license persistence.
+- [x] Render service has durable production account/license persistence.
 
 Remaining Settings/UI polish after PR #628:
 
@@ -736,7 +736,7 @@ Verified Render truth as of 2026-05-11 before backend creation:
   `render.yaml` `jarvis-backend` service and configured with production env
   values before a notarized Jarvis package can point at it.
 
-Verified Render backend state as of 2026-05-11 after service creation:
+Verified Render backend state as of 2026-05-12 after Neon configuration:
 
 - Created Render web service `jarvis-backend` in workspace `My Workspace`.
 - Service ID: `srv-d80sqc8g4nts738v1j80`.
@@ -746,26 +746,34 @@ Verified Render backend state as of 2026-05-11 after service creation:
 - Repo/branch: `https://github.com/artemgetmann/openclaw` `main`.
 - Build command: `cd services/jarvis-backend && pip install -r requirements.txt`.
 - Start command: `cd services/jarvis-backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
-- Deploy `dep-d80ssrlckfvc73de5vtg` is live from commit
-  `d367eebb295bef6072de1e057bc22a544a5102e0`.
+- Neon project `jarvis-backend` was created on the Neon Free plan in
+  `AWS US East 1 (N. Virginia)`.
+- Render env `NEON_DATABASE_URL` is configured from the pooled Neon connection
+  string. The value is stored outside Git in local macOS Keychain under service
+  `Jarvis Neon Database`, account `NEON_DATABASE_URL`.
+- Deploy `dep-d81agunlk1mc73a8m020` is live from commit
+  `1ab30c2cca15b54e8b86fba7c8b1c3a31f6e6fe6`.
 - `GET /healthz` returns 200 with `service=jarvis-backend`,
   `environment=production`, `providers.openai=true`, and
   `providers.anthropic=false`.
+- `POST /v1/account/login` returns 200 and creates a persisted 14-day trial.
+- `POST /v1/license/status` returns 200 for a valid account access token and
+  preserves the account/device trial link.
+- Repeating activation for the same email returns 409 and does not leak a new
+  account token.
+- License lookup with an invalid account access token returns 401.
 - `POST /v1/managed/utilities/smoke` returns 200 with the backend token,
   proving the managed utility contract is live and provider keys are
   server-held.
-- `POST /v1/license/status` returns 503
-  `NEON_DATABASE_URL is required for production persistence`, which is the
-  expected fail-closed state until Neon is configured.
 - `JARVIS_BACKEND_API_TOKEN` was generated and stored outside Git in local
   macOS Keychain under service `Jarvis Render Backend`, account
   `JARVIS_BACKEND_API_TOKEN`.
 
-Remaining backend blocker:
+Remaining backend follow-up:
 
-- Configure `NEON_DATABASE_URL` server-side in Render, redeploy, then re-run
-  account activation and license status probes. Do not package this as a
-  sendable beta until that passes.
+- Anthropic is not configured yet. This is not a blocker for the current
+  OpenAI-backed backend smoke, but should be configured before claiming
+  Anthropic-managed utility coverage.
 
 ### Imported from retired consolidation trackers
 
