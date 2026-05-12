@@ -62,9 +62,12 @@ Current package truth:
   `~/Library/Application Support/OpenClaw/release.env` and should be inherited
   by all worktrees/chats.
 - API token and Neon URL are stored outside Git in macOS Keychain.
-- Current artifacts are Developer ID signed, but Gatekeeper rejects them as
-  Unnotarized Developer ID until the Apple notary profile is stored in
-  Keychain as `NOTARYTOOL_PROFILE="Jarvis Notary"` or equivalent.
+- Current trusted-tester artifacts from 2026-05-12 are Developer ID signed,
+  notarized, stapled, and Gatekeeper-accepted as `Jarvis.app`, `Jarvis.dmg`,
+  `Jarvis.zip`, and `jarvis-appcast.xml`.
+- The release-credential workflow still needs hardening before the next release
+  lane: replace Apple ID app-specific password / Keychain-profile notarization
+  with App Store Connect API key auth plus async submit/poll/staple receipts.
 - `ai.jarvis.mac` bundle ID/runtime/update identity migration is a required
   launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
 - Cleanup of old OpenClaw apps and worktree `dist` bundles is lower priority
@@ -295,8 +298,9 @@ Say this directly:
 - `ai.jarvis.mac` migration is required before Reddit/GitHub, public-ish beta,
   or a wider beta, and needs a deliberate migration lane because permissions,
   state, LaunchAgents, and update continuity can be affected
-- current Developer ID signed artifacts still need notarization before normal
-  Gatekeeper install trust
+- current trusted-tester artifacts are notarized and Gatekeeper-accepted, but
+  the next release lane should use App Store Connect API key auth and async
+  notarization instead of interactive Apple ID / Keychain-profile recovery
 
 ### Roadmap
 
@@ -304,7 +308,8 @@ Say this directly:
 - cleaner Telegram setup
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
-- Apple notary Keychain profile setup for the beta package
+- App Store Connect API key auth and async notarization receipts for repeatable
+  release packaging
 - better first-run permission copy
 - backend-managed utility cap hardening
 - skill audit and safer third-party skill install flow
