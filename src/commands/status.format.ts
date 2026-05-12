@@ -1,5 +1,6 @@
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
+import { formatContextPressureSuffix } from "./status.summary.js";
 import type { SessionStatus } from "./status.types.js";
 export { shortenText } from "./text-format.js";
 
@@ -33,6 +34,7 @@ export const formatTokensCompact = (
     const pctLabel = sess.percentUsed != null ? `${sess.percentUsed}%` : "?%";
     result = `${formatKTokens(used)}/${formatKTokens(ctx)} (${pctLabel})`;
   }
+  result += formatContextPressureSuffix(sess);
 
   // Add cache hit rate if there are cached reads
   if (typeof cacheRead === "number" && cacheRead > 0) {

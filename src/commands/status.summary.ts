@@ -75,6 +75,33 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   return flags;
 };
 
+const CONTEXT_PRESSURE_THRESHOLD = 75;
+
+export function formatContextPressureSuffix(
+  sess: Pick<SessionStatus, "percentUsed" | "remainingTokens" | "contextTokens">,
+  variant: "compact" | "detailed" = "compact",
+): string {
+  // Keep this intentionally late: we only want to nudge once a session is
+  // already near the edge of its resolved window, not spam warnings early.
+  const percentUsed =
+    typeof sess.percentUsed === "number" && Number.isFinite(sess.percentUsed)
+      ? sess.percentUsed
+      : null;
+  const shouldWarn =
+    percentUsed != null
+      ? percentUsed >= CONTEXT_PRESSURE_THRESHOLD
+      : typeof sess.remainingTokens === "number" &&
+        typeof sess.contextTokens === "number" &&
+        sess.contextTokens > 0 &&
+        sess.remainingTokens / sess.contextTokens <= 1 - CONTEXT_PRESSURE_THRESHOLD / 100;
+  if (!shouldWarn) {
+    return "";
+  }
+  return variant === "detailed"
+    ? " · ⚠️ getting heavy; checkpoint or continue fresh soon"
+    : " · ⚠️ checkpoint soon";
+}
+
 export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
   return {
     ...summary,
