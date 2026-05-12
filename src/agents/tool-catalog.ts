@@ -202,6 +202,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "monitor",
+    label: "monitor",
+    description: "Manage durable monitors",
+    sectionId: "automation",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "gateway",
     label: "gateway",
     description: "Gateway control",

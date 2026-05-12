@@ -237,6 +237,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "For monitor-related replies or status questions, use the monitor-router skill",
     );
+    expect(prompt).toContain(
+      "Before answering a status question about a watched person/task, call monitor list/get",
+    );
+    expect(prompt).toContain("answer from monitor state before old chat memory");
     expect(prompt).toContain("ask a short clarification before ambiguous external actions");
     expect(prompt).toContain("When creating a monitor, encode deterministic wake instructions.");
     expect(prompt).toContain("pin that exact command");
