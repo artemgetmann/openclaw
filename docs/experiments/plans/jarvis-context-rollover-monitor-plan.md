@@ -1,8 +1,9 @@
 # Jarvis Context Rollover and Monitor Continuity Plan
 
-Status: draft  
-Owner: Jarvis/OpenClaw runtime  
+Status: active implementation plan
+Owner: Jarvis/OpenClaw runtime
 Created: 2026-05-11
+Last updated: 2026-05-12
 
 ## Problem
 
@@ -24,12 +25,43 @@ Jarvis should preserve continuity while keeping active working context small.
   live Jarvis config had `reserveTokensFloor: 4000`.
 - Session pruning trims old tool results in memory for selected providers.
 - Tool-result truncation exists as overflow recovery.
+- PR #670 added durable monitor sessions and human-style monitor status
+  guidance.
+- PR #677 exposed monitor state to Telegram-capable agents and injected compact
+  active-monitor awareness into same-session Telegram turns. It merged at
+  2026-05-12 16:54 Malaysia time.
 - After the latest pull, monitors have their own durable `monitorSessionKey`.
 - Monitor wakes now run against that monitor session with
   `sessionDefaultResetMode: "manual"`, so monitor state can persist across
   wakes.
 - Monitor status notes should read like a human assistant talking to the user,
   not like a cron log.
+
+## Progress
+
+Done:
+
+- Monitor wakes now use their own durable monitor sessions instead of resetting
+  on each wake.
+- Telegram-capable agents can see compact active-monitor awareness and use the
+  `monitor` tool.
+- The monitor-router skill owns natural-language routing guidance, so the global
+  system prompt stays small.
+- Isolated Telegram tester proof covered baseline delivery and the monitor
+  status/route prompt path. The shared main Jarvis runtime still needs an
+  explicit build/restart before this code is live there.
+
+Not done:
+
+- The live Jarvis runtime reserve-floor override still needs confirmation and,
+  if approved, correction from `4000` back toward the sane default.
+- There is no model-aware rollover/checkpoint trigger yet.
+- Monitor creation is not deduplicated yet.
+- Oversized raw tool outputs are not yet moved into structured artifacts with
+  compact evidence pointers.
+- Reply-message metadata, where Telegram replies directly to a monitor update
+  carry the exact `monitorId`, is intentionally deferred until current behavior
+  proves insufficient.
 
 ## Non-Goals
 
@@ -117,9 +149,14 @@ When the user asks the main chat about a monitored item, Jarvis should:
 
 This avoids the brittle behavior where only the monitor session knows the truth.
 
-Current safety rail: plain Telegram replies still do not route to
-`monitorSessionKey` yet. That is a follow-up guardrail, not something this plan
-assumes is already live.
+Current behavior after PR #677: the main Telegram topic gets compact monitor
+awareness and can use the `monitor` tool to inspect state. That is the 80/20
+path.
+
+Deferred safety rail: plain Telegram replies still do not carry exact
+`message_id -> monitorId -> monitorSessionKey` metadata. If testing shows
+natural-language routing is too ambiguous, add that bridge later instead of
+front-loading it now.
 
 ## Monitor Router Module
 
@@ -200,11 +237,12 @@ job. Allow explicit advanced override for separate monitors.
 
 ## Open Questions
 
-1. What exact command/API should expose monitor status to the main chat?
-2. Should monitor status be written into `lastCheckpoint`, a separate registry
+1. Should the live Jarvis config restore `reserveTokensFloor` from `4000` to the
+   default-range value before building the full rollover UX?
+2. Should monitor status continue through `lastCheckpoint`, a separate registry
    field, or both?
-3. How should plain Telegram replies to a monitor update be routed when there are
-   multiple active monitors in the same topic?
+3. How often does current natural-language monitor routing become ambiguous in
+   real Telegram use?
 4. What visual/natural-language treatment should Telegram use for rollover
    messages?
 5. Should the macOS app show a "Continue Fresh" action, or should rollover be
@@ -213,8 +251,11 @@ job. Allow explicit advanced override for separate monitors.
 ## 80/20 Implementation Order
 
 1. Restore sane Jarvis compaction reserve floor.
-2. Add monitor status lookup from main chat.
+2. Add monitor status lookup from main chat. Done in PR #677 for the 80/20
+   Telegram path; deeper reply-message metadata is deferred.
 3. Improve monitor checkpoint fields so each wake has compact durable state.
+   Partially done through durable `lastCheckpoint` plumbing; richer structured
+   evidence fields remain.
 4. Add model-aware rollover warning/checkpoint.
 5. Deduplicate monitor creation.
 6. Move oversized raw tool output out of active prompt while keeping evidence
