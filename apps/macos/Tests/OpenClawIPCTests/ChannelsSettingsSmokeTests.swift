@@ -156,4 +156,23 @@ struct ChannelsSettingsSmokeTests {
         let view = ChannelsSettings(store: store)
         _ = view.body
     }
+
+    @Test func `consumer simple channel layout avoids nested sidebars for single channel`() {
+        #expect(ChannelsSettings.usesSingleChannelSettingsLayout(
+            isConsumer: true,
+            showAdvancedSettings: false,
+            channelCount: 1))
+        #expect(!ChannelsSettings.usesSingleChannelSettingsLayout(
+            isConsumer: true,
+            showAdvancedSettings: true,
+            channelCount: 1))
+        #expect(!ChannelsSettings.usesSingleChannelSettingsLayout(
+            isConsumer: true,
+            showAdvancedSettings: false,
+            channelCount: 2))
+        #expect(!ChannelsSettings.usesSingleChannelSettingsLayout(
+            isConsumer: false,
+            showAdvancedSettings: false,
+            channelCount: 1))
+    }
 }
