@@ -8,6 +8,7 @@ import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import type { TemplateContext } from "../templating.js";
+import { CONTEXT_PRESSURE_NOTICE_TEXT } from "./context-pressure-notice.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
@@ -746,6 +747,117 @@ describe("runReplyAgent auto-compaction token update", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     // totalTokens should use lastCallUsage (55k), not accumulated (75k)
     expect(stored[sessionKey].totalTokens).toBe(55_000);
+  });
+
+  it("prepends a context pressure notice once and persists the dedupe marker", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pressure-notice-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: {
+          promptTokens: 150_000,
+          usage: { input: 1, output: 1, total: 2 },
+        },
+      },
+    });
+
+    const config = {
+      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
+    };
+    const firstRun = createBaseRun({
+      storePath,
+      sessionEntry,
+      config,
+    });
+
+    const firstResult = await runReplyAgent({
+      commandBody: "hello",
+      followupRun: firstRun.followupRun,
+      queueKey: "main",
+      resolvedQueue: firstRun.resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing: firstRun.typing,
+      sessionCtx: firstRun.sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(Array.isArray(firstResult)).toBe(true);
+    expect(firstResult).toMatchObject([{ text: CONTEXT_PRESSURE_NOTICE_TEXT }, { text: "done" }]);
+
+    const storedAfterFirst = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(storedAfterFirst[sessionKey].contextPressureNoticeAt).toEqual(expect.any(Number));
+    expect(storedAfterFirst[sessionKey].contextPressureNoticeCompactionCount).toBe(0);
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done again" }],
+      meta: {
+        agentMeta: {
+          promptTokens: 150_000,
+          usage: { input: 1, output: 1, total: 2 },
+        },
+      },
+    });
+
+    const secondStore = loadSessionStore(storePath, { skipCache: true });
+    const secondEntry = secondStore[sessionKey];
+    const secondRun = createBaseRun({
+      storePath,
+      sessionEntry: secondEntry,
+      config,
+    });
+
+    const secondResult = await runReplyAgent({
+      commandBody: "hello",
+      followupRun: secondRun.followupRun,
+      queueKey: "main",
+      resolvedQueue: secondRun.resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing: secondRun.typing,
+      sessionCtx: secondRun.sessionCtx,
+      sessionEntry: secondEntry,
+      sessionStore: secondStore,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(secondResult).toMatchObject({ text: "done again" });
   });
 
   it("does not enqueue legacy post-compaction audit warnings", async () => {
