@@ -13,11 +13,16 @@ Jarvis is the public consumer brand from the start. OpenClaw can appear as
 technical, developer, repo, or "powered by OpenClaw" language only.
 
 Public-facing app/docs, visible app name, release artifacts, and app icon are
-Jarvis now. Bundle ID, runtime identity, update feed identity, and deeper
-internal renames intentionally stay on `ai.openclaw.consumer.mac` and OpenClaw
-paths for the beta package. Move those internals only in a separate migration
-lane, because changing them can reset macOS permissions/state and create
-support churn.
+Jarvis now.
+
+For the 3 trusted waiting testers only, bundle ID, runtime identity, update
+feed identity, and deeper internal renames intentionally stay on
+`ai.openclaw.consumer.mac` and OpenClaw paths so the notarized package can ship
+fastest. Before Reddit/GitHub, public-ish beta, or any wider beta beyond that
+tiny trusted ring, `ai.jarvis.mac` bundle ID/runtime/update identity migration
+is a required launch gate. Do not treat that migration as a quick rename; it
+needs a deliberate lane because it can affect permissions, state, LaunchAgents,
+and update continuity.
 
 ## Backend deployment status
 
@@ -51,7 +56,8 @@ Current package truth:
 - Jarvis visible branding is in place for the app name, release artifacts, and
   app icon.
 - Bundle ID/runtime/update identity remain `ai.openclaw.consumer.mac` and
-  OpenClaw paths by deliberate decision.
+  OpenClaw paths only for the 3 trusted waiting testers by deliberate 80/20
+  decision.
 - Non-secret Sparkle release config lives at
   `~/Library/Application Support/OpenClaw/release.env` and should be inherited
   by all worktrees/chats.
@@ -59,8 +65,8 @@ Current package truth:
 - Current artifacts are Developer ID signed, but Gatekeeper rejects them as
   Unnotarized Developer ID until the Apple notary profile is stored in
   Keychain as `NOTARYTOOL_PROFILE="Jarvis Notary"` or equivalent.
-- Bundle ID migration is not a beta package blocker; it belongs in a separate
-  migration lane.
+- `ai.jarvis.mac` bundle ID/runtime/update identity migration is a required
+  launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
 - Cleanup of old OpenClaw apps and worktree `dist` bundles is lower priority
   than notarized Jarvis package proof.
 
@@ -284,7 +290,11 @@ Say this directly:
 - third-party skills can run code and should be treated as untrusted until
   reviewed
 - visible app/artifact/icon branding is Jarvis, but internal bundle/runtime/
-  update identities need a separate migration
+  update identities stay on `ai.openclaw.consumer.mac` only for the 3 trusted
+  waiting testers
+- `ai.jarvis.mac` migration is required before Reddit/GitHub, public-ish beta,
+  or a wider beta, and needs a deliberate migration lane because permissions,
+  state, LaunchAgents, and update continuity can be affected
 - current Developer ID signed artifacts still need notarization before normal
   Gatekeeper install trust
 
@@ -298,7 +308,8 @@ Say this directly:
 - better first-run permission copy
 - backend-managed utility cap hardening
 - skill audit and safer third-party skill install flow
-- separate bundle ID/runtime/update identity migration after beta package proof
+- `ai.jarvis.mac` bundle ID/runtime/update identity migration before
+  Reddit/GitHub, public-ish beta, or any wider beta
 - website after GitHub/Reddit signal
 
 ## 60-second demo script
