@@ -266,6 +266,64 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("batches duplicate tool progress into the answer draft when preview streaming is on", async () => {
+    const draftStream = createDraftStream(9001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "browser.status", phase: "start" });
+        await replyOptions?.onToolStart?.({ name: "browser.status", phase: "start" });
+        await replyOptions?.onToolResult?.({ text: "🔧 browser.status: checking tab state" });
+        await replyOptions?.onToolResult?.({ text: "🔧 browser.status: checking tab state" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).toHaveBeenCalledWith("🔧 browser.status");
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "🔧 browser.status\n🔧 browser.status: checking tab state",
+    );
+    expect(
+      deliverReplies.mock.calls.some(
+        ([arg]) =>
+          (arg as { replies?: Array<{ text?: string }> }).replies?.[0]?.text ===
+          "🔧 browser.status: checking tab state",
+      ),
+    ).toBe(false);
+  });
+
+  it("still delivers media-bearing tool payloads while batching text progress", async () => {
+    const draftStream = createDraftStream(9002);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "browser.screenshot", phase: "start" });
+      await replyOptions?.onToolResult?.({
+        text: "Screenshot captured",
+        mediaUrls: ["file:///tmp/screenshot.png"],
+      });
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).toHaveBeenCalledWith("🔧 browser.screenshot");
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: "Screenshot captured",
+            mediaUrls: ["file:///tmp/screenshot.png"],
+          }),
+        ],
+      }),
+    );
+  });
+
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(

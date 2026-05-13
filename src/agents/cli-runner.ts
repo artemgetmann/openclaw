@@ -450,6 +450,42 @@ function buildClaudeBridgePrompt(params: {
   return padClaudeBridgePrompt(`${prompt}${fillerSource}`);
 }
 
+function buildClaudeCliWorkspaceBootstrapAppendix(params: {
+  workspaceDir: string;
+  contextFiles: Array<{ path: string; content: string }>;
+  bootstrapTruncationWarningLines: string[];
+}): string {
+  const validContextFiles = params.contextFiles.filter(
+    (file) => typeof file.path === "string" && file.path.trim().length > 0,
+  );
+  const warningLines = params.bootstrapTruncationWarningLines.filter(
+    (line) => line.trim().length > 0,
+  );
+  if (validContextFiles.length === 0 && warningLines.length === 0) {
+    return "";
+  }
+
+  const lines = [
+    "# OpenClaw Workspace Bootstrap",
+    "",
+    "Use these OpenClaw workspace bootstrap files as the source of truth for this product/runtime session.",
+    "Do not treat Claude Code user-level memory, ~/.claude/projects, or ~/.claude/CLAUDE.md as authoritative for this OpenClaw run.",
+    `Runtime workspace: ${params.workspaceDir}`,
+    "",
+  ];
+  if (warningLines.length > 0) {
+    lines.push("Bootstrap truncation warning:");
+    for (const warningLine of warningLines) {
+      lines.push(`- ${warningLine}`);
+    }
+    lines.push("");
+  }
+  for (const file of validContextFiles) {
+    lines.push(`## ${file.path}`, "", file.content, "");
+  }
+  return lines.join("\n").trim();
+}
+
 async function buildCliAgentPromptStack(params: {
   sessionId: string;
   sessionKey?: string;
@@ -867,15 +903,14 @@ export async function runCliAgent(params: {
 
   const useBridgeSafeClaudeCliPrompt = backendResolved.id === "claude-cli";
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles } = useBridgeSafeClaudeCliPrompt
-    ? { bootstrapFiles: [], contextFiles: [] }
-    : await resolveBootstrapContextForRun({
-        workspaceDir,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-      });
+  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+    workspaceDir,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+  });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
   const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -911,11 +946,23 @@ export async function runCliAgent(params: {
         moduleUrl: import.meta.url,
       });
   const systemPrompt = useBridgeSafeClaudeCliPrompt
-    ? buildClaudeBridgePrompt({
-        mode: resolveClaudeBridgePromptMode(),
-        splitMode: resolveClaudeBridgeSplitMode(),
-        extraSystemPrompt: params.extraSystemPrompt,
-      })
+    ? [
+        buildClaudeBridgePrompt({
+          mode: resolveClaudeBridgePromptMode(),
+          splitMode: resolveClaudeBridgeSplitMode(),
+          extraSystemPrompt: params.extraSystemPrompt,
+        }),
+        // Claude CLI still needs the small Bridge-safe identity prompt, but Telegram/product
+        // runs must not answer from the host user's ~/.claude memory. Append only the bounded
+        // OpenClaw bootstrap files instead of switching to the full OpenClaw prompt stack.
+        buildClaudeCliWorkspaceBootstrapAppendix({
+          workspaceDir,
+          contextFiles,
+          bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
+        }),
+      ]
+        .filter((section) => section.trim().length > 0)
+        .join("\n\n")
     : buildSystemPrompt({
         workspaceDir,
         config: params.config,

@@ -57,6 +57,23 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 /** Minimum chars before sending first streaming message (improves push notification UX). */
 const DRAFT_MIN_INITIAL_CHARS = 12;
 const DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW = 1;
+const TOOL_PROGRESS_MAX_LINES = 6;
+
+function normalizeToolProgressLine(text?: string) {
+  return text?.replace(/\s+/g, " ").trim();
+}
+
+function formatToolStartProgressLine(payload: { name?: string; phase?: string }) {
+  const name = normalizeToolProgressLine(payload.name) ?? "tool";
+  const phase = normalizeToolProgressLine(payload.phase);
+  return phase && phase !== "start" ? `🔧 ${name} ${phase}` : `🔧 ${name}`;
+}
+
+function hasToolPayloadContent(payload: ReplyPayload) {
+  return (
+    Boolean(payload.text?.trim()) || Boolean(payload.mediaUrl) || Boolean(payload.mediaUrls?.length)
+  );
+}
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -283,6 +300,7 @@ export const dispatchTelegramMessage = async ({
   const reasoningLane = lanes.reasoning;
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
+  let toolProgressLines: string[] = [];
   let draftLaneEventQueue = Promise.resolve();
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
@@ -378,6 +396,9 @@ export const dispatchTelegramMessage = async ({
       skipNextAnswerMessageStartRotation = await rotateAnswerLaneForNewAssistantMessage();
     }
     for (const segment of split.segments) {
+      if (segment.lane === "answer") {
+        resetToolProgressDraft();
+      }
       if (segment.lane === "reasoning") {
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
@@ -390,6 +411,26 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     await lane.stream.flush();
+  };
+  const canStreamToolProgressDraft = Boolean(answerLane.stream);
+  const renderToolProgressDraftText = () => toolProgressLines.join("\n");
+  const resetToolProgressDraft = () => {
+    toolProgressLines = [];
+  };
+  const pushToolProgressDraft = (line?: string) => {
+    if (!canStreamToolProgressDraft) {
+      return false;
+    }
+    const normalized = normalizeToolProgressLine(line);
+    if (!normalized) {
+      return false;
+    }
+    if (toolProgressLines.at(-1) === normalized) {
+      return true;
+    }
+    toolProgressLines = [...toolProgressLines, normalized].slice(-TOOL_PROGRESS_MAX_LINES);
+    updateDraftFromPartial(answerLane, renderToolProgressDraftText());
+    return true;
   };
 
   const disableBlockStreaming = !previewStreamingEnabled
@@ -529,14 +570,18 @@ export const dispatchTelegramMessage = async ({
     return result.delivered;
   };
   const sendToolPayload = async (payload: ReplyPayload) => {
+    if (
+      canStreamToolProgressDraft &&
+      !payload.mediaUrl &&
+      !payload.mediaUrls?.length &&
+      pushToolProgressDraft(payload.text)
+    ) {
+      return;
+    }
     // Tool payloads already arrive fully structured, including media URLs from
     // trusted tool results. Deliver them directly so Telegram does not have to
     // infer media from assistant prose after the model paraphrases the tool.
-    const hasContent =
-      Boolean(payload.text?.length) ||
-      Boolean(payload.mediaUrl) ||
-      Boolean(payload.mediaUrls?.length);
-    if (!hasContent) {
+    if (!hasToolPayloadContent(payload)) {
       return;
     }
     await sendPayload(payload);
@@ -655,6 +700,9 @@ export const dispatchTelegramMessage = async ({
             if (segment.lane === "reasoning") {
               reasoningStepState.noteReasoningHint();
             }
+            if (segment.lane === "answer") {
+              resetToolProgressDraft();
+            }
             const result = await deliverLaneText({
               laneName: segment.lane,
               text: segment.text,
@@ -753,6 +801,7 @@ export const dispatchTelegramMessage = async ({
           ? () =>
               enqueueDraftLaneEvent(async () => {
                 reasoningStepState.resetForNextStep();
+                resetToolProgressDraft();
                 if (skipNextAnswerMessageStartRotation) {
                   skipNextAnswerMessageStartRotation = false;
                   activePreviewLifecycleByLane.answer = "transient";
@@ -777,9 +826,18 @@ export const dispatchTelegramMessage = async ({
           : undefined,
         onToolStart: statusReactionController
           ? async (payload) => {
+              const progressPromise = enqueueDraftLaneEvent(async () => {
+                pushToolProgressDraft(formatToolStartProgressLine(payload));
+              });
               await statusReactionController.setTool(payload.name);
+              await progressPromise;
             }
-          : undefined,
+          : canStreamToolProgressDraft
+            ? (payload) =>
+                enqueueDraftLaneEvent(async () => {
+                  pushToolProgressDraft(formatToolStartProgressLine(payload));
+                })
+            : undefined,
         onCompactionStart: statusReactionController
           ? () => statusReactionController.setCompacting()
           : undefined,

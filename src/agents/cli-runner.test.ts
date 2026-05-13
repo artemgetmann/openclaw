@@ -252,7 +252,7 @@ describe("runCliAgent with process supervisor", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(
       path.join(workspaceDir, "AGENTS.md"),
-      "# AGENTS.md - Test Workspace\n\nThis full OpenClaw prompt content must not be inlined.\n",
+      "# AGENTS.md - Test Workspace\n\nWorkspace bootstrap marker for Claude CLI source isolation.\n",
       "utf-8",
     );
     const stdout = [
@@ -326,7 +326,7 @@ describe("runCliAgent with process supervisor", () => {
       expect(result.payloads?.[0]?.text).toBe("Hello there");
       expect(result.meta.agentMeta?.sessionId).toBe("claude-session-1");
       expect(result.meta.agentMeta?.usage?.cacheWrite).toBe(3);
-      expect(result.meta.systemPromptReport?.injectedWorkspaceFiles).toEqual([]);
+      expect(result.meta.systemPromptReport?.injectedWorkspaceFiles?.[0]?.name).toBe("AGENTS.md");
       expect(result.meta.systemPromptReport?.systemPrompt.projectContextChars).toBe(0);
       expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
       expect(onPartialReply.mock.calls).toEqual([[{ text: "Hello" }], [{ text: "Hello there" }]]);
@@ -339,8 +339,11 @@ describe("runCliAgent with process supervisor", () => {
         "Your home is the runtime workspace at ~/.openclaw/workspace.",
       );
       expect(systemPrompt).toContain("~/.openclaw/workspace/AGENTS.md first");
+      expect(systemPrompt).toContain("# OpenClaw Workspace Bootstrap");
+      expect(systemPrompt).toContain("Do not treat Claude Code user-level memory");
+      expect(systemPrompt).toContain(`${workspaceDir}/AGENTS.md`);
+      expect(systemPrompt).toContain("Workspace bootstrap marker for Claude CLI source isolation.");
       expect(systemPrompt).not.toContain("# Project Context");
-      expect(systemPrompt).not.toContain("This full OpenClaw prompt content must not be inlined.");
       expect(JSON.stringify(argv)).not.toContain("Tools are disabled");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });

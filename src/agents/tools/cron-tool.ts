@@ -196,13 +196,23 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   }
 
   let channel: CronMessageChannel | undefined;
+  let accountId: string | undefined;
   if (markerIndex >= 1) {
     channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
+  }
+  if (markerIndex >= 2) {
+    const inferredAccountId = parts[1]?.trim();
+    if (inferredAccountId) {
+      accountId = inferredAccountId;
+    }
   }
 
   const delivery: CronDelivery = { mode: "announce", to: peerId };
   if (channel) {
     delivery.channel = channel;
+  }
+  if (accountId) {
+    delivery.accountId = accountId;
   }
   return delivery;
 }
