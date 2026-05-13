@@ -468,6 +468,8 @@ Live tester rerun after PR #683:
 - Claude model switching passed: `/model claude-cli/haiku` returned `Model set to claude-cli/haiku.`
 - Source isolation passed: Claude returned `SOURCE_ISOLATION_OK` and explicitly said `~/.claude/CLAUDE.md` and `~/.claude/projects` are not authoritative for the OpenClaw Telegram session.
 - Source-reporting nuance: Claude reported `/Users/user/.openclaw/workspace` as the OpenClaw bootstrap workspace, not the repo worktree path. That is acceptable for the bounded bootstrap shape, but keep this distinction visible in future main-bot rollout review.
+- Follow-up prompt/files visibility audit returned `PROMPT_FILES_VISIBLE_OK`, but with an important caveat: Claude said `~/.claude/CLAUDE.md` and `~/.claude/projects/.../MEMORY.md` were present in context while not authoritative, and that style from `~/.claude/CLAUDE.md` may still bleed through. Treat the fix as authority isolation, not complete user-context invisibility.
+- The same audit said `/Users/user/.openclaw/CLAUDE.md` was loaded and `/Users/user/.openclaw/workspace/AGENTS.md` was canonical but not directly loaded in the current context window. If the product requirement is "Claude cannot see any native Claude user context," this PR is not sufficient; if the requirement is "Claude must not treat native Claude user context as OpenClaw authority," the live proof is green.
 - Progress/no-spam proof passed at the basic level: the Claude CLI fetch-style probe returned one final Telegram message with `PROGRESS_BATCHING_OK`, and `telegram-user read --after-id` showed no extra visible progress spam for that turn.
 - Progress batching remains only partially proven because the prompt completed quickly and did not produce a long multi-tool progress stream.
 - Reminder creation reached the cron tool path and returned job id `1a791dc3-19c3-444e-b098-a292b7c9c4f2`.
@@ -478,7 +480,7 @@ Live tester rerun after PR #683:
 Current read:
 
 - Claude CLI is operational in the isolated tester Telegram lane after config/auth setup, including direct `/model` switching.
-- Prompt/source isolation is green enough for review and merge: the old `~/.claude` authority leak did not reproduce.
+- Prompt/source isolation is green enough for review and merge under the authority-isolation definition: the old `~/.claude` authority leak did not reproduce, but native Claude user context can still be visible as non-authoritative context.
 - Progress batching is green enough for the no-spam concern, but still needs one slower multi-tool Telegram turn before calling the UX fully proven.
 - Reminder firing is improved but not fully green for the original blocker. The next test must force a named per-account Telegram route and assert persisted `delivery.accountId`, exact reminder text, cron run success, and Telegram arrival from that tester account.
 - Not green enough for default main-bot exposure until the per-account reminder route proof and a slower progress-stream proof pass. Green enough to merge PR #683 as the prompt/source isolation and focused code fixes are covered, with reminder proof carried as the next isolated runtime slice.
