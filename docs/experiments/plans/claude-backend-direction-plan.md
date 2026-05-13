@@ -395,7 +395,7 @@ Scope boundary:
 
 ### Slice 2c: Tester Telegram visibility and feel probe
 
-Status: live tester-bot proof passed for model selection; follow-up blocker fixes are implemented with focused unit coverage. Live tester rerun is still required before main-bot exposure.
+Status: live tester-bot rerun passed for Claude CLI model selection, source isolation, and basic progress/no-spam behavior. Reminder firing worked, but the rerun did not fully exercise the per-account `accountId` preservation bug because the isolated tester config used the default unnamed Telegram account route.
 
 What was required in the isolated tester lane:
 
@@ -456,12 +456,32 @@ Follow-up fixes:
 - Progress/status UX: `extensions/telegram/src/bot-message-dispatch.ts` now batches text-only tool progress into the editable answer draft lane when preview streaming is available, dedupes adjacent repeats, and still sends media-bearing tool payloads normally. Focused proof passed: `pnpm vitest run extensions/telegram/src/bot-message-dispatch.test.ts --pool=forks --maxWorkers=1` passed 1 file / 72 tests.
 - Claude setup UX: `src/commands/models/consumer-auth.ts` now hides `anthropic-claude-cli` until the configured local `claude` command is executable and readable Claude auth exists. Direct apply fails with install/sign-in instructions when missing. This keeps Claude hidden/default-off without bundling Claude Code.
 
+Live tester rerun after PR #683:
+
+- Date: 2026-05-13.
+- Worktree: `/Users/user/.codex/worktrees/claude-cli-next/claude-cli-next-20260512`.
+- Branch/commit: `codex/claude-cli-next-20260512` at `98957d02c9356a59bc2dd90d4bcd1ee4427188c1`.
+- Tester bot: `@Artem_jarvis_exec_bot`.
+- Runtime ownership passed: doctor reported runtime PID `47473`, port `20510`, and `runtime_worktree=/Users/user/.codex/worktrees/claude-cli-next/claude-cli-next-20260512`.
+- Baseline wiring passed after approving tester-only Telegram pairing for user id `1336356696`.
+- The helper-managed Telegram tester runtime was not enough for this rerun because `telegram runtime ensure` can regenerate the isolated config and strip the temporary `claude-cli/*` model entries; the final proof used a manual isolated runtime pointed at the patched tester config.
+- Claude model switching passed: `/model claude-cli/haiku` returned `Model set to claude-cli/haiku.`
+- Source isolation passed: Claude returned `SOURCE_ISOLATION_OK` and explicitly said `~/.claude/CLAUDE.md` and `~/.claude/projects` are not authoritative for the OpenClaw Telegram session.
+- Source-reporting nuance: Claude reported `/Users/user/.openclaw/workspace` as the OpenClaw bootstrap workspace, not the repo worktree path. That is acceptable for the bounded bootstrap shape, but keep this distinction visible in future main-bot rollout review.
+- Progress/no-spam proof passed at the basic level: the Claude CLI fetch-style probe returned one final Telegram message with `PROGRESS_BATCHING_OK`, and `telegram-user read --after-id` showed no extra visible progress spam for that turn.
+- Progress batching remains only partially proven because the prompt completed quickly and did not produce a long multi-tool progress stream.
+- Reminder creation reached the cron tool path and returned job id `1a791dc3-19c3-444e-b098-a292b7c9c4f2`.
+- Reminder firing passed at the delivery layer: cron state recorded `lastRunStatus=ok`, `lastDelivered=true`, and `lastDeliveryStatus=delivered`; Telegram received `Reminder delivered.`
+- Reminder proof caveat: the stored job used `delivery.mode=announce` and `sessionKey=agent:main:main`, not a per-account Telegram session key; it therefore did not prove the `delivery.accountId` preservation fix. It also did not deliver the requested nonce text, only the generic delivery summary.
+- Tester-runtime caveat: the standard helper starts isolated Telegram runtime with `OPENCLAW_SKIP_CRON=1`, so reminder firing proof requires a manual cron-enabled isolated runtime or a helper option that keeps cron enabled for this exact test.
+
 Current read:
 
-- Claude CLI is operational in the tester Telegram lane, including direct `/model` switching and at least one real tool call.
-- The prompt/source, reminder-targeting, progress-batching, and setup-detection fixes are implemented with focused tests.
-- Green enough to keep testing: model switching, recent-session continuity, fetch/browser, authenticated browser reads, wacli, and the patched blockers are usable in the tester lane after rerun.
-- Not green enough for full main-bot exposure by default until isolated tester live proof confirms source reporting, reminder delivery, and bundled progress behavior under the running Telegram runtime.
+- Claude CLI is operational in the isolated tester Telegram lane after config/auth setup, including direct `/model` switching.
+- Prompt/source isolation is green enough for review and merge: the old `~/.claude` authority leak did not reproduce.
+- Progress batching is green enough for the no-spam concern, but still needs one slower multi-tool Telegram turn before calling the UX fully proven.
+- Reminder firing is improved but not fully green for the original blocker. The next test must force a named per-account Telegram route and assert persisted `delivery.accountId`, exact reminder text, cron run success, and Telegram arrival from that tester account.
+- Not green enough for default main-bot exposure until the per-account reminder route proof and a slower progress-stream proof pass. Green enough to merge PR #683 as the prompt/source isolation and focused code fixes are covered, with reminder proof carried as the next isolated runtime slice.
 
 ### Slice 3: Warm Claude CLI spike
 
