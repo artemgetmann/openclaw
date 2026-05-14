@@ -396,9 +396,6 @@ export const dispatchTelegramMessage = async ({
       skipNextAnswerMessageStartRotation = await rotateAnswerLaneForNewAssistantMessage();
     }
     for (const segment of split.segments) {
-      if (segment.lane === "answer") {
-        resetToolProgressDraft();
-      }
       if (segment.lane === "reasoning") {
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
@@ -413,7 +410,11 @@ export const dispatchTelegramMessage = async ({
     await lane.stream.flush();
   };
   const canStreamToolProgressDraft = Boolean(answerLane.stream);
-  const renderToolProgressDraftText = () => toolProgressLines.join("\n");
+  const renderToolProgressDraftText = () => toolProgressLines.join("\n\n");
+  const renderTextWithToolProgress = (text: string) => {
+    const progressText = renderToolProgressDraftText();
+    return progressText ? `${progressText}\n\n${text}` : text;
+  };
   const resetToolProgressDraft = () => {
     toolProgressLines = [];
   };
@@ -643,120 +644,130 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         deliver: async (payload, info) => {
-          if (info.kind === "final") {
-            // Assistant callbacks are fire-and-forget; ensure queued boundary
-            // rotations/partials are applied before final delivery mapping.
-            await enqueueDraftLaneEvent(async () => {});
-          }
-          if (
-            shouldSuppressLocalTelegramExecApprovalPrompt({
-              cfg,
-              accountId: route.accountId,
-              payload,
-            })
-          ) {
-            queuedFinal = true;
-            return;
-          }
-          const previewButtons = (
-            payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
-          )?.buttons;
-          const split = splitTextIntoLaneSegments(payload.text);
-          const segments = split.segments;
-          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-
-          const flushBufferedFinalAnswer = async () => {
-            const buffered = reasoningStepState.takeBufferedFinalAnswer();
-            if (!buffered) {
+          try {
+            if (info.kind === "final") {
+              // Assistant callbacks are fire-and-forget; ensure queued boundary
+              // rotations/partials are applied before final delivery mapping.
+              await enqueueDraftLaneEvent(async () => {});
+            }
+            if (
+              shouldSuppressLocalTelegramExecApprovalPrompt({
+                cfg,
+                accountId: route.accountId,
+                payload,
+              })
+            ) {
+              queuedFinal = true;
               return;
             }
-            const bufferedButtons = (
-              buffered.payload.channelData?.telegram as
-                | { buttons?: TelegramInlineButtons }
-                | undefined
+            const previewButtons = (
+              payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
             )?.buttons;
-            await deliverLaneText({
-              laneName: "answer",
-              text: buffered.text,
-              payload: buffered.payload,
-              infoKind: "final",
-              previewButtons: bufferedButtons,
-            });
-            reasoningStepState.resetForNextStep();
-          };
+            const split = splitTextIntoLaneSegments(payload.text);
+            const segments = split.segments;
+            const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
-          for (const segment of segments) {
-            if (
-              segment.lane === "answer" &&
-              info.kind === "final" &&
-              reasoningStepState.shouldBufferFinalAnswer()
-            ) {
-              reasoningStepState.bufferFinalAnswer({
-                payload,
-                text: segment.text,
+            const flushBufferedFinalAnswer = async () => {
+              const buffered = reasoningStepState.takeBufferedFinalAnswer();
+              if (!buffered) {
+                return;
+              }
+              const bufferedButtons = (
+                buffered.payload.channelData?.telegram as
+                  | { buttons?: TelegramInlineButtons }
+                  | undefined
+              )?.buttons;
+              await deliverLaneText({
+                laneName: "answer",
+                text: renderTextWithToolProgress(buffered.text),
+                payload: buffered.payload,
+                infoKind: "final",
+                previewButtons: bufferedButtons,
               });
-              continue;
+              reasoningStepState.resetForNextStep();
+            };
+
+            for (const segment of segments) {
+              if (
+                segment.lane === "answer" &&
+                info.kind === "final" &&
+                reasoningStepState.shouldBufferFinalAnswer()
+              ) {
+                reasoningStepState.bufferFinalAnswer({
+                  payload,
+                  text: segment.text,
+                });
+                continue;
+              }
+              if (segment.lane === "reasoning") {
+                reasoningStepState.noteReasoningHint();
+              }
+              const result = await deliverLaneText({
+                laneName: segment.lane,
+                text:
+                  segment.lane === "answer"
+                    ? renderTextWithToolProgress(segment.text)
+                    : segment.text,
+                payload,
+                infoKind: info.kind,
+                previewButtons,
+                allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
+              });
+              if (segment.lane === "reasoning") {
+                if (result !== "skipped") {
+                  reasoningStepState.noteReasoningDelivered();
+                  await flushBufferedFinalAnswer();
+                }
+                continue;
+              }
+              if (info.kind === "final") {
+                if (reasoningLane.hasStreamedMessage) {
+                  activePreviewLifecycleByLane.reasoning = "complete";
+                  retainPreviewOnCleanupByLane.reasoning = true;
+                }
+                reasoningStepState.resetForNextStep();
+              }
             }
-            if (segment.lane === "reasoning") {
-              reasoningStepState.noteReasoningHint();
+            if (segments.length > 0) {
+              return;
             }
-            if (segment.lane === "answer") {
-              resetToolProgressDraft();
-            }
-            const result = await deliverLaneText({
-              laneName: segment.lane,
-              text: segment.text,
-              payload,
-              infoKind: info.kind,
-              previewButtons,
-              allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
-            });
-            if (segment.lane === "reasoning") {
-              if (result !== "skipped") {
-                reasoningStepState.noteReasoningDelivered();
+            if (split.suppressedReasoningOnly) {
+              if (hasMedia) {
+                const payloadWithoutSuppressedReasoning =
+                  typeof payload.text === "string" ? { ...payload, text: "" } : payload;
+                await sendPayload(payloadWithoutSuppressedReasoning);
+              }
+              if (info.kind === "final") {
                 await flushBufferedFinalAnswer();
               }
-              continue;
+              return;
             }
+
             if (info.kind === "final") {
-              if (reasoningLane.hasStreamedMessage) {
-                activePreviewLifecycleByLane.reasoning = "complete";
-                retainPreviewOnCleanupByLane.reasoning = true;
-              }
+              await answerLane.stream?.stop();
+              await reasoningLane.stream?.stop();
               reasoningStepState.resetForNextStep();
             }
-          }
-          if (segments.length > 0) {
-            return;
-          }
-          if (split.suppressedReasoningOnly) {
-            if (hasMedia) {
-              const payloadWithoutSuppressedReasoning =
-                typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-              await sendPayload(payloadWithoutSuppressedReasoning);
+            const canSendAsIs =
+              hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
+            if (!canSendAsIs) {
+              if (info.kind === "final") {
+                await flushBufferedFinalAnswer();
+              }
+              return;
             }
+            await sendPayload(
+              payload.text
+                ? applyTextToPayload(payload, renderTextWithToolProgress(payload.text))
+                : payload,
+            );
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
             }
-            return;
-          }
-
-          if (info.kind === "final") {
-            await answerLane.stream?.stop();
-            await reasoningLane.stream?.stop();
-            reasoningStepState.resetForNextStep();
-          }
-          const canSendAsIs =
-            hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
-          if (!canSendAsIs) {
+          } finally {
             if (info.kind === "final") {
-              await flushBufferedFinalAnswer();
+              resetToolProgressDraft();
             }
-            return;
-          }
-          await sendPayload(payload);
-          if (info.kind === "final") {
-            await flushBufferedFinalAnswer();
           }
         },
         onSkip: (_payload, info) => {
@@ -801,7 +812,6 @@ export const dispatchTelegramMessage = async ({
           ? () =>
               enqueueDraftLaneEvent(async () => {
                 reasoningStepState.resetForNextStep();
-                resetToolProgressDraft();
                 if (skipNextAnswerMessageStartRotation) {
                   skipNextAnswerMessageStartRotation = false;
                   activePreviewLifecycleByLane.answer = "transient";

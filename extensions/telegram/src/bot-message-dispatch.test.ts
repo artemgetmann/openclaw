@@ -280,12 +280,19 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     );
     deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9001" });
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(draftStream.update).toHaveBeenCalledWith("🔧 browser.status");
     expect(draftStream.update).toHaveBeenCalledWith(
-      "🔧 browser.status\n🔧 browser.status: checking tab state",
+      "🔧 browser.status\n\n🔧 browser.status: checking tab state",
+    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9001,
+      "🔧 browser.status\n\n🔧 browser.status: checking tab state\n\nDone",
+      expect.any(Object),
     );
     expect(
       deliverReplies.mock.calls.some(
@@ -294,6 +301,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
           "🔧 browser.status: checking tab state",
       ),
     ).toBe(false);
+    expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
   it("still delivers media-bearing tool payloads while batching text progress", async () => {

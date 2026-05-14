@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runCliAgent } from "./cli-runner.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import { writeSkill } from "./skills.e2e-test-helpers.js";
 
 const supervisorSpawnMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
@@ -314,6 +315,7 @@ describe("runCliAgent with process supervisor", () => {
         sessionId: "s1",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir,
+        config: createTextClaudeCliConfig(),
         prompt: "hi",
         provider: "claude-cli",
         model: "opus",
@@ -345,6 +347,67 @@ describe("runCliAgent with process supervisor", () => {
       expect(systemPrompt).toContain("Workspace bootstrap marker for Claude CLI source isolation.");
       expect(systemPrompt).not.toContain("# Project Context");
       expect(JSON.stringify(argv)).not.toContain("Tools are disabled");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("includes workspace skills in the bridge-safe claude-cli prompt", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-skills-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.md"),
+      "# AGENTS.md - Test Workspace\n\nBridge-safe skill injection test instructions.\n",
+      "utf-8",
+    );
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "tone-of-voice"),
+      name: "tone-of-voice",
+      description: "Artem tone guidance",
+      body: "# Artem tone of voice\n\nUse direct, founder-mode language.\n",
+    });
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      const result = await runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir,
+        config: createTextClaudeCliConfig(),
+        prompt: "hi",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-skills",
+      });
+
+      const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+      const argv = spawnInput.argv ?? [];
+      const systemPromptIndex = argv.indexOf("--append-system-prompt");
+      expect(systemPromptIndex).toBeGreaterThanOrEqual(0);
+      const systemPrompt = argv[systemPromptIndex + 1] ?? "";
+      expect(systemPrompt).toContain("Do not treat Claude Code user-level memory");
+      expect(systemPrompt).toContain("<available_skills>");
+      expect(systemPrompt).toContain("tone-of-voice");
+      expect(systemPrompt).toContain("Artem tone guidance");
+      expect(systemPrompt).toContain("Bridge-safe skill injection test instructions.");
+      expect(result.meta.systemPromptReport?.skills.promptChars).toBeGreaterThan(0);
+      expect(result.meta.systemPromptReport?.skills.entries.map((entry) => entry.name)).toContain(
+        "tone-of-voice",
+      );
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
