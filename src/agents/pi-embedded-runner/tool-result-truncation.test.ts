@@ -30,6 +30,15 @@ function makeToolResult(text: string, toolCallId = "call_1"): ToolResultMessage 
   };
 }
 
+function getToolResultTexts(message: AgentMessage): string[] {
+  if (message.role !== "toolResult") {
+    return [];
+  }
+  return message.content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text);
+}
+
 function makeUserMessage(text: string): UserMessage {
   return {
     role: "user",
@@ -150,6 +159,52 @@ describe("truncateToolResultMessage", () => {
     expect(firstBlock && "text" in firstBlock ? firstBlock.text : "").toContain(
       "[persist-truncated]",
     );
+  });
+
+  it("keeps multi-block tool results within the total configured text cap", () => {
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [
+        { type: "text", text: "short metadata" },
+        { type: "text", text: "a".repeat(50_000) },
+        { type: "text", text: "b".repeat(50_000) },
+      ],
+      isError: false,
+      timestamp: nextTimestamp(),
+    };
+
+    const result = truncateToolResultMessage(msg, 10_000);
+    const texts = getToolResultTexts(result);
+    const totalTextChars = texts.reduce((sum, text) => sum + text.length, 0);
+
+    expect(totalTextChars).toBeLessThanOrEqual(10_000);
+    expect(texts[0]).toBe("short metadata");
+    expect(texts.join("\n")).toContain("truncated");
+  });
+
+  it("keeps text budgets aligned when non-text blocks precede text blocks", () => {
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [
+        { type: "image", data: "not-part-of-text-budget", mimeType: "image/png" },
+        { type: "text", text: "header" },
+        { type: "text", text: "a".repeat(50_000) },
+      ],
+      isError: false,
+      timestamp: nextTimestamp(),
+    };
+
+    const result = truncateToolResultMessage(msg, 8_000);
+    const texts = getToolResultTexts(result);
+    const totalTextChars = texts.reduce((sum, text) => sum + text.length, 0);
+
+    expect(totalTextChars).toBeLessThanOrEqual(8_000);
+    expect(texts[0]).toBe("header");
+    expect(texts[1]).toContain("truncated");
   });
 });
 
@@ -286,6 +341,34 @@ describe("truncateOversizedToolResultsInMessages", () => {
       const text = firstBlock && "text" in firstBlock ? firstBlock.text : "";
       expect(text.length).toBeLessThan(500_000);
     }
+  });
+
+  it("caps a multi-block oversized result before in-memory prompt reuse", () => {
+    const multiBlock = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [
+        { type: "text", text: "header" },
+        { type: "text", text: "x".repeat(40_000) },
+        { type: "text", text: "y".repeat(40_000) },
+      ],
+      isError: false,
+      timestamp: nextTimestamp(),
+    } satisfies ToolResultMessage;
+    const messages: AgentMessage[] = [makeUserMessage("hello"), multiBlock];
+
+    const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
+      messages,
+      128_000,
+      8_000,
+    );
+    const toolResult = result[1];
+    const totalTextChars = toolResult ? getToolResultTextLength(toolResult) : 0;
+
+    expect(truncatedCount).toBe(1);
+    expect(totalTextChars).toBeLessThanOrEqual(8_000);
+    expect(toolResult).not.toBe(multiBlock);
   });
 });
 
