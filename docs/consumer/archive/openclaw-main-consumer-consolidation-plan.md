@@ -185,12 +185,16 @@ The manual release recut proved the flow, but it also exposed a workflow bug:
 `notarytool submit --wait` can block the whole agent lane while Apple performs
 server-side analysis. The release scripts now have deterministic release-env
 loading plus explicit submit/poll/staple support; use that flow for the final
-package instead of rediscovering credentials or blocking blindly.
+package instead of rediscovering credentials or blocking blindly. The default
+auth path should be App Store Connect API key auth through `NOTARYTOOL_KEY`,
+`NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER`; `NOTARYTOOL_PROFILE` is fallback
+only. Artem still must create/provide the actual ASC API key if it is not
+present locally.
 
 Release env defaults to
 `~/Library/Application Support/OpenClaw/release.env` for non-secret settings and
-secret file pointers. Secrets stay in Keychain [Apple's encrypted credential
-store], not in `~/.openclaw`.
+secret file pointers. Secrets stay outside Git and out of `~/.openclaw`; use
+the release env to point at local key material rather than committing it.
 
 ### 2. Publish the verified final recut
 

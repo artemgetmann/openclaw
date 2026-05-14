@@ -83,9 +83,12 @@ background, not as this document's active queue.
 
 1. Use the deterministic release lane for the final package. Release scripts now
    support a local release-env file rooted under
-   `~/Library/Application Support/OpenClaw/` for non-secret paths, with secrets
-   kept in Keychain, plus explicit submit/poll/staple notarization steps so the
-   agent lane does not block blindly on Apple's queue.
+   `~/Library/Application Support/OpenClaw/` for non-secret paths, plus
+   explicit submit/poll/staple notarization steps so the agent lane does not
+   block blindly on Apple's queue. The default auth path is App Store Connect
+   API key auth through `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and
+   `NOTARYTOOL_ISSUER`; `NOTARYTOOL_PROFILE` is fallback only. Artem still must
+   create/provide the actual ASC API key if it is missing locally.
 2. Publish the verified final recut only after the app work is done and
    final release approval is explicit. The local handoff artifacts were rebuilt
    from current `main` at `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`, version

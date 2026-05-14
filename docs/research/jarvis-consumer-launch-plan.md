@@ -722,11 +722,11 @@ Current implementation order:
    Reddit/GitHub, public-ish beta, or a wider beta.
 10. Machine-level release env. Done for non-secret Sparkle config at
     `~/Library/Application Support/OpenClaw/release.env`.
-11. Notary credentials. Unblocked for this local package, but the workflow is
-    too fragile because Apple ID app-specific password + Keychain profile auth
-    required Safari/2FA recovery and disappeared mid-run. Before the next
-    release lane, replace it with App Store Connect API key auth and async
-    submit/poll/staple receipts.
+11. Notary credentials. The default release path is now App Store Connect API
+    key auth plus async submit/poll/staple receipts. Use `NOTARYTOOL_KEY`,
+    `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` from the machine release env;
+    keep `NOTARYTOOL_PROFILE` as an emergency/manual fallback only. Artem must
+    create or provide the real ASC API key if it is missing locally.
 
 Progress:
 
@@ -753,10 +753,10 @@ Progress:
 - [x] Produce local Jarvis trusted-tester artifacts from current `main`:
       `Jarvis.app`, `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`.
       `Jarvis.app` and `Jarvis.dmg` pass Gatekeeper as Notarized Developer ID.
-- [ ] Replace Apple ID app-specific password / Keychain-profile notarization
-      with App Store Connect API key auth plus async submit/poll/staple receipts
-      before the next release lane. The current package is unblocked, but the
-      credential workflow is too slow and brittle for repeat use.
+- [ ] Run the next release lane with App Store Connect API key auth plus async
+      submit/poll/staple receipts. Keychain-profile notarization remains a
+      fallback only; Artem must create/provide the actual ASC API key if it is
+      not already present.
 
 Remaining Settings/UI polish after PR #628:
 
@@ -824,17 +824,17 @@ docs remain historical proof only:
 - `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md`
 - `docs/consumer/archive/openclaw-main-consumer-divergence-tracker.md`
 
-| Item                                             | Owner                                            | Status                           | Launch-plan handling                                                                                                                                                                                                                                                                                                                                 |
-| ------------------------------------------------ | ------------------------------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Final package through deterministic release lane | Release lane from current `main`                 | Done locally for trusted testers | Local 2026-05-12 Jarvis recut produced `Jarvis.app`, `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`; app and DMG pass Gatekeeper as Notarized Developer ID. Before the next repeatable release lane, replace Apple ID app-specific password / Keychain-profile auth with App Store Connect API key auth and async submit/poll/staple receipts. |
-| Public `v2026.3.15` asset replacement            | Release lane with explicit Artem approval        | Open, approval-gated             | Current public assets still point at old provenance `205d5f596602ff82270b1af5a3de24c33c32b532`. Prior local recut proof existed from `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`; if app work continues, recut again from final `main` before uploading.                                                                                              |
-| Release assets involved                          | Release lane                                     | Open, approval-gated             | Replace/upload only after explicit approval: `Jarvis.dmg`, `Jarvis.zip`, the dSYM zip, and the Jarvis appcast generated for the consumer feed.                                                                                                                                                                                                       |
-| Optional Sparkle dialog smoke                    | Release/GUI smoke lane                           | Optional                         | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                                                                                                              |
-| Local old-app/package cleanup                    | Cleanup lane after local smoke                   | Next after smoke                 | After the trusted-tester Jarvis package passes local install/open smoke, remove old local OpenClaw app/package variants from Artem's machine so Artem uses the same installed Jarvis package as testers. Do not clean up before smoke passes.                                                                                                        |
-| Launch audit                                     | Launch/commercial readiness lane                 | Open                             | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                                                                              |
-| Overlay/defaults hygiene                         | Future product/platform lane                     | Deferred, non-blocking           | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                                                                                                                |
-| Bundle ID migration                              | Separate migration lane before public-ish launch | Required before wider beta       | Keep `ai.openclaw.consumer.mac` plus OpenClaw runtime/update paths only for the 3 trusted waiting testers. Before Reddit/GitHub, public-ish beta, or any wider beta, migrate to `ai.jarvis.mac` through a deliberate lane because permissions, state, LaunchAgents, and update continuity can be affected.                                           |
-| Old worktree `dist` cleanup                      | Cleanup lane                                     | Lower priority                   | Cleanup of old worktree `dist` bundles is useful hygiene, but it is lower priority than local smoke, tester send, and release-hardening.                                                                                                                                                                                                             |
+| Item                                             | Owner                                            | Status                           | Launch-plan handling                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------------ | ------------------------------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Final package through deterministic release lane | Release lane from current `main`                 | Done locally for trusted testers | Local 2026-05-12 Jarvis recut produced `Jarvis.app`, `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`; app and DMG pass Gatekeeper as Notarized Developer ID. The repeatable release path now defaults to App Store Connect API key auth plus async submit/poll/staple receipts, with Keychain profile auth as fallback only. Artem still must create/provide the real ASC API key if it is missing locally. |
+| Public `v2026.3.15` asset replacement            | Release lane with explicit Artem approval        | Open, approval-gated             | Current public assets still point at old provenance `205d5f596602ff82270b1af5a3de24c33c32b532`. Prior local recut proof existed from `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`; if app work continues, recut again from final `main` before uploading.                                                                                                                                                          |
+| Release assets involved                          | Release lane                                     | Open, approval-gated             | Replace/upload only after explicit approval: `Jarvis.dmg`, `Jarvis.zip`, the dSYM zip, and the Jarvis appcast generated for the consumer feed.                                                                                                                                                                                                                                                                   |
+| Optional Sparkle dialog smoke                    | Release/GUI smoke lane                           | Optional                         | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                                                                                                                                                                          |
+| Local old-app/package cleanup                    | Cleanup lane after local smoke                   | Next after smoke                 | After the trusted-tester Jarvis package passes local install/open smoke, remove old local OpenClaw app/package variants from Artem's machine so Artem uses the same installed Jarvis package as testers. Do not clean up before smoke passes.                                                                                                                                                                    |
+| Launch audit                                     | Launch/commercial readiness lane                 | Open                             | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                                                                                                                                          |
+| Overlay/defaults hygiene                         | Future product/platform lane                     | Deferred, non-blocking           | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                                                                                                                                                                            |
+| Bundle ID migration                              | Separate migration lane before public-ish launch | Required before wider beta       | Keep `ai.openclaw.consumer.mac` plus OpenClaw runtime/update paths only for the 3 trusted waiting testers. Before Reddit/GitHub, public-ish beta, or any wider beta, migrate to `ai.jarvis.mac` through a deliberate lane because permissions, state, LaunchAgents, and update continuity can be affected.                                                                                                       |
+| Old worktree `dist` cleanup                      | Cleanup lane                                     | Lower priority                   | Cleanup of old worktree `dist` bundles is useful hygiene, but it is lower priority than local smoke, tester send, and release-hardening.                                                                                                                                                                                                                                                                         |
 
 Deployment/security boundary:
 
@@ -859,9 +859,9 @@ Deployment/security boundary:
 - [x] Produce notarized Jarvis trusted-tester app/DMG/ZIP/appcast from current
       `main` while keeping `ai.openclaw.consumer.mac` for the 3 trusted waiting
       testers.
-- [ ] Replace Apple ID app-specific password / Keychain-profile notarization
-      with App Store Connect API key auth plus async submit/poll/staple receipts
-      before the next release lane.
+- [ ] Run the next release lane with App Store Connect API key auth plus async
+      submit/poll/staple receipts. Keep Keychain-profile auth as fallback only,
+      and have Artem create/provide the actual ASC API key if it is missing.
 - [ ] After the local trusted-tester package smoke passes, delete old local
       OpenClaw app/package variants from Artem's machine so Artem dogfoods the
       same installed Jarvis package as testers.

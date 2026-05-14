@@ -4,15 +4,15 @@ set -euo pipefail
 # Notarize a macOS artifact (zip/dmg/pkg) and optionally staple the app bundle.
 #
 # Usage:
-#   STAPLE_APP_PATH=dist/OpenClaw.app scripts/notarize-mac-artifact.sh <artifact>
 #   STAPLE_APP_PATH=dist/OpenClaw.app scripts/notarize-mac-artifact.sh --submit-only --receipt dist/app.notary.env <artifact>
 #   scripts/notarize-mac-artifact.sh --poll <submission-id> --artifact dist/OpenClaw.dmg
+#   STAPLE_APP_PATH=dist/OpenClaw.app scripts/notarize-mac-artifact.sh <artifact>
 #
 # Auth (pick one):
-#   NOTARYTOOL_PROFILE   keychain profile created via `xcrun notarytool store-credentials`
 #   NOTARYTOOL_KEY       path to App Store Connect API key (.p8)
 #   NOTARYTOOL_KEY_ID    API key ID
 #   NOTARYTOOL_ISSUER    API issuer ID
+#   NOTARYTOOL_PROFILE   fallback keychain profile created via `xcrun notarytool store-credentials`
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
@@ -26,14 +26,13 @@ STAPLE_APP_PATH="${STAPLE_APP_PATH:-}"
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/notarize-mac-artifact.sh <artifact>
   scripts/notarize-mac-artifact.sh --submit-only [--receipt path] <artifact>
   scripts/notarize-mac-artifact.sh --poll <submission-id> --artifact <artifact> [--staple-app app]
+  scripts/notarize-mac-artifact.sh <artifact>
 
-Default mode submits with --wait, then staples DMG/PKG artifacts and
-STAPLE_APP_PATH when supplied. --submit-only records the submission ID and exits
-without blocking on Apple's notarization queue. --poll checks one submission and
-staples only after Apple reports Accepted.
+Recommended release flow is async: --submit-only writes a receipt containing the
+submission ID, then --poll checks one submission and staples only after Apple
+reports Accepted. The plain artifact form remains for one-off blocking waits.
 EOF
 }
 
@@ -107,12 +106,12 @@ if ! command -v xcrun >/dev/null 2>&1; then
 fi
 
 auth_args=()
-if [[ -n "${NOTARYTOOL_PROFILE:-}" ]]; then
-  auth_args+=(--keychain-profile "$NOTARYTOOL_PROFILE")
-elif [[ -n "${NOTARYTOOL_KEY:-}" && -n "${NOTARYTOOL_KEY_ID:-}" && -n "${NOTARYTOOL_ISSUER:-}" ]]; then
+if [[ -n "${NOTARYTOOL_KEY:-}" && -n "${NOTARYTOOL_KEY_ID:-}" && -n "${NOTARYTOOL_ISSUER:-}" ]]; then
   auth_args+=(--key "$NOTARYTOOL_KEY" --key-id "$NOTARYTOOL_KEY_ID" --issuer "$NOTARYTOOL_ISSUER")
+elif [[ -n "${NOTARYTOOL_PROFILE:-}" ]]; then
+  auth_args+=(--keychain-profile "$NOTARYTOOL_PROFILE")
 else
-  echo "Error: Notary auth missing. Set NOTARYTOOL_PROFILE or NOTARYTOOL_KEY/NOTARYTOOL_KEY_ID/NOTARYTOOL_ISSUER." >&2
+  echo "Error: Notary auth missing. Set NOTARYTOOL_KEY/NOTARYTOOL_KEY_ID/NOTARYTOOL_ISSUER or fallback NOTARYTOOL_PROFILE." >&2
   echo >&2
   openclaw_release_env_hint >&2
   exit 1

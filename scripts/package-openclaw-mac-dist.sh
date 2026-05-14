@@ -24,6 +24,13 @@ Compatibility alias:
 
 Env:
   SKIP_NOTARIZE=1     Build release zip + DMG without notarization/stapling
+  NOTARYTOOL_KEY=...  App Store Connect API key path outside the repo
+  NOTARYTOOL_KEY_ID=...
+  NOTARYTOOL_ISSUER=...
+                      Recommended notarization auth; avoids Apple ID, 2FA, and
+                      brittle Keychain profile state in release lanes
+  NOTARYTOOL_PROFILE=...
+                      Fallback notarytool Keychain profile
   SKIP_DSYM=1         Skip dSYM zip generation
   APP_VERSION=...     Override CFBundleShortVersionString
   APP_BUILD=...       Override CFBundleVersion
@@ -47,10 +54,10 @@ EOF
 }
 
 notary_auth_configured() {
-  if [[ -n "${NOTARYTOOL_PROFILE:-}" ]]; then
+  if [[ -n "${NOTARYTOOL_KEY:-}" && -n "${NOTARYTOOL_KEY_ID:-}" && -n "${NOTARYTOOL_ISSUER:-}" ]]; then
     return 0
   fi
-  if [[ -n "${NOTARYTOOL_KEY:-}" && -n "${NOTARYTOOL_KEY_ID:-}" && -n "${NOTARYTOOL_ISSUER:-}" ]]; then
+  if [[ -n "${NOTARYTOOL_PROFILE:-}" ]]; then
     return 0
   fi
   return 1
@@ -293,7 +300,7 @@ if [[ "$NOTARIZE" == "1" ]]; then
     exit 1
   fi
   if ! notary_auth_configured; then
-    echo "ERROR: notary auth missing. Set NOTARYTOOL_PROFILE or NOTARYTOOL_KEY/NOTARYTOOL_KEY_ID/NOTARYTOOL_ISSUER." >&2
+    echo "ERROR: notary auth missing. Set NOTARYTOOL_KEY/NOTARYTOOL_KEY_ID/NOTARYTOOL_ISSUER or fallback NOTARYTOOL_PROFILE." >&2
     exit 1
   fi
 fi
