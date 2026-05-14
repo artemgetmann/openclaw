@@ -85,7 +85,11 @@ function main() {
   // keeps those numbers from silently aging into fake precision.
   if (updatedAt && Number.isInteger(staleAfterDays) && staleAfterDays > 0) {
     const expiresAt = new Date(updatedAt.getTime() + staleAfterDays * 24 * 60 * 60 * 1000);
-    const now = new Date();
+    const now = new Date(process.env.PROJECT_STATUS_NOW ?? Date.now());
+    if (Number.isNaN(now.getTime())) {
+      fail("PROJECT_STATUS_NOW must be a valid date when provided");
+      return;
+    }
     if (now >= expiresAt) {
       fail(
         `expired on ${expiresAt.toISOString().slice(0, 10)}; refresh updated_at, numbers, and source_of_truth`,
