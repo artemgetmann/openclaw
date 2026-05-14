@@ -235,8 +235,6 @@ enum ConsumerPermissionCatalog {
         .accessibility,
         .appleScript,
         .location,
-        .notifications,
-        .microphone,
     ]
 
     // One CTA should request everything macOS will allow directly, then leave
@@ -259,13 +257,13 @@ enum ConsumerPermissionCatalog {
     }
 
     static let settingsBulkGrantCapabilities: [Capability] = [
-        .notifications,
         .appleScript,
-        .microphone,
         .location,
     ]
 
     static let optionalCapabilities: [Capability] = [
+        .notifications,
+        .microphone,
         .camera,
         .speechRecognition,
     ]
