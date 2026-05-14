@@ -198,6 +198,40 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.prompt.length).toBeLessThan(2000);
   });
 
+  it("keeps workspace skills ahead of bundled skills when prompt limits truncate", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+
+    for (let i = 0; i < 5; i += 1) {
+      const name = `generic-bundled-${String(i).padStart(2, "0")}`;
+      await writeSkill({
+        dir: path.join(bundledDir, name),
+        name,
+        description: "Generic bundled helper",
+      });
+    }
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "reddit"),
+      name: "reddit",
+      description: "User Reddit skill",
+    });
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 1,
+            maxSkillsPromptChars: 2_000,
+          },
+        },
+      },
+    });
+
+    expect(snapshot.prompt).toContain("reddit");
+    expect(snapshot.prompt).toContain("User Reddit skill");
+    expect(snapshot.prompt).not.toContain("generic-bundled-00");
+  });
+
   it("limits discovery for nested repo-style skills roots (dir/skills/*)", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const repoDir = await cloneTemplateDir(nestedRepoTemplateDir, "skills-repo");

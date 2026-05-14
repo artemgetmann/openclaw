@@ -108,6 +108,41 @@ const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 30_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
 
+function resolvePromptSourcePriority(source?: string): number {
+  switch (source) {
+    case "openclaw-workspace":
+      return 0;
+    case "agents-skills-project":
+      return 1;
+    case "openclaw-managed":
+      return 2;
+    case "openclaw-bundled":
+      return 3;
+    case "openclaw-extra":
+      return 4;
+    default:
+      return 5;
+  }
+}
+
+function rankSkillsForPrompt(entries: SkillEntry[]): Skill[] {
+  // Prompt limits trim from the front, so user-owned skills must be ordered
+  // before generic bundled inventory. Duplicate-name precedence is handled
+  // earlier by the merge map; this ranking protects unique workspace skills.
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => {
+      const sourceDelta =
+        resolvePromptSourcePriority(a.entry.skill.source) -
+        resolvePromptSourcePriority(b.entry.skill.source);
+      if (sourceDelta !== 0) {
+        return sourceDelta;
+      }
+      return a.index - b.index;
+    })
+    .map(({ entry }) => entry.skill);
+}
+
 function sanitizeSkillCommandName(raw: string): string {
   const normalized = raw
     .toLowerCase()
@@ -631,7 +666,7 @@ function resolveWorkspaceSkillPromptState(
     (entry) => entry.invocation?.disableModelInvocation !== true,
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const resolvedSkills = promptEntries.map((entry) => entry.skill);
+  const resolvedSkills = rankSkillsForPrompt(promptEntries);
   const { skillsForPrompt, truncated } = applySkillsPromptLimits({
     skills: resolvedSkills,
     config: opts?.config,
