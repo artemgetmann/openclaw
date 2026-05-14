@@ -1,9 +1,16 @@
 # Jarvis Context Rollover and Monitor Continuity Plan
 
-Status: active implementation plan
+Status: archived 80/20 plan; follow-ups deferred
 Owner: Jarvis/OpenClaw runtime
 Created: 2026-05-11
 Last updated: 2026-05-14
+
+Archive note: the practical 80/20 lane is complete as of PR #697. Jarvis now
+has the one-time heavy-chat nudge, local checkpoint/resume skill guidance,
+monitor phrasing cleanup, monitor dedupe, and the worst raw tool-output prompt
+bloat fix. Automatic rollover, richer raw-output artifact pointers, and
+reply-to-monitor metadata are intentionally deferred until real usage proves
+the manual checkpoint path insufficient.
 
 ## Problem
 
@@ -77,9 +84,10 @@ Done:
 - PR #692 merged with multi-block tool-result caps for active prompt reuse and
   transcript persistence.
 
-Not done:
+Deferred:
 
-- There is no automatic fresh-session rollover yet.
+- There is no automatic fresh-session rollover yet. This should wait until the
+  manual checkpoint path is proven annoying or insufficient.
 - Structured raw-output artifacts with compact evidence pointers are not built
   yet. PR #692 reduces the worst prompt-bloat path, but it is not an artifact
   storage system.
@@ -321,7 +329,7 @@ job. Allow explicit advanced override for separate monitors.
    and bundled skill eligibility passed; live model-created checkpoint proof was
    blocked by invalid local OpenAI auth.
 8. Add consumer-friendly automatic rollover or Continue Fresh UX after the
-   manual checkpoint path is proven annoying or insufficient.
+   manual checkpoint path is proven annoying or insufficient. Deferred.
 
 ## Validation Gates
 
@@ -340,7 +348,18 @@ job. Allow explicit advanced override for separate monitors.
   starting a new chat. Covered by PR #697 focused tests.
 - "Resume from checkpoint" works from the latest local checkpoint, while
   "resume from checkpoint <id>" works for a specific saved handoff. PR #697
-  adds the local skill contract; live isolated resume proof still needs a valid
-  tester model-auth path.
+  adds the local skill contract and a no-provider prompt-injection regression;
+  live isolated resume proof should use a valid Codex-auth tester runtime, not
+  direct provider API keys.
 - Automatic context rollover creates a usable continuation without manual paste
-  only after the local checkpoint path is proven.
+  only after the local checkpoint path is proven. Deferred.
+
+## Closeout
+
+This plan should not stay open as an active execution tracker. The next product
+slices should each get their own narrow plan only when they become real work:
+
+- automatic rollover / Continue Fresh UX
+- structured raw-output artifact pointers
+- reply-to-monitor metadata
+- packaged/shared runtime live proof
