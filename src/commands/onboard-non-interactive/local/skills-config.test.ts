@@ -28,6 +28,8 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(next.skills?.allowBundled).toEqual(
       expect.arrayContaining([
         "consumer-setup",
+        "checkpoint",
+        "monitor-router",
         "mcporter",
         "nano-banana-pro",
         "telegram-user",
