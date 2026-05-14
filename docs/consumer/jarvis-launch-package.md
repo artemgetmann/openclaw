@@ -65,9 +65,18 @@ Current package truth:
 - Current trusted-tester artifacts from 2026-05-12 are Developer ID signed,
   notarized, stapled, and Gatekeeper-accepted as `Jarvis.app`, `Jarvis.dmg`,
   `Jarvis.zip`, and `jarvis-appcast.xml`.
-- The release-credential workflow still needs hardening before the next release
-  lane: replace Apple ID app-specific password / Keychain-profile notarization
-  with App Store Connect API key auth plus async submit/poll/staple receipts.
+- Recommended release path for the next lane: App Store Connect API key auth
+  plus async notarization submit/poll/staple receipts. Set
+  `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
+  machine release env; leave `NOTARYTOOL_PROFILE` unset unless deliberately
+  using the fallback path.
+- Keychain-profile notarization remains a fallback for emergency/manual
+  recovery only. It should not be the default release path because Apple ID
+  app-specific password and 2FA recovery made the previous package lane too
+  brittle.
+- Artem must create or provide the actual App Store Connect API key if it is
+  not already present on the machine. Do not block the release docs on fake
+  placeholders or commit key material.
 - `ai.jarvis.mac` bundle ID/runtime/update identity migration is a required
   launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
 - After the trusted-tester package passes a local install/open smoke, clean up
@@ -306,8 +315,10 @@ Say this directly:
   or a wider beta, and needs a deliberate migration lane because permissions,
   state, LaunchAgents, and update continuity can be affected
 - current trusted-tester artifacts are notarized and Gatekeeper-accepted, but
-  the next release lane should use App Store Connect API key auth and async
-  notarization instead of interactive Apple ID / Keychain-profile recovery
+  the next release lane should default to App Store Connect API key auth and
+  async submit/poll/staple notarization receipts. Keychain profile auth is a
+  fallback only, and Artem still must create/provide the real ASC API key if it
+  is missing locally
 
 ### Roadmap
 
@@ -315,8 +326,8 @@ Say this directly:
 - cleaner Telegram setup with one consumer-first command/settings surface
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
-- App Store Connect API key auth and async notarization receipts for repeatable
-  release packaging
+- App Store Connect API key auth and async submit/poll/staple notarization
+  receipts as the default repeatable release packaging path
 - better first-run permission copy
 - backend-managed utility cap hardening
 - skill audit and safer third-party skill install flow
