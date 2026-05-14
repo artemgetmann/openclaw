@@ -3,7 +3,7 @@
 Status: active implementation plan
 Owner: Jarvis/OpenClaw runtime
 Created: 2026-05-11
-Last updated: 2026-05-12
+Last updated: 2026-05-14
 
 ## Problem
 
@@ -32,8 +32,10 @@ Jarvis should preserve continuity while keeping active working context small.
   2026-05-12 16:54 Malaysia time.
 - PR #679 added model-aware context pressure warnings to status surfaces. It
   merged on 2026-05-12.
-- PR #681 adds the first normal-chat checkpoint nudge when a session crosses
-  roughly 75% of the resolved context window. It is open for review.
+- PR #681 merged on 2026-05-12 at commit
+  `12dada12d526d7e0cccd328a7a761964cf249981`. It adds the first one-time
+  normal-chat checkpoint nudge when a session crosses roughly 75% of the
+  resolved context window, but it does not do automatic fresh-session rollover.
 - After the latest pull, monitors have their own durable `monitorSessionKey`.
 - Monitor wakes now run against that monitor session with
   `sessionDefaultResetMode: "manual"`, so monitor state can persist across
@@ -41,6 +43,11 @@ Jarvis should preserve continuity while keeping active working context small.
 - The active packaged-app/shared gateway config is
   `~/Library/Application Support/OpenClaw/.openclaw/openclaw.json`, not the
   legacy CLI default `~/.openclaw/openclaw.json`.
+- PR #686 merged on 2026-05-12 at commit
+  `e87cdaf457834e2ba5527ad1984f0062a77f28bf`. Active monitor creation now
+  deduplicates before cron job creation using `agentId`, `sourceType`,
+  normalized `sourceTarget`, `actionPolicy`, and `name` as the purpose label.
+  Stopped or terminal monitor history does not block new monitors.
 - Monitor status notes should read like a human assistant talking to the user,
   not like a cron log.
 
@@ -60,14 +67,13 @@ Done:
 - The bad `reserveTokensFloor: 4000` override was fixed to `20000` in both the
   legacy CLI config and the app-owned Application Support config.
 - Status surfaces now warn at roughly 75% of the resolved model context window.
-- PR #681 is open with a one-time normal-chat context-pressure nudge. It does
+- PR #681 merged with a one-time normal-chat context-pressure nudge. It does
   not switch sessions automatically.
+- PR #686 merged with active monitor creation dedupe before cron job creation.
 
 Not done:
 
-- Merge and deploy PR #681 if review passes.
 - There is no automatic fresh-session rollover yet.
-- Monitor creation is not deduplicated yet.
 - Oversized raw tool outputs are not yet moved into structured artifacts with
   compact evidence pointers.
 - The `~/.openclaw/openclaw.json` legacy/default CLI config path still belongs
@@ -273,12 +279,12 @@ job. Allow explicit advanced override for separate monitors.
    Partially done through durable `lastCheckpoint` plumbing; richer structured
    evidence fields remain.
 4. Add model-aware rollover warning/checkpoint. Status warning done in PR #679;
-   normal-chat nudge is open in PR #681.
-5. Deduplicate monitor creation.
+   one-time normal-chat nudge done in PR #681.
+5. Deduplicate monitor creation. Done in PR #686 for active monitors before
+   cron job creation.
 6. Move oversized raw tool output out of active prompt while keeping evidence
    fetchable.
-7. Add consumer-friendly automatic rollover UX after #681 has been reviewed in
-   real chat.
+7. Add consumer-friendly automatic rollover or Continue Fresh UX.
 
 ## Validation Gates
 
@@ -288,6 +294,8 @@ job. Allow explicit advanced override for separate monitors.
 - A monitor update delivered to Telegram remains concise.
 - A monitor status note reads like an assistant, not a cron banner.
 - A natural-language reply like "send it" works without requiring buttons.
-- Duplicate monitor creation returns or updates the existing monitor.
+- Duplicate monitor creation returns or updates the existing active monitor.
+  Covered by PR #686 focused tests; live shared-runtime proof is not claimed
+  here.
 - Raw evidence remains inspectable for debugging.
 - Context rollover creates a usable continuation without manual paste.
