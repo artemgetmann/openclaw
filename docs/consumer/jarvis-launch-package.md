@@ -70,24 +70,37 @@ Current package truth:
 - Public release assets for `v2026.3.15` now include `Jarvis.dmg`,
   `Jarvis.zip`, and `jarvis-appcast.xml`; the Jarvis appcast URL returns 200
   and points Sparkle at the uploaded `Jarvis.zip`.
-- Current `/Applications/Jarvis.app` on Artem's machine still points at the
-  older installed build `14d2624bb8` because the final `ab9c3c1ca1` DMG has not
-  yet been installed over it. The next chat owns that install/smoke.
+- `/Applications/Jarvis.app` on Artem's machine has been installed from the
+  final trusted-tester DMG and now reports `OpenClawGitCommit=ab9c3c1ca1`,
+  `CFBundleDisplayName=Jarvis`, and `CFBundleIdentifier=ai.openclaw.consumer.mac`.
+  The installed app passes `scripts/verify-consumer-mac-app.sh --release`,
+  Gatekeeper accepts it as Notarized Developer ID, and stapler validation
+  succeeds.
 - Prior installed app smoke on the older Jarvis build passed: visible app name
   and icon were Jarvis, bundle ID intentionally remained
   `ai.openclaw.consumer.mac`, runtime takeover was green, `/healthz` returned
   `{"ok":true,"status":"live"}`, and Channels showed Telegram live/verified as
   `@Jarvis_cl4w_bot`.
-- After `jarvis-appcast.xml` upload, the installed app's About -> Check for
-  Updates no longer returns Update Error; it now reaches the feed and reports
-  Jarvis 2026.3.14 as up to date. This proves feed retrieval, not same-version
+- Computer Use GUI smoke on the installed app verified the Settings sidebar
+  exposes only General, Channels, Browser, AI access, Permissions, and About by
+  default. The Permissions primary list contains only Screen Recording,
+  Accessibility, Automation (AppleScript), and Location. Notifications,
+  Microphone, Camera, and Speech Recognition are under "More permissions
+  (optional)".
+- About -> Check for Updates no longer returns Update Error; the installed app
+  reaches Sparkle and reports "You're up to date! Jarvis 2026.3.14 is currently
+  the newest version available." This proves feed retrieval, not a newer-version
   update installation.
-- Next recommended pre-send validation is: install
-  `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` over the current app,
-  verify the Permissions tab shows only the four core permissions, then run a
-  clean macOS user install smoke. Sending `Jarvis.dmg` to the 3 trusted waiting
-  testers is allowed after that clean-user smoke passes, unless Artem
-  explicitly chooses to send earlier.
+- Clean trusted-tester smoke passed: the DMG hash matched
+  `784ee3b1c77f8612a4bf3525b8f8ca8b2e9f63863e0f94732f2f6d309c48ac89`, the
+  installed app reports commit `ab9c3c1ca1`, targeted Settings tests passed, and
+  the isolated fresh-user packaged smoke passed from the final root
+  `Jarvis.dmg` with isolated state, isolated gateway health, onboarding
+  observed, and real user config unchanged. A true separate macOS account smoke
+  was deliberately skipped as unnecessary for the 3 trusted waiting testers.
+- Sending `Jarvis.dmg` to the 3 trusted waiting testers is allowed. Do not send
+  wider/public until the `ai.jarvis.mac` identity migration and remaining wider
+  beta gates are complete.
 - Recommended release path for the next lane: App Store Connect API key auth
   plus async notarization submit/poll/staple receipts. Set
   `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
@@ -341,19 +354,16 @@ Say this directly:
   or a wider beta, and needs a deliberate migration lane because permissions,
   state, LaunchAgents, and update continuity can be affected
 - final 2026-05-14 trusted-tester `Jarvis.dmg` from commit `ab9c3c1ca1` is
-  notarized, Gatekeeper-accepted, copied to the sacred repo root, and uploaded
-  with its Jarvis ZIP/appcast assets; it is not yet installed over Artem's
-  current `/Applications/Jarvis.app`, which still reports older build
-  `14d2624bb8`; before sending to the 3 trusted waiting testers, the next
-  recommended validation is install-over-current plus clean macOS user install
-  smoke
+  notarized, Gatekeeper-accepted, copied to the sacred repo root, uploaded with
+  its Jarvis ZIP/appcast assets, installed over Artem's current app, and smoke
+  tested. Sending to the 3 trusted waiting testers is allowed; wider
+  distribution still waits on `ai.jarvis.mac` migration and the remaining beta
+  gates.
 
 ### Roadmap
 
-- install `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` over the
-  current app, verify the Permissions tab has only the four core permissions,
-  run clean macOS user install smoke, then send the final `Jarvis.dmg` to the
-  3 trusted waiting testers unless Artem chooses to send earlier
+- send the final `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` to the
+  3 trusted waiting testers
 - focused Channels UI polish to remove duplicated connected-bot text/buttons
 - smoother account login and trial activation
 - cleaner Telegram setup with one consumer-first command/settings surface
