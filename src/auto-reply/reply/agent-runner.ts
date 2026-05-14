@@ -753,6 +753,7 @@ export async function runReplyAgent(params: {
       sessionEntry: activeSessionEntry,
       totalTokens: contextPressureTotalTokens,
       contextTokens: contextTokensUsed,
+      systemPromptReport: runResult.meta?.systemPromptReport,
     });
     if (contextPressureNotice && sessionKey && storePath) {
       // Persist the marker before we prepend the notice so the next turn can

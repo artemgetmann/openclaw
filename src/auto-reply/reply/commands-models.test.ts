@@ -55,4 +55,30 @@ describe("resolveModelsCommandReply", () => {
     expect(reply?.text).toBe("Select a provider:");
     expect(buttons.flat().map((button) => button.callback_data)).toContain("mdl_list_google_1");
   });
+
+  it("lists Claude CLI 1M variants as explicit advanced models", async () => {
+    const reply = await resolveModelsCommandReply({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "claude-cli/sonnet" },
+            models: {
+              "claude-cli/sonnet": {},
+              "claude-cli/sonnet[1m]": {},
+              "claude-cli/opus": {},
+              "claude-cli/opus[1m]": {},
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      commandBodyNormalized: "/models claude-cli all",
+      surface: "whatsapp",
+    });
+
+    expect(reply?.text).toContain("Models (claude-cli)");
+    expect(reply?.text).toContain("- claude-cli/sonnet");
+    expect(reply?.text).toContain("- claude-cli/sonnet[1m]");
+    expect(reply?.text).toContain("- claude-cli/opus");
+    expect(reply?.text).toContain("- claude-cli/opus[1m]");
+  });
 });

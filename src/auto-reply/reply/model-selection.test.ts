@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createModelSelectionState } from "./model-selection.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
@@ -294,5 +294,27 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
       hasModelDirective: false,
     });
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("off");
+  });
+});
+
+describe("resolveContextTokens", () => {
+  it("uses provider-aware context lookup for Claude CLI 1M variants", () => {
+    expect(
+      resolveContextTokens({
+        cfg: {} as OpenClawConfig,
+        agentCfg: undefined,
+        provider: "claude-cli",
+        model: "sonnet[1m]",
+      }),
+    ).toBe(1_048_576);
+
+    expect(
+      resolveContextTokens({
+        cfg: {} as OpenClawConfig,
+        agentCfg: undefined,
+        provider: "claude-cli",
+        model: "sonnet",
+      }),
+    ).toBe(200_000);
   });
 });

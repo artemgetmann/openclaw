@@ -120,6 +120,27 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.contextTokens).toBeUndefined();
     expect((entry.updatedAt ?? 0) > before).toBe(true);
   });
+
+  it("preserves explicit Claude CLI 1M override ids in session storage", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-5",
+      updatedAt: before,
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "claude-cli",
+        model: "sonnet[1m]",
+      },
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBe("claude-cli");
+    expect(entry.modelOverride).toBe("sonnet[1m]");
+    expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
 });
 
 describe("applyFutureThreadModelDefaultToSessionEntry", () => {

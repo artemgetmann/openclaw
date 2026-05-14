@@ -29,6 +29,13 @@ describe("extractModelDirective", () => {
       expect(result.rawModel).toBe("anthropic/claude-opus-4-5");
     });
 
+    it("extracts explicit Claude CLI long-context variants", () => {
+      const result = extractModelDirective("/model claude-cli/sonnet[1m]");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("claude-cli/sonnet[1m]");
+      expect(result.cleaned).toBe("");
+    });
+
     it("extracts /model with profile override", () => {
       const result = extractModelDirective("/model gpt-5@myprofile");
       expect(result.hasDirective).toBe(true);

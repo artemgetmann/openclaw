@@ -102,6 +102,28 @@ function codexTwinForPlainOpenAiModel(model) {
   return `openai-codex/${trimmed.slice("openai/".length)}`;
 }
 
+function claudeCliAdvancedTesterModels(model) {
+  const trimmed = String(model ?? "").trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === "claude-cli/sonnet" || lower === "claude-cli/sonnet[1m]") {
+    return ["claude-cli/sonnet", "claude-cli/sonnet[1m]"];
+  }
+  if (lower === "claude-cli/opus" || lower === "claude-cli/opus[1m]") {
+    return ["claude-cli/opus", "claude-cli/opus[1m]"];
+  }
+  return trimmed ? [trimmed] : [];
+}
+
+function ensureTesterModelAllowlistEntries(allowlist, modelRefs) {
+  const next = { ...(allowlist && typeof allowlist === "object" ? allowlist : {}) };
+  for (const modelRef of normalizeStringList(modelRefs)) {
+    if (!next[modelRef]) {
+      next[modelRef] = {};
+    }
+  }
+  return next;
+}
+
 function normalizeModelFallbacks(fallbacks) {
   return normalizeTokenList(Array.isArray(fallbacks) ? fallbacks : []);
 }
@@ -1130,7 +1152,7 @@ export function buildTelegramLiveRuntimeConfig(params) {
           : "",
       ].filter(Boolean),
     );
-    const nextModelAllowlist =
+    const cleanedModelAllowlist =
       disallowedModelKeys.size > 0
         ? Object.fromEntries(
             Object.entries(currentModelAllowlist).filter(
@@ -1138,6 +1160,11 @@ export function buildTelegramLiveRuntimeConfig(params) {
             ),
           )
         : currentModelAllowlist;
+    const nextModelAllowlist = ensureTesterModelAllowlistEntries(cleanedModelAllowlist, [
+      effectiveModel.effectiveModel,
+      ...effectiveModel.fallbackModels,
+      ...claudeCliAdvancedTesterModels(effectiveModel.effectiveModel),
+    ]);
 
     // Tester lanes need an explicit effective primary model plus a cleaned
     // allowlist. Preserve the OpenAI/Codex auth split by removing the plain
@@ -1147,9 +1174,7 @@ export function buildTelegramLiveRuntimeConfig(params) {
       primary: effectiveModel.effectiveModel,
       fallbacks: effectiveModel.fallbackModels,
     };
-    if (disallowedModelKeys.size > 0) {
-      agentDefaults.models = nextModelAllowlist;
-    }
+    agentDefaults.models = nextModelAllowlist;
     config.agents = {
       ...agents,
       defaults: agentDefaults,
