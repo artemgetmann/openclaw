@@ -538,6 +538,16 @@ Main-bot acceptance follow-up fixes merged on `main`:
 - PR #709 merged user/workspace skill priority in the Claude CLI prompt budget. Live production proof is still pending.
 - PR #710 merged ACP progress title preservation. Live production proof is still pending.
 
+Production readiness checkpoint after PR #711:
+
+- Runtime ownership: passed. Shared gateway is `branch=main`, `worktree=~/Programming_Projects/openclaw`, `OPENCLAW_STATE_DIR=~/Library/Application Support/OpenClaw/.openclaw`, port `18789`, RPC probe ok. Latest observed runtime PID after `/restart`: `56299`.
+- Standard Claude backend: passed. Production `/model claude-cli/sonnet` returned `Model set to claude-cli/sonnet.`, `/status` showed `Model: claude-cli/sonnet` and `Context: 23/200k`, and a real turn returned exactly `CLAUDE_STANDARD_READY_20260514` with no fallback or context-pressure warning.
+- Delayed agent-turn reminder parity: passed for the main product bot. `in 1 min reply exactly CLAUDE_DELAYED_AGENTTURN_READY_20260514` first returned `Reminder scheduled: reply exactly CLAUDE_DELAYED_AGENTTURN_READY_20260514`, then later delivered exactly `CLAUDE_DELAYED_AGENTTURN_READY_20260514` without a follow-up prompt.
+- Basic web/tool smoke: usable but not a strong tool-choice proof. The prompt `Use a web/search tool if available. Answer with exactly one sentence: what is OpenAI?` returned the correct one-sentence OpenAI summary. It did not prove a specific named tool path.
+- Progress/final behavior: basic pass. A slow progress smoke eventually left the final visible message as exactly `CLAUDE_PROGRESS_READY_20260514`; a transient intermediate draft was observed during polling, but it was not present in the final recent-message read.
+- Skills acceptance: still failed. The live app workspace has `workspace/skills -> ~/.agents/skills`, and local prompt construction includes the `reddit` skill, but production Claude replied `REDDIT_SKILL_MISSING_AFTER_RESTART_20260514` even after `/restart`. Treat this as the current blocker for Codex-level parity, not a ranking-only issue.
+- Product readiness verdict: usable enough for normal Claude chat, model switching, simple tool/web work, delayed reminders, and basic progress. Not ready to call full Codex parity until the Claude CLI skill-discovery/invocation path is fixed and re-proven.
+
 Claude CLI 1M status after the #706/#708/#709/#710 stack:
 
 - Tester Telegram proof passed for selecting `claude-cli/sonnet[1m]` and reporting `1.0m` context.
