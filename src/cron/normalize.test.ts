@@ -290,6 +290,27 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.mode).toBe("announce");
   });
 
+  it("keeps explicit isolated one-shot agentTurn reminders deliverable", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "Reminder: check Telegram and report back",
+      schedule: { kind: "at", at: "2026-05-14T10:01:00.000Z" },
+      sessionTarget: "isolated",
+      delivery: { mode: "announce" },
+      payload: {
+        kind: "agentTurn",
+        message: "Reminder: check Telegram and report back",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.deleteAfterRun).toBe(true);
+    expect(normalized.delivery).toEqual({ mode: "announce" });
+    expect(normalized.payload).toEqual({
+      kind: "agentTurn",
+      message: "Reminder: check Telegram and report back",
+    });
+  });
+
   it("migrates legacy delivery fields to delivery", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy deliver",
