@@ -63,11 +63,15 @@ Current package truth:
   by all worktrees/chats.
 - API token and Neon URL are stored outside Git in macOS Keychain.
 - Final trusted-tester package from 2026-05-14 was built from commit
-  `14d2624bb8` at
-  `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg`.
+  `ab9c3c1ca1` at
+  `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg`
+  and copied to `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`.
   `Jarvis.dmg` is Gatekeeper-accepted as Notarized Developer ID.
+- Public release assets for `v2026.3.15` now include `Jarvis.dmg`,
+  `Jarvis.zip`, and `jarvis-appcast.xml`; the Jarvis appcast URL returns 200
+  and points Sparkle at the uploaded `Jarvis.zip`.
 - Installed app smoke passed for `/Applications/Jarvis.app`: visible app name
-  and icon are Jarvis, installed app provenance matches commit `14d2624bb8`,
+  and icon are Jarvis, installed app provenance matches commit `ab9c3c1ca1`,
   and bundle ID intentionally remains `ai.openclaw.consumer.mac` for the 3
   trusted waiting testers.
 - Installed runtime takeover smoke passed: `OPENCLAW_MAIN_REPO` resolves to
@@ -330,11 +334,13 @@ Say this directly:
 - `ai.jarvis.mac` migration is required before Reddit/GitHub, public-ish beta,
   or a wider beta, and needs a deliberate migration lane because permissions,
   state, LaunchAgents, and update continuity can be affected
-- final 2026-05-14 trusted-tester `Jarvis.dmg` from commit `14d2624bb8` is
+- final 2026-05-14 trusted-tester `Jarvis.dmg` from commit `ab9c3c1ca1` is
   notarized, Gatekeeper-accepted, installed at `/Applications/Jarvis.app`, and
-  proved against the installed runtime and Channels UI; before sending to the
-  3 trusted waiting testers, the next recommended validation is a clean macOS
-  user install smoke
+  proved against the installed runtime and Channels UI; public `v2026.3.15`
+  release assets now include the Jarvis DMG/ZIP/appcast so the installed app no
+  longer hits a missing `jarvis-appcast.xml`; before sending to the 3 trusted
+  waiting testers, the next recommended validation is a clean macOS user
+  install smoke
 
 ### Roadmap
 
