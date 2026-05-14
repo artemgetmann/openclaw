@@ -108,7 +108,7 @@ describe("getStatusSummary", () => {
         },
         "detailed",
       ),
-    ).toBe(" · ⚠️ getting heavy; checkpoint or continue fresh soon");
+    ).toBe(" · ⚠️ long chat; ask me to make a checkpoint before starting a new chat");
   });
 
   it("includes runtimeVersion in the status payload", async () => {

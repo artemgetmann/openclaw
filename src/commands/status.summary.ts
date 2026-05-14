@@ -98,7 +98,7 @@ export function formatContextPressureSuffix(
     return "";
   }
   return variant === "detailed"
-    ? " · ⚠️ getting heavy; checkpoint or continue fresh soon"
+    ? " · ⚠️ long chat; ask me to make a checkpoint before starting a new chat"
     : " · ⚠️ checkpoint soon";
 }
 

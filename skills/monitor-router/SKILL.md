@@ -28,6 +28,10 @@ state and route actions to the right monitor.
    evidence only if the user asks or the compact state is not enough.
 7. For clear updates, persist a compact checkpoint/status with `action:
 "update"` and keep raw evidence behind ids, paths, or refs.
+8. If a monitor update includes a drafted reply, include the actual draft text
+   before asking whether to send, edit, or stop watching.
+9. If the monitor update is status-only, report the status and next step without
+   pretending there is a draft to send.
 
 ## Ambiguity Safety
 
@@ -64,8 +68,14 @@ Write monitor updates like the assistant talking, not like a cron banner.
 
 Good:
 
-> Chloe replied. She says 25 days may work at RM2,800 all-in. Want me to ask
-> for a same-day viewing and confirm deposit/Wi-Fi?
+> Chloe replied. She says 25 days may work at RM2,800 all-in.
+> Draft: "Sounds good. Can you confirm what is included and the earliest start
+> date?"
+> Would you like me to send it, edit it, or stop watching Chloe?
+
+Good status-only:
+
+> Chloe has not replied yet. I checked the thread and will keep watching.
 
 Avoid:
 

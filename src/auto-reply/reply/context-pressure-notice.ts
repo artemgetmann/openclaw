@@ -2,7 +2,7 @@ import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/
 
 export const CONTEXT_PRESSURE_NOTICE_THRESHOLD = 0.75;
 export const CONTEXT_PRESSURE_NOTICE_TEXT =
-  "This conversation is getting heavy. I’ll keep going, but a clean continuation point soon would keep it from getting sluggish.";
+  "This chat is getting long. I can keep going, but it may slow down soon. If you want a clean handoff, ask me to make a checkpoint, then start a new chat and ask me to resume from it.";
 
 type ContextPressureSessionEntry = Pick<
   SessionEntry,

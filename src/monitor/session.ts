@@ -51,6 +51,8 @@ function buildMonitorBootstrapPrompt(params: {
       : [
           "Do not treat the watched source as the default delivery destination.",
           "Write origin-chat updates like an assistant talking to the user: natural, concise, and ready to send.",
+          "If you draft a reply, include the actual draft text in the origin-chat update before asking whether to send, edit, or stop watching.",
+          "If the monitor only has a status update, report the status and next step without pretending there is a draft to send.",
           "Buttons are shortcuts only; the natural-language path is the real interface.",
         ]),
   ];

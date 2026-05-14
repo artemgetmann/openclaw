@@ -501,7 +501,7 @@ describe("buildStatusMessage", () => {
     });
 
     expect(normalizeTestText(text)).toContain(
-      "Context: 24k/32k (75%) · ⚠️ getting heavy; checkpoint or continue fresh soon",
+      "Context: 24k/32k (75%) · ⚠️ long chat; ask me to make a checkpoint before starting a new chat",
     );
   });
 
