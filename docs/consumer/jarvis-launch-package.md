@@ -339,6 +339,10 @@ through consumer setup. Candidate shape:
 - Shared/default bot setup stays the consumer path; BYO bot token, custom
   commands, verbose developer detail, and internal tool/skill IDs stay in the
   advanced path.
+- `/visibility` should replace stale `/verbose` naming in the Telegram command
+  list and runtime behavior. Before wider beta, inspect upstream's current
+  command/visibility implementation, then prove the Jarvis command list and
+  `/visibility off|on|full` behavior with a tester bot before merging.
 
 ## 60-second demo script
 
