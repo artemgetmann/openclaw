@@ -386,6 +386,21 @@ describe("cron tool", () => {
     });
   });
 
+  it("infers Telegram target when an agentTurn job already sets announce delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-explicit-announce-delivery",
+        agentSessionKey: "agent:main:telegram:personal:direct:1336356696",
+        delivery: { mode: "announce" },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      accountId: "personal",
+      to: "1336356696",
+    });
+  });
+
   // ── Flat-params recovery (issue #11310) ──────────────────────────────
 
   it("recovers flat params when job is missing", async () => {
