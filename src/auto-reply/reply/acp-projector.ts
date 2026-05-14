@@ -32,6 +32,7 @@ export type AcpProjectedDeliveryMeta = {
 type ToolLifecycleState = {
   started: boolean;
   terminal: boolean;
+  title?: string;
   lastRenderedHash?: string;
 };
 
@@ -138,9 +139,15 @@ function shouldFlushLiveBufferOnIdle(text: string): boolean {
   return false;
 }
 
-function renderToolSummaryText(event: Extract<AcpRuntimeEvent, { type: "tool_call" }>): string {
+function renderToolSummaryText(
+  event: Extract<AcpRuntimeEvent, { type: "tool_call" }>,
+  state?: ToolLifecycleState,
+): string {
   const detailParts: string[] = [];
-  const title = event.title?.trim();
+  // Some ACP adapters only include the human-readable tool title on the initial
+  // event. Reuse that title for later status-only updates so an in-place
+  // Telegram edit does not collapse "Run tests" into a context-free "done".
+  const title = event.title?.trim() || state?.title;
   if (title) {
     detailParts.push(title);
   }
@@ -331,17 +338,18 @@ export function createAcpReplyProjector(params: {
       return;
     }
 
-    const renderedToolSummary = renderToolSummaryText(event);
-    const toolSummary = truncateText(renderedToolSummary, settings.maxSessionUpdateChars);
-    const hash = hashText(renderedToolSummary);
     const toolCallId = event.toolCallId?.trim() || undefined;
     const status = normalizeToolStatus(event.status);
     const isTerminal = status ? TERMINAL_TOOL_STATUSES.has(status) : false;
     const isStart = status === "in_progress" || event.tag === "tool_call";
+    const existingState = toolCallId ? toolLifecycleById.get(toolCallId) : undefined;
+    const renderedToolSummary = renderToolSummaryText(event, existingState);
+    const toolSummary = truncateText(renderedToolSummary, settings.maxSessionUpdateChars);
+    const hash = hashText(renderedToolSummary);
 
     if (settings.repeatSuppression) {
       if (toolCallId) {
-        const state = toolLifecycleById.get(toolCallId) ?? {
+        const state = existingState ?? {
           started: false,
           terminal: false,
         };
@@ -360,11 +368,25 @@ export function createAcpReplyProjector(params: {
         if (isTerminal) {
           state.terminal = true;
         }
+        const eventTitle = event.title?.trim();
+        if (eventTitle) {
+          state.title = eventTitle;
+        }
         state.lastRenderedHash = hash;
         toolLifecycleById.set(toolCallId, state);
       } else if (lastToolHash === hash) {
         return;
       }
+    } else if (toolCallId) {
+      const state = existingState ?? {
+        started: false,
+        terminal: false,
+      };
+      const eventTitle = event.title?.trim();
+      if (eventTitle) {
+        state.title = eventTitle;
+      }
+      toolLifecycleById.set(toolCallId, state);
     }
 
     const deliveryMeta: AcpProjectedDeliveryMeta = {

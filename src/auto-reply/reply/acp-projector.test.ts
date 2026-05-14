@@ -491,6 +491,30 @@ describe("createAcpReplyProjector", () => {
     expectToolCallSummary(deliveries[1]);
   });
 
+  it("keeps the initial tool title on status-only lifecycle updates", async () => {
+    const { deliveries, projector } = createLiveToolLifecycleHarness();
+
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_status_only",
+      status: "in_progress",
+      title: "Run slow Claude CLI task",
+      text: "Run slow Claude CLI task (in_progress)",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call_update",
+      toolCallId: "call_status_only",
+      status: "completed",
+      text: "completed",
+    });
+
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries[1]?.text).toContain("Run slow Claude CLI task");
+    expect(deliveries[1]?.text).toContain("status=completed");
+  });
+
   it("renders fallback tool labels without leaking call ids as primary label", async () => {
     const { deliveries, projector } = createLiveToolLifecycleHarness();
 
