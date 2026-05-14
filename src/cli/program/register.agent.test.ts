@@ -113,6 +113,20 @@ describe("registerAgentCommands", () => {
     );
   });
 
+  it("forwards explicit embedded fallback opt-in", async () => {
+    await runCli(["agent", "--message", "hi", "--to", "+1555", "--embedded-fallback"]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "hi",
+        to: "+1555",
+        embeddedFallback: true,
+      }),
+      runtime,
+      { deps: true },
+    );
+  });
+
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     expect(agentsAddCommandMock).toHaveBeenNthCalledWith(

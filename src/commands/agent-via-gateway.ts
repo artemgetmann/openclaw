@@ -52,6 +52,7 @@ export type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  embeddedFallback?: boolean;
 };
 
 function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
@@ -194,7 +195,11 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
   try {
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
-    runtime.error?.(`Gateway agent failed; falling back to embedded: ${String(err)}`);
+    if (opts.embeddedFallback !== true) {
+      throw err;
+    }
+
+    runtime.error?.(`Gateway agent failed; using explicit embedded fallback: ${String(err)}`);
     return await agentCommand(localOpts, runtime, deps);
   }
 }

@@ -120,15 +120,33 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("falls back to embedded agent when gateway fails", async () => {
+  it("does not fall back to embedded agent when gateway fails by default", async () => {
     await withTempStore(async () => {
       vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
       mockLocalAgentReply();
 
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
+        "gateway not connected",
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.log).not.toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("uses embedded fallback only when explicitly requested", async () => {
+    await withTempStore(async () => {
+      vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555", embeddedFallback: true }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("using explicit embedded fallback"),
+      );
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
