@@ -315,7 +315,9 @@ job. Allow explicit advanced override for separate monitors.
 6. Move oversized raw tool output out of active prompt while keeping evidence
    fetchable. Partially done in PR #692 for multi-block tool-result caps;
    structured artifact pointers remain.
-7. Add local checkpoint/resume skill and clearer heavy-chat nudge.
+7. Add local checkpoint/resume skill and clearer heavy-chat nudge. Done in PR
+   #697 for the local skill, warning copy, status copy, and monitor draft/status
+   guidance; live tester-gateway proof is not claimed here.
 8. Add consumer-friendly automatic rollover or Continue Fresh UX after the
    manual checkpoint path is proven annoying or insufficient.
 
@@ -333,8 +335,9 @@ job. Allow explicit advanced override for separate monitors.
 - Raw evidence remains inspectable for debugging. PR #692 preserves capped
   transcript output; structured raw artifacts still need a follow-up.
 - Heavy-chat nudge appears once and tells the user to make a checkpoint before
-  starting a new chat.
+  starting a new chat. Covered by PR #697 focused tests.
 - "Resume from checkpoint" works from the latest local checkpoint, while
-  "resume from checkpoint <id>" works for a specific saved handoff.
+  "resume from checkpoint <id>" works for a specific saved handoff. PR #697
+  adds the local skill contract; live isolated resume proof is still pending.
 - Automatic context rollover creates a usable continuation without manual paste
   only after the local checkpoint path is proven.
