@@ -342,6 +342,36 @@ describe("telegram live runtime helpers", () => {
     });
   });
 
+  it("adds explicit Claude CLI 1M variants to the isolated tester allowlist", () => {
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.4",
+            },
+            models: {
+              "openai-codex/gpt-5.4": { alias: "Codex 5.4" },
+            },
+          },
+        },
+      },
+      assignedToken: "tester-token",
+      preferredModel: "claude-cli/sonnet",
+      runtimePort: 24567,
+    });
+
+    expect(config.agents?.defaults?.model).toMatchObject({
+      primary: "claude-cli/sonnet",
+      fallbacks: [],
+    });
+    expect(config.agents?.defaults?.models).toMatchObject({
+      "claude-cli/sonnet": {},
+      "claude-cli/sonnet[1m]": {},
+    });
+    expect(config.agents?.defaults?.models).not.toHaveProperty("openai-codex/gpt-5.4");
+  });
+
   it("defaults isolated tester lanes to Codex when local Codex auth is available", () => {
     const config = buildTelegramLiveRuntimeConfig({
       baseConfig: {

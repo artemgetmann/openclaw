@@ -54,4 +54,74 @@ describe("context pressure notice", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("stays quiet when system prompt overhead dominates a fresh session", () => {
+    const entry = {
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+      compactionCount: 0,
+      systemPromptReport: {
+        source: "run",
+        generatedAt: Date.now(),
+        systemPrompt: {
+          chars: 520_000,
+          projectContextChars: 400_000,
+          nonProjectContextChars: 120_000,
+        },
+        injectedWorkspaceFiles: [],
+        skills: {
+          promptChars: 0,
+          entries: [],
+        },
+        tools: {
+          listChars: 0,
+          schemaChars: 40_000,
+          entries: [],
+        },
+      },
+    } as SessionEntry;
+
+    expect(
+      resolveContextPressureNotice({
+        sessionEntry: entry,
+        totalTokens: 150_000,
+        contextTokens: 200_000,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("still warns after compaction even if current system prompt overhead is large", () => {
+    const entry = {
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+      compactionCount: 1,
+      systemPromptReport: {
+        source: "run",
+        generatedAt: Date.now(),
+        systemPrompt: {
+          chars: 520_000,
+          projectContextChars: 400_000,
+          nonProjectContextChars: 120_000,
+        },
+        injectedWorkspaceFiles: [],
+        skills: {
+          promptChars: 0,
+          entries: [],
+        },
+        tools: {
+          listChars: 0,
+          schemaChars: 40_000,
+          entries: [],
+        },
+      },
+    } as SessionEntry;
+
+    expect(
+      resolveContextPressureNotice({
+        sessionEntry: entry,
+        totalTokens: 150_000,
+        contextTokens: 200_000,
+      }),
+    ).toBe(CONTEXT_PRESSURE_NOTICE_TEXT);
+  });
 });

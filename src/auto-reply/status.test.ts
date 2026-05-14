@@ -190,6 +190,73 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 200k/1.0m");
   });
 
+  it("shows 1M context window for explicit Claude CLI 1M variants", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "claude-cli/sonnet",
+            models: {
+              "claude-cli/sonnet": {},
+              "claude-cli/sonnet[1m]": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/sonnet[1m]",
+      },
+      sessionEntry: {
+        sessionId: "claude-cli-1m",
+        updatedAt: 0,
+        providerOverride: "claude-cli",
+        modelOverride: "sonnet[1m]",
+        totalTokens: 200_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: claude-cli/sonnet[1m]");
+    expect(normalized).toContain("Context: 200k/1.0m");
+  });
+
+  it("recomputes the context window for explicit Claude CLI 1M overrides with stale session context", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "claude-cli/sonnet",
+            models: {
+              "claude-cli/sonnet": {},
+              "claude-cli/sonnet[1m]": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/sonnet",
+      },
+      sessionEntry: {
+        sessionId: "claude-cli-1m-stale-context",
+        updatedAt: 0,
+        providerOverride: "claude-cli",
+        modelOverride: "sonnet[1m]",
+        contextTokens: 200_000,
+        totalTokens: 55,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: claude-cli/sonnet[1m]");
+    expect(normalized).toContain("Context: 55/1.0m");
+  });
+
   it("recomputes context window from the active model after switching away from a smaller session override", () => {
     const sessionEntry = {
       sessionId: "switch-back",

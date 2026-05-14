@@ -176,6 +176,18 @@ describe("model-selection", () => {
         expected: { provider: "anthropic", model: "claude-sonnet-4-6" },
       },
       {
+        name: "preserves Claude CLI 1M variants",
+        variants: ["claude-cli/sonnet[1m]", "sonnet[1m]"],
+        defaultProvider: "claude-cli",
+        expected: { provider: "claude-cli", model: "sonnet[1m]" },
+      },
+      {
+        name: "preserves Claude CLI opus 1M variants",
+        variants: ["claude-cli/opus[1m]", "opus[1m]"],
+        defaultProvider: "claude-cli",
+        expected: { provider: "claude-cli", model: "opus[1m]" },
+      },
+      {
         name: "keeps dated anthropic model ids unchanged",
         variants: ["anthropic/claude-sonnet-4-20250514", "claude-sonnet-4-20250514"],
         defaultProvider: "anthropic",

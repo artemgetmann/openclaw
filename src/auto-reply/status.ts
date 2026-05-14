@@ -449,12 +449,17 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
   let activeProvider = modelRefs.active.provider;
   let activeModel = modelRefs.active.model;
+  const hasExplicitSessionModelOverride = Boolean(
+    entry?.providerOverride?.trim() || entry?.modelOverride?.trim(),
+  );
   let contextTokens =
     resolveContextTokensForModel({
       cfg: contextConfig,
       provider: activeProvider,
       model: activeModel,
-      contextTokensOverride: entry?.contextTokens ?? args.agent?.contextTokens,
+      contextTokensOverride: hasExplicitSessionModelOverride
+        ? undefined
+        : (entry?.contextTokens ?? args.agent?.contextTokens),
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 

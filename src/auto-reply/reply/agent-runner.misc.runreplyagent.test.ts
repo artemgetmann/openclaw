@@ -860,6 +860,96 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(secondResult).toMatchObject({ text: "done again" });
   });
 
+  it("does not prepend a context pressure notice for a fresh turn dominated by bootstrap overhead", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pressure-bootstrap-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: {
+          promptTokens: 150_000,
+          usage: { input: 1, output: 1, total: 2 },
+        },
+        systemPromptReport: {
+          source: "run",
+          generatedAt: Date.now(),
+          sessionId: "session",
+          sessionKey,
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          bootstrapMaxChars: 300_000,
+          bootstrapTotalMaxChars: 600_000,
+          systemPrompt: {
+            chars: 520_000,
+            projectContextChars: 400_000,
+            nonProjectContextChars: 120_000,
+          },
+          injectedWorkspaceFiles: [],
+          skills: {
+            promptChars: 0,
+            entries: [],
+          },
+          tools: {
+            listChars: 0,
+            schemaChars: 40_000,
+            entries: [],
+          },
+        },
+      },
+    });
+
+    const config = {
+      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
+    };
+    const run = createBaseRun({
+      storePath,
+      sessionEntry,
+      config,
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun: run.followupRun,
+      queueKey: "main",
+      resolvedQueue: run.resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing: run.typing,
+      sessionCtx: run.sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(result).toMatchObject({ text: "done" });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].contextPressureNoticeAt).toBeUndefined();
+    expect(stored[sessionKey].contextPressureNoticeCompactionCount).toBeUndefined();
+  });
+
   it("does not enqueue legacy post-compaction audit warnings", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-no-audit-warning-"));
     const workspaceDir = path.join(tmp, "workspace");
