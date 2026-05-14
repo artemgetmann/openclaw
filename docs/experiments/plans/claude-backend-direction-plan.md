@@ -395,7 +395,7 @@ Scope boundary:
 
 ### Slice 2c: Tester Telegram visibility and feel probe
 
-Status: live tester-bot rerun passed for Claude CLI model selection, source isolation, and basic progress/no-spam behavior. Reminder firing worked, but the rerun did not fully exercise the per-account `accountId` preservation bug because the isolated tester config used the default unnamed Telegram account route.
+Status: live tester-bot rerun passed for Claude CLI model selection, source isolation, basic progress/no-spam behavior, and named per-account Telegram reminder delivery.
 
 What was required in the isolated tester lane:
 
@@ -452,7 +452,7 @@ Manual tester pass after source-path discovery:
 
 Follow-up fixes:
 
-- Reminder targeting: `src/agents/tools/cron-tool.ts` now preserves inferred Telegram `accountId` from per-account session keys such as `agent:main:telegram:tester-bot:direct:<peer>:thread:<id>`. Focused cron coverage passed in the combined suite above. Live proof still needs an isolated tester reminder that verifies persisted `delivery.accountId`, cron run success, and Telegram arrival from the tester bot.
+- Reminder targeting: `src/agents/tools/cron-tool.ts` now preserves inferred Telegram `accountId` from per-account session keys such as `agent:main:telegram:tester-bot:direct:<peer>:thread:<id>`. Focused cron coverage passed in the combined suite above, and the live named-account proof below verified persisted `delivery.accountId`, cron run success, exact reminder text, and Telegram arrival from the tester bot.
 - Progress/status UX: `extensions/telegram/src/bot-message-dispatch.ts` now batches text-only tool progress into the editable answer draft lane when preview streaming is available, dedupes adjacent repeats, and still sends media-bearing tool payloads normally. Focused proof passed: `pnpm vitest run extensions/telegram/src/bot-message-dispatch.test.ts --pool=forks --maxWorkers=1` passed 1 file / 72 tests.
 - Claude setup UX: `src/commands/models/consumer-auth.ts` now hides `anthropic-claude-cli` until the configured local `claude` command is executable and readable Claude auth exists. Direct apply fails with install/sign-in instructions when missing. This keeps Claude hidden/default-off without bundling Claude Code.
 
@@ -477,13 +477,27 @@ Live tester rerun after PR #683:
 - Reminder proof caveat: the stored job used `delivery.mode=announce` and `sessionKey=agent:main:main`, not a per-account Telegram session key; it therefore did not prove the `delivery.accountId` preservation fix. It also did not deliver the requested nonce text, only the generic delivery summary.
 - Tester-runtime caveat: the standard helper starts isolated Telegram runtime with `OPENCLAW_SKIP_CRON=1`, so reminder firing proof requires a manual cron-enabled isolated runtime or a helper option that keeps cron enabled for this exact test.
 
+Live named-account reminder proof after PR #683 merge:
+
+- Date: 2026-05-14.
+- Branch/commit: `codex/telegram-reminder-accountid-proof` at merged PR #683 commit `9be14f2d0533e9ceb537b28c73c999ecb4cb0f65`.
+- Runtime ownership passed: doctor reported runtime PID `49571`, port `20510`, and `runtime_worktree=/Users/user/.codex/worktrees/claude-cli-next/claude-cli-next-20260512`.
+- The isolated tester config was reshaped so the same tester bot token runs as named account `tester-bot` instead of the default unnamed Telegram account; gateway logs confirmed `[tester-bot] starting provider (@Artem_jarvis_exec_bot)`.
+- Claude CLI model switch passed again: `/model claude-cli/haiku` returned `Model set to claude-cli/haiku.`
+- Natural-language Claude-created reminder job `7f0a2b05-47fc-4f80-a220-b7216fc2d099` persisted the target correctly: `sessionKey=agent:main:telegram:tester-bot:direct:1336356696` and `delivery={mode:"announce", channel:"telegram", to:"1336356696", accountId:"tester-bot"}`.
+- That Claude-created job proved `delivery.accountId` inference from the current named-account Telegram session, but Claude chose a calendar cron expression that rolled to the next year, so it was manually triggered for delivery proof.
+- Manual trigger of the same job delivered exact text `REMINDER_ACCOUNTID_OK_1778730629`; cron run log recorded `status=ok`, `deliveryStatus=delivered`, `summary=REMINDER_ACCOUNTID_OK_1778730629`, provider `claude-cli`, model `haiku`, and session key `agent:main:telegram:tester-bot:direct:1336356696`.
+- Timer firing was then proved separately with direct `kind:"at"` job `719b0669-0aa4-4ec1-a03e-07fb94a59cac`, using the same named-account session and explicit `delivery.accountId=tester-bot`.
+- The timer job fired naturally at `2026-05-14T03:54:15.482Z`, Telegram received exact text `REMINDER_TIMER_ACCOUNTID_OK_1778730795`, and cron state recorded `lastRunStatus=ok`, `lastDelivered=true`, and `lastDeliveryStatus=delivered`.
+- Remaining caveat: the standard tester runtime helper still starts with `OPENCLAW_SKIP_CRON=1`, so this proof required a manual cron-enabled isolated runtime. The product code path is green; the helper ergonomics are still rough.
+
 Current read:
 
 - Claude CLI is operational in the isolated tester Telegram lane after config/auth setup, including direct `/model` switching.
 - Prompt/source isolation is green enough for review and merge under the authority-isolation definition: the old `~/.claude` authority leak did not reproduce, but native Claude user context can still be visible as non-authoritative context.
 - Progress batching is green enough for the no-spam concern, but still needs one slower multi-tool Telegram turn before calling the UX fully proven.
-- Reminder firing is improved but not fully green for the original blocker. The next test must force a named per-account Telegram route and assert persisted `delivery.accountId`, exact reminder text, cron run success, and Telegram arrival from that tester account.
-- Not green enough for default main-bot exposure until the per-account reminder route proof and a slower progress-stream proof pass. Green enough to merge PR #683 as the prompt/source isolation and focused code fixes are covered, with reminder proof carried as the next isolated runtime slice.
+- Reminder delivery is green for the original account-routing blocker: named-account route, persisted `delivery.accountId`, exact reminder text, cron success, and Telegram arrival all passed in the isolated tester lane.
+- Not green enough for default main-bot exposure until one slower multi-tool Telegram turn proves progress batching under real stream pressure. Prompt/source and reminder delivery are no longer blockers.
 
 ### Slice 3: Warm Claude CLI spike
 
