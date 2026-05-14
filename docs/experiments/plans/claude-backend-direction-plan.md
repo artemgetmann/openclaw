@@ -533,6 +533,28 @@ Main-bot acceptance follow-up fixes in progress:
 - Context-pressure nuance: the main-bot "conversation is getting heavy" notice is not fully explained by the 200k fallback alone. The session store for topic `10980` showed `contextTokens=200000`, tiny persisted input/output counts, no persisted total tokens, and a set `contextPressureNoticeAt`; treat this as a separate false-positive notice bug caused by transient prompt-token estimation until proven otherwise.
 - Telegram progress UX: progress transcript lines now use blank-line separators and are retained into the final answer instead of being cleared by preview cleanup. Focused proof passed: `pnpm exec vitest run extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery.test.ts --pool=forks --maxWorkers=1` passed 2 files / 96 tests.
 
+Main-bot manual acceptance checkpoint after PR 701:
+
+- Runtime deployment: passed. `main` was fast-forwarded to `40043ae48f fix(telegram): harden claude acceptance paths`, and the main LaunchAgent was recovered to `~/Programming_Projects/openclaw` with app-owned config/state under `~/Library/Application Support/OpenClaw/.openclaw`, Node 22, listener on `127.0.0.1:18789`, and RPC probe ok.
+- Prompt/source audit: mixed. Claude correctly understood a precedence stack, but it still reported `~/.openclaw/CLAUDE.md` / OpenClaw dev-runtime rules as authoritative context. This may be excessive context bloat for product Telegram sessions and should be re-audited; the desired surface is bounded OpenClaw workspace/app context, not broad local developer rules unless explicitly needed.
+- Tone-of-voice skill: mostly passed in the main bot. The tweet draft used Artem's tone better after the workspace-skills prompt injection.
+- Reddit/tool selection: failed. Claude fetched Reddit through generic web/MCP behavior instead of proactively using the repo/user Reddit skill. Next lane should verify whether the Claude CLI skills prompt exposes skill names/descriptions strongly enough and whether skill invocation rules survive the bridge-safe prompt.
+- Reminder basic delivery: passed for the simple reminder path. `remind me in 1 min to test claude cli reminders` produced a truthful scheduled ack and later sent `Reminder fired: test Claude CLI reminders.`
+- Delayed automation reminder/monitor parity: failed. `in 1 min check my twitter feed lmk whats on it` acknowledged with a temporary "Back in ~60s" style reply, but the eventual Twitter-feed result did not arrive automatically in Telegram; the user had to ask `done?`, after which Claude claimed the summary was above and only then repeated it. This is not parity with the Codex backend, where delayed agent-turn automation should wake, run, and deliver the result without a follow-up prompt.
+- Progress UX: still failed. Interim progress text now has some newlines, but the preview still gets replaced/cleared after the final answer. The user-visible product requirement is that slow-task progress remains readable and the final result does not make useful progress/context vanish.
+- Context-pressure notice: still failed. The main bot emitted "This chat is getting long..." in a short/fresh acceptance run, so the false-positive heavy-chat notice remains unresolved.
+- Claude CLI 1M model selection: failed. `/model claude-cli/sonnet[1m]` responded as if it selected `claude-cli/sonnet`, and `/model status` still reported 200k context. The `[1m]` variants are not actually usable through Telegram model selection yet, even though the lower-level alias/context reporting patch exists.
+- Manual QA process: failed as a workflow. Too much of the acceptance burden landed on Artem. The next checkpoint should use a tester Telegram bot/runtime first, with coordinator + parallel workers, and only hand Artem the main bot once the agent has proved the fixed paths itself.
+
+Next orchestrated repair lanes:
+
+- Progress lifecycle lane: reproduce in an isolated Telegram tester bot with a slow multi-tool task, then fix preview/final retention so readable progress does not disappear after the final answer.
+- Delayed agent-turn parity lane: reproduce `in 1 min check <thing> and report back` with Claude CLI in tester Telegram, inspect the cron/agentTurn result-delivery path, and make it deliver the actual result to Telegram without a user follow-up.
+- Skills/tool-selection lane: verify why Claude CLI sees workspace skills but does not choose the Reddit skill; tighten the bridge-safe skills prompt or invocation surface without restoring full prompt bloat.
+- Prompt/source-bloat lane: audit exactly why `~/.openclaw/CLAUDE.md` and dev/runtime rules appear as authoritative in Claude CLI Telegram sessions; decide the 80/20 product boundary for product sessions versus local developer sessions.
+- Model-selection lane: make explicit `claude-cli/sonnet[1m]` and `claude-cli/opus[1m]` survive `/model` parsing, allowlist/config lookup, session storage, and `/model status` before exposing them in Telegram.
+- Context-pressure lane: gate the heavy-chat notice on fresh, credible token totals and prove a short Claude CLI main/tester session does not emit it.
+
 Future model-picker/default-exposure rule:
 
 - Keep the current visible/default Claude choice unchanged until Claude CLI passes main-bot acceptance.
