@@ -2,7 +2,7 @@
 
 Status: v1 launch package draft
 Owner: Artem
-Last updated: 2026-05-12
+Last updated: 2026-05-14
 
 This document turns the launch plan into decisions that can be shipped into the
 GitHub README, release notes, pricing copy, and the first 60-second demo.
@@ -62,9 +62,22 @@ Current package truth:
   `~/Library/Application Support/OpenClaw/release.env` and should be inherited
   by all worktrees/chats.
 - API token and Neon URL are stored outside Git in macOS Keychain.
-- Current trusted-tester artifacts from 2026-05-12 are Developer ID signed,
-  notarized, stapled, and Gatekeeper-accepted as `Jarvis.app`, `Jarvis.dmg`,
-  `Jarvis.zip`, and `jarvis-appcast.xml`.
+- Final trusted-tester package from 2026-05-14 was built from commit
+  `14d2624bb8` at
+  `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg`.
+  `Jarvis.dmg` is Gatekeeper-accepted as Notarized Developer ID.
+- Installed app smoke passed for `/Applications/Jarvis.app`: visible app name
+  and icon are Jarvis, installed app provenance matches commit `14d2624bb8`,
+  and bundle ID intentionally remains `ai.openclaw.consumer.mac` for the 3
+  trusted waiting testers.
+- Installed runtime takeover smoke passed: `OPENCLAW_MAIN_REPO` resolves to
+  `/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw`, and
+  `/healthz` returns `{"ok":true,"status":"live"}`.
+- Visual Channels smoke passed in the installed Jarvis app: Channels opens,
+  Telegram shows live/verified, and the connected bot is `@Jarvis_cl4w_bot`.
+- Next recommended pre-send validation is a clean macOS user install smoke.
+  Sending `Jarvis.dmg` to the 3 trusted waiting testers is allowed after that
+  clean-user smoke passes, unless Artem explicitly chooses to send earlier.
 - Recommended release path for the next lane: App Store Connect API key auth
   plus async notarization submit/poll/staple receipts. Set
   `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
@@ -79,10 +92,13 @@ Current package truth:
   placeholders or commit key material.
 - `ai.jarvis.mac` bundle ID/runtime/update identity migration is a required
   launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
-- After the trusted-tester package passes a local install/open smoke, clean up
-  old local OpenClaw app/package variants on Artem's machine so Artem uses the
-  same installed Jarvis package as testers. Do not do this before the smoke
-  passes.
+- Do not send to Reddit/GitHub/public-ish beta until the `ai.jarvis.mac`
+  bundle/runtime/update migration is complete.
+- Clean up old local OpenClaw app/package variants on Artem's machine only
+  after an exact delete list is approved.
+- Channels currently duplicates connected-bot text/buttons. This is not a
+  blocker for the 3 trusted waiting testers, but it should get a focused UI
+  polish lane before wider beta.
 
 ## v1 commercial decision
 
@@ -314,14 +330,17 @@ Say this directly:
 - `ai.jarvis.mac` migration is required before Reddit/GitHub, public-ish beta,
   or a wider beta, and needs a deliberate migration lane because permissions,
   state, LaunchAgents, and update continuity can be affected
-- current trusted-tester artifacts are notarized and Gatekeeper-accepted, but
-  the next release lane should default to App Store Connect API key auth and
-  async submit/poll/staple notarization receipts. Keychain profile auth is a
-  fallback only, and Artem still must create/provide the real ASC API key if it
-  is missing locally
+- final 2026-05-14 trusted-tester `Jarvis.dmg` from commit `14d2624bb8` is
+  notarized, Gatekeeper-accepted, installed at `/Applications/Jarvis.app`, and
+  proved against the installed runtime and Channels UI; before sending to the
+  3 trusted waiting testers, the next recommended validation is a clean macOS
+  user install smoke
 
 ### Roadmap
 
+- clean macOS user install smoke, then send the final `Jarvis.dmg` to the
+  3 trusted waiting testers unless Artem chooses to send earlier
+- focused Channels UI polish to remove duplicated connected-bot text/buttons
 - smoother account login and trial activation
 - cleaner Telegram setup with one consumer-first command/settings surface
 - Apple-style signed, verified updates that keep setup, preferences, and local
