@@ -25,6 +25,10 @@ Jarvis should preserve continuity while keeping active working context small.
   live Jarvis config had `reserveTokensFloor: 4000`.
 - Session pruning trims old tool results in memory for selected providers.
 - Tool-result truncation exists as overflow recovery.
+- PR #692 merged on 2026-05-14 at commit
+  `0745c7332df66a9d47741a7ab2600ff7647ea7fc`. It closes the multi-block raw
+  tool-output bypass by enforcing one total text budget per tool result before
+  prompt reuse and persistence.
 - PR #670 added durable monitor sessions and human-style monitor status
   guidance.
 - PR #677 exposed monitor state to Telegram-capable agents and injected compact
@@ -70,12 +74,15 @@ Done:
 - PR #681 merged with a one-time normal-chat context-pressure nudge. It does
   not switch sessions automatically.
 - PR #686 merged with active monitor creation dedupe before cron job creation.
+- PR #692 merged with multi-block tool-result caps for active prompt reuse and
+  transcript persistence.
 
 Not done:
 
 - There is no automatic fresh-session rollover yet.
-- Oversized raw tool outputs are not yet moved into structured artifacts with
-  compact evidence pointers.
+- Structured raw-output artifacts with compact evidence pointers are not built
+  yet. PR #692 reduces the worst prompt-bloat path, but it is not an artifact
+  storage system.
 - The `~/.openclaw/openclaw.json` legacy/default CLI config path still belongs
   in CLI/dev docs. Packaged/shared Jarvis docs and app copy should name the
   active Application Support config instead.
@@ -283,7 +290,8 @@ job. Allow explicit advanced override for separate monitors.
 5. Deduplicate monitor creation. Done in PR #686 for active monitors before
    cron job creation.
 6. Move oversized raw tool output out of active prompt while keeping evidence
-   fetchable.
+   fetchable. Partially done in PR #692 for multi-block tool-result caps;
+   structured artifact pointers remain.
 7. Add consumer-friendly automatic rollover or Continue Fresh UX.
 
 ## Validation Gates
@@ -297,5 +305,6 @@ job. Allow explicit advanced override for separate monitors.
 - Duplicate monitor creation returns or updates the existing active monitor.
   Covered by PR #686 focused tests; live shared-runtime proof is not claimed
   here.
-- Raw evidence remains inspectable for debugging.
+- Raw evidence remains inspectable for debugging. PR #692 preserves capped
+  transcript output; structured raw artifacts still need a follow-up.
 - Context rollover creates a usable continuation without manual paste.
