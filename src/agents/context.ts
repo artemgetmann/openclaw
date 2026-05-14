@@ -324,6 +324,15 @@ function isAnthropic1MModel(provider: string, model: string): boolean {
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
+function isClaudeCode1MModel(provider: string, model: string): boolean {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "claude-cli" && normalizedProvider !== "claude-bridge") {
+    return false;
+  }
+  const normalizedModel = model.trim().toLowerCase();
+  return normalizedModel.endsWith("[1m]");
+}
+
 export function resolveContextTokensForModel(params: {
   cfg?: OpenClawConfig;
   provider?: string;
@@ -342,6 +351,9 @@ export function resolveContextTokensForModel(params: {
   if (ref) {
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
+      return ANTHROPIC_CONTEXT_1M_TOKENS;
+    }
+    if (isClaudeCode1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
     // Only do the config direct scan when the caller explicitly passed a

@@ -347,4 +347,32 @@ describe("lookupContextTokens", () => {
     });
     expect(result).toBe(1_048_576);
   });
+
+  it("resolveContextTokensForModel reports Claude Code explicit 1M variants as 1M", async () => {
+    mockDiscoveryDeps([]);
+
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    expect(
+      resolveContextTokensForModel({
+        provider: "claude-cli",
+        model: "sonnet[1m]",
+        fallbackContextTokens: 200_000,
+      }),
+    ).toBe(1_048_576);
+    expect(
+      resolveContextTokensForModel({
+        provider: "claude-cli",
+        model: "opus[1m]",
+        fallbackContextTokens: 200_000,
+      }),
+    ).toBe(1_048_576);
+    expect(
+      resolveContextTokensForModel({
+        provider: "claude-cli",
+        model: "sonnet",
+        fallbackContextTokens: 200_000,
+      }),
+    ).toBe(200_000);
+  });
 });

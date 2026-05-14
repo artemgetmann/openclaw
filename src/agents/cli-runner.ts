@@ -14,6 +14,7 @@ import {
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -72,6 +73,7 @@ import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
 } from "./session-write-lock.js";
+import { buildWorkspaceSkillsPrompt } from "./skills.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
@@ -484,6 +486,19 @@ function buildClaudeCliWorkspaceBootstrapAppendix(params: {
     lines.push(`## ${file.path}`, "", file.content, "");
   }
   return lines.join("\n").trim();
+}
+
+function buildBridgeSafeClaudeCliSkillsPrompt(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+}): string {
+  // Keep the bridge-safe prompt small, but still surface OpenClaw-managed
+  // skills so Claude can proactively pick the right workspace skill instead
+  // of falling back to ~/.claude state.
+  return buildWorkspaceSkillsPrompt(params.workspaceDir, {
+    config: params.config,
+    eligibility: { remote: getRemoteSkillEligibility() },
+  }).trim();
 }
 
 async function buildCliAgentPromptStack(params: {
@@ -945,6 +960,12 @@ export async function runCliAgent(params: {
         cwd: process.cwd(),
         moduleUrl: import.meta.url,
       });
+  const skillsPrompt = useBridgeSafeClaudeCliPrompt
+    ? buildBridgeSafeClaudeCliSkillsPrompt({
+        workspaceDir,
+        config: params.config,
+      })
+    : "";
   const systemPrompt = useBridgeSafeClaudeCliPrompt
     ? [
         buildClaudeBridgePrompt({
@@ -952,6 +973,7 @@ export async function runCliAgent(params: {
           splitMode: resolveClaudeBridgeSplitMode(),
           extraSystemPrompt: params.extraSystemPrompt,
         }),
+        skillsPrompt,
         // Claude CLI still needs the small Bridge-safe identity prompt, but Telegram/product
         // runs must not answer from the host user's ~/.claude memory. Append only the bounded
         // OpenClaw bootstrap files instead of switching to the full OpenClaw prompt stack.
@@ -996,7 +1018,7 @@ export async function runCliAgent(params: {
     systemPrompt,
     bootstrapFiles,
     injectedFiles: contextFiles,
-    skillsPrompt: "",
+    skillsPrompt,
     tools: [],
   });
 

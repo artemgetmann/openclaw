@@ -3,6 +3,7 @@ import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
+import { createCronTool } from "../../agents/tools/cron-tool.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -28,6 +29,7 @@ import { buildStatusReply, handleCommands } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { isDirectiveOnly } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
+import { buildReminderCronJob, extractReminderIntent } from "./reminder-intent.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
@@ -83,6 +85,48 @@ function extractTextFromToolResult(result: any): string | null {
   const out = parts.join("");
   const trimmed = out.trim();
   return trimmed ? trimmed : null;
+}
+
+async function tryScheduleReminderIntent(params: {
+  cleanedBody: string;
+  command: Parameters<typeof handleCommands>[0]["command"];
+  sessionKey: string;
+  typing: TypingController;
+}) {
+  if (!params.command.isAuthorizedSender) {
+    return null;
+  }
+
+  const intent = extractReminderIntent(params.cleanedBody);
+  if (!intent) {
+    return null;
+  }
+
+  try {
+    const cronTool = createCronTool({ agentSessionKey: params.sessionKey });
+    const toolCallId = `reminder_${generateSecureToken(8)}`;
+    await cronTool.execute(toolCallId, {
+      action: "add",
+      job: buildReminderCronJob(intent),
+    });
+
+    params.typing.cleanup();
+    return {
+      kind: "reply" as const,
+      reply: {
+        text: `✅ Reminder scheduled: ${intent.task}`,
+      },
+    };
+  } catch (err) {
+    params.typing.cleanup();
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      kind: "reply" as const,
+      reply: {
+        text: `❌ Could not schedule reminder: ${message}`,
+      },
+    };
+  }
 }
 
 export async function handleInlineActions(params: {
@@ -305,6 +349,16 @@ export async function handleInlineActions(params: {
     sessionCtx.Body = cleanedBody;
     sessionCtx.BodyForAgent = cleanedBody;
     sessionCtx.BodyStripped = cleanedBody;
+  }
+
+  const reminderIntentResult = await tryScheduleReminderIntent({
+    cleanedBody,
+    command,
+    sessionKey,
+    typing,
+  });
+  if (reminderIntentResult) {
+    return reminderIntentResult;
   }
 
   const handleInlineStatus =

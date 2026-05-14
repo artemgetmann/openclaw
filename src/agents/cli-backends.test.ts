@@ -126,6 +126,15 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toContain("mcp__openclaw__*");
   });
 
+  it("passes Claude Code 1M context model variants through", () => {
+    const resolved = resolveCliBackendConfig("claude-cli");
+
+    expect(resolved?.config.modelAliases?.["sonnet[1m]"]).toBe("sonnet[1m]");
+    expect(resolved?.config.modelAliases?.["opus[1m]"]).toBe("opus[1m]");
+    expect(resolved?.config.modelAliases?.["claude-sonnet-4-6[1m]"]).toBe("claude-sonnet-4-6[1m]");
+    expect(resolved?.config.modelAliases?.["claude-opus-4-7[1m]"]).toBe("claude-opus-4-7[1m]");
+  });
+
   it("normalizes legacy skip-permissions overrides to permission-mode bypassPermissions", () => {
     const cfg = {
       agents: {
