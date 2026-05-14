@@ -98,9 +98,23 @@ Current package truth:
   `Jarvis.dmg` with isolated state, isolated gateway health, onboarding
   observed, and real user config unchanged. A true separate macOS account smoke
   was deliberately skipped as unnecessary for the 3 trusted waiting testers.
+- Known trusted-build caveat: after launch, Jarvis can materialize extension
+  dependencies under
+  `/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw/dist/extensions/acpx/node_modules`.
+  That mutates the signed app bundle and makes a later `codesign --verify`
+  report a sealed-resource failure until the app is reinstalled from the DMG.
+  This is acceptable for the 3 trusted waiting testers as an early trusted
+  build caveat, but it is a required fix before Reddit/GitHub, public-ish beta,
+  or any wider beta. Runtime-writable extension dependencies must move to
+  Application Support or another writable state/cache path outside
+  `/Applications/Jarvis.app`.
 - Sending `Jarvis.dmg` to the 3 trusted waiting testers is allowed. Do not send
   wider/public until the `ai.jarvis.mac` identity migration and remaining wider
   beta gates are complete.
+- Full newer-version Sparkle update-cycle testing is deferred for speed. Current
+  proof covers appcast/feed reachability and no Update Error; a real
+  download/verify/install/relaunch/preserve-state cycle should be tested before
+  relying on an update to recover trusted users or before broader distribution.
 - Recommended release path for the next lane: App Store Connect API key auth
   plus async notarization submit/poll/staple receipts. Set
   `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
@@ -353,12 +367,15 @@ Say this directly:
 - `ai.jarvis.mac` migration is required before Reddit/GitHub, public-ish beta,
   or a wider beta, and needs a deliberate migration lane because permissions,
   state, LaunchAgents, and update continuity can be affected
+- post-launch app-bundle mutation is also a wider-beta blocker: Jarvis must not
+  write extension `node_modules` or other runtime dependencies inside
+  `/Applications/Jarvis.app` after signing
 - final 2026-05-14 trusted-tester `Jarvis.dmg` from commit `ab9c3c1ca1` is
   notarized, Gatekeeper-accepted, copied to the sacred repo root, uploaded with
   its Jarvis ZIP/appcast assets, installed over Artem's current app, and smoke
   tested. Sending to the 3 trusted waiting testers is allowed; wider
-  distribution still waits on `ai.jarvis.mac` migration and the remaining beta
-  gates.
+  distribution still waits on `ai.jarvis.mac` migration, post-launch bundle
+  immutability, and the remaining beta gates.
 
 ### Roadmap
 
@@ -371,6 +388,10 @@ Say this directly:
   data in place
 - App Store Connect API key auth and async submit/poll/staple notarization
   receipts as the default repeatable release packaging path
+- move runtime-writable extension dependencies out of the signed app bundle
+  before wider beta
+- run a real newer-version Sparkle update cycle before relying on updates for
+  recovery or wider distribution
 - better first-run permission copy
 - backend-managed utility cap hardening
 - skill audit and safer third-party skill install flow
