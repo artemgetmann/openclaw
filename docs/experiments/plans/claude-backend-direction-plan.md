@@ -495,9 +495,15 @@ Current read:
 
 - Claude CLI is operational in the isolated tester Telegram lane after config/auth setup, including direct `/model` switching.
 - Prompt/source isolation is green enough for review and merge under the authority-isolation definition: the old `~/.claude` authority leak did not reproduce, but native Claude user context can still be visible as non-authoritative context.
-- Progress batching is green enough for the no-spam concern, but still needs one slower multi-tool Telegram turn before calling the UX fully proven.
+- Progress batching is green enough for the no-spam concern, but still needs one slower multi-tool Telegram turn before calling the UX fully proven. Plain English: ask Claude CLI to do a task that takes long enough and uses several tools so Telegram has to show, edit, dedupe, and settle progress updates instead of only sending one fast final reply.
 - Reminder delivery is green for the original account-routing blocker: named-account route, persisted `delivery.accountId`, exact reminder text, cron success, and Telegram arrival all passed in the isolated tester lane.
 - Not green enough for default main-bot exposure until one slower multi-tool Telegram turn proves progress batching under real stream pressure. Prompt/source and reminder delivery are no longer blockers.
+
+Remaining validation gates:
+
+- Slow multi-tool tester-bot progress proof: use isolated tester Telegram, switch to `claude-cli/haiku`, and ask for a deliberately bounded task that calls multiple harmless tools (for example `sessions_list`, `web_fetch` for two public URLs, and a short memory/search or status read). Pass if Telegram does not spam multiple standalone progress messages, progress text is deduped/edited into the draft lane, and the final answer contains a compact useful result.
+- Main-bot manual acceptance proof: after the merged code is deployed/running on Artem's own main Telegram bot, Artem should personally run the final smoke before default exposure is called done. Minimum manual path: `/model claude-cli/haiku`, source/prompt sanity question, one real browser/fetch/tool task, one reminder, and one slow multi-tool progress task. Pass only if the main bot feels correct in the actual product chat, not just in the isolated tester lane.
+- Rollout rule: if main-bot manual proof fails, keep `claude-cli/*` tester-only and fix the specific failing path before exposing it broadly.
 
 ### Slice 3: Warm Claude CLI spike
 
