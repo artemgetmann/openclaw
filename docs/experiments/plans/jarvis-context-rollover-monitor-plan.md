@@ -316,8 +316,10 @@ job. Allow explicit advanced override for separate monitors.
    fetchable. Partially done in PR #692 for multi-block tool-result caps;
    structured artifact pointers remain.
 7. Add local checkpoint/resume skill and clearer heavy-chat nudge. Done in PR
-   #697 for the local skill, warning copy, status copy, and monitor draft/status
-   guidance; live tester-gateway proof is not claimed here.
+   #697 for the local skill, warning copy, status copy, monitor draft/status
+   guidance, and fresh consumer bundled-skill allowlist. Isolated gateway boot
+   and bundled skill eligibility passed; live model-created checkpoint proof was
+   blocked by invalid local OpenAI auth.
 8. Add consumer-friendly automatic rollover or Continue Fresh UX after the
    manual checkpoint path is proven annoying or insufficient.
 
@@ -338,6 +340,7 @@ job. Allow explicit advanced override for separate monitors.
   starting a new chat. Covered by PR #697 focused tests.
 - "Resume from checkpoint" works from the latest local checkpoint, while
   "resume from checkpoint <id>" works for a specific saved handoff. PR #697
-  adds the local skill contract; live isolated resume proof is still pending.
+  adds the local skill contract; live isolated resume proof still needs a valid
+  tester model-auth path.
 - Automatic context rollover creates a usable continuation without manual paste
   only after the local checkpoint path is proven.
