@@ -69,6 +69,8 @@ describe("monitor tool", () => {
     expect(tool.description).toContain(
       "if multiple active monitors could match, ask a short clarification",
     );
+    expect(tool.description).toContain("include the actual draft text");
+    expect(tool.description).toContain("only reporting status");
     expect(tool.description).toContain("keep raw evidence behind ids, paths, or refs");
   });
 

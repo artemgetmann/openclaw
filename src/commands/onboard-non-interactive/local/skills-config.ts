@@ -4,6 +4,8 @@ import type { OnboardOptions } from "../../onboard-types.js";
 
 export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "consumer-setup",
+  "checkpoint",
+  "monitor-router",
   "apple-notes",
   "apple-reminders",
   "gog",

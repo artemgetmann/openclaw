@@ -149,9 +149,14 @@ Avoid making buttons the primary flow.
 
 Good:
 
-> Chloe replied. She says 25 days is possible at RM2,800 all-in. I drafted a
-> reply asking for viewing today. Say "send it", "change it to ...", or "stop
-> watching Chloe".
+> Chloe replied. She says 25 days is possible at RM2,800 all-in.
+> Draft: "Sounds good. Can you confirm what is included and the earliest start
+> date?"
+> Would you like me to send it, edit it, or stop watching Chloe?
+
+Good status-only:
+
+> Chloe has not replied yet. I checked the thread and will keep watching.
 
 Power-user buttons may exist as shortcuts, but the natural-language path should
 work first:
@@ -208,16 +213,34 @@ available anywhere monitors are used.
 When a topic is getting heavy, Jarvis should not say "type /new and paste this"
 as the consumer path.
 
-Preferred UX:
+Current 80/20 UX:
+
+> This chat is getting long. I can keep going, but it may slow down soon. If you
+> want a clean handoff, ask me to make a checkpoint, then start a new chat and
+> ask me to resume from it.
+
+Local checkpoint skill:
+
+- `skills/checkpoint/SKILL.md`
+- Store checkpoints locally in the active OpenClaw workspace under
+  `checkpoints/YYYY-MM-DD/<timestamp>-<slug>.md`.
+- "Resume from checkpoint" or "resume from the latest checkpoint" reads the
+  newest local checkpoint; "resume from checkpoint <id>" reads the named one.
+- MindMirror can remain useful for Artem's personal workflow, but consumer
+  Jarvis should not require remote memory infrastructure for this handoff.
+
+Deferred automatic UX:
 
 > This conversation is getting heavy, so I made a clean continuation point. I'll
 > continue from there.
 
-Then Jarvis creates or selects a fresh session and injects the compact handoff.
+That version creates or selects a fresh session and injects the compact handoff.
+It stays deferred until the manual checkpoint path proves annoying or
+insufficient, because automatic rollover needs reliable checkpoint creation,
+local persistence, session routing, and Telegram continuation behavior.
 
 Power-user fallback:
 
-- `/checkpoint`
 - `/compact`
 - `/new`
 
@@ -292,7 +315,13 @@ job. Allow explicit advanced override for separate monitors.
 6. Move oversized raw tool output out of active prompt while keeping evidence
    fetchable. Partially done in PR #692 for multi-block tool-result caps;
    structured artifact pointers remain.
-7. Add consumer-friendly automatic rollover or Continue Fresh UX.
+7. Add local checkpoint/resume skill and clearer heavy-chat nudge. Done in PR
+   #697 for the local skill, warning copy, status copy, monitor draft/status
+   guidance, and fresh consumer bundled-skill allowlist. Isolated gateway boot
+   and bundled skill eligibility passed; live model-created checkpoint proof was
+   blocked by invalid local OpenAI auth.
+8. Add consumer-friendly automatic rollover or Continue Fresh UX after the
+   manual checkpoint path is proven annoying or insufficient.
 
 ## Validation Gates
 
@@ -307,4 +336,11 @@ job. Allow explicit advanced override for separate monitors.
   here.
 - Raw evidence remains inspectable for debugging. PR #692 preserves capped
   transcript output; structured raw artifacts still need a follow-up.
-- Context rollover creates a usable continuation without manual paste.
+- Heavy-chat nudge appears once and tells the user to make a checkpoint before
+  starting a new chat. Covered by PR #697 focused tests.
+- "Resume from checkpoint" works from the latest local checkpoint, while
+  "resume from checkpoint <id>" works for a specific saved handoff. PR #697
+  adds the local skill contract; live isolated resume proof still needs a valid
+  tester model-auth path.
+- Automatic context rollover creates a usable continuation without manual paste
+  only after the local checkpoint path is proven.

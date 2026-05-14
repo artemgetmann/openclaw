@@ -52,6 +52,8 @@ export function buildMonitorWakeMessage(params: {
       : [
           "Default behavior is notify + draft to the origin chat unless the original task explicitly authorized action on the watched surface.",
           "Write the update like an assistant talking to the user: natural, concise, and ready to send.",
+          "If you draft a reply, include the actual draft text in the origin-chat update before asking whether to send, edit, or stop watching.",
+          "If the wake only needs a status update, report the status and next step without pretending there is a draft to send.",
           "Buttons are shortcuts only; the natural-language path is the real interface.",
         ]),
     "After a successful check, update the monitor checkpoint/status if needed before finishing.",

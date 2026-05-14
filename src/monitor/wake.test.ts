@@ -34,6 +34,8 @@ describe("buildMonitorWakeMessage", () => {
       "Do not keep or re-mark the monitor completed solely because older checkpoint data looked settled.",
     );
     expect(message).toContain("Write the update like an assistant talking to the user");
+    expect(message).toContain("include the actual draft text");
+    expect(message).toContain("only needs a status update");
   });
 
   it("preserves the reopened-conversation regression contract for WhatsApp-like checkpoints", () => {

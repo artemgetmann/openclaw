@@ -60,6 +60,8 @@ For monitor-related user replies/status:
 - use the monitor-router skill for natural-language routing.
 - use list/get to inspect candidate monitors before acting.
 - act only when exactly one monitor is clear; if multiple active monitors could match, ask a short clarification.
+- when drafting a reply, include the actual draft text in the origin-chat update before asking whether to send, edit, or stop watching.
+- when only reporting status, summarize the status and next step without forcing send/edit language.
 - use update to persist compact status/checkpoint; keep raw evidence behind ids, paths, or refs.`,
     parameters: MonitorToolSchema,
     execute: async (_toolCallId, args) => {
