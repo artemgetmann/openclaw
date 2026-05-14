@@ -179,8 +179,19 @@ struct ConsumerPermissionRecoveryTests {
     @Test func `bulk grant excludes manual privacy permissions`() {
         #expect(!PermissionsSettings.consumerBulkGrantCapabilities.contains(.screenRecording))
         #expect(!PermissionsSettings.consumerBulkGrantCapabilities.contains(.accessibility))
-        #expect(PermissionsSettings.consumerBulkGrantCapabilities.contains(.notifications))
+        #expect(!PermissionsSettings.consumerBulkGrantCapabilities.contains(.notifications))
+        #expect(!PermissionsSettings.consumerBulkGrantCapabilities.contains(.microphone))
+        #expect(PermissionsSettings.consumerBulkGrantCapabilities.contains(.appleScript))
         #expect(PermissionsSettings.consumerBulkGrantCapabilities.contains(.location))
+    }
+
+    @Test func `consumer settings keeps media permissions optional`() {
+        #expect(PermissionsSettings.consumerRecommendedCapabilities.contains(.screenRecording))
+        #expect(PermissionsSettings.consumerRecommendedCapabilities.contains(.accessibility))
+        #expect(PermissionsSettings.consumerRecommendedCapabilities.contains(.appleScript))
+        #expect(PermissionsSettings.consumerRecommendedCapabilities.contains(.location))
+        #expect(!PermissionsSettings.consumerRecommendedCapabilities.contains(.notifications))
+        #expect(!PermissionsSettings.consumerRecommendedCapabilities.contains(.microphone))
     }
 
     @Test func `core onboarding permissions include apple script and location`() {
