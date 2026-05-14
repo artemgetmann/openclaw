@@ -595,6 +595,11 @@ Telegram/BotFather:
 - Manual BotFather setup is too much friction for mainstream users.
 - If Telegram supports managed/programmatic bot provisioning through some official/allowed path, investigate and implement.
 - If not, use shared bot by default and BYO bot token as advanced option.
+- Telegram command/settings strategy lives in
+  `docs/consumer/jarvis-launch-package.md`. Normal users should get one
+  consumer-safe `/settings` surface with plain names; advanced/developer
+  controls such as BYO bot token, custom commands, verbose detail, and internal
+  IDs should be exposed intentionally through an advanced mode/toggle.
 
 ### 11.1 First beta goal
 
@@ -825,10 +830,11 @@ docs remain historical proof only:
 | Public `v2026.3.15` asset replacement            | Release lane with explicit Artem approval        | Open, approval-gated             | Current public assets still point at old provenance `205d5f596602ff82270b1af5a3de24c33c32b532`. Prior local recut proof existed from `1ec69a58fd441e1c63a91e5af4468fd6fe53f272`; if app work continues, recut again from final `main` before uploading.                                                                                              |
 | Release assets involved                          | Release lane                                     | Open, approval-gated             | Replace/upload only after explicit approval: `Jarvis.dmg`, `Jarvis.zip`, the dSYM zip, and the Jarvis appcast generated for the consumer feed.                                                                                                                                                                                                       |
 | Optional Sparkle dialog smoke                    | Release/GUI smoke lane                           | Optional                         | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                                                                                                              |
+| Local old-app/package cleanup                    | Cleanup lane after local smoke                   | Next after smoke                 | After the trusted-tester Jarvis package passes local install/open smoke, remove old local OpenClaw app/package variants from Artem's machine so Artem uses the same installed Jarvis package as testers. Do not clean up before smoke passes.                                                                                                        |
 | Launch audit                                     | Launch/commercial readiness lane                 | Open                             | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                                                                              |
 | Overlay/defaults hygiene                         | Future product/platform lane                     | Deferred, non-blocking           | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                                                                                                                |
 | Bundle ID migration                              | Separate migration lane before public-ish launch | Required before wider beta       | Keep `ai.openclaw.consumer.mac` plus OpenClaw runtime/update paths only for the 3 trusted waiting testers. Before Reddit/GitHub, public-ish beta, or any wider beta, migrate to `ai.jarvis.mac` through a deliberate lane because permissions, state, LaunchAgents, and update continuity can be affected.                                           |
-| Old app/dist/worktree cleanup                    | Cleanup lane                                     | Lower priority                   | Cleanup of old OpenClaw apps and worktree `dist` bundles is useful hygiene, but it is lower priority than proving the notarized Jarvis beta package.                                                                                                                                                                                                 |
+| Old worktree `dist` cleanup                      | Cleanup lane                                     | Lower priority                   | Cleanup of old worktree `dist` bundles is useful hygiene, but it is lower priority than local smoke, tester send, and release-hardening.                                                                                                                                                                                                             |
 
 Deployment/security boundary:
 
@@ -856,6 +862,9 @@ Deployment/security boundary:
 - [ ] Replace Apple ID app-specific password / Keychain-profile notarization
       with App Store Connect API key auth plus async submit/poll/staple receipts
       before the next release lane.
+- [ ] After the local trusted-tester package smoke passes, delete old local
+      OpenClaw app/package variants from Artem's machine so Artem dogfoods the
+      same installed Jarvis package as testers.
 - [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
 - [ ] Implement subscription/trial-gated update entitlement UX.
 - [x] Remove or proxy all founder keys from public builds. Backend/proxy contract exists in PR #560; public-package audit guard landed in PR #565.
