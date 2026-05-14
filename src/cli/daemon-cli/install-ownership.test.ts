@@ -109,60 +109,63 @@ describe("detectSharedGatewayInstallOwnershipConflict", () => {
     );
   });
 
-  it("allows the packaged consumer app runtime to own the default shared gateway", async () => {
-    const homeDir = makeTempDir("openclaw-home-");
-    const canonicalRepo = path.join(homeDir, "Programming_Projects", "openclaw");
-    const appRuntime = path.join(
-      homeDir,
-      "Applications",
-      "OpenClaw.app",
-      "Contents",
-      "Resources",
-      "OpenClawRuntime",
-      "openclaw",
-    );
-    cleanupPaths.push(homeDir);
+  it.each(["OpenClaw.app", "Jarvis.app"])(
+    "allows the packaged %s consumer app runtime to own the default shared gateway",
+    async (appName) => {
+      const homeDir = makeTempDir("openclaw-home-");
+      const canonicalRepo = path.join(homeDir, "Programming_Projects", "openclaw");
+      const appRuntime = path.join(
+        homeDir,
+        "Applications",
+        appName,
+        "Contents",
+        "Resources",
+        "OpenClawRuntime",
+        "openclaw",
+      );
+      cleanupPaths.push(homeDir);
 
-    fs.mkdirSync(path.join(canonicalRepo, "dist"), { recursive: true });
-    fs.writeFileSync(path.join(canonicalRepo, "dist", "index.js"), "// canonical repo\n");
-    fs.mkdirSync(path.join(appRuntime, "dist"), { recursive: true });
-    fs.writeFileSync(path.join(appRuntime, "dist", "index.js"), "// packaged app\n");
+      fs.mkdirSync(path.join(canonicalRepo, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(canonicalRepo, "dist", "index.js"), "// canonical repo\n");
+      fs.mkdirSync(path.join(appRuntime, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(appRuntime, "dist", "index.js"), "// packaged app\n");
 
-    const conflict = await detectSharedGatewayInstallOwnershipConflict({
-      env: { HOME: homeDir },
-      service: {
-        label: "Gateway",
-        readCommand: async () => null,
-      } as never,
-      allowSharedServiceTakeover: true,
-      programArguments: [
-        process.execPath,
-        path.join(appRuntime, "dist", "index.js"),
-        "gateway",
-        "--port",
-        "18789",
-      ],
-      workingDirectory: appRuntime,
-      environment: {
-        OPENCLAW_STATE_DIR: path.join(
-          homeDir,
-          "Library",
-          "Application Support",
-          "OpenClaw",
-          ".openclaw",
-        ),
-        OPENCLAW_CONFIG_PATH: path.join(
-          homeDir,
-          "Library",
-          "Application Support",
-          "OpenClaw",
-          ".openclaw",
-          "openclaw.json",
-        ),
-        OPENCLAW_GATEWAY_PORT: "18789",
-      },
-    });
+      const conflict = await detectSharedGatewayInstallOwnershipConflict({
+        env: { HOME: homeDir },
+        service: {
+          label: "Gateway",
+          readCommand: async () => null,
+        } as never,
+        allowSharedServiceTakeover: true,
+        programArguments: [
+          process.execPath,
+          path.join(appRuntime, "dist", "index.js"),
+          "gateway",
+          "--port",
+          "18789",
+        ],
+        workingDirectory: appRuntime,
+        environment: {
+          OPENCLAW_STATE_DIR: path.join(
+            homeDir,
+            "Library",
+            "Application Support",
+            "OpenClaw",
+            ".openclaw",
+          ),
+          OPENCLAW_CONFIG_PATH: path.join(
+            homeDir,
+            "Library",
+            "Application Support",
+            "OpenClaw",
+            ".openclaw",
+            "openclaw.json",
+          ),
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+      });
 
-    expect(conflict).toBeNull();
-  });
+      expect(conflict).toBeNull();
+    },
+  );
 });

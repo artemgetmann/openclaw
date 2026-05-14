@@ -70,8 +70,10 @@ Current package truth:
   with App Store Connect API key auth plus async submit/poll/staple receipts.
 - `ai.jarvis.mac` bundle ID/runtime/update identity migration is a required
   launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
-- Cleanup of old OpenClaw apps and worktree `dist` bundles is lower priority
-  than notarized Jarvis package proof.
+- After the trusted-tester package passes a local install/open smoke, clean up
+  old local OpenClaw app/package variants on Artem's machine so Artem uses the
+  same installed Jarvis package as testers. Do not do this before the smoke
+  passes.
 
 ## v1 commercial decision
 
@@ -310,7 +312,7 @@ Say this directly:
 ### Roadmap
 
 - smoother account login and trial activation
-- cleaner Telegram setup
+- cleaner Telegram setup with one consumer-first command/settings surface
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
 - App Store Connect API key auth and async notarization receipts for repeatable
@@ -321,6 +323,22 @@ Say this directly:
 - `ai.jarvis.mac` bundle ID/runtime/update identity migration before
   Reddit/GitHub, public-ish beta, or any wider beta
 - website after GitHub/Reddit signal
+
+### Telegram command/settings strategy
+
+Normal users should see the same Telegram bot behavior Artem uses, but with
+consumer-safe defaults. The default `/settings` surface should use plain names,
+hide internal IDs, and keep advanced controls off by default.
+
+Advanced/developer controls should be available intentionally, not scattered
+through consumer setup. Candidate shape:
+
+- `/settings` shows the normal settings menu and an "Advanced settings" toggle.
+- `/advanced` or `/enable advanced` can expose developer/provider/BYO-bot/custom
+  command settings for power users.
+- Shared/default bot setup stays the consumer path; BYO bot token, custom
+  commands, verbose developer detail, and internal tool/skill IDs stay in the
+  advanced path.
 
 ## 60-second demo script
 

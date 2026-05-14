@@ -85,8 +85,10 @@ function isPackagedConsumerGatewayEntrypoint(entrypoint: string | null): boolean
     "dist",
     "index.js",
   );
+  const packagedAppNames = ["OpenClaw.app", "Jarvis.app"];
   return (
-    normalized.includes(`${path.sep}OpenClaw.app${path.sep}`) && normalized.endsWith(expectedSuffix)
+    packagedAppNames.some((appName) => normalized.includes(`${path.sep}${appName}${path.sep}`)) &&
+    normalized.endsWith(expectedSuffix)
   );
 }
 
