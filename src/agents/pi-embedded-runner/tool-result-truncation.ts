@@ -42,6 +42,10 @@ type ToolResultTruncationOptions = {
   minKeepChars?: number;
 };
 
+function isTextContentBlock(block: unknown): block is TextContent {
+  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "text";
+}
+
 function resolveEffectiveMinKeepChars(params: {
   maxChars: number;
   minKeepChars: number;
@@ -70,6 +74,59 @@ function appendBoundedTruncationSuffix(params: {
     const overflow = finalText.length - params.maxChars;
     keptText = keptText.slice(0, Math.max(0, keptText.length - overflow));
   }
+}
+
+function allocateTextBlockBudgets(textLengths: number[], maxChars: number): number[] {
+  const budgets = Array.from({ length: textLengths.length }, () => 0);
+  let remainingBudget = Math.max(0, Math.floor(maxChars));
+  let remainingIndices = textLengths
+    .map((length, index) => ({ index, length: Math.max(0, length) }))
+    .filter((entry) => entry.length > 0);
+
+  // Keep naturally-small blocks intact first. This avoids wasting a truncation
+  // suffix on short metadata while still enforcing the total text budget.
+  while (remainingBudget > 0 && remainingIndices.length > 0) {
+    const averageBudget = remainingBudget / remainingIndices.length;
+    const smallEntries = remainingIndices.filter((entry) => entry.length <= averageBudget);
+    if (smallEntries.length === 0) {
+      break;
+    }
+    for (const entry of smallEntries) {
+      budgets[entry.index] = entry.length;
+      remainingBudget -= entry.length;
+    }
+    const smallIndexes = new Set(smallEntries.map((entry) => entry.index));
+    remainingIndices = remainingIndices.filter((entry) => !smallIndexes.has(entry.index));
+  }
+
+  if (remainingBudget <= 0 || remainingIndices.length === 0) {
+    return budgets;
+  }
+
+  const remainingTotal = remainingIndices.reduce((sum, entry) => sum + entry.length, 0);
+  let assigned = 0;
+  for (const entry of remainingIndices) {
+    const proportionalBudget = Math.floor((entry.length / remainingTotal) * remainingBudget);
+    const budget = Math.min(entry.length, proportionalBudget);
+    budgets[entry.index] = budget;
+    assigned += budget;
+  }
+
+  let leftover = remainingBudget - assigned;
+  for (const entry of remainingIndices) {
+    if (leftover <= 0) {
+      break;
+    }
+    const available = entry.length - budgets[entry.index];
+    if (available <= 0) {
+      continue;
+    }
+    const add = Math.min(available, leftover);
+    budgets[entry.index] += add;
+    leftover -= add;
+  }
+
+  return budgets;
 }
 
 /**
@@ -244,25 +301,35 @@ export function truncateToolResultMessage(
     return msg;
   }
 
-  // Distribute the budget proportionally among text blocks
-  const newContent = content.map((block: unknown) => {
-    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
+  const textLengths = content.map((block: unknown) => {
+    if (!isTextContentBlock(block)) {
+      return 0;
+    }
+    return typeof block.text === "string" ? block.text.length : 0;
+  });
+  const textBudgets = allocateTextBlockBudgets(textLengths, boundedMaxChars);
+
+  // Distribute one total text budget across blocks. The final sum matters more
+  // than per-block floors; otherwise multi-block raw output can still bloat the
+  // next prompt or transcript even though every block was "truncated".
+  const newContent = content.map((block: unknown, index) => {
+    if (!isTextContentBlock(block)) {
       return block; // Keep non-text blocks (images) as-is
     }
-    const textBlock = block as TextContent;
+    const textBlock = block;
+    const blockBudget = textBudgets[index] ?? 0;
     if (typeof textBlock.text !== "string") {
       return block;
     }
-    // Proportional budget for this block
-    const blockShare = textBlock.text.length / totalTextChars;
-    const proportionalBudget = Math.floor(boundedMaxChars * blockShare);
-    const blockBudget = Math.max(
-      1,
-      Math.min(boundedMaxChars, Math.max(minKeepChars + suffix.length, proportionalBudget)),
-    );
+    if (blockBudget <= 0) {
+      return { ...textBlock, text: "" };
+    }
     return {
       ...textBlock,
-      text: truncateToolResultText(textBlock.text, blockBudget, { suffix, minKeepChars }),
+      text:
+        textBlock.text.length <= blockBudget
+          ? textBlock.text
+          : truncateToolResultText(textBlock.text, blockBudget, { suffix, minKeepChars }),
     };
   });
 

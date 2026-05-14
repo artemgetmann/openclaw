@@ -76,6 +76,18 @@ function getToolResultText(messages: AgentMessage[]): string {
   return textBlock.text;
 }
 
+function getToolResultTextLength(messages: AgentMessage[]): number {
+  const toolResult = messages.find((m) => m.role === "toolResult") as
+    | { content?: Array<{ type?: string; text?: string }> }
+    | undefined;
+  expect(toolResult).toBeDefined();
+  return (toolResult?.content ?? []).reduce(
+    (sum, block) =>
+      sum + (block.type === "text" && typeof block.text === "string" ? block.text.length : 0),
+    0,
+  );
+}
+
 describe("installSessionToolResultGuard", () => {
   it("inserts synthetic toolResult before non-tool message when pending", () => {
     const sm = SessionManager.inMemory();
@@ -375,6 +387,34 @@ describe("installSessionToolResultGuard", () => {
     const text = getToolResultText(getPersistedMessages(sm));
     expect(text.length).toBeLessThanOrEqual(120);
     expect(text).toContain("truncated");
+  });
+
+  it("caps multi-block tool results by total persisted text length", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      maxToolResultChars: 8_000,
+    });
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [
+          { type: "text", text: "header" },
+          { type: "text", text: "x".repeat(40_000) },
+          { type: "text", text: "y".repeat(40_000) },
+        ],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = getPersistedMessages(sm);
+    expect(getToolResultTextLength(messages)).toBeLessThanOrEqual(8_000);
+    expect(getToolResultText(messages)).toBe("header");
+    expect(JSON.stringify(messages)).not.toContain("x".repeat(20_000));
   });
 
   it("does not truncate tool results under the limit", () => {
