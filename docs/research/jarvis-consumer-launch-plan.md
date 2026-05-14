@@ -774,6 +774,20 @@ Progress:
       2026.3.14 is up to date; the isolated fresh-user packaged smoke passed
       with real user config unchanged. Sending `Jarvis.dmg` to the 3 trusted
       waiting testers is allowed.
+- [ ] Fix post-launch app-bundle mutation before broader distribution. After
+      launching the trusted build, Jarvis can add extension dependencies under
+      `/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw/dist/extensions/acpx/node_modules`,
+      which mutates the signed app bundle and makes later `codesign --verify`
+      fail with a sealed-resource error until reinstall. This is acceptable as
+      an early trusted-tester caveat, but runtime-writable extension
+      dependencies must move to Application Support or another writable
+      state/cache path outside `/Applications/Jarvis.app` before Reddit/GitHub,
+      public-ish beta, or any wider beta.
+- [ ] Defer full newer-version Sparkle update-cycle smoke for speed unless we
+      are about to ship an update to testers. Current proof covers appcast/feed
+      reachability and no Update Error; a real download/verify/install/relaunch/
+      preserve-state cycle is still required before relying on updates for
+      recovery or wider distribution.
 - [ ] Polish duplicated connected-bot text/buttons in Channels. This is not a
       blocker for the 3 trusted waiting testers.
 - [ ] Run the next release lane with App Store Connect API key auth plus async
@@ -854,6 +868,8 @@ docs remain historical proof only:
 | Release assets involved                          | Release lane                                     | Done for Jarvis trusted tester   | Uploaded `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`. No new dSYM zip was produced in the manual continuation after notary profile failure.                                                                                                                                                                                                                                                                                                                                              |
 | Optional Sparkle dialog smoke                    | Release/GUI smoke lane                           | Optional                         | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                                                                                                                                                                                                                                                           |
 | Clean macOS user install smoke                   | Release/GUI smoke lane                           | Passed for trusted testers       | Isolated fresh-user packaged smoke passed from `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`: bundled runtime seeded, isolated gateway became healthy, onboarding was observed, and real user config stayed unchanged. A true separate macOS account smoke was deliberately skipped as unnecessary for the 3 trusted waiting testers. Sending `Jarvis.dmg` to those testers is allowed.                                                                                                  |
+| Post-launch app-bundle mutation                  | Packaging/runtime lane before public-ish launch  | Required before wider beta       | After launch, Jarvis can add extension dependencies under `/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw/dist/extensions/acpx/node_modules`, mutating the signed app bundle and making later `codesign --verify` fail until reinstall. Do not block the 3 trusted waiting testers on this, but move runtime-writable extension dependencies to Application Support or another writable state/cache path before Reddit/GitHub, public-ish beta, or wider beta.              |
+| Full newer-version Sparkle update-cycle smoke    | Release/GUI smoke lane                           | Deferred for speed               | Current proof covers appcast/feed reachability and no Update Error. A real higher-build appcast should still prove download, signature verification, install, relaunch, and state preservation before relying on updates for recovery or wider distribution. Do not block the 3 trusted waiting testers on this unless an immediate tester update is planned.                                                                                                                                     |
 | Channels duplicate connected-bot UI              | UI polish lane                                   | Non-blocking for trusted testers | Channels currently duplicates connected-bot text/buttons. Do not block the 3 trusted waiting testers on this, but clean it up before wider beta.                                                                                                                                                                                                                                                                                                                                                  |
 | Local old-app/package cleanup                    | Cleanup lane after approved delete list          | Approval-gated                   | Old local OpenClaw app/package cleanup should happen only after Artem approves the exact delete list. Do not do broad cleanup from memory or pattern guesses.                                                                                                                                                                                                                                                                                                                                     |
 | Launch audit                                     | Launch/commercial readiness lane                 | Open                             | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                                                                                                                                                                                                                           |
@@ -892,6 +908,12 @@ Deployment/security boundary:
       Permissions tab grouping, verify About update check, and run isolated
       fresh-user packaged smoke. The trusted-tester send gate is now open for
       the 3 waiting testers.
+- [ ] Fix signed-app immutability before wider beta: Jarvis must not write
+      extension `node_modules` or other runtime dependencies inside
+      `/Applications/Jarvis.app` after launch.
+- [ ] Run a real newer-version Sparkle update-cycle smoke before depending on
+      updates for tester recovery or wider distribution; defer for the 3 trusted
+      waiting testers unless an immediate update is planned.
 - [ ] Run the next release lane with App Store Connect API key auth plus async
       submit/poll/staple receipts. Keep Keychain-profile auth as fallback only,
       and have Artem create/provide the actual ASC API key if it is missing.
