@@ -1234,6 +1234,16 @@ Possible command/copy:
 - `/visibility on` — show important actions, files changed, commands run.
 - `/visibility full` — show detailed under-the-hood activity.
 
+Current follow-up:
+
+- Live Telegram may still advertise stale `/verbose` instead of `/visibility`.
+- Command registration has recently behaved inconsistently against the main bot,
+  so do not assume this is only copy drift.
+- Before wider beta, compare upstream's current verbose/visibility command
+  implementation, then prove Jarvis command registration and `/visibility
+off|on|full` behavior with an isolated tester bot. Merge that as a normal PR
+  before relying on the main bot.
+
 Goal:
 
 - make Jarvis feel transparent without forcing approvals every 30 seconds.
