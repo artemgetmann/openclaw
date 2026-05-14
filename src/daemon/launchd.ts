@@ -79,8 +79,10 @@ function isPackagedConsumerRuntimePath(candidate: string | null): boolean {
   // bundled runtime. Keep the exception narrow so random worktrees still cannot
   // manage ai.openclaw.gateway from outside the canonical main checkout.
   const expectedSuffix = path.join("Contents", "Resources", "OpenClawRuntime", "openclaw");
+  const packagedAppNames = ["OpenClaw.app", "Jarvis.app"];
   return (
-    candidate.includes(`${path.sep}OpenClaw.app${path.sep}`) && candidate.includes(expectedSuffix)
+    packagedAppNames.some((appName) => candidate.includes(`${path.sep}${appName}${path.sep}`)) &&
+    candidate.includes(expectedSuffix)
   );
 }
 
