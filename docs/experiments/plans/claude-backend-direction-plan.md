@@ -395,7 +395,7 @@ Scope boundary:
 
 ### Slice 2c: Tester Telegram visibility and feel probe
 
-Status: live tester-bot rerun passed for Claude CLI model selection, source isolation, basic progress/no-spam behavior, and named per-account Telegram reminder delivery.
+Status: live tester-bot rerun passed for Claude CLI model selection, source isolation, slow progress/no-spam behavior, and named per-account Telegram reminder delivery.
 
 What was required in the isolated tester lane:
 
@@ -491,17 +491,31 @@ Live named-account reminder proof after PR #683 merge:
 - The timer job fired naturally at `2026-05-14T03:54:15.482Z`, Telegram received exact text `REMINDER_TIMER_ACCOUNTID_OK_1778730795`, and cron state recorded `lastRunStatus=ok`, `lastDelivered=true`, and `lastDeliveryStatus=delivered`.
 - Remaining caveat: the standard tester runtime helper still starts with `OPENCLAW_SKIP_CRON=1`, so this proof required a manual cron-enabled isolated runtime. The product code path is green; the helper ergonomics are still rough.
 
+Live slow progress batching proof after PR #689 merge:
+
+- Date: 2026-05-14.
+- Branch/commit: `codex/claude-progress-proof` at `72ca1437b770761215a6dd36dd7a315125dd56fd`.
+- Runtime ownership passed before the run: doctor reported runtime PID `81292`, port `20510`, bot `@Artem_jarvis_exec_bot`, userbot id `1336356696`, and `runtime_worktree=/Users/user/.codex/worktrees/claude-cli-next/claude-cli-next-20260512`.
+- Claude CLI model switch passed again: `/model claude-cli/haiku` sent as Telegram message `49125`; bot message `49126` returned `Model set to claude-cli/haiku.`
+- Fast multi-tool proof passed first: user message `49127` returned bot message `49128` with nonce `PROGRESS_MULTI_TOOL_OK_1778732302`, using `sessions_list`, `WebFetch` for `example.com`, `web_fetch` for the IANA example-domains page, and `session_status`. This proved multi-tool Claude CLI execution but was too fast at about 4.8s to stress Telegram progress batching.
+- A naive slow prompt that asked Claude to run a local sleep command was rejected as a proof: user message `49129` produced a context-pressure notice and an interim-looking standalone reply (`Awaiting monitor completion...`) without the required final nonce. Treat that as a bad probe shape, not a green product proof.
+- Clean slow proof used a controlled delayed local HTTP endpoint plus harmless tools after resetting the tester session and switching back to `claude-cli/haiku`.
+- Clean slow proof prompt was Telegram message `49136` with nonce `PROGRESS_LOCAL_SLOW_OK_1778732876`. The runtime logged `[agent/claude-cli] cli exec: provider=claude-cli model=haiku`.
+- The MCP URL fetch correctly blocked `http://127.0.0.1:8765/slow` as private/internal; Claude recovered by using Bash `curl`, waited 22 seconds, then completed the remaining harmless tools.
+- Telegram visible result stayed on one bot message id, `49137`: an early progress preview appeared as `Loading tool schemas...`, then the same message was edited into the final answer containing `PROGRESS_LOCAL_SLOW_OK_1778732876`, the delayed `SLOW_LOCAL_FETCH_OK` body, `sessions_list`, `example.com`, and the IANA example-domains fetch.
+- Pass condition met: real slow tool pressure, multiple tools, no multiple standalone Telegram progress spam messages, and one draft-lane message edited into the final result.
+- Caveat: the final answer contained the nonce after a short introductory sentence instead of as the first token. That is prompt obedience noise, not a Telegram progress batching blocker.
+
 Current read:
 
 - Claude CLI is operational in the isolated tester Telegram lane after config/auth setup, including direct `/model` switching.
 - Prompt/source isolation is green enough for review and merge under the authority-isolation definition: the old `~/.claude` authority leak did not reproduce, but native Claude user context can still be visible as non-authoritative context.
-- Progress batching is green enough for the no-spam concern, but still needs one slower multi-tool Telegram turn before calling the UX fully proven. Plain English: ask Claude CLI to do a task that takes long enough and uses several tools so Telegram has to show, edit, dedupe, and settle progress updates instead of only sending one fast final reply.
+- Progress batching is green in the isolated tester lane: a 22-second delayed tool turn stayed on one Telegram message id and edited the draft lane into the final result instead of spamming separate progress messages.
 - Reminder delivery is green for the original account-routing blocker: named-account route, persisted `delivery.accountId`, exact reminder text, cron success, and Telegram arrival all passed in the isolated tester lane.
-- Not green enough for default main-bot exposure until one slower multi-tool Telegram turn proves progress batching under real stream pressure. Prompt/source and reminder delivery are no longer blockers.
+- The remaining blocker before broad/default exposure is not another tester-lane code proof; it is Artem's main-bot manual acceptance after the merged code is deployed and running on the real product bot.
 
 Remaining validation gates:
 
-- Slow multi-tool tester-bot progress proof: use isolated tester Telegram, switch to `claude-cli/haiku`, and ask for a deliberately bounded task that calls multiple harmless tools (for example `sessions_list`, `web_fetch` for two public URLs, and a short memory/search or status read). Pass if Telegram does not spam multiple standalone progress messages, progress text is deduped/edited into the draft lane, and the final answer contains a compact useful result.
 - Main-bot manual acceptance proof: after the merged code is deployed/running on Artem's own main Telegram bot, Artem should personally run the final smoke before default exposure is called done. Minimum manual path: `/model claude-cli/haiku`, source/prompt sanity question, one real browser/fetch/tool task, one reminder, and one slow multi-tool progress task. Pass only if the main bot feels correct in the actual product chat, not just in the isolated tester lane.
 - Rollout rule: if main-bot manual proof fails, keep `claude-cli/*` tester-only and fix the specific failing path before exposing it broadly.
 
