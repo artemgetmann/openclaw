@@ -70,18 +70,24 @@ Current package truth:
 - Public release assets for `v2026.3.15` now include `Jarvis.dmg`,
   `Jarvis.zip`, and `jarvis-appcast.xml`; the Jarvis appcast URL returns 200
   and points Sparkle at the uploaded `Jarvis.zip`.
-- Installed app smoke passed for `/Applications/Jarvis.app`: visible app name
-  and icon are Jarvis, installed app provenance matches commit `ab9c3c1ca1`,
-  and bundle ID intentionally remains `ai.openclaw.consumer.mac` for the 3
-  trusted waiting testers.
-- Installed runtime takeover smoke passed: `OPENCLAW_MAIN_REPO` resolves to
-  `/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw`, and
-  `/healthz` returns `{"ok":true,"status":"live"}`.
-- Visual Channels smoke passed in the installed Jarvis app: Channels opens,
-  Telegram shows live/verified, and the connected bot is `@Jarvis_cl4w_bot`.
-- Next recommended pre-send validation is a clean macOS user install smoke.
-  Sending `Jarvis.dmg` to the 3 trusted waiting testers is allowed after that
-  clean-user smoke passes, unless Artem explicitly chooses to send earlier.
+- Current `/Applications/Jarvis.app` on Artem's machine still points at the
+  older installed build `14d2624bb8` because the final `ab9c3c1ca1` DMG has not
+  yet been installed over it. The next chat owns that install/smoke.
+- Prior installed app smoke on the older Jarvis build passed: visible app name
+  and icon were Jarvis, bundle ID intentionally remained
+  `ai.openclaw.consumer.mac`, runtime takeover was green, `/healthz` returned
+  `{"ok":true,"status":"live"}`, and Channels showed Telegram live/verified as
+  `@Jarvis_cl4w_bot`.
+- After `jarvis-appcast.xml` upload, the installed app's About -> Check for
+  Updates no longer returns Update Error; it now reaches the feed and reports
+  Jarvis 2026.3.14 as up to date. This proves feed retrieval, not same-version
+  update installation.
+- Next recommended pre-send validation is: install
+  `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` over the current app,
+  verify the Permissions tab shows only the four core permissions, then run a
+  clean macOS user install smoke. Sending `Jarvis.dmg` to the 3 trusted waiting
+  testers is allowed after that clean-user smoke passes, unless Artem
+  explicitly chooses to send earlier.
 - Recommended release path for the next lane: App Store Connect API key auth
   plus async notarization submit/poll/staple receipts. Set
   `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
@@ -335,16 +341,18 @@ Say this directly:
   or a wider beta, and needs a deliberate migration lane because permissions,
   state, LaunchAgents, and update continuity can be affected
 - final 2026-05-14 trusted-tester `Jarvis.dmg` from commit `ab9c3c1ca1` is
-  notarized, Gatekeeper-accepted, installed at `/Applications/Jarvis.app`, and
-  proved against the installed runtime and Channels UI; public `v2026.3.15`
-  release assets now include the Jarvis DMG/ZIP/appcast so the installed app no
-  longer hits a missing `jarvis-appcast.xml`; before sending to the 3 trusted
-  waiting testers, the next recommended validation is a clean macOS user
-  install smoke
+  notarized, Gatekeeper-accepted, copied to the sacred repo root, and uploaded
+  with its Jarvis ZIP/appcast assets; it is not yet installed over Artem's
+  current `/Applications/Jarvis.app`, which still reports older build
+  `14d2624bb8`; before sending to the 3 trusted waiting testers, the next
+  recommended validation is install-over-current plus clean macOS user install
+  smoke
 
 ### Roadmap
 
-- clean macOS user install smoke, then send the final `Jarvis.dmg` to the
+- install `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` over the
+  current app, verify the Permissions tab has only the four core permissions,
+  run clean macOS user install smoke, then send the final `Jarvis.dmg` to the
   3 trusted waiting testers unless Artem chooses to send earlier
 - focused Channels UI polish to remove duplicated connected-bot text/buttons
 - smoother account login and trial activation
