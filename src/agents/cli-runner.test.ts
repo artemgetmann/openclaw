@@ -4,6 +4,7 @@ import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { runCliAgent } from "./cli-runner.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
@@ -355,6 +356,7 @@ describe("runCliAgent with process supervisor", () => {
   it("includes workspace skills in the bridge-safe claude-cli prompt", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-skills-"));
     const workspaceDir = path.join(tempDir, "workspace");
+    const bundledDir = path.join(tempDir, "bundled-skills");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(
       path.join(workspaceDir, "AGENTS.md"),
@@ -362,10 +364,15 @@ describe("runCliAgent with process supervisor", () => {
       "utf-8",
     );
     await writeSkill({
-      dir: path.join(workspaceDir, "skills", "tone-of-voice"),
-      name: "tone-of-voice",
-      description: "Artem tone guidance",
-      body: "# Artem tone of voice\n\nUse direct, founder-mode language.\n",
+      dir: path.join(bundledDir, "generic-bundled"),
+      name: "generic-bundled",
+      description: "Generic bundled skill that should lose prompt priority",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "reddit"),
+      name: "reddit",
+      description: "User Reddit skill",
+      body: "# Reddit\n\nUse the workspace Reddit workflow.\n",
     });
 
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -382,17 +389,27 @@ describe("runCliAgent with process supervisor", () => {
     );
 
     try {
-      const result = await runCliAgent({
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir,
-        config: createTextClaudeCliConfig(),
-        prompt: "hi",
-        provider: "claude-cli",
-        model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-skills",
-      });
+      const result = await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir }, () =>
+        runCliAgent({
+          sessionId: "s1",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir,
+          config: {
+            ...createTextClaudeCliConfig(),
+            skills: {
+              limits: {
+                maxSkillsInPrompt: 1,
+                maxSkillsPromptChars: 2_000,
+              },
+            },
+          },
+          prompt: "hi",
+          provider: "claude-cli",
+          model: "opus",
+          timeoutMs: 1_000,
+          runId: "run-skills",
+        }),
+      );
 
       const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
       const argv = spawnInput.argv ?? [];
@@ -401,12 +418,13 @@ describe("runCliAgent with process supervisor", () => {
       const systemPrompt = argv[systemPromptIndex + 1] ?? "";
       expect(systemPrompt).toContain("Do not treat Claude Code user-level memory");
       expect(systemPrompt).toContain("<available_skills>");
-      expect(systemPrompt).toContain("tone-of-voice");
-      expect(systemPrompt).toContain("Artem tone guidance");
+      expect(systemPrompt).toContain("reddit");
+      expect(systemPrompt).toContain("User Reddit skill");
+      expect(systemPrompt).not.toContain("generic-bundled");
       expect(systemPrompt).toContain("Bridge-safe skill injection test instructions.");
       expect(result.meta.systemPromptReport?.skills.promptChars).toBeGreaterThan(0);
       expect(result.meta.systemPromptReport?.skills.entries.map((entry) => entry.name)).toContain(
-        "tone-of-voice",
+        "reddit",
       );
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
