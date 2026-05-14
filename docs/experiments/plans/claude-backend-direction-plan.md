@@ -525,7 +525,7 @@ Remaining validation gates:
 - Final main-bot smoke: rerun only after the above blockers are understood/fixed. Minimum manual path remains `/model claude-cli/haiku` or `/model claude-cli/sonnet`, source/prompt sanity question, one real browser/fetch/tool task, one skill-triggered tone-of-voice task, one reminder, and one slow multi-tool progress task. Pass only if the main bot feels correct in the actual product chat, not just in the isolated tester lane.
 - Rollout rule: if main-bot manual proof fails, keep `claude-cli/*` tester-only and fix the specific failing path before exposing it broadly.
 
-Main-bot acceptance follow-up fixes in progress:
+Main-bot acceptance follow-up fixes merged on `main`:
 
 - Reminder truthfulness: exact `remind me in <duration> to <task>` intents now short-circuit into a real `cron.add` before the model can produce a fake acknowledgment. Focused proof passed: `pnpm exec vitest run src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts -t "reminder|Reminder" --pool=forks --maxWorkers=1` passed 2 files / 8 selected tests.
 - Claude CLI skills: the bridge-safe Claude CLI prompt now includes the compact OpenClaw `<available_skills>` block while preserving the `~/.claude` non-authority warning. Focused proof passed in the selected CLI runner test pack.
@@ -533,6 +533,18 @@ Main-bot acceptance follow-up fixes in progress:
 - Context-pressure nuance: the main-bot "conversation is getting heavy" notice is not fully explained by the 200k fallback alone. The session store for topic `10980` showed `contextTokens=200000`, tiny persisted input/output counts, no persisted total tokens, and a set `contextPressureNoticeAt`; follow-up fix subtracts static system/bootstrap/tool-schema overhead before warning on a fresh, uncompacted session. Focused proof passed in `src/auto-reply/reply/context-pressure-notice.test.ts` and `src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts`. Tester Telegram proof passed on `@Artem_jarvis_exec_bot`: short Claude CLI reply returned exactly `CLAUDE_SHORT_NO_NOTICE_OK_180000` with no heavy-chat notice.
 - Claude CLI Telegram 1M selection: follow-up fix now resolves `/model` and `/status` context windows with provider-aware lookup, preserving explicit `claude-cli/sonnet[1m]` and `claude-cli/opus[1m]` variants while keeping plain `sonnet`/`opus` at 200k. The isolated Telegram tester config builder now also keeps explicitly pinned Claude CLI tester models in the allowlist and includes the matching `[1m]` advanced variant. Focused proof passed in model override, reply selection, status, model-list, exact parser, and Telegram runtime-helper tests. Tester Telegram proof passed on `@Artem_jarvis_exec_bot`: `/model claude-cli/sonnet[1m]` returned `Model set to claude-cli/sonnet[1m].`, and `/status` showed `Context: 62/1.0m`.
 - Telegram progress UX: progress transcript lines now use blank-line separators and are retained into the final answer instead of being cleared by preview cleanup. Focused proof passed: `pnpm exec vitest run extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery.test.ts --pool=forks --maxWorkers=1` passed 2 files / 96 tests.
+- PR #706 merged the context-pressure and explicit `[1m]` selection fixes.
+- PR #708 merged delayed free-form agent-turn reminder scheduling. Live production proof is still pending.
+- PR #709 merged user/workspace skill priority in the Claude CLI prompt budget. Live production proof is still pending.
+- PR #710 merged ACP progress title preservation. Live production proof is still pending.
+
+Claude CLI 1M status after the #706/#708/#709/#710 stack:
+
+- Tester Telegram proof passed for selecting `claude-cli/sonnet[1m]` and reporting `1.0m` context.
+- Production proof passed for selecting `claude-cli/sonnet[1m]` and reporting `1.0m` context, but execution fell back because direct Claude CLI rejects Sonnet 1M on this account with `Extra usage is required for 1M context`.
+- Direct Claude CLI `opus[1m]` succeeds with `contextWindow: 1000000`; direct `claude-opus-4-7[1m]` succeeds too.
+- Production OpenClaw proof passed for `claude-cli/opus[1m]`: `/model claude-cli/opus[1m]` returned `Model set to claude-cli/opus[1m].`, `/status` showed `Context: 47/1.0m`, and a real turn returned exactly `PROD_CLAUDE_OPUS_1M_OK_20260514` with no fallback warning.
+- Prefer `claude-cli/opus[1m]` for true no-extra-usage 1M on this account. Do not treat `sonnet[1m]` as the reliable 1M path unless Anthropic changes this account's Sonnet 1M entitlement.
 
 Main-bot manual acceptance checkpoint after PR 701:
 
@@ -553,14 +565,14 @@ Next orchestrated repair lanes:
 - Delayed agent-turn parity lane: reproduce `in 1 min check <thing> and report back` with Claude CLI in tester Telegram, inspect the cron/agentTurn result-delivery path, and make it deliver the actual result to Telegram without a user follow-up.
 - Skills/tool-selection lane: verify why Claude CLI sees workspace skills but does not choose the Reddit skill; tighten the bridge-safe skills prompt or invocation surface without restoring full prompt bloat.
 - Prompt/source-bloat lane: audit exactly why `~/.openclaw/CLAUDE.md` and dev/runtime rules appear as authoritative in Claude CLI Telegram sessions; decide the 80/20 product boundary for product sessions versus local developer sessions.
-- Model-selection lane: tester proof complete for explicit `claude-cli/sonnet[1m]` through isolated Telegram `/model` and `/status`; next remaining model-selection proof is optional `opus[1m]` parity or main-bot acceptance after merge.
+- Model-selection lane: production proof complete for `claude-cli/opus[1m]` selection, status, and one real turn. Remaining 1M work is product policy: expose Opus 1M as the advanced 1M path and avoid steering users to Sonnet 1M while it requires extra usage on this account.
 - Context-pressure lane: tester proof complete for a short Claude CLI Telegram turn without the heavy-chat notice; next gate is main-bot acceptance after merge.
 
 Future model-picker/default-exposure rule:
 
 - Keep the current visible/default Claude choice unchanged until Claude CLI passes main-bot acceptance.
 - After acceptance, make Claude CLI 200k models the preferred default Claude path.
-- Keep explicit Claude CLI 1M variants, such as `claude-cli/sonnet[1m]` and `claude-cli/opus[1m]`, in More/advanced options instead of making them defaults.
+- Keep explicit Claude CLI 1M variants in More/advanced options instead of making them defaults. Prefer `claude-cli/opus[1m]` for the 1M advanced path because direct Claude CLI and production Telegram proof both confirm no-extra-usage 1M behavior for Opus on this account.
 - Hide Claude API model rows unless the user has configured a Claude API key or enabled advanced provider settings. Dead provider rows create noisy UX and make the picker feel broken.
 
 ### Slice 3: Warm Claude CLI spike
