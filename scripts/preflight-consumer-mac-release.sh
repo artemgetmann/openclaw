@@ -9,6 +9,9 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
 DEFAULT_SPARKLE_KEY="AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI="
 FAILED=0
+ASC_MISSING_VARS=()
+ASC_READY=0
+FALLBACK_PROFILE_STATE="missing"
 
 mark_ok() {
   printf 'OK: %s\n' "$1"
@@ -63,17 +66,49 @@ check_notary_tooling() {
 }
 
 check_notary_auth() {
+  ASC_MISSING_VARS=()
+  ASC_READY=0
+  FALLBACK_PROFILE_STATE="missing"
+
+  if [[ -n "${NOTARYTOOL_KEY:-}" ]]; then
+    if [[ -f "$NOTARYTOOL_KEY" && -r "$NOTARYTOOL_KEY" ]]; then
+      mark_ok "NOTARYTOOL_KEY is present and readable"
+    else
+      ASC_MISSING_VARS+=("NOTARYTOOL_KEY")
+      mark_missing "NOTARYTOOL_KEY is set but the .p8 file is missing or unreadable"
+    fi
+  else
+    ASC_MISSING_VARS+=("NOTARYTOOL_KEY")
+    mark_missing "NOTARYTOOL_KEY is missing"
+  fi
+
+  if [[ -n "${NOTARYTOOL_KEY_ID:-}" ]]; then
+    mark_ok "NOTARYTOOL_KEY_ID is present"
+  else
+    ASC_MISSING_VARS+=("NOTARYTOOL_KEY_ID")
+    mark_missing "NOTARYTOOL_KEY_ID is missing"
+  fi
+
+  if [[ -n "${NOTARYTOOL_ISSUER:-}" ]]; then
+    mark_ok "NOTARYTOOL_ISSUER is present"
+  else
+    ASC_MISSING_VARS+=("NOTARYTOOL_ISSUER")
+    mark_missing "NOTARYTOOL_ISSUER is missing"
+  fi
+
   if [[ -n "${NOTARYTOOL_PROFILE:-}" ]]; then
-    mark_ok "notary auth is configured through NOTARYTOOL_PROFILE"
-    return
+    FALLBACK_PROFILE_STATE="present"
+    mark_warn "NOTARYTOOL_PROFILE is present (fallback only)"
+  else
+    mark_warn "NOTARYTOOL_PROFILE is missing (fallback only)"
   fi
 
-  if [[ -n "${NOTARYTOOL_KEY:-}" && -n "${NOTARYTOOL_KEY_ID:-}" && -n "${NOTARYTOOL_ISSUER:-}" ]]; then
-    mark_ok "notary auth is configured through App Store Connect API key env vars"
-    return
+  if [[ "${#ASC_MISSING_VARS[@]}" -eq 0 ]]; then
+    ASC_READY=1
+    mark_ok "ASC notary auth lane is ready"
+  else
+    mark_missing "ASC notary auth lane is not ready; missing: ${ASC_MISSING_VARS[*]}"
   fi
-
-  mark_missing "notary auth is not configured; set NOTARYTOOL_PROFILE or NOTARYTOOL_KEY/NOTARYTOOL_KEY_ID/NOTARYTOOL_ISSUER"
 }
 
 check_sparkle_public_key() {
@@ -155,12 +190,26 @@ check_sparkle_private_key
 check_sparkle_tools
 
 printf '\n'
-if [[ "$FAILED" -eq 0 ]]; then
+if [[ "$ASC_READY" -eq 1 ]]; then
+  printf 'Final: ASC API key lane ready.\n'
+else
+  printf 'Final: ASC API key lane not ready.\n'
+fi
+
+printf 'Fallback profile: %s.\n' "$FALLBACK_PROFILE_STATE"
+
+if [[ "$ASC_READY" -ne 1 ]]; then
+  printf 'Next operator action: set the missing ASC env vars in the release env, then rerun this preflight; profile auth stays fallback-only.\n'
+elif [[ "$FAILED" -ne 0 ]]; then
+  printf 'Next operator action: fix the remaining missing release prerequisites above, then rerun this preflight before any submit/poll/staple lane.\n'
+else
+  printf 'Next operator action: proceed with the dry-run release lane checks; no notarization submit, stapling, packaging, uploads, or release asset changes will happen in this script.\n'
+fi
+
+if [[ "$FAILED" -eq 0 && "$ASC_READY" -eq 1 ]]; then
   printf 'Ready: required release credential inputs are present.\n'
 else
   printf 'Not ready: fix the missing items above before notarized Consumer distribution.\n'
-  printf '\n'
-  openclaw_release_env_hint
 fi
 
 exit "$FAILED"
