@@ -205,7 +205,7 @@ Check:
 7. Optional 1M side check:
 
 ```text
-/model claude-cli/sonnet[1m]
+/model claude-cli/opus[1m]
 /status
 ```
 
@@ -213,8 +213,10 @@ Check:
 
 - Model is accepted only if Claude Code supports it on this machine/account.
 - `/status` reports about `1M` context only for explicit `[1m]` models.
-- If Sonnet 1M fails because of account entitlement, do not block the core
-  Claude backend acceptance on it.
+- Do not use `claude-cli/sonnet[1m]` as the preferred 1M smoke on this account:
+  prior proof showed Sonnet 1M can select/report but execution requires
+  Anthropic extra-usage entitlement here. Use Opus 1M for the no-extra-usage
+  1M side check.
 
 Recommendation:
 
