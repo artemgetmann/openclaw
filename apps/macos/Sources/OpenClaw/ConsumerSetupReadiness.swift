@@ -388,9 +388,9 @@ final class ConsumerModelSetupModel {
         }
         // A transient gateway/auth probe failure should not stick forever in the
         // Settings card. When the view appears again after the runtime recovers,
-        // allow one more live readiness check instead of forcing the user to
-        // change auth/model state just to clear a stale error.
-        await self.refresh()
+        // allow one more live readiness check without replacing the useful
+        // failure copy with a spinner.
+        await self.refresh(preservingDisplayedResult: self.hasDisplayedReadinessResult)
     }
 
     func refreshOnAppActivationIfNeeded() async {
@@ -401,13 +401,31 @@ final class ConsumerModelSetupModel {
         guard !self.isApplyingAuth else { return }
         guard !self.isApplyingModel else { return }
         guard !self.isRestartingOperator else { return }
-        await self.refresh()
+        await self.refresh(preservingDisplayedResult: self.hasDisplayedReadinessResult)
     }
 
     func refresh() async {
-        self.phase = .checking
-        self.statusLine = "Checking \(AppFlavor.current.appName)'s AI access…"
-        self.failureKind = nil
+        await self.refresh(preservingDisplayedResult: false)
+    }
+
+    private var hasDisplayedReadinessResult: Bool {
+        switch self.phase {
+        case .ready, .failed:
+            return true
+        case .idle, .checking:
+            return false
+        }
+    }
+
+    private func refresh(preservingDisplayedResult: Bool) async {
+        // Passive probes come from view re-appearance or app activation. They
+        // should update stale data, but they should not make a healthy card look
+        // like setup restarted unless there is no prior result to show.
+        if !preservingDisplayedResult || !self.hasDisplayedReadinessResult {
+            self.phase = .checking
+            self.statusLine = "Checking \(AppFlavor.current.appName)'s AI access…"
+            self.failureKind = nil
+        }
 
         if ProcessInfo.processInfo.environment["OPENCLAW_SKIP_RUNTIME_OWNERSHIP_BLOCKER"] != "1",
            let blocker = self.runtimeOwnershipBlocker()
