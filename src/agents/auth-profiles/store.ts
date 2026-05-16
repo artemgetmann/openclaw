@@ -27,7 +27,7 @@ function isExternalCliAuthSyncDisabled(): boolean {
   return process.env.OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC === "1";
 }
 
-function syncExternalCliCredentialsIfEnabled(store: AuthProfileStore, enabled: boolean): boolean {
+function syncExternalCliCredentialsIfEnabled(store: AuthProfileStore, enabled = true): boolean {
   if (!enabled || isExternalCliAuthSyncDisabled()) {
     return false;
   }
