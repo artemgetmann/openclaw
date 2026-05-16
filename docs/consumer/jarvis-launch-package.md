@@ -120,6 +120,12 @@ Current package truth:
   `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
   machine release env; leave `NOTARYTOOL_PROFILE` unset unless deliberately
   using the fallback path.
+- Dry-run preflight truth on 2026-05-16: ASC API-key lane is not ready on
+  Artem's machine. `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and
+  `NOTARYTOOL_ISSUER` are missing from the machine release env. The fallback
+  `NOTARYTOOL_PROFILE` is present and usable, but remains fallback-only. The
+  preflight is read-only and does not submit notarization, staple, package,
+  upload, or mutate release assets.
 - Keychain-profile notarization remains a fallback for emergency/manual
   recovery only. It should not be the default release path because Apple ID
   app-specific password and 2FA recovery made the previous package lane too
@@ -385,9 +391,18 @@ Say this directly:
 
 - send the final `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` to the
   3 trusted waiting testers
+- split setup into guided pages instead of one long scroll: Chrome, Mac
+  permissions, AI access, and Telegram
+- stop re-checking Browser/AI access on every focus or tab switch when recent
+  readiness is already known; show cached status and run explicit refreshes or
+  quiet background checks instead
+- rewrite setup copy after the page split so each step explains one thing:
+  what Jarvis needs, why it matters, what happens next, and how to recover
 - focused Channels UI polish to remove duplicated connected-bot text/buttons
 - smoother account login and trial activation
 - cleaner Telegram setup with one consumer-first command/settings surface
+- investigate Telegram Managed Bots as the path to remove or hide manual
+  BotFather setup for mainstream users
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
 - App Store Connect API key auth and async submit/poll/staple notarization
@@ -418,6 +433,13 @@ through consumer setup. Candidate shape:
 - Shared/default bot setup stays the consumer path; BYO bot token, custom
   commands, verbose developer detail, and internal tool/skill IDs stay in the
   advanced path.
+- Research Telegram Managed Bots before locking the wider-beta Telegram setup.
+  Official Telegram Bot API 9.6 added managed-bot creation/token flows, and Bot
+  API 10.0 added managed-bot access settings. The next lane should verify
+  whether Jarvis can run a bot-management bot that lets a user create or connect
+  a personal Jarvis bot without leaving onboarding for manual BotFather steps.
+  If the official flow is too constrained, keep a shared Jarvis bot as the
+  default and move BYO BotFather tokens to the advanced path.
 - `/visibility` should replace stale `/verbose` naming in the Telegram command
   list and runtime behavior. Before wider beta, inspect upstream's current
   command/visibility implementation, then prove the Jarvis command list and
