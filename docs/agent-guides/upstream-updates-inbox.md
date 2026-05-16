@@ -97,6 +97,6 @@ Do not expand the list unless you find a directly adjacent upstream PR that chan
 
 ## Prior Closed Batch
 
-The May 2026 intake batch is tracked in `docs/agent-guides/upstream-intake-2026-04-27.md`.
+The May 2026 intake batch is archived in `docs/agent-guides/archive/upstream-intake-2026-04-27.md`.
 
 Do not reopen that batch unless a parked signal graduates into a concrete verification task.
