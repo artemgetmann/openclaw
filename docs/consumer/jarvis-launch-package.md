@@ -143,8 +143,17 @@ Current package truth:
   placeholders or commit key material.
 - Follow-up preflight on 2026-05-16 confirmed this split is current:
   Sparkle `generate_appcast` is already available from the repo SwiftPM build,
-  while the ASC API-key trio is still absent. This is not a Sparkle-tooling
-  blocker; it is a missing Apple API-key setup blocker.
+  while the ASC API-key trio is still absent from
+  `~/Library/Application Support/OpenClaw/release.env`. Local Spotlight search
+  also found no existing `AuthKey_*.p8`. This is not a Sparkle-tooling blocker;
+  it is a missing Apple API-key setup blocker.
+- Current ASC blocker captured by the conductor on 2026-05-16:
+  `/access/integrations/api` is reachable after login, but it does not show API
+  keys. It shows "Permission is required to access the App Store Connect API.
+  You can request access on behalf of your organization." with a Request Access
+  button. Do not claim Artem clicked it. Next step is to request/enable ASC API
+  access, then create/download the `.p8` key once and wire only the local
+  release env/key path outside Git.
 - `ai.jarvis.mac` bundle ID/runtime/update identity migration is a required
   launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
 - Do not send to Reddit/GitHub/public-ish beta until the `ai.jarvis.mac`

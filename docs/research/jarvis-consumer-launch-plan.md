@@ -796,9 +796,17 @@ Current implementation order:
     with the exact next operator action.
 13. Follow-up ASC/Sparkle check on 2026-05-16: Sparkle appcast tooling is not
     the blocker. `generate_appcast` is available from the repo SwiftPM build at
-    `apps/macos/.build/artifacts/sparkle/Sparkle/bin/generate_appcast`. The
-    remaining ASC blocker is only the missing API-key trio in
-    `~/Library/Application Support/OpenClaw/release.env`.
+    `apps/macos/.build/artifacts/sparkle/Sparkle/bin/generate_appcast`.
+14. Current ASC blocker from the conductor check on 2026-05-16:
+    `/access/integrations/api` is reachable after login, but it does not show
+    API keys. It shows "Permission is required to access the App Store Connect
+    API. You can request access on behalf of your organization." with a Request
+    Access button. Do not claim Artem clicked it. Local searches found no
+    existing `AuthKey_*.p8` via Spotlight and no actual `NOTARYTOOL_KEY`,
+    `NOTARYTOOL_KEY_ID`, or `NOTARYTOOL_ISSUER` in
+    `~/Library/Application Support/OpenClaw/release.env`. The lane is blocked
+    on enabling/requesting ASC API access, then creating/downloading the `.p8`
+    key once and wiring the local release env/key path outside Git.
 
 Progress:
 
@@ -828,6 +836,10 @@ Progress:
       2026-05-16: ASC API-key env is missing; fallback profile is present and
       usable; Sparkle appcast tooling availability is explicit; the preflight
       has no submit/staple/package/upload side effects.
+- [x] ASC account-access blocker was captured on 2026-05-16: the API
+      integrations page is reachable after login but shows the permission
+      request message instead of keys; no local `AuthKey_*.p8` or actual ASC env
+      trio was found.
 - [x] Packaged Jarvis smoke iteration now has a smoke-only runtime reuse path:
       after one normal fast package, run
       `bash scripts/package-consumer-mac-app-fast.sh --instance <id> --reuse-runtime`
@@ -879,8 +891,8 @@ Progress:
       next artifact.
 - [ ] Run the next release lane with App Store Connect API key auth plus async
       submit/poll/staple receipts. Keychain-profile notarization remains a
-      fallback only; Artem must create/provide the actual ASC API key if it is
-      not already present.
+      fallback only; Artem must request/enable ASC API access, then
+      create/download the actual `.p8` key once if it is not already present.
 
 Remaining Settings/UI polish after PR #628:
 
