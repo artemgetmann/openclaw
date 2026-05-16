@@ -17,8 +17,11 @@ extension OnboardingView {
     }
 
     func updatePermissionMonitoring(for pageIndex: Int) {
+        let isConsumerPermissionsStep =
+            self.isConsumerSetupShellActive &&
+            self.consumerSetupStep == .permissions
         PermissionMonitoringSupport.setMonitoring(
-            pageIndex == self.permissionsPageIndex,
+            pageIndex == self.permissionsPageIndex || isConsumerPermissionsStep,
             monitoring: &self.monitoringPermissions)
     }
 

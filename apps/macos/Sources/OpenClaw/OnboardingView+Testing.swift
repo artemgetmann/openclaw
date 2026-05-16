@@ -39,6 +39,10 @@ extension OnboardingView {
         view.workspaceStatus = "Saved workspace"
         view.state.connectionMode = .local
         _ = view.welcomePage()
+        for step in ConsumerSetupStep.allCases {
+            view.consumerSetupStep = step
+            _ = view.consumerSetupPage()
+        }
         _ = view.connectionPage()
         _ = view.wizardPage()
         _ = view.permissionsPage()

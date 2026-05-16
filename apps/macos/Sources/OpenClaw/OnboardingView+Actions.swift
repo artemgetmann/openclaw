@@ -39,6 +39,15 @@ extension OnboardingView {
     }
 
     func handleBack() {
+        if self.isConsumerSetupShellActive,
+           let previousStep = self.consumerSetupStep.previous
+        {
+            withAnimation {
+                self.consumerSetupStep = previousStep
+            }
+            return
+        }
+
         withAnimation {
             self.currentPage = max(0, self.currentPage - 1)
         }
@@ -53,6 +62,16 @@ extension OnboardingView {
             // Consumer onboarding defaults to local mode instead of making the
             // user choose infrastructure on first launch.
             self.selectLocalGateway()
+        }
+        if self.isConsumerSetupShellActive {
+            if let nextStep = self.consumerSetupStep.next {
+                withAnimation {
+                    self.consumerSetupStep = nextStep
+                }
+            } else {
+                self.finish()
+            }
+            return
         }
         if self.currentPage < self.pageCount - 1 {
             withAnimation { self.currentPage += 1 }
@@ -99,5 +118,21 @@ extension OnboardingView {
         pb.setString(text, forType: .string)
         self.copied = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.copied = false }
+    }
+}
+
+extension ConsumerSetupStep {
+    var previous: ConsumerSetupStep? {
+        guard let index = Self.allCases.firstIndex(of: self), index > Self.allCases.startIndex else {
+            return nil
+        }
+        return Self.allCases[Self.allCases.index(before: index)]
+    }
+
+    var next: ConsumerSetupStep? {
+        guard let index = Self.allCases.firstIndex(of: self) else { return nil }
+        let nextIndex = Self.allCases.index(after: index)
+        guard nextIndex < Self.allCases.endIndex else { return nil }
+        return Self.allCases[nextIndex]
     }
 }

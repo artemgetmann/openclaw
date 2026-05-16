@@ -29,7 +29,7 @@ struct OnboardingViewSmokeTests {
         #expect(!order.contains(8))
     }
 
-    @Test func `consumer local onboarding collapses to welcome and setup`() async {
+    @Test func `consumer local onboarding uses one setup shell`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
             #expect(order == [0])
@@ -40,6 +40,48 @@ struct OnboardingViewSmokeTests {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             let order = OnboardingView.pageOrder(for: .unconfigured, showOnboardingChat: false)
             #expect(order == [0])
+        }
+    }
+
+    @Test func `consumer setup steps stay in expected order`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            #expect(ConsumerSetupStep.allCases == [.chrome, .permissions, .aiAccess, .telegram])
+            #expect(ConsumerSetupStep.chrome.next == .permissions)
+            #expect(ConsumerSetupStep.permissions.previous == .chrome)
+            #expect(ConsumerSetupStep.telegram.next == nil)
+        }
+    }
+
+    @Test func `consumer setup shell builds each step page`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let state = AppState(preview: true)
+            state.connectionMode = .local
+            let view = OnboardingView(
+                state: state,
+                permissionMonitor: PermissionMonitor.shared,
+                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
+
+            for step in ConsumerSetupStep.allCases {
+                view.consumerSetupStep = step
+                _ = view.consumerSetupPage()
+                _ = view.navigationBar
+            }
+        }
+    }
+
+    @Test func `consumer setup navigation does not finish when prior steps are incomplete`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let state = AppState(preview: true)
+            state.connectionMode = .local
+            let view = OnboardingView(
+                state: state,
+                permissionMonitor: PermissionMonitor.shared,
+                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
+
+            view.consumerSetupStep = .telegram
+
+            #expect(view.isConsumerSetupShellActive)
+            #expect(!view.canAdvance)
         }
     }
 
