@@ -734,6 +734,12 @@ Current implementation order:
     `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` from the machine release env;
     keep `NOTARYTOOL_PROFILE` as an emergency/manual fallback only. Artem must
     create or provide the real ASC API key if it is missing locally.
+12. Dry-run preflight lane truth on 2026-05-16: ASC API-key lane is not ready.
+    `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` are missing
+    from Artem's machine release env. The fallback `NOTARYTOOL_PROFILE` is
+    present and usable, but remains fallback-only. The preflight remains
+    read-only and never submits, staples, packages, uploads, or mutates release
+    assets.
 
 Progress:
 
@@ -759,6 +765,9 @@ Progress:
 - [x] Non-secret Sparkle release config is machine-level at
       `~/Library/Application Support/OpenClaw/release.env` so release worktrees
       and chats inherit the same values.
+- [x] Dry-run preflight truth for the ASC release lane was captured on
+      2026-05-16: ASC API-key env is missing; fallback profile is present and
+      usable; the preflight has no submit/staple/package/upload side effects.
 - [x] Produce local Jarvis trusted-tester artifacts from current `main`:
       final `Jarvis.dmg` exists at
       `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg`

@@ -120,6 +120,12 @@ Current package truth:
   `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
   machine release env; leave `NOTARYTOOL_PROFILE` unset unless deliberately
   using the fallback path.
+- Dry-run preflight truth on 2026-05-16: ASC API-key lane is not ready on
+  Artem's machine. `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and
+  `NOTARYTOOL_ISSUER` are missing from the machine release env. The fallback
+  `NOTARYTOOL_PROFILE` is present and usable, but remains fallback-only. The
+  preflight is read-only and does not submit notarization, staple, package,
+  upload, or mutate release assets.
 - Keychain-profile notarization remains a fallback for emergency/manual
   recovery only. It should not be the default release path because Apple ID
   app-specific password and 2FA recovery made the previous package lane too
