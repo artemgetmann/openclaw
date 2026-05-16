@@ -124,8 +124,10 @@ Current package truth:
   Artem's machine. `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and
   `NOTARYTOOL_ISSUER` are missing from the machine release env. The fallback
   `NOTARYTOOL_PROFILE` is present and usable, but remains fallback-only. The
-  preflight is read-only and does not submit notarization, staple, package,
-  upload, or mutate release assets.
+  release preflight should spell out that split, report whether Sparkle
+  `generate_appcast` is available, and name the exact next operator action
+  without printing secret values. The preflight is read-only and does not
+  submit notarization, staple, package, upload, or mutate release assets.
 - Keychain-profile notarization remains a fallback for emergency/manual
   recovery only. It should not be the default release path because Apple ID
   app-specific password and 2FA recovery made the previous package lane too
@@ -146,6 +148,13 @@ Current package truth:
   in source, but there is still no packaged installed-app GUI proof yet. Do
   not count this as closed for broader launch proof until the packaged app is
   verified.
+- Packaging-smoke iteration speed note from 2026-05-16: the full fast package
+  loop was slow because it still staged the full bundled runtime, redeployed the
+  large production `node_modules` tree, recopied Node/uv payloads, and signed
+  runtime binaries on every shell-only app smoke. Local smoke lanes can now run
+  `bash scripts/package-consumer-mac-app-fast.sh --instance <id> --reuse-runtime`
+  after one normal fast package, but shipping/default package behavior remains
+  unchanged.
 
 ## v1 commercial decision
 

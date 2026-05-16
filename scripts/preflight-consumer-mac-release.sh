@@ -12,6 +12,9 @@ FAILED=0
 ASC_MISSING_VARS=()
 ASC_READY=0
 FALLBACK_PROFILE_STATE="missing"
+FALLBACK_PROFILE_READY=0
+NOTARYTOOL_READY=0
+SPARKLE_APPCAST_READY=0
 
 mark_ok() {
   printf 'OK: %s\n' "$1"
@@ -49,6 +52,18 @@ sparkle_tool_path() {
   command -v "$name" 2>/dev/null || true
 }
 
+print_asc_operator_action() {
+  local env_file
+  env_file="$(openclaw_release_env_file)"
+
+  if [[ "$env_file" == "0" || "$env_file" == "false" ]]; then
+    printf 'Next operator action: re-enable the release env, add %s to the release env, keep the .p8 file outside the repo, then rerun this preflight.\n' "${ASC_MISSING_VARS[*]}"
+    return
+  fi
+
+  printf 'Next operator action: add %s to %s, with the .p8 file stored outside the repo, then rerun this preflight.\n' "${ASC_MISSING_VARS[*]}" "$env_file"
+}
+
 check_developer_id() {
   if has_developer_id_application_cert; then
     mark_ok "Developer ID Application certificate is available in the keychain"
@@ -59,9 +74,33 @@ check_developer_id() {
 
 check_notary_tooling() {
   if command -v xcrun >/dev/null && xcrun notarytool --version >/dev/null 2>&1; then
+    NOTARYTOOL_READY=1
     mark_ok "xcrun notarytool is available"
   else
+    NOTARYTOOL_READY=0
     mark_missing "xcrun notarytool is not available"
+  fi
+}
+
+check_notary_profile() {
+  local profile="$1"
+
+  if [[ "$NOTARYTOOL_READY" -ne 1 ]]; then
+    FALLBACK_PROFILE_STATE="present-unverified"
+    mark_warn "NOTARYTOOL_PROFILE is present, but xcrun notarytool is unavailable so the Keychain profile was not verified"
+    return
+  fi
+
+  # `history` is read-only and verifies that the Keychain profile can
+  # authenticate with Apple's notary service without printing credentials.
+  if xcrun notarytool history --keychain-profile "$profile" >/dev/null 2>&1; then
+    FALLBACK_PROFILE_STATE="present-working"
+    FALLBACK_PROFILE_READY=1
+    mark_ok "NOTARYTOOL_PROFILE Keychain profile is present and works"
+  else
+    FALLBACK_PROFILE_STATE="present-not-working"
+    FALLBACK_PROFILE_READY=0
+    mark_warn "NOTARYTOOL_PROFILE is present, but notarytool could not authenticate with that Keychain profile"
   fi
 }
 
@@ -69,6 +108,7 @@ check_notary_auth() {
   ASC_MISSING_VARS=()
   ASC_READY=0
   FALLBACK_PROFILE_STATE="missing"
+  FALLBACK_PROFILE_READY=0
 
   if [[ -n "${NOTARYTOOL_KEY:-}" ]]; then
     if [[ -f "$NOTARYTOOL_KEY" && -r "$NOTARYTOOL_KEY" ]]; then
@@ -98,7 +138,7 @@ check_notary_auth() {
 
   if [[ -n "${NOTARYTOOL_PROFILE:-}" ]]; then
     FALLBACK_PROFILE_STATE="present"
-    mark_warn "NOTARYTOOL_PROFILE is present (fallback only)"
+    check_notary_profile "$NOTARYTOOL_PROFILE"
   else
     mark_warn "NOTARYTOOL_PROFILE is missing (fallback only)"
   fi
@@ -165,9 +205,11 @@ check_sparkle_tools() {
   keys_tool="$(sparkle_tool_path generate_keys)"
 
   if [[ -n "$appcast_tool" ]]; then
-    mark_ok "Sparkle generate_appcast tool is available"
+    SPARKLE_APPCAST_READY=1
+    mark_ok "Sparkle generate_appcast tool is available at $appcast_tool"
   else
-    mark_missing "Sparkle generate_appcast tool is not available; build Sparkle tools via SwiftPM"
+    SPARKLE_APPCAST_READY=0
+    mark_missing "Sparkle generate_appcast tool is not available; build Sparkle tools via SwiftPM before appcast generation"
   fi
 
   if [[ -n "$keys_tool" ]]; then
@@ -197,9 +239,19 @@ else
 fi
 
 printf 'Fallback profile: %s.\n' "$FALLBACK_PROFILE_STATE"
+if [[ "$SPARKLE_APPCAST_READY" -eq 1 ]]; then
+  printf 'Sparkle appcast tooling: ready.\n'
+else
+  printf 'Sparkle appcast tooling: missing generate_appcast.\n'
+fi
 
 if [[ "$ASC_READY" -ne 1 ]]; then
-  printf 'Next operator action: set the missing ASC env vars in the release env, then rerun this preflight; profile auth stays fallback-only.\n'
+  print_asc_operator_action
+  if [[ "$FALLBACK_PROFILE_READY" -eq 1 ]]; then
+    printf 'Fallback option: the Keychain profile works, so an operator can deliberately run the fallback profile lane if ASC setup is blocked.\n'
+  else
+    printf 'Fallback option: no working Keychain profile was verified; do not assume profile notarization will save this lane.\n'
+  fi
 elif [[ "$FAILED" -ne 0 ]]; then
   printf 'Next operator action: fix the remaining missing release prerequisites above, then rerun this preflight before any submit/poll/staple lane.\n'
 else
