@@ -892,6 +892,8 @@ Order:
    - Review screenshots/flow as one package rather than sentence-by-sentence.
 3. Telegram Managed Bots proof spike.
    - Do not do a full migration first.
+   - Spike harness exists at `scripts/telegram-managed-bots-spike.mjs`; dry-run
+     validates link generation and token redaction without network calls.
    - Manually prepare one Telegram manager bot in BotFather with Bot Management
      Mode.
    - Open the official `https://t.me/newbot/{manager}/{suggested_bot}?name=...`
