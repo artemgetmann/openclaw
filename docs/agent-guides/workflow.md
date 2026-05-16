@@ -97,9 +97,11 @@
   allows API-key management at `/access/integrations/api`; on 2026-05-16 the
   page was reachable after login but showed "Permission is required to access
   the App Store Connect API. You can request access on behalf of your
-  organization." with a Request Access button instead of API keys. The next
-  human step is to enable/request ASC API access, then create/download the
-  `.p8` key once and provide `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and
+  organization." with a Request Access button instead of API keys. Artem
+  approved and submitted that access request the same day; the page then showed
+  "Your request to access the App Store Connect API was approved", `Active (0)`,
+  and `Generate API Key`. The next human-approved step is to generate/download
+  the `.p8` key once and provide `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and
   `NOTARYTOOL_ISSUER` through the machine release env.
 - The script must not print secret values. It should report only presence,
   readability, tool availability, and the exact next operator action.
