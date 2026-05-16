@@ -75,6 +75,9 @@ REQUIRED_WORKSPACE_TEMPLATES=(
   "BOOTSTRAP.md"
   "MEMORY.md"
 )
+REQUIRED_BUNDLED_SKILLS=(
+  "timezone-preference-updater"
+)
 
 if [[ ! -f "$INFO_PLIST" ]]; then
   echo "ERROR: consumer app bundle not found: $APP_PATH" >&2
@@ -121,6 +124,28 @@ assert_required_templates() {
     if [[ ! -f "$template_dir/$template_name" ]]; then
       echo "ERROR: ${context_label} missing required template '$template_name'" >&2
       echo "Expected directory: $template_dir" >&2
+      exit 1
+    fi
+  done
+}
+
+assert_required_bundled_skills() {
+  local skills_dir="$1"
+  local context_label="$2"
+  local skill_name=""
+
+  if [[ ! -d "$skills_dir" ]]; then
+    echo "ERROR: ${context_label} directory missing: $skills_dir" >&2
+    exit 1
+  fi
+
+  # These are consumer-critical skills, not optional ClawHub inventory. If a
+  # packaging refactor stops copying bundled skills, Jarvis silently loses
+  # natural-language preference updates. Fail the bundle verifier instead.
+  for skill_name in "${REQUIRED_BUNDLED_SKILLS[@]}"; do
+    if [[ ! -f "$skills_dir/$skill_name/SKILL.md" ]]; then
+      echo "ERROR: ${context_label} is missing bundled skill '$skill_name'." >&2
+      echo "Expected file: $skills_dir/$skill_name/SKILL.md" >&2
       exit 1
     fi
   done
@@ -186,6 +211,9 @@ assert_required_templates "$APP_PATH/Contents/Resources/templates" "app resource
 assert_required_templates \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/docs/reference/templates" \
   "bundled runtime workspace templates"
+assert_required_bundled_skills \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
+  "bundled runtime skills"
 
 sparkle_mode="disabled"
 if [[ -n "$sparkle_feed_url" ]]; then

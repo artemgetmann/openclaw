@@ -18,6 +18,14 @@ function parseConversationInfoPayload(text: string): Record<string, unknown> {
   return JSON.parse(match[1]) as Record<string, unknown>;
 }
 
+function parseTimeContextPayload(text: string): Record<string, unknown> {
+  const match = text.match(/Time context \(trusted metadata\):\n```json\n([\s\S]*?)\n```/);
+  if (!match?.[1]) {
+    throw new Error("missing time context json block");
+  }
+  return JSON.parse(match[1]) as Record<string, unknown>;
+}
+
 function parseSenderInfoPayload(text: string): Record<string, unknown> {
   const match = text.match(/Sender \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
   if (!match?.[1]) {
@@ -108,7 +116,10 @@ describe("buildInboundUserContextPrefix", () => {
       ConversationLabel: "openclaw-tui",
     } as TemplateContext);
 
-    expect(text).toBe("");
+    expect(parseTimeContextPayload(text)["current_timezone"]).toEqual(expect.any(String));
+    expect(() => parseConversationInfoPayload(text)).toThrow(
+      "missing conversation info json block",
+    );
   });
 
   it("hides message identifiers for direct webchat chats", () => {
@@ -119,7 +130,10 @@ describe("buildInboundUserContextPrefix", () => {
       MessageSidFull: "provider-full-id",
     } as TemplateContext);
 
-    expect(text).toBe("");
+    expect(parseTimeContextPayload(text)["current_timezone"]).toEqual(expect.any(String));
+    expect(() => parseConversationInfoPayload(text)).toThrow(
+      "missing conversation info json block",
+    );
   });
 
   it("includes message identifiers for direct external-channel chats", () => {
@@ -136,6 +150,62 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["message_id_full"]).toBeUndefined();
     expect(conversationInfo["sender"]).toBe("+15551234567");
     expect(conversationInfo["conversation_label"]).toBeUndefined();
+  });
+
+  it("includes trusted per-turn time context using configured user timezone", () => {
+    const text = buildInboundUserContextPrefix(
+      {
+        ChatType: "direct",
+        OriginatingChannel: "telegram",
+        Timestamp: Date.UTC(2026, 1, 15, 13, 35),
+      } as TemplateContext,
+      {
+        cfg: { agents: { defaults: { userTimezone: "Asia/Dubai", timeFormat: "24" } } },
+        nowMs: Date.UTC(2026, 1, 15, 14, 5),
+      },
+    );
+
+    const timeContext = parseTimeContextPayload(text);
+    expect(timeContext["message_sent_at_utc"]).toBe("2026-02-15T13:35:00.000Z");
+    expect(timeContext["current_timezone"]).toBe("Asia/Dubai");
+    expect(timeContext["timezone_source"]).toBe("user_config");
+    expect(timeContext["current_time_local"]).toBe("Sunday, February 15th, 2026 — 18:05");
+    expect(timeContext["current_time_utc"]).toBe("2026-02-15T14:05:00.000Z");
+  });
+
+  it("falls back to the runtime host timezone when configured user timezone is invalid", () => {
+    const text = buildInboundUserContextPrefix(
+      {
+        ChatType: "direct",
+        OriginatingChannel: "telegram",
+        Timestamp: Date.UTC(2026, 1, 15, 13, 35),
+      } as TemplateContext,
+      {
+        cfg: { agents: { defaults: { userTimezone: "Bali", timeFormat: "24" } } },
+        nowMs: Date.UTC(2026, 1, 15, 14, 5),
+      },
+    );
+
+    const timeContext = parseTimeContextPayload(text);
+    expect(timeContext["current_timezone"]).toEqual(expect.any(String));
+    expect(timeContext["current_timezone"]).not.toBe("Bali");
+    expect(timeContext["timezone_source"]).toBe("runtime_host");
+  });
+
+  it("labels host timezone as runtime_host when user timezone is not configured", () => {
+    const text = buildInboundUserContextPrefix(
+      {
+        ChatType: "group",
+        Timestamp: Date.UTC(2026, 1, 15, 13, 35),
+      } as TemplateContext,
+      { cfg: { agents: { defaults: { timeFormat: "24" } } }, nowMs: Date.UTC(2026, 1, 15, 14, 5) },
+    );
+
+    const timeContext = parseTimeContextPayload(text);
+    expect(timeContext["message_sent_at_utc"]).toBe("2026-02-15T13:35:00.000Z");
+    expect(timeContext["current_timezone"]).toEqual(expect.any(String));
+    expect(timeContext["timezone_source"]).toBe("runtime_host");
+    expect(timeContext["current_time_local"]).toEqual(expect.any(String));
   });
 
   it("includes message identifiers for direct chats when channel is inferred from Provider", () => {
