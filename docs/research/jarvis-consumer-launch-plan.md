@@ -703,16 +703,20 @@ provider worker:
   fixture with HTTP 200 and returned text.
 - Brave search works through the active OpenClaw config; the follow-up worker
   got HTTP 200 and one result for a harmless query.
-- Firecrawl now works locally; `POST /v2/scrape` for `https://example.com`
-  returned HTTP 200 with `success` and `data`.
+- Firecrawl is not launch-green with the current local secret source. An
+  earlier clean-copy smoke succeeded, but the follow-up provider worker got
+  HTTP 401 `invalid token` from `/v2/search`; treat Firecrawl as blocked until
+  the key is replaced and re-smoked.
 - Google Places still fails live smoke with `400 API_KEY_INVALID`.
-- Gemini/Nano Banana key validation is partially green: Gemini model listing
-  returned HTTP 200 with 50 models. Image generation was not re-smoked yet.
-- Anthropic is locally present now, but production `/healthz` still reports
-  Anthropic not configured. No Anthropic live model smoke is counted here.
+- Gemini text/model access is partially green through cached `gemini` CLI auth;
+  image generation still needs a real `GEMINI_API_KEY` and a tiny Nano Banana
+  smoke.
+- Anthropic is not configured locally or in production `/healthz`. No Anthropic
+  live model smoke is counted here.
 
 Before wider beta:
 
+- [ ] Replace the invalid Firecrawl credential before claiming scraping works.
 - [ ] Replace the invalid Google Places credential before claiming Google
       Places/location search works.
 - [ ] Run a real Gemini/Nano Banana image-generation smoke before claiming image
@@ -980,8 +984,12 @@ Order:
      `MANAGER_BOT_USERNAME` locally without exposing the token, then rerun
      `node scripts/telegram-managed-bots-spike.mjs`.
 4. Provider/backend utility hardening.
-   - Status: OpenAI STT, Brave, Firecrawl, and Gemini model-list validation are
-     green. Google Places still fails with `API_KEY_INVALID`.
+   - Status: OpenAI STT, Brave, and Gemini text/model validation are green.
+     Firecrawl and Google Places currently fail with invalid credentials.
+     Gemini image generation is not proven because the image script needs a
+     `GEMINI_API_KEY`.
+   - Fix the invalid Firecrawl credential or remove scraping claims from launch
+     copy.
    - Fix the invalid Google Places credential or remove Google Places/location
      claims from launch copy.
    - Run Gemini image-generation proof before claiming Nano Banana/image paths.
