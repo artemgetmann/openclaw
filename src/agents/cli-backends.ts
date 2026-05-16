@@ -58,7 +58,7 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
     "--permission-mode",
     "bypassPermissions",
     "--allowedTools",
-    "mcp__openclaw__*",
+    "Read,mcp__openclaw__*",
   ],
   resumeArgs: [
     "-p",
@@ -71,7 +71,7 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
     "--permission-mode",
     "bypassPermissions",
     "--allowedTools",
-    "mcp__openclaw__*",
+    "Read,mcp__openclaw__*",
     "--resume",
     "{sessionId}",
   ],

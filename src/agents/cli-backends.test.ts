@@ -80,7 +80,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "--permission-mode",
       "bypassPermissions",
       "--allowedTools",
-      "mcp__openclaw__*",
+      "Read,mcp__openclaw__*",
     ]);
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
     expect(resolved?.config.resumeArgs).toEqual([
@@ -94,7 +94,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "--permission-mode",
       "bypassPermissions",
       "--allowedTools",
-      "mcp__openclaw__*",
+      "Read,mcp__openclaw__*",
       "--resume",
       "{sessionId}",
     ]);
@@ -120,10 +120,10 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.command).toBe("/usr/local/bin/claude");
     expect(resolved?.config.args).toContain("--include-partial-messages");
     expect(resolved?.config.args).toContain("--allowedTools");
-    expect(resolved?.config.args).toContain("mcp__openclaw__*");
+    expect(resolved?.config.args).toContain("Read,mcp__openclaw__*");
     expect(resolved?.config.resumeArgs).toContain("--include-partial-messages");
     expect(resolved?.config.resumeArgs).toContain("--allowedTools");
-    expect(resolved?.config.resumeArgs).toContain("mcp__openclaw__*");
+    expect(resolved?.config.resumeArgs).toContain("Read,mcp__openclaw__*");
   });
 
   it("passes Claude Code 1M context model variants through", () => {

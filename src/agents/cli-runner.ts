@@ -492,13 +492,26 @@ function buildBridgeSafeClaudeCliSkillsPrompt(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
 }): string {
-  // Keep the bridge-safe prompt small, but still surface OpenClaw-managed
-  // skills so Claude can proactively pick the right workspace skill instead
-  // of falling back to ~/.claude state.
-  return buildWorkspaceSkillsPrompt(params.workspaceDir, {
+  // Keep the bridge-safe prompt small, but still make the OpenClaw skill
+  // contract explicit. Claude CLI has its own native skill registry; these
+  // workspace skills are intentionally prompt-advertised OpenClaw skills that
+  // must be selected from <available_skills> and then read from SKILL.md.
+  const skillsPrompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
     config: params.config,
     eligibility: { remote: getRemoteSkillEligibility() },
   }).trim();
+  if (!skillsPrompt) {
+    return "";
+  }
+  return [
+    "## OpenClaw Workspace Skills (mandatory)",
+    "These are OpenClaw workspace skills, not Claude Code native slash skills.",
+    "Before saying a skill is missing or unavailable, inspect <available_skills> in this prompt.",
+    "If exactly one skill clearly matches the user task, use Claude's Read tool on its <location> SKILL.md, then follow that file.",
+    "If a matching skill exists, prefer it over generic web/search/MCP behavior unless the user explicitly asks for a different route.",
+    "If the user asks whether a skill exists, answer from <available_skills> first; do not rely on Claude Code's native /skill registry.",
+    skillsPrompt,
+  ].join("\n");
 }
 
 async function buildCliAgentPromptStack(params: {

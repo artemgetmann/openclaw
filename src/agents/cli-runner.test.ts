@@ -417,6 +417,16 @@ describe("runCliAgent with process supervisor", () => {
       expect(systemPromptIndex).toBeGreaterThanOrEqual(0);
       const systemPrompt = argv[systemPromptIndex + 1] ?? "";
       expect(systemPrompt).toContain("Do not treat Claude Code user-level memory");
+      expect(systemPrompt).toContain("## OpenClaw Workspace Skills (mandatory)");
+      expect(systemPrompt).toContain(
+        "These are OpenClaw workspace skills, not Claude Code native slash skills.",
+      );
+      expect(systemPrompt).toContain(
+        "Before saying a skill is missing or unavailable, inspect <available_skills> in this prompt.",
+      );
+      expect(systemPrompt).toContain(
+        "If the user asks whether a skill exists, answer from <available_skills> first; do not rely on Claude Code's native /skill registry.",
+      );
       expect(systemPrompt).toContain("<available_skills>");
       expect(systemPrompt).toContain("reddit");
       expect(systemPrompt).toContain("User Reddit skill");
