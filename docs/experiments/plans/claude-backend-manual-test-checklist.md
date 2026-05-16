@@ -127,9 +127,19 @@ Fail criteria:
 
 ## Current Lane Status
 
-- Skills: local proof passed, but still needs product-level user testing through
-  the real bot path.
-- Reminder: lower-level cron proof passed, but the product-level agent scheduling
-  test still needs to pass.
-- Progress UX: local projection passed, but the tester-runtime harness blocker
-  may still need the progress lane fix before the manual tester proof is clean.
+- Skills: product-level OpenClaw CLI proof passed on `claude-cli/sonnet` using
+  the exact Reddit URL
+  `https://www.reddit.com/r/codex/comments/1swq4g4/what_theme_do_you_use_in_codex_app/`.
+  Claude read the OpenClaw `reddit` skill instructions, used
+  `skills/reddit/scripts/reddit.mjs comments`, summarized the post/comments, and
+  confirmed in a same-session follow-up that it used the Reddit skill.
+- Reminder: tester Telegram proof passed on `@Artem_jarvis_email_bot` with the
+  natural prompt `in one minute go to my Twitter profile, click on the first
+post, and check the first comment`. Telegram message `49433` scheduled cron
+  job `a6a44bb6-90e6-4bd2-9147-c53a75433942`, bot reply `49434` confirmed
+  scheduling, delayed run executed as `provider=claude-cli model=sonnet`, and
+  final Telegram message `49435` delivered the first-comment result.
+- Progress UX: tester Telegram proof passed on `@Artem_jarvis_exec_bot`; final
+  message `49418` retained the progress transcript above the final answer and
+  ended with `CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516`. Artem still plans to
+  manually judge the visible UX before main-bot rollout.
