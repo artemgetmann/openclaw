@@ -304,6 +304,40 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("suppresses internal exec progress draft lines when Telegram verbose is off", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { verboseLevel: "off" },
+    });
+    const draftStream = createDraftStream(9002);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "update" });
+        await dispatcherOptions.deliver({ text: "telegram_voice_sanitize_ok" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9002" });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 exec");
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 exec\n\n🔧 exec update");
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9002,
+      "telegram_voice_sanitize_ok",
+      expect.any(Object),
+    );
+  });
+
   it("retains non-prefix answer preview progress when the final answer replaces it", async () => {
     const draftStream = createDraftStream(9003);
     createTelegramDraftStream.mockReturnValue(draftStream);

@@ -133,6 +133,7 @@ async function runDispatch(params: {
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
+  shouldSendToolSummaries?: boolean;
   onReplyStart?: () => void;
   ctxOverrides?: Record<string, unknown>;
 }) {
@@ -152,7 +153,7 @@ async function runDispatch(params: {
     ...(params.shouldRouteToOriginating
       ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
       : {}),
-    shouldSendToolSummaries: true,
+    shouldSendToolSummaries: params.shouldSendToolSummaries ?? true,
     bypassForCommand: false,
     ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
     recordProcessed: vi.fn(),
@@ -282,6 +283,22 @@ describe("tryDispatchAcpReply", () => {
         }),
       }),
     );
+  });
+
+  it("suppresses ACP tool lifecycle summaries when tool summaries are disabled", async () => {
+    setReadyAcpResolution();
+    mockToolLifecycleTurn("call-hidden");
+
+    const { dispatcher } = createDispatcher();
+    await runDispatch({
+      bodyForAgent: "run quiet tool",
+      cfg: createAcpConfigWithVisibleToolTags(),
+      dispatcher,
+      shouldSendToolSummaries: false,
+    });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(routeMocks.routeReply).not.toHaveBeenCalled();
   });
 
   it("falls back to new tool message when edit fails", async () => {

@@ -5,11 +5,14 @@ import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js
 
 type Delivery = { kind: string; text?: string };
 
-function createProjectorHarness(cfgOverrides?: Parameters<typeof createCfg>[0]) {
+function createProjectorHarness(
+  cfgOverrides?: Parameters<typeof createCfg>[0],
+  projectorOverrides?: { shouldSendToolSummaries?: boolean },
+) {
   const deliveries: Delivery[] = [];
   const projector = createAcpReplyProjector({
     cfg: createCfg(cfgOverrides),
-    shouldSendToolSummaries: true,
+    shouldSendToolSummaries: projectorOverrides?.shouldSendToolSummaries ?? true,
     deliver: async (kind, payload) => {
       deliveries.push({ kind, text: payload.text });
       return true;
@@ -263,6 +266,52 @@ describe("createAcpReplyProjector", () => {
       { kind: "block", text: "b".repeat(50) },
       { kind: "block", text: "c".repeat(20) },
     ]);
+  });
+
+  it("strips internal tool summary lines from block text when tool summaries are disabled", async () => {
+    const { deliveries, projector } = createProjectorHarness(
+      createLiveCfgOverrides({
+        coalesceIdleMs: 0,
+        maxChunkChars: 512,
+      }),
+      {
+        shouldSendToolSummaries: false,
+      },
+    );
+
+    await projector.onEvent({
+      type: "text_delta",
+      text: "🔧 exec\n\ncommand output\n\n🔧 exec update\n\nstill running\n\n🔧 cron\n\nfinal assistant text",
+      tag: "agent_message_chunk",
+    });
+    await projector.flush(true);
+
+    expect(combinedBlockText(deliveries)).toBe(
+      "command output\nstill running\nfinal assistant text",
+    );
+  });
+
+  it("preserves internal tool summary lines in block text when tool summaries are enabled", async () => {
+    const { deliveries, projector } = createProjectorHarness(
+      createLiveCfgOverrides({
+        coalesceIdleMs: 0,
+        maxChunkChars: 512,
+      }),
+      {
+        shouldSendToolSummaries: true,
+      },
+    );
+
+    const text =
+      "🔧 exec\n\ncommand output\n\n🔧 exec update\n\nstill running\n\n🔧 cron\n\nfinal assistant text";
+    await projector.onEvent({
+      type: "text_delta",
+      text,
+      tag: "agent_message_chunk",
+    });
+    await projector.flush(true);
+
+    expect(combinedBlockText(deliveries)).toBe(text);
   });
 
   it("does not flush short live fragments mid-phrase on idle", async () => {
