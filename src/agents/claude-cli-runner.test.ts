@@ -133,7 +133,7 @@ describe("runClaudeCliAgent", () => {
     expect(spawnInput.argv).toContain("stdio");
     expect(spawnInput.argv).toContain("--include-partial-messages");
     expect(spawnInput.argv).toContain("--allowedTools");
-    expect(spawnInput.argv).toContain("mcp__openclaw__*");
+    expect(spawnInput.argv).toContain("Read,mcp__openclaw__*");
     expect(spawnInput.argv).not.toContain("hi");
     expect(spawnInput.input).toBeUndefined();
     expect(spawnInput.stdinMode).toBe("pipe-open");
