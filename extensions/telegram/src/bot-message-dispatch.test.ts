@@ -821,26 +821,32 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Fetching both pages now");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Fetching both pages now.");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
-      3,
-      [
-        "Summary of what changed between the two pages:",
-        "",
-        "The IANA page is deeper and explains the policy behind the example domains.",
-        "",
-        "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-      ].join("\n"),
-    );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith(
       expect.stringContaining("Fetching both pages now.\n\nSummary"),
     );
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      1002,
-      expect.stringContaining("CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516"),
-      expect.any(Object),
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(
+      deliverReplies.mock.calls.filter((call: unknown[]) =>
+        ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).some((reply) =>
+          reply.text?.includes("CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516"),
+        ),
+      ),
+    ).toHaveLength(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: [
+              "Summary of what changed between the two pages:",
+              "",
+              "The IANA page is deeper and explains the policy behind the example domains.",
+              "",
+              "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+            ].join("\n"),
+          }),
+        ],
+      }),
     );
   });
 
@@ -890,17 +896,28 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      1002,
-      [
-        "| example.com | IANA Reserved Domains |",
-        "| --- | --- |",
-        "| Stub | Policy source |",
-        "",
-        "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-      ].join("\n"),
-      expect.any(Object),
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(
+      deliverReplies.mock.calls.filter((call: unknown[]) =>
+        ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).some((reply) =>
+          reply.text?.includes("CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516"),
+        ),
+      ),
+    ).toHaveLength(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: [
+              "| example.com | IANA Reserved Domains |",
+              "| --- | --- |",
+              "| Stub | Policy source |",
+              "",
+              "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+            ].join("\n"),
+          }),
+        ],
+      }),
     );
   });
 
@@ -953,17 +970,91 @@ describe("dispatchTelegramMessage draft streaming", () => {
       1,
       expect.not.stringContaining("example.com is a minimal placeholder"),
     );
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      1002,
-      [
-        "example.com is a minimal placeholder:",
-        "",
-        "• One sentence of content",
-        "",
-        "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-      ].join("\n"),
-      expect.any(Object),
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(
+      deliverReplies.mock.calls.filter((call: unknown[]) =>
+        ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).some((reply) =>
+          reply.text?.includes("CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516"),
+        ),
+      ),
+    ).toHaveLength(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: [
+              "example.com is a minimal placeholder:",
+              "",
+              "• One sentence of content",
+              "",
+              "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+            ].join("\n"),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("strips separator-delimited progress from a final that matches the latest preview", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    const combinedText = [
+      "Step 1 of 5 — Fetching example.com",
+      "",
+      "✅ example.com fetched.",
+      "",
+      "───",
+      "",
+      "Step 2 of 5 — Waiting 8 seconds",
+      "",
+      "✅ 8 seconds elapsed.",
+      "",
+      "───",
+      "",
+      "Step 3 of 5 — Detailed comparison:",
+      "",
+      "example.com is the public stub. IANA is the policy source behind it.",
+      "",
+      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: combinedText });
+        await dispatcherOptions.deliver({ text: combinedText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: [
+              "example.com is the public stub. IANA is the policy source behind it.",
+              "",
+              "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+            ].join("\n"),
+          }),
+        ],
+      }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: expect.stringContaining("Step 1 of 5"),
+          }),
+        ],
+      }),
     );
   });
 

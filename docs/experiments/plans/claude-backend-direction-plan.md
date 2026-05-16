@@ -764,6 +764,43 @@ Tests run in this slice:
 - `pnpm exec vitest run src/agents/cli-runner.bundle-mcp.e2e.test.ts`
   - not run: repo Vitest config excludes `**/*.e2e.test.ts`
 
+### Telegram Progress UX v2 Follow-Up
+
+Current status:
+
+- Duplicate-final bug is fixed in focused dispatcher tests.
+- Telegram finalization now materializes retained answer progress before final
+  delivery and forces the paired final answer onto a new message.
+- Separator-delimited progress transcripts such as `───` are treated as
+  progress, so final answers do not keep the retained progress prefix when the
+  final text matches the latest preview snapshot.
+- Live isolated tester bot proof is partially exercised but not yet a clean
+  acceptance pass: one Sonnet run produced a separate progress/final sequence
+  before the separator stripping fix; later reruns often produced only one final
+  message, so they did not exercise the split path.
+
+Validation:
+
+- `pnpm exec vitest run extensions/telegram/src/bot-message-dispatch.test.ts --pool=forks --maxWorkers=1`
+  - pass: 1 file, 79 tests
+- `pnpm exec vitest run extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery.test.ts src/infra/telegram-live-runtime-helpers.test.ts --pool=forks --maxWorkers=1`
+  - pass: 3 files, 129 tests
+- `git diff --check`
+  - pass
+- `pnpm build`
+  - completed; known plugin SDK DTS command still prints unrelated existing
+    type errors under the repo's `|| true` build behavior
+
+Open follow-up before merge readiness:
+
+1. Get one clean isolated tester Telegram visual proof where the model emits a
+   streamed progress preview and final delivery lands as two useful bubbles:
+   retained progress first, final answer second, no duplicated final content.
+2. Run the same acceptance shape against the Codex backend; this UX must remain
+   backend-agnostic.
+3. Handle the separate "chat is getting long" warning in a different follow-up;
+   it is intentionally out of scope for the progress delivery fix.
+
 Next:
 
 1. Land `scripts/smoke-cli-backend-parity.ts` as the reusable parity report.

@@ -75,7 +75,7 @@ function looksLikeProgressPreview(text: string): boolean {
 }
 
 function looksLikeProgressParagraph(text: string): boolean {
-  return /^(?:🔧|✅|Step\b|Starting\b|Moving\b|Fetching\b|Loading\b|Following\b|Got\b|Comparing\b|Redirect\b)/i.test(
+  return /^(?:[-─—]{2,}|🔧|✅|Step\b|Starting\b|Moving\b|Fetching\b|Loading\b|Following\b|Got\b|Comparing\b|Redirect\b)/i.test(
     text.trim(),
   );
 }
@@ -363,6 +363,7 @@ export const dispatchTelegramMessage = async ({
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
   let retainedAnswerProgressPreviewText = "";
+  let forceNextAnswerFinalSend = false;
   let toolProgressLines: string[] = [];
   let draftLaneEventQueue = Promise.resolve();
   const reasoningStepState = createTelegramReasoningStepState();
@@ -482,17 +483,31 @@ export const dispatchTelegramMessage = async ({
     await answerLane.stream.materialize?.();
     answerLane.stream.forceNewMessage();
     resetDraftLaneState(answerLane);
+    // The retained progress bubble is now permanent. The paired final answer
+    // must be delivered as a fresh outbound message, not routed back through
+    // the generic preview-final edit path.
+    forceNextAnswerFinalSend = true;
     activePreviewLifecycleByLane.answer = "transient";
     retainPreviewOnCleanupByLane.answer = false;
     return true;
   };
-  const prepareFinalAnswerText = async (text: string) => {
+  const prepareFinalAnswerText = async (
+    text: string,
+    opts?: { hasMedia?: boolean; isError?: boolean },
+  ) => {
     const prepared = stripRetainedProgressFromFinal(text);
+    const retainedProgress = retainedAnswerProgressPreviewText.trim();
+    const hasSeparateFinalText =
+      prepared.text.trim() !== (retainedProgress || answerLane.lastPartialText.trim());
     if (
+      !opts?.hasMedia &&
+      !opts?.isError &&
       answerLane.hasStreamedMessage &&
       answerLane.lastPartialText.trim() &&
-      prepared.text !== answerLane.lastPartialText.trim() &&
-      (prepared.stripped || looksLikeProgressPreview(answerLane.lastPartialText))
+      hasSeparateFinalText &&
+      (prepared.stripped ||
+        retainedProgress ||
+        looksLikeProgressPreview(answerLane.lastPartialText))
     ) {
       await materializeAnswerProgressBeforeFinal();
     }
@@ -773,6 +788,34 @@ export const dispatchTelegramMessage = async ({
       deliveryState.markDelivered();
     },
   });
+  const deliverFinalAnswerText = async ({
+    text,
+    payload,
+    previewButtons,
+    hasMedia,
+  }: {
+    text: string;
+    payload: ReplyPayload;
+    previewButtons?: TelegramInlineButtons;
+    hasMedia?: boolean;
+  }) => {
+    const preparedText = await prepareFinalAnswerText(text, {
+      hasMedia,
+      isError: payload.isError,
+    });
+    if (forceNextAnswerFinalSend) {
+      forceNextAnswerFinalSend = false;
+      const delivered = await sendPayload(applyTextToPayload(payload, preparedText));
+      return delivered ? "sent" : "skipped";
+    }
+    return deliverLaneText({
+      laneName: "answer",
+      text: preparedText,
+      payload,
+      infoKind: "final",
+      previewButtons,
+    });
+  };
 
   let queuedFinal = false;
 
@@ -834,11 +877,9 @@ export const dispatchTelegramMessage = async ({
                   | { buttons?: TelegramInlineButtons }
                   | undefined
               )?.buttons;
-              await deliverLaneText({
-                laneName: "answer",
-                text: await prepareFinalAnswerText(buffered.text),
+              await deliverFinalAnswerText({
+                text: buffered.text,
                 payload: buffered.payload,
-                infoKind: "final",
                 previewButtons: bufferedButtons,
               });
               reasoningStepState.resetForNextStep();
@@ -859,19 +900,25 @@ export const dispatchTelegramMessage = async ({
               if (segment.lane === "reasoning") {
                 reasoningStepState.noteReasoningHint();
               }
-              const result = await deliverLaneText({
-                laneName: segment.lane,
-                text:
-                  segment.lane === "answer"
-                    ? info.kind === "final"
-                      ? await prepareFinalAnswerText(segment.text)
-                      : renderTextWithToolProgress(segment.text)
-                    : segment.text,
-                payload,
-                infoKind: info.kind,
-                previewButtons,
-                allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
-              });
+              const result =
+                segment.lane === "answer" && info.kind === "final"
+                  ? await deliverFinalAnswerText({
+                      text: segment.text,
+                      payload,
+                      previewButtons,
+                      hasMedia,
+                    })
+                  : await deliverLaneText({
+                      laneName: segment.lane,
+                      text:
+                        segment.lane === "answer"
+                          ? renderTextWithToolProgress(segment.text)
+                          : segment.text,
+                      payload,
+                      infoKind: info.kind,
+                      previewButtons,
+                      allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
+                    });
               if (segment.lane === "reasoning") {
                 if (result !== "skipped") {
                   reasoningStepState.noteReasoningDelivered();
@@ -920,7 +967,10 @@ export const dispatchTelegramMessage = async ({
                 ? applyTextToPayload(
                     payload,
                     info.kind === "final"
-                      ? await prepareFinalAnswerText(payload.text)
+                      ? await prepareFinalAnswerText(payload.text, {
+                          hasMedia,
+                          isError: payload.isError,
+                        })
                       : renderTextWithToolProgress(payload.text),
                   )
                 : payload,
