@@ -794,6 +794,11 @@ Current implementation order:
     assets. It must distinguish missing ASC API-key vars from a present/working
     Keychain fallback, report Sparkle `generate_appcast` availability, and end
     with the exact next operator action.
+13. Follow-up ASC/Sparkle check on 2026-05-16: Sparkle appcast tooling is not
+    the blocker. `generate_appcast` is available from the repo SwiftPM build at
+    `apps/macos/.build/artifacts/sparkle/Sparkle/bin/generate_appcast`. The
+    remaining ASC blocker is only the missing API-key trio in
+    `~/Library/Application Support/OpenClaw/release.env`.
 
 Progress:
 
@@ -863,9 +868,15 @@ Progress:
       reachability and no Update Error; a real download/verify/install/relaunch/
       preserve-state cycle is still required before relying on updates for
       recovery or wider distribution.
-- [ ] Confirm the Channels duplicate connected-bot UI fix in a packaged
-      installed-app GUI build. Source UI duplication is addressed, but there is
-      still no packaged installed-app GUI proof yet.
+- [x] Capture current-main GUI proof for the Channels duplicate connected-bot
+      UI fix. On 2026-05-16, the isolated `channels-proof` native UI-smoke app
+      opened Settings -> Channels with one Telegram detail pane, one
+      `Connected bot` section, one verified card, and one `Open your bot`
+      action. Screenshot:
+      `/tmp/openclaw/full-after-ready-channel-click.png`. Caveat: the existing
+      trusted-tester `Jarvis.dmg` was built before PR #719, so exact
+      release-DMG proof still requires a recut if this polish must ship in the
+      next artifact.
 - [ ] Run the next release lane with App Store Connect API key auth plus async
       submit/poll/staple receipts. Keychain-profile notarization remains a
       fallback only; Artem must create/provide the actual ASC API key if it is
@@ -998,7 +1009,7 @@ docs remain historical proof only:
 | Clean macOS user install smoke                   | Release/GUI smoke lane                           | Passed for trusted testers        | Isolated fresh-user packaged smoke passed from `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`: bundled runtime seeded, isolated gateway became healthy, onboarding was observed, and real user config stayed unchanged. A true separate macOS account smoke was deliberately skipped as unnecessary for the 3 trusted waiting testers. Sending `Jarvis.dmg` to those testers is allowed.                                                                                                  |
 | Post-launch app-bundle mutation                  | Packaging/runtime lane before public-ish launch  | Fixed and copied-app proof passed | Fixed by treating bundled app resources as seed-only, running packaged gateway identity from the seeded Application Support runtime, and sending managed `acpx` installs to `$OPENCLAW_STATE_DIR/cache/extensions/acpx`. Targeted `acpx` Vitest, macOS bundled-runtime/launch-agent suites, isolated generated-runtime proof, and copied-app signed-bundle proof passed on 2026-05-16 without touching `/Applications/Jarvis.app`.                                                                |
 | Full newer-version Sparkle update-cycle smoke    | Release/GUI smoke lane                           | Deferred for speed                | Current proof covers appcast/feed reachability and no Update Error. A real higher-build appcast should still prove download, signature verification, install, relaunch, and state preservation before relying on updates for recovery or wider distribution. Do not block the 3 trusted waiting testers on this unless an immediate tester update is planned.                                                                                                                                     |
-| Channels duplicate connected-bot UI              | UI polish lane                                   | Partially addressed               | Source UI fix removes the duplicated connected-bot Settings copy/buttons, but there is still no packaged installed-app GUI proof yet. Keep this open until the packaged app is verified. Do not block the 3 trusted waiting testers on this.                                                                                                                                                                                                                                                      |
+| Channels duplicate connected-bot UI              | UI polish lane                                   | Current-main GUI proof captured   | Source UI fix removes the duplicated connected-bot Settings copy/buttons. Current-main isolated native UI-smoke proof on 2026-05-16 showed Settings -> Channels with one Telegram detail pane, one `Connected bot` section, one verified card, and one `Open your bot` action; screenshot: `/tmp/openclaw/full-after-ready-channel-click.png`. Existing trusted-tester `Jarvis.dmg` predates PR #719, so recut the release artifact before claiming this polish ships in that DMG.                |
 | Local old-app/package cleanup                    | Cleanup lane after approved delete list          | Done for Artem's machine          | Completed after Artem approved the cleanup list on 2026-05-16: removed `/Applications/OpenClaw.app`, stale GUI smoke app processes, and stale `gui-verify` / `consolidation-gui-smoke` / `macos-ui-cleanup` LaunchAgents. Kept `/Applications/Jarvis.app`, the default gateway, watchdog, mail monitor, and the separate Chrome Telegram-live profile.                                                                                                                                            |
 | Launch audit                                     | Launch/commercial readiness lane                 | Open                              | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                                                                                                                                                                                                                           |
 | Overlay/defaults hygiene                         | Future product/platform lane                     | Deferred, non-blocking            | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                                                                                                                                                                                                                                                             |
@@ -1052,9 +1063,11 @@ Deployment/security boundary:
       `gui-verify` / `consolidation-gui-smoke` / `macos-ui-cleanup`
       LaunchAgents while keeping Jarvis, the default gateway, watchdog, mail
       monitor, and the separate Chrome Telegram-live profile.
-- [ ] Confirm the Channels duplicate connected-bot UI fix in a packaged
-      installed-app GUI build. Source UI duplication is addressed, but there is
-      still no packaged installed-app GUI proof yet.
+- [x] Capture current-main GUI proof for the Channels duplicate connected-bot
+      UI fix. Screenshot:
+      `/tmp/openclaw/full-after-ready-channel-click.png`; recut release-DMG
+      proof is still needed before claiming the existing trusted-tester DMG
+      contains this polish.
 - [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
 - [ ] Implement subscription/trial-gated update entitlement UX.
 - [x] Remove or proxy all founder keys from public builds. Backend/proxy contract exists in PR #560; public-package audit guard landed in PR #565.

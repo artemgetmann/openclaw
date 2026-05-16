@@ -141,6 +141,10 @@ Current package truth:
 - Artem must create or provide the actual App Store Connect API key if it is
   not already present on the machine. Do not block the release docs on fake
   placeholders or commit key material.
+- Follow-up preflight on 2026-05-16 confirmed this split is current:
+  Sparkle `generate_appcast` is already available from the repo SwiftPM build,
+  while the ASC API-key trio is still absent. This is not a Sparkle-tooling
+  blocker; it is a missing Apple API-key setup blocker.
 - `ai.jarvis.mac` bundle ID/runtime/update identity migration is a required
   launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
 - Do not send to Reddit/GitHub/public-ish beta until the `ai.jarvis.mac`
@@ -151,9 +155,14 @@ Current package truth:
   were removed. `/Applications/Jarvis.app`, the default gateway, watchdog, mail
   monitor, and the separate Chrome Telegram-live profile were kept.
 - The duplicate connected-bot Settings copy/buttons issue has been addressed
-  in source, but there is still no packaged installed-app GUI proof yet. Do
-  not count this as closed for broader launch proof until the packaged app is
-  verified.
+  in source. Current-main GUI proof was captured on 2026-05-16 with the
+  isolated `channels-proof` native UI-smoke app: Settings -> Channels rendered
+  one Telegram detail pane, one `Connected bot` section, one verified card, and
+  one `Open your bot` action. Screenshot:
+  `/tmp/openclaw/full-after-ready-channel-click.png`. This proves the merged
+  UI state, but the existing trusted-tester `Jarvis.dmg` was built before PR
+  #719, so exact release-DMG proof still requires a recut if we want to ship
+  that polish in a public artifact.
 - Packaging-smoke iteration speed note from 2026-05-16: the full fast package
   loop was slow because it still staged the full bundled runtime, redeployed the
   large production `node_modules` tree, recopied Node/uv payloads, and signed
