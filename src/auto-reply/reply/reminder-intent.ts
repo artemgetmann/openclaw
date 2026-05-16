@@ -13,6 +13,15 @@ const LEADING_IN_REMINDER_INTENT_RE = new RegExp(
   String.raw`^\s*(?:please\s+)?(?:can you\s+)?in\s+((?:${DURATION_COMPONENT_RE})(?:\s+${DURATION_COMPONENT_RE})*)\s*,?\s+(.+?)\s*[.?!]*\s*$`,
   "i",
 );
+const LEADING_TIMESTAMP_RE =
+  /^\s*\[[A-Z][a-z]{2}\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\s+GMT[+-]\d{1,2}\]\s*/;
+
+function stripProductTimestampPrefix(text: string): string {
+  // Product chat paths prepend the current time before the user's words so the
+  // model has temporal context. Reminder parsing must use the actual user text
+  // or natural "in one minute ..." requests fall through to the model.
+  return text.replace(LEADING_TIMESTAMP_RE, "");
+}
 
 function normalizeDurationPhrase(raw: string): string {
   // Users naturally say "in one minute" or "in a sec"; the duration parser
@@ -33,7 +42,7 @@ function normalizeDurationPhrase(raw: string): string {
 }
 
 export function extractReminderIntent(text: string): ReminderIntent | null {
-  const trimmedText = text.trim();
+  const trimmedText = stripProductTimestampPrefix(text.trim()).trim();
   const match =
     REMINDER_INTENT_RE.exec(trimmedText) ?? LEADING_IN_REMINDER_INTENT_RE.exec(trimmedText);
   if (!match) {
