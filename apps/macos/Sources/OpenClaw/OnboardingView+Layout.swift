@@ -36,6 +36,9 @@ extension OnboardingView {
         .onChange(of: self.currentPage) { _, newValue in
             self.updateMonitoring(for: self.activePageIndex(for: newValue))
         }
+        .onChange(of: self.consumerSetupStep) { _, _ in
+            self.updateMonitoring(for: self.activePageIndex)
+        }
         .onChange(of: self.state.connectionMode) { _, _ in
             let oldActive = self.activePageIndex
             self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
@@ -92,8 +95,11 @@ extension OnboardingView {
     }
 
     var navigationBar: some View {
+        if self.isConsumerSetupShellActive {
+            return AnyView(self.consumerSetupNavigationBar)
+        }
         let wizardLockIndex = self.wizardPageOrderIndex
-        return HStack(spacing: 20) {
+        return AnyView(HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
                     Label("Back", systemImage: "chevron.left").labelStyle(.iconOnly)
@@ -146,7 +152,55 @@ extension OnboardingView {
         }
         .padding(.horizontal, 28)
         .padding(.bottom, 13)
+        .frame(minHeight: 60, alignment: .bottom))
+    }
+
+    private var consumerSetupNavigationBar: some View {
+        HStack(spacing: 16) {
+            Button(action: self.handleBack) {
+                Label("Back", systemImage: "chevron.left")
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.secondary)
+            .opacity(self.consumerSetupStep.previous == nil ? 0 : 0.8)
+            .disabled(self.consumerSetupStep.previous == nil)
+            .frame(minWidth: 80, alignment: .leading)
+
+            Spacer()
+
+            HStack(spacing: 8) {
+                ForEach(ConsumerSetupStep.allCases) { step in
+                    Button {
+                        withAnimation { self.consumerSetupStep = step }
+                    } label: {
+                        Circle()
+                            .fill(self.consumerSetupStep == step ? Color.accentColor : self.consumerSetupStepTint(for: step))
+                            .frame(width: 8, height: 8)
+                            .help(step.title)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Spacer()
+
+            Button(action: self.handleNext) {
+                Text(self.buttonTitle)
+                    .frame(minWidth: 88)
+            }
+            .keyboardShortcut(.return)
+            .buttonStyle(.borderedProminent)
+            .disabled(!self.canAdvance)
+        }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 13)
         .frame(minHeight: 60, alignment: .bottom)
+    }
+
+    private func consumerSetupStepTint(for step: ConsumerSetupStep) -> Color {
+        self.isConsumerSetupStepComplete(step)
+            ? Color.green.opacity(0.75)
+            : Color.gray.opacity(0.3)
     }
 
     func onboardingPage(@ViewBuilder _ content: () -> some View) -> some View {
