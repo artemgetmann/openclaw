@@ -135,6 +135,10 @@ private final class SendableCounter: @unchecked Sendable {
     var value = 0
 }
 
+private final class ReadinessContinuationBox: @unchecked Sendable {
+    var continuation: CheckedContinuation<ConsumerModelsReadinessPayload, any Error>?
+}
+
 @Suite(.serialized)
 @MainActor
 struct ConsumerSetupReadinessTests {
@@ -305,6 +309,43 @@ struct ConsumerSetupReadinessTests {
         #expect(probeCalls.value == 2)
         #expect(model.phase == .ready("openai-codex/gpt-5.5"))
         #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+    }
+
+    @Test func `consumer model keeps ready result visible during passive activation refresh`() async {
+        let probeCalls = SendableCounter()
+        let pendingProbe = ReadinessContinuationBox()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                if probeCalls.value == 1 {
+                    return readyReadinessPayload()
+                }
+                return try await withCheckedThrowingContinuation { continuation in
+                    pendingProbe.continuation = continuation
+                }
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        await model.refresh()
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+
+        let refreshTask = Task {
+            await model.refreshOnAppActivationIfNeeded()
+        }
+        while pendingProbe.continuation == nil {
+            await Task.yield()
+        }
+
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+
+        pendingProbe.continuation?.resume(returning: readyReadinessPayload())
+        await refreshTask.value
+
+        #expect(probeCalls.value == 2)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
     }
 
     @Test func `consumer model refreshIfNeeded retries after transient failure`() async {

@@ -18,6 +18,10 @@ private final class SendableClockBox: @unchecked Sendable {
     }
 }
 
+private final class BrowserVerificationContinuationBox: @unchecked Sendable {
+    var continuation: CheckedContinuation<String?, Never>?
+}
+
 @Suite(.serialized)
 @MainActor
 struct BrowserSetupSupportTests {
@@ -130,6 +134,68 @@ struct BrowserSetupSupportTests {
             #expect(model.selectedProfileName == "Artem")
             #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
             #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
+        }
+    }
+
+    @Test func `settings model keeps cached browser profile visible during passive restore check`() async {
+        let defaults = self.makeDefaults()
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: "artem@example.com",
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        let pendingVerification = BrowserVerificationContinuationBox()
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)
+            defaults.set("Artem", forKey: browserSelectedChromeProfileNameKey)
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in
+                    await withCheckedContinuation { continuation in
+                        pendingVerification.continuation = continuation
+                    }
+                })
+
+            #expect(model.phase == .ready(ChromeProfileCandidate(
+                directoryName: "Profile 4",
+                displayName: "Artem",
+                subtitle: nil,
+                lastUsedAt: nil,
+                isDefaultProfile: false)))
+
+            let refreshTask = Task {
+                await model.refreshIfNeeded()
+            }
+            while pendingVerification.continuation == nil {
+                await Task.yield()
+            }
+
+            #expect(model.phase == .ready(ChromeProfileCandidate(
+                directoryName: "Profile 4",
+                displayName: "Artem",
+                subtitle: nil,
+                lastUsedAt: nil,
+                isDefaultProfile: false)))
+            #expect(model.statusLine == "Connected to Artem. Jarvis can use your live Chrome tabs for signed-in tasks and its own browser when needed.")
+
+            pendingVerification.continuation?.resume(returning: nil)
+            await refreshTask.value
+
+            #expect(model.phase == .ready(selected))
+            #expect(model.isComplete)
         }
     }
 

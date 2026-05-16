@@ -213,6 +213,7 @@ final class BrowserSetupModel {
     private let allowConfigOnlyRestore: Bool
     private let restoredSelectionRequiresConfirmation: Bool
     private var detectedProfiles: [ChromeProfileCandidate] = []
+    private var isRestoredDisplaySnapshot = false
 
     init(
         defaults: UserDefaults = .standard,
@@ -242,6 +243,9 @@ final class BrowserSetupModel {
         self.verifySelectionReadiness = verifySelectionReadiness ?? { profile in
             await BrowserSetupModel.verifyConsumerBrowserSelection(expectedProfile: profile)
         }
+        if !restoredSelectionRequiresConfirmation {
+            self.restoreCachedSelectionForDisplay()
+        }
     }
 
     var isComplete: Bool {
@@ -263,6 +267,10 @@ final class BrowserSetupModel {
     }
 
     func refreshIfNeeded() async {
+        if self.isRestoredDisplaySnapshot {
+            await self.refresh(preservingDisplayedResult: true)
+            return
+        }
         guard self.phase == .idle else { return }
         await self.refresh()
     }
@@ -276,7 +284,7 @@ final class BrowserSetupModel {
         // showing a fake-broken browser card after setup already succeeded.
         guard self.lastAutoRecoveryFailureMessage != message else { return }
         self.lastAutoRecoveryFailureMessage = message
-        await self.refresh()
+        await self.refresh(preservingDisplayedResult: true)
     }
 
     func retryTransientFailureAfterGatewayStatusChange(_ status: GatewayProcessManager.Status) async {
@@ -289,7 +297,9 @@ final class BrowserSetupModel {
     }
 
     func refresh() async {
-        await self.refresh(requiresRestoredSelectionConfirmation: self.restoredSelectionRequiresConfirmation)
+        await self.refresh(
+            requiresRestoredSelectionConfirmation: self.restoredSelectionRequiresConfirmation,
+            preservingDisplayedResult: false)
     }
 
     func refreshForSetupResume() async {
@@ -297,12 +307,22 @@ final class BrowserSetupModel {
         // actually usable. The normal onboarding path deliberately pauses on a
         // confirmation card, but that would force healthy existing users through
         // setup again after every onboarding-version bump.
-        await self.refresh(requiresRestoredSelectionConfirmation: false)
+        await self.refresh(
+            requiresRestoredSelectionConfirmation: false,
+            preservingDisplayedResult: false)
     }
 
-    private func refresh(requiresRestoredSelectionConfirmation: Bool) async {
-        self.phase = .checking
-        self.statusLine = "Checking Chrome on this Mac…"
+    private func refresh(
+        requiresRestoredSelectionConfirmation: Bool = false,
+        preservingDisplayedResult: Bool) async
+    {
+        // Passive rechecks should prove that the saved Chrome profile still
+        // works without briefly replacing a known result with a setup spinner.
+        if !preservingDisplayedResult || !self.hasDisplayedReadinessResult {
+            self.phase = .checking
+            self.statusLine = "Checking Chrome on this Mac…"
+        }
+        self.isRestoredDisplaySnapshot = false
 
         guard self.detectChromeExecutable() != nil else {
             self.detectedProfiles = []
@@ -336,14 +356,16 @@ final class BrowserSetupModel {
                 self.lastAutoRecoveryFailureMessage = nil
                 return
             }
-            self.statusLine = "Checking browser readiness…"
+            if !preservingDisplayedResult || !self.hasDisplayedReadinessResult {
+                self.statusLine = "Checking browser readiness…"
+            }
             if let failure = await self.verifySelectionReadiness(selected) {
                 self.phase = .failed(failure)
                 self.statusLine = failure
                 return
             }
             self.phase = .ready(selected)
-            self.statusLine = "Connected to \(selected.displayName). \(AppFlavor.current.appName) can use your live Chrome tabs for signed-in tasks and its own browser when needed."
+            self.statusLine = Self.connectedStatusLine(for: selected)
             self.lastAutoRecoveryFailureMessage = nil
             return
         }
@@ -379,7 +401,7 @@ final class BrowserSetupModel {
             return
         }
         self.phase = .ready(profile)
-        self.statusLine = "Connected to \(profile.displayName). \(AppFlavor.current.appName) can use your live Chrome tabs for signed-in tasks and its own browser when needed."
+        self.statusLine = Self.connectedStatusLine(for: profile)
         self.lastAutoRecoveryFailureMessage = nil
     }
 
@@ -397,6 +419,39 @@ final class BrowserSetupModel {
             self.phase = .idle
             self.statusLine = nil
         }
+    }
+
+    private var hasDisplayedReadinessResult: Bool {
+        switch self.phase {
+        case .ready, .failed, .chromeMissing, .noProfiles, .confirm, .choose:
+            return true
+        case .idle, .checking:
+            return false
+        }
+    }
+
+    private func restoreCachedSelectionForDisplay() {
+        guard let directoryName = self.defaults.string(forKey: browserSelectedChromeProfileIDKey),
+              !directoryName.isEmpty
+        else {
+            return
+        }
+        let cachedName = self.defaults.string(forKey: browserSelectedChromeProfileNameKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = cachedName?.isEmpty == false ? cachedName! : directoryName
+        let profile = ChromeProfileCandidate(
+            directoryName: directoryName,
+            displayName: displayName,
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        self.phase = .ready(profile)
+        self.statusLine = Self.connectedStatusLine(for: profile)
+        self.isRestoredDisplaySnapshot = true
+    }
+
+    private static func connectedStatusLine(for profile: ChromeProfileCandidate) -> String {
+        "Connected to \(profile.displayName). \(AppFlavor.current.appName) can use your live Chrome tabs for signed-in tasks and its own browser when needed."
     }
 
     private static func isTransientReadinessFailure(_ message: String) -> Bool {
