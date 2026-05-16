@@ -846,6 +846,66 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("strips a retained progress suffix when the final answer starts from the last progress step", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: [
+            "Step 1 of 3 — fetching example.com",
+            "",
+            "Got it. example.com is a minimal stub.",
+            "",
+            "Step 2 of 3 — fetching IANA reserved domains page",
+            "",
+            "Got it. Rich policy page with multiple sections. Now comparing.",
+            "",
+            "Step 3 of 3 — summary of differences:",
+          ].join("\n"),
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: [
+              "Got it. Rich policy page with multiple sections. Now comparing.",
+              "",
+              "Step 3 of 3 — summary of differences:",
+              "",
+              "| example.com | IANA Reserved Domains |",
+              "| --- | --- |",
+              "| Stub | Policy source |",
+              "",
+              "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+            ].join("\n"),
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1002" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1002,
+      [
+        "| example.com | IANA Reserved Domains |",
+        "| --- | --- |",
+        "| Stub | Policy source |",
+        "",
+        "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+      ].join("\n"),
+      expect.any(Object),
+    );
+  });
+
   it("clears active preview even when an unrelated boundary archive exists", async () => {
     const answerDraftStream = createDraftStream(999);
     answerDraftStream.materialize.mockResolvedValue(4321);

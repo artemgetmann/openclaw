@@ -115,6 +115,16 @@ function looksLikeFinalAnswerRemainder(text: string): boolean {
   );
 }
 
+function findRetainedProgressFinalOverlap(progressText: string, finalText: string): number {
+  const max = Math.min(progressText.length, finalText.length);
+  for (let length = max; length > 0; length -= 1) {
+    if (progressText.slice(progressText.length - length) === finalText.slice(0, length)) {
+      return length;
+    }
+  }
+  return 0;
+}
+
 function formatToolStartProgressLine(payload: { name?: string; phase?: string }) {
   const name = normalizeToolProgressLine(payload.name) ?? "tool";
   const phase = normalizeToolProgressLine(payload.phase);
@@ -428,6 +438,16 @@ export const dispatchTelegramMessage = async ({
       return { text: normalizedFinal, stripped: false };
     }
     if (!progressComparableFinal.startsWith(retainedProgress)) {
+      const overlap = findRetainedProgressFinalOverlap(retainedProgress, progressComparableFinal);
+      if (overlap >= 16) {
+        const overlapRemainder = progressComparableFinal
+          .slice(overlap)
+          .replace(/^(?:[-─—]{2,}\s*)+/, "")
+          .trim();
+        if (looksLikeFinalAnswerRemainder(overlapRemainder)) {
+          return { text: overlapRemainder, stripped: true };
+        }
+      }
       return { text: normalizedFinal, stripped: false };
     }
     const remainder = progressComparableFinal
