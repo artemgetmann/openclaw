@@ -74,6 +74,47 @@ function looksLikeProgressPreview(text: string): boolean {
   return /(^|\n)\s*(?:🔧|Step\b|Fetching\b|Loading\b|Following\b|Got\b|Comparing\b)/i.test(text);
 }
 
+function looksLikeProgressParagraph(text: string): boolean {
+  return /^(?:🔧|Step\b|Fetching\b|Loading\b|Following\b|Got\b|Comparing\b|Redirect\b)/i.test(
+    text.trim(),
+  );
+}
+
+function splitRetainedProgressPrefix(text: string) {
+  const normalized = normalizeAnswerPreviewText(text).trim();
+  if (!normalized) {
+    return { progress: "", remainder: "" };
+  }
+  const paragraphs = normalized.split(/\n{2,}/);
+  const progressParagraphs: string[] = [];
+  const remainderParagraphs: string[] = [];
+  let inRemainder = false;
+  for (const paragraph of paragraphs) {
+    const trimmed = paragraph.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (!inRemainder && looksLikeProgressParagraph(trimmed)) {
+      progressParagraphs.push(trimmed);
+      continue;
+    }
+    inRemainder = true;
+    remainderParagraphs.push(trimmed);
+  }
+  return {
+    progress: progressParagraphs.join("\n\n"),
+    remainder: remainderParagraphs.join("\n\n"),
+  };
+}
+
+function looksLikeFinalAnswerRemainder(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    trimmed.length >= 32 ||
+    /^(?:[-─—]{2,}|summary\b|here\b|short version\b|\||[-*]\s+)/i.test(trimmed)
+  );
+}
+
 function formatToolStartProgressLine(payload: { name?: string; phase?: string }) {
   const name = normalizeToolProgressLine(payload.name) ?? "tool";
   const phase = normalizeToolProgressLine(payload.phase);
@@ -311,6 +352,7 @@ export const dispatchTelegramMessage = async ({
   const reasoningLane = lanes.reasoning;
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
+  let retainedAnswerProgressPreviewText = "";
   let toolProgressLines: string[] = [];
   let draftLaneEventQueue = Promise.resolve();
   const reasoningStepState = createTelegramReasoningStepState();
@@ -345,6 +387,9 @@ export const dispatchTelegramMessage = async ({
   const resetDraftLaneState = (lane: DraftLaneState) => {
     lane.lastPartialText = "";
     lane.hasStreamedMessage = false;
+    if (lane === answerLane) {
+      retainedAnswerProgressPreviewText = "";
+    }
   };
   const rotateAnswerLaneForNewAssistantMessage = async () => {
     let didForceNewMessage = false;
@@ -377,7 +422,8 @@ export const dispatchTelegramMessage = async ({
   const stripRetainedProgressFromFinal = (text: string) => {
     const normalizedFinal = normalizeAdjacentProgressBoundaries(text).trim();
     const progressComparableFinal = normalizeAnswerPreviewText(text).trim();
-    const retainedProgress = answerLane.lastPartialText.trim();
+    const retainedProgress =
+      retainedAnswerProgressPreviewText.trim() || answerLane.lastPartialText.trim();
     if (!retainedProgress || normalizedFinal === retainedProgress) {
       return { text: normalizedFinal, stripped: false };
     }
@@ -399,9 +445,19 @@ export const dispatchTelegramMessage = async ({
     if (
       !answerLane.stream ||
       !answerLane.hasStreamedMessage ||
-      !answerLane.lastPartialText.trim()
+      !(retainedAnswerProgressPreviewText.trim() || answerLane.lastPartialText.trim())
     ) {
       return false;
+    }
+    const retainedProgress =
+      retainedAnswerProgressPreviewText.trim() || answerLane.lastPartialText.trim();
+    // A provider can emit a late partial that already contains progress plus
+    // final text. Restore the visible preview to the retained progress prefix
+    // before materializing, otherwise Telegram keeps the final answer in the
+    // progress bubble and the final sender duplicates it below.
+    if (retainedProgress && retainedProgress !== answerLane.lastPartialText.trim()) {
+      answerLane.stream.update(retainedProgress);
+      answerLane.lastPartialText = retainedProgress;
     }
     await answerLane.stream.materialize?.();
     answerLane.stream.forceNewMessage();
@@ -442,6 +498,21 @@ export const dispatchTelegramMessage = async ({
       previewText.length < lane.lastPartialText.length
     ) {
       return;
+    }
+    if (lane === answerLane) {
+      const split = splitRetainedProgressPrefix(previewText);
+      if (split.progress) {
+        retainedAnswerProgressPreviewText = split.progress;
+      }
+      if (
+        lane.lastPartialText &&
+        retainedAnswerProgressPreviewText &&
+        previewText !== retainedAnswerProgressPreviewText &&
+        previewText.startsWith(retainedAnswerProgressPreviewText) &&
+        looksLikeFinalAnswerRemainder(split.remainder)
+      ) {
+        return;
+      }
     }
     lane.lastPartialText = previewText;
     laneStream.update(previewText);

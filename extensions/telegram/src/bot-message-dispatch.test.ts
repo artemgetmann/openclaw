@@ -790,6 +790,62 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("keeps retained progress separate when a late partial already contains the final answer", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    const finalText = [
+      "Fetching both pages now.",
+      "",
+      "Summary of what changed between the two pages:",
+      "",
+      "The IANA page is deeper and explains the policy behind the example domains.",
+      "",
+      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Fetching both pages now..." });
+        // Some backends emit the completed answer as one last partial before
+        // the final delivery callback. That partial must not contaminate the
+        // retained progress bubble.
+        await replyOptions?.onPartialReply?.({ text: finalText });
+        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1002" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Fetching both pages now");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Fetching both pages now.");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      [
+        "Summary of what changed between the two pages:",
+        "",
+        "The IANA page is deeper and explains the policy behind the example domains.",
+        "",
+        "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+      ].join("\n"),
+    );
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
+      expect.stringContaining("Fetching both pages now.\n\nSummary"),
+    );
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1002,
+      expect.stringContaining("CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516"),
+      expect.any(Object),
+    );
+  });
+
   it("clears active preview even when an unrelated boundary archive exists", async () => {
     const answerDraftStream = createDraftStream(999);
     answerDraftStream.materialize.mockResolvedValue(4321);
