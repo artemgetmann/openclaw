@@ -231,6 +231,8 @@ export async function ensureAcpx(params: {
       `acpx local binary unavailable or mismatched (${precheck.message}); running plugin-local install`,
     );
 
+    fs.mkdirSync(pluginRoot, { recursive: true });
+
     const install = await spawnAndCollect({
       command: "npm",
       args: ["install", "--omit=dev", "--no-save", `acpx@${installVersion}`],

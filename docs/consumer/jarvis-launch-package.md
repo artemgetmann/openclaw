@@ -105,11 +105,12 @@ Current package truth:
   seed-only, prefers the seeded Application Support runtime for packaged
   gateway identity, and routes managed `acpx` dependencies to
   `$OPENCLAW_STATE_DIR/cache/extensions/acpx` outside `/Applications/Jarvis.app`.
-  Validation on 2026-05-16: targeted `acpx` Vitest coverage passed, and macOS
+  Validation on 2026-05-16: targeted `acpx` Vitest coverage passed, macOS
   `ConsumerBundledRuntimeTests` plus `GatewayLaunchAgentManagerTests` passed per
-  suite. A final isolated package smoke should still prove no new
-  `node_modules` appear inside a temp app bundle after launch before broader
-  beta.
+  suite, and an isolated generated-runtime proof installed `acpx@0.3.0` under
+  `$OPENCLAW_STATE_DIR/cache/extensions/acpx` while leaving
+  `dist/extensions/acpx/node_modules` absent. A final copied-app smoke should
+  still prove signed bundle verification after launch before broader beta.
 - Sending `Jarvis.dmg` to the 3 trusted waiting testers is allowed. Do not send
   wider/public until the `ai.jarvis.mac` identity migration and remaining wider
   beta gates are complete.
