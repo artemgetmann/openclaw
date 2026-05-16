@@ -92,6 +92,10 @@
   not treat fallback profile success as default-lane readiness.
 - The same preflight reports whether Sparkle `generate_appcast` is available.
   If it is missing, build the Sparkle tools before appcast generation.
+- If the preflight says `generate_appcast` is ready but ASC auth is missing,
+  do not keep rediscovering Sparkle. Add/provide the ASC API-key trio in the
+  machine release env, with the `.p8` file stored outside the repo, then rerun
+  the preflight.
 - The script must not print secret values. It should report only presence,
   readability, tool availability, and the exact next operator action.
 
