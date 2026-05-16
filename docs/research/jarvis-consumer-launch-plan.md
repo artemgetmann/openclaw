@@ -585,9 +585,9 @@ P0 blockers before public strangers:
 - [x] Baseline Sparkle update mechanism proof.
 - [x] Production Render service/env configuration.
 - [ ] Subscription/trial-gated update entitlement UX.
-- [ ] Page-based setup instead of one long scroll: Chrome, Mac permissions, AI
+- [x] Page-based setup instead of one long scroll: Chrome, Mac permissions, AI
       access, and Telegram.
-- [ ] Stable readiness checks: Browser and AI access should not visibly reset
+- [x] Stable readiness checks: Browser and AI access should not visibly reset
       to "Checking..." on every app focus, tab switch, or return to a completed
       setup page when the recent result is still valid.
 - [ ] Better copywriting for every setup page.
@@ -652,18 +652,16 @@ Bootstrap/setup needs to be redesigned around fastest path to first value.
 
 Current walkthrough finding:
 
-- The first-run flow is directionally usable, but the continuous-scroll setup
-  feels less polished than a guided installer. Split it into pages with a clear
-  next action per page:
+- The first-run flow is directionally usable. PR #725 replaced the
+  continuous-scroll setup shell with guided pages and clear next/back
+  navigation:
   - Chrome
   - Mac permissions
   - AI access
   - Telegram
-- The Browser and AI access checks currently flicker back to "Checking..." when
-  a tester switches apps or revisits those sections after setup. Cache the latest
-  readiness result, keep the completed state visible, and run re-checks only
-  when the user clicks refresh, changes a credential/profile, or the cached
-  result is stale enough to matter.
+- PR #723 fixed the Browser and AI access readiness flicker: completed readiness
+  remains visible when a tester switches apps or revisits those sections, while
+  passive re-checks run quietly in the background.
 - Copy needs a dedicated rewrite after the page structure is fixed. Each page
   should say what Jarvis needs, why it needs it, what the user should do next,
   and what capability they lose if they skip it.
@@ -673,7 +671,7 @@ P0 bootstrap goals:
 - [ ] fewer steps
 - [ ] plain-English copy
 - [ ] no developer jargon
-- [ ] obvious page progress and next/back navigation
+- [x] obvious page progress and next/back navigation
 - [ ] explain why each permission/account connection is needed
 - [ ] recover gracefully if a step fails
 - [ ] let users continue with reduced capability where possible
@@ -861,11 +859,11 @@ Progress:
 
 Remaining Settings/UI polish after PR #628:
 
-- Replace the one-scroll setup with page-based onboarding: Chrome, Mac
-  permissions, AI access, Telegram.
-- Keep readiness state stable across focus/tab changes. A completed Browser or
-  AI access page should not visually reset to "Checking..." just because the app
-  regained focus.
+- Page-based onboarding landed in PR #725: Chrome, Mac permissions, AI access,
+  Telegram.
+- Readiness state stability landed in PR #723. A completed Browser or AI access
+  page should not visually reset to "Checking..." just because the app regained
+  focus.
 - Reduce copy density and card heaviness inside Channels, AI access, and
   Permissions.
 - Rewrite onboarding copy after the page split, then check each page with real
