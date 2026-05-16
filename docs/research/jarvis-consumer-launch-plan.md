@@ -585,15 +585,24 @@ P0 blockers before public strangers:
 - [x] Baseline Sparkle update mechanism proof.
 - [x] Production Render service/env configuration.
 - [ ] Subscription/trial-gated update entitlement UX.
-- [ ] Cleaner settings/onboarding flow after the first-pass PR #628 settings
-      cleanup.
-- [ ] Better copywriting for every step.
+- [ ] Page-based setup instead of one long scroll: Chrome, Mac permissions, AI
+      access, and Telegram.
+- [ ] Stable readiness checks: Browser and AI access should not visibly reset
+      to "Checking..." on every app focus, tab switch, or return to a completed
+      setup page when the recent result is still valid.
+- [ ] Better copywriting for every setup page.
 - [ ] Telegram setup simplification.
 
 Telegram/BotFather:
 
 - Manual BotFather setup is too much friction for mainstream users.
-- If Telegram supports managed/programmatic bot provisioning through some official/allowed path, investigate and implement.
+- Official Telegram docs now expose a Managed Bots surface: Bot API 9.6 added
+  managed-bot creation/token updates and token retrieval/replacement methods,
+  while Bot API 10.0 added managed-bot access settings. Research whether Jarvis
+  can use this official path to create or connect a personal Jarvis bot inside
+  onboarding without sending normal users through manual BotFather steps.
+- If Telegram supports managed/programmatic bot provisioning through an
+  official/allowed path, investigate and implement it.
 - If not, use shared bot by default and BYO bot token as advanced option.
 - Telegram command/settings strategy lives in
   `docs/consumer/jarvis-launch-package.md`. Normal users should get one
@@ -641,12 +650,30 @@ It is:
 
 Bootstrap/setup needs to be redesigned around fastest path to first value.
 
+Current walkthrough finding:
+
+- The first-run flow is directionally usable, but the continuous-scroll setup
+  feels less polished than a guided installer. Split it into pages with a clear
+  next action per page:
+  - Chrome
+  - Mac permissions
+  - AI access
+  - Telegram
+- The Browser and AI access checks currently flicker back to "Checking..." when
+  a tester switches apps or revisits those sections after setup. Cache the latest
+  readiness result, keep the completed state visible, and run re-checks only
+  when the user clicks refresh, changes a credential/profile, or the cached
+  result is stale enough to matter.
+- Copy needs a dedicated rewrite after the page structure is fixed. Each page
+  should say what Jarvis needs, why it needs it, what the user should do next,
+  and what capability they lose if they skip it.
+
 P0 bootstrap goals:
 
 - [ ] fewer steps
 - [ ] plain-English copy
 - [ ] no developer jargon
-- [ ] obvious progress/checklist
+- [ ] obvious page progress and next/back navigation
 - [ ] explain why each permission/account connection is needed
 - [ ] recover gracefully if a step fails
 - [ ] let users continue with reduced capability where possible
@@ -661,6 +688,33 @@ Bootstrap should answer:
 - [ ] Is browser control connected or clearly optional?
 - [ ] Is account/trial/subscription active?
 - [ ] What can the user ask Jarvis to do right now?
+
+### 11.5 Provider and managed-utility readiness
+
+Provider smoke from the 2026-05-16 clean-copy walkthrough:
+
+- Backend `/healthz` is live in production and reports OpenAI configured,
+  Anthropic not configured.
+- Backend `/v1/managed/utilities/{utility}` is still a placeholder contract. It
+  proves server-held provider-key boundaries, but it does not yet perform real
+  OpenAI STT, Brave, Firecrawl, Google Places, Gemini/Nano Banana, or Anthropic
+  work.
+- Local OpenAI STT works through the active OpenClaw config
+  `OPENAI_NON_MODEL_API_KEY`.
+- Brave search works through the active OpenClaw config.
+- Firecrawl, Google Places, and Gemini/Nano Banana-style config entries are
+  present locally but failed live smoke as invalid credentials.
+- Anthropic is missing locally and on the production backend.
+
+Before wider beta:
+
+- [ ] Replace or remove invalid Firecrawl, Google Places, and Gemini/Nano
+      Banana credentials before claiming those utilities work.
+- [ ] Add real backend-managed utility endpoints or remove managed-utility
+      claims from consumer copy until they exist.
+- [ ] Keep `OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS=1` out of public
+      builds unless the product intentionally ships env-derived provider keys
+      inside the bundle for a private bridge.
 
 ## 12. Competitive context
 
@@ -797,8 +851,15 @@ Progress:
 
 Remaining Settings/UI polish after PR #628:
 
+- Replace the one-scroll setup with page-based onboarding: Chrome, Mac
+  permissions, AI access, Telegram.
+- Keep readiness state stable across focus/tab changes. A completed Browser or
+  AI access page should not visually reset to "Checking..." just because the app
+  regained focus.
 - Reduce copy density and card heaviness inside Channels, AI access, and
   Permissions.
+- Rewrite onboarding copy after the page split, then check each page with real
+  screenshots before wider beta.
 - Keep the next pass focused on beta onboarding clarity rather than a full
   Liquid Glass redesign.
 
