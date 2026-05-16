@@ -149,6 +149,68 @@ function shouldSkipRegressivePreviewUpdate(args: {
   );
 }
 
+function findPreviewFinalOverlap(previewText: string, finalText: string): number {
+  const max = Math.min(previewText.length, finalText.length);
+  for (let length = max; length > 0; length -= 1) {
+    if (previewText.slice(previewText.length - length) === finalText.slice(0, length)) {
+      return length;
+    }
+  }
+  return 0;
+}
+
+export function normalizeAdjacentProgressBoundaries(text: string): string {
+  const separated = text
+    .replace(/([.!?])(\*\*Step\s+\d\b)/g, "$1\n\n$2")
+    .replace(/(\.\.\.\*\*)(\*\*Step\s+\d\b)/g, "$1\n\n$2")
+    .replace(/(\.\.\.\*\*)([A-Z][^\n*])/g, "$1\n\n$2")
+    .replace(/([^\n*])((?:\*\*)?Step\s+\d(?:\s+of\s+\d+)?\s*[:—-])/g, "$1\n\n$2")
+    .replace(/([^\n*])(Step\s+\d(?:\s+of\s+\d+)?\s*[:—-])/g, "$1\n\n$2")
+    .replace(/\*{4,}(Step\s+\d(?:\s+of\s+\d+)?\s*[:—-])/g, "\n\n$1")
+    .replace(/([^\n])(Redirect\b)/g, "$1\n\n$2");
+  const paragraphs = separated.split(/\n{2,}/);
+  const deduped: string[] = [];
+  for (const paragraph of paragraphs) {
+    const normalizedParagraph = paragraph.trim();
+    if (normalizedParagraph.length === 0) {
+      continue;
+    }
+    if (deduped[deduped.length - 1]?.trim() === normalizedParagraph) {
+      continue;
+    }
+    deduped.push(paragraph);
+  }
+  return deduped.join("\n\n");
+}
+
+function mergePreviewProgressWithFinal(previewText: string | undefined, finalText: string): string {
+  const normalizedFinal = normalizeAdjacentProgressBoundaries(finalText);
+  const preview = previewText?.trim();
+  if (!preview || !normalizedFinal.trim()) {
+    return normalizedFinal;
+  }
+  if (
+    preview === normalizedFinal ||
+    normalizedFinal.startsWith(preview) ||
+    preview.startsWith(normalizedFinal)
+  ) {
+    return normalizedFinal;
+  }
+
+  // Claude CLI can stream an early progress sentence and then replace it with
+  // a full final answer that starts partway through the preview. Keep the
+  // progress prefix, but avoid duplicating the overlapping final text.
+  const overlap = findPreviewFinalOverlap(preview, normalizedFinal);
+  if (overlap < 16) {
+    return normalizedFinal;
+  }
+  const retainedPreview = overlap > 0 ? preview.slice(0, preview.length - overlap).trim() : preview;
+  if (retainedPreview.length < 3 || normalizedFinal.includes(retainedPreview)) {
+    return normalizedFinal;
+  }
+  return `${retainedPreview}\n\n${normalizedFinal}`;
+}
+
 function resolvePreviewTarget(params: ResolvePreviewTargetParams): PreviewTargetResolution {
   const lanePreviewMessageId = params.lane.stream?.messageId();
   const previewMessageId =
@@ -460,8 +522,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
     const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    const deliveryText =
+      laneName === "answer"
+        ? infoKind === "final"
+          ? mergePreviewProgressWithFinal(lane.lastPartialText, text)
+          : normalizeAdjacentProgressBoundaries(text)
+        : text;
     const canEditViaPreview =
-      !hasMedia && text.length > 0 && text.length <= params.draftMaxChars && !payload.isError;
+      !hasMedia &&
+      deliveryText.length > 0 &&
+      deliveryText.length <= params.draftMaxChars &&
+      !payload.isError;
 
     if (infoKind === "final") {
       // Transient previews must decide cleanup retention per final attempt.
@@ -473,7 +544,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       if (laneName === "answer") {
         const archivedResult = await consumeArchivedAnswerPreviewForFinal({
           lane,
-          text,
+          text: deliveryText,
           payload,
           previewButtons,
           canEditViaPreview,
@@ -487,7 +558,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         if (laneName === "answer") {
           const archivedResultAfterFlush = await consumeArchivedAnswerPreviewForFinal({
             lane,
-            text,
+            text: deliveryText,
             payload,
             previewButtons,
             canEditViaPreview,
@@ -500,7 +571,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           const materialized = await tryMaterializeDraftPreviewForFinal({
             lane,
             laneName,
-            text,
+            text: deliveryText,
           });
           if (materialized) {
             markActivePreviewComplete(laneName);
@@ -510,7 +581,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         const finalized = await tryUpdatePreviewForLane({
           lane,
           laneName,
-          text,
+          text: deliveryText,
           previewButtons,
           stopBeforeEdit: true,
           skipRegressive: "existingOnly",
@@ -524,13 +595,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           markActivePreviewComplete(laneName);
           return "preview-retained";
         }
-      } else if (!hasMedia && !payload.isError && text.length > params.draftMaxChars) {
+      } else if (!hasMedia && !payload.isError && deliveryText.length > params.draftMaxChars) {
         params.log(
-          `telegram: preview final too long for edit (${text.length} > ${params.draftMaxChars}); falling back to standard send`,
+          `telegram: preview final too long for edit (${deliveryText.length} > ${params.draftMaxChars}); falling back to standard send`,
         );
       }
       await params.stopDraftLane(lane);
-      const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+      const delivered = await params.sendPayload(params.applyTextToPayload(payload, deliveryText));
       return delivered ? "sent" : "skipped";
     }
 
@@ -539,24 +610,26 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         // DM draft flow has no message_id to edit; updates are sent via sendMessageDraft.
         // Only mark as updated when the draft flush actually emits an update.
         const previewRevisionBeforeFlush = lane.stream?.previewRevision?.() ?? 0;
-        lane.stream?.update(text);
+        lane.stream?.update(deliveryText);
         await params.flushDraftLane(lane);
         const previewUpdated = (lane.stream?.previewRevision?.() ?? 0) > previewRevisionBeforeFlush;
         if (!previewUpdated) {
           params.log(
             `telegram: ${laneName} draft preview update not emitted; falling back to standard send`,
           );
-          const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+          const delivered = await params.sendPayload(
+            params.applyTextToPayload(payload, deliveryText),
+          );
           return delivered ? "sent" : "skipped";
         }
-        lane.lastPartialText = text;
+        lane.lastPartialText = deliveryText;
         params.markDelivered();
         return "preview-updated";
       }
       const updated = await tryUpdatePreviewForLane({
         lane,
         laneName,
-        text,
+        text: deliveryText,
         previewButtons,
         stopBeforeEdit: false,
         updateLaneSnapshot: true,
@@ -568,7 +641,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
     }
 
-    const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+    const delivered = await params.sendPayload(params.applyTextToPayload(payload, deliveryText));
     return delivered ? "sent" : "skipped";
   };
 }
