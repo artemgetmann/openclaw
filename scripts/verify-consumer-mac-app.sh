@@ -75,9 +75,7 @@ REQUIRED_WORKSPACE_TEMPLATES=(
   "BOOTSTRAP.md"
   "MEMORY.md"
 )
-REQUIRED_BUNDLED_SKILLS=(
-  "timezone-preference-updater"
-)
+REQUIRED_BUNDLED_SKILLS=()
 
 if [[ ! -f "$INFO_PLIST" ]]; then
   echo "ERROR: consumer app bundle not found: $APP_PATH" >&2
@@ -129,6 +127,51 @@ assert_required_templates() {
   done
 }
 
+load_consumer_default_bundled_skills() {
+  local skills_config_path="$ROOT_DIR/src/commands/onboard-non-interactive/local/skills-config.ts"
+  local skills_output=""
+
+  if [[ ! -f "$skills_config_path" ]]; then
+    echo "ERROR: central consumer default skill config not found: $skills_config_path" >&2
+    exit 1
+  fi
+
+  # The app bundle and fresh-user config must agree on the consumer-default
+  # model-facing skill surface. Import the exported TS constant through the
+  # repo-standard tsx loader instead of maintaining a second shell-only list.
+  if ! skills_output="$(
+    cd "$ROOT_DIR"
+    "$OPENCLAW_NODE_BIN" --import tsx --input-type=module <<'NODE'
+import { CONSUMER_DEFAULT_BUNDLED_SKILLS } from "./src/commands/onboard-non-interactive/local/skills-config.ts";
+
+if (!Array.isArray(CONSUMER_DEFAULT_BUNDLED_SKILLS)) {
+  throw new Error("CONSUMER_DEFAULT_BUNDLED_SKILLS is not an array");
+}
+
+for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
+  if (typeof skillName !== "string" || skillName.length === 0 || skillName.includes("\n")) {
+    throw new Error(`Invalid consumer default bundled skill name: ${JSON.stringify(skillName)}`);
+  }
+  console.log(skillName);
+}
+NODE
+  )"; then
+    echo "ERROR: failed to load CONSUMER_DEFAULT_BUNDLED_SKILLS from $skills_config_path" >&2
+    echo "Ensure repo dependencies are installed and the validated Node can run 'node --import tsx'." >&2
+    exit 1
+  fi
+
+  if [[ -z "$skills_output" ]]; then
+    echo "ERROR: CONSUMER_DEFAULT_BUNDLED_SKILLS is empty in $skills_config_path" >&2
+    exit 1
+  fi
+
+  REQUIRED_BUNDLED_SKILLS=()
+  while IFS= read -r skill_name; do
+    REQUIRED_BUNDLED_SKILLS+=("$skill_name")
+  done <<<"$skills_output"
+}
+
 assert_required_bundled_skills() {
   local skills_dir="$1"
   local context_label="$2"
@@ -139,17 +182,20 @@ assert_required_bundled_skills() {
     exit 1
   fi
 
-  # These are consumer-critical skills, not optional ClawHub inventory. If a
-  # packaging refactor stops copying bundled skills, Jarvis silently loses
-  # natural-language preference updates. Fail the bundle verifier instead.
+  # These are the consumer-default bundled skills, not optional ClawHub
+  # inventory. If packaging stops copying one of them, fresh Jarvis installs
+  # silently lose expected model-facing capability. Fail the bundle verifier.
   for skill_name in "${REQUIRED_BUNDLED_SKILLS[@]}"; do
     if [[ ! -f "$skills_dir/$skill_name/SKILL.md" ]]; then
       echo "ERROR: ${context_label} is missing bundled skill '$skill_name'." >&2
+      echo "Required by: CONSUMER_DEFAULT_BUNDLED_SKILLS in src/commands/onboard-non-interactive/local/skills-config.ts" >&2
       echo "Expected file: $skills_dir/$skill_name/SKILL.md" >&2
       exit 1
     fi
   done
 }
+
+load_consumer_default_bundled_skills
 
 actual_name="$(plist_print CFBundleDisplayName)"
 actual_bundle_id="$(plist_print CFBundleIdentifier)"
