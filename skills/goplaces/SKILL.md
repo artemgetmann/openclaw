@@ -56,3 +56,7 @@ Setup Routing
 - If `GOOGLE_PLACES_API_KEY` is missing, use the shared `consumer-setup`
   skill instead of pretending place search is ready.
 - Distinguish missing user/API setup from a product-side missing secret.
+- TODO(managed): packaged Jarvis managed mode should route search through
+  `/v1/managed/utilities/google_places.search` once this CLI skill has a
+  TypeScript runtime adapter; do not add raw Google Places keys to the app
+  bundle as a shortcut.

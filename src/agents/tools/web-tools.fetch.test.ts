@@ -88,6 +88,13 @@ function installMockFetch(
   return mockFetch;
 }
 
+function parseJsonRequestBody(init: RequestInit | undefined): unknown {
+  if (typeof init?.body !== "string") {
+    throw new Error("expected JSON string request body");
+  }
+  return JSON.parse(init.body);
+}
+
 function createFetchTool(fetchOverrides: Record<string, unknown> = {}) {
   return createWebFetchTool({
     config: {
@@ -147,7 +154,7 @@ describe("web_fetch extraction fallbacks", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
+    const resolvePinned = async (hostname: string) => {
       const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
       const addresses = ["93.184.216.34", "93.184.216.35"];
       return {
@@ -155,7 +162,9 @@ describe("web_fetch extraction fallbacks", () => {
         addresses,
         lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
       };
-    });
+    };
+    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(resolvePinned);
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(resolvePinned);
   });
 
   afterEach(() => {
@@ -438,6 +447,79 @@ describe("web_fetch extraction fallbacks", () => {
     const details = result?.details as { extractor?: string; text?: string };
     expect(details.extractor).toBe("firecrawl");
     expect(details.text).toContain("firecrawl fallback");
+  });
+
+  it("routes managed Firecrawl scrape fallback through Jarvis backend", async () => {
+    const fetchSpy = installMockFetch((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = resolveRequestUrl(input);
+      if (url === "https://jarvis.example/v1/managed/utilities/firecrawl.scrape") {
+        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer backend-token");
+        expect(parseJsonRequestBody(init)).toEqual({
+          input: {
+            url: "https://example.com/managed-blocked",
+          },
+        });
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ok: true,
+              result: {
+                provider: "firecrawl",
+                payload: {
+                  success: true,
+                  data: {
+                    markdown: "managed firecrawl fallback",
+                    metadata: {
+                      title: "Managed Firecrawl",
+                      sourceURL: "https://example.com/managed-blocked",
+                      statusCode: 200,
+                    },
+                  },
+                },
+              },
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      expect(url).not.toContain("api.firecrawl.dev");
+      return Promise.resolve({
+        ok: false,
+        status: 403,
+        headers: makeFetchHeaders({ "content-type": "text/html" }),
+        text: async () => "blocked",
+      } as Response);
+    });
+
+    const tool = createWebFetchTool({
+      config: {
+        jarvis: {
+          backend: {
+            baseUrl: "https://jarvis.example",
+            accessToken: "backend-token",
+          },
+          managedServices: { mode: "managed" },
+        },
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              firecrawl: { enabled: true },
+            },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/managed-blocked",
+    });
+    const details = result?.details as { extractor?: string; text?: string };
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(details.extractor).toBe("firecrawl");
+    expect(details.text).toContain("managed firecrawl fallback");
   });
 
   it("wraps external content and clamps oversized maxChars", async () => {
