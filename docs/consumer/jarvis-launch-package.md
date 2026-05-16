@@ -391,12 +391,13 @@ Say this directly:
 
 - send the final `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` to the
   3 trusted waiting testers
-- split setup into guided pages instead of one long scroll: Chrome, Mac
-  permissions, AI access, and Telegram
-- stop re-checking Browser/AI access on every focus or tab switch when recent
-  readiness is already known; show cached status and run explicit refreshes or
-  quiet background checks instead
-- rewrite setup copy after the page split so each step explains one thing:
+- page-based setup shell landed on `main` in PR #725: Chrome, Mac permissions,
+  AI access, and Telegram are separate guided steps that reuse the existing
+  setup cards
+- passive Browser/AI readiness flicker is fixed on `main` in PR #723: completed
+  readiness stays visible during focus/view refreshes while background probes
+  run
+- rewrite setup copy now that the page split exists so each step explains one thing:
   what Jarvis needs, why it matters, what happens next, and how to recover
 - focused Channels UI polish to remove duplicated connected-bot text/buttons
 - smoother account login and trial activation
