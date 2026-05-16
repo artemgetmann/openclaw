@@ -871,6 +871,42 @@ Remaining Settings/UI polish after PR #628:
 - Keep the next pass focused on beta onboarding clarity rather than a full
   Liquid Glass redesign.
 
+### 14.1 Jarvis onboarding polish gate
+
+This gate is scoped to the next onboarding/product-readiness pass only. It does
+not include wider-beta release identity, post-launch bundle mutation, or full
+Sparkle update-cycle work.
+
+Order:
+
+1. Packaged GUI proof of current `main`.
+   - Build/run an isolated Jarvis app from current `main`.
+   - Use Computer Use to inspect the four onboarding pages.
+   - Verify Browser/AI access do not visibly reset to "Checking..." on app
+     focus or setup-tab return.
+   - Do not install into `/Applications` and do not restart the default gateway.
+2. Copy rewrite on the four-page shell.
+   - Rewrite against real Chrome, Mac permissions, AI access, and Telegram
+     pages.
+   - Rebuild/run the isolated app.
+   - Review screenshots/flow as one package rather than sentence-by-sentence.
+3. Telegram Managed Bots proof spike.
+   - Do not do a full migration first.
+   - Manually prepare one Telegram manager bot in BotFather with Bot Management
+     Mode.
+   - Open the official `https://t.me/newbot/{manager}/{suggested_bot}?name=...`
+     flow and let Artem approve bot creation.
+   - Prove the harness receives `managed_bot`, calls `getManagedBotToken`,
+     redacts the token, calls `getMe` with the managed token, and applies
+     `setManagedBotAccessSettings(is_access_restricted=true)`.
+   - If this fails, keep BotFather setup as the advanced fallback and avoid
+     migration work.
+4. Provider/backend utility hardening.
+   - Fix invalid Firecrawl, Google Places, and Gemini/Nano Banana credentials or
+     remove those claims from launch copy.
+   - Decide whether backend-managed utilities become real endpoints now or stay
+     local-only for trusted beta.
+
 Verified Render truth as of 2026-05-11 before backend creation:
 
 - Render workspace `My Workspace` has no service pointing at
