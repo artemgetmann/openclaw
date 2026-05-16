@@ -109,8 +109,11 @@ Current package truth:
   `ConsumerBundledRuntimeTests` plus `GatewayLaunchAgentManagerTests` passed per
   suite, and an isolated generated-runtime proof installed `acpx@0.3.0` under
   `$OPENCLAW_STATE_DIR/cache/extensions/acpx` while leaving
-  `dist/extensions/acpx/node_modules` absent. A final copied-app smoke should
-  still prove signed bundle verification after launch before broader beta.
+  `dist/extensions/acpx/node_modules` absent. Copied-app proof also passed from
+  a temp signed Jarvis app: `acpx` installed under isolated state/cache, the app
+  bundle still had no `dist/extensions/acpx/node_modules`, and
+  `codesign --verify --deep --strict` passed after the runtime path was
+  exercised.
 - Sending `Jarvis.dmg` to the 3 trusted waiting testers is allowed. Do not send
   wider/public until the `ai.jarvis.mac` identity migration and remaining wider
   beta gates are complete.
