@@ -95,18 +95,17 @@ extension ChannelsSettings {
     }
 
     var telegramSetupSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            self.formSection(
-                self.store.consumerTelegramReadyForFirstTask() ? "Connected bot" : "One-time setup")
-            {
-                ConsumerTelegramSetupCardContent(store: self.store, presentation: .settings)
-            }
-        }
+        self.telegramSection(
+            title: self.store.consumerTelegramReadyForFirstTask() ? "Connected bot" : "One-time setup")
     }
 
     var consumerTelegramLiveSection: some View {
+        self.telegramSection(title: "Connected bot")
+    }
+
+    private func telegramSection(title: String) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            self.formSection("Connected bot") {
+            self.formSection(title) {
                 ConsumerTelegramSetupCardContent(store: self.store, presentation: .settings)
             }
         }

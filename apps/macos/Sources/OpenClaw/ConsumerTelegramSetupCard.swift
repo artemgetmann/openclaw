@@ -134,13 +134,6 @@ struct ConsumerTelegramSetupCardContent: View {
                 if self.store.telegramSetupPhase == .verifyingToken {
                     ProgressView().controlSize(.small)
                 }
-
-                if self.presentation == .settings, AppFlavor.current.telegramSetupVideoURL != nil {
-                    Button("Video walkthrough") {
-                        self.store.openTelegramSetupVideo()
-                    }
-                    .buttonStyle(.bordered)
-                }
             }
 
             Text("3. Open the bot, press Start if Telegram shows it, send one real task in DM, then click Verify first task here.")

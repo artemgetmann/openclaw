@@ -142,9 +142,10 @@ Current package truth:
   `gui-verify` / `consolidation-gui-smoke` / `macos-ui-cleanup` LaunchAgents
   were removed. `/Applications/Jarvis.app`, the default gateway, watchdog, mail
   monitor, and the separate Chrome Telegram-live profile were kept.
-- Channels currently duplicates connected-bot text/buttons. This is not a
-  blocker for the 3 trusted waiting testers, but it should get a focused UI
-  polish lane before wider beta.
+- The duplicate connected-bot Settings copy/buttons issue has been addressed
+  in source, but there is still no packaged installed-app GUI proof yet. Do
+  not count this as closed for broader launch proof until the packaged app is
+  verified.
 
 ## v1 commercial decision
 
