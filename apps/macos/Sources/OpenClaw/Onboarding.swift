@@ -40,13 +40,13 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .chrome:
-            return "Choose the Chrome profile \(AppFlavor.current.appName) should use for browser work."
+            return "Choose the browser profile \(AppFlavor.current.appName) can use."
         case .permissions:
-            return "Grant the Mac permissions real tasks need before the first task fails."
+            return "Allow the Mac access real tasks need."
         case .aiAccess:
-            return "Confirm the local AI connection is usable before Telegram work starts."
+            return "Confirm \(AppFlavor.current.appName) has an AI path before tasks start."
         case .telegram:
-            return "Connect your bot and verify one real task from this Mac."
+            return "Connect the bot and prove one real task works."
         }
     }
 
