@@ -6,6 +6,7 @@ IDENTITY="${SIGN_IDENTITY:-}"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 DISABLE_LIBRARY_VALIDATION="${DISABLE_LIBRARY_VALIDATION:-0}"
 SKIP_TEAM_ID_CHECK="${SKIP_TEAM_ID_CHECK:-0}"
+SKIP_RUNTIME_PAYLOAD_CODESIGN="${SKIP_RUNTIME_PAYLOAD_CODESIGN:-0}"
 PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
 source "$(cd "$(dirname "$0")" && pwd)/lib/openclaw-runtime-payloads.sh"
 ENT_TMP_BASE=$(mktemp -t openclaw-entitlements-base.XXXXXX)
@@ -22,12 +23,19 @@ Env:
   CODESIGN_TIMESTAMP=auto|on|off
   DISABLE_LIBRARY_VALIDATION=1      # dev-only Sparkle Team ID workaround
   SKIP_TEAM_ID_CHECK=1              # bypass Team ID audit
+  SKIP_RUNTIME_PAYLOAD_CODESIGN=1   # smoke-only: trust a previously signed reused runtime
 HELP
   exit 0
 fi
 
 if [ ! -d "$APP_BUNDLE" ]; then
   echo "App bundle not found: $APP_BUNDLE" >&2
+  exit 1
+fi
+
+if [[ "$SKIP_RUNTIME_PAYLOAD_CODESIGN" == "1" && "${OPENCLAW_CONSUMER_REUSE_RUNTIME:-0}" != "1" ]]; then
+  echo "ERROR: SKIP_RUNTIME_PAYLOAD_CODESIGN=1 is allowed only with OPENCLAW_CONSUMER_REUSE_RUNTIME=1." >&2
+  echo "Re-sign runtime payloads for normal packaging, or use scripts/package-consumer-mac-app-fast.sh --reuse-runtime for smoke-only loops." >&2
   exit 1
 fi
 
@@ -338,24 +346,32 @@ phase_log_elapsed "$frameworks_started_ms" "Sign embedded frameworks"
 # signature lands. The runtime lives under Resources, so codesign does not
 # reach these binaries unless we walk the tree explicitly.
 runtime_node_started_ms="$(phase_now_ms)"
-while IFS= read -r -d '' runtime_node; do
-  if openclaw_file_is_macho "$runtime_node"; then
-    echo "Signing runtime node binary with JIT entitlements: $runtime_node"
-    sign_runtime_node_item "$runtime_node"
-  fi
-done < <(openclaw_runtime_node_binary_files "$APP_BUNDLE")
+if [[ "$SKIP_RUNTIME_PAYLOAD_CODESIGN" == "1" ]]; then
+  echo "Note: skipping runtime node binary signing (SKIP_RUNTIME_PAYLOAD_CODESIGN=1)."
+else
+  while IFS= read -r -d '' runtime_node; do
+    if openclaw_file_is_macho "$runtime_node"; then
+      echo "Signing runtime node binary with JIT entitlements: $runtime_node"
+      sign_runtime_node_item "$runtime_node"
+    fi
+  done < <(openclaw_runtime_node_binary_files "$APP_BUNDLE")
+fi
 phase_log_elapsed "$runtime_node_started_ms" "Sign runtime node binaries"
 
 # Sign the rest of the executable runtime payloads before the outer bundle
 # signature lands. The runtime lives under Resources, so codesign does not
 # reach these binaries unless we walk the tree explicitly.
 runtime_payload_started_ms="$(phase_now_ms)"
-while IFS= read -r -d '' runtime_file; do
-  if openclaw_file_is_macho "$runtime_file"; then
-    echo "Signing runtime payload: $runtime_file"
-    sign_plain_item "$runtime_file"
-  fi
-done < <(openclaw_runtime_payload_files "$APP_BUNDLE")
+if [[ "$SKIP_RUNTIME_PAYLOAD_CODESIGN" == "1" ]]; then
+  echo "Note: skipping runtime payload signing (SKIP_RUNTIME_PAYLOAD_CODESIGN=1)."
+else
+  while IFS= read -r -d '' runtime_file; do
+    if openclaw_file_is_macho "$runtime_file"; then
+      echo "Signing runtime payload: $runtime_file"
+      sign_plain_item "$runtime_file"
+    fi
+  done < <(openclaw_runtime_payload_files "$APP_BUNDLE")
+fi
 phase_log_elapsed "$runtime_payload_started_ms" "Sign runtime payloads"
 
 # Finally sign the bundle

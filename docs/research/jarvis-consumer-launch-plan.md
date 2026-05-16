@@ -791,7 +791,9 @@ Current implementation order:
     from Artem's machine release env. The fallback `NOTARYTOOL_PROFILE` is
     present and usable, but remains fallback-only. The preflight remains
     read-only and never submits, staples, packages, uploads, or mutates release
-    assets.
+    assets. It must distinguish missing ASC API-key vars from a present/working
+    Keychain fallback, report Sparkle `generate_appcast` availability, and end
+    with the exact next operator action.
 
 Progress:
 
@@ -819,7 +821,13 @@ Progress:
       and chats inherit the same values.
 - [x] Dry-run preflight truth for the ASC release lane was captured on
       2026-05-16: ASC API-key env is missing; fallback profile is present and
-      usable; the preflight has no submit/staple/package/upload side effects.
+      usable; Sparkle appcast tooling availability is explicit; the preflight
+      has no submit/staple/package/upload side effects.
+- [x] Packaged Jarvis smoke iteration now has a smoke-only runtime reuse path:
+      after one normal fast package, run
+      `bash scripts/package-consumer-mac-app-fast.sh --instance <id> --reuse-runtime`
+      for app-shell-only loops. Default/shipping packaging still rebuilds and
+      signs the bundled runtime.
 - [x] Produce local Jarvis trusted-tester artifacts from current `main`:
       final `Jarvis.dmg` exists at
       `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg`

@@ -79,6 +79,35 @@
 9. Remove the merged temp worktree with `bash scripts/gc-worktrees.sh --auto --base-branch <base>` or let the scheduled GC clean it up.
 10. Keep the sacred home clone on its base branch and fast-forward it again before the next task.
 
+## Release preflight operator notes
+
+- Use `bash scripts/preflight-consumer-mac-release.sh` for the read-only
+  consumer macOS release credential check before a notarized Jarvis lane.
+- The default notarization path is App Store Connect API-key auth:
+  `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` from
+  `~/Library/Application Support/OpenClaw/release.env` or
+  `OPENCLAW_RELEASE_ENV_FILE`.
+- `NOTARYTOOL_PROFILE` is fallback-only. The preflight now distinguishes
+  missing ASC API-key vars from a present and working Keychain profile, so do
+  not treat fallback profile success as default-lane readiness.
+- The same preflight reports whether Sparkle `generate_appcast` is available.
+  If it is missing, build the Sparkle tools before appcast generation.
+- The script must not print secret values. It should report only presence,
+  readability, tool availability, and the exact next operator action.
+
+## Packaged Jarvis smoke loops
+
+- For local app-shell/package smoke iteration after one normal fast package has
+  produced `dist/<Jarvis instance>.app`, use
+  `bash scripts/package-consumer-mac-app-fast.sh --instance <id> --reuse-runtime`.
+- `--reuse-runtime` is smoke-only. It preserves the previous app bundle's
+  signed `Contents/Resources/OpenClawRuntime`, then rebuilds the macOS shell and
+  reruns the verifier without redeploying runtime `node_modules` or recopied
+  Node/uv payloads.
+- Do not use `--reuse-runtime` after changing runtime JS, extension, skill,
+  template, package, Node, uv, or bundled dependency inputs. Rerun the fast
+  package without the flag once, then resume reuse for app-shell-only changes.
+
 ## Temporary worktrees
 
 - Temporary worktrees are the default implementation surface now.
