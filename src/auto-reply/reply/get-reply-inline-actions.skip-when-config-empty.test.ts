@@ -247,7 +247,8 @@ describe("handleInlineActions", () => {
             },
             payload: {
               kind: "agentTurn",
-              message: "Reminder: post this reddit post",
+              message:
+                "Scheduled task due now. Perform this task and report the result: post this reddit post",
             },
           }),
         }),

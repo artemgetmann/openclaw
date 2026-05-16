@@ -16,6 +16,17 @@ describe("extractReminderIntent", () => {
     });
   });
 
+  it("parses one-minute natural wording for complex agent-turn reminders", () => {
+    expect(
+      extractReminderIntent(
+        "in one minute go to my Twitter profile, click on the first post, and check the first comment",
+      ),
+    ).toEqual({
+      delayMs: 60_000,
+      task: "go to my Twitter profile, click on the first post, and check the first comment",
+    });
+  });
+
   it("does not treat duration-free text as a reminder", () => {
     expect(extractReminderIntent("in summary check Telegram and report back")).toBeNull();
   });
@@ -43,7 +54,8 @@ describe("buildReminderCronJob", () => {
       },
       payload: {
         kind: "agentTurn",
-        message: "Reminder: check Telegram and report back",
+        message:
+          "Scheduled task due now. Perform this task and report the result: check Telegram and report back",
       },
     });
   });

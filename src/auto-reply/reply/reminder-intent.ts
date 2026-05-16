@@ -7,16 +7,21 @@ export type ReminderIntent = {
 
 const REMINDER_INTENT_RE =
   /^\s*(?:please\s+)?(?:can you\s+)?remind me in\s+(.+?)\s+to\s+(.+?)\s*[.?!]*\s*$/i;
-const DURATION_COMPONENT_RE = String.raw`\d+(?:\.\d+)?\s*(?:milliseconds?|msecs?|ms|seconds?|secs?|sec|s|minutes?|mins?|min|m|hours?|hrs?|hr|h|days?|day|d)`;
+const DURATION_NUMBER_RE = String.raw`(?:\d+(?:\.\d+)?|one|a|an)`;
+const DURATION_COMPONENT_RE = String.raw`${DURATION_NUMBER_RE}\s*(?:milliseconds?|msecs?|ms|seconds?|secs?|sec|s|minutes?|mins?|min|m|hours?|hrs?|hr|h|days?|day|d)`;
 const LEADING_IN_REMINDER_INTENT_RE = new RegExp(
   String.raw`^\s*(?:please\s+)?(?:can you\s+)?in\s+((?:${DURATION_COMPONENT_RE})(?:\s+${DURATION_COMPONENT_RE})*)\s*,?\s+(.+?)\s*[.?!]*\s*$`,
   "i",
 );
 
 function normalizeDurationPhrase(raw: string): string {
+  // Users naturally say "in one minute" or "in a sec"; the duration parser
+  // accepts digits, so normalize the tiny word-number set we intentionally
+  // support before compacting unit aliases.
   const compact = raw
     .trim()
     .toLowerCase()
+    .replace(/\b(?:one|a|an)\b/g, "1")
     .replace(/[.?!,]+$/g, "")
     .replace(/\s+/g, "");
   return compact
@@ -58,8 +63,16 @@ export function extractReminderIntent(text: string): ReminderIntent | null {
   }
 }
 
+function buildAgentTaskMessage(task: string) {
+  // The delayed run is an agent turn, not a dumb notification. Keep the user's
+  // task intact and make the execution contract explicit so CLI backends know
+  // they should act, use tools if needed, then return the result for delivery.
+  return `Scheduled task due now. Perform this task and report the result: ${task}`;
+}
+
 export function buildReminderCronJob(intent: ReminderIntent, nowMs = Date.now()) {
   const reminderText = `Reminder: ${intent.task}`;
+  const agentTaskMessage = buildAgentTaskMessage(intent.task);
   return {
     name: reminderText,
     schedule: {
@@ -72,7 +85,7 @@ export function buildReminderCronJob(intent: ReminderIntent, nowMs = Date.now())
     },
     payload: {
       kind: "agentTurn" as const,
-      message: reminderText,
+      message: agentTaskMessage,
     },
   };
 }
