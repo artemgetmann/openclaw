@@ -67,6 +67,13 @@ DMG/zip/runtime archive/npm tarball/bundled Node, and does not restart the
 default gateway. Reserve `rebuild-relaunch` and full packaging for cases where
 the release artifact or installer path is the thing being proven.
 
+To remove generated UI-smoke build output without deleting a currently running
+smoke app, run:
+
+```bash
+bash scripts/relaunch-consumer-mac-ui-smoke.sh --clean
+```
+
 For user-facing OpenClaw handoff builds, use the main product distribution
 wrapper:
 

@@ -7,13 +7,14 @@ source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 OPEN_APP=1
 BUILD_APP=1
+CLEAN_ONLY=0
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 BUILD_PATH="$ROOT_DIR/apps/macos/.build-ui-smoke"
 STARTED_AT="$SECONDS"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/relaunch-consumer-mac-ui-smoke.sh [--instance <id>] [--no-open|--build-only] [--no-build]
+Usage: scripts/relaunch-consumer-mac-ui-smoke.sh [--instance <id>] [--no-open|--build-only] [--no-build] [--clean]
 
 Fast native Jarvis UI smoke:
   - builds apps/macos with SwiftPM only unless --no-build is passed
@@ -21,7 +22,65 @@ Fast native Jarvis UI smoke:
   - uses an isolated consumer instance/config/state
   - skips /Applications installs, release packaging, DMGs, zips, npm tarballs,
     bundled Node, node_modules packaging, and default gateway restarts
+
+Cleanup:
+  --clean removes generated UI-smoke build output and stopped debug .app wrappers.
+          Running UI-smoke apps are left in place for inspection.
 EOF
+}
+
+app_binary_has_matching_pids() {
+  local binary_path="$1"
+  local pid=""
+
+  # Deleting a live debug wrapper can break the app being inspected. Treat any
+  # process whose command contains this exact wrapper binary as live, regardless
+  # of parent process, so cleanup stays conservative.
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    return 0
+  done < <(/bin/ps -axo pid=,command= | /usr/bin/awk -v target="$binary_path" 'index($0, target) > 0 { print $1 }')
+
+  return 1
+}
+
+cleanup_ui_smoke_artifacts() {
+  local app_dir="$ROOT_DIR/dist-ui-smoke"
+  local app_path=""
+  local binary_path=""
+  local removed_apps=0
+  local skipped_apps=0
+
+  if [[ -d "$BUILD_PATH" ]]; then
+    echo "Removing UI-smoke SwiftPM build output: $BUILD_PATH"
+    /bin/rm -rf "$BUILD_PATH"
+  else
+    echo "UI-smoke SwiftPM build output already clean: $BUILD_PATH"
+  fi
+
+  if [[ ! -d "$app_dir" ]]; then
+    echo "UI-smoke debug app wrappers already clean: $app_dir"
+    return
+  fi
+
+  shopt -s nullglob
+  for app_path in "$app_dir"/*.app; do
+    binary_path="$app_path/Contents/MacOS/OpenClaw"
+    if [[ -x "$binary_path" ]] && app_binary_has_matching_pids "$binary_path"; then
+      echo "Keeping running UI-smoke app wrapper: $app_path"
+      skipped_apps=$((skipped_apps + 1))
+      continue
+    fi
+
+    echo "Removing stopped UI-smoke app wrapper: $app_path"
+    /bin/rm -rf "$app_path"
+    removed_apps=$((removed_apps + 1))
+  done
+  shopt -u nullglob
+
+  # Remove the container only when every wrapper was safely removed.
+  /bin/rmdir "$app_dir" 2>/dev/null || true
+  echo "UI-smoke cleanup complete: removed_app_wrappers=$removed_apps skipped_running_app_wrappers=$skipped_apps"
 }
 
 terminate_matching_app_binary() {
@@ -194,6 +253,12 @@ while [[ $# -gt 0 ]]; do
       BUILD_APP=0
       shift
       ;;
+    --clean)
+      CLEAN_ONLY=1
+      OPEN_APP=0
+      BUILD_APP=0
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -205,6 +270,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$CLEAN_ONLY" == "1" ]]; then
+  cleanup_ui_smoke_artifacts
+  exit 0
+fi
 
 if [[ -z "$INSTANCE_ID" ]]; then
   INSTANCE_ID="$(consumer_instance_default_id_for_checkout "$ROOT_DIR")"
