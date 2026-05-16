@@ -27,7 +27,11 @@ The source can be public. The hosted environment cannot be.
 - `POST /v1/device/register` - creates or reuses a durable device/license row.
 - `POST /v1/license/status` - returns persisted trial/license status for a device.
 - `POST /v1/admin/devices/{device_id}/license` - manual beta support override.
-- `POST /v1/managed/utilities/{utility}` - placeholder for future managed operations.
+- `POST /v1/managed/utilities/{utility}` - server-held provider-key utilities.
+  Supported utility IDs:
+  - `firecrawl.search` with `input.query` and optional `input.limit`.
+  - `firecrawl.scrape` with `input.url`.
+  - `google_places.search` with `input.query` and optional `input.limit`.
 
 ## Environment
 
@@ -41,6 +45,9 @@ The source can be public. The hosted environment cannot be.
 - `JARVIS_OFFLINE_GRACE_DAYS` - defaults to `3`.
 - `OPENAI_API_KEY` - optional managed provider key.
 - `ANTHROPIC_API_KEY` - optional managed provider key.
+- `FIRECRAWL_API_KEY` - enables `firecrawl.search` and `firecrawl.scrape`.
+- `GOOGLE_PLACES_API_KEY` - enables `google_places.search`.
+- `GEMINI_API_KEY` - reserved for the staged Gemini managed utility slice.
 
 In production, protected endpoints refuse requests if
 `JARVIS_BACKEND_API_TOKEN` is missing. In development, the token is optional so
@@ -84,8 +91,10 @@ Render owns production secret values:
 - `NEON_DATABASE_URL` is a `sync: false` value from Neon. Create a Neon Postgres
   database, copy its pooled or direct connection string, and enter it in the
   Render dashboard before using hosted account/license state.
-- `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are `sync: false` values that must be
-  entered in the Render dashboard.
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `FIRECRAWL_API_KEY`,
+  `GOOGLE_PLACES_API_KEY`, and `GEMINI_API_KEY` are `sync: false` values that
+  must be entered in the Render dashboard only when the corresponding managed
+  provider is enabled.
 - Keep `JARVIS_BACKEND_ENV=production` so protected endpoints fail closed if the
   backend token or Neon URL is missing.
 
