@@ -724,8 +724,12 @@ Before wider beta:
       generation works, even though model-list validation passes.
 - [x] Add real backend-managed utility endpoints for Firecrawl and Google
       Places.
-- [ ] Route the macOS app/runtime utility callers through the Render backend for
-      managed-plan users; PR #751 proves backend endpoints, not app-side routing.
+- [x] Route Firecrawl app/runtime utility callers through the Render backend for
+      managed-plan users; landed in the Firecrawl managed-routing slice after
+      PR #751.
+- [ ] Route Google Places/goplaces through the Render backend for managed-plan
+      users; current `goplaces` path is still a CLI skill without a TypeScript
+      runtime adapter.
 - [ ] Add real backend-managed Gemini/Nano Banana utility execution or keep image
       generation local/BYOK-only in launch copy.
 - [ ] Keep `OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS=1` out of public
@@ -1005,9 +1009,12 @@ Order:
    - PR #751 added and deployed real backend-managed `firecrawl.search`,
      `firecrawl.scrape`, and `google_places.search` endpoints. Live Render
      smoke returned HTTP 200 for all three with token/key output redacted.
-   - Remaining hard gap: wire macOS app/runtime utility callers to the Render
-     backend for managed-plan users. Until that lands, backend utilities are
-     live but not necessarily used by the packaged app.
+   - Firecrawl app/runtime routing now uses the Render managed utility endpoint
+     in managed mode and preserves direct/BYOK Firecrawl when the Jarvis backend
+     is absent.
+   - Remaining hard gap: wire Google Places/goplaces to the Render backend for
+     managed-plan users. Until that lands, Places is live on the backend but not
+     necessarily used by the packaged app.
    - Gemini managed utility execution remains staged; local Nano Banana proof is
      green, but Render only proves the key is configured.
 
@@ -1071,8 +1078,9 @@ Remaining backend follow-up:
   `POST /v1/managed/utilities/google_places.search` return 200 through Render
   with the backend token and without exposing local provider/backend secrets in
   the response body.
-- The macOS app/runtime still needs a separate routing slice so managed-plan
-  consumers call these Render endpoints instead of direct local provider keys.
+- Firecrawl app/runtime calls now use the Render managed utility endpoints in
+  managed mode. Google Places/goplaces still needs a separate routing slice so
+  managed-plan consumers call Render instead of direct local provider keys.
 
 ### Imported from retired consolidation trackers
 
