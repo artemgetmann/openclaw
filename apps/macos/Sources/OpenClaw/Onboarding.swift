@@ -16,6 +16,54 @@ enum RemoteOnboardingProbeState: Equatable {
     case failed(String)
 }
 
+enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
+    case chrome
+    case permissions
+    case aiAccess
+    case telegram
+
+    var id: Int { self.rawValue }
+
+    var title: String {
+        switch self {
+        case .chrome:
+            return "Chrome"
+        case .permissions:
+            return "Mac permissions"
+        case .aiAccess:
+            return "AI access"
+        case .telegram:
+            return "Telegram"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .chrome:
+            return "Choose the browser profile \(AppFlavor.current.appName) can use."
+        case .permissions:
+            return "Allow the Mac access real tasks need."
+        case .aiAccess:
+            return "Confirm \(AppFlavor.current.appName) has an AI path before tasks start."
+        case .telegram:
+            return "Connect the bot and prove one real task works."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .chrome:
+            return "globe"
+        case .permissions:
+            return "lock.shield"
+        case .aiAccess:
+            return "sparkles"
+        case .telegram:
+            return "paperplane"
+        }
+    }
+}
+
 @MainActor
 final class OnboardingController {
     static let shared = OnboardingController()
@@ -90,6 +138,7 @@ struct OnboardingView: View {
     @State var setupResume = ConsumerSetupResumeModel()
     @State var onboardingSkillsModel = SkillsSettingsModel()
     @State var onboardingWizard = OnboardingWizardModel()
+    @State var consumerSetupStep = ConsumerSetupStep.chrome
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
     @Bindable var state: AppState
@@ -151,6 +200,9 @@ struct OnboardingView: View {
 
     var buttonTitle: String {
         if AppFlavor.current.isConsumer {
+            if self.isConsumerSetupShellActive {
+                return self.consumerSetupStep == .telegram ? "Finish" : "Next"
+            }
             if self.pageCount == 1, self.activePageIndex == 0 {
                 if self.isCorePermissionsBlocking {
                     return "Grant core permissions"
@@ -182,32 +234,28 @@ struct OnboardingView: View {
             self.state.connectionMode == .unconfigured
     }
 
-    var isBrowserSetupBlocking: Bool {
+    var isConsumerSetupShellActive: Bool {
         AppFlavor.current.isConsumer &&
             self.pageCount == 1 &&
             self.activePageIndex == 0 &&
-            self.state.connectionMode == .local &&
+            self.state.connectionMode == .local
+    }
+
+    var isBrowserSetupBlocking: Bool {
+        self.isConsumerSetupShellActive &&
+            self.consumerSetupStep == .chrome &&
             !self.browserSetup.isComplete
     }
 
     var isModelSetupBlocking: Bool {
-        AppFlavor.current.isConsumer &&
-            self.pageCount == 1 &&
-            self.activePageIndex == 0 &&
-            self.state.connectionMode == .local &&
-            self.browserSetup.isComplete &&
-            self.areCorePermissionsGranted &&
+        self.isConsumerSetupShellActive &&
+            self.consumerSetupStep == .aiAccess &&
             !self.modelSetup.isComplete
     }
 
     var isTelegramSetupBlocking: Bool {
-        AppFlavor.current.isConsumer &&
-            self.pageCount == 1 &&
-            self.activePageIndex == 0 &&
-            self.state.connectionMode == .local &&
-            self.browserSetup.isComplete &&
-            self.areCorePermissionsGranted &&
-            self.modelSetup.isComplete &&
+        self.isConsumerSetupShellActive &&
+            self.consumerSetupStep == .telegram &&
             !self.channelsStore.consumerTelegramReadyForFirstTask()
     }
 
@@ -218,27 +266,41 @@ struct OnboardingView: View {
     }
 
     var isCorePermissionsBlocking: Bool {
-        AppFlavor.current.isConsumer &&
-            self.pageCount == 1 &&
-            self.activePageIndex == 0 &&
-            self.state.connectionMode == .local &&
-            self.browserSetup.isComplete &&
+        self.isConsumerSetupShellActive &&
+            self.consumerSetupStep == .permissions &&
             !self.areCorePermissionsGranted
     }
 
     var canFinishConsumerInlineSetup: Bool {
-        AppFlavor.current.isConsumer &&
-            self.pageCount == 1 &&
-            self.activePageIndex == 0 &&
-            self.state.connectionMode == .local &&
+        self.isConsumerSetupShellActive &&
             self.browserSetup.isComplete &&
             self.areCorePermissionsGranted &&
             self.modelSetup.isComplete &&
             self.channelsStore.consumerTelegramReadyForFirstTask()
     }
 
+    var canAdvanceConsumerSetupStep: Bool {
+        guard self.isConsumerSetupShellActive else { return false }
+        switch self.consumerSetupStep {
+        case .chrome:
+            return self.browserSetup.isComplete
+        case .permissions:
+            return self.browserSetup.isComplete &&
+                self.areCorePermissionsGranted
+        case .aiAccess:
+            return self.browserSetup.isComplete &&
+                self.areCorePermissionsGranted &&
+                self.modelSetup.isComplete
+        case .telegram:
+            return self.canFinishConsumerInlineSetup
+        }
+    }
+
     var canAdvance: Bool {
-        !self.isWizardBlocking &&
+        if self.isConsumerSetupShellActive {
+            return self.canAdvanceConsumerSetupStep
+        }
+        return !self.isWizardBlocking &&
             !self.isConsumerInlineSetupBlocking &&
             !self.isBrowserSetupBlocking &&
             !self.isModelSetupBlocking &&

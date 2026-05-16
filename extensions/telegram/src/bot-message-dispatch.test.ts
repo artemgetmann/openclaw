@@ -304,6 +304,67 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("retains non-prefix answer preview progress when the final answer replaces it", async () => {
+    const draftStream = createDraftStream(9003);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "Fetching all three in parallel.All three fetched. Here's what each source contributes:",
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "All three fetched. Here's what each source contributes:\n\nFinal answer.",
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9003" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9003,
+      "Fetching all three in parallel.\n\nAll three fetched. Here's what each source contributes:\n\nFinal answer.",
+      expect.any(Object),
+    );
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("separates adjacent progress phrases retained in final answer text", async () => {
+    const draftStream = createDraftStream(9004);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "On it — fetching both pages step by step.**Step 1 — Fetching example.com...**",
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "On it — fetching both pages step by step.**Step 1 — Fetching example.com...****Step 2 — Fetching IANA example domains page...**Redirect detected.\n\nFinal answer.",
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9004" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9004,
+      "On it — fetching both pages step by step.\n\n**Step 1 — Fetching example.com...**\n\n**Step 2 — Fetching IANA example domains page...**\n\nRedirect detected.\n\nFinal answer.",
+      expect.any(Object),
+    );
+  });
+
   it("still delivers media-bearing tool payloads while batching text progress", async () => {
     const draftStream = createDraftStream(9002);
     createTelegramDraftStream.mockReturnValue(draftStream);

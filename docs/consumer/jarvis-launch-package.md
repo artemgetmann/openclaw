@@ -123,6 +123,14 @@ Current package truth:
   `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
   machine release env; leave `NOTARYTOOL_PROFILE` unset unless deliberately
   using the fallback path.
+- Dry-run preflight truth on 2026-05-16: ASC API-key lane is not ready on
+  Artem's machine. `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and
+  `NOTARYTOOL_ISSUER` are missing from the machine release env. The fallback
+  `NOTARYTOOL_PROFILE` is present and usable, but remains fallback-only. The
+  release preflight should spell out that split, report whether Sparkle
+  `generate_appcast` is available, and name the exact next operator action
+  without printing secret values. The preflight is read-only and does not
+  submit notarization, staple, package, upload, or mutate release assets.
 - Keychain-profile notarization remains a fallback for emergency/manual
   recovery only. It should not be the default release path because Apple ID
   app-specific password and 2FA recovery made the previous package lane too
@@ -139,9 +147,17 @@ Current package truth:
   `gui-verify` / `consolidation-gui-smoke` / `macos-ui-cleanup` LaunchAgents
   were removed. `/Applications/Jarvis.app`, the default gateway, watchdog, mail
   monitor, and the separate Chrome Telegram-live profile were kept.
-- Channels currently duplicates connected-bot text/buttons. This is not a
-  blocker for the 3 trusted waiting testers, but it should get a focused UI
-  polish lane before wider beta.
+- The duplicate connected-bot Settings copy/buttons issue has been addressed
+  in source, but there is still no packaged installed-app GUI proof yet. Do
+  not count this as closed for broader launch proof until the packaged app is
+  verified.
+- Packaging-smoke iteration speed note from 2026-05-16: the full fast package
+  loop was slow because it still staged the full bundled runtime, redeployed the
+  large production `node_modules` tree, recopied Node/uv payloads, and signed
+  runtime binaries on every shell-only app smoke. Local smoke lanes can now run
+  `bash scripts/package-consumer-mac-app-fast.sh --instance <id> --reuse-runtime`
+  after one normal fast package, but shipping/default package behavior remains
+  unchanged.
 
 ## v1 commercial decision
 
@@ -387,9 +403,19 @@ Say this directly:
 
 - send the final `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` to the
   3 trusted waiting testers
+- page-based setup shell landed on `main` in PR #725: Chrome, Mac permissions,
+  AI access, and Telegram are separate guided steps that reuse the existing
+  setup cards
+- passive Browser/AI readiness flicker is fixed on `main` in PR #723: completed
+  readiness stays visible during focus/view refreshes while background probes
+  run
+- rewrite setup copy now that the page split exists so each step explains one thing:
+  what Jarvis needs, why it matters, what happens next, and how to recover
 - focused Channels UI polish to remove duplicated connected-bot text/buttons
 - smoother account login and trial activation
 - cleaner Telegram setup with one consumer-first command/settings surface
+- investigate Telegram Managed Bots as the path to remove or hide manual
+  BotFather setup for mainstream users
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
 - App Store Connect API key auth and async submit/poll/staple notarization
@@ -420,6 +446,13 @@ through consumer setup. Candidate shape:
 - Shared/default bot setup stays the consumer path; BYO bot token, custom
   commands, verbose developer detail, and internal tool/skill IDs stay in the
   advanced path.
+- Research Telegram Managed Bots before locking the wider-beta Telegram setup.
+  Official Telegram Bot API 9.6 added managed-bot creation/token flows, and Bot
+  API 10.0 added managed-bot access settings. The next lane should verify
+  whether Jarvis can run a bot-management bot that lets a user create or connect
+  a personal Jarvis bot without leaving onboarding for manual BotFather steps.
+  If the official flow is too constrained, keep a shared Jarvis bot as the
+  default and move BYO BotFather tokens to the advanced path.
 - `/visibility` should replace stale `/verbose` naming in the Telegram command
   list and runtime behavior. Before wider beta, inspect upstream's current
   command/visibility implementation, then prove the Jarvis command list and

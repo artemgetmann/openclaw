@@ -38,7 +38,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Connect Telegram")
                         .font(.headline)
-                    Text("Setup only counts as done after \(AppFlavor.current.appName) finishes one real Telegram task from this Mac.")
+                    Text("Connect the bot, send one DM task, and confirm \(AppFlavor.current.appName) can answer.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -58,8 +58,8 @@ struct ConsumerTelegramSetupCardContent: View {
             self.callout(
                 title: "Telegram verified",
                 body: self.store.consumerTelegramBotUsername().map {
-                    "Connected as @\($0). \(AppFlavor.current.appName) already finished a Telegram task on this Mac."
-                } ?? "Telegram is connected and \(AppFlavor.current.appName) already finished a Telegram task on this Mac.")
+                    "Connected as @\($0). \(AppFlavor.current.appName) answered a real Telegram task."
+                } ?? "Telegram is connected and \(AppFlavor.current.appName) answered a real task.")
 
             if let username = self.store.consumerTelegramBotUsername() {
                 Button("Open your bot") {
@@ -82,10 +82,10 @@ struct ConsumerTelegramSetupCardContent: View {
             self.callout(
                 title: self.store.consumerTelegramLooksLive() ? "One task left" : "Use your own Telegram bot",
                 body: self.store.consumerTelegramLooksLive()
-                    ? "The bot is connected, but onboarding is not complete until \(AppFlavor.current.appName) answers one Telegram task end-to-end on this Mac."
-                    : "Create a bot in BotFather, verify the token here, then send the first task you want \(AppFlavor.current.appName) to handle.")
+                    ? "The bot is connected. Send one DM task so \(AppFlavor.current.appName) can prove the loop works."
+                    : "Create a bot in BotFather, verify the token here, then send one DM task to prove it works.")
 
-            Text("1. Open @BotFather, send /newbot, choose a name + username, then copy the full token BotFather gives you.")
+            Text("1. Open @BotFather, send /newbot, choose a name and username, then copy the full token BotFather gives you.")
                 .font(.callout)
 
             HStack(spacing: 10) {
@@ -109,7 +109,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 }
             }
 
-            Text("2. Paste that exact token here and verify it. Do not trim it, shorten it, or copy the bot username instead.")
+            Text("2. Paste the full token here and verify it.")
                 .font(.callout)
 
             TextField("BotFather token", text: self.$store.telegramSetupToken)
@@ -134,16 +134,9 @@ struct ConsumerTelegramSetupCardContent: View {
                 if self.store.telegramSetupPhase == .verifyingToken {
                     ProgressView().controlSize(.small)
                 }
-
-                if self.presentation == .settings, AppFlavor.current.telegramSetupVideoURL != nil {
-                    Button("Video walkthrough") {
-                        self.store.openTelegramSetupVideo()
-                    }
-                    .buttonStyle(.bordered)
-                }
             }
 
-            Text("3. Open the bot, press Start if Telegram shows it, send one real task in DM, then click Verify first task here.")
+            Text("3. Open your bot, press Start if Telegram shows it, send one real task in DM, then click Verify first task.")
                 .font(.callout)
 
             HStack(spacing: 10) {
@@ -192,16 +185,16 @@ struct ConsumerTelegramSetupCardContent: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text("No extra macOS permissions are required just to verify Telegram. Optional system permissions stay later.")
+            Text("No extra Mac permissions are needed just to verify Telegram.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Telegram groups are stricter than DMs. Simplest path: make the bot an admin in the group. If the bot is not an admin, BotFather Group Privacy usually means it will only see commands, replies, and tagged messages. If you want normal group chat behavior without tags, disable Group Privacy in BotFather, then remove and re-add the bot so Telegram actually applies the change. Enable topics/threaded mode for the cleanest multi-task setup.")
+            Text("Advanced: DMs are the reliable first path. For groups, make the bot an admin or disable Group Privacy in BotFather, then remove and re-add the bot so Telegram applies the change. Topics are best for multiple parallel tasks.")
                 .font(.callout)
                 .foregroundStyle(.primary)
 
-            Text("Power users: for multiple tasks at once, add the bot to a Telegram group and use topics.")
+            Text("Start with a DM. Move to groups and topics after the first task works.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }

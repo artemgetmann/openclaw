@@ -135,6 +135,10 @@ private final class SendableCounter: @unchecked Sendable {
     var value = 0
 }
 
+private final class ReadinessContinuationBox: @unchecked Sendable {
+    var continuation: CheckedContinuation<ConsumerModelsReadinessPayload, any Error>?
+}
+
 @Suite(.serialized)
 @MainActor
 struct ConsumerSetupReadinessTests {
@@ -307,6 +311,43 @@ struct ConsumerSetupReadinessTests {
         #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
     }
 
+    @Test func `consumer model keeps ready result visible during passive activation refresh`() async {
+        let probeCalls = SendableCounter()
+        let pendingProbe = ReadinessContinuationBox()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                if probeCalls.value == 1 {
+                    return readyReadinessPayload()
+                }
+                return try await withCheckedThrowingContinuation { continuation in
+                    pendingProbe.continuation = continuation
+                }
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        await model.refresh()
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+
+        let refreshTask = Task {
+            await model.refreshOnAppActivationIfNeeded()
+        }
+        while pendingProbe.continuation == nil {
+            await Task.yield()
+        }
+
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+
+        pendingProbe.continuation?.resume(returning: readyReadinessPayload())
+        await refreshTask.value
+
+        #expect(probeCalls.value == 2)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+    }
+
     @Test func `consumer model refreshIfNeeded retries after transient failure`() async {
         let probeCalls = SendableCounter()
         let model = ConsumerModelSetupModel(
@@ -328,13 +369,33 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."))
+                    "Jarvis is still starting or needs a restart. This is not an AI account issue. Wait a moment, then try again."))
 
         await model.refreshIfNeeded()
 
         #expect(probeCalls.value == 2)
         #expect(model.phase == .ready("openai-codex/gpt-5.5"))
         #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+    }
+
+    @Test func `consumer model hides raw cancellation errors during startup`() async {
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                throw CancellationError()
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        await model.refresh()
+
+        #expect(
+            model.phase
+                == .failed(
+                    "Jarvis is still starting. Try again in a moment, or restart Jarvis if this keeps happening."))
+        #expect(
+            model.statusLine
+                == "Jarvis is still starting. Try again in a moment, or restart Jarvis if this keeps happening.")
     }
 
     @Test func `consumer model apply auth consumes returned readiness and marks ready`() async {
@@ -431,7 +492,7 @@ struct ConsumerSetupReadinessTests {
 
         #expect(probeCalls.value == 5)
         #expect(model.phase == .checking)
-        #expect(model.statusLine == "Reconnecting AI operator after sign-in…")
+        #expect(model.statusLine == "Reconnecting Jarvis after sign-in…")
         #expect(model.failureKind == nil)
         #expect(!model.isComplete)
     }
@@ -525,10 +586,10 @@ struct ConsumerSetupReadinessTests {
         #expect(
             model.phase
                 == .failed(
-                    "Jarvis could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."))
+                    "Jarvis is still starting or needs a restart. This is not an AI account issue. Wait a moment, then try again."))
         #expect(
             model.statusLine
-                == "Jarvis could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again.")
+                == "Jarvis is still starting or needs a restart. This is not an AI account issue. Wait a moment, then try again.")
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.canRestartOperator)
     }
@@ -632,7 +693,7 @@ struct ConsumerSetupReadinessTests {
         #expect(model.selectedOptionId == "anthropic-api-key")
         #expect(model.authCategory == .apiKey)
         #expect(model.activeAccessTitle == "Claude API key")
-        #expect(model.activeAccessDetail == "Uses a tester-owned API key for this runtime.")
+        #expect(model.activeAccessDetail == "Uses the saved API key for this Mac.")
     }
 
     @Test func `consumer model applies a curated selection and reruns readiness`() async {

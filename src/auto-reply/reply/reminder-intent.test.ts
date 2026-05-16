@@ -27,6 +27,17 @@ describe("extractReminderIntent", () => {
     });
   });
 
+  it("parses product timestamp-prefixed complex reminders", () => {
+    expect(
+      extractReminderIntent(
+        "[Sat 2026-05-16 13:17 GMT+8] in one minute go to my Twitter profile, click on the first post, and check the first comment",
+      ),
+    ).toEqual({
+      delayMs: 60_000,
+      task: "go to my Twitter profile, click on the first post, and check the first comment",
+    });
+  });
+
   it("does not treat duration-free text as a reminder", () => {
     expect(extractReminderIntent("in summary check Telegram and report back")).toBeNull();
   });

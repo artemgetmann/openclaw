@@ -125,11 +125,122 @@ Fail criteria:
 - The final response loses the progress context entirely.
 - The final marker is missing or altered.
 
+## Main Bot Smoke After Restart
+
+Purpose: this is main-bot acceptance testing, not final broad release. Do this
+only after the main Jarvis runtime is restarted from updated `main`.
+
+1. Send:
+
+```text
+/status
+```
+
+Check:
+
+- Model list contains Claude CLI options.
+- Current model is expected.
+- Normal Claude CLI context is `200k` unless an explicit `[1m]` model is
+  selected.
+
+2. Send:
+
+```text
+/model claude-cli/sonnet
+```
+
+Check:
+
+- Accepted.
+- No `model not allowed` error.
+
+3. Send:
+
+```text
+What prompt/source files do you see as authoritative for this Telegram session?
+```
+
+Check:
+
+- OpenClaw workspace/app support files are treated as authority.
+- `~/.claude` may be visible as Claude-native context, but should not be treated
+  as OpenClaw authority.
+
+4. Send:
+
+```text
+draft a tweet in my tone of voice about moving from codex cli to codex app
+```
+
+Check:
+
+- Uses Artem's tone skill without being spoon-fed.
+- Does not say it has no tone context.
+
+5. Send:
+
+```text
+remind me in 1 min to test claude cli reminders
+```
+
+Check:
+
+- Says scheduled only if it actually scheduled.
+- Wakes back up around one minute later.
+- Sends the reminder in the same Telegram chat/topic.
+
+6. Send:
+
+```text
+summarize this reddit thread and explain your process after done: <url>
+```
+
+Check:
+
+- Uses the Reddit/OpenClaw skill path or clearly explains the equivalent process.
+- Progress updates have readable spacing.
+- Final answer keeps useful progress/process instead of clearing it.
+- No message spam.
+
+7. Optional 1M side check:
+
+```text
+/model claude-cli/opus[1m]
+/status
+```
+
+Check:
+
+- Model is accepted only if Claude Code supports it on this machine/account.
+- `/status` reports about `1M` context only for explicit `[1m]` models.
+- Do not use `claude-cli/sonnet[1m]` as the preferred 1M smoke on this account:
+  prior proof showed Sonnet 1M can select/report but execution requires
+  Anthropic extra-usage entitlement here. Use Opus 1M for the no-extra-usage
+  1M side check.
+
+Recommendation:
+
+- Merge/restart is acceptable if this is treated as main-bot acceptance testing,
+  not final broad release.
+- Do not broaden/default-expose Claude CLI until this manual smoke passes.
+- If reminder wakeup fails again, make that blocker #1. That is a trust issue,
+  not polish.
+
 ## Current Lane Status
 
-- Skills: local proof passed, but still needs product-level user testing through
-  the real bot path.
-- Reminder: lower-level cron proof passed, but the product-level agent scheduling
-  test still needs to pass.
-- Progress UX: local projection passed, but the tester-runtime harness blocker
-  may still need the progress lane fix before the manual tester proof is clean.
+- Skills: product-level OpenClaw CLI proof passed on `claude-cli/sonnet` using
+  the exact Reddit URL
+  `https://www.reddit.com/r/codex/comments/1swq4g4/what_theme_do_you_use_in_codex_app/`.
+  Claude read the OpenClaw `reddit` skill instructions, used
+  `skills/reddit/scripts/reddit.mjs comments`, summarized the post/comments, and
+  confirmed in a same-session follow-up that it used the Reddit skill.
+- Reminder: tester Telegram proof passed on `@Artem_jarvis_email_bot` with the
+  natural prompt `in one minute go to my Twitter profile, click on the first
+post, and check the first comment`. Telegram message `49433` scheduled cron
+  job `a6a44bb6-90e6-4bd2-9147-c53a75433942`, bot reply `49434` confirmed
+  scheduling, delayed run executed as `provider=claude-cli model=sonnet`, and
+  final Telegram message `49435` delivered the first-comment result.
+- Progress UX: tester Telegram proof passed on `@Artem_jarvis_exec_bot`; final
+  message `49418` retained the progress transcript above the final answer and
+  ended with `CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516`. Artem still plans to
+  manually judge the visible UX before main-bot rollout.

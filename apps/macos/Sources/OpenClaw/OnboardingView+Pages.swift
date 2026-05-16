@@ -34,7 +34,7 @@ extension OnboardingView {
 
     func welcomePage() -> some View {
         let consumerSecurityCopy =
-            "\(AppFlavor.current.appName) can use connected apps, local tools, MCP tool servers [external tool connectors], and Mac permissions when you allow it."
+            "\(AppFlavor.current.appName) only gets access to apps, tools, and Mac permissions when you allow it."
         let standardSecurityCopy =
             "The connected AI agent can trigger powerful actions on your Mac, " +
             "including running commands, reading/writing files, and capturing screenshots — " +
@@ -48,7 +48,7 @@ extension OnboardingView {
                     .font(.largeTitle.weight(.semibold))
                 Text(
                     AppFlavor.current.isConsumer
-                        ? "\(AppFlavor.current.appName) is a personal AI operator for this Mac. Setup takes about two minutes. First we’ll connect Chrome and local access."
+                        ? "\(AppFlavor.current.appName) helps get real work done from this Mac. Setup takes about two minutes: pick Chrome, allow Mac access, confirm AI, then connect Telegram."
                         : "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
@@ -84,19 +84,19 @@ extension OnboardingView {
                                     // The actual setup work starts after the user presses Continue.
                                     self.featureRow(
                                         title: "Connect Chrome",
-                                        subtitle: "Pick the Chrome profile \(AppFlavor.current.appName) should use for browser work.",
+                                        subtitle: "Choose the browser profile \(AppFlavor.current.appName) can use.",
                                         systemImage: "globe")
                                     self.featureRow(
-                                        title: "Confirm AI access",
-                                        subtitle: "We check that the default AI connection is ready before remote work starts.",
-                                        systemImage: "sparkles")
-                                    self.featureRow(
                                         title: "Grant Mac permissions",
-                                        subtitle: "\(AppFlavor.current.appName) asks only for app, tool, and Mac permissions that real tasks need.",
+                                        subtitle: "Allow the Mac access real tasks need.",
                                         systemImage: "lock.shield")
                                     self.featureRow(
+                                        title: "Confirm AI access",
+                                        subtitle: "Make sure \(AppFlavor.current.appName) has an AI path before tasks start.",
+                                        systemImage: "sparkles")
+                                    self.featureRow(
                                         title: "Verify Telegram",
-                                        subtitle: "Confirm the bot by completing one real task from this Mac.",
+                                        subtitle: "Connect the bot and prove one real task works.",
                                         systemImage: "paperplane")
                                 }
                             }
@@ -114,57 +114,107 @@ extension OnboardingView {
             VStack(spacing: 22) {
                 Text("Set up \(AppFlavor.current.appName)")
                     .font(.largeTitle.weight(.semibold))
-                Text("Connect Chrome first, then confirm Mac permissions, local tools, AI access, and Telegram.")
+                Text(self.consumerSetupStep.subtitle)
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 560)
                     .fixedSize(horizontal: false, vertical: true)
 
+                self.consumerSetupStepIndicator()
+
                 self.onboardingCard(spacing: 10, padding: 14) {
-                    BrowserSetupCardContent(
-                        model: self.browserSetup,
-                        presentation: .onboarding)
-
-                    if self.browserSetup.isComplete {
-                        Divider()
-                            .padding(.vertical, 6)
-                        ConsumerCorePermissionsSection(
-                            status: self.permissionMonitor.status,
-                            refresh: self.refreshPerms,
-                            presentation: .onboarding)
-
-                        Divider()
-                            .padding(.vertical, 6)
-
-                        ConsumerModelSetupCardContent(model: self.modelSetup)
-
-                        if self.modelSetup.isComplete {
-                            Divider()
-                                .padding(.vertical, 6)
-
-                            ConsumerTelegramSetupCardContent(
-                                store: self.channelsStore,
-                                presentation: .onboarding)
-                        }
-                    } else {
-                        Divider()
-                            .padding(.vertical, 6)
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Mac permissions and AI access come next")
-                                .font(.headline)
-                            Text(
-                                "Finish Chrome first, then \(AppFlavor.current.appName) will guide you through the remaining setup in order.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+                    self.consumerSetupStepContent()
                 }
                 .frame(maxWidth: 520)
             }
             .padding(.top, 16)
+        }
+    }
+
+    @ViewBuilder
+    private func consumerSetupStepContent() -> some View {
+        switch self.consumerSetupStep {
+        case .chrome:
+            BrowserSetupCardContent(
+                model: self.browserSetup,
+                presentation: .onboarding)
+        case .permissions:
+            ConsumerCorePermissionsSection(
+                status: self.permissionMonitor.status,
+                refresh: self.refreshPerms,
+                presentation: .onboarding)
+        case .aiAccess:
+            ConsumerModelSetupCardContent(model: self.modelSetup)
+        case .telegram:
+            ConsumerTelegramSetupCardContent(
+                store: self.channelsStore,
+                presentation: .onboarding)
+        }
+    }
+
+    private func consumerSetupStepIndicator() -> some View {
+        HStack(spacing: 8) {
+            ForEach(ConsumerSetupStep.allCases) { step in
+                self.consumerSetupStepPill(step)
+            }
+        }
+        .frame(maxWidth: 520)
+    }
+
+    private func consumerSetupStepPill(_ step: ConsumerSetupStep) -> some View {
+        Button {
+            withAnimation { self.consumerSetupStep = step }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: self.consumerSetupStepIcon(for: step))
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 14)
+                Text(step.title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(self.consumerSetupStep == step ? Color.accentColor : .primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(self.consumerSetupStep == step ? Color.accentColor.opacity(0.12) : Color.clear))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(self.consumerSetupStepBorder(for: step), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func consumerSetupStepIcon(for step: ConsumerSetupStep) -> String {
+        if self.isConsumerSetupStepComplete(step) {
+            return "checkmark.circle.fill"
+        }
+        return step.systemImage
+    }
+
+    private func consumerSetupStepBorder(for step: ConsumerSetupStep) -> Color {
+        if self.consumerSetupStep == step {
+            return Color.accentColor.opacity(0.45)
+        }
+        if self.isConsumerSetupStepComplete(step) {
+            return Color.green.opacity(0.35)
+        }
+        return Color.secondary.opacity(0.2)
+    }
+
+    func isConsumerSetupStepComplete(_ step: ConsumerSetupStep) -> Bool {
+        switch step {
+        case .chrome:
+            return self.browserSetup.isComplete
+        case .permissions:
+            return self.areCorePermissionsGranted
+        case .aiAccess:
+            return self.modelSetup.isComplete
+        case .telegram:
+            return self.channelsStore.consumerTelegramReadyForFirstTask()
         }
     }
 

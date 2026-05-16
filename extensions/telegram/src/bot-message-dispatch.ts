@@ -44,6 +44,7 @@ import {
   type DraftLaneState,
   type LaneName,
   type LanePreviewLifecycle,
+  normalizeAdjacentProgressBoundaries,
 } from "./lane-delivery.js";
 import {
   createTelegramReasoningStepState,
@@ -368,7 +369,8 @@ export const dispatchTelegramMessage = async ({
     if (!laneStream || !text) {
       return;
     }
-    if (text === lane.lastPartialText) {
+    const previewText = lane === answerLane ? normalizeAdjacentProgressBoundaries(text) : text;
+    if (previewText === lane.lastPartialText) {
       return;
     }
     // Mark that we've received streaming content (for forceNewMessage decision).
@@ -378,13 +380,13 @@ export const dispatchTelegramMessage = async ({
     // visible punctuation flicker.
     if (
       lane.lastPartialText &&
-      lane.lastPartialText.startsWith(text) &&
-      text.length < lane.lastPartialText.length
+      lane.lastPartialText.startsWith(previewText) &&
+      previewText.length < lane.lastPartialText.length
     ) {
       return;
     }
-    lane.lastPartialText = text;
-    laneStream.update(text);
+    lane.lastPartialText = previewText;
+    laneStream.update(previewText);
   };
   const ingestDraftLaneSegments = async (text: string | undefined) => {
     const split = splitTextIntoLaneSegments(text);
@@ -413,7 +415,7 @@ export const dispatchTelegramMessage = async ({
   const renderToolProgressDraftText = () => toolProgressLines.join("\n\n");
   const renderTextWithToolProgress = (text: string) => {
     const progressText = renderToolProgressDraftText();
-    return progressText ? `${progressText}\n\n${text}` : text;
+    return normalizeAdjacentProgressBoundaries(progressText ? `${progressText}\n\n${text}` : text);
   };
   const resetToolProgressDraft = () => {
     toolProgressLines = [];
@@ -560,9 +562,13 @@ export const dispatchTelegramMessage = async ({
     return { ...payload, replyToId: implicitQuoteReplyTargetId };
   };
   const sendPayload = async (payload: ReplyPayload) => {
+    const normalizedPayload =
+      typeof payload.text === "string"
+        ? applyTextToPayload(payload, normalizeAdjacentProgressBoundaries(payload.text))
+        : payload;
     const result = await deliverReplies({
       ...deliveryBaseOptions,
-      replies: [applyQuoteReplyTarget(payload)],
+      replies: [applyQuoteReplyTarget(normalizedPayload)],
       onVoiceRecording: sendRecordVoice,
     });
     if (result.delivered) {
