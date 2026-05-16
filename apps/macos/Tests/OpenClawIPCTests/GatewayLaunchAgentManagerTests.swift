@@ -62,7 +62,7 @@ struct GatewayLaunchAgentManagerTests {
             try? FileManager().removeItem(at: staleSourceRoot)
         }
 
-        await TestIsolation.withIsolatedState(
+        try await TestIsolation.withIsolatedState(
             env: [
                 "OPENCLAW_APP_VARIANT": "consumer",
                 ConsumerInstance.envKey: nil,
@@ -74,6 +74,8 @@ struct GatewayLaunchAgentManagerTests {
             ])
         {
             ConsumerBundledRuntime._setTestingResourceURL(bundled.resourceRoot)
+            let seededRoot = ConsumerBundledRuntime.installedProjectRoot()
+            _ = try self.makeRepoRoot(at: seededRoot)
             let sourceEntrypoint = staleSourceRoot.appendingPathComponent("dist/index.js").path
             let snapshot = LaunchAgentPlistSnapshot(
                 programArguments: ["/usr/bin/node", sourceEntrypoint, "gateway"],
@@ -87,23 +89,35 @@ struct GatewayLaunchAgentManagerTests {
 
             let ownership = GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot)
 
-            #expect(ownership.expectedEntrypoint == bundled.projectRoot.appendingPathComponent("dist/index.js").path)
+            #expect(ownership.expectedEntrypoint == seededRoot.appendingPathComponent("dist/index.js").path)
             #expect(ownership.actualEntrypoint == sourceEntrypoint)
             #expect(!ownership.matchesCurrentEntrypoint)
         }
     }
 
     @MainActor
-    @Test func `daemon install environment prefers packaged bundled runtime over stale source default`() async throws {
+    @Test func `daemon command environment prefers seeded bundled runtime over bundle resources`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
         let sourceRoot = try self.makeRepoRoot(named: "source-openclaw-\(UUID().uuidString)")
-        let worktreeBundle = try self.makeBundledRuntimeInsideWorktree()
+        let worktreeBundle = try self.makeBundledRuntime()
+        let fm = FileManager.default
+        let manifest = ConsumerBundledRuntime.Manifest(
+            format: 1,
+            bundleVersion: "123",
+            gitCommit: "abc123",
+            nodeVersion: "22.22.1",
+            uvVersion: "0.9.21")
+        try BundledRuntimeFixtureHelper.writeMinimalBundledRuntime(
+            into: worktreeBundle.resourceRoot,
+            manifest: manifest,
+            fileManager: fm)
+        try self.writeBundledWorkspaceTemplates(into: worktreeBundle.projectRoot)
         defer {
             ConsumerBundledRuntime._clearTestingResourceURL()
             try? FileManager().removeItem(at: home)
             try? FileManager().removeItem(at: sourceRoot)
-            try? FileManager().removeItem(at: worktreeBundle.repoRoot)
+            try? FileManager().removeItem(at: worktreeBundle.resourceRoot.deletingLastPathComponent())
         }
 
         await TestIsolation.withIsolatedState(
@@ -118,13 +132,29 @@ struct GatewayLaunchAgentManagerTests {
             ])
         {
             ConsumerBundledRuntime._setTestingResourceURL(worktreeBundle.resourceRoot)
-
+            ConsumerBundledRuntime.bootstrapIfNeeded(fileManager: fm)
+            let seededRoot = ConsumerBundledRuntime.installedProjectRoot()
+            let seededEntrypoint = seededRoot.appendingPathComponent("dist/index.js").path
+            let resourceEntrypoint = worktreeBundle.projectRoot.appendingPathComponent("dist/index.js").path
             let env = GatewayLaunchAgentManager.daemonCommandEnvironment(base: [:])
+            let snapshot = LaunchAgentPlistSnapshot(
+                programArguments: ["/usr/bin/node", resourceEntrypoint, "gateway"],
+                environment: [:],
+                stdoutPath: nil,
+                stderrPath: nil,
+                port: nil,
+                bind: nil,
+                token: nil,
+                password: nil)
+            let ownership = GatewayLaunchAgentManager.currentEntrypointOwnership(snapshot: snapshot)
 
-            #expect(CommandResolver.daemonProjectRootEnvironmentHint() == worktreeBundle.projectRoot.path)
-            #expect(CommandResolver.canonicalGatewayProjectRoot().path == worktreeBundle.projectRoot.path)
-            #expect(env["OPENCLAW_FORK_ROOT"] == worktreeBundle.projectRoot.path)
+            #expect(CommandResolver.daemonProjectRootEnvironmentHint() == seededRoot.path)
+            #expect(CommandResolver.canonicalGatewayProjectRoot().path == seededRoot.path)
+            #expect(env["OPENCLAW_FORK_ROOT"] == seededRoot.path)
             #expect(env["OPENCLAW_FORK_ROOT"] != sourceRoot.path)
+            #expect(ownership.expectedEntrypoint == seededEntrypoint)
+            #expect(ownership.actualEntrypoint == resourceEntrypoint)
+            #expect(!ownership.matchesCurrentEntrypoint)
         }
     }
 
@@ -165,6 +195,7 @@ struct GatewayLaunchAgentManagerTests {
             ])
         {
             ConsumerBundledRuntime._setTestingResourceURL(bundled.resourceRoot)
+            _ = try self.makeRepoRoot(at: ConsumerBundledRuntime.installedProjectRoot())
             let identity = RuntimeIdentity.current
             let plist: [String: Any] = [
                 "ProgramArguments": [
@@ -272,6 +303,7 @@ struct GatewayLaunchAgentManagerTests {
         let error = try await TestIsolation.withIsolatedState(
             env: [
                 "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
             ],
@@ -279,11 +311,14 @@ struct GatewayLaunchAgentManagerTests {
                 "openclaw.gatewayProjectRootPath": installedRoot.path,
             ])
         {
+            let seededRoot = ConsumerBundledRuntime.installedProjectRoot()
+            _ = try self.makeRepoRoot(at: seededRoot)
+            let seededEntrypoint = seededRoot.appendingPathComponent("dist/index.js")
             let identity = RuntimeIdentity.current
             let plist: [String: Any] = [
                 "ProgramArguments": [
                     "/usr/bin/node",
-                    entrypoint.path,
+                    seededEntrypoint.path,
                     "gateway",
                     "--port",
                     "\(identity.gatewayPort)",
@@ -368,6 +403,9 @@ struct GatewayLaunchAgentManagerTests {
             ]
             let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             try data.write(to: plistURL, options: [.atomic])
+
+            #expect(GatewayLaunchAgentManager.launchAgentMatchesCurrentRuntime())
+            #expect(GatewayLaunchAgentManager.currentEntrypointOwnership().matchesCurrentEntrypoint)
 
             return await GatewayLaunchAgentManager.set(
                 enabled: false,
@@ -885,6 +923,29 @@ extension GatewayLaunchAgentManagerTests {
         try Data().write(to: root.appendingPathComponent("package.json"))
         try Data().write(to: root.appendingPathComponent("openclaw.mjs"))
         return root
+    }
+
+    private func writeBundledWorkspaceTemplates(into bundledRoot: URL) throws {
+        let templatesRoot = bundledRoot
+            .appendingPathComponent("openclaw", isDirectory: true)
+            .appendingPathComponent("docs", isDirectory: true)
+            .appendingPathComponent("reference", isDirectory: true)
+            .appendingPathComponent("templates", isDirectory: true)
+
+        try FileManager().createDirectory(at: templatesRoot, withIntermediateDirectories: true)
+        for name in [
+            "AGENTS.md",
+            "SOUL.md",
+            "TOOLS.md",
+            "IDENTITY.md",
+            "USER.md",
+            "HEARTBEAT.md",
+            "BOOTSTRAP.md",
+            "MEMORY.md",
+        ] {
+            let fileURL = templatesRoot.appendingPathComponent(name)
+            try "# \(name)\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        }
     }
 
     private func makeBundledRuntime() throws -> (resourceRoot: URL, projectRoot: URL) {

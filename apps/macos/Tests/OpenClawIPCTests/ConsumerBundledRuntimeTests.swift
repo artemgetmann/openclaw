@@ -103,11 +103,16 @@ struct ConsumerBundledRuntimeTests {
             defaults: ["gatewayPort": nil])
         {
             ConsumerBundledRuntime.bootstrapIfNeeded(bundle: bundle, fileManager: fm)
+            let seededProjectRoot = ConsumerBundledRuntime.installedProjectRoot()
 
             #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("bin/openclaw").path))
             #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/node/bin/node").path))
             #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("tools/uv/bin/uv").path))
             #expect(FileManager.default.fileExists(atPath: ConsumerRuntime.installPrefixURL.appendingPathComponent("lib/openclaw-bundled/dist/entry.js").path))
+            #expect(CommandResolver.projectRootEnvironmentHint() == seededProjectRoot.path)
+            #expect(CommandResolver.daemonProjectRootEnvironmentHint() == seededProjectRoot.path)
+            #expect(CommandResolver.bundledConsumerRuntimeProjectRoot()?.path == seededProjectRoot.path)
+            #expect(CommandResolver.projectRootEnvironmentHint() != bundledRoot.appendingPathComponent("openclaw").path)
             self.assertInstalledWorkspaceTemplates(
                 at: ConsumerRuntime.installPrefixURL,
                 fileManager: FileManager.default)
