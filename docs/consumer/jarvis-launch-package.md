@@ -131,8 +131,11 @@ Current package truth:
   launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
 - Do not send to Reddit/GitHub/public-ish beta until the `ai.jarvis.mac`
   bundle/runtime/update migration is complete.
-- Clean up old local OpenClaw app/package variants on Artem's machine only
-  after an exact delete list is approved.
+- Local cleanup on Artem's machine was completed after approval on 2026-05-16:
+  the old `/Applications/OpenClaw.app`, stale GUI smoke app processes, and stale
+  `gui-verify` / `consolidation-gui-smoke` / `macos-ui-cleanup` LaunchAgents
+  were removed. `/Applications/Jarvis.app`, the default gateway, watchdog, mail
+  monitor, and the separate Chrome Telegram-live profile were kept.
 - Channels currently duplicates connected-bot text/buttons. This is not a
   blocker for the 3 trusted waiting testers, but it should get a focused UI
   polish lane before wider beta.
