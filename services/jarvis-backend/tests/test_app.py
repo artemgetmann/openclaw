@@ -1,7 +1,9 @@
+import json
 import os
 import sqlite3
 
 from fastapi.testclient import TestClient
+import httpx
 import pytest
 
 from app.main import app, get_settings
@@ -23,17 +25,40 @@ def reset_settings() -> None:
     get_settings.cache_clear()
 
 
+def install_mock_async_client(monkeypatch, handler) -> None:
+    """Route provider HTTP through httpx MockTransport so tests never hit the network."""
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+
+    def make_client(*args, **kwargs):
+        return real_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("app.main.httpx.AsyncClient", make_client)
+
+
 def test_health_reports_provider_presence_without_secret_values(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-provider-placeholder")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "test-places-provider-placeholder")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     reset_settings()
 
     response = TestClient(app).get("/healthz")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["providers"] == {"openai": True, "anthropic": False}
+    assert body["providers"] == {
+        "openai": True,
+        "anthropic": False,
+        "firecrawl": True,
+        "google_places": True,
+        "gemini": False,
+    }
     assert "test-openai-provider-placeholder" not in response.text
+    assert "test-firecrawl-provider-placeholder" not in response.text
+    assert "test-places-provider-placeholder" not in response.text
 
 
 def test_device_registration_returns_trial_contract_without_token_in_development(monkeypatch):
@@ -312,9 +337,128 @@ def test_configured_backend_token_is_required(monkeypatch):
     assert authorized.json()["state"] == "trial_active"
 
 
-def test_managed_utility_never_returns_provider_key(monkeypatch):
+def test_firecrawl_search_calls_provider_and_redacts_echoed_key(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-managed-provider-placeholder")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.firecrawl.dev/v2/search"
+        assert request.headers["authorization"] == "Bearer test-firecrawl-provider-placeholder"
+        assert json.loads(request.content) == {"query": "founder mode", "limit": 3}
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": [{"title": "Jarvis", "url": "https://example.com"}],
+                "creditsUsed": 2,
+                "debug": "test-firecrawl-provider-placeholder",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.search",
+        json={"input": {"query": "founder mode", "limit": 3}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["result"]["provider"] == "firecrawl"
+    assert body["result"]["payload"]["data"][0]["title"] == "Jarvis"
+    assert body["result"]["payload"]["debug"] == "[redacted]"
+    assert body["usage"]["units"] == 2
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_firecrawl_scrape_calls_provider_with_markdown_format(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.firecrawl.dev/v2/scrape"
+        assert request.headers["authorization"] == "Bearer test-firecrawl-provider-placeholder"
+        assert json.loads(request.content) == {
+            "url": "https://example.com",
+            "formats": ["markdown"],
+        }
+        return httpx.Response(
+            200,
+            json={"success": True, "data": {"markdown": "# Example"}, "creditsUsed": 1},
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.scrape",
+        json={"input": {"url": "https://example.com"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["provider"] == "firecrawl"
+    assert response.json()["result"]["payload"]["data"]["markdown"] == "# Example"
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_google_places_search_calls_provider_and_redacts_echoed_key(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "test-places-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://places.googleapis.com/v1/places:searchText"
+        assert request.headers["x-goog-api-key"] == "test-places-provider-placeholder"
+        assert "places.displayName" in request.headers["x-goog-fieldmask"]
+        assert json.loads(request.content) == {"textQuery": "coffee near KLCC", "pageSize": 4}
+        return httpx.Response(
+            200,
+            json={
+                "places": [
+                    {
+                        "id": "place-123",
+                        "displayName": {"text": "Coffee Bar"},
+                        "formattedAddress": "Kuala Lumpur",
+                    }
+                ],
+                "debug": "test-places-provider-placeholder",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/google_places.search",
+        json={"input": {"query": "coffee near KLCC", "limit": 4}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"]["provider"] == "google_places"
+    assert body["result"]["payload"]["places"][0]["id"] == "place-123"
+    assert body["result"]["payload"]["debug"] == "[redacted]"
+    assert "test-places-provider-placeholder" not in response.text
+
+
+def test_managed_utility_missing_provider_key_fails_closed(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    reset_settings()
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.search",
+        json={"input": {"query": "founder mode"}},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "firecrawl provider is not configured"
+    assert response.json().get("ok") is None
+
+
+def test_unknown_managed_utility_returns_not_found(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     reset_settings()
 
     response = TestClient(app).post(
@@ -322,10 +466,8 @@ def test_managed_utility_never_returns_provider_key(monkeypatch):
         json={"input": {"ignored": True}},
     )
 
-    assert response.status_code == 200
-    assert response.json()["ok"] is True
-    assert response.json()["result"]["providers"]["openai"] is True
-    assert "test-managed-provider-placeholder" not in response.text
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Unknown managed utility: provider_status"
 
 
 def teardown_function():
@@ -338,5 +480,8 @@ def teardown_function():
         "NEON_DATABASE_URL",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
+        "FIRECRAWL_API_KEY",
+        "GOOGLE_PLACES_API_KEY",
+        "GEMINI_API_KEY",
     ):
         os.environ.pop(key, None)

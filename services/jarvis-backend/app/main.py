@@ -10,11 +10,15 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+import httpx
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel, Field
 
 SERVICE_VERSION = "0.1.0"
+FIRECRAWL_API_BASE_URL = "https://api.firecrawl.dev/v2"
+GOOGLE_PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+MANAGED_UTILITY_TIMEOUT_SECONDS = 20.0
 
 
 class Settings(BaseModel):
@@ -28,6 +32,9 @@ class Settings(BaseModel):
     neon_database_url: str | None = None
     openai_configured: bool = False
     anthropic_configured: bool = False
+    firecrawl_api_key: str | None = Field(default=None, repr=False)
+    google_places_api_key: str | None = Field(default=None, repr=False)
+    gemini_api_key: str | None = Field(default=None, repr=False)
 
 
 @lru_cache(maxsize=1)
@@ -43,6 +50,9 @@ def get_settings() -> Settings:
         neon_database_url=os.getenv("NEON_DATABASE_URL") or None,
         openai_configured=bool(os.getenv("OPENAI_API_KEY")),
         anthropic_configured=bool(os.getenv("ANTHROPIC_API_KEY")),
+        firecrawl_api_key=os.getenv("FIRECRAWL_API_KEY") or None,
+        google_places_api_key=os.getenv("GOOGLE_PLACES_API_KEY") or None,
+        gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
     )
 
 
@@ -155,9 +165,7 @@ class ManagedUtilityUsage(BaseModel):
 
 
 class ManagedUtilityResult(BaseModel):
-    utility: str
-    providers: dict[str, bool]
-    message: str
+    provider: str
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -321,23 +329,243 @@ async def managed_utility(
     settings: Settings = Depends(get_settings),
 ) -> ManagedUtilityResponse:
     """
-    Placeholder for future server-held provider-key operations.
+    Execute the first server-managed utilities with provider keys held here.
 
-    The response only exposes provider availability. Raw keys remain process
-    env on the server, which is the core safety boundary this service exists to
-    establish before real managed features are wired in.
+    The app sends a small, provider-neutral input. This backend performs the
+    provider call, redacts configured secrets from any echoed JSON, and returns
+    the stable envelope the app already expects.
     """
+
+    if utility == "firecrawl.search":
+        return await _firecrawl_search(request.input, settings)
+    if utility == "firecrawl.scrape":
+        return await _firecrawl_scrape(request.input, settings)
+    if utility == "google_places.search":
+        return await _google_places_search(request.input, settings)
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Unknown managed utility: {utility}",
+    )
+
+
+async def _firecrawl_search(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Run a conservative Firecrawl web search using the server-held API key."""
+
+    api_key = _require_provider_key("firecrawl", settings.firecrawl_api_key)
+    query = _required_input_string(input_payload, "query", "firecrawl.search")
+    limit = _optional_limit(input_payload, default=5, maximum=10, utility="firecrawl.search")
+    provider_payload = await _post_provider_json(
+        provider="firecrawl",
+        url=f"{FIRECRAWL_API_BASE_URL}/search",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json_payload={"query": query, "limit": limit},
+        settings=settings,
+    )
+    return _managed_provider_response("firecrawl", provider_payload)
+
+
+async def _firecrawl_scrape(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Scrape one URL through Firecrawl and request markdown by default."""
+
+    api_key = _require_provider_key("firecrawl", settings.firecrawl_api_key)
+    url = _required_input_string(input_payload, "url", "firecrawl.scrape")
+    provider_payload = await _post_provider_json(
+        provider="firecrawl",
+        url=f"{FIRECRAWL_API_BASE_URL}/scrape",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json_payload={"url": url, "formats": ["markdown"]},
+        settings=settings,
+    )
+    return _managed_provider_response("firecrawl", provider_payload)
+
+
+async def _google_places_search(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Run Google Places Text Search with a tight field mask to control payload size."""
+
+    api_key = _require_provider_key("google_places", settings.google_places_api_key)
+    query = _required_input_string(input_payload, "query", "google_places.search")
+    limit = _optional_limit(input_payload, default=5, maximum=10, utility="google_places.search")
+    provider_payload = await _post_provider_json(
+        provider="google_places",
+        url=GOOGLE_PLACES_TEXT_SEARCH_URL,
+        headers={
+            "X-Goog-Api-Key": api_key,
+            "X-Goog-FieldMask": (
+                "places.id,places.displayName,places.formattedAddress,"
+                "places.location,places.googleMapsUri,nextPageToken"
+            ),
+        },
+        json_payload={"textQuery": query, "pageSize": limit},
+        settings=settings,
+    )
+    return _managed_provider_response("google_places", provider_payload)
+
+
+async def _post_provider_json(
+    *,
+    provider: str,
+    url: str,
+    headers: dict[str, str],
+    json_payload: dict[str, Any],
+    settings: Settings,
+) -> dict[str, Any]:
+    """POST provider JSON while converting network failures into clean API errors."""
+
+    try:
+        async with httpx.AsyncClient(timeout=MANAGED_UTILITY_TIMEOUT_SECONDS) as client:
+            response = await client.post(url, headers=headers, json=json_payload)
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"{provider} request timed out",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"{provider} request failed",
+        ) from exc
+
+    provider_payload = _response_json_or_text(response)
+    sanitized_payload = _sanitize_provider_payload(provider_payload, settings)
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "provider": provider,
+                "status": response.status_code,
+                "payload": sanitized_payload,
+            },
+        )
+
+    if isinstance(sanitized_payload, dict):
+        return sanitized_payload
+    return {"value": sanitized_payload}
+
+
+def _response_json_or_text(response: httpx.Response) -> Any:
+    """Keep provider pass-through JSON-first, with text fallback for bad responses."""
+
+    try:
+        return response.json()
+    except ValueError:
+        return {"text": response.text}
+
+
+def _require_provider_key(provider: str, api_key: str | None) -> str:
+    """Fail closed when Render has not been configured for this managed utility."""
+
+    if api_key:
+        return api_key
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=f"{provider} provider is not configured",
+    )
+
+
+def _required_input_string(input_payload: dict[str, Any], field_name: str, utility: str) -> str:
+    """Validate the tiny public utility contract before spending provider quota."""
+
+    raw_value = input_payload.get(field_name)
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} requires input.{field_name}",
+        )
+    return raw_value.strip()
+
+
+def _optional_limit(
+    input_payload: dict[str, Any],
+    *,
+    default: int,
+    maximum: int,
+    utility: str,
+) -> int:
+    """Read a small positive limit so managed calls stay bounded by default."""
+
+    raw_value = input_payload.get("limit")
+    if raw_value is None:
+        return default
+    if (
+        isinstance(raw_value, bool)
+        or not isinstance(raw_value, int)
+        or raw_value < 1
+        or raw_value > maximum
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} input.limit must be an integer between 1 and {maximum}",
+        )
+    return raw_value
+
+
+def _managed_provider_response(
+    provider: str,
+    provider_payload: dict[str, Any],
+) -> ManagedUtilityResponse:
+    """Wrap provider JSON in the app-facing envelope without leaking keys."""
 
     return ManagedUtilityResponse(
         ok=True,
         result=ManagedUtilityResult(
-            utility=utility,
-            providers=_provider_presence(settings),
-            message="Managed utility contract is available; provider keys are server-held.",
-            payload={},
+            provider=provider,
+            payload=provider_payload,
         ),
-        usage=ManagedUtilityUsage(),
+        usage=ManagedUtilityUsage(units=_provider_units(provider_payload)),
     )
+
+
+def _provider_units(provider_payload: dict[str, Any]) -> int:
+    """Expose coarse usage when the provider returns it, otherwise count one call."""
+
+    credits_used = provider_payload.get("creditsUsed")
+    if isinstance(credits_used, int) and not isinstance(credits_used, bool) and credits_used >= 0:
+        return credits_used
+    return 1
+
+
+def _sanitize_provider_payload(payload: Any, settings: Settings) -> Any:
+    """Recursively redact known server secrets if a provider ever echoes them."""
+
+    secrets_to_redact = [
+        value
+        for value in (
+            settings.api_token,
+            settings.firecrawl_api_key,
+            settings.google_places_api_key,
+            settings.gemini_api_key,
+        )
+        if value
+    ]
+    return _redact_known_secrets(payload, secrets_to_redact)
+
+
+def _redact_known_secrets(payload: Any, secrets_to_redact: list[str]) -> Any:
+    """Replace exact configured secret substrings while preserving provider shape."""
+
+    if isinstance(payload, dict):
+        return {
+            key: _redact_known_secrets(value, secrets_to_redact)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [_redact_known_secrets(value, secrets_to_redact) for value in payload]
+    if isinstance(payload, str):
+        redacted_value = payload
+        for secret_value in secrets_to_redact:
+            redacted_value = redacted_value.replace(secret_value, "[redacted]")
+        return redacted_value
+    return payload
 
 
 class LicenseRecord(BaseModel):
@@ -921,6 +1149,9 @@ def _provider_presence(settings: Settings) -> dict[str, bool]:
     return {
         "openai": settings.openai_configured,
         "anthropic": settings.anthropic_configured,
+        "firecrawl": bool(settings.firecrawl_api_key),
+        "google_places": bool(settings.google_places_api_key),
+        "gemini": bool(settings.gemini_api_key),
     }
 
 
