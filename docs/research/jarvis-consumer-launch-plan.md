@@ -894,6 +894,13 @@ Sparkle update-cycle work.
 Order:
 
 1. Packaged GUI proof of current `main`.
+   - For onboarding copy/layout iteration, run
+     `bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <id>` first.
+     It builds the native SwiftUI app from source and launches it through a tiny
+     debug `.app` wrapper without `/Applications` installs, release packaging,
+     or default gateway restarts.
+   - Use packaged GUI proof only when the bundle/release artifact itself is the
+     thing being tested.
    - Build/run an isolated Jarvis app from current `main`.
    - Use Computer Use to inspect the four onboarding pages.
    - Verify Browser/AI access do not visibly reset to "Checking..." on app
