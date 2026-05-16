@@ -90,7 +90,9 @@ export function resolveContextPressureNotice(params: {
 export function buildContextPressureNoticeMarker(params: {
   sessionEntry?: Pick<SessionEntry, "compactionCount">;
   now?: number;
-}): Pick<SessionEntry, "contextPressureNoticeAt" | "contextPressureNoticeCompactionCount"> {
+}): Required<
+  Pick<SessionEntry, "contextPressureNoticeAt" | "contextPressureNoticeCompactionCount">
+> {
   return {
     contextPressureNoticeAt: params.now ?? Date.now(),
     contextPressureNoticeCompactionCount: params.sessionEntry?.compactionCount ?? 0,
