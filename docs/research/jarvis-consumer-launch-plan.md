@@ -689,7 +689,8 @@ Bootstrap should answer:
 
 ### 11.5 Provider and managed-utility readiness
 
-Provider smoke from the 2026-05-16 clean-copy walkthrough:
+Provider smoke from the 2026-05-16 clean-copy walkthrough and follow-up
+provider worker:
 
 - Backend `/healthz` is live in production and reports OpenAI configured,
   Anthropic not configured.
@@ -698,16 +699,24 @@ Provider smoke from the 2026-05-16 clean-copy walkthrough:
   OpenAI STT, Brave, Firecrawl, Google Places, Gemini/Nano Banana, or Anthropic
   work.
 - Local OpenAI STT works through the active OpenClaw config
-  `OPENAI_NON_MODEL_API_KEY`.
-- Brave search works through the active OpenClaw config.
-- Firecrawl, Google Places, and Gemini/Nano Banana-style config entries are
-  present locally but failed live smoke as invalid credentials.
-- Anthropic is missing locally and on the production backend.
+  `OPENAI_NON_MODEL_API_KEY`; the follow-up worker transcribed a valid WAV
+  fixture with HTTP 200 and returned text.
+- Brave search works through the active OpenClaw config; the follow-up worker
+  got HTTP 200 and one result for a harmless query.
+- Firecrawl now works locally; `POST /v2/scrape` for `https://example.com`
+  returned HTTP 200 with `success` and `data`.
+- Google Places still fails live smoke with `400 API_KEY_INVALID`.
+- Gemini/Nano Banana key validation is partially green: Gemini model listing
+  returned HTTP 200 with 50 models. Image generation was not re-smoked yet.
+- Anthropic is locally present now, but production `/healthz` still reports
+  Anthropic not configured. No Anthropic live model smoke is counted here.
 
 Before wider beta:
 
-- [ ] Replace or remove invalid Firecrawl, Google Places, and Gemini/Nano
-      Banana credentials before claiming those utilities work.
+- [ ] Replace the invalid Google Places credential before claiming Google
+      Places/location search works.
+- [ ] Run a real Gemini/Nano Banana image-generation smoke before claiming image
+      generation works, even though model-list validation passes.
 - [ ] Add real backend-managed utility endpoints or remove managed-utility
       claims from consumer copy until they exist.
 - [ ] Keep `OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS=1` out of public
@@ -922,6 +931,17 @@ Sparkle update-cycle work.
 Order:
 
 1. Packaged GUI proof of current `main`.
+   - Status: fast GUI copy/layout proof passed on 2026-05-16 using
+     `Jarvis UI Smoke (gui-proof)` from merged `main`.
+   - Computer Use must target the smoke app by app name or bundle ID
+     (`Jarvis UI Smoke (gui-proof)` or
+     `ai.openclaw.consumer.mac.debug.ui-smoke.gui-proof`), not by the full
+     `.app` path.
+   - Verified the Chrome, Mac permissions, AI access, and Telegram pages through
+     Computer Use. The Telegram page screenshot was captured by CG window ID at
+     `/tmp/jarvis-gui-proof/jarvis-telegram-window.png`.
+   - Limit: the fast smoke launches with `--no-launchd`, so it proves
+     page/copy/layout and app-window targeting, not full AI/backend readiness.
    - For onboarding copy/layout iteration, run
      `bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <id>` first.
      It builds the native SwiftUI app from source and launches it through a tiny
@@ -935,11 +955,15 @@ Order:
      focus or setup-tab return.
    - Do not install into `/Applications` and do not restart the default gateway.
 2. Copy rewrite on the four-page shell.
+   - Status: landed in PR #733 and verified in the fast GUI proof. Telegram copy
+     is shorter and the advanced group/topic guidance is below the main DM path.
    - Rewrite against real Chrome, Mac permissions, AI access, and Telegram
      pages.
    - Rebuild/run the isolated app.
    - Review screenshots/flow as one package rather than sentence-by-sentence.
 3. Telegram Managed Bots proof spike.
+   - Status: dry-run harness passed on 2026-05-16. Live proof is blocked because
+     no local manager bot token or manager username is available.
    - Do not do a full migration first.
    - Spike harness exists at `scripts/telegram-managed-bots-spike.mjs`; dry-run
      validates link generation and token redaction without network calls.
@@ -952,9 +976,15 @@ Order:
      `setManagedBotAccessSettings(is_access_restricted=true)`.
    - If this fails, keep BotFather setup as the advanced fallback and avoid
      migration work.
+   - Next live gate: provide `TELEGRAM_MANAGER_BOT_TOKEN` and
+     `MANAGER_BOT_USERNAME` locally without exposing the token, then rerun
+     `node scripts/telegram-managed-bots-spike.mjs`.
 4. Provider/backend utility hardening.
-   - Fix invalid Firecrawl, Google Places, and Gemini/Nano Banana credentials or
-     remove those claims from launch copy.
+   - Status: OpenAI STT, Brave, Firecrawl, and Gemini model-list validation are
+     green. Google Places still fails with `API_KEY_INVALID`.
+   - Fix the invalid Google Places credential or remove Google Places/location
+     claims from launch copy.
+   - Run Gemini image-generation proof before claiming Nano Banana/image paths.
    - Decide whether backend-managed utilities become real endpoints now or stay
      local-only for trusted beta.
 
