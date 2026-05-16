@@ -4,6 +4,7 @@ import type { OnboardOptions } from "../../onboard-types.js";
 
 export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "consumer-setup",
+  "timezone-preference-updater",
   "checkpoint",
   "monitor-router",
   "apple-notes",

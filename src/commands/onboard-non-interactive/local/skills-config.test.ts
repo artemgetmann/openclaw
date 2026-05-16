@@ -33,6 +33,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(next.skills?.allowBundled).toEqual(
       expect.arrayContaining([
         "consumer-setup",
+        "timezone-preference-updater",
         "checkpoint",
         "monitor-router",
         "mcporter",

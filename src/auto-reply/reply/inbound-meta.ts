@@ -1,7 +1,18 @@
+import {
+  formatUserTime,
+  normalizeTimestamp,
+  resolveUserTimeFormat,
+} from "../../agents/date-time.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import type { TemplateContext } from "../templating.js";
+
+type InboundUserContextOptions = {
+  cfg?: Pick<OpenClawConfig, "agents">;
+  nowMs?: number;
+};
 
 function safeTrim(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -40,6 +51,77 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
     }
   }
   return channelValue;
+}
+
+function resolveMessageSentAtUtc(rawTimestamp: unknown): string | undefined {
+  try {
+    const messageTimestamp = normalizeTimestamp(rawTimestamp);
+    if (!messageTimestamp || Number.isNaN(new Date(messageTimestamp.timestampMs).getTime())) {
+      return undefined;
+    }
+    return new Date(messageTimestamp.timestampMs).toISOString();
+  } catch {
+    return undefined;
+  }
+}
+
+function isValidTimezone(timeZone: string | undefined): timeZone is string {
+  if (!timeZone) {
+    return false;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveHostTimezone(): string | undefined {
+  const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone?.trim();
+  return isValidTimezone(hostTimezone) ? hostTimezone : undefined;
+}
+
+function resolveTrustedTimezone(configuredTimezone: string | undefined): {
+  timeZone: string;
+  source: "user_config" | "runtime_host" | "utc_fallback";
+} {
+  const trimmed = configuredTimezone?.trim();
+  const lower = trimmed?.toLowerCase();
+
+  if (trimmed && lower !== "local" && lower !== "host" && isValidTimezone(trimmed)) {
+    return { timeZone: trimmed, source: "user_config" };
+  }
+
+  const hostTimezone = resolveHostTimezone();
+  if (hostTimezone) {
+    return { timeZone: hostTimezone, source: "runtime_host" };
+  }
+
+  return { timeZone: "UTC", source: "utc_fallback" };
+}
+
+function buildTrustedTimeContext(
+  ctx: TemplateContext,
+  options: InboundUserContextOptions,
+): Record<string, unknown> {
+  const { timeZone: currentTimezone, source: timezoneSource } = resolveTrustedTimezone(
+    options.cfg?.agents?.defaults?.userTimezone,
+  );
+  const currentTimeFormat = resolveUserTimeFormat(options.cfg?.agents?.defaults?.timeFormat);
+  const now = new Date(options.nowMs ?? Date.now());
+
+  // Keep this block machine-generated and compact. The legacy `timestamp` field in
+  // Conversation info remains untouched; these fields are the trusted time source
+  // agents should use for timezone-sensitive reasoning.
+  return {
+    message_sent_at_utc: resolveMessageSentAtUtc(ctx.Timestamp),
+    current_time_local:
+      formatUserTime(now, currentTimezone, currentTimeFormat) ?? now.toISOString(),
+    current_time_utc: now.toISOString(),
+    current_timezone: currentTimezone,
+    timezone_source: timezoneSource,
+  };
 }
 
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
@@ -81,7 +163,10 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   ].join("\n");
 }
 
-export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
+export function buildInboundUserContextPrefix(
+  ctx: TemplateContext,
+  options: InboundUserContextOptions = {},
+): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -95,6 +180,15 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const messageIdFull = safeTrim(ctx.MessageSidFull);
   const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp);
+
+  blocks.push(
+    [
+      "Time context (trusted metadata):",
+      "```json",
+      JSON.stringify(buildTrustedTimeContext(ctx, options), null, 2),
+      "```",
+    ].join("\n"),
+  );
 
   const conversationInfo = {
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
