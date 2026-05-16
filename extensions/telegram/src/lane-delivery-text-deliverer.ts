@@ -168,6 +168,7 @@ export function normalizeAdjacentProgressBoundaries(text: string): string {
     .replace(/([^\n*])((?:\*\*)?Step\s+\d(?:\s+of\s+\d+)?\s*[:—-])/g, "$1\n\n$2")
     .replace(/([^\n*])(Step\s+\d(?:\s+of\s+\d+)?\s*[:—-])/g, "$1\n\n$2")
     .replace(/\*{4,}(Step\s+\d(?:\s+of\s+\d+)?\s*[:—-])/g, "\n\n$1")
+    .replace(/([.!?])([A-Z]{2,}\b)/g, "$1\n\n$2")
     .replace(/([^\n])(Redirect\b)/g, "$1\n\n$2");
   const paragraphs = separated.split(/\n{2,}/);
   const deduped: string[] = [];
