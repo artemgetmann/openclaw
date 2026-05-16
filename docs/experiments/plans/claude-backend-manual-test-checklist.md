@@ -125,6 +125,105 @@ Fail criteria:
 - The final response loses the progress context entirely.
 - The final marker is missing or altered.
 
+## Main Bot Smoke After Restart
+
+Purpose: this is main-bot acceptance testing, not final broad release. Do this
+only after the main Jarvis runtime is restarted from updated `main`.
+
+1. Send:
+
+```text
+/status
+```
+
+Check:
+
+- Model list contains Claude CLI options.
+- Current model is expected.
+- Normal Claude CLI context is `200k` unless an explicit `[1m]` model is
+  selected.
+
+2. Send:
+
+```text
+/model claude-cli/sonnet
+```
+
+Check:
+
+- Accepted.
+- No `model not allowed` error.
+
+3. Send:
+
+```text
+What prompt/source files do you see as authoritative for this Telegram session?
+```
+
+Check:
+
+- OpenClaw workspace/app support files are treated as authority.
+- `~/.claude` may be visible as Claude-native context, but should not be treated
+  as OpenClaw authority.
+
+4. Send:
+
+```text
+draft a tweet in my tone of voice about moving from codex cli to codex app
+```
+
+Check:
+
+- Uses Artem's tone skill without being spoon-fed.
+- Does not say it has no tone context.
+
+5. Send:
+
+```text
+remind me in 1 min to test claude cli reminders
+```
+
+Check:
+
+- Says scheduled only if it actually scheduled.
+- Wakes back up around one minute later.
+- Sends the reminder in the same Telegram chat/topic.
+
+6. Send:
+
+```text
+summarize this reddit thread and explain your process after done: <url>
+```
+
+Check:
+
+- Uses the Reddit/OpenClaw skill path or clearly explains the equivalent process.
+- Progress updates have readable spacing.
+- Final answer keeps useful progress/process instead of clearing it.
+- No message spam.
+
+7. Optional 1M side check:
+
+```text
+/model claude-cli/sonnet[1m]
+/status
+```
+
+Check:
+
+- Model is accepted only if Claude Code supports it on this machine/account.
+- `/status` reports about `1M` context only for explicit `[1m]` models.
+- If Sonnet 1M fails because of account entitlement, do not block the core
+  Claude backend acceptance on it.
+
+Recommendation:
+
+- Merge/restart is acceptable if this is treated as main-bot acceptance testing,
+  not final broad release.
+- Do not broaden/default-expose Claude CLI until this manual smoke passes.
+- If reminder wakeup fails again, make that blocker #1. That is a trust issue,
+  not polish.
+
 ## Current Lane Status
 
 - Skills: product-level OpenClaw CLI proof passed on `claude-cli/sonnet` using
