@@ -76,23 +76,27 @@ describe("acpx ensure", () => {
       });
   }
 
-  function expectEnsureInstallCalls(stripProviderAuthEnvVars?: boolean) {
+  function expectEnsureInstallCalls(
+    stripProviderAuthEnvVars?: boolean,
+    pluginRoot = "/plugin",
+    command = path.join(pluginRoot, "node_modules", ".bin", "acpx"),
+  ) {
     expect(spawnAndCollectMock.mock.calls[0]?.[0]).toMatchObject({
-      command: "/plugin/node_modules/.bin/acpx",
+      command,
       args: ["--version"],
-      cwd: "/plugin",
+      cwd: pluginRoot,
       stripProviderAuthEnvVars,
     });
     expect(spawnAndCollectMock.mock.calls[1]?.[0]).toMatchObject({
       command: "npm",
       args: ["install", "--omit=dev", "--no-save", `acpx@${ACPX_PINNED_VERSION}`],
-      cwd: "/plugin",
+      cwd: pluginRoot,
       stripProviderAuthEnvVars,
     });
     expect(spawnAndCollectMock.mock.calls[2]?.[0]).toMatchObject({
-      command: "/plugin/node_modules/.bin/acpx",
+      command,
       args: ["--version"],
-      cwd: "/plugin",
+      cwd: pluginRoot,
       stripProviderAuthEnvVars,
     });
   }
@@ -220,32 +224,62 @@ describe("acpx ensure", () => {
   });
 
   it("installs and verifies pinned acpx when precheck fails", async () => {
+    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-ensure-install-"));
+    tempDirs.push(pluginRoot);
+    const command = path.join(pluginRoot, "node_modules", ".bin", "acpx");
     mockEnsureInstallFlow();
 
     await ensureAcpx({
-      command: "/plugin/node_modules/.bin/acpx",
-      pluginRoot: "/plugin",
+      command,
+      pluginRoot,
       expectedVersion: ACPX_PINNED_VERSION,
     });
 
     expect(spawnAndCollectMock).toHaveBeenCalledTimes(3);
-    expectEnsureInstallCalls();
+    expectEnsureInstallCalls(undefined, pluginRoot, command);
   });
 
-  it("threads stripProviderAuthEnvVars through version probes and install", async () => {
+  it("creates the managed install root before probing and installing", async () => {
+    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-managed-root-parent-"));
+    fs.rmSync(pluginRoot, { recursive: true, force: true });
+    tempDirs.push(pluginRoot);
     mockEnsureInstallFlow();
 
     await ensureAcpx({
-      command: "/plugin/node_modules/.bin/acpx",
-      pluginRoot: "/plugin",
+      command: path.join(pluginRoot, "node_modules", ".bin", "acpx"),
+      pluginRoot,
+      expectedVersion: ACPX_PINNED_VERSION,
+    });
+
+    expect(fs.existsSync(pluginRoot)).toBe(true);
+    expect(spawnAndCollectMock.mock.calls[0]?.[0]).toMatchObject({
+      cwd: pluginRoot,
+    });
+    expect(spawnAndCollectMock.mock.calls[1]?.[0]).toMatchObject({
+      cwd: pluginRoot,
+    });
+  });
+
+  it("threads stripProviderAuthEnvVars through version probes and install", async () => {
+    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-ensure-strip-"));
+    tempDirs.push(pluginRoot);
+    const command = path.join(pluginRoot, "node_modules", ".bin", "acpx");
+    mockEnsureInstallFlow();
+
+    await ensureAcpx({
+      command,
+      pluginRoot,
       expectedVersion: ACPX_PINNED_VERSION,
       stripProviderAuthEnvVars: true,
     });
 
-    expectEnsureInstallCalls(true);
+    expectEnsureInstallCalls(true, pluginRoot, command);
   });
 
   it("fails with actionable error when npm install fails", async () => {
+    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-ensure-fail-"));
+    tempDirs.push(pluginRoot);
+    const command = path.join(pluginRoot, "node_modules", ".bin", "acpx");
     spawnAndCollectMock
       .mockResolvedValueOnce({
         stdout: "acpx 0.0.9\n",
@@ -262,8 +296,8 @@ describe("acpx ensure", () => {
 
     await expect(
       ensureAcpx({
-        command: "/plugin/node_modules/.bin/acpx",
-        pluginRoot: "/plugin",
+        command,
+        pluginRoot,
         expectedVersion: ACPX_PINNED_VERSION,
       }),
     ).rejects.toThrow("failed to install plugin-local acpx");

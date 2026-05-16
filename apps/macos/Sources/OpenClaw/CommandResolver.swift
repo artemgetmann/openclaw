@@ -52,9 +52,9 @@ enum CommandResolver {
     }
 
     static func projectRoot(preferredBundledRuntimeRoot: URL?) -> URL {
-        // Consumer packages carry the runtime they should operate. A stale
-        // developer default from a prior source-checkout smoke must not make
-        // the visible app believe the gateway should still point at the repo.
+        // Consumer packages carry a seeded runtime under Application Support.
+        // The app bundle is read-only seed material; once the seed exists, that
+        // copy must win over stale defaults or raw bundle resources.
         if AppFlavor.current.isConsumer,
            let preferredBundledRuntimeRoot,
            self.isRepoRoot(preferredBundledRuntimeRoot),
@@ -85,10 +85,9 @@ enum CommandResolver {
 
     static func bundledConsumerRuntimeProjectRoot() -> URL? {
         guard AppFlavor.current.isConsumer else { return nil }
-        guard let resourceURL = ConsumerBundledRuntime.resourceURL() else { return nil }
-        let root = resourceURL.appendingPathComponent("openclaw", isDirectory: true)
-        // Only advertise the packaged root once it can actually boot the gateway.
-        // A partial or malformed bundle should fall back to the source/dev paths.
+        let root = ConsumerBundledRuntime.installedProjectRoot()
+        // Only advertise the packaged root once the seeded copy can actually boot
+        // the gateway. Bundle resources are only used to seed this location.
         guard self.isRepoRoot(root), self.gatewayEntrypoint(in: root) != nil else { return nil }
         return root
     }
@@ -140,7 +139,8 @@ enum CommandResolver {
 
     static func daemonProjectRootEnvironmentHint() -> String? {
         // The CLI install command snapshots OPENCLAW_FORK_ROOT into launchd.
-        // For packaged consumer apps, that must be the bundled runtime root.
+        // For packaged consumer apps, that must be the seeded Application Support
+        // runtime root, not the read-only bundle resources.
         if let bundledRoot = self.bundledConsumerRuntimeProjectRoot() {
             return bundledRoot.path
         }

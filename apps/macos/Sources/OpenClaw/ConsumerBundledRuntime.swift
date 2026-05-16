@@ -62,7 +62,15 @@ enum ConsumerBundledRuntime {
         }
     }
 
+    static func installedProjectRoot() -> URL {
+        ConsumerRuntime.installPrefixURL
+            .appendingPathComponent("lib", isDirectory: true)
+            .appendingPathComponent(self.installedPayloadDirectoryName, isDirectory: true)
+    }
+
     static func resourceURL(bundle: Bundle = .main) -> URL? {
+        // The app bundle is read-only seed input. Runtime resolution should
+        // point at the installed Application Support copy once it exists.
         #if DEBUG
         if let hook = self.testResourceURLHook {
             return hook()
@@ -73,6 +81,12 @@ enum ConsumerBundledRuntime {
             return nil
         }
         return resourceURL
+    }
+
+    static func installedProjectRoot(installPrefixURL: URL = ConsumerRuntime.installPrefixURL) -> URL {
+        installPrefixURL
+            .appendingPathComponent("lib", isDirectory: true)
+            .appendingPathComponent(self.installedPayloadDirectoryName, isDirectory: true)
     }
 
     static func seedIfNeeded(
@@ -92,9 +106,7 @@ enum ConsumerBundledRuntime {
         let stagingRoot = try self.makeStagingRoot(near: installPrefixURL, fileManager: fileManager)
         defer { try? fileManager.removeItem(at: stagingRoot) }
 
-        let stagedOpenClawRoot = stagingRoot
-            .appendingPathComponent("lib", isDirectory: true)
-            .appendingPathComponent(self.installedPayloadDirectoryName, isDirectory: true)
+        let stagedOpenClawRoot = self.installedProjectRoot(installPrefixURL: stagingRoot)
         let stagedNodeRoot = stagingRoot
             .appendingPathComponent("tools", isDirectory: true)
             .appendingPathComponent("node", isDirectory: true)

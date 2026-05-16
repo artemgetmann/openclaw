@@ -9,6 +9,7 @@ import {
   ACPX_PINNED_VERSION,
   createAcpxPluginConfigSchema,
   resolveManagedAcpxCommand,
+  resolveManagedAcpxInstallRoot,
   resolveAcpxPluginRoot,
   resolveAcpxPluginConfig,
 } from "./config.js";
@@ -105,6 +106,37 @@ describe("acpx plugin config parsing", () => {
     } finally {
       fs.rmSync(repoRoot, { recursive: true, force: true });
     }
+  });
+
+  it("moves managed installs for packaged consumer dist plugins into state cache", () => {
+    const distPluginRoot =
+      "/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw/dist/extensions/acpx";
+    const stateDir = "/Users/tester/Library/Application Support/OpenClaw/.openclaw";
+
+    expect(
+      resolveManagedAcpxInstallRoot(distPluginRoot, {
+        OPENCLAW_APP_VARIANT: "consumer",
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    ).toBe(path.join(stateDir, "cache", "extensions", "acpx"));
+  });
+
+  it("keeps source and non-consumer dist plugin installs local to the plugin", () => {
+    const repoRoot = "/Users/tester/Programming_Projects/openclaw";
+    const sourcePluginRoot = path.join(repoRoot, "extensions", "acpx");
+    const distPluginRoot = path.join(repoRoot, "dist", "extensions", "acpx");
+
+    expect(
+      resolveManagedAcpxInstallRoot(sourcePluginRoot, {
+        OPENCLAW_APP_VARIANT: "consumer",
+        OPENCLAW_STATE_DIR: "/tmp/state",
+      }),
+    ).toBe(sourcePluginRoot);
+    expect(
+      resolveManagedAcpxInstallRoot(distPluginRoot, {
+        OPENCLAW_STATE_DIR: "/tmp/state",
+      }),
+    ).toBe(distPluginRoot);
   });
 
   it("accepts command override and disables plugin-local auto-install", () => {

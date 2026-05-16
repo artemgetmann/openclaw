@@ -90,6 +90,7 @@ export function createAcpxRuntimeService(
           await ensureAcpx({
             command: pluginConfig.command,
             logger: ctx.logger,
+            pluginRoot: pluginConfig.installRoot,
             expectedVersion: pluginConfig.expectedVersion,
             allowInstall: pluginConfig.allowPluginLocalInstall,
             stripProviderAuthEnvVars: pluginConfig.stripProviderAuthEnvVars,
