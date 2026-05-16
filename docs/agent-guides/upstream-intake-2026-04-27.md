@@ -15,6 +15,8 @@ This is not an implementation plan for a single PR. It is the running ledger so 
 - what has landed
 - what was intentionally skipped
 
+For future loose signals that are not ready to become intake work, use `docs/agent-guides/upstream-updates-inbox.md`.
+
 ## Guardrails
 
 - Do not merge `upstream/main`.
