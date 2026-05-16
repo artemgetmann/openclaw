@@ -913,12 +913,12 @@ Progress:
       action. Screenshot:
       `/tmp/openclaw/full-after-ready-channel-click.png`. Caveat: the existing
       trusted-tester `Jarvis.dmg` was built before PR #719, so exact
-      release-DMG proof still requires a recut if this polish must ship in the
-      next artifact.
-- [ ] Run the next release lane with App Store Connect API key auth plus async
-      submit/poll/staple receipts. Keychain-profile notarization remains a
-      fallback only; ASC credentials and Sparkle tooling are now present on
-      Artem's machine, so the next action is dry-run release lane checks.
+      release-DMG proof still requires a recut only if we want the latest
+      merged polish/fixes in the artifact being sent.
+- [x] Dry-run release lane checks completed. App Store Connect API key auth and
+      Sparkle tooling are ready, so the real async submit/poll/staple path is
+      unblocked but was not run in this dry-run lane. Keychain-profile
+      notarization remains a fallback only.
 
 Remaining Settings/UI polish after PR #628:
 
