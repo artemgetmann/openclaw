@@ -799,14 +799,15 @@ Current implementation order:
     `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` from the machine release env;
     keep `NOTARYTOOL_PROFILE` as an emergency/manual fallback only. Artem must
     create or provide the real ASC API key if it is missing locally.
-12. Dry-run preflight lane truth on 2026-05-16: ASC API-key lane is not ready.
-    `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` are missing
-    from Artem's machine release env. The fallback `NOTARYTOOL_PROFILE` is
-    present and usable, but remains fallback-only. The preflight remains
-    read-only and never submits, staples, packages, uploads, or mutates release
-    assets. It must distinguish missing ASC API-key vars from a present/working
-    Keychain fallback, report Sparkle `generate_appcast` availability, and end
-    with the exact next operator action.
+12. Historical dry-run preflight lane truth from earlier on 2026-05-16: ASC
+    API-key lane was not ready because `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`,
+    and `NOTARYTOOL_ISSUER` were missing from Artem's machine release env. The
+    fallback `NOTARYTOOL_PROFILE` was present and usable, but remains
+    fallback-only. The preflight remains read-only and never submits, staples,
+    packages, uploads, or mutates release assets. It must distinguish missing
+    ASC API-key vars from a present/working Keychain fallback, report Sparkle
+    `generate_appcast` availability, and end with the exact next operator
+    action.
 13. Follow-up ASC/Sparkle check on 2026-05-16: Sparkle appcast tooling is not
     the blocker. `generate_appcast` is available from the repo SwiftPM build at
     `apps/macos/.build/artifacts/sparkle/Sparkle/bin/generate_appcast`.
@@ -822,9 +823,14 @@ Current implementation order:
     Store Connect API access request. Apple immediately showed "Your request to
     access the App Store Connect API was approved", `Active (0)`, and
     `Generate API Key`. Screenshot proof:
-    `/tmp/openclaw/asc-api-access-approved-generate-key.png`. The lane is now
-    blocked only on generating/downloading the `.p8` key once and wiring the
-    local release env/key path outside Git.
+    `/tmp/openclaw/asc-api-access-approved-generate-key.png`.
+16. Final ASC credential state on 2026-05-16: Artem approved key generation.
+    The `Jarvis Notary` team key was created with Developer access, its
+    one-time `.p8` was downloaded, moved out of iCloud Downloads, stored at
+    `~/Library/Application Support/OpenClaw/release-keys/`, and locked to mode
+    `600`. The machine release env now has `NOTARYTOOL_KEY`,
+    `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER`. Read-only preflight ended
+    with `Final: ASC API key lane ready.`
 
 Progress:
 
@@ -850,10 +856,12 @@ Progress:
 - [x] Non-secret Sparkle release config is machine-level at
       `~/Library/Application Support/OpenClaw/release.env` so release worktrees
       and chats inherit the same values.
-- [x] Dry-run preflight truth for the ASC release lane was captured on
-      2026-05-16: ASC API-key env is missing; fallback profile is present and
-      usable; Sparkle appcast tooling availability is explicit; the preflight
-      has no submit/staple/package/upload side effects.
+- [x] ASC release credential lane is ready on Artem's machine as of
+      2026-05-16: App Store Connect API access is approved, the `Jarvis Notary`
+      team key exists with Developer access, the `.p8` is stored outside Git in
+      Application Support, the ASC env trio is present in the machine release
+      env, fallback profile is still present, Sparkle appcast tooling is ready,
+      and the preflight has no submit/staple/package/upload side effects.
 - [x] ASC account-access blocker was captured on 2026-05-16: the API
       integrations page is reachable after login but shows the permission
       request message instead of keys; no local `AuthKey_*.p8` or actual ASC env
@@ -909,8 +917,8 @@ Progress:
       next artifact.
 - [ ] Run the next release lane with App Store Connect API key auth plus async
       submit/poll/staple receipts. Keychain-profile notarization remains a
-      fallback only; ASC API access is now approved, but Artem must
-      create/download the actual `.p8` key once if it is not already present.
+      fallback only; ASC credentials and Sparkle tooling are now present on
+      Artem's machine, so the next action is dry-run release lane checks.
 
 Remaining Settings/UI polish after PR #628:
 
@@ -1111,9 +1119,7 @@ Deployment/security boundary:
       waiting testers unless an immediate update is planned.
 - [ ] Run the next release lane with App Store Connect API key auth plus async
       submit/poll/staple receipts. Keep Keychain-profile auth as fallback only,
-      and have Artem create/provide the actual ASC API key if it is missing.
-      ASC API access itself is approved as of 2026-05-16; key generation and
-      local release-env wiring remain.
+      and use the now-ready ASC API-key lane from the machine release env.
 - [x] Delete old local OpenClaw app/package variants from Artem's machine after
       the exact delete list is approved. Completed 2026-05-16: removed
       `/Applications/OpenClaw.app`, stale GUI smoke processes, and stale

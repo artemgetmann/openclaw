@@ -126,14 +126,15 @@ Current package truth:
   `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
   machine release env; leave `NOTARYTOOL_PROFILE` unset unless deliberately
   using the fallback path.
-- Dry-run preflight truth on 2026-05-16: ASC API-key lane is not ready on
-  Artem's machine. `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and
-  `NOTARYTOOL_ISSUER` are missing from the machine release env. The fallback
-  `NOTARYTOOL_PROFILE` is present and usable, but remains fallback-only. The
-  release preflight should spell out that split, report whether Sparkle
-  `generate_appcast` is available, and name the exact next operator action
-  without printing secret values. The preflight is read-only and does not
-  submit notarization, staple, package, upload, or mutate release assets.
+- Historical dry-run preflight truth from earlier on 2026-05-16: ASC API-key
+  lane was not ready on Artem's machine because `NOTARYTOOL_KEY`,
+  `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` were missing from the machine
+  release env. The fallback `NOTARYTOOL_PROFILE` was present and usable, but
+  remains fallback-only. The release preflight should continue to spell out
+  that split, report whether Sparkle `generate_appcast` is available, and name
+  the exact next operator action without printing secret values. The preflight
+  is read-only and does not submit notarization, staple, package, upload, or
+  mutate release assets.
 - Keychain-profile notarization remains a fallback for emergency/manual
   recovery only. It should not be the default release path because Apple ID
   app-specific password and 2FA recovery made the previous package lane too
@@ -141,12 +142,10 @@ Current package truth:
 - Artem must create or provide the actual App Store Connect API key if it is
   not already present on the machine. Do not block the release docs on fake
   placeholders or commit key material.
-- Follow-up preflight on 2026-05-16 confirmed this split is current:
-  Sparkle `generate_appcast` is already available from the repo SwiftPM build,
-  while the ASC API-key trio is still absent from
-  `~/Library/Application Support/OpenClaw/release.env`. Local Spotlight search
-  also found no existing `AuthKey_*.p8`. This is not a Sparkle-tooling blocker;
-  it is a missing Apple API-key setup blocker.
+- Follow-up preflight on 2026-05-16 confirmed Sparkle `generate_appcast` is
+  already available from the repo SwiftPM build. Local Spotlight search found
+  no existing `AuthKey_*.p8`, so the missing piece was Apple API-key setup, not
+  Sparkle tooling.
 - Current ASC blocker captured by the conductor on 2026-05-16:
   `/access/integrations/api` is reachable after login, but it does not show API
   keys. It shows "Permission is required to access the App Store Connect API.
@@ -156,9 +155,14 @@ Current package truth:
   Connect API access request. Apple immediately showed "Your request to access
   the App Store Connect API was approved", `Active (0)`, and `Generate API Key`.
   Screenshot proof:
-  `/tmp/openclaw/asc-api-access-approved-generate-key.png`. Next step is to
-  generate/download the `.p8` key once, then wire only the local release env/key
-  path outside Git.
+  `/tmp/openclaw/asc-api-access-approved-generate-key.png`.
+- Final ASC credential state on 2026-05-16: Artem approved key generation. The
+  `Jarvis Notary` team key was created with Developer access, its one-time
+  `.p8` was downloaded, moved out of iCloud Downloads, stored at
+  `~/Library/Application Support/OpenClaw/release-keys/`, and locked to mode
+  `600`. The machine release env now has `NOTARYTOOL_KEY`,
+  `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER`. Read-only preflight ended with
+  `Final: ASC API key lane ready.`
 - `ai.jarvis.mac` bundle ID/runtime/update identity migration is a required
   launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
 - Do not send to Reddit/GitHub/public-ish beta until the `ai.jarvis.mac`

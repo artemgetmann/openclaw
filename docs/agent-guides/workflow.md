@@ -100,9 +100,12 @@
   organization." with a Request Access button instead of API keys. Artem
   approved and submitted that access request the same day; the page then showed
   "Your request to access the App Store Connect API was approved", `Active (0)`,
-  and `Generate API Key`. The next human-approved step is to generate/download
-  the `.p8` key once and provide `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and
-  `NOTARYTOOL_ISSUER` through the machine release env.
+  and `Generate API Key`. Artem then approved key generation; the `Jarvis
+Notary` team key was created with Developer access, the `.p8` was moved under
+  `~/Library/Application Support/OpenClaw/release-keys/`, and
+  `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` were wired in
+  the machine release env. A follow-up preflight reported `ASC API key lane
+ready`.
 - The script must not print secret values. It should report only presence,
   readability, tool availability, and the exact next operator action.
 
