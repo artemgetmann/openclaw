@@ -124,7 +124,7 @@ extension ConsumerAIAccessFailureKind {
     var title: String {
         switch self {
         case .gatewayUnreachable:
-            return "AI operator is offline"
+            return "\(AppFlavor.current.appName) is still starting"
         case .providerAuthFailed:
             return "AI account needs attention"
         case .readinessFailed:
@@ -465,7 +465,7 @@ final class ConsumerModelSetupModel {
         defer { self.isRestartingOperator = false }
 
         self.phase = .checking
-        self.statusLine = "Restarting AI operator…"
+        self.statusLine = "Restarting \(AppFlavor.current.appName)…"
         await self.restartGateway()
         await self.refresh()
     }
@@ -486,7 +486,7 @@ final class ConsumerModelSetupModel {
 
     func submitSelectedAuth() async {
         guard let option = self.selectedOption else {
-            self.authError = "No sign-in option is available in this runtime."
+            self.authError = "No sign-in option is available right now."
             return
         }
 
@@ -507,7 +507,7 @@ final class ConsumerModelSetupModel {
             self.draftSecret = ""
             await self.refreshAfterAuthApply(
                 optimisticReadiness: payload.readiness,
-                defaultStatusLine: "Reconnecting AI operator after sign-in…")
+                defaultStatusLine: "Reconnecting \(AppFlavor.current.appName) after sign-in…")
         } catch {
             self.authError = error.localizedDescription
         }
@@ -529,7 +529,7 @@ final class ConsumerModelSetupModel {
         } catch {
             if await self.handleGatewayReconnectFailure(
                 error,
-                statusLine: "Reconnecting AI operator after saving the model…")
+                statusLine: "Reconnecting \(AppFlavor.current.appName) after saving the model…")
             {
                 self.modelError = nil
             } else {
@@ -735,7 +735,7 @@ final class ConsumerModelSetupModel {
 
         if readiness.mode == "managed", readiness.probe?.provider == "openai-codex" {
             self.activeAccessTitle = "\(AppFlavor.current.appName)-managed ChatGPT / Codex"
-            self.activeAccessDetail = "Shared founder auth is active for this runtime."
+            self.activeAccessDetail = "Managed AI access is active for this Mac."
             return
         }
 
@@ -778,9 +778,9 @@ final class ConsumerModelSetupModel {
         case .none:
             return "Uses the current sign-in already available on this Mac."
         case .apiKey:
-            return "Uses a tester-owned API key for this runtime."
+            return "Uses the saved API key for this Mac."
         case .token:
-            return "Uses a Claude setup token stored in this runtime."
+            return "Uses a setup token stored in local auth state on this Mac."
         }
     }
 
@@ -815,8 +815,12 @@ final class ConsumerModelSetupModel {
     }
 
     private static func consumerFriendlyReadinessError(_ error: Error) -> String {
+        if error is CancellationError {
+            return "\(AppFlavor.current.appName) is still starting. Try again in a moment, or restart \(AppFlavor.current.appName) if this keeps happening."
+        }
+
         if error is ReadinessProbeTimeoutError {
-            return "\(AppFlavor.current.appName) could not check AI access yet. The operator may still be starting up. Try again in a moment."
+            return "\(AppFlavor.current.appName) is still checking AI access. Try again in a moment, or restart \(AppFlavor.current.appName) if this keeps happening."
         }
 
         let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -826,7 +830,7 @@ final class ConsumerModelSetupModel {
 
         if Self.consumerAccessFailureKind(for: error) == .gatewayUnreachable
         {
-            return "\(AppFlavor.current.appName) could not reach the local consumer gateway yet. This is a local runtime/startup issue, not an AI account issue. Start or resume the operator, wait a moment, then try again."
+            return "\(AppFlavor.current.appName) is still starting or needs a restart. This is not an AI account issue. Wait a moment, then try again."
         }
 
         return detail
@@ -1004,9 +1008,9 @@ struct ConsumerModelsReadinessPayload: Decodable {
         }
         switch self.consumerFailureKind {
         case .gatewayUnreachable:
-            return "\(AppFlavor.current.appName) could not reach the local consumer gateway yet."
+            return "\(AppFlavor.current.appName) is still starting or needs a restart."
         case .providerAuthFailed:
-            return "\(AppFlavor.current.appName) could not verify a usable AI account for this runtime yet."
+            return "\(AppFlavor.current.appName) could not verify a usable AI account yet."
         case .readinessFailed:
             return "\(AppFlavor.current.appName) reached the AI provider, but it is not ready yet."
         }
@@ -1213,7 +1217,7 @@ struct ConsumerModelSetupCardContent: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("AI access")
                     .font(.headline)
-                Text("Choose which AI provider and billing path this Mac should use.")
+                Text("Confirm \(AppFlavor.current.appName) has an AI path before tasks start.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1231,7 +1235,7 @@ struct ConsumerModelSetupCardContent: View {
             case let .ready(modelRef):
                 self.callout(
                     title: "AI is ready",
-                    body: "\(AppFlavor.current.appName) is ready to run the first delegated task on \(modelRef).")
+                    body: "\(AppFlavor.current.appName) is ready to run tasks with \(modelRef).")
             case let .failed(message):
                 self.failureCallout(message: message)
             }
@@ -1283,7 +1287,7 @@ struct ConsumerModelSetupCardContent: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Model")
                 .font(.subheadline.weight(.semibold))
-            Text("Pick a small curated default model for this runtime. \(AppFlavor.current.appName) will re-check readiness after you switch.")
+            Text("Pick the default model \(AppFlavor.current.appName) should use. Readiness is checked again after you switch.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1379,7 +1383,7 @@ struct ConsumerModelSetupCardContent: View {
                         ProgressView()
                             .controlSize(.small)
                     } else {
-                        Label("Restart AI Operator", systemImage: "arrow.clockwise")
+                        Label("Restart \(AppFlavor.current.appName)", systemImage: "arrow.clockwise")
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -1395,8 +1399,8 @@ struct ConsumerModelSetupCardContent: View {
                 .font(.subheadline.weight(.semibold))
             Text(
                 isReady
-                    ? "You’re already ready to run tasks. Change this only if you want a different provider, subscription, setup token, or API key. Credentials stay in this runtime’s local auth state, not in the app bundle."
-                    : "Choose how \(AppFlavor.current.appName) should use your own subscription, setup token, or API key. Credentials stay in this runtime’s local auth state, not in the app bundle.")
+                    ? "You’re already ready to run tasks. Change this only if you want a different provider, subscription, setup token, or API key. Credentials stay in local auth state on this Mac, not in the app bundle."
+                    : "Choose how \(AppFlavor.current.appName) should use your subscription, setup token, or API key. Credentials stay in local auth state on this Mac, not in the app bundle.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

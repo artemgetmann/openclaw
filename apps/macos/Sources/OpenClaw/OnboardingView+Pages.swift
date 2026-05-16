@@ -34,7 +34,7 @@ extension OnboardingView {
 
     func welcomePage() -> some View {
         let consumerSecurityCopy =
-            "\(AppFlavor.current.appName) can use connected apps, local tools, MCP tool servers [external tool connectors], and Mac permissions when you allow it."
+            "\(AppFlavor.current.appName) only gets access to apps, tools, and Mac permissions when you allow it."
         let standardSecurityCopy =
             "The connected AI agent can trigger powerful actions on your Mac, " +
             "including running commands, reading/writing files, and capturing screenshots — " +
@@ -48,7 +48,7 @@ extension OnboardingView {
                     .font(.largeTitle.weight(.semibold))
                 Text(
                     AppFlavor.current.isConsumer
-                        ? "\(AppFlavor.current.appName) is a personal AI operator for this Mac. Setup takes about two minutes. First we’ll connect Chrome and local access."
+                        ? "\(AppFlavor.current.appName) helps get real work done from this Mac. Setup takes about two minutes: pick Chrome, allow Mac access, confirm AI, then connect Telegram."
                         : "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
@@ -84,19 +84,19 @@ extension OnboardingView {
                                     // The actual setup work starts after the user presses Continue.
                                     self.featureRow(
                                         title: "Connect Chrome",
-                                        subtitle: "Pick the Chrome profile \(AppFlavor.current.appName) should use for browser work.",
+                                        subtitle: "Choose the browser profile \(AppFlavor.current.appName) can use.",
                                         systemImage: "globe")
                                     self.featureRow(
-                                        title: "Confirm AI access",
-                                        subtitle: "We check that the default AI connection is ready before remote work starts.",
-                                        systemImage: "sparkles")
-                                    self.featureRow(
                                         title: "Grant Mac permissions",
-                                        subtitle: "\(AppFlavor.current.appName) asks only for app, tool, and Mac permissions that real tasks need.",
+                                        subtitle: "Allow the Mac access real tasks need.",
                                         systemImage: "lock.shield")
                                     self.featureRow(
+                                        title: "Confirm AI access",
+                                        subtitle: "Make sure \(AppFlavor.current.appName) has an AI path before tasks start.",
+                                        systemImage: "sparkles")
+                                    self.featureRow(
                                         title: "Verify Telegram",
-                                        subtitle: "Confirm the bot by completing one real task from this Mac.",
+                                        subtitle: "Connect the bot and prove one real task works.",
                                         systemImage: "paperplane")
                                 }
                             }
