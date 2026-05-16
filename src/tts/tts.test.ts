@@ -74,6 +74,7 @@ const {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  sanitizeUrlsForSpeech,
 } = _test;
 
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
@@ -744,6 +745,61 @@ describe("tts", () => {
         expect(result.mediaUrl).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
+    });
+
+    it("keeps visible URLs but shortens them for OpenAI speech input", async () => {
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const longSourceUrl =
+          "https://www.reddit.com/r/OpenAI/comments/123456/source_thread_with_long_slug/?utm_source=share&utm_medium=web2x&context=3";
+        const visibleText = `Here is the source: ${longSourceUrl}`;
+
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: visibleText },
+          cfg: baseCfg,
+          kind: "final",
+          inboundAudio: true,
+        });
+
+        expect(result.text).toBe(visibleText);
+        expect(result.mediaUrl).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(typeof init.body).toBe("string");
+        const body = JSON.parse(init.body as string) as { input?: string };
+        expect(body.input).toContain("reddit.com");
+        expect(body.input).not.toContain("link to reddit.com");
+        expect(body.input).not.toContain(longSourceUrl);
+        expect(body.input).not.toContain("/r/OpenAI/comments/123456");
+        expect(body.input).not.toContain("utm_source");
+      });
+    });
+  });
+
+  describe("sanitizeUrlsForSpeech", () => {
+    it("replaces URL paths and query strings with the registrable domain", () => {
+      const input =
+        "Source: https://www.reddit.com/r/OpenAI/comments/123456/source_thread/?utm_source=share.";
+
+      const result = sanitizeUrlsForSpeech(input);
+
+      expect(result).toBe("Source: reddit.com.");
+    });
+
+    it("drops common documentation subdomains but keeps the registrable domain", () => {
+      const input = "Docs: https://docs.openclaw.ai/guides/tts?tab=telegram.";
+
+      const result = sanitizeUrlsForSpeech(input);
+
+      expect(result).toBe("Docs: openclaw.ai.");
+    });
+
+    it("keeps common multi-part country-code suffixes", () => {
+      const input = "Article: https://news.example.co.uk/story?id=42.";
+
+      const result = sanitizeUrlsForSpeech(input);
+
+      expect(result).toBe("Article: example.co.uk.");
     });
   });
 });

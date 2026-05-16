@@ -16,6 +16,8 @@ import {
   isCanonicalSharedGatewayActive,
   pruneTesterRuntimeAuthStore,
   selectTelegramTesterToken,
+  syncTelegramLiveRuntimeTtsPreferences,
+  validateLocalCodexAuth,
 } from "../../scripts/lib/telegram-live-runtime-helpers.mjs";
 
 const tempDirs: string[] = [];
@@ -24,6 +26,12 @@ function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-live-helper-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function unsignedJwtWithExp(expSeconds: number): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ exp: expSeconds })).toString("base64url");
+  return `${header}.${payload}.`;
 }
 
 afterEach(() => {
@@ -685,6 +693,55 @@ describe("telegram live runtime helpers", () => {
     );
   });
 
+  it("syncs sanitized baseline TTS preferences into isolated runtime state", () => {
+    const baselineStateDir = makeTempDir();
+    const runtimeStateDir = makeTempDir();
+    const baselineTtsPath = path.join(baselineStateDir, "settings", "tts.json");
+    fs.mkdirSync(path.dirname(baselineTtsPath), { recursive: true });
+    fs.writeFileSync(
+      baselineTtsPath,
+      JSON.stringify(
+        {
+          tts: {
+            auto: "always",
+            provider: "edge",
+            maxLength: 4096,
+            summarize: true,
+            apiKey: "baseline-secret",
+            nested: {
+              key: "nested-secret",
+              voice: "en-US-AriaNeural",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = syncTelegramLiveRuntimeTtsPreferences({
+      baselineStateDir,
+      runtimeStateDir,
+    });
+
+    expect(result).toMatchObject({
+      copied: true,
+      sourcePath: baselineTtsPath,
+      targetPath: path.join(runtimeStateDir, "settings", "tts.json"),
+    });
+    expect(JSON.parse(fs.readFileSync(result.targetPath, "utf8"))).toEqual({
+      tts: {
+        auto: "always",
+        provider: "edge",
+        maxLength: 4096,
+        summarize: true,
+        nested: {
+          voice: "en-US-AriaNeural",
+        },
+      },
+    });
+  });
+
   it("bootstraps the ACP validation auth store from local Codex auth", () => {
     const runtimeStateDir = makeTempDir();
     const codexHome = makeTempDir();
@@ -741,6 +798,13 @@ describe("telegram live runtime helpers", () => {
     const codexAuthPath = path.join(codexHome, "auth.json");
 
     expect(isLocalCodexAuthAvailable({ codexHome })).toBe(false);
+    expect(validateLocalCodexAuth({ codexHome })).toMatchObject({
+      ok: false,
+      reason: "codex_auth_missing",
+      hasAccessToken: false,
+      hasRefreshToken: false,
+      expirySource: "missing",
+    });
 
     fs.writeFileSync(
       codexAuthPath,
@@ -753,17 +817,92 @@ describe("telegram live runtime helpers", () => {
     );
 
     expect(isLocalCodexAuthAvailable({ codexHome })).toBe(true);
+    expect(validateLocalCodexAuth({ codexHome })).toMatchObject({
+      ok: true,
+      reason: "ok",
+      hasAccessToken: true,
+      hasRefreshToken: true,
+      expirySource: "mtime_fallback",
+    });
+  });
+
+  it("rejects expired local Codex JWT auth before tester runtime bootstrap", () => {
+    const codexHome = makeTempDir();
+    const nowMs = 1_900_000_000_000;
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: unsignedJwtWithExp(Math.floor(nowMs / 1000) - 60),
+          refresh_token: "refresh-token",
+        },
+      }),
+    );
+
+    expect(validateLocalCodexAuth({ codexHome, nowMs })).toMatchObject({
+      ok: false,
+      reason: "codex_auth_expired",
+      hasAccessToken: true,
+      hasRefreshToken: true,
+      expirySource: "jwt_exp",
+    });
+    expect(isLocalCodexAuthAvailable({ codexHome, nowMs })).toBe(false);
+  });
+
+  it("rejects incomplete local Codex auth tokens", () => {
+    const codexHome = makeTempDir();
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: "access-token",
+        },
+      }),
+    );
+
+    expect(validateLocalCodexAuth({ codexHome })).toMatchObject({
+      ok: false,
+      reason: "codex_auth_invalid",
+      hasAccessToken: true,
+      hasRefreshToken: false,
+      expirySource: "token_presence",
+    });
+  });
+
+  it("accepts fresh local Codex JWT auth with safe metadata only", () => {
+    const codexHome = makeTempDir();
+    const nowMs = 1_900_000_000_000;
+    const accessExpiryMs = nowMs + 30 * 60 * 1000;
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: unsignedJwtWithExp(Math.floor(accessExpiryMs / 1000)),
+          refresh_token: "refresh-token",
+        },
+      }),
+    );
+
+    expect(validateLocalCodexAuth({ codexHome, nowMs })).toMatchObject({
+      ok: true,
+      reason: "ok",
+      hasAccessToken: true,
+      hasRefreshToken: true,
+      accessExpiryMs,
+      expirySource: "jwt_exp",
+    });
   });
 
   it("bootstraps generic tester Codex auth stores from local Codex auth", () => {
     const runtimeStateDir = makeTempDir();
     const codexHome = makeTempDir();
     const codexAuthPath = path.join(codexHome, "auth.json");
+    const accessExpiryMs = Date.now() + 30 * 60 * 1000;
     fs.writeFileSync(
       codexAuthPath,
       JSON.stringify({
         tokens: {
-          access_token: "access-token",
+          access_token: unsignedJwtWithExp(Math.floor(accessExpiryMs / 1000)),
           refresh_token: "refresh-token",
         },
       }),
@@ -783,6 +922,7 @@ describe("telegram live runtime helpers", () => {
     expect(store.profiles["openai-codex:default"]).toMatchObject({
       type: "oauth",
       provider: "openai-codex",
+      expires: Math.floor(accessExpiryMs / 1000) * 1000,
     });
     expect(store.order).toEqual({ "openai-codex": ["openai-codex:default"] });
   });

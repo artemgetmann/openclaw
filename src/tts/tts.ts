@@ -90,6 +90,9 @@ const TELEPHONY_OUTPUT = {
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
+const SPEECH_URL_REGEX = /https?:\/\/[^\s<>"']+/gi;
+const TRAILING_URL_PUNCTUATION_REGEX = /[),.;:!?]+$/;
+const COMMON_SECOND_LEVEL_TLDS = new Set(["ac", "co", "com", "edu", "gov", "net", "org"]);
 
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
@@ -227,6 +230,53 @@ export function normalizeTtsAutoMode(value: unknown): TtsAutoMode | undefined {
     return normalized as TtsAutoMode;
   }
   return undefined;
+}
+
+function normalizeUrlHostForSpeech(rawUrl: string): string | undefined {
+  try {
+    const url = new URL(rawUrl);
+    const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+    if (!hostname) {
+      return undefined;
+    }
+
+    const labels = hostname.split(".").filter(Boolean);
+    if (labels.length === 0) {
+      return undefined;
+    }
+
+    // Speak the registrable site, not the technical route:
+    // reddit.com stays reddit.com, docs.openclaw.ai becomes openclaw.ai,
+    // and common country-code suffixes like example.co.uk keep the suffix.
+    if (labels.length === 1) {
+      return labels[0];
+    }
+    const tld = labels.at(-1);
+    const secondLevel = labels.at(-2);
+    if (
+      labels.length >= 3 &&
+      tld?.length === 2 &&
+      COMMON_SECOND_LEVEL_TLDS.has(secondLevel ?? "")
+    ) {
+      return labels.slice(-3).join(".");
+    }
+    return labels.slice(-2).join(".");
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeUrlsForSpeech(text: string): string {
+  return text.replace(SPEECH_URL_REGEX, (rawMatch) => {
+    // Preserve sentence punctuation, but never send URL paths or query strings to speech.
+    const trailingPunctuation = rawMatch.match(TRAILING_URL_PUNCTUATION_REGEX)?.[0] ?? "";
+    const rawUrl = trailingPunctuation ? rawMatch.slice(0, -trailingPunctuation.length) : rawMatch;
+    const host = normalizeUrlHostForSpeech(rawUrl);
+    if (!host) {
+      return rawMatch;
+    }
+    return `${host}${trailingPunctuation}`;
+  });
 }
 
 function resolveModelOverridePolicy(
@@ -942,6 +992,7 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   textForAudio = stripMarkdown(textForAudio).trim(); // strip markdown for TTS (### → "hashtag" etc.)
+  textForAudio = sanitizeUrlsForSpeech(textForAudio).trim();
   if (textForAudio.length < 10) {
     return nextPayload;
   }
@@ -1001,4 +1052,5 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  sanitizeUrlsForSpeech,
 };

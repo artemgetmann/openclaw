@@ -269,6 +269,33 @@ const ACP_TRANSCRIPT_USAGE = {
   },
 } as const;
 
+const ACP_INTERNAL_TOOL_SUMMARY_LINE_RE = /^🔧\s+(?:exec(?:\s+update)?|cron)$/iu;
+
+function stripAcpInternalToolSummaryLines(text: string): string {
+  const lines = text.split("\n");
+  const strippedLines = lines.map((line) => ACP_INTERNAL_TOOL_SUMMARY_LINE_RE.test(line.trim()));
+  if (!strippedLines.some(Boolean)) {
+    return text;
+  }
+
+  return lines
+    .filter((line, index) => {
+      if (strippedLines[index]) {
+        return false;
+      }
+      // Some ACP bridge paths render tool lifecycle updates as standalone text
+      // paragraphs before the final assistant text. Keep real command output,
+      // but drop the blank separators attached to stripped internal labels.
+      if (line.trim() !== "") {
+        return true;
+      }
+      const previousStripped = index > 0 && strippedLines[index - 1];
+      const nextStripped = index + 1 < strippedLines.length && strippedLines[index + 1];
+      return !previousStripped && !nextStripped;
+    })
+    .join("\n");
+}
+
 async function persistAcpTurnTranscript(params: {
   body: string;
   finalText: string;
@@ -755,6 +782,8 @@ async function agentCommandInternal(
   } = prepared;
   let acpResolution = preparedAcpResolution;
   let sessionEntry = prepared.sessionEntry;
+  const resolvedVerboseLevel =
+    verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
   const existingSkillsSnapshot = sessionEntry?.skillsSnapshot;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
@@ -911,7 +940,14 @@ async function agentCommandInternal(
             if (!event.text) {
               return;
             }
-            const visibleUpdate = visibleTextAccumulator.consume(event.text);
+            const textForVisibleOutput =
+              resolvedVerboseLevel !== undefined && resolvedVerboseLevel !== "off"
+                ? event.text
+                : stripAcpInternalToolSummaryLines(event.text);
+            if (!textForVisibleOutput) {
+              return;
+            }
+            const visibleUpdate = visibleTextAccumulator.consume(textForVisibleOutput);
             if (!visibleUpdate) {
               return;
             }
@@ -999,9 +1035,6 @@ async function agentCommandInternal(
     }
 
     let resolvedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;
-    const resolvedVerboseLevel =
-      verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
-
     if (sessionKey) {
       registerAgentRunContext(runId, {
         sessionKey,

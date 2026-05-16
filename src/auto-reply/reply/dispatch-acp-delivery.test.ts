@@ -26,25 +26,33 @@ function createDispatcher(): ReplyDispatcher {
   };
 }
 
-function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>) {
-  return createAcpDispatchDeliveryCoordinator({
+function createCoordinator(params?: {
+  onReplyStart?: (...args: unknown[]) => Promise<void>;
+  shouldSendToolSummaries?: boolean;
+}) {
+  const dispatcher = createDispatcher();
+  const coordinator = createAcpDispatchDeliveryCoordinator({
     cfg: createAcpTestConfig(),
     ctx: buildTestCtx({
       Provider: "discord",
       Surface: "discord",
       SessionKey: "agent:codex-acp:session-1",
     }),
-    dispatcher: createDispatcher(),
+    dispatcher,
     inboundAudio: false,
     shouldRouteToOriginating: false,
-    ...(onReplyStart ? { onReplyStart } : {}),
+    ...(params?.shouldSendToolSummaries !== undefined
+      ? { shouldSendToolSummaries: params.shouldSendToolSummaries }
+      : {}),
+    ...(params?.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
   });
+  return { coordinator, dispatcher };
 }
 
 describe("createAcpDispatchDeliveryCoordinator", () => {
   it("starts reply lifecycle only once when called directly and through deliver", async () => {
     const onReplyStart = vi.fn(async () => {});
-    const coordinator = createCoordinator(onReplyStart);
+    const { coordinator } = createCoordinator({ onReplyStart });
 
     await coordinator.startReplyLifecycle();
     await coordinator.deliver("final", { text: "hello" });
@@ -56,7 +64,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
   it("starts reply lifecycle once when deliver triggers first", async () => {
     const onReplyStart = vi.fn(async () => {});
-    const coordinator = createCoordinator(onReplyStart);
+    const { coordinator } = createCoordinator({ onReplyStart });
 
     await coordinator.deliver("final", { text: "hello" });
     await coordinator.startReplyLifecycle();
@@ -66,10 +74,31 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
   it("does not start reply lifecycle for empty payload delivery", async () => {
     const onReplyStart = vi.fn(async () => {});
-    const coordinator = createCoordinator(onReplyStart);
+    const { coordinator } = createCoordinator({ onReplyStart });
 
     await coordinator.deliver("final", {});
 
     expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("strips leaked ACP tool summary labels at delivery when summaries are disabled", async () => {
+    const { coordinator, dispatcher } = createCoordinator({ shouldSendToolSummaries: false });
+
+    await coordinator.deliver("block", {
+      text: "🔧 exec\n\n🔧 exec update\n\ntelegram_voice_sanitize_ok\n\n🔧 cron\n\nfinal",
+    });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({
+      text: "telegram_voice_sanitize_ok\nfinal",
+    });
+  });
+
+  it("preserves ACP tool summary labels at delivery when summaries are enabled", async () => {
+    const { coordinator, dispatcher } = createCoordinator({ shouldSendToolSummaries: true });
+    const text = "🔧 exec\n\n🔧 exec update\n\ntelegram_voice_verbose_ok";
+
+    await coordinator.deliver("block", { text });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text });
   });
 });

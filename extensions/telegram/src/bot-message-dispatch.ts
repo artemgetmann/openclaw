@@ -135,6 +135,26 @@ type DispatchTelegramMessageParams = {
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
+function resolveTelegramVerboseLevel(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  agentId: string;
+}): "off" | "on" | "full" | undefined {
+  const { cfg, sessionKey, agentId } = params;
+  if (!sessionKey) {
+    return undefined;
+  }
+  try {
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+    const level = entry?.verboseLevel;
+    return level === "off" || level === "on" || level === "full" ? level : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
@@ -207,6 +227,12 @@ export const dispatchTelegramMessage = async ({
     sessionKey: ctxPayload.SessionKey,
     agentId: route.agentId,
   });
+  const resolvedVerboseLevel = resolveTelegramVerboseLevel({
+    cfg,
+    sessionKey: ctxPayload.SessionKey,
+    agentId: route.agentId,
+  });
+  const suppressInternalToolProgressDrafts = resolvedVerboseLevel === "off";
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const previewStreamingEnabled = streamMode !== "off";
@@ -434,6 +460,16 @@ export const dispatchTelegramMessage = async ({
     toolProgressLines = [...toolProgressLines, normalized].slice(-TOOL_PROGRESS_MAX_LINES);
     updateDraftFromPartial(answerLane, renderToolProgressDraftText());
     return true;
+  };
+  const pushToolStartProgressDraft = (payload: { name?: string; phase?: string }) => {
+    const normalizedName = normalizeToolProgressLine(payload.name)?.toLowerCase();
+    if (
+      suppressInternalToolProgressDrafts &&
+      (normalizedName === "exec" || normalizedName === "cron")
+    ) {
+      return false;
+    }
+    return pushToolProgressDraft(formatToolStartProgressLine(payload));
   };
 
   const disableBlockStreaming = !previewStreamingEnabled
@@ -843,7 +879,7 @@ export const dispatchTelegramMessage = async ({
         onToolStart: statusReactionController
           ? async (payload) => {
               const progressPromise = enqueueDraftLaneEvent(async () => {
-                pushToolProgressDraft(formatToolStartProgressLine(payload));
+                pushToolStartProgressDraft(payload);
               });
               await statusReactionController.setTool(payload.name);
               await progressPromise;
@@ -851,7 +887,7 @@ export const dispatchTelegramMessage = async ({
           : canStreamToolProgressDraft
             ? (payload) =>
                 enqueueDraftLaneEvent(async () => {
-                  pushToolProgressDraft(formatToolStartProgressLine(payload));
+                  pushToolStartProgressDraft(payload);
                 })
             : undefined,
         onCompactionStart: statusReactionController

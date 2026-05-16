@@ -121,6 +121,35 @@ function compactNativeTelegramToolText(text: string): string {
   return preview ? `${preview}\n\n${suffix}` : suffix;
 }
 
+const TELEGRAM_INTERNAL_TOOL_SUMMARY_LINE_RE = /^🔧\s+(?:exec(?:\s+update)?|cron)$/iu;
+
+function stripTelegramInternalToolSummaryLines(text: string): string {
+  const lines = text.split("\n");
+  const strippedLines = lines.map((line) =>
+    TELEGRAM_INTERNAL_TOOL_SUMMARY_LINE_RE.test(line.trim()),
+  );
+  if (!strippedLines.some(Boolean)) {
+    return text;
+  }
+
+  return lines
+    .filter((line, index) => {
+      if (strippedLines[index]) {
+        return false;
+      }
+      // Codex/Gateway can surface tool lifecycle labels as normal streaming
+      // text. In non-verbose Telegram chats, drop only those standalone labels
+      // and their paragraph separators; keep real command output/final text.
+      if (line.trim() !== "") {
+        return true;
+      }
+      const previousStripped = index > 0 && strippedLines[index - 1];
+      const nextStripped = index + 1 < strippedLines.length && strippedLines[index + 1];
+      return !previousStripped && !nextStripped;
+    })
+    .join("\n");
+}
+
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
@@ -222,11 +251,14 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
-  const nativeTelegramVerboseLevel =
-    normalizeMessageChannel(ctx.Provider) === "telegram" && ctx.CommandSource === "native"
-      ? (normalizeVerboseLevel(sessionStoreEntry.entry?.verboseLevel) ??
-        normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault))
-      : undefined;
+  const visibilityChannel = normalizeMessageChannel(
+    ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
+  );
+  const isTelegramProvider = visibilityChannel === "telegram";
+  const telegramVerboseLevel = isTelegramProvider
+    ? (normalizeVerboseLevel(sessionStoreEntry.entry?.verboseLevel) ??
+      normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault))
+    : undefined;
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
@@ -537,12 +569,18 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
-    const isNativeTelegramVerbose =
-      nativeTelegramVerboseLevel !== undefined && nativeTelegramVerboseLevel !== "off";
+    const isTelegramVerbose = telegramVerboseLevel !== undefined && telegramVerboseLevel !== "off";
     const shouldSendToolSummaries =
       !sourceReplyPolicy.suppressAutomaticSourceDelivery &&
       ctx.ChatType !== "group" &&
-      (ctx.CommandSource !== "native" || isNativeTelegramVerbose);
+      (!isTelegramProvider || isTelegramVerbose);
+    const sanitizeTelegramVisiblePayload = (payload: ReplyPayload): ReplyPayload => {
+      if (!isTelegramProvider || isTelegramVerbose || typeof payload.text !== "string") {
+        return payload;
+      }
+      const text = stripTelegramInternalToolSummaryLines(payload.text);
+      return text === payload.text ? payload : { ...payload, text };
+    };
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
@@ -600,16 +638,14 @@ export async function dispatchReplyFromConfig(params: {
       if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
         return payload;
       }
-      // Native Telegram slash sessions normally suppress tool summary text, but
-      // verbose mode needs to surface safe tool traces. Media-only tool results
-      // (for example TTS audio) must still be delivered.
+      // Telegram user chats normally suppress internal tool/status text. Verbose
+      // mode is the explicit opt-in for those traces; media and approval payloads
+      // still need delivery because they carry user-visible effects.
       const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-      const shouldShowNativeToolText =
-        nativeTelegramVerboseLevel !== undefined && nativeTelegramVerboseLevel !== "off";
-      if (!hasMedia && !shouldShowNativeToolText) {
+      if (!hasMedia && !isTelegramVerbose) {
         return null;
       }
-      if (shouldShowNativeToolText) {
+      if (isTelegramVerbose) {
         const text =
           typeof payload.text === "string"
             ? compactNativeTelegramToolText(payload.text)
@@ -685,9 +721,13 @@ export async function dispatchReplyFromConfig(params: {
               return;
             }
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
+              await sendPayloadAsync(
+                sanitizeTelegramVisiblePayload(ttsPayload),
+                context?.abortSignal,
+                false,
+              );
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              dispatcher.sendBlockReply(sanitizeTelegramVisiblePayload(ttsPayload));
             }
           };
           return run();
@@ -746,7 +786,7 @@ export async function dispatchReplyFromConfig(params: {
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
         const result = await routeReply({
-          payload: ttsReply,
+          payload: sanitizeTelegramVisiblePayload(ttsReply),
           channel: originatingChannel,
           to: originatingTo,
           sessionKey: ctx.SessionKey,
@@ -766,7 +806,8 @@ export async function dispatchReplyFromConfig(params: {
           routedFinalCount += 1;
         }
       } else {
-        queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
+        queuedFinal =
+          dispatcher.sendFinalReply(sanitizeTelegramVisiblePayload(ttsReply)) || queuedFinal;
       }
     }
 
