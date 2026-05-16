@@ -7,7 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "📍",
-        "requires": { "bins": ["goplaces"], "env": ["GOOGLE_PLACES_API_KEY"] },
+        "requires": { "bins": ["node"] },
         "primaryEnv": "GOOGLE_PLACES_API_KEY",
         "install":
           [
@@ -25,7 +25,9 @@ metadata:
 
 # goplaces
 
-Modern Google Places API (New) CLI. Human output by default, `--json` for scripts.
+Modern Google Places search for Jarvis managed mode and BYOK Google Places API
+(New) users. Search routes through the Jarvis backend when managed services are
+configured; BYOK falls back to the local Google Places key.
 
 Install
 
@@ -33,17 +35,19 @@ Install
 
 Config
 
-- `GOOGLE_PLACES_API_KEY` required.
-- Optional: `GOOGLE_PLACES_BASE_URL` for testing/proxying.
+- Jarvis managed: no local Google Places key is required for search.
+- BYOK/direct: `GOOGLE_PLACES_API_KEY` or `skills.entries.goplaces.apiKey`
+  required.
+- Optional direct CLI: `GOOGLE_PLACES_BASE_URL` for testing/proxying.
 
 Common commands
 
-- Search: `goplaces search "coffee" --open-now --min-rating 4 --limit 5`
-- Bias: `goplaces search "pizza" --lat 40.8 --lng -73.9 --radius-m 3000`
-- Pagination: `goplaces search "pizza" --page-token "NEXT_PAGE_TOKEN"`
-- Resolve: `goplaces resolve "Soho, London" --limit 5`
-- Details: `goplaces details <place_id> --reviews`
-- JSON: `goplaces search "sushi" --json`
+- Search: `skills/goplaces/scripts/goplaces-search.sh "coffee near KLCC" --limit 5`
+- JSON search: `skills/goplaces/scripts/goplaces-search.sh "sushi" --json`
+- Direct CLI bias: `goplaces search "pizza" --lat 40.8 --lng -73.9 --radius-m 3000`
+- Direct CLI pagination: `goplaces search "pizza" --page-token "NEXT_PAGE_TOKEN"`
+- Direct CLI resolve: `goplaces resolve "Soho, London" --limit 5`
+- Direct CLI details: `goplaces details <place_id> --reviews`
 
 Notes
 
@@ -53,10 +57,9 @@ Notes
 
 Setup Routing
 
-- If `GOOGLE_PLACES_API_KEY` is missing, use the shared `consumer-setup`
-  skill instead of pretending place search is ready.
+- For ordinary search, use `skills/goplaces/scripts/goplaces-search.sh` first.
+  It chooses Jarvis managed routing when configured and direct BYOK otherwise.
+- If BYOK mode has no `GOOGLE_PLACES_API_KEY`, use the shared `consumer-setup`
+  skill instead of pretending direct place search is ready.
 - Distinguish missing user/API setup from a product-side missing secret.
-- TODO(managed): packaged Jarvis managed mode should route search through
-  `/v1/managed/utilities/google_places.search` once this CLI skill has a
-  TypeScript runtime adapter; do not add raw Google Places keys to the app
-  bundle as a shortcut.
+- Do not add raw Google Places keys to the packaged app bundle as a shortcut.

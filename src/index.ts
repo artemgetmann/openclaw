@@ -24,6 +24,7 @@ export const PortInUseError = library.PortInUseError;
 export const promptYesNo = library.promptYesNo;
 export const resolveSessionKey = library.resolveSessionKey;
 export const resolveStorePath = library.resolveStorePath;
+export const runGooglePlacesSearch = library.runGooglePlacesSearch;
 export const runCommandWithTimeout = library.runCommandWithTimeout;
 export const runExec = library.runExec;
 export const saveSessionStore = library.saveSessionStore;

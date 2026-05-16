@@ -727,9 +727,9 @@ Before wider beta:
 - [x] Route Firecrawl app/runtime utility callers through the Render backend for
       managed-plan users; landed in the Firecrawl managed-routing slice after
       PR #751.
-- [ ] Route Google Places/goplaces through the Render backend for managed-plan
-      users; current `goplaces` path is still a CLI skill without a TypeScript
-      runtime adapter.
+- [x] Route Google Places/goplaces search through the Render backend for
+      managed-plan users. Details/resolve/reviews still require the upstream
+      direct CLI and BYOK key until backend utilities exist for those shapes.
 - [ ] Add real backend-managed Gemini/Nano Banana utility execution or keep image
       generation local/BYOK-only in launch copy.
 - [ ] Keep `OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS=1` out of public
@@ -1012,9 +1012,12 @@ Order:
    - Firecrawl app/runtime routing now uses the Render managed utility endpoint
      in managed mode and preserves direct/BYOK Firecrawl when the Jarvis backend
      is absent.
-   - Remaining hard gap: wire Google Places/goplaces to the Render backend for
-     managed-plan users. Until that lands, Places is live on the backend but not
-     necessarily used by the packaged app.
+   - Google Places/goplaces ordinary search now uses the Render managed utility
+     endpoint in managed mode and preserves direct/BYOK search when the Jarvis
+     backend is absent.
+   - Remaining Places gap: details/resolve/reviews still require the upstream
+     direct `goplaces` CLI and a BYOK key because the backend only exposes
+     `google_places.search`.
    - Gemini managed utility execution remains staged; local Nano Banana proof is
      green, but Render only proves the key is configured.
 
@@ -1078,9 +1081,10 @@ Remaining backend follow-up:
   `POST /v1/managed/utilities/google_places.search` return 200 through Render
   with the backend token and without exposing local provider/backend secrets in
   the response body.
-- Firecrawl app/runtime calls now use the Render managed utility endpoints in
-  managed mode. Google Places/goplaces still needs a separate routing slice so
-  managed-plan consumers call Render instead of direct local provider keys.
+- Firecrawl app/runtime calls and Google Places/goplaces ordinary search now
+  use the Render managed utility endpoints in managed mode. Google Places
+  details/resolve/reviews still require direct BYOK until the backend exposes
+  managed utilities for those operations.
 
 ### Imported from retired consolidation trackers
 

@@ -12,6 +12,7 @@ import {
   resolveStorePath,
   saveSessionStore,
 } from "./config/sessions.js";
+import { runGooglePlacesSearch } from "./consumer/google-places-search.js";
 import { ensureBinary } from "./infra/binaries.js";
 import {
   describePortOwner,
@@ -40,6 +41,7 @@ export {
   promptYesNo,
   resolveSessionKey,
   resolveStorePath,
+  runGooglePlacesSearch,
   runCommandWithTimeout,
   runExec,
   saveSessionStore,

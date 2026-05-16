@@ -53,9 +53,9 @@ Verified on 2026-05-12 and refreshed on 2026-05-16:
 Backend/account persistence and the first Firecrawl/Places managed utility
 endpoints are ready for the next beta package smoke. Anthropic remains unset,
 Gemini is configured but not yet exposed as a managed utility endpoint.
-Firecrawl app/runtime calls now use Render in managed mode; Google
-Places/goplaces still needs a routing slice so managed-plan consumers use
-Render instead of direct local provider keys.
+Firecrawl app/runtime calls and Google Places/goplaces ordinary search now use
+Render in managed mode. Google Places details/resolve/reviews still require
+direct BYOK until the backend exposes managed utilities for those operations.
 
 ## Release package status
 
