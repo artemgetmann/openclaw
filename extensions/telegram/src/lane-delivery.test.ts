@@ -150,6 +150,14 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
+  it("separates adjacent emoji-led progress phrases", () => {
+    expect(
+      normalizeAdjacentProgressBoundaries(
+        "Starting step 1 now✅ Step 1 done.\n\nMoving to step 2 page✅ Step 2 done.",
+      ),
+    ).toBe("Starting step 1 now\n\n✅ Step 1 done.\n\nMoving to step 2 page\n\n✅ Step 2 done.");
+  });
+
   it("finalizes text-only replies by editing an existing preview message", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 

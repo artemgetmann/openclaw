@@ -75,7 +75,7 @@ function looksLikeProgressPreview(text: string): boolean {
 }
 
 function looksLikeProgressParagraph(text: string): boolean {
-  return /^(?:🔧|Step\b|Fetching\b|Loading\b|Following\b|Got\b|Comparing\b|Redirect\b)/i.test(
+  return /^(?:🔧|✅|Step\b|Starting\b|Moving\b|Fetching\b|Loading\b|Following\b|Got\b|Comparing\b|Redirect\b)/i.test(
     text.trim(),
   );
 }
@@ -503,7 +503,7 @@ export const dispatchTelegramMessage = async ({
     if (!laneStream || !text) {
       return;
     }
-    const previewText = lane === answerLane ? normalizeAnswerPreviewText(text) : text;
+    let previewText = lane === answerLane ? normalizeAnswerPreviewText(text) : text;
     if (previewText === lane.lastPartialText) {
       return;
     }
@@ -525,14 +525,16 @@ export const dispatchTelegramMessage = async ({
         retainedAnswerProgressPreviewText = split.progress;
       }
       if (
-        lane.lastPartialText &&
         retainedAnswerProgressPreviewText &&
         previewText !== retainedAnswerProgressPreviewText &&
         previewText.startsWith(retainedAnswerProgressPreviewText) &&
         looksLikeFinalAnswerRemainder(split.remainder)
       ) {
-        return;
+        previewText = retainedAnswerProgressPreviewText;
       }
+    }
+    if (previewText === lane.lastPartialText) {
+      return;
     }
     lane.lastPartialText = previewText;
     laneStream.update(previewText);

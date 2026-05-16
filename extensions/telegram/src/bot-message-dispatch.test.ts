@@ -332,9 +332,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Fetching all three in parallel.\n\nAll three fetched. Here's what each source contributes:",
-    );
+    expect(draftStream.update).toHaveBeenCalledWith("Fetching all three in parallel.");
     expect(draftStream.materialize).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -899,6 +897,69 @@ describe("dispatchTelegramMessage draft streaming", () => {
         "| example.com | IANA Reserved Domains |",
         "| --- | --- |",
         "| Stub | Policy source |",
+        "",
+        "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+      ].join("\n"),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps progress separate when the first partial already contains the final answer", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    const combinedText = [
+      "Starting step 1 of 3 — fetching example.com now✅ Step 1 done. Tiny page.",
+      "",
+      "Moving to step 2 of 3 — fetching the IANA example domains page✅ Step 2 done. Rich policy page.",
+      "",
+      "Step 3 of 3 — comparing the two pages:",
+      "",
+      "example.com is a minimal placeholder:",
+      "",
+      "• One sentence of content",
+      "",
+      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: combinedText });
+        await dispatcherOptions.deliver({ text: combinedText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1002" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      [
+        "Starting step 1 of 3 — fetching example.com now",
+        "",
+        "✅ Step 1 done. Tiny page.",
+        "",
+        "Moving to step 2 of 3 — fetching the IANA example domains page",
+        "",
+        "✅ Step 2 done. Rich policy page.",
+        "",
+        "Step 3 of 3 — comparing the two pages:",
+      ].join("\n"),
+    );
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      expect.not.stringContaining("example.com is a minimal placeholder"),
+    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1002,
+      [
+        "example.com is a minimal placeholder:",
+        "",
+        "• One sentence of content",
         "",
         "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
       ].join("\n"),
