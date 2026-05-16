@@ -93,9 +93,14 @@
 - The same preflight reports whether Sparkle `generate_appcast` is available.
   If it is missing, build the Sparkle tools before appcast generation.
 - If the preflight says `generate_appcast` is ready but ASC auth is missing,
-  do not keep rediscovering Sparkle. Add/provide the ASC API-key trio in the
-  machine release env, with the `.p8` file stored outside the repo, then rerun
-  the preflight.
+  do not keep rediscovering Sparkle. First confirm App Store Connect actually
+  allows API-key management at `/access/integrations/api`; on 2026-05-16 the
+  page was reachable after login but showed "Permission is required to access
+  the App Store Connect API. You can request access on behalf of your
+  organization." with a Request Access button instead of API keys. The next
+  human step is to enable/request ASC API access, then create/download the
+  `.p8` key once and provide `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and
+  `NOTARYTOOL_ISSUER` through the machine release env.
 - The script must not print secret values. It should report only presence,
   readability, tool availability, and the exact next operator action.
 
