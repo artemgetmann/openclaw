@@ -801,12 +801,17 @@ Current implementation order:
     `/access/integrations/api` is reachable after login, but it does not show
     API keys. It shows "Permission is required to access the App Store Connect
     API. You can request access on behalf of your organization." with a Request
-    Access button. Do not claim Artem clicked it. Local searches found no
-    existing `AuthKey_*.p8` via Spotlight and no actual `NOTARYTOOL_KEY`,
-    `NOTARYTOOL_KEY_ID`, or `NOTARYTOOL_ISSUER` in
-    `~/Library/Application Support/OpenClaw/release.env`. The lane is blocked
-    on enabling/requesting ASC API access, then creating/downloading the `.p8`
-    key once and wiring the local release env/key path outside Git.
+    Access button. Local searches found no existing `AuthKey_*.p8` via
+    Spotlight and no actual `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, or
+    `NOTARYTOOL_ISSUER` in
+    `~/Library/Application Support/OpenClaw/release.env`.
+15. Follow-up ASC state on 2026-05-16: Artem approved and submitted the App
+    Store Connect API access request. Apple immediately showed "Your request to
+    access the App Store Connect API was approved", `Active (0)`, and
+    `Generate API Key`. Screenshot proof:
+    `/tmp/openclaw/asc-api-access-approved-generate-key.png`. The lane is now
+    blocked only on generating/downloading the `.p8` key once and wiring the
+    local release env/key path outside Git.
 
 Progress:
 
@@ -891,7 +896,7 @@ Progress:
       next artifact.
 - [ ] Run the next release lane with App Store Connect API key auth plus async
       submit/poll/staple receipts. Keychain-profile notarization remains a
-      fallback only; Artem must request/enable ASC API access, then
+      fallback only; ASC API access is now approved, but Artem must
       create/download the actual `.p8` key once if it is not already present.
 
 Remaining Settings/UI polish after PR #628:
@@ -1069,6 +1074,8 @@ Deployment/security boundary:
 - [ ] Run the next release lane with App Store Connect API key auth plus async
       submit/poll/staple receipts. Keep Keychain-profile auth as fallback only,
       and have Artem create/provide the actual ASC API key if it is missing.
+      ASC API access itself is approved as of 2026-05-16; key generation and
+      local release-env wiring remain.
 - [x] Delete old local OpenClaw app/package variants from Artem's machine after
       the exact delete list is approved. Completed 2026-05-16: removed
       `/Applications/OpenClaw.app`, stale GUI smoke processes, and stale

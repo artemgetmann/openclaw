@@ -151,9 +151,14 @@ Current package truth:
   `/access/integrations/api` is reachable after login, but it does not show API
   keys. It shows "Permission is required to access the App Store Connect API.
   You can request access on behalf of your organization." with a Request Access
-  button. Do not claim Artem clicked it. Next step is to request/enable ASC API
-  access, then create/download the `.p8` key once and wire only the local
-  release env/key path outside Git.
+  button.
+- Follow-up ASC state on 2026-05-16: Artem approved and submitted the App Store
+  Connect API access request. Apple immediately showed "Your request to access
+  the App Store Connect API was approved", `Active (0)`, and `Generate API Key`.
+  Screenshot proof:
+  `/tmp/openclaw/asc-api-access-approved-generate-key.png`. Next step is to
+  generate/download the `.p8` key once, then wire only the local release env/key
+  path outside Git.
 - `ai.jarvis.mac` bundle ID/runtime/update identity migration is a required
   launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
 - Do not send to Reddit/GitHub/public-ish beta until the `ai.jarvis.mac`
