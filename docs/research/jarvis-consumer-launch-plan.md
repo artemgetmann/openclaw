@@ -689,40 +689,45 @@ Bootstrap should answer:
 
 ### 11.5 Provider and managed-utility readiness
 
-Provider smoke from the 2026-05-16 clean-copy walkthrough and follow-up
-provider worker:
+Provider smoke from the 2026-05-16 clean-copy walkthrough, follow-up provider
+worker, and Render deploy:
 
 - Backend `/healthz` is live in production and reports OpenAI configured,
-  Anthropic not configured.
-- Backend `/v1/managed/utilities/{utility}` is still a placeholder contract. It
-  proves server-held provider-key boundaries, but it does not yet perform real
-  OpenAI STT, Brave, Firecrawl, Google Places, Gemini/Nano Banana, or Anthropic
-  work.
+  Anthropic not configured, and Firecrawl, Google Places, and Gemini provider
+  env present.
+- Backend `/v1/managed/utilities/{utility}` now performs real server-held
+  provider calls for `firecrawl.search`, `firecrawl.scrape`, and
+  `google_places.search`; PR #751 deployed live to Render on 2026-05-16.
 - Local OpenAI STT works through the active OpenClaw config
   `OPENAI_NON_MODEL_API_KEY`; the follow-up worker transcribed a valid WAV
   fixture with HTTP 200 and returned text.
 - Brave search works through the active OpenClaw config; the follow-up worker
   got HTTP 200 and one result for a harmless query.
-- Firecrawl is not launch-green with the current local secret source. An
-  earlier clean-copy smoke succeeded, but the follow-up provider worker got
-  HTTP 401 `invalid token` from `/v2/search`; treat Firecrawl as blocked until
-  the key is replaced and re-smoked.
-- Google Places still fails live smoke with `400 API_KEY_INVALID`.
-- Gemini text/model access is partially green through cached `gemini` CLI auth;
-  image generation still needs a real `GEMINI_API_KEY` and a tiny Nano Banana
-  smoke.
+- Firecrawl key was replaced/recovered and live-smoked both locally and through
+  Render. Render `firecrawl.search` and `firecrawl.scrape` returned HTTP 200
+  with no local secret substring detected in the backend response.
+- Google Places key was replaced/recovered and live-smoked both locally and
+  through Render. Render `google_places.search` returned HTTP 200 with one
+  place and no local secret substring detected in the backend response.
+- Gemini/Nano Banana image generation was live-smoked locally with the recovered
+  key and generated `/tmp/jarvis-nano-banana-smoke-candidate-2.png`. Render
+  reports Gemini configured, but no Gemini managed utility endpoint exists yet.
 - Anthropic is not configured locally or in production `/healthz`. No Anthropic
   live model smoke is counted here.
 
 Before wider beta:
 
-- [ ] Replace the invalid Firecrawl credential before claiming scraping works.
-- [ ] Replace the invalid Google Places credential before claiming Google
+- [x] Replace the invalid Firecrawl credential before claiming scraping works.
+- [x] Replace the invalid Google Places credential before claiming Google
       Places/location search works.
-- [ ] Run a real Gemini/Nano Banana image-generation smoke before claiming image
+- [x] Run a real Gemini/Nano Banana image-generation smoke before claiming image
       generation works, even though model-list validation passes.
-- [ ] Add real backend-managed utility endpoints or remove managed-utility
-      claims from consumer copy until they exist.
+- [x] Add real backend-managed utility endpoints for Firecrawl and Google
+      Places.
+- [ ] Route the macOS app/runtime utility callers through the Render backend for
+      managed-plan users; PR #751 proves backend endpoints, not app-side routing.
+- [ ] Add real backend-managed Gemini/Nano Banana utility execution or keep image
+      generation local/BYOK-only in launch copy.
 - [ ] Keep `OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS=1` out of public
       builds unless the product intentionally ships env-derived provider keys
       inside the bundle for a private bridge.
@@ -992,17 +997,19 @@ Order:
      `MANAGER_BOT_USERNAME` locally without exposing the token, then rerun
      `node scripts/telegram-managed-bots-spike.mjs`.
 4. Provider/backend utility hardening.
-   - Status: OpenAI STT, Brave, and Gemini text/model validation are green.
-     Firecrawl and Google Places currently fail with invalid credentials.
-     Gemini image generation is not proven because the image script needs a
-     `GEMINI_API_KEY`.
-   - Fix the invalid Firecrawl credential or remove scraping claims from launch
-     copy.
-   - Fix the invalid Google Places credential or remove Google Places/location
-     claims from launch copy.
-   - Run Gemini image-generation proof before claiming Nano Banana/image paths.
-   - Decide whether backend-managed utilities become real endpoints now or stay
-     local-only for trusted beta.
+   - Status: OpenAI STT, Brave, Firecrawl, Google Places, and Gemini/Nano
+     Banana local smokes are green after local secret recovery on 2026-05-16.
+   - Render env now has Firecrawl, Google Places, and Gemini provider keys
+     present; `/healthz` reports `firecrawl=true`, `google_places=true`, and
+     `gemini=true`.
+   - PR #751 added and deployed real backend-managed `firecrawl.search`,
+     `firecrawl.scrape`, and `google_places.search` endpoints. Live Render
+     smoke returned HTTP 200 for all three with token/key output redacted.
+   - Remaining hard gap: wire macOS app/runtime utility callers to the Render
+     backend for managed-plan users. Until that lands, backend utilities are
+     live but not necessarily used by the packaged app.
+   - Gemini managed utility execution remains staged; local Nano Banana proof is
+     green, but Render only proves the key is configured.
 
 Verified Render truth as of 2026-05-11 before backend creation:
 
@@ -1054,6 +1061,18 @@ Remaining backend follow-up:
 - Anthropic is not configured yet. This is not a blocker for the current
   OpenAI-backed backend smoke, but should be configured before claiming
   Anthropic-managed utility coverage.
+- PR #751 deployed `dep-d848hq57vvec73f2jrm0` live from commit
+  `62ed39851c0eb23b5e007ff1d290b236879204f8` on 2026-05-16.
+- `GET /healthz` returns 200 with `providers.openai=true`,
+  `providers.anthropic=false`, `providers.firecrawl=true`,
+  `providers.google_places=true`, and `providers.gemini=true`.
+- `POST /v1/managed/utilities/firecrawl.search`,
+  `POST /v1/managed/utilities/firecrawl.scrape`, and
+  `POST /v1/managed/utilities/google_places.search` return 200 through Render
+  with the backend token and without exposing local provider/backend secrets in
+  the response body.
+- The macOS app/runtime still needs a separate routing slice so managed-plan
+  consumers call these Render endpoints instead of direct local provider keys.
 
 ### Imported from retired consolidation trackers
 

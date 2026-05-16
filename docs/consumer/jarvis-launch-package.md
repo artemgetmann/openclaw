@@ -34,20 +34,27 @@ Current beta backend:
 - Region/plan: `virginia` / `starter`
 - Source: `https://github.com/artemgetmann/openclaw` on `main`
 
-Verified on 2026-05-12:
+Verified on 2026-05-12 and refreshed on 2026-05-16:
 
 - `/healthz` is live and reports production mode.
 - OpenAI is configured server-side.
 - Anthropic is not configured yet.
+- Firecrawl, Google Places, and Gemini provider env are configured server-side.
 - The managed utility smoke endpoint works with the backend token.
+- Real managed utility endpoints for `firecrawl.search`, `firecrawl.scrape`,
+  and `google_places.search` are deployed on Render and returned HTTP 200 in a
+  live redacted smoke.
 - Neon persistence is configured server-side in Render.
 - Account activation creates a persisted 14-day trial.
 - License status succeeds for a valid account token.
 - Repeated activation for the same email fails closed with 409.
 - Invalid account access tokens reject with 401.
 
-Backend/account persistence is ready for the next beta package smoke. Anthropic
-remains unset, so do not claim Anthropic-managed utility coverage yet.
+Backend/account persistence and the first Firecrawl/Places managed utility
+endpoints are ready for the next beta package smoke. Anthropic remains unset,
+Gemini is configured but not yet exposed as a managed utility endpoint, and the
+macOS app/runtime still needs a routing slice so managed-plan consumers use
+Render instead of direct local provider keys.
 
 ## Release package status
 
