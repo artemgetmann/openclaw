@@ -164,6 +164,7 @@ export function normalizeAdjacentProgressBoundaries(text: string): string {
     .replace(/([.!?])(\*\*Step\s+\d\b)/g, "$1\n\n$2")
     .replace(/(\.\.\.\*\*)(\*\*Step\s+\d\b)/g, "$1\n\n$2")
     .replace(/(\.\.\.\*\*)([A-Z][^\n*])/g, "$1\n\n$2")
+    .replace(/([.!?])([A-Z][a-z][^\n])/g, "$1\n\n$2")
     .replace(/([^\n*])((?:\*\*)?Step\s+\d(?:\s+of\s+\d+)?\s*[:—-])/g, "$1\n\n$2")
     .replace(/([^\n*])(Step\s+\d(?:\s+of\s+\d+)?\s*[:—-])/g, "$1\n\n$2")
     .replace(/\*{4,}(Step\s+\d(?:\s+of\s+\d+)?\s*[:—-])/g, "\n\n$1")
