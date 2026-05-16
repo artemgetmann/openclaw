@@ -38,6 +38,30 @@ private func makeChannelsStore(
     return store
 }
 
+@MainActor
+private func makeConsumerTelegramSetupStore() -> ChannelsStore {
+    let store = makeChannelsStore(
+        channels: [
+            "telegram": SnapshotAnyCodable([
+                "configured": true,
+                "tokenSource": "env",
+                "running": true,
+                "mode": "polling",
+                "lastStartAt": 1_700_000_000_000,
+                "probe": [
+                    "ok": true,
+                    "status": 200,
+                    "elapsedMs": 120,
+                    "bot": ["id": 123, "username": "openclawbot"],
+                    "webhook": ["url": "https://example.com/hook", "hasCustomCert": false],
+                ],
+                "lastProbeAt": 1_700_000_050_000,
+            ]),
+        ])
+    store.telegramSetupToken = "123:bot-token"
+    return store
+}
+
 @Suite(.serialized)
 @MainActor
 struct ChannelsSettingsSmokeTests {
@@ -174,5 +198,20 @@ struct ChannelsSettingsSmokeTests {
             isConsumer: false,
             showAdvancedSettings: false,
             channelCount: 1))
+    }
+
+    @Test func `consumer telegram setup card builds both settings states`() {
+        let store = makeConsumerTelegramSetupStore()
+        defer { store.clearConsumerTelegramFirstTaskVerified() }
+
+        _ = ConsumerTelegramSetupCardContent(
+            store: store,
+            presentation: .settings).body
+
+        store.markConsumerTelegramFirstTaskVerified()
+
+        _ = ConsumerTelegramSetupCardContent(
+            store: store,
+            presentation: .settings).body
     }
 }
