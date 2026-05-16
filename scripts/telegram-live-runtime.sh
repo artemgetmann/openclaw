@@ -900,6 +900,7 @@ start_isolated_runtime() {
   # a real detached process from Node instead so the runtime survives the helper
   # shell exiting and keeps its own stdio on the runtime log file.
   if REPO_ROOT="$REPO_ROOT" \
+    PROFILE_ID="$PROFILE_ID" \
     RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
     RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
     RUNTIME_PORT="$RUNTIME_PORT" \
@@ -953,6 +954,7 @@ const child = spawn(
       repoRoot,
       parentEnv: {
         ...process.env,
+        OPENCLAW_PROFILE: process.env.OPENCLAW_PROFILE || process.env.PROFILE_ID,
         OPENCLAW_STATE_DIR: runtimeStateDir,
         OPENCLAW_CONFIG_PATH: runtimeConfigPath,
         OPENCLAW_GATEWAY_PORT: runtimePort,
