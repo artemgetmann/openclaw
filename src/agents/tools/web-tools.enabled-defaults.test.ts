@@ -100,6 +100,20 @@ function parseFirstRequestBody(mockFetch: ReturnType<typeof installMockFetch>) {
   >;
 }
 
+function resolveRequestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
+}
+
+function parseJsonRequestBody(init?: RequestInit): Record<string, unknown> {
+  return JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+}
+
 function installPerplexitySearchApiFetch(results?: Array<Record<string, unknown>>) {
   return installMockFetch({
     results: results ?? [
@@ -321,6 +335,122 @@ describe("web_search provider proxy dispatch", () => {
       expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
     },
   );
+});
+
+describe("web_search managed Brave routing", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    webSearchTesting.SEARCH_CACHE.clear();
+  });
+
+  it("routes Brave through Jarvis managed utility when managed mode is configured", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = resolveRequestUrl(input);
+      expect(url).toBe("https://example.com/v1/managed/utilities/brave.search");
+      expect(url).not.toContain("api.search.brave.com");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer backend-token");
+      expect(parseJsonRequestBody(init)).toEqual({
+        input: {
+          query: "managed brave",
+          count: 2,
+          mode: "web",
+          country: "US",
+          search_lang: "en",
+        },
+      });
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            result: {
+              provider: "brave",
+              payload: {
+                web: {
+                  results: [
+                    {
+                      title: "Managed Brave",
+                      url: "https://example.com/managed",
+                      description: "Server-held key result",
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const tool = createWebSearchTool({
+      config: {
+        jarvis: {
+          backend: {
+            baseUrl: "https://example.com",
+            accessToken: "backend-token",
+          },
+          managedServices: { mode: "managed" },
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+
+    const result = await tool?.execute?.("call-1", {
+      query: "managed brave",
+      count: 2,
+      country: "US",
+      search_lang: "en",
+    });
+    const details = result?.details as {
+      transport?: string;
+      results?: Array<{ title?: string; url?: string }>;
+    };
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(details.transport).toBe("jarvis-managed");
+    expect(details.results?.[0]?.url).toBe("https://example.com/managed");
+    expect(details.results?.[0]?.title).toContain("Managed Brave");
+  });
+
+  it("keeps direct Brave API routing when managed backend config is absent", async () => {
+    const mockFetch = installMockFetch({
+      web: {
+        results: [
+          {
+            title: "Direct Brave",
+            url: "https://example.com/direct",
+            description: "BYOK result",
+          },
+        ],
+      },
+    });
+    const tool = createBraveSearchTool();
+
+    const result = await tool?.execute?.("call-1", { query: "direct brave" });
+    const requestUrl = new URL(mockFetch.mock.calls[0]?.[0] as string);
+    const details = result?.details as {
+      transport?: string;
+      results?: Array<{ title?: string; url?: string }>;
+    };
+
+    expect(requestUrl.origin).toBe("https://api.search.brave.com");
+    expect(requestUrl.pathname).toBe("/res/v1/web/search");
+    expect(requestUrl.searchParams.get("q")).toBe("direct brave");
+    expect(details.transport).toBeUndefined();
+    expect(details.results?.[0]?.url).toBe("https://example.com/direct");
+  });
 });
 
 describe("web_search perplexity Search API", () => {

@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field
 SERVICE_VERSION = "0.1.0"
 FIRECRAWL_API_BASE_URL = "https://api.firecrawl.dev/v2"
 GOOGLE_PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+BRAVE_LLM_CONTEXT_URL = "https://api.search.brave.com/res/v1/llm/context"
 MANAGED_UTILITY_TIMEOUT_SECONDS = 20.0
 
 
@@ -35,6 +37,7 @@ class Settings(BaseModel):
     firecrawl_api_key: str | None = Field(default=None, repr=False)
     google_places_api_key: str | None = Field(default=None, repr=False)
     gemini_api_key: str | None = Field(default=None, repr=False)
+    brave_api_key: str | None = Field(default=None, repr=False)
 
 
 @lru_cache(maxsize=1)
@@ -53,6 +56,7 @@ def get_settings() -> Settings:
         firecrawl_api_key=os.getenv("FIRECRAWL_API_KEY") or None,
         google_places_api_key=os.getenv("GOOGLE_PLACES_API_KEY") or None,
         gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
+        brave_api_key=os.getenv("BRAVE_API_KEY") or None,
     )
 
 
@@ -342,6 +346,8 @@ async def managed_utility(
         return await _firecrawl_scrape(request.input, settings)
     if utility == "google_places.search":
         return await _google_places_search(request.input, settings)
+    if utility == "brave.search":
+        return await _brave_search(request.input, settings)
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -411,6 +417,40 @@ async def _google_places_search(
     return _managed_provider_response("google_places", provider_payload)
 
 
+async def _brave_search(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Run Brave Search with the server-held key so managed users stay BYOK-free."""
+
+    api_key = _require_provider_key("brave", settings.brave_api_key)
+    query = _required_input_string(input_payload, "query", "brave.search")
+    count = _optional_count_or_limit(input_payload, default=5, maximum=10, utility="brave.search")
+    mode = _optional_string(input_payload, "mode")
+    if mode not in (None, "web", "llm-context"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="brave.search input.mode must be web or llm-context",
+        )
+
+    query_params = {"q": query}
+    if mode != "llm-context":
+        query_params["count"] = str(count)
+    for field_name in ("country", "search_lang", "ui_lang", "freshness"):
+        value = _optional_string(input_payload, field_name)
+        if value:
+            query_params[field_name] = value
+
+    provider_payload = await _get_provider_json(
+        provider="brave",
+        url=BRAVE_LLM_CONTEXT_URL if mode == "llm-context" else BRAVE_SEARCH_URL,
+        headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
+        params=query_params,
+        settings=settings,
+    )
+    return _managed_provider_response("brave", provider_payload)
+
+
 async def _post_provider_json(
     *,
     provider: str,
@@ -424,6 +464,47 @@ async def _post_provider_json(
     try:
         async with httpx.AsyncClient(timeout=MANAGED_UTILITY_TIMEOUT_SECONDS) as client:
             response = await client.post(url, headers=headers, json=json_payload)
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"{provider} request timed out",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"{provider} request failed",
+        ) from exc
+
+    provider_payload = _response_json_or_text(response)
+    sanitized_payload = _sanitize_provider_payload(provider_payload, settings)
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "provider": provider,
+                "status": response.status_code,
+                "payload": sanitized_payload,
+            },
+        )
+
+    if isinstance(sanitized_payload, dict):
+        return sanitized_payload
+    return {"value": sanitized_payload}
+
+
+async def _get_provider_json(
+    *,
+    provider: str,
+    url: str,
+    headers: dict[str, str],
+    params: dict[str, str],
+    settings: Settings,
+) -> dict[str, Any]:
+    """GET provider JSON for read-only managed utilities such as Brave Search."""
+
+    try:
+        async with httpx.AsyncClient(timeout=MANAGED_UTILITY_TIMEOUT_SECONDS) as client:
+            response = await client.get(url, headers=headers, params=params)
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
@@ -484,6 +565,16 @@ def _required_input_string(input_payload: dict[str, Any], field_name: str, utili
     return raw_value.strip()
 
 
+def _optional_string(input_payload: dict[str, Any], field_name: str) -> str | None:
+    """Allow only non-empty string provider parameters through the managed boundary."""
+
+    raw_value = input_payload.get(field_name)
+    if not isinstance(raw_value, str):
+        return None
+    value = raw_value.strip()
+    return value or None
+
+
 def _optional_limit(
     input_payload: dict[str, Any],
     *,
@@ -507,6 +598,31 @@ def _optional_limit(
             detail=f"{utility} input.limit must be an integer between 1 and {maximum}",
         )
     return raw_value
+
+
+def _optional_count_or_limit(
+    input_payload: dict[str, Any],
+    *,
+    default: int,
+    maximum: int,
+    utility: str,
+) -> int:
+    """Support both app-facing count and existing managed utility limit names."""
+
+    raw_count = input_payload.get("count")
+    if raw_count is None:
+        return _optional_limit(input_payload, default=default, maximum=maximum, utility=utility)
+    if input_payload.get("limit") is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} input.count and input.limit cannot both be set",
+        )
+    return _optional_limit(
+        {"limit": raw_count},
+        default=default,
+        maximum=maximum,
+        utility=utility,
+    )
 
 
 def _managed_provider_response(
@@ -544,6 +660,7 @@ def _sanitize_provider_payload(payload: Any, settings: Settings) -> Any:
             settings.firecrawl_api_key,
             settings.google_places_api_key,
             settings.gemini_api_key,
+            settings.brave_api_key,
         )
         if value
     ]
@@ -1152,6 +1269,7 @@ def _provider_presence(settings: Settings) -> dict[str, bool]:
         "firecrawl": bool(settings.firecrawl_api_key),
         "google_places": bool(settings.google_places_api_key),
         "gemini": bool(settings.gemini_api_key),
+        "brave": bool(settings.brave_api_key),
     }
 
 

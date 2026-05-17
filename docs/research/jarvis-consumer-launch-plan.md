@@ -703,6 +703,9 @@ worker, and Render deploy:
   fixture with HTTP 200 and returned text.
 - Brave search works through the active OpenClaw config; the follow-up worker
   got HTTP 200 and one result for a harmless query.
+- Managed Brave routing is implemented in the local code path via backend
+  `brave.search` and runtime `web_search` routing, but still needs Render
+  deployment/env verification before it counts as live managed proof.
 - Firecrawl key was replaced/recovered and live-smoked both locally and through
   Render. Render `firecrawl.search` and `firecrawl.scrape` returned HTTP 200
   with no local secret substring detected in the backend response.
@@ -730,6 +733,9 @@ Before wider beta:
 - [x] Route Google Places/goplaces search through the Render backend for
       managed-plan users. Details/resolve/reviews still require the upstream
       direct CLI and BYOK key until backend utilities exist for those shapes.
+- [x] Add backend-managed Brave Search utility and route runtime `web_search`
+      through Jarvis in managed mode while preserving direct/BYOK Brave when no
+      managed backend is configured.
 - [ ] Add real backend-managed Gemini/Nano Banana utility execution or keep image
       generation local/BYOK-only in launch copy.
 - [ ] Keep `OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS=1` out of public
@@ -1015,6 +1021,8 @@ Order:
    - Google Places/goplaces ordinary search now uses the Render managed utility
      endpoint in managed mode and preserves direct/BYOK search when the Jarvis
      backend is absent.
+   - Brave `web_search` now has a managed backend utility/routing slice in code;
+     live Render proof is pending deployment plus `BRAVE_API_KEY` configuration.
    - Remaining Places gap: details/resolve/reviews still require the upstream
      direct `goplaces` CLI and a BYOK key because the backend only exposes
      `google_places.search`.

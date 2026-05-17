@@ -43,6 +43,7 @@ def test_health_reports_provider_presence_without_secret_values(monkeypatch):
     monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
     monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "test-places-provider-placeholder")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("BRAVE_API_KEY", "test-brave-provider-placeholder")
     reset_settings()
 
     response = TestClient(app).get("/healthz")
@@ -55,10 +56,12 @@ def test_health_reports_provider_presence_without_secret_values(monkeypatch):
         "firecrawl": True,
         "google_places": True,
         "gemini": False,
+        "brave": True,
     }
     assert "test-openai-provider-placeholder" not in response.text
     assert "test-firecrawl-provider-placeholder" not in response.text
     assert "test-places-provider-placeholder" not in response.text
+    assert "test-brave-provider-placeholder" not in response.text
 
 
 def test_device_registration_returns_trial_contract_without_token_in_development(monkeypatch):
@@ -442,6 +445,57 @@ def test_google_places_search_calls_provider_and_redacts_echoed_key(monkeypatch)
     assert "test-places-provider-placeholder" not in response.text
 
 
+def test_brave_search_calls_provider_and_redacts_echoed_key(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("BRAVE_API_KEY", "test-brave-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).startswith("https://api.search.brave.com/res/v1/web/search?")
+        assert request.headers["x-subscription-token"] == "test-brave-provider-placeholder"
+        assert request.url.params["q"] == "managed search"
+        assert request.url.params["count"] == "4"
+        assert request.url.params["country"] == "US"
+        assert request.url.params["search_lang"] == "en"
+        return httpx.Response(
+            200,
+            json={
+                "web": {
+                    "results": [
+                        {
+                            "title": "Jarvis",
+                            "url": "https://example.com",
+                            "description": "Managed result",
+                        }
+                    ]
+                },
+                "debug": "test-brave-provider-placeholder",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/brave.search",
+        json={
+            "input": {
+                "query": "managed search",
+                "count": 4,
+                "country": "US",
+                "search_lang": "en",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["result"]["provider"] == "brave"
+    assert body["result"]["payload"]["web"]["results"][0]["title"] == "Jarvis"
+    assert body["result"]["payload"]["debug"] == "[redacted]"
+    assert "test-brave-provider-placeholder" not in response.text
+
+
 def test_managed_utility_missing_provider_key_fails_closed(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
@@ -483,5 +537,6 @@ def teardown_function():
         "FIRECRAWL_API_KEY",
         "GOOGLE_PLACES_API_KEY",
         "GEMINI_API_KEY",
+        "BRAVE_API_KEY",
     ):
         os.environ.pop(key, None)
