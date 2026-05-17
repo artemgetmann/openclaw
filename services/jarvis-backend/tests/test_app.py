@@ -511,7 +511,7 @@ def test_gemini_image_generate_calls_provider_and_returns_inline_image(monkeypat
             "contents": [{"parts": [{"text": "tiny robot assistant"}]}],
             "generationConfig": {
                 "responseModalities": ["TEXT", "IMAGE"],
-                "responseFormat": {"image": {"imageSize": "2K", "aspectRatio": "16:9"}},
+                "imageConfig": {"imageSize": "2K", "aspectRatio": "16:9"},
             },
         }
         return httpx.Response(
