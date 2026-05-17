@@ -729,17 +729,17 @@ def _gemini_image_generation_request(
 ) -> dict[str, Any]:
     """Build the narrow Gemini REST payload for one text-to-image request."""
 
-    image_response_format: dict[str, str] = {}
+    image_config: dict[str, str] = {}
     if resolution:
-        image_response_format["imageSize"] = resolution
+        image_config["imageSize"] = resolution
     if aspect_ratio:
-        image_response_format["aspectRatio"] = aspect_ratio
+        image_config["aspectRatio"] = aspect_ratio
 
     generation_config: dict[str, Any] = {
         "responseModalities": ["TEXT", "IMAGE"],
     }
-    if image_response_format:
-        generation_config["responseFormat"] = {"image": image_response_format}
+    if image_config:
+        generation_config["imageConfig"] = image_config
 
     return {
         "contents": [{"parts": [{"text": prompt}]}],
