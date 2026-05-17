@@ -44,6 +44,8 @@ Verified on 2026-05-12 and refreshed on 2026-05-16:
 - Real managed utility endpoints for `firecrawl.search`, `firecrawl.scrape`,
   and `google_places.search` are deployed on Render and returned HTTP 200 in a
   live redacted smoke.
+- `gemini.image.generate` now exists in code for backend-managed text-to-image;
+  Render live smoke is still pending after deployment.
 - Neon persistence is configured server-side in Render.
 - Account activation creates a persisted 14-day trial.
 - License status succeeds for a valid account token.
@@ -51,11 +53,13 @@ Verified on 2026-05-12 and refreshed on 2026-05-16:
 - Invalid account access tokens reject with 401.
 
 Backend/account persistence and the first Firecrawl/Places managed utility
-endpoints are ready for the next beta package smoke. Anthropic remains unset,
-Gemini is configured but not yet exposed as a managed utility endpoint.
-Firecrawl app/runtime calls and Google Places/goplaces ordinary search now use
-Render in managed mode. Google Places details/resolve/reviews still require
-direct BYOK until the backend exposes managed utilities for those operations.
+endpoints are ready for the next beta package smoke. Anthropic remains unset.
+Gemini text-to-image now has a managed utility code path, but still needs Render
+deployment/live smoke before launch copy can count it as production-ready.
+Firecrawl app/runtime calls, Google Places/goplaces ordinary search, and the
+Nano Banana text-to-image wrapper use Render in managed mode when configured.
+Google Places details/resolve/reviews and Nano Banana input-image editing still
+require direct BYOK until the backend exposes managed utilities for those shapes.
 
 ## Release package status
 

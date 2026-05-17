@@ -12,6 +12,10 @@ import {
   resolveStorePath,
   saveSessionStore,
 } from "./config/sessions.js";
+import {
+  isJarvisManagedGeminiImageGenerationConfigured,
+  runGeminiImageGeneration,
+} from "./consumer/gemini-image-generation.js";
 import { runGooglePlacesSearch } from "./consumer/google-places-search.js";
 import { ensureBinary } from "./infra/binaries.js";
 import {
@@ -41,6 +45,8 @@ export {
   promptYesNo,
   resolveSessionKey,
   resolveStorePath,
+  isJarvisManagedGeminiImageGenerationConfigured,
+  runGeminiImageGeneration,
   runGooglePlacesSearch,
   runCommandWithTimeout,
   runExec,

@@ -35,6 +35,8 @@ The source can be public. The hosted environment cannot be.
   - `brave.search` with `input.query`, optional `input.count`/`input.limit`,
     and optional Brave-safe filters (`country`, `search_lang`, `ui_lang`,
     `freshness`, `mode`).
+  - `gemini.image.generate` with `input.prompt` and optional
+    `input.resolution` / `input.aspectRatio`.
 
 ## Environment
 
@@ -50,8 +52,8 @@ The source can be public. The hosted environment cannot be.
 - `ANTHROPIC_API_KEY` - optional managed provider key.
 - `FIRECRAWL_API_KEY` - enables `firecrawl.search` and `firecrawl.scrape`.
 - `GOOGLE_PLACES_API_KEY` - enables `google_places.search`.
-- `GEMINI_API_KEY` - reserved for the staged Gemini managed utility slice.
 - `BRAVE_API_KEY` - enables `brave.search`.
+- `GEMINI_API_KEY` - enables `gemini.image.generate`.
 
 In production, protected endpoints refuse requests if
 `JARVIS_BACKEND_API_TOKEN` is missing. In development, the token is optional so
