@@ -496,6 +496,94 @@ def test_brave_search_calls_provider_and_redacts_echoed_key(monkeypatch):
     assert "test-brave-provider-placeholder" not in response.text
 
 
+def test_gemini_image_generate_calls_provider_and_returns_inline_image(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert (
+            str(request.url)
+            == "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent"
+        )
+        assert request.headers["x-goog-api-key"] == "test-gemini-provider-placeholder"
+        assert json.loads(request.content) == {
+            "contents": [{"parts": [{"text": "tiny robot assistant"}]}],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"],
+                "responseFormat": {"image": {"imageSize": "2K", "aspectRatio": "16:9"}},
+            },
+        }
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"text": "Generated a small robot."},
+                                {
+                                    "inlineData": {
+                                        "mimeType": "image/png",
+                                        "data": "ZmFrZS1pbWFnZQ==",
+                                    }
+                                },
+                            ]
+                        }
+                    }
+                ],
+                "usageMetadata": {"totalTokenCount": 1120},
+                "debug": "test-gemini-provider-placeholder",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/gemini.image.generate",
+        json={
+            "input": {
+                "prompt": "tiny robot assistant",
+                "resolution": "2K",
+                "aspectRatio": "16:9",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"]["provider"] == "gemini"
+    assert body["result"]["payload"]["model"] == "gemini-3-pro-image-preview"
+    assert body["result"]["payload"]["text"] == "Generated a small robot."
+    assert body["result"]["payload"]["images"] == [
+        {"mimeType": "image/png", "data": "ZmFrZS1pbWFnZQ=="}
+    ]
+    assert body["result"]["payload"]["usageMetadata"]["totalTokenCount"] == 1120
+    assert body["usage"]["units"] == 1
+    assert "test-gemini-provider-placeholder" not in response.text
+
+
+def test_gemini_image_generate_validates_prompt_before_provider_spend(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected provider request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/gemini.image.generate",
+        json={"input": {"prompt": "tiny robot assistant", "resolution": "8K"}},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "gemini.image.generate input.resolution must be one of: 1K, 2K, 4K"
+    )
+
+
 def test_managed_utility_missing_provider_key_fails_closed(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)

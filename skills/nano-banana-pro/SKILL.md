@@ -7,8 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🍌",
-        "requires": { "bins": ["uv"], "env": ["GEMINI_API_KEY"] },
-        "primaryEnv": "GEMINI_API_KEY",
+        "requires": { "bins": ["node"] },
         "install":
           [
             {
@@ -30,30 +29,32 @@ Use the bundled script to generate or edit images.
 Generate
 
 ```bash
-uv run {baseDir}/scripts/generate_image.py --prompt "your image description" --filename "output.png" --resolution 1K
+node {baseDir}/scripts/generate-image.mjs --prompt "your image description" --filename "output.png" --resolution 1K
 ```
 
 Edit (single image)
 
 ```bash
-uv run {baseDir}/scripts/generate_image.py --prompt "edit instructions" --filename "output.png" -i "/path/in.png" --resolution 2K
+node {baseDir}/scripts/generate-image.mjs --prompt "edit instructions" --filename "output.png" -i "/path/in.png" --resolution 2K
 ```
 
 Multi-image composition (up to 14 images)
 
 ```bash
-uv run {baseDir}/scripts/generate_image.py --prompt "combine these into one scene" --filename "output.png" -i img1.png -i img2.png -i img3.png
+node {baseDir}/scripts/generate-image.mjs --prompt "combine these into one scene" --filename "output.png" -i img1.png -i img2.png -i img3.png
 ```
 
-API key
+Managed and API key paths
 
-- `GEMINI_API_KEY` env var
+- Jarvis managed mode can generate a text-to-image result through the backend without a local Gemini key.
+- Input-image editing/composition still uses the direct BYOK path.
+- Direct BYOK: `GEMINI_API_KEY` env var
 - Or set `skills."nano-banana-pro".apiKey` / `skills."nano-banana-pro".env.GEMINI_API_KEY` in `~/.openclaw/openclaw.json`
 
 Specific aspect ratio (optional)
 
 ```bash
-uv run {baseDir}/scripts/generate_image.py --prompt "portrait photo" --filename "output.png" --aspect-ratio 9:16
+node {baseDir}/scripts/generate-image.mjs --prompt "portrait photo" --filename "output.png" --aspect-ratio 9:16
 ```
 
 Notes

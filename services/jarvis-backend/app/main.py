@@ -20,7 +20,23 @@ FIRECRAWL_API_BASE_URL = "https://api.firecrawl.dev/v2"
 GOOGLE_PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 BRAVE_LLM_CONTEXT_URL = "https://api.search.brave.com/res/v1/llm/context"
+GEMINI_GENERATE_CONTENT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+GEMINI_IMAGE_GENERATION_MODEL = "gemini-3-pro-image-preview"
 MANAGED_UTILITY_TIMEOUT_SECONDS = 20.0
+MAX_GEMINI_IMAGE_PROMPT_CHARS = 4000
+SUPPORTED_GEMINI_IMAGE_RESOLUTIONS = {"1K", "2K", "4K"}
+SUPPORTED_GEMINI_IMAGE_ASPECT_RATIOS = {
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+}
 
 
 class Settings(BaseModel):
@@ -348,6 +364,8 @@ async def managed_utility(
         return await _google_places_search(request.input, settings)
     if utility == "brave.search":
         return await _brave_search(request.input, settings)
+    if utility == "gemini.image.generate":
+        return await _gemini_image_generate(request.input, settings)
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -449,6 +467,62 @@ async def _brave_search(
         settings=settings,
     )
     return _managed_provider_response("brave", provider_payload)
+
+
+async def _gemini_image_generate(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Generate one image through Gemini with the server-held API key.
+
+    This first managed slice intentionally supports text-to-image only. Image
+    editing/composition requires client-to-server binary upload limits, storage,
+    and abuse controls, so the local BYOK Nano Banana path remains responsible
+    for input-image workflows until that contract is designed.
+    """
+
+    api_key = _require_provider_key("gemini", settings.gemini_api_key)
+    prompt = _required_input_string(input_payload, "prompt", "gemini.image.generate")
+    if len(prompt) > MAX_GEMINI_IMAGE_PROMPT_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "gemini.image.generate input.prompt must be "
+                f"{MAX_GEMINI_IMAGE_PROMPT_CHARS} characters or fewer"
+            ),
+        )
+
+    resolution = _optional_choice(
+        input_payload,
+        "resolution",
+        "gemini.image.generate",
+        SUPPORTED_GEMINI_IMAGE_RESOLUTIONS,
+        default="1K",
+    )
+    aspect_ratio = _optional_choice(
+        input_payload,
+        "aspectRatio",
+        "gemini.image.generate",
+        SUPPORTED_GEMINI_IMAGE_ASPECT_RATIOS,
+    )
+    provider_payload = await _post_provider_json(
+        provider="gemini",
+        url=f"{GEMINI_GENERATE_CONTENT_BASE_URL}/{GEMINI_IMAGE_GENERATION_MODEL}:generateContent",
+        headers={"x-goog-api-key": api_key},
+        json_payload=_gemini_image_generation_request(
+            prompt=prompt,
+            resolution=resolution,
+            aspect_ratio=aspect_ratio,
+        ),
+        settings=settings,
+    )
+    return _managed_provider_response(
+        "gemini",
+        _extract_gemini_image_generation_payload(
+            provider_payload=provider_payload,
+            model=GEMINI_IMAGE_GENERATION_MODEL,
+        ),
+    )
 
 
 async def _post_provider_json(
@@ -575,6 +649,28 @@ def _optional_string(input_payload: dict[str, Any], field_name: str) -> str | No
     return value or None
 
 
+def _optional_choice(
+    input_payload: dict[str, Any],
+    field_name: str,
+    utility: str,
+    choices: set[str],
+    *,
+    default: str | None = None,
+) -> str | None:
+    """Validate small enum-like fields before a provider call can spend money."""
+
+    raw_value = input_payload.get(field_name)
+    if raw_value is None:
+        return default
+    if not isinstance(raw_value, str) or raw_value not in choices:
+        allowed = ", ".join(sorted(choices))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} input.{field_name} must be one of: {allowed}",
+        )
+    return raw_value
+
+
 def _optional_limit(
     input_payload: dict[str, Any],
     *,
@@ -623,6 +719,91 @@ def _optional_count_or_limit(
         maximum=maximum,
         utility=utility,
     )
+
+
+def _gemini_image_generation_request(
+    *,
+    prompt: str,
+    resolution: str | None,
+    aspect_ratio: str | None,
+) -> dict[str, Any]:
+    """Build the narrow Gemini REST payload for one text-to-image request."""
+
+    image_response_format: dict[str, str] = {}
+    if resolution:
+        image_response_format["imageSize"] = resolution
+    if aspect_ratio:
+        image_response_format["aspectRatio"] = aspect_ratio
+
+    generation_config: dict[str, Any] = {
+        "responseModalities": ["TEXT", "IMAGE"],
+    }
+    if image_response_format:
+        generation_config["responseFormat"] = {"image": image_response_format}
+
+    return {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": generation_config,
+    }
+
+
+def _extract_gemini_image_generation_payload(
+    *,
+    provider_payload: dict[str, Any],
+    model: str,
+) -> dict[str, Any]:
+    """Normalize Gemini's candidate/parts response into a tiny app contract."""
+
+    images: list[dict[str, str]] = []
+    texts: list[str] = []
+    candidates = provider_payload.get("candidates")
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content")
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts")
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    texts.append(text)
+                inline_data = part.get("inlineData") or part.get("inline_data")
+                if not isinstance(inline_data, dict):
+                    continue
+                data = inline_data.get("data")
+                if not isinstance(data, str) or not data.strip():
+                    continue
+                mime_type = inline_data.get("mimeType") or inline_data.get("mime_type")
+                images.append(
+                    {
+                        "mimeType": mime_type if isinstance(mime_type, str) else "image/png",
+                        "data": data,
+                    }
+                )
+
+    if not images:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="gemini returned no generated image",
+        )
+
+    model_version = provider_payload.get("modelVersion")
+    payload: dict[str, Any] = {
+        "model": model_version if isinstance(model_version, str) and model_version else model,
+        "images": images,
+    }
+    if texts:
+        payload["text"] = "\n".join(texts)
+    usage_metadata = provider_payload.get("usageMetadata")
+    if isinstance(usage_metadata, dict):
+        payload["usageMetadata"] = usage_metadata
+    return payload
 
 
 def _managed_provider_response(

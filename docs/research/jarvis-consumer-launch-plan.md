@@ -713,8 +713,9 @@ worker, and Render deploy:
   through Render. Render `google_places.search` returned HTTP 200 with one
   place and no local secret substring detected in the backend response.
 - Gemini/Nano Banana image generation was live-smoked locally with the recovered
-  key and generated `/tmp/jarvis-nano-banana-smoke-candidate-2.png`. Render
-  reports Gemini configured, but no Gemini managed utility endpoint exists yet.
+  key and generated `/tmp/jarvis-nano-banana-smoke-candidate-2.png`. The
+  backend now has a narrow `gemini.image.generate` managed utility code path
+  for text-to-image; Render live smoke is still pending.
 - Anthropic is not configured locally or in production `/healthz`. No Anthropic
   live model smoke is counted here.
 
@@ -736,8 +737,9 @@ Before wider beta:
 - [x] Add backend-managed Brave Search utility and route runtime `web_search`
       through Jarvis in managed mode while preserving direct/BYOK Brave when no
       managed backend is configured.
-- [ ] Add real backend-managed Gemini/Nano Banana utility execution or keep image
-      generation local/BYOK-only in launch copy.
+- [x] Add real backend-managed Gemini/Nano Banana text-to-image utility
+      execution. Input-image editing/composition remains local/BYOK-only until
+      the backend has an upload/storage/abuse-control contract.
 - [ ] Keep `OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS=1` out of public
       builds unless the product intentionally ships env-derived provider keys
       inside the bundle for a private bridge.
@@ -1026,8 +1028,9 @@ Order:
    - Remaining Places gap: details/resolve/reviews still require the upstream
      direct `goplaces` CLI and a BYOK key because the backend only exposes
      `google_places.search`.
-   - Gemini managed utility execution remains staged; local Nano Banana proof is
-     green, but Render only proves the key is configured.
+   - Gemini managed utility execution now exists for text-to-image via
+     `gemini.image.generate`; local Nano Banana proof is green, and Render live
+     smoke still needs to prove the new endpoint after deployment.
 
 Verified Render truth as of 2026-05-11 before backend creation:
 
