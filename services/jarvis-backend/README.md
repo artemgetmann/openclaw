@@ -32,6 +32,9 @@ The source can be public. The hosted environment cannot be.
   - `firecrawl.search` with `input.query` and optional `input.limit`.
   - `firecrawl.scrape` with `input.url`.
   - `google_places.search` with `input.query` and optional `input.limit`.
+  - `brave.search` with `input.query`, optional `input.count`/`input.limit`,
+    and optional Brave-safe filters (`country`, `search_lang`, `ui_lang`,
+    `freshness`, `mode`).
 
 ## Environment
 
@@ -48,6 +51,7 @@ The source can be public. The hosted environment cannot be.
 - `FIRECRAWL_API_KEY` - enables `firecrawl.search` and `firecrawl.scrape`.
 - `GOOGLE_PLACES_API_KEY` - enables `google_places.search`.
 - `GEMINI_API_KEY` - reserved for the staged Gemini managed utility slice.
+- `BRAVE_API_KEY` - enables `brave.search`.
 
 In production, protected endpoints refuse requests if
 `JARVIS_BACKEND_API_TOKEN` is missing. In development, the token is optional so
@@ -92,7 +96,7 @@ Render owns production secret values:
   database, copy its pooled or direct connection string, and enter it in the
   Render dashboard before using hosted account/license state.
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `FIRECRAWL_API_KEY`,
-  `GOOGLE_PLACES_API_KEY`, and `GEMINI_API_KEY` are `sync: false` values that
+  `GOOGLE_PLACES_API_KEY`, `GEMINI_API_KEY`, and `BRAVE_API_KEY` are `sync: false` values that
   must be entered in the Render dashboard only when the corresponding managed
   provider is enabled.
 - Keep `JARVIS_BACKEND_ENV=production` so protected endpoints fail closed if the
