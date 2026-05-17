@@ -70,13 +70,18 @@ function normalizeAnswerPreviewText(text: string): string {
     .trimEnd();
 }
 
-function looksLikeProgressPreview(text: string): boolean {
-  return /(^|\n)\s*(?:🔧|Step\b|Fetching\b|Loading\b|Following\b|Got\b|Comparing\b)/i.test(text);
-}
-
 function looksLikeProgressParagraph(text: string): boolean {
   return /^(?:[-─—]{2,}|🔧|✅|Step\b|Starting\b|Moving\b|Fetching\b|Loading\b|Following\b|Got\b|Comparing\b|Redirect\b)/i.test(
     text.trim(),
+  );
+}
+
+function hasRetainedProgressTranscriptShape(text: string): boolean {
+  return (
+    text
+      .trim()
+      .split(/\n{2,}/)
+      .filter((paragraph) => paragraph.trim().length > 0).length > 1
   );
 }
 
@@ -499,15 +504,15 @@ export const dispatchTelegramMessage = async ({
     const retainedProgress = retainedAnswerProgressPreviewText.trim();
     const hasSeparateFinalText =
       prepared.text.trim() !== (retainedProgress || answerLane.lastPartialText.trim());
+    const hasRetainedProgressTranscript =
+      retainedProgress || hasRetainedProgressTranscriptShape(answerLane.lastPartialText);
     if (
       !opts?.hasMedia &&
       !opts?.isError &&
       answerLane.hasStreamedMessage &&
       answerLane.lastPartialText.trim() &&
       hasSeparateFinalText &&
-      (prepared.stripped ||
-        retainedProgress ||
-        looksLikeProgressPreview(answerLane.lastPartialText))
+      (prepared.stripped || hasRetainedProgressTranscript)
     ) {
       await materializeAnswerProgressBeforeFinal();
     }
@@ -535,9 +540,25 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     if (lane === answerLane) {
+      const previousPreviewText = lane.lastPartialText.trim();
       const split = splitRetainedProgressPrefix(previewText);
       if (split.progress) {
         retainedAnswerProgressPreviewText = split.progress;
+      }
+      // Some providers append the final answer to the last progress snapshot
+      // before the formal final callback arrives. When the old snapshot is a
+      // prefix, keep that old snapshot as the retained progress bubble and let
+      // final delivery own the answer text.
+      if (
+        !retainedAnswerProgressPreviewText &&
+        previousPreviewText &&
+        previewText.startsWith(previousPreviewText)
+      ) {
+        const appendedText = previewText.slice(previousPreviewText.length).trim();
+        if (looksLikeFinalAnswerRemainder(appendedText)) {
+          retainedAnswerProgressPreviewText = previousPreviewText;
+          previewText = previousPreviewText;
+        }
       }
       if (
         retainedAnswerProgressPreviewText &&

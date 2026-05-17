@@ -436,6 +436,47 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("keeps natural progress narration as one bubble and sends the final answer separately", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    const progressText = "I'll check the first page now.\n\nNow checking the IANA page.";
+    const finalText = [
+      "The main difference is that example.com is a short placeholder, while the IANA page explains the policy.",
+      "",
+      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "I'll check the first page now." });
+        await replyOptions?.onPartialReply?.({ text: progressText });
+        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "I'll check the first page now.");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, progressText);
+    expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: finalText,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("still delivers media-bearing tool payloads while batching text progress", async () => {
     const draftStream = createDraftStream(9002);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -844,6 +885,50 @@ describe("dispatchTelegramMessage draft streaming", () => {
               "",
               "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
             ].join("\n"),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("restores natural progress when a late partial appends the final answer", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    const progressText = "I'll check the first page now.\n\nNow checking the IANA page.";
+    const finalText = [
+      "The main difference is that example.com is a short placeholder, while the IANA page explains the policy.",
+      "",
+      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+    ].join("\n");
+    const combinedText = `${progressText}\n\n${finalText}`;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: progressText });
+        await replyOptions?.onPartialReply?.({ text: combinedText });
+        await dispatcherOptions.deliver({ text: combinedText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, progressText);
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
+      expect.stringContaining("The main difference is that example.com"),
+    );
+    expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: finalText,
           }),
         ],
       }),
