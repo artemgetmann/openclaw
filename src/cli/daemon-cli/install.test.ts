@@ -460,7 +460,7 @@ describe("runDaemonInstall", () => {
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
-  it("allows replacing the shared gateway when takeover is explicit", async () => {
+  it("blocks explicit shared gateway takeover when the install plan uses the legacy config root", async () => {
     service.readCommand.mockResolvedValue({
       programArguments: [
         "/opt/homebrew/bin/node",
@@ -479,8 +479,14 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true, force: true, allowSharedServiceTakeover: true });
 
-    expect(actionState.failed).toEqual([]);
-    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    expect(actionState.failed[0]?.message).toContain("canonical app-owned config root");
+    expect(actionState.failed[0]?.hints).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("OPENCLAW_STATE_DIR"),
+        expect.stringContaining("Application Support"),
+      ]),
+    );
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
   it("skips the shared-service guard for profiled installs", async () => {
