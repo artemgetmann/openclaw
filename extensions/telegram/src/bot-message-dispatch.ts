@@ -70,6 +70,11 @@ function formatToolStartProgressLine(payload: { name?: string; phase?: string })
   return phase && phase !== "start" ? `🔧 ${name} ${phase}` : `🔧 ${name}`;
 }
 
+function hasInternalToolTraceText(text?: string) {
+  const normalized = normalizeToolProgressLine(text);
+  return normalized?.startsWith("🔧") === true;
+}
+
 function hasToolPayloadContent(payload: ReplyPayload) {
   return (
     Boolean(payload.text?.trim()) || Boolean(payload.mediaUrl) || Boolean(payload.mediaUrls?.length)
@@ -462,11 +467,7 @@ export const dispatchTelegramMessage = async ({
     return true;
   };
   const pushToolStartProgressDraft = (payload: { name?: string; phase?: string }) => {
-    const normalizedName = normalizeToolProgressLine(payload.name)?.toLowerCase();
-    if (
-      suppressInternalToolProgressDrafts &&
-      (normalizedName === "exec" || normalizedName === "cron")
-    ) {
+    if (suppressInternalToolProgressDrafts) {
       return false;
     }
     return pushToolProgressDraft(formatToolStartProgressLine(payload));
@@ -597,6 +598,15 @@ export const dispatchTelegramMessage = async ({
     }
     return { ...payload, replyToId: implicitQuoteReplyTargetId };
   };
+  const stripInternalToolTraceText = (payload: ReplyPayload): ReplyPayload | undefined => {
+    if (!suppressInternalToolProgressDrafts || !hasInternalToolTraceText(payload.text)) {
+      return payload;
+    }
+    if (!payload.mediaUrl && !(payload.mediaUrls?.length ?? 0)) {
+      return undefined;
+    }
+    return { ...payload, text: undefined };
+  };
   const sendPayload = async (payload: ReplyPayload) => {
     const normalizedPayload =
       typeof payload.text === "string"
@@ -613,21 +623,26 @@ export const dispatchTelegramMessage = async ({
     return result.delivered;
   };
   const sendToolPayload = async (payload: ReplyPayload) => {
+    const text = normalizeToolProgressLine(payload.text);
+    const sanitizedPayload = stripInternalToolTraceText(payload);
+    if (!sanitizedPayload) {
+      return;
+    }
     if (
       canStreamToolProgressDraft &&
-      !payload.mediaUrl &&
-      !payload.mediaUrls?.length &&
-      pushToolProgressDraft(payload.text)
+      !sanitizedPayload.mediaUrl &&
+      !sanitizedPayload.mediaUrls?.length &&
+      pushToolProgressDraft(text)
     ) {
       return;
     }
     // Tool payloads already arrive fully structured, including media URLs from
     // trusted tool results. Deliver them directly so Telegram does not have to
     // infer media from assistant prose after the model paraphrases the tool.
-    if (!hasToolPayloadContent(payload)) {
+    if (!hasToolPayloadContent(sanitizedPayload)) {
       return;
     }
-    await sendPayload(payload);
+    await sendPayload(sanitizedPayload);
   };
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
@@ -705,6 +720,13 @@ export const dispatchTelegramMessage = async ({
             const previewButtons = (
               payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
             )?.buttons;
+            if (info.kind === "tool") {
+              const sanitizedPayload = stripInternalToolTraceText(payload);
+              if (!sanitizedPayload) {
+                return;
+              }
+              payload = sanitizedPayload;
+            }
             const split = splitTextIntoLaneSegments(payload.text);
             const segments = split.segments;
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
