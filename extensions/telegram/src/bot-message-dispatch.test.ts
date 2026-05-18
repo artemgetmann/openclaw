@@ -1045,7 +1045,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     ].join("\n");
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "example.com:" });
+        await replyOptions?.onPartialReply?.({ text: "example.com: Documentation" });
         await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
         return { queuedFinal: true };
       },
@@ -1054,7 +1054,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(answerDraftStream.update).not.toHaveBeenCalledWith("example.com:");
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("example.com: Documentation");
     expect(answerDraftStream.materialize).not.toHaveBeenCalled();
     expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(editMessageTelegram).toHaveBeenCalledWith(123, 1001, finalText, expect.any(Object));

@@ -99,7 +99,7 @@ function isSuppressibleAnswerPreviewPrefix(text: string): boolean {
     return false;
   }
   const isSingleLine = !/\n/.test(trimmed);
-  const isShortHeading = trimmed.length <= 80 && /[:：]$/.test(trimmed);
+  const isShortHeading = trimmed.length <= 120 && /^[^!?\n]{1,80}[:：]\s*[^.!?\n]*$/.test(trimmed);
   return isSingleLine && isShortHeading;
 }
 
