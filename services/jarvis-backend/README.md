@@ -54,6 +54,10 @@ The source can be public. The hosted environment cannot be.
 - `GOOGLE_PLACES_API_KEY` - enables `google_places.search`.
 - `BRAVE_API_KEY` - enables `brave.search`.
 - `GEMINI_API_KEY` - enables `gemini.image.generate`.
+- `TELEGRAM_MANAGER_BOT_TOKEN` - Telegram manager bot token for Managed Bots
+  onboarding. Keep this server-side only.
+- `MANAGER_BOT_USERNAME` - Telegram manager bot username used to build the
+  approval link.
 
 In production, protected endpoints refuse requests if
 `JARVIS_BACKEND_API_TOKEN` is missing. In development, the token is optional so
@@ -98,9 +102,11 @@ Render owns production secret values:
   database, copy its pooled or direct connection string, and enter it in the
   Render dashboard before using hosted account/license state.
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `FIRECRAWL_API_KEY`,
-  `GOOGLE_PLACES_API_KEY`, `GEMINI_API_KEY`, and `BRAVE_API_KEY` are `sync: false` values that
-  must be entered in the Render dashboard only when the corresponding managed
-  provider is enabled.
+  `GOOGLE_PLACES_API_KEY`, `GEMINI_API_KEY`, and `BRAVE_API_KEY` are
+  `sync: false` values that must be entered in the Render dashboard only when
+  the corresponding managed provider is enabled.
+- `TELEGRAM_MANAGER_BOT_TOKEN` and `MANAGER_BOT_USERNAME` are `sync: false`
+  values for Managed Bots onboarding. Never commit the token value.
 - Keep `JARVIS_BACKEND_ENV=production` so protected endpoints fail closed if the
   backend token or Neon URL is missing.
 
@@ -108,6 +114,10 @@ Do not add a Render persistent disk to `jarvis-backend` for account/license
 state. Neon/Postgres is the durable store for production. Google Auth, billing,
 and richer account linking are later slices; this service currently persists
 beta account rows and device/license rows only.
+
+Managed-bot setup sessions currently have an in-memory risk: a Render restart
+can lose pending setup before the user finishes Telegram approval. Persistent
+session storage is later hardening before wider beta.
 
 ## Run Locally
 

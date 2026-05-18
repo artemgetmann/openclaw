@@ -277,4 +277,148 @@ struct TelegramSetupBootstrapTests {
         #expect(payload["updateId"] as? Int == 101)
         #expect(payload["chatId"] as? Int == 303)
     }
+
+    @Test func `managed telegram client decodes start and connected status responses`() async throws {
+        let client = try JarvisTelegramManagedBotClient(
+            configuration: .init(
+                baseURL: #require(URL(string: "https://jarvis.example.test")),
+                accessToken: "server-token",
+                accountAccessToken: "jat_account_token"),
+            transport: { request in
+                let path = request.url?.path ?? ""
+                let body: String
+                if path == "/v1/telegram/managed/start" {
+                    body = """
+                    {
+                      "setupId": "tgms_test",
+                      "approvalUrl": "https://t.me/JarvisManagerBot?start=abc",
+                      "suggestedBotUsername": "jarvis_test_bot",
+                      "expiresAt": "2026-05-18T12:00:00Z",
+                      "status": "pending"
+                    }
+                    """
+                } else {
+                    body = """
+                    {
+                      "setupId": "tgms_test",
+                      "expiresAt": "2026-05-18T12:00:00Z",
+                      "status": "connected",
+                      "suggestedBotUsername": "jarvis_test_bot",
+                      "botId": 777000,
+                      "botUsername": "jarvis_test_bot",
+                      "managedChildBotToken": "777000:test-child-token"
+                    }
+                    """
+                }
+                guard let url = request.url,
+                      let response = HTTPURLResponse(
+                        url: url,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: nil)
+                else {
+                    throw URLError(.badServerResponse)
+                }
+                return (
+                    Data(body.utf8),
+                    response)
+            })
+
+        let started = try await client.start(suggestedBotName: "Jarvis Assistant")
+        let connected = try await client.status(setupId: started.setupId)
+
+        #expect(started.setupId == "tgms_test")
+        #expect(started.approvalUrl == "https://t.me/JarvisManagerBot?start=abc")
+        #expect(connected.status == "connected")
+        #expect(connected.managedChildBotToken == "777000:test-child-token")
+    }
+
+    @Test func `managed telegram status installs child token without exposing it in status text`() async throws {
+        let savedRoot = SavedConfigRoot()
+        let configPath = TestIsolation.tempConfigPath()
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-managed-telegram-\(UUID().uuidString)", isDirectory: true)
+            .path
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_STATE_DIR": stateDir,
+            "JARVIS_BACKEND_BASE_URL": "https://jarvis.example.test",
+            "JARVIS_BACKEND_ACCESS_TOKEN": "server-token",
+            "JARVIS_ACCOUNT_ACCESS_TOKEN": "jat_account_token",
+        ]) {
+            let initialRoot: [String: Any] = [
+                "jarvis": [
+                    "backend": [
+                        "baseUrl": "https://jarvis.example.test",
+                        "accessToken": "server-token",
+                        "accountAccessToken": "jat_account_token",
+                    ],
+                ],
+            ]
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: { initialRoot },
+                saveLocal: { root in
+                    savedRoot.set(root)
+                }))
+            await JarvisTelegramManagedBotClient._testSetTransportOverride { request in
+                #expect(request.url?.path == "/v1/telegram/managed/status/tgms_test")
+                let body = """
+                {
+                  "setupId": "tgms_test",
+                  "expiresAt": "2026-05-18T12:00:00Z",
+                  "status": "connected",
+                  "suggestedBotUsername": "jarvis_test_bot",
+                  "botId": 777000,
+                  "botUsername": "jarvis_test_bot",
+                  "managedChildBotToken": "777000:test-child-token"
+                }
+                """
+                guard let url = request.url,
+                      let response = HTTPURLResponse(
+                        url: url,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: nil)
+                else {
+                    throw URLError(.badServerResponse)
+                }
+                return (
+                    Data(body.utf8),
+                    response)
+            }
+
+            let store = ChannelsStore(isPreview: true)
+            store.configRoot = initialRoot
+            store.telegramManagedSetupId = "tgms_test"
+
+            await store.checkManagedTelegramSetupStatus()
+
+            let telegram = try #require(
+                ((savedRoot.value()["channels"] as? [String: Any])?["telegram"] as? [String: Any]))
+            let accounts = try #require(telegram["accounts"] as? [String: Any])
+            let defaultAccount = try #require(accounts["default"] as? [String: Any])
+            #expect(telegram["botToken"] as? String == "777000:test-child-token")
+            #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
+            #expect(store.telegramSetupStatus?.contains("777000:test-child-token") == false)
+
+            await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)
+            await ConfigStore._testClearOverrides()
+        }
+    }
+}
+
+@MainActor
+private final class SavedConfigRoot {
+    private var root: [String: Any] = [:]
+
+    func set(_ root: [String: Any]) {
+        self.root = root
+    }
+
+    func value() -> [String: Any] {
+        self.root
+    }
 }

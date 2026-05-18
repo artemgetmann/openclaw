@@ -9,6 +9,7 @@ struct ConsumerTelegramSetupCardContent: View {
     @Bindable var store: ChannelsStore
     let presentation: Presentation
     @FocusState private var tokenFieldFocused: Bool
+    @State private var manualSetupExpanded = false
 
     private var normalizedToken: String {
         TelegramSetupVerifier.normalizeToken(self.store.telegramSetupToken)
@@ -20,6 +21,15 @@ struct ConsumerTelegramSetupCardContent: View {
 
     private var isTokenEditingLocked: Bool {
         self.store.telegramBusy || self.store.telegramSetupPhase != .idle
+    }
+
+    private var managedSetupIsBusy: Bool {
+        switch self.store.telegramSetupPhase {
+        case .startingManagedBot, .checkingManagedApproval, .installingManagedBot:
+            true
+        default:
+            false
+        }
     }
 
     private var statusText: String? {
@@ -38,7 +48,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Connect Telegram")
                         .font(.headline)
-                    Text("Connect the bot, send one DM task, and confirm \(AppFlavor.current.appName) can answer.")
+                    Text("Create your Telegram bot, send one DM task, and confirm \(AppFlavor.current.appName) can answer.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -80,73 +90,59 @@ struct ConsumerTelegramSetupCardContent: View {
     private var setupState: some View {
         VStack(alignment: .leading, spacing: 14) {
             self.callout(
-                title: self.store.consumerTelegramLooksLive() ? "One task left" : "Use your own Telegram bot",
+                title: self.store.consumerTelegramLooksLive() ? "One task left" : "Create your Telegram bot",
                 body: self.store.consumerTelegramLooksLive()
                     ? "The bot is connected. Send one DM task so \(AppFlavor.current.appName) can prove the loop works."
-                    : "Create a bot in BotFather, verify the token here, then send one DM task to prove it works.")
-
-            Text("1. Open @BotFather, send /newbot, choose a name and username, then copy the full token BotFather gives you.")
-                .font(.callout)
+                    : "\(AppFlavor.current.appName) will open Telegram so you can approve a new bot. Then send one DM task to prove it works.")
 
             HStack(spacing: 10) {
-                Button("Open BotFather") {
-                    self.store.openTelegramBotFather()
-                }
-                .buttonStyle(.bordered)
-
-                if AppFlavor.current.telegramSetupGuideURL != nil {
-                    Button("Written guide") {
-                        self.store.openTelegramSetupGuide()
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                if AppFlavor.current.telegramSetupVideoURL != nil {
-                    Button("Video walkthrough") {
-                        self.store.openTelegramSetupVideo()
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-
-            Text("2. Paste the full token here and verify it.")
-                .font(.callout)
-
-            TextField("BotFather token", text: self.$store.telegramSetupToken)
-                .textFieldStyle(.roundedBorder)
-                .autocorrectionDisabled()
-                .focused(self.$tokenFieldFocused)
-                .disabled(self.isTokenEditingLocked)
-                .onChange(of: self.store.telegramSetupToken) { oldValue, newValue in
-                    guard !self.isTokenEditingLocked else { return }
-                    guard TelegramSetupVerifier.normalizeToken(oldValue) != TelegramSetupVerifier.normalizeToken(newValue) else { return }
-                    self.store.resetTelegramSetupProgressForEditedToken()
-                }
-
-            HStack(spacing: 10) {
-                Button("Verify token") {
-                    self.tokenFieldFocused = false
-                    Task { await self.store.verifyTelegramSetupToken() }
+                Button("Create Telegram bot") {
+                    Task { await self.store.startManagedTelegramSetup() }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.store.telegramBusy || self.store.telegramSetupPhase == .savingSetup)
+                .disabled(self.store.telegramBusy || self.store.telegramSetupPhase != .idle)
 
-                if self.store.telegramSetupPhase == .verifyingToken {
+                if self.store.telegramManagedApprovalURL != nil {
+                    Button("Open approval") {
+                        self.store.openTelegramManagedApproval()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if self.managedSetupIsBusy {
                     ProgressView().controlSize(.small)
                 }
             }
 
-            Text("3. Open your bot, press Start if Telegram shows it, send one real task in DM, then click Verify first task.")
-                .font(.callout)
+            if let suggestedUsername = self.store.telegramManagedSuggestedBotUsername {
+                Text("Telegram will ask you to approve @\(suggestedUsername).")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             HStack(spacing: 10) {
+                Button("Check status") {
+                    Task { await self.store.checkManagedTelegramSetupStatus() }
+                }
+                .buttonStyle(.bordered)
+                .disabled(
+                    self.store.telegramBusy
+                        || self.store.telegramManagedSetupId == nil
+                        || self.store.telegramSetupPhase != .idle)
+
                 if let username = self.store.consumerTelegramBotUsername() {
                     Button("Open your bot") {
                         self.store.openTelegramBot(username: username)
                     }
                     .buttonStyle(.bordered)
                 }
+            }
 
+            Text("Send one real task as a DM to your bot, then verify the first task.")
+                .font(.callout)
+
+            HStack(spacing: 10) {
                 Button("Verify first task") {
                     self.tokenFieldFocused = false
                     Task { await self.store.verifyConsumerTelegramFirstTask() }
@@ -190,12 +186,70 @@ struct ConsumerTelegramSetupCardContent: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Advanced: DMs are the reliable first path. For groups, make the bot an admin or disable Group Privacy in BotFather, then remove and re-add the bot so Telegram applies the change. Topics are best for multiple parallel tasks.")
+            DisclosureGroup("Advanced: use BotFather instead", isExpanded: self.$manualSetupExpanded) {
+                self.manualBotFatherSetup
+            }
+            .font(.callout)
+        }
+    }
+
+    private var manualBotFatherSetup: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Use this if Jarvis bot creation is unavailable or you already have a bot.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Open @BotFather, send /newbot, choose a name and username, then copy the full token BotFather gives you.")
                 .font(.callout)
-                .foregroundStyle(.primary)
+
+            HStack(spacing: 10) {
+                Button("Open BotFather") {
+                    self.store.openTelegramBotFather()
+                }
+                .buttonStyle(.bordered)
+
+                if AppFlavor.current.telegramSetupGuideURL != nil {
+                    Button("Written guide") {
+                        self.store.openTelegramSetupGuide()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if AppFlavor.current.telegramSetupVideoURL != nil {
+                    Button("Video walkthrough") {
+                        self.store.openTelegramSetupVideo()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            TextField("BotFather token", text: self.$store.telegramSetupToken)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .focused(self.$tokenFieldFocused)
+                .disabled(self.isTokenEditingLocked)
+                .onChange(of: self.store.telegramSetupToken) { oldValue, newValue in
+                    guard !self.isTokenEditingLocked else { return }
+                    guard TelegramSetupVerifier.normalizeToken(oldValue) != TelegramSetupVerifier.normalizeToken(newValue) else { return }
+                    self.store.resetTelegramSetupProgressForEditedToken()
+                }
+
+            HStack(spacing: 10) {
+                Button("Verify token") {
+                    self.tokenFieldFocused = false
+                    Task { await self.store.verifyTelegramSetupToken() }
+                }
+                .buttonStyle(.bordered)
+                .disabled(self.store.telegramBusy || self.store.telegramSetupPhase == .savingSetup)
+
+                if self.store.telegramSetupPhase == .verifyingToken {
+                    ProgressView().controlSize(.small)
+                }
+            }
 
             Text("Start with a DM. Move to groups and topics after the first task works.")
-                .font(.callout)
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
