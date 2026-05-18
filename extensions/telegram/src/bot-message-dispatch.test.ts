@@ -967,6 +967,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(answerDraftStream.update).toHaveBeenCalledWith("Fetching both pages now.");
+    const restoredUpdateCall = answerDraftStream.update.mock.calls.findIndex(
+      ([text]) => text === "Fetching both pages now.",
+    );
+    const restoredUpdateOrder =
+      answerDraftStream.update.mock.invocationCallOrder[restoredUpdateCall];
+    const flushOrder = answerDraftStream.flush.mock.invocationCallOrder[0];
+    const materializeOrder = answerDraftStream.materialize.mock.invocationCallOrder[0];
+    expect(restoredUpdateOrder).toBeLessThan(flushOrder);
+    expect(flushOrder).toBeLessThan(materializeOrder);
     expect(answerDraftStream.update).not.toHaveBeenCalledWith(
       expect.stringContaining("Comparison:"),
     );

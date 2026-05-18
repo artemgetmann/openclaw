@@ -507,6 +507,10 @@ export const dispatchTelegramMessage = async ({
       answerLane.stream.update(progressToMaterialize);
       answerLane.lastPartialText = progressToMaterialize;
     }
+    // Materialization snapshots the last delivered preview. Force any restored
+    // progress-only edit out first so a late partial containing the final
+    // answer cannot be frozen into the retained progress bubble.
+    await answerLane.stream.flush();
     await answerLane.stream.materialize?.();
     answerLane.stream.forceNewMessage();
     resetDraftLaneState(answerLane);
