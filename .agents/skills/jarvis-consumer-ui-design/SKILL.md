@@ -47,8 +47,8 @@ navigation, and no internal machinery leaking into the user's face.
 
 - Chrome title: `Choose Your Main Chrome Account`
 - Chrome subtitle: `Jarvis will use this Chrome browser, so you don’t have to log in everywhere again.`
-- Telegram: keep the current manual BotFather flow for now. Do not design or
-  implement Managed Bots migration from this skill.
+- Telegram uses Managed Bots as the primary onboarding path; manual
+  BotFather/BYO bot stays fallback/advanced.
 - Visual language: color, typography, and deeper brand styling are deferred.
   The current blue accent is acceptable for now.
 
@@ -62,4 +62,4 @@ Before calling onboarding UI/copy ready, check:
 - Does Jarvis identity stay visible while interacting with the page?
 - Are required permissions obvious without sounding alarming?
 - Are internal errors translated into plain recovery guidance?
-- Does Telegram still match the manual BotFather setup path?
+- Does Telegram follow the Managed Bots-first path with BotFather fallback?

@@ -20,6 +20,10 @@ extension ChannelsStore {
         self.telegramSetupBaselineOutboundAt = nil
         self.telegramSetupWaitingForDM = false
         self.telegramSetupPhase = .idle
+        self.telegramManagedSetupId = nil
+        self.telegramManagedApprovalURL = nil
+        self.telegramManagedSuggestedBotUsername = nil
+        self.telegramManagedExpiresAt = nil
     }
 
     func openTelegramSetupGuide() {
@@ -39,6 +43,90 @@ extension ChannelsStore {
     func openTelegramBot(username: String) {
         guard !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         self.openTelegramURL("https://t.me/\(username)")
+    }
+
+    func openTelegramManagedApproval() {
+        guard let approvalURL = self.telegramManagedApprovalURL else { return }
+        self.openTelegramURL(approvalURL)
+    }
+
+    func startManagedTelegramSetup() async {
+        guard !self.telegramBusy, self.telegramSetupPhase == .idle else { return }
+        self.telegramBusy = true
+        self.telegramSetupPhase = .startingManagedBot
+        defer {
+            self.telegramBusy = false
+            self.telegramSetupPhase = .idle
+        }
+
+        self.telegramSetupStatus = "Creating your Telegram bot..."
+        do {
+            let client = try self.managedTelegramBotClient()
+            let response = try await client.start(suggestedBotName: "\(AppFlavor.current.appName) Assistant")
+            self.telegramManagedSetupId = response.setupId
+            self.telegramManagedApprovalURL = response.approvalUrl
+            self.telegramManagedSuggestedBotUsername = response.suggestedBotUsername
+            self.telegramManagedExpiresAt = response.expiresAt
+            self.telegramSetupStatus = self.managedTelegramApprovalStatus(
+                suggestedUsername: response.suggestedBotUsername)
+            self.openTelegramURL(response.approvalUrl)
+        } catch {
+            self.telegramSetupStatus = error.localizedDescription
+        }
+    }
+
+    func checkManagedTelegramSetupStatus() async {
+        guard !self.telegramBusy, self.telegramSetupPhase == .idle else { return }
+        guard let setupId = self.telegramManagedSetupId else {
+            self.telegramSetupStatus = "Create the bot first, then approve it in Telegram."
+            return
+        }
+
+        self.telegramBusy = true
+        self.telegramSetupPhase = .checkingManagedApproval
+        defer {
+            self.telegramBusy = false
+            self.telegramSetupPhase = .idle
+        }
+
+        self.telegramSetupStatus = "Checking Telegram approval..."
+        do {
+            let client = try self.managedTelegramBotClient()
+            let response = try await self.pollManagedTelegramSetupStatus(client: client, setupId: setupId)
+            self.telegramManagedSuggestedBotUsername = response.suggestedBotUsername
+            self.telegramManagedExpiresAt = response.expiresAt
+            guard response.status == "connected" else {
+                self.telegramSetupStatus = self.managedTelegramPendingStatus(
+                    suggestedUsername: response.suggestedBotUsername)
+                return
+            }
+            guard let token = response.managedChildBotToken.map(TelegramSetupVerifier.normalizeToken),
+                  !token.isEmpty
+            else {
+                self.telegramSetupStatus = "Telegram approved the bot, but Jarvis could not finish setup. Try again."
+                return
+            }
+
+            self.telegramSetupPhase = .installingManagedBot
+            self.telegramSetupToken = token
+            self.telegramSetupBotId = response.botId
+            self.telegramSetupBotUsername = response.botUsername ?? response.suggestedBotUsername
+            if let username = self.telegramSetupBotUsername, !username.isEmpty {
+                UserDefaults.standard.set(
+                    username,
+                    forKey: Self.consumerTelegramBotUsernameDefaultsKey)
+            }
+            _ = try await self.applyTelegramSetupBootstrap(
+                token: token,
+                dmPolicy: "pairing",
+                allowFrom: nil,
+                enabled: true)
+            self.primeConsumerTelegramFirstTaskBaselineIfNeeded()
+            self.telegramSetupStatus = self.managedTelegramConnectedStatus(
+                botUsername: self.telegramSetupBotUsername)
+        } catch {
+            self.telegramSetupStatus = error.localizedDescription
+        }
     }
 
     func verifyTelegramSetupToken() async {
@@ -315,6 +403,52 @@ extension ChannelsStore {
         botUsername.map {
             "Token verified for @\($0). Now send your first task in Telegram, then click Verify first task."
         } ?? "Token verified. Now send your first task in Telegram, then click Verify first task."
+    }
+
+    private func managedTelegramBotClient() throws -> JarvisTelegramManagedBotClient {
+        let config = self.configRoot.isEmpty ? OpenClawConfigFile.loadDict() : self.configRoot
+        return try JarvisTelegramManagedBotClient(
+            configuration: JarvisTelegramManagedBotClient.resolveConfiguration(root: config))
+    }
+
+    private func pollManagedTelegramSetupStatus(
+        client: JarvisTelegramManagedBotClient,
+        setupId: String,
+        attempts: Int = 8,
+        delayNanoseconds: UInt64 = 1_500_000_000
+    ) async throws -> JarvisTelegramManagedStatusResponse {
+        var latest: JarvisTelegramManagedStatusResponse?
+        for attempt in 0..<attempts {
+            let response = try await client.status(setupId: setupId)
+            latest = response
+            if response.status == "connected" {
+                return response
+            }
+
+            // Telegram approval arrives through the manager bot webhook. Poll a
+            // short bounded window so the user does not need to click repeatedly.
+            guard attempt + 1 < attempts else { break }
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+
+        if let latest {
+            return latest
+        }
+        return try await client.status(setupId: setupId)
+    }
+
+    private func managedTelegramApprovalStatus(suggestedUsername: String) -> String {
+        "Telegram is opening. Approve @\(suggestedUsername), then come back and check status."
+    }
+
+    private func managedTelegramPendingStatus(suggestedUsername: String) -> String {
+        "Still waiting for Telegram approval for @\(suggestedUsername). Approve it in Telegram, then check again."
+    }
+
+    private func managedTelegramConnectedStatus(botUsername: String?) -> String {
+        botUsername.map {
+            "@\($0) is ready. Send one DM task in Telegram, then verify the first task."
+        } ?? "Your Telegram bot is ready. Send one DM task in Telegram, then verify the first task."
     }
 
     private func telegramCaptureStatus(
