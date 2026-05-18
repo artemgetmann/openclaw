@@ -993,30 +993,42 @@ Order:
      pages.
    - Rebuild/run the isolated app.
    - Review screenshots/flow as one package rather than sentence-by-sentence.
-3. Telegram Managed Bots proof spike.
-   - Status: live proof passed on 2026-05-18. The proof created
+3. Telegram Managed Bots backend contract implementation.
+   - Status: backend contract implementation in progress after live proof
+     passed on 2026-05-18. The proof created
      `@jarvis_manager_260518_bot`, enabled BotFather Bot Management Mode,
      created managed child bot `@JarvisManagedProof260518Bot`, received
      `managed_bot`, fetched the managed token with output redacted, verified the
      child bot with `getMe`, and applied
      `setManagedBotAccessSettings(is_access_restricted=true)`.
-   - Keep this as proof only; do not do a full migration before the onboarding
-     and backend contract are designed.
    - Spike harness exists at `scripts/telegram-managed-bots-spike.mjs`; dry-run
      validates link generation and token redaction without network calls.
-   - Manually prepare one Telegram manager bot in BotFather with Bot Management
-     Mode.
-   - Open the official `https://t.me/newbot/{manager}/{suggested_bot}?name=...`
-     flow and let Artem approve bot creation.
-   - Prove the harness receives `managed_bot`, calls `getManagedBotToken`,
-     redacts the token, calls `getMe` with the managed token, and applies
-     `setManagedBotAccessSettings(is_access_restricted=true)`.
-   - Keep BotFather setup as the advanced fallback, but treat Managed Bots as
-     the mainstream onboarding direction.
-   - Next implementation gate: store the production manager-bot token in the
-     backend secret store, expose a consumer onboarding endpoint/session around
-     the managed-bot approval flow, and handle Telegram account bot-limit errors
-     with clear copy.
+   - Target contract: backend stores the manager bot token and username;
+     backend returns the Telegram approval link; user approves in Telegram;
+     backend polls or receives `managed_bot`; backend fetches the child token
+     and restricts child access. The app-facing UI migration is deferred until
+     the Apple-style setup flow can absorb it without fighting the current
+     manual BotFather baseline.
+   - Acceptance criteria:
+     - backend can start a managed-bot setup session and return the approval
+       link
+     - backend exposes pending, connected, and actionable error states
+     - approved session fetches `getManagedBotToken`, verifies child `getMe`,
+       and applies `setManagedBotAccessSettings(is_access_restricted=true)`
+     - provider errors redact manager and child tokens
+     - current manual BotFather Telegram onboarding remains unchanged
+   - Security notes:
+     - manager bot token stays backend-only
+     - no raw founder/provider keys are bundled in the app
+     - managed child bot token is user-specific and must not be logged
+     - final child-token storage path may need hardening before wider beta
+   - Out of scope: macOS Managed Bots onboarding UI migration, broad onboarding
+     copy polish, `/visibility` command cleanup, `ai.jarvis.mac`
+     bundle/runtime/update migration, Sparkle update-cycle proof, and wider beta
+     blockers.
+   - Keep BotFather setup as the current product path for now, but treat
+     Managed Bots as the mainstream onboarding direction once the redesigned
+     setup flow is ready.
 4. Provider/backend utility hardening.
    - Status: OpenAI STT, Brave, Firecrawl, Google Places, and Gemini/Nano
      Banana local smokes are green after local secret recovery on 2026-05-16.
