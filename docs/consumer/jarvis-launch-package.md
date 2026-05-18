@@ -46,6 +46,12 @@ Verified on 2026-05-12 and refreshed on 2026-05-18:
   `google_places.search`, `brave.search`, and `gemini.image.generate` are
   deployed on Render and returned HTTP 200 in live redacted smokes.
 - Neon persistence is configured server-side in Render.
+- Render now has the Managed Bots env enabled and redeployed; the redacted
+  health smoke returned `providers.telegram_managed_bots=true`.
+- Live Managed Bots start/status proof passed on 2026-05-18: setup
+  `tgms_3LBqIilzthPPfPZZ-aIaTw` connected as
+  `@JarvisManagedSmoke184350Bot` with bot id `8882555895`; the managed child
+  token was redacted in proof output.
 - Account activation creates a persisted 14-day trial.
 - License status succeeds for a valid account token.
 - Repeated activation for the same email fails closed with 409.
@@ -459,9 +465,15 @@ Say this directly:
   the child token, and restricts child access. Managed Bots is now the primary
   planned Telegram onboarding path; manual BotFather/BYO bot stays
   fallback/advanced.
-- Managed-bot setup sessions currently have an in-memory risk: a backend
-  restart can lose pending setup. Persistent session storage is later
-  hardening, not a reason to keep normal users on BotFather.
+- PR #767 moved the macOS Telegram onboarding onto the Managed Bots-first path.
+  The current normal-user gate is DM-first: create the Jarvis bot, approve it in
+  Telegram, send one direct-message task, then let Jarvis verify that task.
+- Group/threaded/forum auto-setup is later research and implementation. Track
+  whether the backend or userbot can create a group with the user plus bot,
+  enable forum topics, and create topics automatically; do not block the first
+  DM onboarding gate on it.
+- Managed-bot smoke cleanup is deferred. The throwaway proof bot can remain
+  unless Telegram bot limits start blocking progress.
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
 - App Store Connect API key auth and async submit/poll/staple notarization
@@ -495,27 +507,33 @@ through consumer setup. Candidate shape:
 - Telegram Managed Bots is viable. The 2026-05-18 live spike proved Jarvis can
   run a manager bot, let the user approve creation of a personal managed Jarvis
   bot, fetch the managed token server-side, verify the child bot, and restrict
-  access. The next product slice is replacing the manual BotFather setup step
-  with this manager-bot approval flow while keeping BYO BotFather tokens in the
-  advanced path.
-- Active implementation slice: macOS onboarding UI migration onto the merged
-  backend session contract. Acceptance criteria:
+  access. The follow-up live smoke proved Render health with
+  `telegram_managed_bots=true` and a connected start/status session with token
+  output redacted. The normal path is now replacing the manual BotFather setup
+  step with this manager-bot approval flow while keeping BYO BotFather tokens in
+  the advanced path.
+- Active implementation slice: durable Managed Bots setup sessions plus small
+  Telegram onboarding copy polish. Acceptance criteria:
   - app-facing backend can start a managed-bot setup session and return the
     approval link
   - backend returns a clear pending/connected/error state for the session
+  - pending and connected setup sessions survive a Render restart by using Neon
   - approved sessions fetch the managed child token and restrict child access
   - manager and child tokens are redacted from provider errors
+  - normal onboarding stays DM-first: create bot, approve in Telegram, send one
+    DM task, verify first task
   - BotFather/BYO bot remains available as fallback/advanced
+  - group/threaded/forum auto-setup stays tracked as later work
 - Security boundary for this slice:
   - manager bot token stays backend-only
   - no raw founder/provider keys are bundled in the app
   - managed child bot token is user-specific and must not be logged
-  - pending setup sessions are in memory today, so a backend restart can lose a
-    session before the user finishes approval; persistent session storage is
-    later hardening before wider beta
+  - connected setup persists the child token only long enough for the app to
+    recover after backend restart and install the user's bot
 - Out of scope for this slice: broad onboarding copy polish, `/visibility`
-  command cleanup, `ai.jarvis.mac` identity migration, Sparkle update-cycle
-  proof, and wider beta blockers.
+  command cleanup, group/threaded auto-setup, smoke-bot cleanup,
+  `ai.jarvis.mac` identity migration, Sparkle update-cycle proof, final DMG
+  packaging, and wider beta blockers.
 - `/visibility` should replace stale `/verbose` naming in the Telegram command
   list and runtime behavior. Before wider beta, inspect upstream's current
   command/visibility implementation, then prove the Jarvis command list and
