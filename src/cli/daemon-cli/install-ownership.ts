@@ -68,6 +68,27 @@ function resolveCanonicalSharedGatewayEntrypoint(env: GatewayServiceEnv): string
   return null;
 }
 
+function resolveMacCanonicalSharedGatewayState(env: GatewayServiceEnv): {
+  home: string;
+  stateDir: string;
+  configPath: string;
+} | null {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const home = env.HOME?.trim() || process.env.HOME?.trim() || "";
+  if (!home) {
+    return null;
+  }
+  const appHome = path.join(home, "Library", "Application Support", "OpenClaw");
+  const stateDir = path.join(appHome, ".openclaw");
+  return {
+    home: appHome,
+    stateDir,
+    configPath: path.join(stateDir, "openclaw.json"),
+  };
+}
+
 function isPackagedConsumerGatewayEntrypoint(entrypoint: string | null): boolean {
   const normalized = normalizePathForComparison(entrypoint);
   if (!normalized) {
@@ -162,6 +183,37 @@ function collectOwnershipDiffs(
   return diffs;
 }
 
+function collectCanonicalSharedGatewayStateDiffs(
+  proposed: GatewayInstallOwnershipSnapshot,
+  expected: { home: string; stateDir: string; configPath: string },
+): string[] {
+  const diffs: string[] = [];
+  const proposedHome = normalizePathForComparison(proposed.daemonEnv.OPENCLAW_HOME);
+  const proposedStateDir = normalizePathForComparison(proposed.daemonEnv.OPENCLAW_STATE_DIR);
+  const proposedConfigPath = normalizePathForComparison(proposed.daemonEnv.OPENCLAW_CONFIG_PATH);
+  const expectedHome = normalizePathForComparison(expected.home);
+  const expectedStateDir = normalizePathForComparison(expected.stateDir);
+  const expectedConfigPath = normalizePathForComparison(expected.configPath);
+
+  if (proposedHome !== expectedHome) {
+    diffs.push(
+      `Requested OPENCLAW_HOME: ${formatValue(proposed.daemonEnv.OPENCLAW_HOME ?? null)}; expected: ${expected.home}`,
+    );
+  }
+  if (proposedStateDir !== expectedStateDir) {
+    diffs.push(
+      `Requested OPENCLAW_STATE_DIR: ${formatValue(proposed.daemonEnv.OPENCLAW_STATE_DIR ?? null)}; expected: ${expected.stateDir}`,
+    );
+  }
+  if (proposedConfigPath !== expectedConfigPath) {
+    diffs.push(
+      `Requested OPENCLAW_CONFIG_PATH: ${formatValue(proposed.daemonEnv.OPENCLAW_CONFIG_PATH ?? null)}; expected: ${expected.configPath}`,
+    );
+  }
+
+  return diffs;
+}
+
 export async function detectSharedGatewayInstallOwnershipConflict(args: {
   env: GatewayServiceEnv;
   service: GatewayService;
@@ -193,6 +245,29 @@ export async function detectSharedGatewayInstallOwnershipConflict(args: {
           `Requested entrypoint: ${formatValue(proposed.entrypoint)}`,
           `Expected shared entrypoint: ${canonicalEntrypoint}`,
           `Run the shared-service install from ${path.dirname(path.dirname(canonicalEntrypoint))}.`,
+          `For isolated runtimes, use ${formatCliCommand(
+            "openclaw --profile tester gateway install",
+            args.env,
+          )}.`,
+        ],
+      };
+    }
+  }
+
+  const canonicalState = resolveMacCanonicalSharedGatewayState(args.env);
+  if (
+    args.allowSharedServiceTakeover &&
+    canonicalState &&
+    !isPackagedConsumerGatewayEntrypoint(proposed.entrypoint)
+  ) {
+    const stateDiffs = collectCanonicalSharedGatewayStateDiffs(proposed, canonicalState);
+    if (stateDiffs.length > 0) {
+      return {
+        message:
+          "Gateway install blocked: the default shared gateway service must use the canonical app-owned config root.",
+        hints: [
+          ...stateDiffs,
+          `Use ${formatCliCommand("pnpm openclaw gateway install", args.env)} from the main checkout, or export OPENCLAW_HOME="${canonicalState.home}" before installing.`,
           `For isolated runtimes, use ${formatCliCommand(
             "openclaw --profile tester gateway install",
             args.env,
