@@ -994,6 +994,42 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("does not retain a plain final-answer prefix as progress", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    const earlyFinalPrefix = "**example";
+    const finalText = [
+      "**example.com says:**",
+      "",
+      "• Domain is for use in documentation examples, no permission needed",
+      "",
+      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: earlyFinalPrefix });
+        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.materialize).not.toHaveBeenCalled();
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: expect.stringMatching(/^\.com says/) })],
+      }),
+    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 1001, finalText, expect.any(Object));
+  });
+
   it("strips a retained progress suffix when the final answer starts from the last progress step", async () => {
     const answerDraftStream = createSequencedDraftStream(1001);
     const reasoningDraftStream = createDraftStream();

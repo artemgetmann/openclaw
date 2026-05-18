@@ -85,6 +85,14 @@ function hasRetainedProgressTranscriptShape(text: string): boolean {
   );
 }
 
+function isRetainableAnswerProgressPreview(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return hasRetainedProgressTranscriptShape(trimmed) || looksLikeProgressParagraph(trimmed);
+}
+
 function splitProgressBeforeFinalHeading(text: string) {
   const normalized = normalizeAnswerPreviewText(text).trim();
   const match =
@@ -455,8 +463,11 @@ export const dispatchTelegramMessage = async ({
   const stripRetainedProgressFromFinal = (text: string) => {
     const normalizedFinal = normalizeAdjacentProgressBoundaries(text).trim();
     const progressComparableFinal = normalizeAnswerPreviewText(text).trim();
-    const retainedProgress =
-      retainedAnswerProgressPreviewText.trim() || answerLane.lastPartialText.trim();
+    const retainedProgress = retainedAnswerProgressPreviewText.trim()
+      ? retainedAnswerProgressPreviewText.trim()
+      : isRetainableAnswerProgressPreview(answerLane.lastPartialText)
+        ? answerLane.lastPartialText.trim()
+        : "";
     if (!retainedProgress || normalizedFinal === retainedProgress) {
       return { text: normalizedFinal, stripped: false };
     }
@@ -531,7 +542,7 @@ export const dispatchTelegramMessage = async ({
     const hasSeparateFinalText =
       prepared.text.trim() !== (retainedProgress || answerLane.lastPartialText.trim());
     const hasRetainedProgressTranscript =
-      retainedProgress || hasRetainedProgressTranscriptShape(answerLane.lastPartialText);
+      retainedProgress || isRetainableAnswerProgressPreview(answerLane.lastPartialText);
     if (
       !opts?.hasMedia &&
       !opts?.isError &&
