@@ -935,6 +935,56 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("splits a glued natural progress sentence from the final comparison heading", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    const contaminatedText = [
+      "Fetching both pages now.Comparison:",
+      "",
+      "example.com says it is a placeholder page.",
+      "",
+      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+    ].join("\n");
+    const finalText = [
+      "Comparison:",
+      "",
+      "example.com says it is a placeholder page.",
+      "",
+      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: contaminatedText });
+        await dispatcherOptions.deliver({ text: contaminatedText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Fetching both pages now.");
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
+      expect.stringContaining("Comparison:"),
+    );
+    expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: finalText,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("strips a retained progress suffix when the final answer starts from the last progress step", async () => {
     const answerDraftStream = createSequencedDraftStream(1001);
     const reasoningDraftStream = createDraftStream();

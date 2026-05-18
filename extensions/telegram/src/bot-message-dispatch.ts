@@ -85,6 +85,21 @@ function hasRetainedProgressTranscriptShape(text: string): boolean {
   );
 }
 
+function splitProgressBeforeFinalHeading(text: string) {
+  const normalized = normalizeAnswerPreviewText(text).trim();
+  const match =
+    /^(?<progress>[\s\S]*?[.!?])\s*(?<final>(?:Comparison|Summary|Final answer)\s*:[\s\S]*)$/i.exec(
+      normalized,
+    );
+  if (!match?.groups) {
+    return { progress: "", remainder: "" };
+  }
+  return {
+    progress: match.groups.progress.trim(),
+    remainder: match.groups.final.trim(),
+  };
+}
+
 function splitRetainedProgressPrefix(text: string) {
   const normalized = normalizeAnswerPreviewText(text).trim();
   if (!normalized) {
@@ -116,7 +131,9 @@ function looksLikeFinalAnswerRemainder(text: string): boolean {
   const trimmed = text.trim();
   return (
     trimmed.length >= 32 ||
-    /^(?:[-─—]{2,}|summary\b|here\b|short version\b|\||[-*]\s+)/i.test(trimmed)
+    /^(?:[-─—]{2,}|comparison\s*:|summary\b|here\b|short version\b|final answer\s*:|\||[-*]\s+)/i.test(
+      trimmed,
+    )
   );
 }
 
@@ -477,13 +494,18 @@ export const dispatchTelegramMessage = async ({
     }
     const retainedProgress =
       retainedAnswerProgressPreviewText.trim() || answerLane.lastPartialText.trim();
+    const headingSplit = splitProgressBeforeFinalHeading(retainedProgress);
+    const progressToMaterialize =
+      headingSplit.progress && looksLikeFinalAnswerRemainder(headingSplit.remainder)
+        ? headingSplit.progress
+        : retainedProgress;
     // A provider can emit a late partial that already contains progress plus
     // final text. Restore the visible preview to the retained progress prefix
     // before materializing, otherwise Telegram keeps the final answer in the
     // progress bubble and the final sender duplicates it below.
-    if (retainedProgress && retainedProgress !== answerLane.lastPartialText.trim()) {
-      answerLane.stream.update(retainedProgress);
-      answerLane.lastPartialText = retainedProgress;
+    if (progressToMaterialize && progressToMaterialize !== answerLane.lastPartialText.trim()) {
+      answerLane.stream.update(progressToMaterialize);
+      answerLane.lastPartialText = progressToMaterialize;
     }
     await answerLane.stream.materialize?.();
     answerLane.stream.forceNewMessage();
