@@ -21,7 +21,8 @@ const ACP_LIVE_HARD_FLUSH_CHARS = 480;
 
 const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
 const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_call_update"]);
-const INTERNAL_TOOL_SUMMARY_LINE_RE = /^🔧\s+(?:exec(?:\s+update)?|cron)$/iu;
+const INTERNAL_TOOL_SUMMARY_LINE_RE =
+  /^🔧\s+[\w./:-]+(?:\s+(?:start|update|completed|failed|cancelled|done|error))?$/iu;
 
 export type AcpProjectedDeliveryMeta = {
   tag?: AcpSessionUpdateTag;

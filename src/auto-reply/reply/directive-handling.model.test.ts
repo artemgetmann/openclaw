@@ -349,6 +349,33 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text).toContain("Thinking disabled.");
     expect(sessionStore[parentSessionKey]?.futureThreadThinkingLevelOverride).toBe("off");
   });
+
+  it("persists /verbose off from a Telegram DM thread onto the parent chat default", async () => {
+    const directives = parseInlineDirectives("/verbose off");
+    const threadSessionKey =
+      "agent:main:telegram:default:direct:1336356696:thread:1336356696:49628";
+    const parentSessionKey = "agent:main:telegram:default:direct:1336356696";
+    const sessionEntry = createSessionEntry();
+    const parentEntry = createSessionEntry({ sessionId: "parent-verbose-1", verboseLevel: "on" });
+    const sessionStore = {
+      [threadSessionKey]: sessionEntry,
+      [parentSessionKey]: parentEntry,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionKey: threadSessionKey,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Verbose logging disabled.");
+    expect(sessionStore[threadSessionKey]?.verboseLevel).toBe("off");
+    expect(sessionStore[parentSessionKey]?.verboseLevel).toBe("off");
+  });
+
   it("stores future-thread default on parent Telegram chat when /model is set in a topic", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const threadSessionKey = "agent:main:telegram:group:-100123:topic:77";

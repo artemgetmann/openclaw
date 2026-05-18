@@ -85,7 +85,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const { coordinator, dispatcher } = createCoordinator({ shouldSendToolSummaries: false });
 
     await coordinator.deliver("block", {
-      text: "🔧 exec\n\n🔧 exec update\n\ntelegram_voice_sanitize_ok\n\n🔧 cron\n\nfinal",
+      text: "🔧 exec\n\n🔧 web_search\n\n🔧 exec update\n\ntelegram_voice_sanitize_ok\n\n🔧 web_fetch\n\n🔧 cron\n\nfinal",
     });
 
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({

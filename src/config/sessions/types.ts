@@ -77,6 +77,7 @@ export type FutureThreadDefaultsHistoryEntry = {
   providerOverride?: string;
   modelOverride?: string;
   thinkingLevelOverride?: string;
+  verboseLevel?: string;
   execSecurity?: string;
   execAsk?: string;
   updatedAt: number;

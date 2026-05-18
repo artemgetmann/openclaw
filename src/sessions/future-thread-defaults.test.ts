@@ -3,6 +3,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import {
   applyFutureThreadModelDefault,
   applyFutureThreadThinkingDefault,
+  applyFutureThreadVerboseDefault,
   seedSessionEntryFromFutureThreadDefaults,
 } from "./future-thread-defaults.js";
 
@@ -144,5 +145,69 @@ describe("future-thread default history", () => {
 
     expect(entry.execSecurity).toBe("full");
     expect(entry.execAsk).toBe("off");
+  });
+
+  it("seeds new thread sessions from the parent verbose default", () => {
+    const store: Record<string, SessionEntry> = {};
+    const parentSessionKey = "agent:main:telegram:default:direct:1336356696";
+
+    applyFutureThreadVerboseDefault({
+      store,
+      parentSessionKey,
+      level: "off",
+    });
+
+    const entry: SessionEntry = {
+      sessionId: "child-thread",
+      updatedAt: Date.now(),
+    };
+    seedSessionEntryFromFutureThreadDefaults({
+      entry,
+      parentEntry: store[parentSessionKey],
+      childThreadId: 49628,
+    });
+
+    expect(store[parentSessionKey]?.verboseLevel).toBe("off");
+    expect(entry.verboseLevel).toBe("off");
+  });
+
+  it("records verbose defaults in thread history so older topics do not inherit later changes", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:telegram:default:direct:1336356696": {
+        sessionId: "parent-session",
+        updatedAt: Date.now(),
+      },
+    };
+    const parentSessionKey = "agent:main:telegram:default:direct:1336356696";
+
+    applyFutureThreadVerboseDefault({
+      store,
+      parentSessionKey,
+      level: "off",
+      afterThreadId: 49645,
+    });
+
+    const olderThreadEntry: SessionEntry = {
+      sessionId: "older-child-thread",
+      updatedAt: Date.now(),
+    };
+    seedSessionEntryFromFutureThreadDefaults({
+      entry: olderThreadEntry,
+      parentEntry: store[parentSessionKey],
+      childThreadId: 49628,
+    });
+
+    const newerThreadEntry: SessionEntry = {
+      sessionId: "newer-child-thread",
+      updatedAt: Date.now(),
+    };
+    seedSessionEntryFromFutureThreadDefaults({
+      entry: newerThreadEntry,
+      parentEntry: store[parentSessionKey],
+      childThreadId: 49646,
+    });
+
+    expect(olderThreadEntry.verboseLevel).toBeUndefined();
+    expect(newerThreadEntry.verboseLevel).toBe("off");
   });
 });

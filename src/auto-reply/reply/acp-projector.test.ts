@@ -281,7 +281,7 @@ describe("createAcpReplyProjector", () => {
 
     await projector.onEvent({
       type: "text_delta",
-      text: "🔧 exec\n\ncommand output\n\n🔧 exec update\n\nstill running\n\n🔧 cron\n\nfinal assistant text",
+      text: "🔧 exec\n\ncommand output\n\n🔧 web_search\n\n🔧 exec update\n\nstill running\n\n🔧 web_fetch\n\n🔧 cron\n\nfinal assistant text",
       tag: "agent_message_chunk",
     });
     await projector.flush(true);
