@@ -71,7 +71,7 @@ function normalizeAnswerPreviewText(text: string): string {
 }
 
 function looksLikeProgressParagraph(text: string): boolean {
-  return /^(?:[-─—]{2,}|🔧|✅|Step\b|Starting\b|Moving\b|Fetching\b|Loading\b|Following\b|Got\b|Comparing\b|Redirect\b)/i.test(
+  return /^(?:[-─—]{2,}|🔧|✅|Step\b|Starting\b|Moving\b|Fetching\b|Loading\b|Following\b|Got\b|Comparing\b|Redirect\b|Now\b|I(?:'ll| will)\b|Let me\b)/i.test(
     text.trim(),
   );
 }
@@ -91,6 +91,16 @@ function isRetainableAnswerProgressPreview(text: string): boolean {
     return false;
   }
   return hasRetainedProgressTranscriptShape(trimmed) || looksLikeProgressParagraph(trimmed);
+}
+
+function isSuppressibleAnswerPreviewPrefix(text: string): boolean {
+  const trimmed = normalizeAnswerPreviewText(text).trim();
+  if (!trimmed || isRetainableAnswerProgressPreview(trimmed)) {
+    return false;
+  }
+  const isSingleLine = !/\n/.test(trimmed);
+  const isShortHeading = trimmed.length <= 80 && /[:：]$/.test(trimmed);
+  return isSingleLine && isShortHeading;
 }
 
 function splitProgressBeforeFinalHeading(text: string) {
@@ -564,8 +574,6 @@ export const dispatchTelegramMessage = async ({
     if (previewText === lane.lastPartialText) {
       return;
     }
-    // Mark that we've received streaming content (for forceNewMessage decision).
-    lane.hasStreamedMessage = true;
     // Some providers briefly emit a shorter prefix snapshot (for example
     // "Sure." -> "Sure" -> "Sure."). Keep the longer preview to avoid
     // visible punctuation flicker.
@@ -577,6 +585,9 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     if (lane === answerLane) {
+      if (isSuppressibleAnswerPreviewPrefix(previewText)) {
+        return;
+      }
       const previousPreviewText = lane.lastPartialText.trim();
       const split = splitRetainedProgressPrefix(previewText);
       if (split.progress) {
@@ -609,6 +620,9 @@ export const dispatchTelegramMessage = async ({
     if (previewText === lane.lastPartialText) {
       return;
     }
+    // Mark only previews we actually render. A suppressed heading like
+    // "example.com:" is just an early final-answer prefix, not progress.
+    lane.hasStreamedMessage = true;
     lane.lastPartialText = previewText;
     laneStream.update(previewText);
   };

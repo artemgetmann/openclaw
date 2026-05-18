@@ -1030,6 +1030,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).toHaveBeenCalledWith(123, 1001, finalText, expect.any(Object));
   });
 
+  it("suppresses short final-answer headings instead of retaining fake progress", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    const finalText = [
+      "Reserved for documentation examples, no permission needed.",
+      "",
+      "IANA reserved domains page: Same policy with RFC citations.",
+      "",
+      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
+    ].join("\n");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "example.com:" });
+        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("example.com:");
+    expect(answerDraftStream.materialize).not.toHaveBeenCalled();
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 1001, finalText, expect.any(Object));
+  });
+
   it("strips a retained progress suffix when the final answer starts from the last progress step", async () => {
     const answerDraftStream = createSequencedDraftStream(1001);
     const reasoningDraftStream = createDraftStream();
