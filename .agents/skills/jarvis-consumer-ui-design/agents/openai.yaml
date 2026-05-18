@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jarvis Consumer UI Design"
+  short_description: "Guide Jarvis onboarding UI and copy"
+  default_prompt: "Use $jarvis-consumer-ui-design to review Jarvis onboarding UI and copy for consumer clarity."
