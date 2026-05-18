@@ -34,30 +34,28 @@ Current beta backend:
 - Region/plan: `virginia` / `starter`
 - Source: `https://github.com/artemgetmann/openclaw` on `main`
 
-Verified on 2026-05-12 and refreshed on 2026-05-16:
+Verified on 2026-05-12 and refreshed on 2026-05-18:
 
 - `/healthz` is live and reports production mode.
 - OpenAI is configured server-side.
 - Anthropic is not configured yet.
-- Firecrawl, Google Places, and Gemini provider env are configured server-side.
+- Firecrawl, Google Places, Gemini, and Brave provider env are configured
+  server-side.
 - The managed utility smoke endpoint works with the backend token.
 - Real managed utility endpoints for `firecrawl.search`, `firecrawl.scrape`,
-  and `google_places.search` are deployed on Render and returned HTTP 200 in a
-  live redacted smoke.
-- `gemini.image.generate` now exists in code for backend-managed text-to-image;
-  Render live smoke is still pending after deployment.
+  `google_places.search`, `brave.search`, and `gemini.image.generate` are
+  deployed on Render and returned HTTP 200 in live redacted smokes.
 - Neon persistence is configured server-side in Render.
 - Account activation creates a persisted 14-day trial.
 - License status succeeds for a valid account token.
 - Repeated activation for the same email fails closed with 409.
 - Invalid account access tokens reject with 401.
 
-Backend/account persistence and the first Firecrawl/Places managed utility
-endpoints are ready for the next beta package smoke. Anthropic remains unset.
-Gemini text-to-image now has a managed utility code path, but still needs Render
-deployment/live smoke before launch copy can count it as production-ready.
-Firecrawl app/runtime calls, Google Places/goplaces ordinary search, and the
-Nano Banana text-to-image wrapper use Render in managed mode when configured.
+Backend/account persistence and the first managed utility endpoints are ready
+for the next beta package smoke. Anthropic remains unset. Firecrawl
+app/runtime calls, Google Places/goplaces ordinary search, Brave `web_search`,
+and the Nano Banana text-to-image wrapper use Render in managed mode when
+configured.
 Google Places details/resolve/reviews and Nano Banana input-image editing still
 require direct BYOK until the backend exposes managed utilities for those shapes.
 

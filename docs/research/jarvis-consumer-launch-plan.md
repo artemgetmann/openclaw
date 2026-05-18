@@ -692,20 +692,22 @@ Bootstrap should answer:
 Provider smoke from the 2026-05-16 clean-copy walkthrough, follow-up provider
 worker, and Render deploy:
 
-- Backend `/healthz` is live in production and reports OpenAI configured,
-  Anthropic not configured, and Firecrawl, Google Places, and Gemini provider
-  env present.
+- Backend `/healthz` is live in production and reports OpenAI, Firecrawl,
+  Google Places, Gemini, and Brave configured. Anthropic is still not
+  configured.
 - Backend `/v1/managed/utilities/{utility}` now performs real server-held
   provider calls for `firecrawl.search`, `firecrawl.scrape`, and
   `google_places.search`; PR #751 deployed live to Render on 2026-05-16.
+  Follow-up PRs added `brave.search` and `gemini.image.generate`, and both
+  returned HTTP 200 in live redacted Render smokes on 2026-05-18.
 - Local OpenAI STT works through the active OpenClaw config
   `OPENAI_NON_MODEL_API_KEY`; the follow-up worker transcribed a valid WAV
   fixture with HTTP 200 and returned text.
 - Brave search works through the active OpenClaw config; the follow-up worker
   got HTTP 200 and one result for a harmless query.
-- Managed Brave routing is implemented in the local code path via backend
-  `brave.search` and runtime `web_search` routing, but still needs Render
-  deployment/env verification before it counts as live managed proof.
+- Managed Brave routing is implemented through backend `brave.search` and
+  runtime `web_search` routing. Render live smoke returned HTTP 200 with real
+  result title/URL fields.
 - Firecrawl key was replaced/recovered and live-smoked both locally and through
   Render. Render `firecrawl.search` and `firecrawl.scrape` returned HTTP 200
   with no local secret substring detected in the backend response.
@@ -715,7 +717,8 @@ worker, and Render deploy:
 - Gemini/Nano Banana image generation was live-smoked locally with the recovered
   key and generated `/tmp/jarvis-nano-banana-smoke-candidate-2.png`. The
   backend now has a narrow `gemini.image.generate` managed utility code path
-  for text-to-image; Render live smoke is still pending.
+  for text-to-image; Render live smoke returned HTTP 200 with one generated
+  JPEG payload after PR #757 fixed the live Gemini `imageConfig` request shape.
 - Anthropic is not configured locally or in production `/healthz`. No Anthropic
   live model smoke is counted here.
 
@@ -1011,9 +1014,9 @@ Order:
 4. Provider/backend utility hardening.
    - Status: OpenAI STT, Brave, Firecrawl, Google Places, and Gemini/Nano
      Banana local smokes are green after local secret recovery on 2026-05-16.
-   - Render env now has Firecrawl, Google Places, and Gemini provider keys
-     present; `/healthz` reports `firecrawl=true`, `google_places=true`, and
-     `gemini=true`.
+   - Render env now has Firecrawl, Google Places, Gemini, and Brave provider
+     keys present; `/healthz` reports `firecrawl=true`, `google_places=true`,
+     `gemini=true`, and `brave=true`.
    - PR #751 added and deployed real backend-managed `firecrawl.search`,
      `firecrawl.scrape`, and `google_places.search` endpoints. Live Render
      smoke returned HTTP 200 for all three with token/key output redacted.
@@ -1024,13 +1027,15 @@ Order:
      endpoint in managed mode and preserves direct/BYOK search when the Jarvis
      backend is absent.
    - Brave `web_search` now has a managed backend utility/routing slice in code;
-     live Render proof is pending deployment plus `BRAVE_API_KEY` configuration.
+     live Render proof returned HTTP 200 with real search results after
+     `BRAVE_API_KEY` was configured on Render.
    - Remaining Places gap: details/resolve/reviews still require the upstream
      direct `goplaces` CLI and a BYOK key because the backend only exposes
      `google_places.search`.
    - Gemini managed utility execution now exists for text-to-image via
      `gemini.image.generate`; local Nano Banana proof is green, and Render live
-     smoke still needs to prove the new endpoint after deployment.
+     smoke returned HTTP 200 with one generated JPEG after the `imageConfig`
+     request-shape fix.
 
 Verified Render truth as of 2026-05-11 before backend creation:
 
