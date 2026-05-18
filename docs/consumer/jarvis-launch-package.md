@@ -449,8 +449,10 @@ Say this directly:
 - focused Channels UI polish to remove duplicated connected-bot text/buttons
 - smoother account login and trial activation
 - cleaner Telegram setup with one consumer-first command/settings surface
-- investigate Telegram Managed Bots as the path to remove or hide manual
-  BotFather setup for mainstream users
+- Telegram Managed Bots proof spike passed on 2026-05-18: a BotFather-created
+  manager bot with Bot Management Mode created a managed child bot, the spike
+  received `managed_bot`, fetched the managed token with redaction, verified it
+  with `getMe`, and applied restricted access
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
 - App Store Connect API key auth and async submit/poll/staple notarization
@@ -481,13 +483,12 @@ through consumer setup. Candidate shape:
 - Shared/default bot setup stays the consumer path; BYO bot token, custom
   commands, verbose developer detail, and internal tool/skill IDs stay in the
   advanced path.
-- Research Telegram Managed Bots before locking the wider-beta Telegram setup.
-  Official Telegram Bot API 9.6 added managed-bot creation/token flows, and Bot
-  API 10.0 added managed-bot access settings. The next lane should verify
-  whether Jarvis can run a bot-management bot that lets a user create or connect
-  a personal Jarvis bot without leaving onboarding for manual BotFather steps.
-  If the official flow is too constrained, keep a shared Jarvis bot as the
-  default and move BYO BotFather tokens to the advanced path.
+- Telegram Managed Bots is viable. The 2026-05-18 live spike proved Jarvis can
+  run a manager bot, let the user approve creation of a personal managed Jarvis
+  bot, fetch the managed token server-side, verify the child bot, and restrict
+  access. The next product slice is replacing the manual BotFather setup step
+  with this manager-bot approval flow while keeping BYO BotFather tokens in the
+  advanced path.
 - `/visibility` should replace stale `/verbose` naming in the Telegram command
   list and runtime behavior. Before wider beta, inspect upstream's current
   command/visibility implementation, then prove the Jarvis command list and

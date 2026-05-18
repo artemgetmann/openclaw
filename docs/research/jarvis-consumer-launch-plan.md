@@ -994,9 +994,14 @@ Order:
    - Rebuild/run the isolated app.
    - Review screenshots/flow as one package rather than sentence-by-sentence.
 3. Telegram Managed Bots proof spike.
-   - Status: dry-run harness passed on 2026-05-16. Live proof is blocked because
-     no local manager bot token or manager username is available.
-   - Do not do a full migration first.
+   - Status: live proof passed on 2026-05-18. The proof created
+     `@jarvis_manager_260518_bot`, enabled BotFather Bot Management Mode,
+     created managed child bot `@JarvisManagedProof260518Bot`, received
+     `managed_bot`, fetched the managed token with output redacted, verified the
+     child bot with `getMe`, and applied
+     `setManagedBotAccessSettings(is_access_restricted=true)`.
+   - Keep this as proof only; do not do a full migration before the onboarding
+     and backend contract are designed.
    - Spike harness exists at `scripts/telegram-managed-bots-spike.mjs`; dry-run
      validates link generation and token redaction without network calls.
    - Manually prepare one Telegram manager bot in BotFather with Bot Management
@@ -1006,11 +1011,12 @@ Order:
    - Prove the harness receives `managed_bot`, calls `getManagedBotToken`,
      redacts the token, calls `getMe` with the managed token, and applies
      `setManagedBotAccessSettings(is_access_restricted=true)`.
-   - If this fails, keep BotFather setup as the advanced fallback and avoid
-     migration work.
-   - Next live gate: provide `TELEGRAM_MANAGER_BOT_TOKEN` and
-     `MANAGER_BOT_USERNAME` locally without exposing the token, then rerun
-     `node scripts/telegram-managed-bots-spike.mjs`.
+   - Keep BotFather setup as the advanced fallback, but treat Managed Bots as
+     the mainstream onboarding direction.
+   - Next implementation gate: store the production manager-bot token in the
+     backend secret store, expose a consumer onboarding endpoint/session around
+     the managed-bot approval flow, and handle Telegram account bot-limit errors
+     with clear copy.
 4. Provider/backend utility hardening.
    - Status: OpenAI STT, Brave, Firecrawl, Google Places, and Gemini/Nano
      Banana local smokes are green after local secret recovery on 2026-05-16.
