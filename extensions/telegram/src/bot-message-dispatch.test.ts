@@ -249,7 +249,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps tool progress fallback delivery when preview streaming is off", async () => {
+  it("drops raw tool trace fallback delivery when preview streaming is off", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onToolResult?.({ text: "🔧 exec: ls" });
       return { queuedFinal: false };
@@ -259,14 +259,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "off" });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [expect.objectContaining({ text: "🔧 exec: ls" })],
-      }),
-    );
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("batches duplicate tool progress into the answer draft when preview streaming is on", async () => {
+  it("does not batch raw tool traces into the answer draft when preview streaming is on", async () => {
     const draftStream = createDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -284,16 +280,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(draftStream.update).toHaveBeenCalledWith("🔧 browser.status");
-    expect(draftStream.update).toHaveBeenCalledWith(
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 browser.status");
+    expect(draftStream.update).not.toHaveBeenCalledWith(
       "🔧 browser.status\n\n🔧 browser.status: checking tab state",
     );
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      9001,
-      "🔧 browser.status\n\n🔧 browser.status: checking tab state\n\nDone",
-      expect.any(Object),
-    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 9001, "Done", expect.any(Object));
     expect(
       deliverReplies.mock.calls.some(
         ([arg]) =>
@@ -304,10 +295,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
-  it("suppresses internal exec progress draft lines when Telegram verbose is off", async () => {
-    loadSessionStore.mockReturnValue({
-      s1: { verboseLevel: "off" },
-    });
+  it("suppresses internal exec progress draft lines regardless of Telegram verbose state", async () => {
     const draftStream = createDraftStream(9002);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -353,13 +341,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("inherits Telegram thread verbose off from the parent chat when the thread has no level", async () => {
+  it("suppresses raw tool traces even when a thread has no inherited verbose level", async () => {
     const threadSessionKey =
       "agent:main:telegram:default:direct:1336356696:thread:1336356696:49628";
     const parentSessionKey = "agent:main:telegram:default:direct:1336356696";
     loadSessionStore.mockReturnValue({
       [threadSessionKey]: {},
-      [parentSessionKey]: { verboseLevel: "off" },
+      [parentSessionKey]: {},
     });
     const draftStream = createDraftStream(90027);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -389,7 +377,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).toHaveBeenCalledWith(123, 90027, "Done", expect.any(Object));
   });
 
-  it("keeps tool traces visible when Telegram verbose is on", async () => {
+  it("suppresses raw tool traces even when Telegram verbose is on", async () => {
     loadSessionStore.mockReturnValue({
       s1: { verboseLevel: "on" },
     });
@@ -408,7 +396,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       streamMode: "partial",
     });
 
-    expect(draftStream.update).toHaveBeenCalledWith("🔧 memory_search");
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 memory_search");
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("retains non-prefix answer preview progress when the final answer replaces it", async () => {
