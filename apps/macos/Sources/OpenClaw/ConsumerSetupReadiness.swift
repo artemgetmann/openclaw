@@ -1184,7 +1184,10 @@ extension BrowserSetupModel {
                     await sleepImpl(retryIntervalNanos)
                     continue
                 }
-                return "\(AppFlavor.current.appName) saved the Chrome profile, but browser readiness failed. \(message)"
+                // Keep raw command output out of onboarding. The underlying
+                // failure can include file paths, stack traces, or runtime
+                // internals that do not help a beta user recover.
+                return "\(AppFlavor.current.appName) saved the Chrome profile, but could not finish the browser check. Try again in a moment."
             }
 
             let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)

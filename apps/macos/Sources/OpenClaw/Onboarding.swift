@@ -325,10 +325,13 @@ struct OnboardingView: View {
         permissionMonitor: PermissionMonitor = .shared,
         discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel(
             localDisplayName: InstanceIdentity.displayName,
-            filterLocalGateways: false))
+            filterLocalGateways: false),
+        consumerSetupDebugStepEnvironment: [String: String] = ProcessInfo.processInfo.environment)
     {
         self.state = state
         self.permissionMonitor = permissionMonitor
+        self._consumerSetupStep = State(
+            initialValue: Self.consumerSetupDebugStep(environment: consumerSetupDebugStepEnvironment) ?? .chrome)
         self._gatewayDiscovery = State(initialValue: discoveryModel)
         self._browserSetup = State(
             initialValue: BrowserSetupModel(

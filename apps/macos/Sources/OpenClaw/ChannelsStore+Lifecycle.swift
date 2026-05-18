@@ -157,11 +157,14 @@ extension ChannelsStore {
         let botRunning = status.running || probeOK
         guard status.configured, botRunning else { return }
 
-        // Once Telegram is configured and healthy, clear transient setup phases.
-        // The config/probe snapshot is now the source of truth; stale "waiting" or
-        // "saving" labels would make an already-live bot look stuck.
-        self.telegramSetupWaitingForDM = false
-        self.telegramSetupPhase = .idle
+        // Once Telegram is configured and healthy, clear stale setup labels only
+        // when the user is not actively verifying the first task. During Verify,
+        // repeated status probes arrive while the app is intentionally waiting
+        // for the next DM; clearing that state hides the spinner and makes the
+        // button look like it did nothing.
+        if !self.telegramBusy, self.telegramSetupPhase == .idle {
+            self.telegramSetupWaitingForDM = false
+        }
 
         if let username = status.probe?.bot?.username, !username.isEmpty {
             self.telegramSetupBotUsername = username
@@ -186,8 +189,8 @@ extension ChannelsStore {
                 } ?? "Telegram bot is live. First task verified."
             } else {
                 self.telegramSetupStatus = username.map {
-                    "Telegram bot is live as @\($0). Send your first task, then click Verify first task."
-                } ?? "Telegram bot is live. Send your first task, then click Verify first task."
+                    "Telegram bot is live as @\($0). Click Verify first task to approve sender access."
+                } ?? "Telegram bot is live. Click Verify first task to approve sender access."
             }
         }
     }

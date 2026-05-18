@@ -68,8 +68,8 @@ struct ConsumerTelegramSetupCardContent: View {
             self.callout(
                 title: "Telegram verified",
                 body: self.store.consumerTelegramBotUsername().map {
-                    "Connected as @\($0). \(AppFlavor.current.appName) answered a real Telegram task."
-                } ?? "Telegram is connected and \(AppFlavor.current.appName) answered a real task.")
+                    "Connected as @\($0). \(AppFlavor.current.appName) answered your first Telegram DM."
+                } ?? "Telegram is connected and \(AppFlavor.current.appName) answered your first Telegram DM.")
 
             if let username = self.store.consumerTelegramBotUsername() {
                 Button("Open your bot") {
@@ -92,8 +92,8 @@ struct ConsumerTelegramSetupCardContent: View {
             self.callout(
                 title: self.store.consumerTelegramLooksLive() ? "One task left" : "Create your Telegram bot",
                 body: self.store.consumerTelegramLooksLive()
-                    ? "The bot is connected. Send it one normal DM task so \(AppFlavor.current.appName) can prove the loop works."
-                    : "\(AppFlavor.current.appName) will open Telegram so you can approve a new bot. Start with a DM; groups and topics can come later.")
+                    ? "The bot is connected. Click Verify to approve your sender, then send one fresh DM."
+                    : "\(AppFlavor.current.appName) will open Telegram so you can approve and create a new bot. Use Jarvis or edit the bot name, then click Create.")
 
             HStack(spacing: 10) {
                 Button("Create Telegram bot") {
@@ -102,6 +102,19 @@ struct ConsumerTelegramSetupCardContent: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(self.store.telegramBusy || self.store.telegramSetupPhase != .idle)
 
+                if self.managedSetupIsBusy {
+                    ProgressView().controlSize(.small)
+                }
+            }
+
+            if let suggestedUsername = self.store.telegramManagedSuggestedBotUsername {
+                Text("In Telegram, approve @\(suggestedUsername), use Jarvis or edit the bot name, then click Create.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 10) {
                 if self.store.telegramManagedApprovalURL != nil {
                     Button("Open approval") {
                         self.store.openTelegramManagedApproval()
@@ -109,19 +122,6 @@ struct ConsumerTelegramSetupCardContent: View {
                     .buttonStyle(.bordered)
                 }
 
-                if self.managedSetupIsBusy {
-                    ProgressView().controlSize(.small)
-                }
-            }
-
-            if let suggestedUsername = self.store.telegramManagedSuggestedBotUsername {
-                Text("Telegram will ask you to approve @\(suggestedUsername).")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack(spacing: 10) {
                 Button("Check status") {
                     Task { await self.store.checkManagedTelegramSetupStatus() }
                 }
@@ -139,7 +139,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 }
             }
 
-            Text("Send one real task as a DM to your bot, then verify the first task.")
+            Text("Click Verify first task. When access is approved, send \"Wake up my friend!\" to the bot in Telegram.")
                 .font(.callout)
 
             HStack(spacing: 10) {
@@ -181,11 +181,6 @@ struct ConsumerTelegramSetupCardContent: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text("No extra Mac permissions are needed just to verify Telegram.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
             DisclosureGroup("Advanced: use BotFather instead", isExpanded: self.$manualSetupExpanded) {
                 self.manualBotFatherSetup
             }
@@ -210,7 +205,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 .buttonStyle(.bordered)
 
                 if AppFlavor.current.telegramSetupGuideURL != nil {
-                    Button("Written guide") {
+                    Button("BotFather guide") {
                         self.store.openTelegramSetupGuide()
                     }
                     .buttonStyle(.bordered)
@@ -248,7 +243,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 }
             }
 
-            Text("Start with a DM. Group chats and topics are advanced setup after the first task works.")
+            Text("Start with a DM. Groups and topics are the next setup step after the first task works.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

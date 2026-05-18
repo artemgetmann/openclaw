@@ -70,6 +70,7 @@ extension OnboardingView {
                 // user presses the first button so the reduced page order stays stable.
                 self.selectLocalGateway()
             }
+            self.applyConsumerSetupDebugStepOverrideIfNeeded()
             if !(await self.attemptConsumerSetupResume()) {
                 await self.loadConsumerTelegramSetupStateIfNeeded()
             }
@@ -80,6 +81,24 @@ extension OnboardingView {
         guard !self.pageOrder.isEmpty else { return 0 }
         let clamped = min(max(0, pageCursor), self.pageOrder.count - 1)
         return self.pageOrder[clamped]
+    }
+
+    func applyConsumerSetupDebugStepOverrideIfNeeded(
+        environment: [String: String] = ProcessInfo.processInfo.environment)
+    {
+        guard let step = Self.consumerSetupDebugStep(environment: environment) else { return }
+        self.consumerSetupStep = step
+    }
+
+    static func consumerSetupDebugStep(environment: [String: String]) -> ConsumerSetupStep? {
+        let raw = environment["OPENCLAW_CONSUMER_SETUP_DEBUG_STEP"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let raw, !raw.isEmpty else { return nil }
+        return ConsumerSetupStep.allCases.first(where: {
+            $0.title.replacingOccurrences(of: " ", with: "").lowercased() == raw ||
+                String(describing: $0).lowercased() == raw
+        })
     }
 
     func reconcilePageForModeChange(previousActivePageIndex: Int) {
@@ -168,22 +187,6 @@ extension OnboardingView {
 
             Spacer()
 
-            HStack(spacing: 8) {
-                ForEach(ConsumerSetupStep.allCases) { step in
-                    Button {
-                        withAnimation { self.consumerSetupStep = step }
-                    } label: {
-                        Circle()
-                            .fill(self.consumerSetupStep == step ? Color.accentColor : self.consumerSetupStepTint(for: step))
-                            .frame(width: 8, height: 8)
-                            .help(step.title)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            Spacer()
-
             Button(action: self.handleNext) {
                 Text(self.buttonTitle)
                     .frame(minWidth: 88)
@@ -195,12 +198,6 @@ extension OnboardingView {
         .padding(.horizontal, 28)
         .padding(.bottom, 13)
         .frame(minHeight: 60, alignment: .bottom)
-    }
-
-    private func consumerSetupStepTint(for step: ConsumerSetupStep) -> Color {
-        self.isConsumerSetupStepComplete(step)
-            ? Color.green.opacity(0.75)
-            : Color.gray.opacity(0.3)
     }
 
     func onboardingPage(@ViewBuilder _ content: () -> some View) -> some View {

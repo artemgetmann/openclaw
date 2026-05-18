@@ -468,12 +468,24 @@ Say this directly:
 - PR #767 moved the macOS Telegram onboarding onto the Managed Bots-first path.
   The current normal-user gate is DM-first: create the Jarvis bot, approve it in
   Telegram, send one direct-message task, then let Jarvis verify that task.
-- Group/threaded/forum auto-setup is later research and implementation. Track
-  whether the backend or userbot can create a group with the user plus bot,
-  enable forum topics, and create topics automatically; do not block the first
-  DM onboarding gate on it.
+- Visual-only macOS smoke is enough for onboarding copy/layout checks, but not
+  for Verify first task. That button needs a reachable local runtime websocket,
+  so use the runtime-backed isolated smoke path before claiming Telegram
+  first-task proof.
+- Group/threaded/forum setup is important and belongs immediately after the
+  first DM task works. Track whether the backend or userbot can create a group
+  with the user plus bot, enable forum mode, grant the managed bot topic
+  permissions, and create topics automatically; do not block the first DM
+  onboarding gate on it.
+- Account activation is still a product/onboarding sequencing gap. Managed Bots
+  needs a Jarvis account token, but the app can currently reach Telegram before
+  there is a clear account activation page. Track a later slice to add
+  account activation before Telegram, likely as the first or third/fourth setup
+  page.
 - Managed-bot smoke cleanup is deferred. The throwaway proof bot can remain
   unless Telegram bot limits start blocking progress.
+- Telegram-not-installed fallback remains deferred; keep Managed Bots primary
+  and BotFather/BYO as the advanced fallback.
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
 - App Store Connect API key auth and async submit/poll/staple notarization
@@ -523,7 +535,8 @@ through consumer setup. Candidate shape:
   - normal onboarding stays DM-first: create bot, approve in Telegram, send one
     DM task, verify first task
   - BotFather/BYO bot remains available as fallback/advanced
-  - group/threaded/forum auto-setup stays tracked as later work
+  - group/threaded/forum auto-setup stays tracked as the next Telegram setup
+    step after DM proof
 - Security boundary for this slice:
   - manager bot token stays backend-only
   - no raw founder/provider keys are bundled in the app

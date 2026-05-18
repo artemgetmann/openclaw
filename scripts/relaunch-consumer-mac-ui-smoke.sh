@@ -3,23 +3,32 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+source "$ROOT_DIR/scripts/lib/validated-node.sh"
+openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 OPEN_APP=1
 BUILD_APP=1
 CLEAN_ONLY=0
+WITH_RUNTIME=0
+CONSUMER_STEP="${OPENCLAW_CONSUMER_SETUP_DEBUG_STEP:-}"
+BACKEND_API_TOKEN="${JARVIS_BACKEND_API_TOKEN:-${JARVIS_BACKEND_ACCESS_TOKEN:-}}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 BUILD_PATH="$ROOT_DIR/apps/macos/.build-ui-smoke"
+GATEWAY_ENTRY="$ROOT_DIR/dist/index.js"
 STARTED_AT="$SECONDS"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/relaunch-consumer-mac-ui-smoke.sh [--instance <id>] [--no-open|--build-only] [--no-build] [--clean]
+Usage: scripts/relaunch-consumer-mac-ui-smoke.sh [--instance <id>] [--consumer-step <step>] [--no-open|--build-only] [--no-build] [--clean]
 
 Fast native Jarvis UI smoke:
   - builds apps/macos with SwiftPM only unless --no-build is passed
   - launches the current worktree's debug binary through a tiny debug .app wrapper
   - uses an isolated consumer instance/config/state
+  - defaults to visual-only mode with --no-launchd so the gateway is not touched
+  - --with-runtime keeps the app attach-only, then refreshes this instance's
+    gateway LaunchAgent env/port/label from the current worktree for Telegram first-task proof
   - skips /Applications installs, release packaging, DMGs, zips, npm tarballs,
     bundled Node, node_modules packaging, and default gateway restarts
 
@@ -42,6 +51,21 @@ app_binary_has_matching_pids() {
   done < <(/bin/ps -axo pid=,command= | /usr/bin/awk -v target="$binary_path" 'index($0, target) > 0 { print $1 }')
 
   return 1
+}
+
+resolve_backend_api_token() {
+  if [[ -n "$BACKEND_API_TOKEN" ]]; then
+    return
+  fi
+  if ! command -v security >/dev/null 2>&1; then
+    return
+  fi
+  # Read the protected Render backend token for the debug wrapper only. Never
+  # print the value; the smoke proof reports only paths and non-secret state.
+  BACKEND_API_TOKEN="$(security find-generic-password \
+    -s "Jarvis Render Backend" \
+    -a "JARVIS_BACKEND_API_TOKEN" \
+    -w 2>/dev/null || true)"
 }
 
 cleanup_ui_smoke_artifacts() {
@@ -121,6 +145,310 @@ find_launchd_owned_app_binary_pids() {
   /bin/ps -axo pid=,ppid=,command= | /usr/bin/awk -v target="$binary_path" 'index($0, target) > 0 && $2 == 1 { print $1 }'
 }
 
+plist_value() {
+  local plist_path="$1"
+  local key_path="$2"
+  /usr/libexec/PlistBuddy -c "Print :${key_path}" "$plist_path" 2>/dev/null || true
+}
+
+bootout_conflicting_gateway_label() {
+  local label="$1"
+  local target_label="$2"
+  local target_state_dir="$3"
+  local target_config_path="$4"
+  local target_port="$5"
+
+  # This does not manage the default gateway. It only unloads stale labels when
+  # their saved env already points at this isolated consumer lane, which keeps
+  # retries from being blocked by old smoke state.
+  [[ "$label" == "$target_label" ]] && return 0
+
+  local plist_path="$HOME/Library/LaunchAgents/${label}.plist"
+  [[ -f "$plist_path" ]] || return 0
+
+  local existing_state_dir
+  local existing_config_path
+  local existing_port=""
+  local index=0
+  local arg=""
+
+  existing_state_dir="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_STATE_DIR')"
+  existing_config_path="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_CONFIG_PATH')"
+
+  while true; do
+    arg="$(plist_value "$plist_path" "ProgramArguments:${index}")"
+    [[ -n "$arg" ]] || break
+    if [[ "$arg" == "--port" ]]; then
+      existing_port="$(plist_value "$plist_path" "ProgramArguments:$((index + 1))")"
+      break
+    fi
+    if [[ "$arg" == --port=* ]]; then
+      existing_port="${arg#--port=}"
+      break
+    fi
+    index=$((index + 1))
+  done
+
+  if [[ "$existing_state_dir" != "$target_state_dir" && "$existing_config_path" != "$target_config_path" && "$existing_port" != "$target_port" ]]; then
+    return 0
+  fi
+
+  /bin/launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
+  /bin/launchctl unload "$plist_path" >/dev/null 2>&1 || true
+  return 0
+}
+
+gateway_plist_port() {
+  local plist_path="$1"
+  local index=0
+  local arg=""
+
+  while true; do
+    arg="$(plist_value "$plist_path" "ProgramArguments:${index}")"
+    [[ -n "$arg" ]] || break
+    if [[ "$arg" == "--port" ]]; then
+      plist_value "$plist_path" "ProgramArguments:$((index + 1))"
+      return 0
+    fi
+    if [[ "$arg" == --port=* ]]; then
+      printf '%s\n' "${arg#--port=}"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+
+  return 1
+}
+
+verify_gateway_plist_matches_instance() {
+  local normalized="$1"
+  local state_dir="$2"
+  local config_path="$3"
+  local gateway_port="$4"
+  local profile="$5"
+  local launchd_label="$6"
+  local plist_path="$HOME/Library/LaunchAgents/${launchd_label}.plist"
+  local actual_label=""
+  local actual_entry=""
+  local actual_port=""
+  local actual_state_dir=""
+  local actual_config_path=""
+  local actual_profile=""
+  local actual_launchd_label=""
+  local actual_consumer_instance=""
+  local actual_gateway_port=""
+
+  if [[ ! -f "$plist_path" ]]; then
+    echo "ERROR: isolated gateway plist was not created: $plist_path" >&2
+    return 1
+  fi
+
+  actual_label="$(plist_value "$plist_path" 'Label')"
+  actual_entry="$(plist_value "$plist_path" 'ProgramArguments:1')"
+  actual_port="$(gateway_plist_port "$plist_path")"
+  actual_state_dir="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_STATE_DIR')"
+  actual_config_path="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_CONFIG_PATH')"
+  actual_profile="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_PROFILE')"
+  actual_launchd_label="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL')"
+  actual_consumer_instance="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_CONSUMER_INSTANCE_ID')"
+  actual_gateway_port="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_GATEWAY_PORT')"
+
+  if [[ "$actual_label" != "$launchd_label" ]]; then
+    echo "ERROR: isolated gateway plist label mismatch: expected=$launchd_label actual=${actual_label:-missing}" >&2
+    return 1
+  fi
+  if [[ "$actual_entry" != "$GATEWAY_ENTRY" ]]; then
+    echo "ERROR: isolated gateway plist entrypoint mismatch: expected=$GATEWAY_ENTRY actual=${actual_entry:-missing}" >&2
+    return 1
+  fi
+  if [[ "$actual_port" != "$gateway_port" || "$actual_gateway_port" != "$gateway_port" ]]; then
+    echo "ERROR: isolated gateway plist port mismatch: expected=$gateway_port args=${actual_port:-missing} env=${actual_gateway_port:-missing}" >&2
+    return 1
+  fi
+  if [[ "$actual_state_dir" != "$state_dir" ]]; then
+    echo "ERROR: isolated gateway plist state dir mismatch: expected=$state_dir actual=${actual_state_dir:-missing}" >&2
+    return 1
+  fi
+  if [[ "$actual_config_path" != "$config_path" ]]; then
+    echo "ERROR: isolated gateway plist config path mismatch: expected=$config_path actual=${actual_config_path:-missing}" >&2
+    return 1
+  fi
+  if [[ "$actual_profile" != "$profile" ]]; then
+    echo "ERROR: isolated gateway plist profile mismatch: expected=$profile actual=${actual_profile:-missing}" >&2
+    return 1
+  fi
+  if [[ "$actual_launchd_label" != "$launchd_label" ]]; then
+    echo "ERROR: isolated gateway plist env label mismatch: expected=$launchd_label actual=${actual_launchd_label:-missing}" >&2
+    return 1
+  fi
+  if [[ "$actual_consumer_instance" != "$normalized" ]]; then
+    echo "ERROR: isolated gateway plist instance mismatch: expected=$normalized actual=${actual_consumer_instance:-missing}" >&2
+    return 1
+  fi
+}
+
+wait_for_gateway_health() {
+  local gateway_port="$1"
+  local deadline=$((SECONDS + 180))
+
+  # Runtime-backed Telegram proof needs a real local listener. A matching plist
+  # only proves ownership; the first-task verifier still fails if the websocket
+  # never becomes reachable.
+  while (( SECONDS < deadline )); do
+    if /usr/bin/curl -fsS --max-time 2 "http://127.0.0.1:${gateway_port}/healthz" >/dev/null 2>&1; then
+      return 0
+    fi
+    /bin/sleep 2
+  done
+
+  echo "ERROR: isolated gateway did not become healthy on 127.0.0.1:${gateway_port}" >&2
+  return 1
+}
+
+scope_runtime_backed_smoke_plugins() {
+  local config_path="$1"
+  local tmp_path
+
+  tmp_path="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/openclaw-ui-smoke-config.XXXXXX")"
+  # First-task proof needs Telegram plus the small provider set that can answer
+  # a basic DM. Keep heavyweight unrelated plugins out of the isolated smoke
+  # runtime so plugin bootstrap does not scan/import the whole worktree.
+  /usr/bin/jq '
+    .plugins = ((.plugins // {}) + {
+      enabled: true,
+      allow: ["telegram", "anthropic", "openai"],
+      deny: ["acpx", "diffs"],
+      slots: ((.plugins.slots // {}) + { memory: "none" }),
+      entries: ((.plugins.entries // {}) + {
+        telegram: (((.plugins.entries.telegram // {}) + { enabled: true }))
+      })
+    })
+  ' "$config_path" >"$tmp_path"
+  /bin/mv "$tmp_path" "$config_path"
+}
+
+approve_latest_device_pairing_if_pending() {
+  local normalized="$1"
+  local state_dir="$2"
+  local config_path="$3"
+  local gateway_port="$4"
+  local profile="$5"
+  local launchd_label="$6"
+  local pending_path="$state_dir/devices/pending.json"
+  local attempt
+
+  # Runtime-backed smoke launches an isolated GUI against an isolated gateway.
+  # The first UI connection can legitimately create an operator pairing repair
+  # request; approve only that instance-local request so first-task proof talks
+  # to the same runtime without involving the shared gateway or another app.
+  for attempt in {1..30}; do
+    if [[ -f "$pending_path" ]] && /usr/bin/jq -e '
+      [ .[]?
+        | select((.clientId // "") == "openclaw-macos")
+        | select((.role // "") == "operator" or ((.roles // []) | index("operator")))
+      ] | length > 0
+    ' "$pending_path" >/dev/null 2>&1; then
+      OPENCLAW_STATE_DIR="$state_dir" \
+        OPENCLAW_CONFIG_PATH="$config_path" \
+        OPENCLAW_PROFILE="$profile" \
+        OPENCLAW_LAUNCHD_LABEL="$launchd_label" \
+        OPENCLAW_CONSUMER_INSTANCE_ID="$normalized" \
+        OPENCLAW_GATEWAY_PORT="$gateway_port" \
+        OPENCLAW_FORK_ROOT="$ROOT_DIR" \
+        "$OPENCLAW_NODE_BIN" "$GATEWAY_ENTRY" devices approve --latest >/dev/null 2>&1 || true
+      return 0
+    fi
+    /bin/sleep 0.25
+  done
+}
+
+bootstrap_isolated_gateway_plist() {
+  local launchd_label="$1"
+  local plist_path="$HOME/Library/LaunchAgents/${launchd_label}.plist"
+
+  # The CLI writes the correct plist for this isolated lane, but launchctl can
+  # report the job as not loaded after a force install. Bootstrap the exact
+  # verified plist so runtime-backed smoke proves a real listener, not just a
+  # file on disk.
+  /bin/launchctl bootstrap "gui/$(id -u)" "$plist_path" >/dev/null 2>&1 || true
+  /bin/launchctl kickstart -k "gui/$(id -u)/${launchd_label}" >/dev/null 2>&1 || true
+}
+
+refresh_gateway_service_env() {
+  local normalized="$1"
+  local state_dir="$2"
+  local config_path="$3"
+  local gateway_port
+  local profile
+  local launchd_label
+
+  gateway_port="$(consumer_instance_gateway_port "$normalized")"
+  profile="$(consumer_instance_profile "$normalized")"
+  launchd_label="$(consumer_instance_gateway_launchd_label "$normalized")"
+
+  # LaunchServices does not reliably carry every shell env var into the app or
+  # the supervised gateway. Reinstall the isolated gateway job from this shell
+  # after bootstrap has written config so Telegram proof uses the right port,
+  # profile, state dir, and label.
+  local attempt
+  for attempt in {1..20}; do
+    if [[ -f "$config_path" ]]; then
+      scope_runtime_backed_smoke_plugins "$config_path"
+      bootout_conflicting_gateway_label "ai.openclaw.gateway" "$launchd_label" "$state_dir" "$config_path" "$gateway_port"
+      bootout_conflicting_gateway_label "ai.openclaw.consumer.gateway" "$launchd_label" "$state_dir" "$config_path" "$gateway_port"
+      /bin/launchctl bootout "gui/$(id -u)/${launchd_label}" >/dev/null 2>&1 || true
+      OPENCLAW_STATE_DIR="$state_dir" \
+        OPENCLAW_CONFIG_PATH="$config_path" \
+        OPENCLAW_PROFILE="$profile" \
+        OPENCLAW_LAUNCHD_LABEL="$launchd_label" \
+        OPENCLAW_CONSUMER_INSTANCE_ID="$normalized" \
+      OPENCLAW_FORK_ROOT="$ROOT_DIR" \
+        "$OPENCLAW_NODE_BIN" "$GATEWAY_ENTRY" gateway install \
+          --force \
+          --allow-shared-service-takeover \
+          --port "$gateway_port" \
+          --runtime node >/dev/null
+      verify_gateway_plist_matches_instance "$normalized" "$state_dir" "$config_path" "$gateway_port" "$profile" "$launchd_label"
+      bootstrap_isolated_gateway_plist "$launchd_label"
+      wait_for_gateway_health "$gateway_port"
+      return 0
+    fi
+    /bin/sleep 0.25
+  done
+
+  echo "ERROR: isolated runtime config was not created in time: $config_path" >&2
+  return 1
+}
+
+launch_smoke_app() {
+  local app_path="$1"
+  local log_path="$2"
+  shift 2
+
+  # Use LaunchServices for the real launch so the GUI belongs to macOS, not this
+  # short-lived shell. Direct exec can pass the immediate check and still vanish
+  # after bash exits, which makes the smoke useless for visual inspection.
+  /usr/bin/open \
+    -n \
+    -F \
+    --stdout "$log_path" \
+    --stderr "$log_path" \
+    --env "OPENCLAW_APP_VARIANT=$OPENCLAW_APP_VARIANT" \
+    --env "OPENCLAW_CONFIG_PATH=$OPENCLAW_CONFIG_PATH" \
+    --env "OPENCLAW_CONSUMER_INSTANCE_ID=$OPENCLAW_CONSUMER_INSTANCE_ID" \
+    --env "OPENCLAW_FORK_ROOT=$OPENCLAW_FORK_ROOT" \
+    --env "OPENCLAW_GATEWAY_BIND=$OPENCLAW_GATEWAY_BIND" \
+    --env "OPENCLAW_GATEWAY_PORT=$OPENCLAW_GATEWAY_PORT" \
+    --env "OPENCLAW_HOME=$OPENCLAW_HOME" \
+    --env "OPENCLAW_LAUNCHD_LABEL=$OPENCLAW_LAUNCHD_LABEL" \
+    --env "OPENCLAW_LOG_DIR=$OPENCLAW_LOG_DIR" \
+    --env "OPENCLAW_PROFILE=$OPENCLAW_PROFILE" \
+    --env "OPENCLAW_STATE_DIR=$OPENCLAW_STATE_DIR" \
+    "$@" \
+    "$app_path" \
+    --args "${APP_ARGS[@]}"
+}
+
 print_proof() {
   local binary_path="$1"
   local app_path="$2"
@@ -130,14 +458,22 @@ print_proof() {
   local logs_dir="$6"
   local log_path="$7"
   local elapsed="$8"
+  local runtime_mode="$9"
+  local launchd_label="${10}"
+  local gateway_port="${11}"
+  local disable_marker="${12}"
 
   echo "Jarvis macOS UI smoke proof:"
   echo "  binary_path=$binary_path"
   echo "  debug_app_path=$app_path"
   echo "  instance_id=$normalized"
+  echo "  runtime_mode=$runtime_mode"
   echo "  state_dir=$state_dir"
   echo "  config_path=$config_path"
   echo "  logs_dir=$logs_dir"
+  echo "  gateway_launchd_label=$launchd_label"
+  echo "  gateway_port=$gateway_port"
+  echo "  launchagent_disable_marker=$disable_marker"
   echo "  launch_log=$log_path"
   echo "  display_identity=Jarvis (OPENCLAW_APP_VARIANT=consumer)"
   echo "  bundle_identity=minimal debug .app wrapper; current worktree SwiftPM binary"
@@ -154,6 +490,7 @@ write_debug_app_wrapper() {
   local state_dir="$4"
   local config_path="$5"
   local logs_dir="$6"
+  local consumer_step="$7"
 
   local contents_dir="$app_path/Contents"
   local macos_dir="$contents_dir/MacOS"
@@ -221,6 +558,8 @@ write_debug_app_wrapper() {
     <string>$(consumer_instance_runtime_root "$normalized")</string>
     <key>OPENCLAW_LOG_DIR</key>
     <string>${logs_dir}</string>
+    <key>OPENCLAW_CONSUMER_SETUP_DEBUG_STEP</key>
+    <string>${consumer_step}</string>
     <key>OPENCLAW_PROFILE</key>
     <string>$(consumer_instance_profile "$normalized")</string>
     <key>OPENCLAW_STATE_DIR</key>
@@ -245,6 +584,14 @@ while [[ $# -gt 0 ]]; do
       INSTANCE_ID="$2"
       shift 2
       ;;
+    --consumer-step)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --consumer-step requires a value" >&2
+        exit 1
+      fi
+      CONSUMER_STEP="$2"
+      shift 2
+      ;;
     --no-open|--build-only)
       OPEN_APP=0
       shift
@@ -257,6 +604,10 @@ while [[ $# -gt 0 ]]; do
       CLEAN_ONLY=1
       OPEN_APP=0
       BUILD_APP=0
+      shift
+      ;;
+    --with-runtime)
+      WITH_RUNTIME=1
       shift
       ;;
     --help|-h)
@@ -293,8 +644,16 @@ LOGS_DIR="$(consumer_instance_logs_path "$NORMALIZED_INSTANCE_ID")"
 LOG_PATH="$LOGS_DIR/mac-ui-smoke.log"
 BINARY_PATH="$BUILD_PATH/${BUILD_CONFIG}/OpenClaw"
 APP_PATH="$ROOT_DIR/dist-ui-smoke/Jarvis UI Smoke (${NORMALIZED_INSTANCE_ID}).app"
+GATEWAY_LAUNCHD_LABEL="$(consumer_instance_gateway_launchd_label "$NORMALIZED_INSTANCE_ID")"
+GATEWAY_PORT="$(consumer_instance_gateway_port "$NORMALIZED_INSTANCE_ID")"
+LAUNCHAGENT_DISABLE_MARKER="$STATE_DIR/disable-launchagent"
+RUNTIME_MODE="visual-only"
+if [[ "$WITH_RUNTIME" == "1" ]]; then
+  RUNTIME_MODE="isolated-runtime-backed"
+fi
 
 /bin/mkdir -p "$STATE_DIR" "$LOGS_DIR"
+resolve_backend_api_token
 
 if [[ "$BUILD_APP" == "1" ]]; then
   echo "Building Jarvis macOS UI smoke from source..."
@@ -314,46 +673,48 @@ if [[ ! -x "$BINARY_PATH" ]]; then
   exit 1
 fi
 
-write_debug_app_wrapper "$BINARY_PATH" "$APP_PATH" "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH" "$LOGS_DIR"
+write_debug_app_wrapper "$BINARY_PATH" "$APP_PATH" "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH" "$LOGS_DIR" "$CONSUMER_STEP"
 
 if [[ "$OPEN_APP" == "0" ]]; then
-  print_proof "$BINARY_PATH" "$APP_PATH" "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH" "$LOGS_DIR" "$LOG_PATH" "$((SECONDS - STARTED_AT))"
+  print_proof "$BINARY_PATH" "$APP_PATH" "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH" "$LOGS_DIR" "$LOG_PATH" "$((SECONDS - STARTED_AT))" "$RUNTIME_MODE" "$GATEWAY_LAUNCHD_LABEL" "$GATEWAY_PORT" "$LAUNCHAGENT_DISABLE_MARKER"
   echo "launch_skipped=true"
   exit 0
 fi
 
 terminate_matching_app_binary "$APP_PATH/Contents/MacOS/OpenClaw"
 
-# --no-launchd writes the disable marker inside this isolated state dir and
-# prevents the GUI from installing/restarting any gateway job. The exported
-# runtime env is the same consumer identity contract used by packaged builds,
-# minus every packaging step.
 export OPENCLAW_APP_VARIANT=consumer
 export OPENCLAW_CONSUMER_INSTANCE_ID="$NORMALIZED_INSTANCE_ID"
 consumer_instance_export_runtime_env "$NORMALIZED_INSTANCE_ID"
 export OPENCLAW_FORK_ROOT="$ROOT_DIR"
 
-# Use LaunchServices for the real launch so the GUI belongs to macOS, not this
-# short-lived shell. Direct exec can pass the immediate check and still vanish
-# after bash exits, which makes the smoke useless for visual inspection.
-/usr/bin/open \
-  -n \
-  -F \
-  --stdout "$LOG_PATH" \
-  --stderr "$LOG_PATH" \
-  --env "OPENCLAW_APP_VARIANT=$OPENCLAW_APP_VARIANT" \
-  --env "OPENCLAW_CONFIG_PATH=$OPENCLAW_CONFIG_PATH" \
-  --env "OPENCLAW_CONSUMER_INSTANCE_ID=$OPENCLAW_CONSUMER_INSTANCE_ID" \
-  --env "OPENCLAW_FORK_ROOT=$OPENCLAW_FORK_ROOT" \
-  --env "OPENCLAW_GATEWAY_BIND=$OPENCLAW_GATEWAY_BIND" \
-  --env "OPENCLAW_GATEWAY_PORT=$OPENCLAW_GATEWAY_PORT" \
-  --env "OPENCLAW_HOME=$OPENCLAW_HOME" \
-  --env "OPENCLAW_LAUNCHD_LABEL=$OPENCLAW_LAUNCHD_LABEL" \
-  --env "OPENCLAW_LOG_DIR=$OPENCLAW_LOG_DIR" \
-  --env "OPENCLAW_PROFILE=$OPENCLAW_PROFILE" \
-  --env "OPENCLAW_STATE_DIR=$OPENCLAW_STATE_DIR" \
-  "$APP_PATH" \
-  --args --no-launchd
+APP_ARGS=(--no-launchd)
+# Runtime-backed smoke lets this script own the isolated LaunchAgent and lets
+# the app attach to it. If the GUI also manages launchd, it can tear down the
+# freshly verified gateway during relaunch and leave first-task proof racing a
+# new bootstrap.
+
+OPEN_ENV_ARGS=()
+if [[ -n "$BACKEND_API_TOKEN" ]]; then
+  # Keep the protected token out of the generated Info.plist. It is only
+  # injected into the launched smoke process and is never printed in proof logs.
+  OPEN_ENV_ARGS+=(--env "JARVIS_BACKEND_API_TOKEN=$BACKEND_API_TOKEN")
+fi
+
+if [[ "$WITH_RUNTIME" == "1" ]]; then
+  # First launch is only a bootstrap pass: the app creates the isolated config
+  # and the durable visual process is relaunched after this shell has installed
+  # and verified the exact gateway plist the GUI should observe on startup.
+  launch_smoke_app "$APP_PATH" "$LOG_PATH" "${OPEN_ENV_ARGS[@]}"
+  approve_latest_device_pairing_if_pending "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH" "$GATEWAY_PORT" "$OPENCLAW_PROFILE" "$OPENCLAW_LAUNCHD_LABEL"
+  refresh_gateway_service_env "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH"
+  terminate_matching_app_binary "$APP_PATH/Contents/MacOS/OpenClaw"
+fi
+
+launch_smoke_app "$APP_PATH" "$LOG_PATH" "${OPEN_ENV_ARGS[@]}"
+if [[ "$WITH_RUNTIME" == "1" ]]; then
+  approve_latest_device_pairing_if_pending "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH" "$GATEWAY_PORT" "$OPENCLAW_PROFILE" "$OPENCLAW_LAUNCHD_LABEL"
+fi
 
 /bin/sleep 4
 APP_PIDS=()
@@ -393,6 +754,6 @@ if [[ "${#APP_PIDS[@]}" -eq 0 ]]; then
 fi
 
 APP_PID="${APP_PIDS[0]}"
-print_proof "$BINARY_PATH" "$APP_PATH" "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH" "$LOGS_DIR" "$LOG_PATH" "$((SECONDS - STARTED_AT))"
+print_proof "$BINARY_PATH" "$APP_PATH" "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH" "$LOGS_DIR" "$LOG_PATH" "$((SECONDS - STARTED_AT))" "$RUNTIME_MODE" "$GATEWAY_LAUNCHD_LABEL" "$GATEWAY_PORT" "$LAUNCHAGENT_DISABLE_MARKER"
 echo "pid=$APP_PID"
 echo "process_running=true"

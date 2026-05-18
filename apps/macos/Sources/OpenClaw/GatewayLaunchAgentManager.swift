@@ -427,7 +427,7 @@ extension GatewayLaunchAgentManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
-        let gatewayRoot = CommandResolver.canonicalGatewayProjectRoot()
+        let gatewayRoot = self.daemonCommandProjectRoot()
         let command = CommandResolver.openclawCommand(
             subcommand: "gateway",
             extraArgs: self.withJsonFlag(args),
@@ -457,6 +457,25 @@ extension GatewayLaunchAgentManager {
             ?? "Gateway daemon command failed (\(exit))"
         self.logger.error("\(fullMessage, privacy: .public)")
         return CommandResult(success: false, payload: payload, message: detail)
+    }
+
+    private static func daemonCommandProjectRoot() -> URL {
+        let projectRoot = CommandResolver.projectRoot()
+        let identity = RuntimeIdentity.current
+
+        // The default/shared gateway label is a single long-lived service. When
+        // a dev app is built from `.worktrees`, daemon commands for that shared
+        // service must still execute from the canonical main checkout that owns
+        // the user's default gateway.
+        guard identity.gatewayLaunchdLabel != "ai.openclaw.gateway" else {
+            return CommandResolver.canonicalGatewayProjectRoot(projectRoot: projectRoot)
+        }
+
+        // Isolated consumer instances have their own label, state, port, and
+        // profile. Canonicalizing those commands back to the shared main checkout
+        // makes a smoke lane manage the wrong code, so keep the root resolved
+        // from env/defaults/bundled runtime.
+        return projectRoot
     }
 
     private static func runServiceBringupCommand(
@@ -609,6 +628,10 @@ extension GatewayLaunchAgentManager {
 
     static func _testShouldTreatBringupResultAsReady(_ payload: String) -> Bool {
         self.shouldTreatBringupResultAsReady(payload.data(using: .utf8))
+    }
+
+    static func _testDaemonCommandProjectRoot() -> URL {
+        self.daemonCommandProjectRoot()
     }
 }
 #endif

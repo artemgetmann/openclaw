@@ -37,7 +37,7 @@ enum TelegramSetupVerifierError: LocalizedError {
         case .conflict:
             return "This bot is already being used by another OpenClaw Telegram poller. Stop the other runtime, or let setup pause Telegram before trying again."
         case .noDirectMessage:
-            return "No Telegram DM arrived yet. Ask the user to send the bot a private message, then try again."
+            return "No Telegram DM arrived during this check. Click Verify first task, then send the bot a fresh private message."
         }
     }
 }

@@ -150,6 +150,22 @@ struct TelegramSetupBootstrapTests {
         #expect(!ChannelsStore.consumerTelegramReplayShouldRetryAfterRestart(unrelatedError))
     }
 
+    @Test func `telegram replay status hides local gateway plumbing`() async throws {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let rawError = "WebSocket connect failed at ws://127.0.0.1:57483/gateway: connection refused"
+            let status = ChannelsStore.consumerTelegramFirstTaskReplayStatusMessage(for: rawError)
+
+            #expect(status != nil)
+            #expect(status?.contains("ws://127.0.0.1") == false)
+            #expect(status?.contains("connection refused") == false)
+            #expect(status?.contains("Telegram setup is saved") == true)
+            #expect(status?.contains("local Jarvis runtime is not reachable") == true)
+            #expect(status?.contains("try Verify first task again") == true)
+        }
+    }
+
     @Test func `healthy telegram refresh promotes timed out setup once outbound activity proves completion`() async throws {
         await TestIsolation.withEnvValues([
             "OPENCLAW_APP_VARIANT": "consumer",
@@ -407,6 +423,103 @@ struct TelegramSetupBootstrapTests {
             await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)
             await ConfigStore._testClearOverrides()
         }
+    }
+
+    @Test func `managed telegram setup not found clears stale verification state`() async throws {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let store = ChannelsStore(isPreview: true)
+            store.telegramManagedSetupId = "tgms_missing"
+            store.telegramManagedApprovalURL = "https://t.me/jarvis_managed_bot?start=tgms_missing"
+            store.telegramManagedSuggestedBotUsername = "jarvis_missing_bot"
+            store.telegramSetupToken = "777000:stale-child-token"
+            store.telegramSetupBotId = 777000
+            store.telegramSetupBotUsername = "jarvis_missing_bot"
+
+            store._testHandleManagedTelegramSetupStatusErrorMessage("Telegram setup not found")
+
+            #expect(store.telegramManagedSetupId == nil)
+            #expect(store.telegramManagedApprovalURL == nil)
+            #expect(store.telegramSetupToken.isEmpty)
+            #expect(store.telegramSetupBotId == nil)
+            #expect(store.telegramSetupBotUsername == nil)
+            #expect(store.telegramSetupStatus?.contains("Create a new Telegram bot") == true)
+        }
+    }
+
+    @Test func `consumer setup can recover latest pending telegram pairing sender`() async throws {
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-telegram-pairing-\(UUID().uuidString)", isDirectory: true)
+        let credentialsDir = stateDir.appendingPathComponent("credentials", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+        try FileManager.default.createDirectory(at: credentialsDir, withIntermediateDirectories: true)
+        let pairingPath = credentialsDir.appendingPathComponent("telegram-pairing.json")
+        let body = """
+        {
+          "version": 1,
+          "requests": [
+            {
+              "id": "111",
+              "code": "OLD111AA",
+              "createdAt": "2026-05-19T13:00:00Z",
+              "lastSeenAt": "2026-05-19T13:00:00Z",
+              "meta": { "accountId": "default" }
+            },
+            {
+              "id": "222",
+              "code": "NEW222BB",
+              "createdAt": "2026-05-19T14:00:00Z",
+              "lastSeenAt": "2026-05-19T14:06:42Z",
+              "meta": { "accountId": "default", "username": "artem" }
+            },
+            {
+              "id": "333",
+              "code": "OTHER333",
+              "createdAt": "2026-05-19T14:10:00Z",
+              "lastSeenAt": "2026-05-19T14:10:00Z",
+              "meta": { "accountId": "work" }
+            }
+          ]
+        }
+        """
+        try body.write(to: pairingPath, atomically: true, encoding: .utf8)
+
+        let pending = ChannelsStore._testLatestPendingTelegramPairingRequest(
+            now: try #require(ISO8601DateFormatter().date(from: "2026-05-19T14:07:00Z")),
+            stateDirURL: stateDir)
+
+        #expect(pending?.id == "222")
+        #expect(pending?.meta?["username"] == "artem")
+    }
+
+    @Test func `consumer setup can recover delayed pending telegram pairing sender`() throws {
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-telegram-delayed-pairing-\(UUID().uuidString)", isDirectory: true)
+        let credentialsDir = stateDir.appendingPathComponent("credentials", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+        try FileManager.default.createDirectory(at: credentialsDir, withIntermediateDirectories: true)
+        let pairingPath = credentialsDir.appendingPathComponent("telegram-pairing.json")
+        let body = """
+        {
+          "version": 1,
+          "requests": [
+            {
+              "id": "1336356696",
+              "code": "WDTNXX2W",
+              "createdAt": "2026-05-19T14:06:42.652Z",
+              "lastSeenAt": "2026-05-19T14:06:42.652Z",
+              "meta": { "accountId": "default", "username": "artemgetmann" }
+            }
+          ]
+        }
+        """
+        try body.write(to: pairingPath, atomically: true, encoding: .utf8)
+
+        let pending = ChannelsStore._testLatestPendingTelegramPairingRequest(
+            now: try #require(ISO8601DateFormatter().date(from: "2026-05-19T17:30:00Z")),
+            stateDirURL: stateDir)
+
+        #expect(pending?.id == "1336356696")
+        #expect(pending?.meta?["username"] == "artemgetmann")
     }
 }
 

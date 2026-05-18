@@ -808,7 +808,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
   const normalized = normalizePluginsConfig(cfg.plugins);
-  const onlyPluginIds = normalizeScopedPluginIds(options.onlyPluginIds);
+  const explicitOnlyPluginIds = normalizeScopedPluginIds(options.onlyPluginIds);
+  // `plugins.allow` is already the runtime trust boundary. When a config opts
+  // into a small allowlist, use it to scope discovery too; otherwise a narrow
+  // Telegram smoke still scans and manifests the entire bundled/workspace
+  // extension tree before the allowlist has a chance to reject anything.
+  const onlyPluginIds =
+    explicitOnlyPluginIds ?? (normalized.allow.length > 0 ? normalized.allow : undefined);
   const onlyPluginIdSet = onlyPluginIds ? new Set(onlyPluginIds) : null;
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const shouldActivate = options.activate !== false;

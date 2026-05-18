@@ -647,6 +647,35 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     expect(fs.existsSync(skippedMarker)).toBe(false);
   });
 
+  it("uses plugins allowlist as a discovery scope before importing plugin modules", () => {
+    useNoBundledPlugins();
+    const allowed = writePlugin({
+      id: "allowed",
+      filename: "allowed.cjs",
+      body: `module.exports = { id: "allowed", register() {} };`,
+    });
+    const skippedMarker = path.join(makeTempDir(), "allow-skipped-loaded.txt");
+    const skipped = writePlugin({
+      id: "skipped",
+      filename: "skipped.cjs",
+      body: `require("node:fs").writeFileSync(${JSON.stringify(skippedMarker)}, "loaded", "utf-8");
+module.exports = { id: "skipped", register() { throw new Error("skipped plugin should not load"); } };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [allowed.file, skipped.file] },
+          allow: ["allowed"],
+        },
+      },
+    });
+
+    expect(registry.plugins.map((entry) => entry.id)).toEqual(["allowed"]);
+    expect(fs.existsSync(skippedMarker)).toBe(false);
+  });
+
   it("keeps scoped plugin loads in a separate cache entry", () => {
     useNoBundledPlugins();
     const allowed = writePlugin({

@@ -31,7 +31,7 @@ enum JarvisTelegramManagedBotClientError: LocalizedError {
         case .missingBaseURL:
             return "Jarvis bot setup is not configured yet."
         case .missingAccessToken:
-            return "Sign in to Jarvis before creating a Telegram bot."
+            return "Jarvis bot setup is not configured for this build."
         case .invalidURL:
             return "Jarvis bot setup could not build a valid request."
         case let .http(message):
