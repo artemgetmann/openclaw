@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 import httpx
 import pytest
 
-from app.main import app, get_settings
+from app.main import app, get_settings, telegram_managed_setup_sessions
 
 
 @pytest.fixture(autouse=True)
@@ -14,8 +14,10 @@ def isolated_backend_db(monkeypatch, tmp_path):
     """Give each test its own SQLite file so trial state cannot leak."""
 
     monkeypatch.setenv("JARVIS_BACKEND_DB_PATH", str(tmp_path / "jarvis-test.sqlite3"))
+    telegram_managed_setup_sessions.clear()
     reset_settings()
     yield
+    telegram_managed_setup_sessions.clear()
     reset_settings()
 
 
@@ -57,6 +59,7 @@ def test_health_reports_provider_presence_without_secret_values(monkeypatch):
         "google_places": True,
         "gemini": False,
         "brave": True,
+        "telegram_managed_bots": False,
     }
     assert "test-openai-provider-placeholder" not in response.text
     assert "test-firecrawl-provider-placeholder" not in response.text
@@ -261,6 +264,212 @@ def test_admin_license_update_marks_device_licensed_and_expired(monkeypatch):
     assert licensed.json()["state"] == "licensed"
     assert expired.status_code == 200
     assert expired.json()["state"] == "expired"
+
+
+def test_telegram_managed_start_missing_config_fails_closed(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.delenv("TELEGRAM_MANAGER_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("MANAGER_BOT_USERNAME", raising=False)
+    reset_settings()
+
+    response = TestClient(app).post(
+        "/v1/telegram/managed/start",
+        json={"deviceId": "device-telegram", "appVersion": "0.1.0"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "telegram managed bots provider is not configured"
+
+
+def test_telegram_managed_start_returns_approval_url_without_secret_values(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "@JarvisManagerBot")
+    reset_settings()
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/telegram/managed/start",
+        json={
+            "deviceId": "device-telegram",
+            "appVersion": "0.1.0",
+            "suggestedBotName": "Jarvis Founder Bot",
+            "suggestedBotUsername": "@founder_jarvis_bot",
+        },
+    )
+    health = client.get("/healthz")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["setupId"].startswith("tgms_")
+    assert body["approvalUrl"] == (
+        "https://t.me/newbot/JarvisManagerBot/founder_jarvis_bot"
+        "?name=Jarvis%20Founder%20Bot"
+    )
+    assert body["suggestedBotUsername"] == "founder_jarvis_bot"
+    assert body["status"] == "pending"
+    assert health.json()["providers"]["telegram_managed_bots"] is True
+    assert "123456:test-manager-token" not in response.text
+    assert "123456:test-manager-token" not in health.text
+    assert "123456:test-manager-token" not in repr(get_settings())
+
+
+def test_telegram_managed_status_returns_pending_when_no_matching_update(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == (
+            "https://api.telegram.org/bot123456:test-manager-token/getUpdates"
+        )
+        assert json.loads(request.content) == {
+            "limit": 20,
+            "timeout": 0,
+            "allowed_updates": ["managed_bot"],
+        }
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": [
+                    {
+                        "update_id": 101,
+                        "managed_bot": {
+                            "bot": {"id": 9001, "is_bot": True, "username": "other_bot"}
+                        },
+                    }
+                ],
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "founder_jarvis_bot"},
+    )
+
+    response = client.get(f"/v1/telegram/managed/status/{started.json()['setupId']}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["suggestedBotUsername"] == "founder_jarvis_bot"
+    assert body["botId"] is None
+    assert body["managedChildBotToken"] is None
+
+
+def test_telegram_managed_status_connects_child_bot_and_returns_token(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+    requests_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(str(request.url))
+        if str(request.url).endswith("/getUpdates"):
+            assert json.loads(request.content) == {
+                "limit": 20,
+                "timeout": 0,
+                "allowed_updates": ["managed_bot"],
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 102,
+                            "managed_bot": {
+                                "bot": {
+                                    "id": 777000,
+                                    "is_bot": True,
+                                    "username": "founder_jarvis_bot",
+                                }
+                            },
+                        }
+                    ],
+                },
+            )
+        if str(request.url).endswith("/getManagedBotToken"):
+            assert json.loads(request.content) == {"user_id": 777000}
+            return httpx.Response(200, json={"ok": True, "result": "777000:test-child-token"})
+        if str(request.url).endswith("/getMe"):
+            assert str(request.url) == "https://api.telegram.org/bot777000:test-child-token/getMe"
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "id": 777000,
+                        "is_bot": True,
+                        "first_name": "Jarvis",
+                        "username": "founder_jarvis_bot",
+                    },
+                },
+            )
+        if str(request.url).endswith("/setManagedBotAccessSettings"):
+            assert json.loads(request.content) == {
+                "user_id": 777000,
+                "is_access_restricted": True,
+            }
+            return httpx.Response(200, json={"ok": True, "result": True})
+        raise AssertionError(f"unexpected Telegram request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "founder_jarvis_bot"},
+    )
+
+    response = client.get(f"/v1/telegram/managed/status/{started.json()['setupId']}")
+    second_status = client.get(f"/v1/telegram/managed/status/{started.json()['setupId']}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "connected"
+    assert body["botId"] == 777000
+    assert body["botUsername"] == "founder_jarvis_bot"
+    assert body["managedChildBotToken"] == "777000:test-child-token"
+    assert second_status.status_code == 200
+    assert second_status.json()["managedChildBotToken"] == "777000:test-child-token"
+    assert len([url for url in requests_seen if url.endswith("/getUpdates")]) == 1
+
+
+def test_telegram_managed_status_sanitizes_telegram_api_error(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={
+                "ok": False,
+                "error_code": 401,
+                "description": "Unauthorized 123456:test-manager-token",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "founder_jarvis_bot"},
+    )
+
+    response = client.get(f"/v1/telegram/managed/status/{started.json()['setupId']}")
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["provider"] == "telegram"
+    assert response.json()["detail"]["method"] == "getUpdates"
+    assert response.json()["detail"]["payload"]["description"] == "Unauthorized [redacted]"
+    assert "123456:test-manager-token" not in response.text
 
 
 def test_development_uses_local_sqlite_without_neon(monkeypatch, tmp_path):
@@ -626,5 +835,7 @@ def teardown_function():
         "GOOGLE_PLACES_API_KEY",
         "GEMINI_API_KEY",
         "BRAVE_API_KEY",
+        "TELEGRAM_MANAGER_BOT_TOKEN",
+        "MANAGER_BOT_USERNAME",
     ):
         os.environ.pop(key, None)

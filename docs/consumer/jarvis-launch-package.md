@@ -453,6 +453,12 @@ Say this directly:
   manager bot with Bot Management Mode created a managed child bot, the spike
   received `managed_bot`, fetched the managed token with redaction, verified it
   with `getMe`, and applied restricted access
+- Telegram Managed Bots backend contract implementation is now in progress.
+  Target flow: the backend stores the manager bot token/username, returns the
+  Telegram approval link, receives or polls `managed_bot`, fetches the child
+  token, and restricts child access. The consumer Telegram onboarding UI stays
+  on the current manual BotFather flow until the Apple-style setup redesign is
+  ready to absorb Managed Bots cleanly.
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
 - App Store Connect API key auth and async submit/poll/staple notarization
@@ -489,6 +495,22 @@ through consumer setup. Candidate shape:
   access. The next product slice is replacing the manual BotFather setup step
   with this manager-bot approval flow while keeping BYO BotFather tokens in the
   advanced path.
+- Active implementation slice: backend session contract only. Acceptance
+  criteria:
+  - app-facing backend can start a managed-bot setup session and return the
+    approval link
+  - backend returns a clear pending/connected/error state for the session
+  - approved sessions fetch the managed child token and restrict child access
+  - manager and child tokens are redacted from provider errors
+  - current BotFather Telegram onboarding remains unchanged in the app
+- Security boundary for this slice:
+  - manager bot token stays backend-only
+  - no raw founder/provider keys are bundled in the app
+  - managed child bot token is user-specific and must not be logged
+  - final child-token storage path may need later hardening before wider beta
+- Out of scope for this slice: macOS Managed Bots onboarding UI migration,
+  broad onboarding copy polish, `/visibility` command cleanup, `ai.jarvis.mac`
+  identity migration, Sparkle update-cycle proof, and wider beta blockers.
 - `/visibility` should replace stale `/verbose` naming in the Telegram command
   list and runtime behavior. Before wider beta, inspect upstream's current
   command/visibility implementation, then prove the Jarvis command list and
