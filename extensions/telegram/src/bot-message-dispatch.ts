@@ -28,7 +28,6 @@ import type {
 import { danger, logVerbose } from "../../../src/globals.js";
 import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
-import { resolveFutureThreadParentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -63,12 +62,6 @@ const TOOL_PROGRESS_MAX_LINES = 6;
 
 function normalizeToolProgressLine(text?: string) {
   return text?.replace(/\s+/g, " ").trim();
-}
-
-function formatToolStartProgressLine(payload: { name?: string; phase?: string }) {
-  const name = normalizeToolProgressLine(payload.name) ?? "tool";
-  const phase = normalizeToolProgressLine(payload.phase);
-  return phase && phase !== "start" ? `🔧 ${name} ${phase}` : `🔧 ${name}`;
 }
 
 function hasInternalToolTraceText(text?: string) {
@@ -140,43 +133,6 @@ type DispatchTelegramMessageParams = {
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
-
-function resolveTelegramVerboseLevel(params: {
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  parentSessionKey?: string;
-  agentId: string;
-}): "off" | "on" | "full" | undefined {
-  const { cfg, sessionKey, parentSessionKey, agentId } = params;
-  if (!sessionKey) {
-    return undefined;
-  }
-  try {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    const store = loadSessionStore(storePath, { skipCache: true });
-    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
-    const level = entry?.verboseLevel;
-    if (level === "off" || level === "on" || level === "full") {
-      return level;
-    }
-
-    const resolvedParentSessionKey = resolveFutureThreadParentSessionKey({
-      sessionKey,
-      parentSessionKey,
-      channelHint: entry?.channel ?? entry?.lastChannel ?? "telegram",
-    });
-    const parentLevel =
-      resolvedParentSessionKey && resolvedParentSessionKey !== sessionKey
-        ? resolveSessionStoreEntry({ store, sessionKey: resolvedParentSessionKey }).existing
-            ?.verboseLevel
-        : undefined;
-    return parentLevel === "off" || parentLevel === "on" || parentLevel === "full"
-      ? parentLevel
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
@@ -250,13 +206,6 @@ export const dispatchTelegramMessage = async ({
     sessionKey: ctxPayload.SessionKey,
     agentId: route.agentId,
   });
-  const resolvedVerboseLevel = resolveTelegramVerboseLevel({
-    cfg,
-    sessionKey: ctxPayload.SessionKey,
-    parentSessionKey: ctxPayload.ParentSessionKey,
-    agentId: route.agentId,
-  });
-  const suppressInternalToolProgressDrafts = resolvedVerboseLevel === "off";
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const previewStreamingEnabled = streamMode !== "off";
@@ -486,10 +435,11 @@ export const dispatchTelegramMessage = async ({
     return true;
   };
   const pushToolStartProgressDraft = (payload: { name?: string; phase?: string }) => {
-    if (suppressInternalToolProgressDrafts) {
-      return false;
-    }
-    return pushToolProgressDraft(formatToolStartProgressLine(payload));
+    // Raw tool lifecycle labels are product-visible trace noise and should not
+    // be streamed into Telegram chats. Keep the status reaction, but suppress
+    // the text transport entirely.
+    void payload;
+    return false;
   };
 
   const disableBlockStreaming = !previewStreamingEnabled
@@ -618,7 +568,7 @@ export const dispatchTelegramMessage = async ({
     return { ...payload, replyToId: implicitQuoteReplyTargetId };
   };
   const stripInternalToolTraceText = (payload: ReplyPayload): ReplyPayload | undefined => {
-    if (!suppressInternalToolProgressDrafts || !hasInternalToolTraceText(payload.text)) {
+    if (!hasInternalToolTraceText(payload.text)) {
       return payload;
     }
     if (!payload.mediaUrl && !(payload.mediaUrls?.length ?? 0)) {
