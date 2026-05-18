@@ -779,6 +779,8 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onToolResult?.({ text: "🔧 exec: ls" });
       await opts?.onToolResult?.({ text: "🔧 exec update: still running" });
       await opts?.onToolResult?.({ text: "🔧 cron: schedule reminder" });
+      await opts?.onToolResult?.({ text: "🔧 web_search" });
+      await opts?.onToolResult?.({ text: "🔧 web_fetch" });
       return { text: "hi" } satisfies ReplyPayload;
     };
 

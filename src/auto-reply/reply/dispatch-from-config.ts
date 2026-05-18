@@ -121,7 +121,8 @@ function compactNativeTelegramToolText(text: string): string {
   return preview ? `${preview}\n\n${suffix}` : suffix;
 }
 
-const TELEGRAM_INTERNAL_TOOL_SUMMARY_LINE_RE = /^🔧\s+(?:exec(?:\s+update)?|cron)$/iu;
+const TELEGRAM_INTERNAL_TOOL_SUMMARY_LINE_RE =
+  /^🔧\s+[\w./:-]+(?:\s+(?:start|update|completed|failed|cancelled|done|error))?$/iu;
 
 function stripTelegramInternalToolSummaryLines(text: string): string {
   const lines = text.split("\n");

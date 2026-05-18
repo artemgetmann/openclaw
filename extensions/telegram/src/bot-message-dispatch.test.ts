@@ -353,6 +353,42 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("inherits Telegram thread verbose off from the parent chat when the thread has no level", async () => {
+    const threadSessionKey =
+      "agent:main:telegram:default:direct:1336356696:thread:1336356696:49628";
+    const parentSessionKey = "agent:main:telegram:default:direct:1336356696";
+    loadSessionStore.mockReturnValue({
+      [threadSessionKey]: {},
+      [parentSessionKey]: { verboseLevel: "off" },
+    });
+    const draftStream = createDraftStream(90027);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "web_search", phase: "start" });
+        await replyOptions?.onToolResult?.({ text: "🔧 web_fetch" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "90027" });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: threadSessionKey,
+          ParentSessionKey: parentSessionKey,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 web_search");
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 web_fetch");
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 90027, "Done", expect.any(Object));
+  });
+
   it("keeps tool traces visible when Telegram verbose is on", async () => {
     loadSessionStore.mockReturnValue({
       s1: { verboseLevel: "on" },

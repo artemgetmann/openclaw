@@ -28,6 +28,7 @@ import type {
 import { danger, logVerbose } from "../../../src/globals.js";
 import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
+import { resolveFutureThreadParentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -143,9 +144,10 @@ type TelegramReasoningLevel = "off" | "on" | "stream";
 function resolveTelegramVerboseLevel(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
+  parentSessionKey?: string;
   agentId: string;
 }): "off" | "on" | "full" | undefined {
-  const { cfg, sessionKey, agentId } = params;
+  const { cfg, sessionKey, parentSessionKey, agentId } = params;
   if (!sessionKey) {
     return undefined;
   }
@@ -154,7 +156,23 @@ function resolveTelegramVerboseLevel(params: {
     const store = loadSessionStore(storePath, { skipCache: true });
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const level = entry?.verboseLevel;
-    return level === "off" || level === "on" || level === "full" ? level : undefined;
+    if (level === "off" || level === "on" || level === "full") {
+      return level;
+    }
+
+    const resolvedParentSessionKey = resolveFutureThreadParentSessionKey({
+      sessionKey,
+      parentSessionKey,
+      channelHint: entry?.channel ?? entry?.lastChannel ?? "telegram",
+    });
+    const parentLevel =
+      resolvedParentSessionKey && resolvedParentSessionKey !== sessionKey
+        ? resolveSessionStoreEntry({ store, sessionKey: resolvedParentSessionKey }).existing
+            ?.verboseLevel
+        : undefined;
+    return parentLevel === "off" || parentLevel === "on" || parentLevel === "full"
+      ? parentLevel
+      : undefined;
   } catch {
     return undefined;
   }
@@ -235,6 +253,7 @@ export const dispatchTelegramMessage = async ({
   const resolvedVerboseLevel = resolveTelegramVerboseLevel({
     cfg,
     sessionKey: ctxPayload.SessionKey,
+    parentSessionKey: ctxPayload.ParentSessionKey,
     agentId: route.agentId,
   });
   const suppressInternalToolProgressDrafts = resolvedVerboseLevel === "off";

@@ -29,7 +29,8 @@ type AcpDispatchDeliveryState = {
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
 
-const ACP_INTERNAL_TOOL_SUMMARY_LINE_RE = /^🔧\s+(?:exec(?:\s+update)?|cron)$/iu;
+const ACP_INTERNAL_TOOL_SUMMARY_LINE_RE =
+  /^🔧\s+[\w./:-]+(?:\s+(?:start|update|completed|failed|cancelled|done|error))?$/iu;
 
 function stripAcpInternalToolSummaryLines(text: string): string {
   const lines = text.split("\n");
