@@ -322,7 +322,7 @@ wait_for_listener() {
 
     if [[ "${retried}" -eq 0 && "${elapsed}" -ge "${RETRY_KICKSTART_AFTER_SECONDS}" ]]; then
       log "listener not ready after ${elapsed}s; issuing one controlled gateway kickstart"
-      run_strict launchctl kickstart -k "gui/$(id -u)/${GATEWAY_LABEL}"
+      kickstart_launch_agent_or_exit "${GATEWAY_LABEL}" "${HOME}/Library/LaunchAgents/${GATEWAY_LABEL}.plist"
       retried=1
     fi
 
