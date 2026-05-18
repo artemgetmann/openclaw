@@ -17,6 +17,12 @@ The current planning snapshot is about 20 total users, 0 paying users, and
 `active_beta_users_7d` is still TBD until analytics or an explicit beta-activity
 source is wired in.
 
+Current Telegram onboarding status: Managed Bots is live-proven on Render with
+redacted health and start/status smokes. The normal beta path stays DM-first:
+create the Jarvis Telegram bot, approve it in Telegram, send one direct-message
+task, then verify the first useful task. Group/threaded auto-setup is tracked
+as later work.
+
 These numbers expire after `stale_after_days`. Once expired, they are not
 decision-grade and must not be used for pricing, launch, investor, or resourcing
 decisions without a fresh source-of-truth update. The same rule applies to

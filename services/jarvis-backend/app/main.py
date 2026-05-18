@@ -409,10 +409,11 @@ async def telegram_managed_start(
     """
 
     _require_telegram_manager_config(settings)
+    store = get_license_store(settings)
     account_id: str | None = None
     if request.accountAccessToken:
         account_id = _account_id_from_access_token(
-            get_license_store(settings),
+            store,
             request.accountAccessToken,
         )
 
@@ -435,8 +436,9 @@ async def telegram_managed_start(
         approval_url=approval_url,
         expires_at=expires_at,
     )
+    store.save_telegram_managed_setup_session(session=session)
     telegram_managed_setup_sessions[setup_id] = session
-    _prune_expired_telegram_managed_sessions()
+    _prune_expired_telegram_managed_sessions(store)
 
     return TelegramManagedStartResponse(
         setupId=session.setup_id,
@@ -459,15 +461,17 @@ async def telegram_managed_status(
     """
     Poll Telegram for a matching managed-bot approval and finalize setup.
 
-    This first slice keeps sessions in memory. That is intentionally small: a
-    Render restart can lose pending setup state, but connected setup returns the
-    child bot token immediately for the Mac runtime to install locally.
+    Setup state is stored through the license-store abstraction so local tests
+    stay SQLite-simple while production survives Render restarts on Neon.
     """
 
     _require_telegram_manager_config(settings)
-    session = _telegram_managed_setup_session(setup_id)
+    store = get_license_store(settings)
+    session = _telegram_managed_setup_session(store, setup_id)
     if session.status == "pending":
         await _refresh_telegram_managed_setup_session(session, settings)
+        store.save_telegram_managed_setup_session(session=session)
+        telegram_managed_setup_sessions[setup_id] = session
 
     return _telegram_managed_status_response(session)
 
@@ -556,22 +560,30 @@ def _telegram_managed_approval_url(
     return url
 
 
-def _telegram_managed_setup_session(setup_id: str) -> TelegramManagedSetupSession:
-    """Fetch a non-expired in-memory setup session by public setup id."""
+def _telegram_managed_setup_session(
+    store: LicenseStore,
+    setup_id: str,
+) -> TelegramManagedSetupSession:
+    """Fetch a non-expired setup session from durable storage by public setup id."""
 
-    session = telegram_managed_setup_sessions.get(setup_id)
+    # Durable storage is authoritative. The process cache only prevents extra
+    # row decoding inside one worker and must not hide restart/redeploy loss.
+    session = store.get_telegram_managed_setup_session(setup_id=setup_id)
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Telegram setup not found")
     if session.expires_at <= _utcnow():
+        store.delete_telegram_managed_setup_session(setup_id=setup_id)
         telegram_managed_setup_sessions.pop(setup_id, None)
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Telegram setup expired")
+    telegram_managed_setup_sessions[setup_id] = session
     return session
 
 
-def _prune_expired_telegram_managed_sessions() -> None:
-    """Keep the proof-slice in-memory session map from growing forever."""
+def _prune_expired_telegram_managed_sessions(store: LicenseStore) -> None:
+    """Keep durable setup state and the process cache from growing forever."""
 
     now = _utcnow()
+    store.delete_expired_telegram_managed_setup_sessions(now=now)
     expired_setup_ids = [
         setup_id
         for setup_id, session in telegram_managed_setup_sessions.items()
@@ -1328,6 +1340,26 @@ class LicenseStore(Protocol):
     ) -> LicenseRecord:
         """Persist a manual license override for the requested device."""
 
+    def save_telegram_managed_setup_session(
+        self,
+        *,
+        session: TelegramManagedSetupSession,
+    ) -> None:
+        """Persist the Telegram setup session without storing the manager token."""
+
+    def get_telegram_managed_setup_session(
+        self,
+        *,
+        setup_id: str,
+    ) -> TelegramManagedSetupSession | None:
+        """Load one Telegram setup session by public setup id."""
+
+    def delete_telegram_managed_setup_session(self, *, setup_id: str) -> None:
+        """Delete one Telegram setup session after expiry or cleanup."""
+
+    def delete_expired_telegram_managed_setup_sessions(self, *, now: datetime) -> None:
+        """Delete Telegram setup sessions whose approval window has expired."""
+
 
 def get_license_store(settings: Settings) -> LicenseStore:
     """
@@ -1505,6 +1537,94 @@ class SQLiteLicenseStore:
 
         return _record_from_row(row)
 
+    def save_telegram_managed_setup_session(
+        self,
+        *,
+        session: TelegramManagedSetupSession,
+    ) -> None:
+        """
+        Upsert one Telegram setup session into the same SQLite store as licenses.
+
+        The manager bot token is intentionally absent from this schema. The
+        child token is sensitive but must survive backend restarts once approval
+        succeeds so the app can finish local runtime setup after a reconnect.
+        """
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                """
+                INSERT INTO telegram_managed_setup_sessions (
+                    setup_id,
+                    device_id,
+                    app_version,
+                    account_id,
+                    suggested_bot_name,
+                    suggested_bot_username,
+                    approval_url,
+                    expires_at,
+                    status,
+                    bot_id,
+                    bot_username,
+                    managed_child_bot_token,
+                    last_update_id,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setup_id) DO UPDATE SET
+                    device_id = excluded.device_id,
+                    app_version = excluded.app_version,
+                    account_id = excluded.account_id,
+                    suggested_bot_name = excluded.suggested_bot_name,
+                    suggested_bot_username = excluded.suggested_bot_username,
+                    approval_url = excluded.approval_url,
+                    expires_at = excluded.expires_at,
+                    status = excluded.status,
+                    bot_id = excluded.bot_id,
+                    bot_username = excluded.bot_username,
+                    managed_child_bot_token = excluded.managed_child_bot_token,
+                    last_update_id = excluded.last_update_id,
+                    updated_at = excluded.updated_at
+                """,
+                _telegram_managed_session_values(session, updated_at=_utcnow()),
+            )
+
+    def get_telegram_managed_setup_session(
+        self,
+        *,
+        setup_id: str,
+    ) -> TelegramManagedSetupSession | None:
+        """Load a Telegram setup session from SQLite without logging sensitive fields."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM telegram_managed_setup_sessions WHERE setup_id = ?",
+                (setup_id,),
+            ).fetchone()
+
+        return _telegram_managed_session_from_row(row) if row else None
+
+    def delete_telegram_managed_setup_session(self, *, setup_id: str) -> None:
+        """Remove one expired or completed setup session from local SQLite."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                "DELETE FROM telegram_managed_setup_sessions WHERE setup_id = ?",
+                (setup_id,),
+            )
+
+    def delete_expired_telegram_managed_setup_sessions(self, *, now: datetime) -> None:
+        """Prune expired Telegram setup sessions from local SQLite."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                "DELETE FROM telegram_managed_setup_sessions WHERE expires_at <= ?",
+                (_format_dt(now),),
+            )
+
     def _connect(self) -> sqlite3.Connection:
         """Open a short-lived connection and create local/Render disk folders."""
 
@@ -1528,6 +1648,27 @@ class SQLiteLicenseStore:
                 email TEXT NOT NULL UNIQUE,
                 account_access_token_hash TEXT NOT NULL UNIQUE,
                 created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS telegram_managed_setup_sessions (
+                setup_id TEXT PRIMARY KEY,
+                device_id TEXT,
+                app_version TEXT,
+                account_id TEXT,
+                suggested_bot_name TEXT NOT NULL,
+                suggested_bot_username TEXT NOT NULL,
+                approval_url TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'connected')),
+                bot_id INTEGER,
+                bot_username TEXT,
+                managed_child_bot_token TEXT,
+                last_update_id INTEGER,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -1705,6 +1846,99 @@ class PostgresLicenseStore:
 
         return _record_from_row(row)
 
+    def save_telegram_managed_setup_session(
+        self,
+        *,
+        session: TelegramManagedSetupSession,
+    ) -> None:
+        """
+        Upsert one Telegram setup session into Neon/Postgres.
+
+        This deliberately reuses the license-store connection path. Adding a
+        second database layer here would make local/production behavior drift
+        exactly where restart recovery needs to be boring.
+        """
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO telegram_managed_setup_sessions (
+                        setup_id,
+                        device_id,
+                        app_version,
+                        account_id,
+                        suggested_bot_name,
+                        suggested_bot_username,
+                        approval_url,
+                        expires_at,
+                        status,
+                        bot_id,
+                        bot_username,
+                        managed_child_bot_token,
+                        last_update_id,
+                        updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(setup_id) DO UPDATE SET
+                        device_id = excluded.device_id,
+                        app_version = excluded.app_version,
+                        account_id = excluded.account_id,
+                        suggested_bot_name = excluded.suggested_bot_name,
+                        suggested_bot_username = excluded.suggested_bot_username,
+                        approval_url = excluded.approval_url,
+                        expires_at = excluded.expires_at,
+                        status = excluded.status,
+                        bot_id = excluded.bot_id,
+                        bot_username = excluded.bot_username,
+                        managed_child_bot_token = excluded.managed_child_bot_token,
+                        last_update_id = excluded.last_update_id,
+                        updated_at = excluded.updated_at
+                    """,
+                    _telegram_managed_session_values(session, updated_at=_utcnow()),
+                )
+
+    def get_telegram_managed_setup_session(
+        self,
+        *,
+        setup_id: str,
+    ) -> TelegramManagedSetupSession | None:
+        """Load a Telegram setup session from Neon/Postgres."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    "SELECT * FROM telegram_managed_setup_sessions WHERE setup_id = %s",
+                    (setup_id,),
+                )
+                row = cursor.fetchone()
+
+        return _telegram_managed_session_from_row(row) if row else None
+
+    def delete_telegram_managed_setup_session(self, *, setup_id: str) -> None:
+        """Remove one expired or no-longer-needed setup session from Neon/Postgres."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM telegram_managed_setup_sessions WHERE setup_id = %s",
+                    (setup_id,),
+                )
+
+    def delete_expired_telegram_managed_setup_sessions(self, *, now: datetime) -> None:
+        """Prune expired Telegram setup sessions from Neon/Postgres."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM telegram_managed_setup_sessions WHERE expires_at <= %s",
+                    (now,),
+                )
+
     def _connect(self) -> psycopg2.extensions.connection:
         """Open a short-lived Neon connection for request-scoped work."""
 
@@ -1743,6 +1977,27 @@ class PostgresLicenseStore:
                     offline_grace_ends_at TIMESTAMPTZ NOT NULL,
                     license_state TEXT NOT NULL
                         CHECK (license_state IN ('trial_active', 'licensed', 'expired')),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS telegram_managed_setup_sessions (
+                    setup_id TEXT PRIMARY KEY,
+                    device_id TEXT,
+                    app_version TEXT,
+                    account_id TEXT,
+                    suggested_bot_name TEXT NOT NULL,
+                    suggested_bot_username TEXT NOT NULL,
+                    approval_url TEXT NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'connected')),
+                    bot_id BIGINT,
+                    bot_username TEXT,
+                    managed_child_bot_token TEXT,
+                    last_update_id BIGINT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
@@ -1825,6 +2080,64 @@ def _account_activation_conflict() -> HTTPException:
             "Account activation already exists for this email. "
             "Account recovery requires a future OTP or magic-code flow."
         ),
+    )
+
+
+def _telegram_managed_session_values(
+    session: TelegramManagedSetupSession,
+    *,
+    updated_at: datetime,
+) -> tuple[Any, ...]:
+    """
+    Normalize Telegram setup session values for both SQLite and Postgres upserts.
+
+    This intentionally excludes the manager token. The child token is persisted
+    only after approval so a connected setup can survive a backend restart.
+    """
+
+    return (
+        session.setup_id,
+        session.device_id,
+        session.app_version,
+        session.account_id,
+        session.suggested_bot_name,
+        session.suggested_bot_username,
+        session.approval_url,
+        _format_dt(session.expires_at),
+        session.status,
+        session.bot_id,
+        session.bot_username,
+        session.managed_child_bot_token,
+        session.last_update_id,
+        _format_dt(updated_at),
+    )
+
+
+def _telegram_managed_session_from_row(
+    row: sqlite3.Row | dict[str, Any],
+) -> TelegramManagedSetupSession:
+    """Convert a persisted Telegram setup row back into the internal model."""
+
+    status_value = _read_row_value(row, "status")
+    if status_value not in ("pending", "connected"):
+        raise HTTPException(status_code=500, detail="Invalid Telegram setup status")
+
+    bot_id_value = _read_row_value(row, "bot_id")
+    last_update_id_value = _read_row_value(row, "last_update_id")
+    return TelegramManagedSetupSession(
+        setup_id=_read_row_value(row, "setup_id"),
+        device_id=_read_row_value(row, "device_id"),
+        app_version=_read_row_value(row, "app_version"),
+        account_id=_read_row_value(row, "account_id"),
+        suggested_bot_name=_read_row_value(row, "suggested_bot_name"),
+        suggested_bot_username=_read_row_value(row, "suggested_bot_username"),
+        approval_url=_read_row_value(row, "approval_url"),
+        expires_at=_parse_dt(_read_row_value(row, "expires_at")),
+        status=status_value,
+        bot_id=bot_id_value if isinstance(bot_id_value, int) else None,
+        bot_username=_read_row_value(row, "bot_username"),
+        managed_child_bot_token=_read_row_value(row, "managed_child_bot_token"),
+        last_update_id=last_update_id_value if isinstance(last_update_id_value, int) else None,
     )
 
 

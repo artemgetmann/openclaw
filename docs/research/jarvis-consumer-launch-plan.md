@@ -602,9 +602,17 @@ Telegram/Managed Bots:
   proof. Render must declare `TELEGRAM_MANAGER_BOT_TOKEN` and
   `MANAGER_BOT_USERNAME` as `sync: false` values; enter actual values only in
   the Render dashboard.
-- Current setup sessions have an in-memory risk: a backend restart can lose
-  pending setup before approval completes. Persistent session storage is later
-  hardening before wider beta.
+- Render has the Managed Bots env configured and redeployed; redacted backend
+  health returned `providers.telegram_managed_bots=true`. Live start/status
+  proof connected setup `tgms_3LBqIilzthPPfPZZ-aIaTw` as
+  `@JarvisManagedSmoke184350Bot` with the managed child token redacted.
+- DM-first remains the main consumer Telegram path for now: create the Jarvis
+  bot, approve in Telegram, send one direct-message task, then verify that first
+  useful task.
+- Group/threaded/forum auto-setup is tracked later. Research whether the
+  backend or userbot can create a group with the user plus bot, enable forum
+  topics, and create topics automatically.
+- Smoke bot cleanup is deferred unless Telegram bot limits block progress.
 - Telegram command/settings strategy lives in
   `docs/consumer/jarvis-launch-package.md`. Normal users should get one
   consumer-safe `/settings` surface with plain names; advanced/developer
@@ -1010,22 +1018,32 @@ Order:
      fetches the child token and restricts child access. Managed Bots is the
      primary planned Telegram onboarding path. Manual BotFather/BYO bot remains
      fallback/advanced.
+   - Current Render truth: after env/deploy, redacted health reports
+     `telegram_managed_bots=true`; live start/status proof connected setup
+     `tgms_3LBqIilzthPPfPZZ-aIaTw` as `@JarvisManagedSmoke184350Bot` with bot id
+     `8882555895` and token output redacted.
+   - Main path: keep first launch DM-first. Group chats, threaded/forum mode,
+     and automatic topic creation are later work, not part of the first
+     onboarding gate.
    - Acceptance criteria:
      - backend can start a managed-bot setup session and return the approval
        link
      - backend exposes pending, connected, and actionable error states
+     - setup sessions persist in Neon so a Render restart does not lose pending
+       approval or connected token handoff state
      - approved session fetches `getManagedBotToken`, verifies child `getMe`,
        and applies `setManagedBotAccessSettings(is_access_restricted=true)`
      - provider errors redact manager and child tokens
      - BotFather/BYO bot remains available as fallback/advanced
+     - smoke-bot cleanup remains deferred unless Telegram limits block progress
    - Security notes:
      - manager bot token stays backend-only
      - no raw founder/provider keys are bundled in the app
      - managed child bot token is user-specific and must not be logged
-     - current setup sessions are in memory, so a backend restart can lose
-       pending setup before the user finishes approval
-     - persistent session storage is later hardening before wider beta
+     - connected setup persists the child token only so the app can survive a
+       backend restart between approval and status check
    - Out of scope: broad onboarding copy polish, `/visibility` command cleanup,
+     group/threaded auto-setup, smoke-bot cleanup,
      `ai.jarvis.mac` bundle/runtime/update migration, Sparkle update-cycle
      proof, and wider beta blockers.
 4. Provider/backend utility hardening.
@@ -1101,6 +1119,9 @@ Verified Render backend state as of 2026-05-12 after Neon configuration:
 - `TELEGRAM_MANAGER_BOT_TOKEN` and `MANAGER_BOT_USERNAME` are required
   `sync: false` Render values for Managed Bots onboarding. The token value must
   stay in Render/local secret storage only.
+- After Render env/deploy, `/healthz` reports
+  `providers.telegram_managed_bots=true`; the live Managed Bots start/status
+  smoke connected and kept the managed child token redacted.
 
 Remaining backend follow-up:
 

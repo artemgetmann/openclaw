@@ -48,7 +48,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Connect Telegram")
                         .font(.headline)
-                    Text("Create your Telegram bot, send one DM task, and confirm \(AppFlavor.current.appName) can answer.")
+                    Text("Create your Jarvis bot, approve it in Telegram, then send one DM task to confirm it works.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -92,8 +92,8 @@ struct ConsumerTelegramSetupCardContent: View {
             self.callout(
                 title: self.store.consumerTelegramLooksLive() ? "One task left" : "Create your Telegram bot",
                 body: self.store.consumerTelegramLooksLive()
-                    ? "The bot is connected. Send one DM task so \(AppFlavor.current.appName) can prove the loop works."
-                    : "\(AppFlavor.current.appName) will open Telegram so you can approve a new bot. Then send one DM task to prove it works.")
+                    ? "The bot is connected. Send it one normal DM task so \(AppFlavor.current.appName) can prove the loop works."
+                    : "\(AppFlavor.current.appName) will open Telegram so you can approve a new bot. Start with a DM; groups and topics can come later.")
 
             HStack(spacing: 10) {
                 Button("Create Telegram bot") {
@@ -195,7 +195,7 @@ struct ConsumerTelegramSetupCardContent: View {
 
     private var manualBotFatherSetup: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Use this if Jarvis bot creation is unavailable or you already have a bot.")
+            Text("Use this if Jarvis bot creation is unavailable or you already have a bot token.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -248,7 +248,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 }
             }
 
-            Text("Start with a DM. Move to groups and topics after the first task works.")
+            Text("Start with a DM. Group chats and topics are advanced setup after the first task works.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

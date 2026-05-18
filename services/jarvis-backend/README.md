@@ -113,11 +113,13 @@ Render owns production secret values:
 Do not add a Render persistent disk to `jarvis-backend` for account/license
 state. Neon/Postgres is the durable store for production. Google Auth, billing,
 and richer account linking are later slices; this service currently persists
-beta account rows and device/license rows only.
+beta account rows, device/license rows, and Telegram Managed Bots setup
+sessions.
 
-Managed-bot setup sessions currently have an in-memory risk: a Render restart
-can lose pending setup before the user finishes Telegram approval. Persistent
-session storage is later hardening before wider beta.
+Managed-bot setup sessions use the same durable store. Pending approval state
+and connected child-token handoff state survive a Render restart as long as
+`NEON_DATABASE_URL` is configured. The manager bot token stays in Render env and
+is never stored in the database.
 
 ## Run Locally
 
