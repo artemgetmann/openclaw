@@ -716,7 +716,8 @@ Decision:
 
 ### 2026-05-19 operational checkpoint
 
-Main Jarvis is ready for Artem's manual Claude CLI smoke:
+Main Jarvis was ready for Artem's manual Claude CLI smoke before the Jarvis Lab
+topic run below:
 
 - `main` is fast-forwarded to `origin/main` at
   `92a03de8ca fix(gateway): bootstrap recovery retry before kickstart`.
@@ -730,20 +731,23 @@ Main Jarvis is ready for Artem's manual Claude CLI smoke:
 - Sacred checkout caveat: `apps/macos/Package.resolved` is dirty in the home
   clone and should be inspected separately before any future pull/build work.
 
-Current acceptance gate, ignoring the separate progress lane:
+Current acceptance gate result, ignoring the separate progress lane:
 
-1. `/status`
-2. `/model claude-cli/sonnet`
-3. source/authority audit for OpenClaw workspace/app context versus
-   `~/.claude`
-4. tone-of-voice skill draft
-5. Reddit skill/thread summary with process explanation
-6. simple reminder wakeup
-7. complex reminder wakeup that opens X/Twitter and reports the first comment
-8. optional `claude-cli/opus[1m]` smoke
+1. `/status`: passed in Jarvis Lab topic `11311`.
+2. `/model claude-cli/sonnet`: passed.
+3. Source/authority audit: mixed/open because `~/.claude/CLAUDE.md` was
+   treated as hard/harness-level authority.
+4. Tone-of-voice draft: passed.
+5. Reddit summary: functionally worked, but did not use the Reddit skill.
+6. Simple reminder wakeup: passed.
+7. Complex reminder wakeup: passed and reported the latest X/Twitter post had
+   `0` replies.
+8. `claude-cli/opus[1m]` smoke: passed and was restored to
+   `claude-cli/sonnet` afterward.
 
-Progress UX is no longer part of this immediate gate. It remains a separate
-Telegram progress lane.
+Open lanes after this smoke: authority/source isolation, skills
+visibility/proactive use, memory routing, and progress newline formatting.
+Model-list cleanup remains lower priority.
 
 Claude model-list policy:
 
@@ -851,6 +855,33 @@ Open follow-up before merge readiness:
    backend-agnostic.
 3. Handle the separate "chat is getting long" warning in a different follow-up;
    it is intentionally out of scope for the progress delivery fix.
+
+### Main Jarvis Claude CLI Smoke 2026-05-19
+
+Current status:
+
+- Main-topic smoke ran in Jarvis Lab topic
+  `Claude CLI smoke 2026-05-19 2021`, root/message id `11311`, session group
+  `-1003783709877`, topic `11311`.
+- `/status` passed.
+- `/model claude-cli/sonnet` passed.
+- Tone prompt passed.
+- Simple reminder passed.
+- Complex reminder passed: latest post was `I 100% agree with Claudes
+disagreement.` with `0` replies.
+- Opus 1M side check passed: `/model claude-cli/opus[1m]`, `/status`
+  `Context 755/1.0m`, real turn `OPUS_1M_MAIN_TOPIC_OK_20260519`, then restored
+  to `claude-cli/sonnet`.
+
+Open:
+
+- Authority/source audit is mixed: `~/.claude/CLAUDE.md` was still treated as
+  hard/harness-level authority.
+- Reddit URL summary functionally worked, but follow-up proved it did not use
+  the Reddit skill. Skills visibility/proactive use remains blocker/partial.
+- Remaining blocker lanes: progress newline formatting, memory routing, and
+  skills visibility/proactive use.
+- Model-list cleanup is lower priority.
 
 Next:
 
