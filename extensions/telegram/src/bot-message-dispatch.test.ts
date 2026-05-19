@@ -620,6 +620,39 @@ describe("dispatchTelegramMessage draft streaming", () => {
     ).toBe(false);
   });
 
+  it("coalesces text-only tool progress into one retained bubble before the final answer", async () => {
+    const draftStream = createSequencedDraftStream(90027);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Checking example.com." }, { kind: "tool" });
+      await dispatcherOptions.deliver(
+        { text: "Checking the IANA reserved domains page." },
+        { kind: "tool" },
+      );
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "90027" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).toHaveBeenNthCalledWith(1, "Checking example.com.");
+    expect(draftStream.update).toHaveBeenNthCalledWith(
+      2,
+      "Checking example.com.\n\nChecking the IANA reserved domains page.",
+    );
+    expect(draftStream.materialize).toHaveBeenCalledTimes(1);
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Final answer" })],
+      }),
+    );
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(

@@ -572,6 +572,19 @@ describe("telegram live runtime helpers", () => {
     });
   });
 
+  it("scrubs inherited ACPX_CMD from the default Telegram live tester env", () => {
+    expect(
+      buildTelegramLiveRuntimeChildEnv({
+        parentEnv: {
+          ACPX_CMD: "/usr/local/bin/acpx",
+          OTHER_VALUE: "kept",
+        },
+      }),
+    ).toEqual({
+      OTHER_VALUE: "kept",
+    });
+  });
+
   it("prunes tester auth stores down to the pinned model provider", () => {
     const pruned = pruneTesterRuntimeAuthStore({
       preferredModel: "openai-codex/gpt-5.4",
@@ -621,6 +634,7 @@ describe("telegram live runtime helpers", () => {
       buildTelegramLiveRuntimeChildEnv({
         acpValidation: "true",
         parentEnv: {
+          ACPX_CMD: "/usr/local/bin/acpx",
           OPENAI_API_KEY: "sk-live-test",
           OTHER_VALUE: "kept",
         },

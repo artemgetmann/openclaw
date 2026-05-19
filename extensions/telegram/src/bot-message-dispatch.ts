@@ -848,6 +848,15 @@ export const dispatchTelegramMessage = async ({
                 return;
               }
               payload = sanitizedPayload;
+              if (
+                !payload.mediaUrl &&
+                !(payload.mediaUrls?.length ?? 0) &&
+                !payload.isError &&
+                typeof payload.text === "string"
+              ) {
+                await sendToolPayload(payload);
+                return;
+              }
             }
             const split = splitTextIntoLaneSegments(payload.text);
             const segments = split.segments;
