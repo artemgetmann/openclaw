@@ -745,8 +745,12 @@ Current acceptance gate result, ignoring the separate progress lane:
 8. `claude-cli/opus[1m]` smoke: passed and was restored to
    `claude-cli/sonnet` afterward.
 
-Open lanes after this smoke: authority/source isolation, skills
-visibility/proactive use, memory routing, and progress newline formatting.
+Follow-up lanes after this smoke landed:
+
+- PR #774 fixed Claude CLI progress newline separation.
+- PR #776 fixed resumed Claude CLI session skills reminders.
+- PR #777 fixed Claude CLI memory routing toward OpenClaw memory.
+
 Model-list cleanup remains lower priority.
 
 Claude model-list policy:
@@ -873,20 +877,42 @@ disagreement.` with `0` replies.
   `Context 755/1.0m`, real turn `OPUS_1M_MAIN_TOPIC_OK_20260519`, then restored
   to `claude-cli/sonnet`.
 
+Post-restart proof after PRs #774, #776, and #777:
+
+- Shared main was fast-forwarded to
+  `af4a754a6f fix(claude-cli): route memory questions to OpenClaw memory` and
+  recovered with `scripts/gateway-recover-main.sh`.
+- Runtime ownership passed: LaunchAgent on `branch=main`,
+  `worktree=~/Programming_Projects/openclaw`, app-owned config/state, port
+  `18789`, PID `58416`, RPC probe ok, `/healthz` live.
+- `/status` in the same Jarvis Lab topic showed OpenClaw `af4a754`,
+  `claude-cli/sonnet`, and `2.3k/200k` context.
+- Reddit skill retest passed. Claude said `Reddit skill this time`, read
+  `~/Library/Application Support/OpenClaw/.openclaw/workspace/skills/reddit/SKILL.md`,
+  ran `reddit.mjs comments <url>`, and summarized the exact thread.
+- Progress newline retest passed for the previously bad shape: progress/final
+  text no longer showed adjacent sentence smashing such as
+  `Let me check both.No memory files...`.
+- Memory authority retest passed when asked directly: Claude answered that
+  OpenClaw workspace memory and memory tools are authoritative for this
+  Telegram session, while Claude-native `~/.claude/projects/.../memory/` is not
+  authoritative.
+
 Open:
 
-- Authority/source audit is mixed: `~/.claude/CLAUDE.md` was still treated as
-  hard/harness-level authority.
-- Reddit URL summary functionally worked, but follow-up proved it did not use
-  the Reddit skill. Skills visibility/proactive use remains blocker/partial.
-- Remaining blocker lanes: progress newline formatting, memory routing, and
-  skills visibility/proactive use.
+- Memory freshness is a separate operational follow-up: Claude reported no
+  daily OpenClaw memory file newer than `2026-05-14`.
+- Some Telegram captures still include empty non-text bot messages, likely
+  voice/media or placeholder artifacts; not currently a Claude backend parity
+  blocker unless they show up as visible spam.
 - Model-list cleanup is lower priority.
 
 Next:
 
-1. Land `scripts/smoke-cli-backend-parity.ts` as the reusable parity report.
-2. Retire this document from active planning to historical evidence.
+1. Retire this document from active planning to historical evidence after the
+   post-restart checkpoint is accepted.
+2. Land `scripts/smoke-cli-backend-parity.ts` only if another backend-parity
+   cycle needs reusable automation.
 3. Decide product exposure separately: whether `claude-cli/*` should remain
    hidden by default or become a selectable Telegram model lane.
 4. Defer already-loaded plugin factory timeout hardening unless a real plugin

@@ -15,7 +15,7 @@ reminder behavior, or visible progress UX.
 - Use main Jarvis only after the Claude backend change is merged and the runtime
   has been restarted onto that merge.
 - As of 2026-05-19, main Jarvis is already fast-forwarded to `origin/main`
-  (`92a03de8ca`) and the shared LaunchAgent is running from
+  (`af4a754a6f`) and the shared LaunchAgent is running from
   `~/Programming_Projects/openclaw` with app-owned state under
   `~/Library/Application Support/OpenClaw/.openclaw`.
 - Set the model before testing:
@@ -261,11 +261,13 @@ Recommendation:
   `-1003783709877`, topic `11311`.
 - `/status`: passed.
 - `/model claude-cli/sonnet`: passed.
-- Authority/source audit: mixed/open. `~/.claude/CLAUDE.md` was still treated as
-  hard/harness-level authority, so isolation is not clean enough.
-- Reddit URL summary: functionally worked, but follow-up proved it did not use
-  the Reddit skill. Skills visibility and proactive skill use remain
-  blocker/partial.
+- Post-restart authority/source audit: passed for the direct memory-authority
+  question. Claude named OpenClaw workspace memory/tools as authoritative and
+  said Claude-native `~/.claude/projects/.../memory/` is not authoritative for
+  this Telegram session.
+- Post-restart Reddit URL summary: passed. Claude selected the Reddit skill,
+  read the workspace `reddit/SKILL.md`, ran `reddit.mjs comments <url>`, and
+  summarized the thread.
 - Tone prompt: passed.
 - Simple reminder: passed.
 - Complex reminder: passed. Latest post found: `I 100% agree with Claudes
@@ -274,6 +276,7 @@ disagreement.` with `0` replies.
   showing `Context 755/1.0m`, and real turn
   `OPUS_1M_MAIN_TOPIC_OK_20260519`; model was restored to
   `claude-cli/sonnet` afterward.
-- Remaining blocker lanes: progress newline formatting, memory routing, and
-  skills visibility/proactive use.
-- Lower priority cleanup: model-list polish.
+- Post-restart progress newline check: passed for the previous smashed-text
+  failure shape; progress/final text now uses readable separation.
+- Remaining follow-ups: daily memory freshness/rollover, model-list polish, and
+  any broader progress UX preference changes after Artem's manual review.
