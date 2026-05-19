@@ -488,6 +488,21 @@ function buildClaudeCliWorkspaceBootstrapAppendix(params: {
   return lines.join("\n").trim();
 }
 
+function buildClaudeCliMemoryRoutingPrompt(): string {
+  // Claude Code can surface its own project memory. For OpenClaw Telegram runs,
+  // that is the wrong source of truth: durable user/runtime memory lives behind
+  // OpenClaw memory tools and workspace files. Keep this separate from the full
+  // OpenClaw prompt so the Claude CLI path stays bridge-safe.
+  return [
+    "## OpenClaw Memory Recall (mandatory)",
+    "For questions about prior work, decisions, dates, people, preferences, todos, or whether memory works: use OpenClaw memory first.",
+    "Call mcp__openclaw__memory_search over MEMORY.md and memory/*.md, then call mcp__openclaw__memory_get for only the needed lines from relevant hits.",
+    "Treat mcp__openclaw__memory_search and mcp__openclaw__memory_get as the primary memory surface for this OpenClaw run.",
+    "Do not inspect or answer from Claude Code project memory under ~/.claude/projects, ~/.claude/CLAUDE.md, or Claude-native memory as the source of truth for OpenClaw/Jarvis memory.",
+    "If OpenClaw memory tools are unavailable or return no useful hits, say that plainly before falling back to workspace bootstrap files.",
+  ].join("\n");
+}
+
 function buildBridgeSafeClaudeCliSkillsPrompt(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -986,6 +1001,7 @@ export async function runCliAgent(params: {
           splitMode: resolveClaudeBridgeSplitMode(),
           extraSystemPrompt: params.extraSystemPrompt,
         }),
+        buildClaudeCliMemoryRoutingPrompt(),
         skillsPrompt,
         // Claude CLI still needs the small Bridge-safe identity prompt, but Telegram/product
         // runs must not answer from the host user's ~/.claude memory. Append only the bounded

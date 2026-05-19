@@ -417,6 +417,16 @@ describe("runCliAgent with process supervisor", () => {
       expect(systemPromptIndex).toBeGreaterThanOrEqual(0);
       const systemPrompt = argv[systemPromptIndex + 1] ?? "";
       expect(systemPrompt).toContain("Do not treat Claude Code user-level memory");
+      expect(systemPrompt).toContain("## OpenClaw Memory Recall (mandatory)");
+      expect(systemPrompt).toContain(
+        "Call mcp__openclaw__memory_search over MEMORY.md and memory/*.md",
+      );
+      expect(systemPrompt).toContain(
+        "mcp__openclaw__memory_get for only the needed lines from relevant hits",
+      );
+      expect(systemPrompt).toContain(
+        "Do not inspect or answer from Claude Code project memory under ~/.claude/projects",
+      );
       expect(systemPrompt).toContain("## OpenClaw Workspace Skills (mandatory)");
       expect(systemPrompt).toContain(
         "These are OpenClaw workspace skills, not Claude Code native slash skills.",
