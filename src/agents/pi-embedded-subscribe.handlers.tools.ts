@@ -26,6 +26,7 @@ import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { isSourcePreviewMessageToolResult } from "./tools/message-tool.js";
 
 type ToolStartRecord = {
   startTime: number;
@@ -631,7 +632,19 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
+  const sourcePreviewMessage =
+    !isToolError && toolName === "message"
+      ? isSourcePreviewMessageToolResult(sanitizedResult)
+      : undefined;
+  if (sourcePreviewMessage && ctx.params.onToolResult) {
+    try {
+      await ctx.params.onToolResult({ text: sourcePreviewMessage });
+    } catch {
+      // ignore delivery failures
+    }
+  } else {
+    await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
+  }
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();

@@ -574,6 +574,193 @@ type MessageToolOptions = {
   requesterSenderId?: string;
 };
 
+const SOURCE_PREVIEW_RESULT_MARKER = "__openclawSourcePreview";
+
+function hasExplicitMessageTarget(params: Record<string, unknown>): boolean {
+  return (
+    (typeof params.target === "string" && params.target.trim().length > 0) ||
+    (typeof params.to === "string" && params.to.trim().length > 0) ||
+    (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
+    (Array.isArray(params.targets) &&
+      params.targets.some((value) => typeof value === "string" && value.trim().length > 0))
+  );
+}
+
+function hasMultipleMessageTargets(params: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(params.targets) &&
+    params.targets.some((value) => typeof value === "string" && value.trim().length > 0)
+  );
+}
+
+function resolveSingleExplicitMessageTarget(params: Record<string, unknown>): string | undefined {
+  for (const field of ["to", "target", "channelId"] as const) {
+    const value = params[field];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+type TelegramPreviewIdentity = {
+  chatId: string;
+  messageThreadId?: number;
+};
+
+// Telegram same-chat checks cannot rely on raw strings: the runtime may carry
+// `telegram:group:-100...` while the model sends to `-100...`.
+function stripTelegramLegacyGroupPrefix(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^group:/i, "")
+    .trim();
+}
+
+function resolveTelegramPreviewIdentity(raw: string): TelegramPreviewIdentity | undefined {
+  const normalized = normalizeTargetForProvider("telegram", raw) ?? raw.trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  const stripped = normalized.replace(/^telegram:/i, "").trim();
+  if (!stripped) {
+    return undefined;
+  }
+
+  const topicMatch = /^(.+?):topic:(\d+)$/i.exec(stripped);
+  if (topicMatch) {
+    return {
+      chatId: stripTelegramLegacyGroupPrefix(topicMatch[1]),
+      messageThreadId: Number.parseInt(topicMatch[2], 10),
+    };
+  }
+
+  const colonMatch = /^(.+):(\d+)$/i.exec(stripped);
+  if (colonMatch) {
+    return {
+      chatId: stripTelegramLegacyGroupPrefix(colonMatch[1]),
+      messageThreadId: Number.parseInt(colonMatch[2], 10),
+    };
+  }
+
+  return {
+    chatId: stripTelegramLegacyGroupPrefix(stripped),
+  };
+}
+
+function isSameTelegramPreviewTarget(params: {
+  currentChannelId?: string;
+  target: string;
+}): boolean {
+  const currentIdentity = params.currentChannelId
+    ? resolveTelegramPreviewIdentity(params.currentChannelId)
+    : undefined;
+  const targetIdentity = resolveTelegramPreviewIdentity(params.target);
+  if (!currentIdentity || !targetIdentity) {
+    return false;
+  }
+  return (
+    currentIdentity.chatId === targetIdentity.chatId &&
+    currentIdentity.messageThreadId === targetIdentity.messageThreadId
+  );
+}
+
+function hasDirectSendOnlyPayload(params: Record<string, unknown>): boolean {
+  for (const field of [
+    "media",
+    "mediaUrl",
+    "mediaUrls",
+    "filename",
+    "buffer",
+    "contentType",
+    "mimeType",
+    "caption",
+    "path",
+    "filePath",
+    "replyTo",
+    "threadId",
+    "interactive",
+    "buttons",
+    "card",
+    "components",
+    "blocks",
+    "effectId",
+    "effect",
+  ]) {
+    const value = params[field];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return true;
+    }
+    if (Array.isArray(value) && value.length > 0) {
+      return true;
+    }
+    if (value && typeof value === "object") {
+      return true;
+    }
+    if (typeof value === "boolean") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveSameSourceTelegramPreviewMessage(params: {
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+  action: ChannelMessageActionName;
+  toolParams: Record<string, unknown>;
+}): string | undefined {
+  if (normalizeMessageChannel(params.currentChannelProvider) !== "telegram") {
+    return undefined;
+  }
+  if (params.action !== "send") {
+    return undefined;
+  }
+  if (hasDirectSendOnlyPayload(params.toolParams) || hasMultipleMessageTargets(params.toolParams)) {
+    return undefined;
+  }
+  const explicitChannel = normalizeMessageChannel(readStringParam(params.toolParams, "channel"));
+  if (explicitChannel && explicitChannel !== "telegram") {
+    return undefined;
+  }
+  const message =
+    readStringParam(params.toolParams, "message") ?? readStringParam(params.toolParams, "content");
+  if (!message?.trim()) {
+    return undefined;
+  }
+
+  const explicitTarget = resolveSingleExplicitMessageTarget(params.toolParams);
+  if (!explicitTarget) {
+    return message;
+  }
+
+  const currentChannelId = params.currentChannelId?.trim();
+  if (!currentChannelId) {
+    return undefined;
+  }
+
+  return isSameTelegramPreviewTarget({ currentChannelId, target: explicitTarget })
+    ? message
+    : undefined;
+}
+
+export function isSourcePreviewMessageToolResult(result: unknown): string | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  const details =
+    record.details && typeof record.details === "object"
+      ? (record.details as Record<string, unknown>)
+      : record;
+  if (details[SOURCE_PREVIEW_RESULT_MARKER] !== true) {
+    return undefined;
+  }
+  const message = details.message;
+  return typeof message === "string" && message.trim() ? message : undefined;
+}
+
 function resolveMessageToolSchemaActions(params: {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
@@ -833,15 +1020,22 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      const sourcePreviewMessage = resolveSameSourceTelegramPreviewMessage({
+        currentChannelProvider: options?.currentChannelProvider,
+        currentChannelId: options?.currentChannelId,
+        action,
+        toolParams: params,
+      });
+      if (sourcePreviewMessage) {
+        return jsonResult({
+          ok: true,
+          [SOURCE_PREVIEW_RESULT_MARKER]: true,
+          message: sourcePreviewMessage,
+        });
+      }
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
-        const explicitTarget =
-          (typeof params.target === "string" && params.target.trim().length > 0) ||
-          (typeof params.to === "string" && params.to.trim().length > 0) ||
-          (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
-          (Array.isArray(params.targets) &&
-            params.targets.some((value) => typeof value === "string" && value.trim().length > 0));
-        if (!explicitTarget) {
+        if (!hasExplicitMessageTarget(params)) {
           throw new Error(
             "Explicit message target required for this run. Provide target/targets (and channel when needed).",
           );

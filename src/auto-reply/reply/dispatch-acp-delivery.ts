@@ -3,6 +3,7 @@ import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { maybeApplyTtsToPayload } from "../../tts/tts.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -103,6 +104,25 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     await params.onReplyStart?.();
   };
 
+  const shouldUseSourceDispatcherForTelegram = () => {
+    if (!params.shouldRouteToOriginating || !params.originatingChannel) {
+      return false;
+    }
+    const sourceChannel = normalizeMessageChannel(params.ctx.Surface ?? params.ctx.Provider);
+    const originatingChannel = normalizeMessageChannel(params.originatingChannel);
+    return sourceChannel === "telegram" && originatingChannel === "telegram";
+  };
+
+  const deliverViaDispatcher = (kind: ReplyDispatchKind, payload: ReplyPayload): boolean => {
+    if (kind === "tool") {
+      return params.dispatcher.sendToolResult(payload);
+    }
+    if (kind === "block") {
+      return params.dispatcher.sendBlockReply(payload);
+    }
+    return params.dispatcher.sendFinalReply(payload);
+  };
+
   const tryEditToolMessage = async (
     payload: ReplyPayload,
     toolCallId: string,
@@ -175,6 +195,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       ttsAuto: params.sessionTtsAuto,
     });
 
+    if (shouldUseSourceDispatcherForTelegram()) {
+      return deliverViaDispatcher(kind, ttsPayload);
+    }
+
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
       const toolCallId = meta?.toolCallId?.trim();
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
@@ -212,13 +236,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return true;
     }
 
-    if (kind === "tool") {
-      return params.dispatcher.sendToolResult(ttsPayload);
-    }
-    if (kind === "block") {
-      return params.dispatcher.sendBlockReply(ttsPayload);
-    }
-    return params.dispatcher.sendFinalReply(ttsPayload);
+    return deliverViaDispatcher(kind, ttsPayload);
   };
 
   return {

@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
-import { createLaneTextDeliverer, type DraftLaneState, type LaneName } from "./lane-delivery.js";
+import {
+  createLaneTextDeliverer,
+  type DraftLaneState,
+  type LaneName,
+  normalizeAdjacentProgressBoundaries,
+} from "./lane-delivery.js";
 
 const HELLO_FINAL = "Hello final";
 
@@ -135,6 +140,24 @@ async function expectFinalEditFallbackToSend(params: {
 }
 
 describe("createLaneTextDeliverer", () => {
+  it("separates adjacent acronym-led progress phrases", () => {
+    expect(
+      normalizeAdjacentProgressBoundaries(
+        "Fetching both pages now.IANA fetch failed — retrying with a slightly different URL.",
+      ),
+    ).toBe(
+      "Fetching both pages now.\n\nIANA fetch failed — retrying with a slightly different URL.",
+    );
+  });
+
+  it("separates adjacent emoji-led progress phrases", () => {
+    expect(
+      normalizeAdjacentProgressBoundaries(
+        "Starting step 1 now✅ Step 1 done.\n\nMoving to step 2 page✅ Step 2 done.",
+      ),
+    ).toBe("Starting step 1 now\n\n✅ Step 1 done.\n\nMoving to step 2 page\n\n✅ Step 2 done.");
+  });
+
   it("finalizes text-only replies by editing an existing preview message", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 

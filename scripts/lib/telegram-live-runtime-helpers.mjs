@@ -692,6 +692,9 @@ export function buildTelegramLiveRuntimeChildEnv(params) {
   // plus synced auth store. Raw host OpenAI env defaults reintroduce product
   // credentials/model routing behind our back, so strip them on entry.
   stripRawOpenAiEnvKeys(env);
+  // ACPX_CMD is only valid for ACP validation lanes; default tester lanes must
+  // not inherit a host shell override that points at the wrong runtime.
+  delete env.ACPX_CMD;
 
   if (isTelegramLiveAcpValidationEnabled(params)) {
     // ACP validation lanes intentionally restart/repair the isolated runtime

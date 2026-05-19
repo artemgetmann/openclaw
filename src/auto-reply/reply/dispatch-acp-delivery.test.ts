@@ -4,11 +4,19 @@ import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 
+const routeMocks = vi.hoisted(() => ({
+  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+}));
+
 const ttsMocks = vi.hoisted(() => ({
   maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
     const params = paramsUnknown as { payload: unknown };
     return params.payload;
   }),
+}));
+
+vi.mock("./route-reply.js", () => ({
+  routeReply: (params: unknown) => routeMocks.routeReply(params),
 }));
 
 vi.mock("../../tts/tts.js", () => ({
@@ -29,18 +37,25 @@ function createDispatcher(): ReplyDispatcher {
 function createCoordinator(params?: {
   onReplyStart?: (...args: unknown[]) => Promise<void>;
   shouldSendToolSummaries?: boolean;
+  provider?: string;
+  surface?: string;
+  shouldRouteToOriginating?: boolean;
+  originatingChannel?: string;
+  originatingTo?: string;
 }) {
   const dispatcher = createDispatcher();
   const coordinator = createAcpDispatchDeliveryCoordinator({
     cfg: createAcpTestConfig(),
     ctx: buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
+      Provider: params?.provider ?? "discord",
+      Surface: params?.surface ?? params?.provider ?? "discord",
       SessionKey: "agent:codex-acp:session-1",
     }),
     dispatcher,
     inboundAudio: false,
-    shouldRouteToOriginating: false,
+    shouldRouteToOriginating: params?.shouldRouteToOriginating ?? false,
+    ...(params?.originatingChannel ? { originatingChannel: params.originatingChannel } : {}),
+    ...(params?.originatingTo ? { originatingTo: params.originatingTo } : {}),
     ...(params?.shouldSendToolSummaries !== undefined
       ? { shouldSendToolSummaries: params.shouldSendToolSummaries }
       : {}),
@@ -50,6 +65,47 @@ function createCoordinator(params?: {
 }
 
 describe("createAcpDispatchDeliveryCoordinator", () => {
+  it("routes same-source Telegram ACP blocks through the dispatcher preview lane", async () => {
+    routeMocks.routeReply.mockClear();
+    const { coordinator, dispatcher } = createCoordinator({
+      provider: "telegram",
+      surface: "telegram",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:123",
+    });
+
+    await coordinator.deliver("tool", { text: "Tool started." });
+    await coordinator.deliver("block", { text: "Checking example.com." });
+    await coordinator.deliver("final", { text: "Final answer." });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "Tool started." });
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "Checking example.com." });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final answer." });
+    expect(routeMocks.routeReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-Telegram originating ACP blocks on direct routeReply delivery", async () => {
+    routeMocks.routeReply.mockClear();
+    const { coordinator, dispatcher } = createCoordinator({
+      provider: "discord",
+      surface: "discord",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+    });
+
+    await coordinator.deliver("block", { text: "Checking example.com." });
+
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+      }),
+    );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
   it("starts reply lifecycle only once when called directly and through deliver", async () => {
     const onReplyStart = vi.fn(async () => {});
     const { coordinator } = createCoordinator({ onReplyStart });

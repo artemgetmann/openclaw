@@ -332,6 +332,50 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
 });
 
 describe("messaging tool media URL tracking", () => {
+  it("emits intercepted same-source message sends as tool progress payloads", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    ctx.shouldEmitToolResult = () => true;
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-preview",
+      args: { action: "send", message: "Checking example.com." },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-preview",
+      isError: false,
+      result: {
+        details: {
+          ok: true,
+          __openclawSourcePreview: true,
+          message: "Checking example.com.",
+        },
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              ok: true,
+              __openclawSourcePreview: true,
+              message: "Checking example.com.",
+            }),
+          },
+        ],
+      },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    expect(onToolResult).toHaveBeenCalledWith({ text: "Checking example.com." });
+    expect(ctx.state.messagingToolSentTexts).toEqual(["Checking example.com."]);
+  });
+
   it("tracks media arg from messaging tool as pending", async () => {
     const { ctx } = createTestContext();
 

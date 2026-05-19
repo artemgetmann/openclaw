@@ -456,7 +456,14 @@ Follow-up fixes:
 - Progress/status UX: `extensions/telegram/src/bot-message-dispatch.ts` now batches text-only tool progress into the editable answer draft lane when preview streaming is available, dedupes adjacent repeats, and still sends media-bearing tool payloads normally. Focused proof passed: `pnpm vitest run extensions/telegram/src/bot-message-dispatch.test.ts --pool=forks --maxWorkers=1` passed 1 file / 72 tests.
 - Progress/status UX follow-up: `codex/claude-cli-progress-ux-20260516` fixed the isolated tester harness so `scripts/telegram-live-runtime.sh ensure` carries the lane-local profile into the detached runtime instead of tripping default shared-runtime ownership policy. It also normalizes Claude CLI progress boundaries before Telegram preview/final send, so adjacent `Step` fragments do not get smashed together.
 - Live tester proof: isolated bot `@Artem_jarvis_exec_bot`, runtime PID `17380`, port `28583`, state dir `/Users/user/.openclaw/telegram-live-worktrees/tg-live-bbafc4d743`, branch `codex/claude-cli-progress-ux-20260516`, model `claude-cli/sonnet`. The corrected no-progress-request prompt produced visible intermediate progress, then final message `49418` retained the progress transcript above the final answer and ended with `CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516`.
-- Remaining UX caveat: the long-chat checkpoint warning can still appear as a separate tester message when the Telegram DM has accumulated many proof turns. That is context-pressure UX, not the Claude progress projection path.
+- Progress UX v2: the same lane now keeps model-authored progress narration as a retained progress bubble and sends the final answer as a separate bubble, instead of pasting progress into the final answer. Follow-up duplicate-final fix now handles late partials that already contain `progress + final` by restoring the clean retained progress prefix before final message rotation, strips retained-progress suffix overlap when the final starts from the last progress step, and separates acronym/emoji-led follow-up progress like `now.IANA` and `now✅`. Focused proof passed: `pnpm exec vitest run extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery.test.ts src/infra/telegram-live-runtime-helpers.test.ts --pool=forks --maxWorkers=1` passed 3 files / 128 tests.
+- Remaining live proof blocker: v2 live Telegram proof is blocked by provider auth/limit state, not runtime ownership. `claude-cli/sonnet` failed with `You've hit your limit · resets 4:10pm (Asia/Kuala_Lumpur)`, `openai/gpt-5.4` lacked `OPENAI_API_KEY`, and `openai-codex/gpt-5.5` hit OAuth refresh failure. The isolated tester runtime itself was healthy at PID `77982`, port `28583`, branch `codex/claude-cli-progress-ux-20260516`.
+- Remaining UX caveat: the long-chat checkpoint warning can still appear as a separate tester message when the Telegram DM has accumulated many proof turns. That is context-pressure UX, not the progress projection path.
+- 2026-05-18 correction: do not treat the v2 Telegram progress UX as accepted. Later live tester runs on follow-up PR #732 still exposed a finalization boundary bug: Telegram can freeze the first half of a final answer as the retained "progress" bubble, then send the remainder as a second final bubble starting mid-sentence. Example bad shape: bubble 1 contained `example.com: For documentation examples... RFC`; bubble 2 started `6761 for documentation...` and ended with the marker. That is not useful progress; it is final-answer text split incorrectly.
+- Product direction clarified by Artem: progress/final content should remain model-authored and natural, but the layout must be deterministic. Do not add or depend on model prompts that ask for "progress updates"; do not impose `Step 1`, checkmarks, or separators as an OpenClaw convention. If the backend produces a real progress lane/event, Telegram should retain that as one progress bubble and put the final answer in a separate bubble. If the backend only streams answer text with no separate progress signal, Telegram should not guess aggressively; prefer one clean final answer over fake progress or split answers.
+- Implementation warning for the next lane: the current regex-based attempt in `extensions/telegram/src/bot-message-dispatch.ts` (`looksLikeProgressParagraph`, `isRetainableAnswerProgressPreview`, and related retained-progress stripping) is likely the wrong abstraction. It may be acceptable as a temporary guard only if backed by explicit event/lane metadata, but should not become the long-term way to distinguish progress from final answer text.
+- 2026-05-18 fix direction implemented in this lane: Telegram no longer preserves answer partials as progress based on English/regex shape. Only explicit non-final block/tool progress is accumulated into a single progress bubble; final delivery remains the final bubble. Focused local proof passed: `pnpm exec vitest run extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery.test.ts src/infra/telegram-live-runtime-helpers.test.ts --pool=forks --maxWorkers=1` passed 3 files / 129 tests.
+- Live tester status after the fix: isolated runtime ownership passed on `codex/telegram-progress-ux-v2-20260516`, worktree `/Users/user/Programming_Projects/openclaw/.worktrees/claude-cli-progress-ux-20260516`, bot `@Artem_jarvis_email_bot`, port `28583`. A Codex-oriented userbot send produced one clean final message with marker `PROGRESS_UX_V2_CODEX_CHECK_20260518` and did not reproduce the prior mid-sentence split. That run did not prove the two-bubble progress case because the model emitted no separate non-final block. The stock progress scenario could not be rerun cleanly because the Telegram userbot backend hit `OSError: [Errno 51] Network is unreachable`.
 - Claude setup UX: `src/commands/models/consumer-auth.ts` now hides `anthropic-claude-cli` until the configured local `claude` command is executable and readable Claude auth exists. Direct apply fails with install/sign-in instructions when missing. This keeps Claude hidden/default-off without bundling Claude Code.
 
 Live tester rerun after PR #683:
@@ -807,6 +814,43 @@ Tests run in this slice:
   - filtered check after fixes found no errors in the new/changed slice files
 - `pnpm exec vitest run src/agents/cli-runner.bundle-mcp.e2e.test.ts`
   - not run: repo Vitest config excludes `**/*.e2e.test.ts`
+
+### Telegram Progress UX v2 Follow-Up
+
+Current status:
+
+- Duplicate-final bug is fixed in focused dispatcher tests.
+- Telegram finalization now materializes retained answer progress before final
+  delivery and forces the paired final answer onto a new message.
+- Separator-delimited progress transcripts such as `───` are treated as
+  progress, so final answers do not keep the retained progress prefix when the
+  final text matches the latest preview snapshot.
+- Live isolated tester bot proof is partially exercised but not yet a clean
+  acceptance pass: one Sonnet run produced a separate progress/final sequence
+  before the separator stripping fix; later reruns often produced only one final
+  message, so they did not exercise the split path.
+
+Validation:
+
+- `pnpm exec vitest run extensions/telegram/src/bot-message-dispatch.test.ts --pool=forks --maxWorkers=1`
+  - pass: 1 file, 79 tests
+- `pnpm exec vitest run extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery.test.ts src/infra/telegram-live-runtime-helpers.test.ts --pool=forks --maxWorkers=1`
+  - pass: 3 files, 129 tests
+- `git diff --check`
+  - pass
+- `pnpm build`
+  - completed; known plugin SDK DTS command still prints unrelated existing
+    type errors under the repo's `|| true` build behavior
+
+Open follow-up before merge readiness:
+
+1. Get one clean isolated tester Telegram visual proof where the model emits a
+   streamed progress preview and final delivery lands as two useful bubbles:
+   retained progress first, final answer second, no duplicated final content.
+2. Run the same acceptance shape against the Codex backend; this UX must remain
+   backend-agnostic.
+3. Handle the separate "chat is getting long" warning in a different follow-up;
+   it is intentionally out of scope for the progress delivery fix.
 
 Next:
 
