@@ -142,7 +142,99 @@ describe("message tool agent routing", () => {
     });
   });
 
-  it("does not intercept explicit Telegram target sends", async () => {
+  it.each([
+    { field: "target", value: "  telegram:123  " },
+    { field: "to", value: "telegram:123" },
+    { field: "channelId", value: "telegram:123" },
+    {
+      field: "target",
+      value: "-100123",
+      currentChannelId: "telegram:group:-100123",
+    },
+    {
+      field: "target",
+      value: "telegram:123",
+      channel: "telegram",
+    },
+  ])(
+    "intercepts explicit same-target Telegram sends via $field",
+    async ({
+      field,
+      value,
+      currentChannelId,
+      channel,
+    }: {
+      field: "target" | "to" | "channelId";
+      value: string;
+      currentChannelId?: string;
+      channel?: string;
+    }) => {
+      mockSendResult();
+      const tool = createMessageTool({
+        config: {} as never,
+        currentChannelProvider: "telegram",
+        currentChannelId: currentChannelId ?? "telegram:123",
+      });
+
+      const result = await tool.execute("1", {
+        action: "send",
+        message: "Checking example.com.",
+        [field]: value,
+        ...(channel ? { channel } : {}),
+      });
+
+      expect(mocks.runMessageAction).not.toHaveBeenCalled();
+      expect(result.details).toMatchObject({
+        ok: true,
+        __openclawSourcePreview: true,
+        message: "Checking example.com.",
+      });
+    },
+  );
+
+  it("intercepts same Telegram group across legacy and bare forms", async () => {
+    mockSendResult();
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+      currentChannelId: "telegram:group:-100123",
+    });
+
+    const result = await tool.execute("1", {
+      action: "send",
+      target: "-100123",
+      message: "Checking group example.",
+    });
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      ok: true,
+      __openclawSourcePreview: true,
+      message: "Checking group example.",
+    });
+  });
+
+  it("does not intercept when the current Telegram topic does not match", async () => {
+    mockSendResult();
+
+    const call = await executeSend({
+      toolOptions: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:group:-100123:topic:77",
+      },
+      action: {
+        target: "-100123",
+        message: "Topic specific send.",
+      },
+    });
+
+    expect(call?.params).toMatchObject({
+      target: "-100123",
+      message: "Topic specific send.",
+    });
+  });
+
+  it("does not intercept explicit non-current Telegram target sends", async () => {
     mockSendResult();
 
     const call = await executeSend({
@@ -158,6 +250,28 @@ describe("message tool agent routing", () => {
 
     expect(call?.params).toMatchObject({
       target: "telegram:456",
+      message: "Send this elsewhere.",
+    });
+  });
+
+  it("does not intercept when the tool channel is non-Telegram", async () => {
+    mockSendResult();
+
+    const call = await executeSend({
+      toolOptions: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:123",
+      },
+      action: {
+        channel: "discord",
+        target: "telegram:123",
+        message: "Send this elsewhere.",
+      },
+    });
+
+    expect(call?.params).toMatchObject({
+      channel: "discord",
+      target: "telegram:123",
       message: "Send this elsewhere.",
     });
   });

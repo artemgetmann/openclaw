@@ -586,6 +586,86 @@ function hasExplicitMessageTarget(params: Record<string, unknown>): boolean {
   );
 }
 
+function hasMultipleMessageTargets(params: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(params.targets) &&
+    params.targets.some((value) => typeof value === "string" && value.trim().length > 0)
+  );
+}
+
+function resolveSingleExplicitMessageTarget(params: Record<string, unknown>): string | undefined {
+  for (const field of ["to", "target", "channelId"] as const) {
+    const value = params[field];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+type TelegramPreviewIdentity = {
+  chatId: string;
+  messageThreadId?: number;
+};
+
+// Telegram same-chat checks cannot rely on raw strings: the runtime may carry
+// `telegram:group:-100...` while the model sends to `-100...`.
+function stripTelegramLegacyGroupPrefix(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^group:/i, "")
+    .trim();
+}
+
+function resolveTelegramPreviewIdentity(raw: string): TelegramPreviewIdentity | undefined {
+  const normalized = normalizeTargetForProvider("telegram", raw) ?? raw.trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  const stripped = normalized.replace(/^telegram:/i, "").trim();
+  if (!stripped) {
+    return undefined;
+  }
+
+  const topicMatch = /^(.+?):topic:(\d+)$/i.exec(stripped);
+  if (topicMatch) {
+    return {
+      chatId: stripTelegramLegacyGroupPrefix(topicMatch[1]),
+      messageThreadId: Number.parseInt(topicMatch[2], 10),
+    };
+  }
+
+  const colonMatch = /^(.+):(\d+)$/i.exec(stripped);
+  if (colonMatch) {
+    return {
+      chatId: stripTelegramLegacyGroupPrefix(colonMatch[1]),
+      messageThreadId: Number.parseInt(colonMatch[2], 10),
+    };
+  }
+
+  return {
+    chatId: stripTelegramLegacyGroupPrefix(stripped),
+  };
+}
+
+function isSameTelegramPreviewTarget(params: {
+  currentChannelId?: string;
+  target: string;
+}): boolean {
+  const currentIdentity = params.currentChannelId
+    ? resolveTelegramPreviewIdentity(params.currentChannelId)
+    : undefined;
+  const targetIdentity = resolveTelegramPreviewIdentity(params.target);
+  if (!currentIdentity || !targetIdentity) {
+    return false;
+  }
+  return (
+    currentIdentity.chatId === targetIdentity.chatId &&
+    currentIdentity.messageThreadId === targetIdentity.messageThreadId
+  );
+}
+
 function hasDirectSendOnlyPayload(params: Record<string, unknown>): boolean {
   for (const field of [
     "media",
@@ -627,6 +707,7 @@ function hasDirectSendOnlyPayload(params: Record<string, unknown>): boolean {
 
 function resolveSameSourceTelegramPreviewMessage(params: {
   currentChannelProvider?: string;
+  currentChannelId?: string;
   action: ChannelMessageActionName;
   toolParams: Record<string, unknown>;
 }): string | undefined {
@@ -636,12 +717,32 @@ function resolveSameSourceTelegramPreviewMessage(params: {
   if (params.action !== "send") {
     return undefined;
   }
-  if (hasExplicitMessageTarget(params.toolParams) || hasDirectSendOnlyPayload(params.toolParams)) {
+  if (hasDirectSendOnlyPayload(params.toolParams) || hasMultipleMessageTargets(params.toolParams)) {
+    return undefined;
+  }
+  const explicitChannel = normalizeMessageChannel(readStringParam(params.toolParams, "channel"));
+  if (explicitChannel && explicitChannel !== "telegram") {
     return undefined;
   }
   const message =
     readStringParam(params.toolParams, "message") ?? readStringParam(params.toolParams, "content");
-  return message?.trim() ? message : undefined;
+  if (!message?.trim()) {
+    return undefined;
+  }
+
+  const explicitTarget = resolveSingleExplicitMessageTarget(params.toolParams);
+  if (!explicitTarget) {
+    return message;
+  }
+
+  const currentChannelId = params.currentChannelId?.trim();
+  if (!currentChannelId) {
+    return undefined;
+  }
+
+  return isSameTelegramPreviewTarget({ currentChannelId, target: explicitTarget })
+    ? message
+    : undefined;
 }
 
 export function isSourcePreviewMessageToolResult(result: unknown): string | undefined {
@@ -921,6 +1022,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }) as ChannelMessageActionName;
       const sourcePreviewMessage = resolveSameSourceTelegramPreviewMessage({
         currentChannelProvider: options?.currentChannelProvider,
+        currentChannelId: options?.currentChannelId,
         action,
         toolParams: params,
       });
