@@ -14,6 +14,10 @@ reminder behavior, or visible progress UX.
 - Use the tester bot first where available.
 - Use main Jarvis only after the Claude backend change is merged and the runtime
   has been restarted onto that merge.
+- As of 2026-05-19, main Jarvis is already fast-forwarded to `origin/main`
+  (`92a03de8ca`) and the shared LaunchAgent is running from
+  `~/Programming_Projects/openclaw` with app-owned state under
+  `~/Library/Application Support/OpenClaw/.openclaw`.
 - Set the model before testing:
 
 ```text
@@ -21,6 +25,7 @@ reminder behavior, or visible progress UX.
 ```
 
 - Do not spend time on 1M context. That is a side quest, not the parity gate.
+- Do not block this smoke on progress UX. Progress polishing is a separate lane.
 - Capture evidence while testing. Screenshots or copied Telegram output are
   fine; exact prompts and observed output matter more than polish.
 
@@ -198,8 +203,6 @@ summarize this reddit thread and explain your process after done: <url>
 Check:
 
 - Uses the Reddit/OpenClaw skill path or clearly explains the equivalent process.
-- Progress updates have readable spacing.
-- Final answer keeps useful progress/process instead of clearing it.
 - No message spam.
 
 7. Optional 1M side check:
@@ -217,6 +220,31 @@ Check:
   prior proof showed Sonnet 1M can select/report but execution requires
   Anthropic extra-usage entitlement here. Use Opus 1M for the no-extra-usage
   1M side check.
+
+## Claude Model List Policy
+
+Current product rule:
+
+- Founder/main bot may keep the broader Claude CLI set while acceptance testing
+  continues. That can include `claude-cli/sonnet`, `claude-cli/opus`, and
+  `claude-cli/opus[1m]`.
+- Consumer product surfaces should not expose the full experimental Claude CLI
+  matrix. Keep the consumer picker small and boring.
+- Do not promote `claude-cli/sonnet[1m]` for this account or for consumers.
+  It can select/report in some paths, but real execution requires Anthropic
+  extra-usage entitlement here.
+- Prefer `claude-cli/opus[1m]` as the only explicit 1M Claude CLI option where
+  1M is exposed at all.
+- Hide Claude CLI rows entirely for consumer users until local Claude Code is
+  installed, authenticated, and intentionally enabled.
+
+Recommended consumer-facing Claude set after the smoke passes:
+
+- one normal Claude CLI row, preferably `claude-cli/sonnet`, labelled as local
+  Claude Code / 200k context
+- one advanced 1M row, `claude-cli/opus[1m]`, behind an advanced/more surface
+- no `haiku` rows, no `sonnet[1m]` row, and no duplicate version aliases in the
+  default consumer picker
 
 Recommendation:
 
@@ -240,7 +268,5 @@ post, and check the first comment`. Telegram message `49433` scheduled cron
   job `a6a44bb6-90e6-4bd2-9147-c53a75433942`, bot reply `49434` confirmed
   scheduling, delayed run executed as `provider=claude-cli model=sonnet`, and
   final Telegram message `49435` delivered the first-comment result.
-- Progress UX: tester Telegram proof passed on `@Artem_jarvis_exec_bot`; final
-  message `49418` retained the progress transcript above the final answer and
-  ended with `CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516`. Artem still plans to
-  manually judge the visible UX before main-bot rollout.
+- Progress UX: intentionally out of the current acceptance gate. Keep it in the
+  separate progress lane; do not block the Claude CLI backend smoke on it.

@@ -707,6 +707,52 @@ Decision:
 
 ## Current Status
 
+### 2026-05-19 operational checkpoint
+
+Main Jarvis is ready for Artem's manual Claude CLI smoke:
+
+- `main` is fast-forwarded to `origin/main` at
+  `92a03de8ca fix(gateway): bootstrap recovery retry before kickstart`.
+- The shared LaunchAgent is loaded and running from
+  `~/Programming_Projects/openclaw`.
+- Runtime identity is correct: `branch=main`,
+  `stateDir=~/Library/Application Support/OpenClaw/.openclaw`,
+  `configPath=~/Library/Application Support/OpenClaw/.openclaw/openclaw.json`,
+  and port `18789`.
+- Health/RPC probes are green.
+- Sacred checkout caveat: `apps/macos/Package.resolved` is dirty in the home
+  clone and should be inspected separately before any future pull/build work.
+
+Current acceptance gate, ignoring the separate progress lane:
+
+1. `/status`
+2. `/model claude-cli/sonnet`
+3. source/authority audit for OpenClaw workspace/app context versus
+   `~/.claude`
+4. tone-of-voice skill draft
+5. Reddit skill/thread summary with process explanation
+6. simple reminder wakeup
+7. complex reminder wakeup that opens X/Twitter and reports the first comment
+8. optional `claude-cli/opus[1m]` smoke
+
+Progress UX is no longer part of this immediate gate. It remains a separate
+Telegram progress lane.
+
+Claude model-list policy:
+
+- Founder/main bot can temporarily keep a wider Claude CLI model set for
+  acceptance testing and debugging.
+- Consumer surfaces must not expose the full experimental Claude CLI matrix.
+  The consumer picker should be small: one normal Claude CLI option and, if
+  needed, one advanced 1M option.
+- Keep `claude-cli/sonnet` as the normal 200k smoke/default candidate.
+- Prefer `claude-cli/opus[1m]` as the only reliable 1M Claude CLI option on
+  this account.
+- Do not promote `claude-cli/sonnet[1m]`: prior direct and production proof
+  showed Sonnet 1M execution requires Anthropic extra-usage entitlement here.
+- Hide Claude CLI rows for consumers until local Claude Code is installed,
+  authenticated, and intentionally enabled.
+
 Implemented so far:
 
 - Claude CLI stream-json defaults
