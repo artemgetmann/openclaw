@@ -277,6 +277,7 @@ function parseClaudeStreamingDelta(params: {
   providerId?: string;
   parsed: Record<string, unknown>;
   textSoFar: string;
+  hasAssistantMessageBoundary?: boolean;
   sessionId?: string;
   usage?: CliUsage;
 }): CliStreamingDelta | null {
@@ -294,8 +295,15 @@ function parseClaudeStreamingDelta(params: {
   if (delta.type !== "text_delta" || typeof delta.text !== "string" || !delta.text) {
     return null;
   }
+  const separator =
+    params.hasAssistantMessageBoundary &&
+    params.textSoFar.trim().length > 0 &&
+    !/\n\s*$/.test(params.textSoFar) &&
+    !/^\s*\n/.test(delta.text)
+      ? "\n\n"
+      : "";
   return {
-    text: `${params.textSoFar}${delta.text}`,
+    text: `${params.textSoFar}${separator}${delta.text}`,
     delta: delta.text,
     sessionId: params.sessionId,
     usage: params.usage,
@@ -311,6 +319,7 @@ export function createCliJsonlStreamingParser(params: {
   let assistantText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
+  let hasAssistantMessageBoundary = false;
 
   const handleLine = (line: string) => {
     let parsed: unknown;
@@ -326,6 +335,17 @@ export function createCliJsonlStreamingParser(params: {
     if (isRecord(parsed.usage)) {
       usage = toUsage(parsed.usage) ?? usage;
     }
+    if (
+      parsed.type === "stream_event" &&
+      isRecord(parsed.event) &&
+      parsed.event.type === "message_start"
+    ) {
+      // Claude stream-json can emit multiple assistant messages in one turn:
+      // progress narration, then later the final answer. Keep the cumulative
+      // preview readable without changing the raw text delta semantics.
+      hasAssistantMessageBoundary = assistantText.trim().length > 0;
+      return;
+    }
 
     // Claude stream-json exposes first visible text before the final result
     // event. Keep the parser stateful so partial callbacks get full text plus
@@ -335,6 +355,7 @@ export function createCliJsonlStreamingParser(params: {
       providerId: params.providerId,
       parsed,
       textSoFar: assistantText,
+      hasAssistantMessageBoundary,
       sessionId,
       usage,
     });
@@ -342,6 +363,7 @@ export function createCliJsonlStreamingParser(params: {
       return;
     }
     assistantText = delta.text;
+    hasAssistantMessageBoundary = false;
     params.onAssistantDelta(delta);
   };
 
