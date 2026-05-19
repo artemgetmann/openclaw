@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HELPER_MODULE="${SCRIPT_DIR}/lib/telegram-live-runtime-helpers.mjs"
 BASELINE_HELPER_MODULE="${SCRIPT_DIR}/lib/worktree-tester-baseline.mjs"
 ASSIGN_BOT_SCRIPT="${SCRIPT_DIR}/assign-bot.sh"
+BOOTSTRAP_TELEGRAM_SCRIPT="${SCRIPT_DIR}/bootstrap-worktree-telegram.sh"
 MAIN_RECOVER_SCRIPT="${SCRIPT_DIR}/gateway-recover-main.sh"
 
 WORKTREE="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
@@ -47,6 +48,7 @@ RUNTIME_TOKEN_SOURCE="unknown"
 TOKEN_ORIGIN_HINT="unknown"
 TOKEN_CLAIM_COUNT=0
 TOKEN_CLAIM_PATHS=()
+TOKEN_BOOTSTRAP_STATUS="not-needed"
 RUNTIME_CONFIG_PRESENT="no"
 RUNTIME_CONFIG_TOKEN_PRESENT="no"
 RUNTIME_CONFIG_TOKEN_FINGERPRINT="none"
@@ -551,12 +553,46 @@ ensure_tester_bot_claim() {
   local env_bots="${REPO_ROOT}/.env.bots"
   local token=""
   local assign_output=""
+  local bootstrap_output=""
 
   if [[ ! -x "$ASSIGN_BOT_SCRIPT" ]]; then
     TOKEN_CLAIM_STATUS="fail"
     TOKEN_CLAIM_REASON="assign_script_missing"
     add_failure "assign_bot_script_missing:${ASSIGN_BOT_SCRIPT}"
     return
+  fi
+
+  if [[ ! -r "$env_bots" ]]; then
+    if [[ -x "$BOOTSTRAP_TELEGRAM_SCRIPT" ]]; then
+      TOKEN_BOOTSTRAP_STATUS="attempted"
+      if ! bootstrap_output="$(cd "$REPO_ROOT" && bash "$BOOTSTRAP_TELEGRAM_SCRIPT" --strict 2>&1)"; then
+        TOKEN_BOOTSTRAP_STATUS="failed"
+        TOKEN_CLAIM_STATUS="fail"
+        TOKEN_CLAIM_REASON="bootstrap_failed"
+        add_failure "token_bootstrap_failed"
+        echo "telegram_bootstrap_hint=bash scripts/bootstrap-worktree-telegram.sh --strict" >&2
+        printf '%s\n' "$bootstrap_output" >&2
+        return
+      fi
+      if [[ -r "$env_bots" ]]; then
+        TOKEN_BOOTSTRAP_STATUS="ok"
+      else
+        TOKEN_BOOTSTRAP_STATUS="missing_env_bots_after_bootstrap"
+        TOKEN_CLAIM_STATUS="fail"
+        TOKEN_CLAIM_REASON="env_bots_missing"
+        add_failure "env_bots_missing"
+        echo "telegram_bootstrap_hint=bash scripts/bootstrap-worktree-telegram.sh --strict" >&2
+        echo "telegram_bootstrap_error=.env.bots is still missing after bootstrap; check OPENCLAW_MAIN_REPO and the main checkout .env.bots file." >&2
+        return
+      fi
+    else
+      TOKEN_BOOTSTRAP_STATUS="script_missing"
+      TOKEN_CLAIM_STATUS="fail"
+      TOKEN_CLAIM_REASON="env_bots_missing"
+      add_failure "env_bots_missing"
+      echo "telegram_bootstrap_hint=bash scripts/bootstrap-worktree-telegram.sh --strict" >&2
+      return
+    fi
   fi
 
   # Always resolve the claim via assign-bot so a stale .env.local token can be
@@ -1014,6 +1050,7 @@ emit_ensure_proof_lines() {
   echo "runtime_plugin_mode=${RUNTIME_PLUGIN_MODE}"
   echo "token_present=${TOKEN_PRESENT}"
   echo "token_pool_guard=${TOKEN_POOL_GUARD}"
+  echo "token_bootstrap_status=${TOKEN_BOOTSTRAP_STATUS}"
   echo "token_fingerprint=${TOKEN_FINGERPRINT}"
   echo "current_lane_bot=${CURRENT_LANE_BOT}"
   echo "runtime_token_source=${RUNTIME_TOKEN_SOURCE}"
@@ -1048,8 +1085,12 @@ ensure_command() {
   fi
 
   ensure_tester_bot_claim
-  prepare_isolated_runtime_config
-  sync_runtime_auth_profiles
+  if [[ "$FAIL" -eq 0 ]]; then
+    prepare_isolated_runtime_config
+  fi
+  if [[ "$FAIL" -eq 0 ]]; then
+    sync_runtime_auth_profiles
+  fi
 
   resolve_runtime_owner
 
@@ -1082,10 +1123,10 @@ ensure_command() {
     done
   fi
 
-  if [[ "$RUNTIME_OWNERSHIP" != "ok" ]]; then
+  if [[ "$FAIL" -eq 0 && "$RUNTIME_OWNERSHIP" != "ok" ]]; then
     add_failure "runtime_ownership_check_failed"
   fi
-  if [[ "$RUNTIME_HEALTH" != "ok" ]]; then
+  if [[ "$FAIL" -eq 0 && "$RUNTIME_HEALTH" != "ok" ]]; then
     add_failure "runtime_health_check_failed"
   fi
   if [[ "${TOKEN_CLAIM_COUNT}" -gt 1 ]]; then
@@ -1099,7 +1140,8 @@ ensure_command() {
     for reason in "${FAIL_REASONS[@]-}"; do
       echo "error=${reason}" >&2
     done
-    if [[ -n "$RUNTIME_LOG_PATH" ]]; then
+    if [[ -n "$RUNTIME_LOG_PATH" ]] &&
+      [[ "$RUNTIME_START_ACTION" == "started" || "$RUNTIME_START_ACTION" == "start-failed" ]]; then
       echo "runtime_log=${RUNTIME_LOG_PATH}" >&2
       emit_runtime_log_summary
     fi
