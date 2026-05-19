@@ -468,7 +468,7 @@ struct ConsumerCorePermissionsSection: View {
                 .font(.headline)
             Text(
                 self.presentation == .onboarding
-                    ? "Grant these now so the first real task does not fail later when \(AppFlavor.current.appName) needs to control apps, capture the screen, or use your location."
+                    ? "Allow the Mac access \(AppFlavor.current.appName) needs for real tasks, like using apps, reading the screen, and finding nearby places."
                     : "If macOS loses track of one of the core permissions later, recover it here.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -507,7 +507,7 @@ struct ConsumerCorePermissionsSection: View {
         case .appleScript:
             return "macOS will ask the first time \(AppFlavor.current.appName) tries to control another app."
         case .location:
-            return "Needed for requests like 'find a cafe near me' so the agent can use this Mac's location."
+            return "Needed for requests like 'find a cafe near me' so \(AppFlavor.current.appName) can use this Mac's location."
         default:
             return nil
         }

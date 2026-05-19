@@ -41,6 +41,7 @@ function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig
       defaults: {
         model: { primary: "openai/gpt-5.3-codex" },
         models: { "openai/gpt-5.3-codex": {} },
+        timeoutSeconds: 1,
         workspace: path.join(home, "openclaw"),
       },
     },
@@ -123,6 +124,9 @@ function mockAcpManager(params: {
       ((input) => {
         return resolveReadySession(input.sessionKey);
       }),
+    closeSession: vi.fn(async () => undefined),
+    initializeSession: vi.fn(async () => undefined),
+    updateSessionRuntimeOptions: vi.fn(async () => undefined),
   } as unknown as ReturnType<typeof acpManagerModule.getAcpSessionManager>);
 }
 
@@ -361,6 +365,57 @@ describe("agentCommand ACP runtime routing", () => {
       expect(assistantEvents.map((event) => event.text).filter(Boolean)).toEqual([]);
       expect(logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
       expect(logLines.some((line) => line.includes("No reply from agent."))).toBe(true);
+    });
+  });
+
+  it("strips ACP internal tool summary text from non-verbose assistant output", async () => {
+    await withAcpSessionEnvInfo(async ({ storePath }) => {
+      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents([
+        "🔧 exec\n\n🔧 exec update\n\ntelegram_voice_sanitize_ok\n\n🔧 cron\n\nfinal",
+      ]);
+
+      expect(assistantEvents).toEqual([
+        {
+          text: "telegram_voice_sanitize_ok\nfinal",
+          delta: "telegram_voice_sanitize_ok\nfinal",
+        },
+      ]);
+      expect(logLines.some((line) => line.includes("🔧 exec"))).toBe(false);
+      expect(logLines.some((line) => line.includes("telegram_voice_sanitize_ok"))).toBe(true);
+      expectPersistedAcpTranscript({
+        storePath,
+        userContent: "ping",
+        assistantText: "telegram_voice_sanitize_ok\nfinal",
+      });
+    });
+  });
+
+  it("preserves ACP internal tool summary text when verbose is on", async () => {
+    await withAcpSessionEnv(async () => {
+      const { assistantEvents, stop } = subscribeAssistantEvents();
+      const runTurn = createRunTurnFromTextDeltas([
+        "🔧 exec\n\n🔧 exec update\n\ntelegram_voice_verbose_ok",
+      ]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      try {
+        await agentCommand(
+          { message: "ping", sessionKey: "agent:codex:acp:test", verbose: "on" },
+          runtime,
+        );
+      } finally {
+        stop();
+      }
+
+      expect(assistantEvents).toEqual([
+        {
+          text: "🔧 exec\n\n🔧 exec update\n\ntelegram_voice_verbose_ok",
+          delta: "🔧 exec\n\n🔧 exec update\n\ntelegram_voice_verbose_ok",
+        },
+      ]);
     });
   });
 

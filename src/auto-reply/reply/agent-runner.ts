@@ -743,11 +743,18 @@ export async function runReplyAgent(params: {
       verboseNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
     }
 
+    const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
+    // Match the session persistence trust boundary: raw accumulated `usage`
+    // can include tool-loop/retry/replay cost and is not a reliable current
+    // context snapshot. Warn only from promptTokens, last-call usage, or a
+    // previously persisted fresh total.
     const contextPressureTotalTokens =
       promptTokens ??
-      deriveSessionTotalTokens({
-        usage: runResult.meta?.agentMeta?.lastCallUsage ?? usage,
-      }) ??
+      (lastCallUsage
+        ? deriveSessionTotalTokens({
+            usage: lastCallUsage,
+          })
+        : undefined) ??
       resolveFreshSessionTotalTokens(activeSessionEntry);
     const contextPressureNotice = resolveContextPressureNotice({
       sessionEntry: activeSessionEntry,

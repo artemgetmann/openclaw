@@ -59,9 +59,11 @@ fi
 CLI_ARCHIVE_STAGED=""
 CLI_ARCHIVE_STAGE_DIR=""
 OPENCLAW_CONSUMER_FAST_PACKAGING="${OPENCLAW_CONSUMER_FAST_PACKAGING:-0}"
+OPENCLAW_CONSUMER_REUSE_RUNTIME="${OPENCLAW_CONSUMER_REUSE_RUNTIME:-0}"
 OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS="${OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS:-0}"
 PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
 BUNDLED_RUNTIME_CACHE_ROOT="${OPENCLAW_CONSUMER_RUNTIME_CACHE_ROOT:-$ROOT_DIR/.cache/consumer-runtime-packages}"
+REUSABLE_RUNTIME_STAGE_DIR=""
 CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
   "AGENTS.md"
   "SOUL.md"
@@ -889,6 +891,19 @@ prepare_bundled_consumer_runtime() {
   cache_root="${BUNDLED_RUNTIME_CACHE_ROOT}/${cache_key}"
   cache_templates_dir="${cache_root}/openclaw/docs/reference/templates"
 
+  if [[ -n "$REUSABLE_RUNTIME_STAGE_DIR" ]]; then
+    if verify_required_workspace_templates "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/docs/reference/templates" "reused bundled consumer runtime workspace templates"; then
+      echo "📦 Reusing previous bundled consumer runtime (smoke-only)"
+      rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
+      mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
+      rsync -a "$REUSABLE_RUNTIME_STAGE_DIR/" "$BUNDLED_RUNTIME_RESOURCE_DIR/"
+      return 0
+    fi
+
+    echo "ERROR: reusable bundled runtime is incomplete; rerun without --reuse-runtime to rebuild it." >&2
+    exit 1
+  fi
+
   if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" && -d "$cache_root" && -f "$cache_root/manifest.json" ]]; then
     if verify_required_workspace_templates "$cache_templates_dir" "cached bundled consumer runtime workspace templates"; then
       echo "📦 Reusing cached bundled consumer runtime"
@@ -995,6 +1010,34 @@ EOF
   fi
 }
 
+capture_reusable_bundled_consumer_runtime() {
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+  if [[ "$OPENCLAW_CONSUMER_REUSE_RUNTIME" != "1" ]]; then
+    return 0
+  fi
+  if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" != "1" ]]; then
+    echo "ERROR: OPENCLAW_CONSUMER_REUSE_RUNTIME is allowed only on the fast smoke packaging path." >&2
+    exit 1
+  fi
+  if [[ ! -d "$BUNDLED_RUNTIME_RESOURCE_DIR" ]]; then
+    echo "ERROR: no previous bundled runtime to reuse: $BUNDLED_RUNTIME_RESOURCE_DIR" >&2
+    echo "Rerun once without --reuse-runtime, then reuse that runtime for smoke-only app shell iterations." >&2
+    exit 1
+  fi
+  if [[ ! -f "$BUNDLED_RUNTIME_RESOURCE_DIR/manifest.json" ]]; then
+    echo "ERROR: previous bundled runtime is missing manifest.json; rerun without --reuse-runtime." >&2
+    exit 1
+  fi
+
+  # The app bundle is deleted before assembly. Preserve the known-good runtime
+  # in a temp dir so shell-only smoke loops can avoid pnpm deploy, Node/uv copy,
+  # and runtime payload signing when those inputs have not changed.
+  REUSABLE_RUNTIME_STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-reuse-runtime.XXXXXX")"
+  rsync -a "$BUNDLED_RUNTIME_RESOURCE_DIR/" "$REUSABLE_RUNTIME_STAGE_DIR/"
+}
+
 prune_bundled_runtime_dangling_symlinks() {
   if [[ ! -d "$BUNDLED_RUNTIME_RESOURCE_DIR" ]]; then
     return 0
@@ -1067,6 +1110,7 @@ phase_log_elapsed "$swift_build_started_ms" "Swift app build"
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
 echo "pkg: binary $BIN_PRIMARY" >&2
+capture_reusable_bundled_consumer_runtime
 echo "🧹 Cleaning old app bundle"
 rm -rf "$APP_ROOT"
 if [[ "$APP_VARIANT" == "consumer" && "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" ]]; then
@@ -1256,5 +1300,9 @@ echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is uns
 codesign_started_ms="$(phase_now_ms)"
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
 phase_log_elapsed "$codesign_started_ms" "Codesign"
+
+if [[ -n "$REUSABLE_RUNTIME_STAGE_DIR" ]]; then
+  rm -rf "$REUSABLE_RUNTIME_STAGE_DIR"
+fi
 
 echo "✅ Bundle ready at $APP_ROOT"

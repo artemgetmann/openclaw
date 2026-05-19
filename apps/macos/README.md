@@ -54,6 +54,26 @@ This keeps the final packaged artifact in `dist/`, but skips the repeated
 dependency reinstall, JS build, and Control UI build that are usually unrelated
 to a native-app relaunch loop.
 
+For onboarding copy/layout GUI proof, use the native UI smoke instead:
+
+```bash
+bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <id>
+```
+
+That script builds `apps/macos` with SwiftPM and launches the debug binary from
+the current worktree through a tiny debug `.app` wrapper. It does not install
+into `/Applications`, does not run release packaging, does not bundle a
+DMG/zip/runtime archive/npm tarball/bundled Node, and does not restart the
+default gateway. Reserve `rebuild-relaunch` and full packaging for cases where
+the release artifact or installer path is the thing being proven.
+
+To remove generated UI-smoke build output without deleting a currently running
+smoke app, run:
+
+```bash
+bash scripts/relaunch-consumer-mac-ui-smoke.sh --clean
+```
+
 For user-facing OpenClaw handoff builds, use the main product distribution
 wrapper:
 

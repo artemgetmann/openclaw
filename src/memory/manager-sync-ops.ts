@@ -894,9 +894,13 @@ export abstract class MemoryManagerSyncOps {
         .run(stale.path, "sessions");
       if (this.fts.enabled && this.fts.available) {
         try {
-          this.db
-            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "sessions", this.provider.model);
+          const sql = this.provider
+            ? `DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`
+            : `DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`;
+          const params = this.provider
+            ? ([stale.path, "sessions", this.provider.model] as const)
+            : ([stale.path, "sessions"] as const);
+          this.db.prepare(sql).run(...params);
         } catch {}
       }
     }

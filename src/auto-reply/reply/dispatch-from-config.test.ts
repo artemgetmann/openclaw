@@ -754,8 +754,11 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("compacts oversized Telegram tool summaries in DM sessions", async () => {
+  it("suppresses direct Telegram text-session tool summaries when verbose is off", async () => {
     setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -763,6 +766,43 @@ describe("dispatchReplyFromConfig", () => {
       Surface: "telegram",
       ChatType: "direct",
       CommandSource: "text",
+      SessionKey: "agent:main:telegram:direct:123",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      expect(opts?.onToolResult).toBeDefined();
+      // These are internal progress bubbles, not user-facing replies.
+      await opts?.onToolResult?.({ text: "🔧 exec: ls" });
+      await opts?.onToolResult?.({ text: "🔧 exec update: still running" });
+      await opts?.onToolResult?.({ text: "🔧 cron: schedule reminder" });
+      await opts?.onToolResult?.({ text: "🔧 web_search" });
+      await opts?.onToolResult?.({ text: "🔧 web_fetch" });
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("compacts oversized Telegram tool summaries in verbose DM sessions", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      CommandSource: "text",
+      SessionKey: "agent:main:telegram:direct:trace",
     });
     const longBody = Array.from(
       { length: 20 },
@@ -871,13 +911,19 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "NO_REPLY" });
   });
 
-  it("sends tool results via dispatcher in DM sessions", async () => {
+  it("sends direct Telegram text-session tool traces when verbose is on", async () => {
     setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
+      Surface: "telegram",
       ChatType: "direct",
+      CommandSource: "text",
+      SessionKey: "agent:main:telegram:direct:verbose",
     });
 
     const replyResolver = async (
@@ -897,7 +943,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses native tool summaries but still forwards tool media", async () => {
+  it("forwards direct Telegram media tool payloads but strips text when verbose is off", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "off",
@@ -906,8 +952,10 @@ describe("dispatchReplyFromConfig", () => {
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
+      Surface: "telegram",
       ChatType: "direct",
-      CommandSource: "native",
+      CommandSource: "text",
+      SessionKey: "agent:main:telegram:direct:media",
     });
 
     const replyResolver = async (
@@ -918,6 +966,7 @@ describe("dispatchReplyFromConfig", () => {
       expect(opts?.onToolResult).toBeDefined();
       await opts?.onToolResult?.({ text: "🔧 tools/sessions_send" });
       await opts?.onToolResult?.({
+        text: "🔧 exec: generated voice",
         mediaUrl: "https://example.com/tts-native.opus",
       });
       return { text: "hi" } satisfies ReplyPayload;
@@ -930,6 +979,77 @@ describe("dispatchReplyFromConfig", () => {
     expect(sent?.mediaUrl).toBe("https://example.com/tts-native.opus");
     expect(sent?.text).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses Telegram verbose rules when ACP/gateway routes replies back to Telegram", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "gateway",
+      Surface: "acp",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:7463849194",
+      ChatType: "direct",
+      CommandSource: "text",
+      SessionKey: "agent:main:telegram:direct:origin-visibility",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({ text: "🔧 exec\n\n🔧 exec update" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        payload: { text: "done" },
+      }),
+    );
+  });
+
+  it("strips internal tool labels from Telegram visible block text when verbose is off", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      CommandSource: "text",
+      SessionKey: "agent:main:telegram:direct:block-visibility",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({
+        text: "🔧 exec\n\n🔧 exec update\n\ntelegram_voice_sanitize_ok",
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({
+      text: "telegram_voice_sanitize_ok",
+    });
   });
 
   it("sends native Telegram tool traces when verbose is on", async () => {
@@ -1024,13 +1144,19 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("delivers deterministic exec approval tool payloads for native commands", async () => {
+  it("delivers deterministic exec approval tool payloads for direct Telegram verbose-off sessions", async () => {
     setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
-      CommandSource: "native",
+      Surface: "telegram",
+      ChatType: "direct",
+      CommandSource: "text",
+      SessionKey: "agent:main:telegram:direct:approval",
     });
 
     const replyResolver = async (

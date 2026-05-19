@@ -226,6 +226,7 @@ export async function tryDispatchAcpReply(params: {
     shouldRouteToOriginating: params.shouldRouteToOriginating,
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
+    shouldSendToolSummaries: params.shouldSendToolSummaries,
     onReplyStart: params.onReplyStart,
   });
 

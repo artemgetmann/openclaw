@@ -37,6 +37,7 @@ apps/android/.kotlin/
 # Bun build artifacts
 *.bun-build
 apps/macos/.build/
+apps/macos/.build-ui-smoke/
 apps/shared/MoltbotKit/.build/
 apps/shared/OpenClawKit/.build/
 apps/shared/OpenClawKit/Package.resolved
@@ -58,6 +59,7 @@ vendor/
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
 apps/macos/.build/**
+apps/macos/.build-ui-smoke/**
 **/*.bun-build
 apps/ios/*.xcfilelist
 
@@ -119,6 +121,7 @@ Swabble/build/
 
 # Generated protocol schema (produced via pnpm protocol:gen)
 dist/protocol.schema.json
+dist-ui-smoke/
 .ant-colony/
 
 # Eclipse

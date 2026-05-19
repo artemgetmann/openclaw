@@ -1,6 +1,11 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import type { JarvisBackendClient } from "../../consumer/jarvis-backend-client.js";
+import {
+  createJarvisManagedUtilityClient,
+  unwrapManagedProviderPayload,
+} from "../../consumer/managed-utilities.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
@@ -437,8 +442,53 @@ export async function fetchFirecrawlContent(params: {
   );
 }
 
+async function fetchManagedFirecrawlContent(params: {
+  client: JarvisBackendClient;
+  url: string;
+  extractMode: ExtractMode;
+}): Promise<{
+  text: string;
+  title?: string;
+  finalUrl?: string;
+  status?: number;
+  warning?: string;
+}> {
+  // In managed mode the app sends only the URL to Jarvis. Render owns the
+  // Firecrawl credential and returns the same provider payload shape we parse
+  // for direct BYOK calls below.
+  const payload = unwrapManagedProviderPayload(
+    await params.client.callManagedUtility({
+      utility: "firecrawl.scrape",
+      input: { url: params.url },
+    }),
+    "firecrawl",
+  );
+  const data =
+    payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+      ? (payload.data as Record<string, unknown>)
+      : {};
+  const metadata =
+    data.metadata && typeof data.metadata === "object" && !Array.isArray(data.metadata)
+      ? (data.metadata as Record<string, unknown>)
+      : undefined;
+  const rawText =
+    typeof data.markdown === "string"
+      ? data.markdown
+      : typeof data.content === "string"
+        ? data.content
+        : "";
+  return {
+    text: params.extractMode === "text" ? markdownToText(rawText) : rawText,
+    title: typeof metadata?.title === "string" ? metadata.title : undefined,
+    finalUrl: typeof metadata?.sourceURL === "string" ? metadata.sourceURL : undefined,
+    status: typeof metadata?.statusCode === "number" ? metadata.statusCode : undefined,
+    warning: typeof payload.warning === "string" ? payload.warning : undefined,
+  };
+}
+
 type FirecrawlRuntimeParams = {
   firecrawlEnabled: boolean;
+  firecrawlManagedUtilityClient?: JarvisBackendClient;
   firecrawlApiKey?: string;
   firecrawlBaseUrl: string;
   firecrawlOnlyMainContent: boolean;
@@ -479,6 +529,23 @@ function toFirecrawlContentParams(
   };
 }
 
+async function fetchConfiguredFirecrawlContent(
+  params: FirecrawlRuntimeParams & { url: string; extractMode: ExtractMode },
+): Promise<Awaited<ReturnType<typeof fetchFirecrawlContent>> | null> {
+  if (!params.firecrawlEnabled) {
+    return null;
+  }
+  if (params.firecrawlManagedUtilityClient) {
+    return await fetchManagedFirecrawlContent({
+      client: params.firecrawlManagedUtilityClient,
+      url: params.url,
+      extractMode: params.extractMode,
+    });
+  }
+  const firecrawlParams = toFirecrawlContentParams(params);
+  return firecrawlParams ? await fetchFirecrawlContent(firecrawlParams) : null;
+}
+
 async function maybeFetchFirecrawlWebFetchPayload(
   params: WebFetchRuntimeParams & {
     urlToFetch: string;
@@ -488,16 +555,14 @@ async function maybeFetchFirecrawlWebFetchPayload(
     tookMs: number;
   },
 ): Promise<Record<string, unknown> | null> {
-  const firecrawlParams = toFirecrawlContentParams({
+  const firecrawl = await fetchConfiguredFirecrawlContent({
     ...params,
     url: params.urlToFetch,
     extractMode: params.extractMode,
   });
-  if (!firecrawlParams) {
+  if (!firecrawl) {
     return null;
   }
-
-  const firecrawl = await fetchFirecrawlContent(firecrawlParams);
   const payload = buildFirecrawlWebFetchPayload({
     firecrawl,
     rawUrl: params.url,
@@ -702,12 +767,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
 async function tryFirecrawlFallback(
   params: FirecrawlRuntimeParams & { url: string; extractMode: ExtractMode },
 ): Promise<{ text: string; title?: string } | null> {
-  const firecrawlParams = toFirecrawlContentParams(params);
-  if (!firecrawlParams) {
-    return null;
-  }
   try {
-    const firecrawl = await fetchFirecrawlContent(firecrawlParams);
+    const firecrawl = await fetchConfiguredFirecrawlContent(params);
+    if (!firecrawl) {
+      return null;
+    }
     return { text: firecrawl.text, title: firecrawl.title };
   } catch {
     return null;
@@ -743,13 +807,23 @@ export function createWebFetchTool(options?: {
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
   const firecrawl = resolveFirecrawlConfig(fetch);
   const runtimeFirecrawlActive = options?.runtimeFirecrawl?.active;
+  const firecrawlManagedUtilityClient = createJarvisManagedUtilityClient(options?.config);
+  // Prefer Jarvis managed routing when configured so packaged consumers do not
+  // need raw Firecrawl keys. Direct keys are only resolved for BYOK/local mode.
   const shouldResolveFirecrawlApiKey =
-    runtimeFirecrawlActive === undefined ? firecrawl?.enabled !== false : runtimeFirecrawlActive;
+    !firecrawlManagedUtilityClient &&
+    (runtimeFirecrawlActive === undefined ? firecrawl?.enabled !== false : runtimeFirecrawlActive);
   const firecrawlApiKey = shouldResolveFirecrawlApiKey
     ? resolveFirecrawlApiKey(firecrawl)
     : undefined;
+  const managedFirecrawlEnabled = Boolean(
+    firecrawlManagedUtilityClient && firecrawl?.enabled !== false,
+  );
   const firecrawlEnabled =
-    runtimeFirecrawlActive ?? resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey });
+    runtimeFirecrawlActive ??
+    Boolean(
+      managedFirecrawlEnabled || resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey }),
+    );
   const firecrawlBaseUrl = resolveFirecrawlBaseUrl(firecrawl);
   const firecrawlOnlyMainContent = resolveFirecrawlOnlyMainContent(firecrawl);
   const firecrawlMaxAgeMs = resolveFirecrawlMaxAgeMsOrDefault(firecrawl);
@@ -788,6 +862,7 @@ export function createWebFetchTool(options?: {
         userAgent,
         readabilityEnabled,
         firecrawlEnabled,
+        firecrawlManagedUtilityClient: firecrawlManagedUtilityClient ?? undefined,
         firecrawlApiKey,
         firecrawlBaseUrl,
         firecrawlOnlyMainContent,

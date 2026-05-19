@@ -21,6 +21,8 @@ const ACP_LIVE_HARD_FLUSH_CHARS = 480;
 
 const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
 const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_call_update"]);
+const INTERNAL_TOOL_SUMMARY_LINE_RE =
+  /^🔧\s+[\w./:-]+(?:\s+(?:start|update|completed|failed|cancelled|done|error))?$/iu;
 
 export type AcpProjectedDeliveryMeta = {
   tag?: AcpSessionUpdateTag;
@@ -164,6 +166,31 @@ function renderToolSummaryText(
     meta: detailParts.join(" · ") || "tool call",
   });
   return formatToolSummary(display);
+}
+
+function stripInternalToolSummaryLines(text: string): string {
+  const lines = text.split("\n");
+  const strippedLines = lines.map((line) => INTERNAL_TOOL_SUMMARY_LINE_RE.test(line.trim()));
+  if (!strippedLines.some(Boolean)) {
+    return text;
+  }
+
+  return lines
+    .filter((line, index) => {
+      if (strippedLines[index]) {
+        return false;
+      }
+      // ACP adapters can leak tool labels as their own paragraphs. Drop only
+      // the blank separator lines attached to stripped labels so the user sees
+      // command output/final text instead of a leading empty Telegram bubble.
+      if (line.trim() !== "") {
+        return true;
+      }
+      const previousStripped = index > 0 && strippedLines[index - 1];
+      const nextStripped = index + 1 < strippedLines.length && strippedLines[index + 1];
+      return !previousStripped && !nextStripped;
+    })
+    .join("\n");
 }
 
 export type AcpReplyProjector = {
@@ -434,6 +461,12 @@ export function createAcpReplyProjector(params: {
       let text = event.text;
       if (!text) {
         return;
+      }
+      if (!params.shouldSendToolSummaries) {
+        text = stripInternalToolSummaryLines(text);
+        if (!text) {
+          return;
+        }
       }
       if (
         pendingHiddenBoundary &&

@@ -18,6 +18,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   applyFutureThreadModelDefault,
   applyFutureThreadThinkingDefault,
+  applyFutureThreadVerboseDefault,
 } from "../../sessions/future-thread-defaults.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -112,6 +113,17 @@ export async function persistInlineDirectives(params: {
     if (directives.hasVerboseDirective && directives.verboseLevel) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
       updated = true;
+      if (futureThreadParentSessionKey) {
+        const { updated: parentUpdated } = applyFutureThreadVerboseDefault({
+          store: sessionStore,
+          parentSessionKey: futureThreadParentSessionKey,
+          level: directives.verboseLevel,
+          afterThreadId: currentThreadId,
+        });
+        if (parentUpdated) {
+          updated = true;
+        }
+      }
     }
     if (directives.hasReasoningDirective && directives.reasoningLevel) {
       if (directives.reasoningLevel === "off") {

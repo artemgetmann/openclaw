@@ -16,6 +16,8 @@ export const ensureBinary = library.ensureBinary;
 export const ensurePortAvailable = library.ensurePortAvailable;
 export const getReplyFromConfig = library.getReplyFromConfig;
 export const handlePortError = library.handlePortError;
+export const isJarvisManagedGeminiImageGenerationConfigured =
+  library.isJarvisManagedGeminiImageGenerationConfigured;
 export const loadConfig = library.loadConfig;
 export const loadSessionStore = library.loadSessionStore;
 export const monitorWebChannel = library.monitorWebChannel;
@@ -24,6 +26,8 @@ export const PortInUseError = library.PortInUseError;
 export const promptYesNo = library.promptYesNo;
 export const resolveSessionKey = library.resolveSessionKey;
 export const resolveStorePath = library.resolveStorePath;
+export const runGeminiImageGeneration = library.runGeminiImageGeneration;
+export const runGooglePlacesSearch = library.runGooglePlacesSearch;
 export const runCommandWithTimeout = library.runCommandWithTimeout;
 export const runExec = library.runExec;
 export const saveSessionStore = library.saveSessionStore;

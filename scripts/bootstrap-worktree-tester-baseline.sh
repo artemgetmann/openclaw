@@ -78,6 +78,7 @@ if (!helperPath || !targetRoot) {
 }
 
 const {
+  copySanitizedTesterTtsPreferences,
   deriveWorktreeTesterBaseline,
   resolveTesterBaselineAgentIds,
   sanitizeInheritedTesterConfigWithMetadata,
@@ -107,6 +108,11 @@ const { config: sanitizedConfig, metadata: sanitizationMetadata } =
   sanitizeInheritedTesterConfigWithMetadata(sourceConfig);
 fs.writeFileSync(baseline.configPath, `${JSON.stringify(sanitizedConfig, null, 2)}\n`, "utf8");
 fs.chmodSync(baseline.configPath, 0o600);
+
+const syncedTtsPreferences = copySanitizedTesterTtsPreferences({
+  sourceStateDir,
+  targetStateDir: baseline.stateDir,
+});
 
 const agentIds = resolveTesterBaselineAgentIds(sourceConfig);
 const syncedAgents = [];
@@ -146,6 +152,7 @@ const meta = {
   configHash: sha256File(baseline.configPath),
   syncedAt: new Date().toISOString(),
   syncedAgents,
+  syncedTtsPreferences,
   sanitization: sanitizationMetadata,
 };
 fs.writeFileSync(baseline.metaPath, `${JSON.stringify(meta, null, 2)}\n`, "utf8");

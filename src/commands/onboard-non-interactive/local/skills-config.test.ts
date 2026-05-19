@@ -9,6 +9,7 @@ import type { RuntimeEnv } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 import {
   applyNonInteractiveSkillsConfig,
+  buildConsumerBundledSkillAllowlist,
   CONSUMER_DEFAULT_BUNDLED_SKILLS,
 } from "./skills-config.js";
 
@@ -33,6 +34,7 @@ describe("applyNonInteractiveSkillsConfig", () => {
     expect(next.skills?.allowBundled).toEqual(
       expect.arrayContaining([
         "consumer-setup",
+        "timezone-preference-updater",
         "checkpoint",
         "monitor-router",
         "mcporter",
@@ -43,10 +45,64 @@ describe("applyNonInteractiveSkillsConfig", () => {
     );
   });
 
-  it("preserves explicit bundled skill allowlists", () => {
+  it("repairs stale bundled skill allowlists while preserving existing order", () => {
+    const next = apply({ skills: { allowBundled: ["custom-skill", "checkpoint"] } });
+
+    expect(next.skills?.allowBundled?.slice(0, 2)).toEqual(["custom-skill", "checkpoint"]);
+    expect(next.skills?.allowBundled).toEqual([
+      "custom-skill",
+      "checkpoint",
+      ...CONSUMER_DEFAULT_BUNDLED_SKILLS.filter((skillName) => skillName !== "checkpoint"),
+    ]);
+  });
+
+  it("preserves explicit bundled skill disable sentinels", () => {
     const next = apply({ skills: { allowBundled: ["__none__"] } });
 
     expect(next.skills?.allowBundled).toEqual(["__none__"]);
+  });
+
+  it("does not add explicitly disabled bundled skills during repair", () => {
+    const next = apply({
+      skills: {
+        allowBundled: ["custom-skill"],
+        entries: {
+          checkpoint: { enabled: false },
+          "timezone-preference-updater": { enabled: false },
+        },
+      },
+    });
+
+    expect(next.skills?.allowBundled).toEqual([
+      "custom-skill",
+      ...CONSUMER_DEFAULT_BUNDLED_SKILLS.filter(
+        (skillName) => skillName !== "checkpoint" && skillName !== "timezone-preference-updater",
+      ),
+    ]);
+  });
+
+  it("keeps fresh defaults exact except explicitly disabled bundled skills", () => {
+    const next = apply({
+      skills: {
+        entries: {
+          "monitor-router": { enabled: false },
+        },
+      },
+    });
+
+    expect(next.skills?.allowBundled).toEqual(
+      CONSUMER_DEFAULT_BUNDLED_SKILLS.filter((skillName) => skillName !== "monitor-router"),
+    );
+    expect(next.skills?.allowBundled).toContain("timezone-preference-updater");
+  });
+
+  it("returns a mutable consumer bundled skill allowlist", () => {
+    const allowlist = buildConsumerBundledSkillAllowlist({});
+
+    allowlist.push("workspace-only");
+
+    expect(allowlist).toEqual([...CONSUMER_DEFAULT_BUNDLED_SKILLS, "workspace-only"]);
+    expect(CONSUMER_DEFAULT_BUNDLED_SKILLS).not.toContain("workspace-only");
   });
 
   it("exposes checkpoint and monitor-router to fresh consumer skill prompts without a model call", async () => {

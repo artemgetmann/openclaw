@@ -53,18 +53,52 @@ function resolvePinnedAcpxVersion(pluginRoot: string): string {
 }
 
 export const ACPX_PINNED_VERSION = resolvePinnedAcpxVersion(ACPX_PLUGIN_ROOT);
-export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
+export const ACPX_BUNDLED_INSTALL_ROOT = resolveManagedAcpxInstallRoot(ACPX_PLUGIN_ROOT);
+export const ACPX_BUNDLED_BIN = path.join(
+  ACPX_BUNDLED_INSTALL_ROOT,
+  "node_modules",
+  ".bin",
+  ACPX_BIN_NAME,
+);
 
-function getManagedAcpxCommandCandidates(pluginRoot: string): string[] {
-  const candidates = [path.join(pluginRoot, "node_modules", ".bin", ACPX_BIN_NAME)];
-
-  // When the plugin is loaded from dist/, local installs may still live under the worktree source
-  // extension directory. Keep that source-local binary as the managed fallback before giving up.
-  if (
+function isDistAcpxPluginRoot(pluginRoot: string): boolean {
+  return (
     path.basename(pluginRoot) === "acpx" &&
     path.basename(path.dirname(pluginRoot)) === "extensions" &&
     path.basename(path.dirname(path.dirname(pluginRoot))) === "dist"
-  ) {
+  );
+}
+
+function consumerRuntimeStateDir(env: NodeJS.ProcessEnv): string | null {
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim();
+  if (!stateDir) {
+    return null;
+  }
+  if (env.OPENCLAW_APP_VARIANT === "consumer" || env.OPENCLAW_CONSUMER_MINIMAL_STARTUP === "1") {
+    return path.resolve(stateDir);
+  }
+  return null;
+}
+
+export function resolveManagedAcpxInstallRoot(
+  pluginRoot: string = ACPX_PLUGIN_ROOT,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const stateDir = consumerRuntimeStateDir(env);
+  if (stateDir && isDistAcpxPluginRoot(pluginRoot)) {
+    // Consumer packages treat bundled/dist plugin code as read-only. The acpx
+    // binary is runtime material, so keep npm's node_modules writes in state.
+    return path.join(stateDir, "cache", "extensions", "acpx");
+  }
+  return pluginRoot;
+}
+
+function getManagedAcpxCommandCandidates(pluginRoot: string, installRoot: string): string[] {
+  const candidates = [path.join(installRoot, "node_modules", ".bin", ACPX_BIN_NAME)];
+
+  // When the plugin is loaded from dist/, local installs may still live under the worktree source
+  // extension directory. Keep that source-local binary as the managed fallback before giving up.
+  if (installRoot === pluginRoot && isDistAcpxPluginRoot(pluginRoot)) {
     const repoRoot = path.dirname(path.dirname(path.dirname(pluginRoot)));
     candidates.push(
       path.join(repoRoot, "extensions", "acpx", "node_modules", ".bin", ACPX_BIN_NAME),
@@ -75,13 +109,14 @@ function getManagedAcpxCommandCandidates(pluginRoot: string): string[] {
 }
 
 export function resolveManagedAcpxCommand(pluginRoot: string = ACPX_PLUGIN_ROOT): string {
-  const candidates = getManagedAcpxCommandCandidates(pluginRoot);
+  const installRoot = resolveManagedAcpxInstallRoot(pluginRoot);
+  const candidates = getManagedAcpxCommandCandidates(pluginRoot, installRoot);
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
       return candidate;
     }
   }
-  return candidates[0] ?? path.join(pluginRoot, "node_modules", ".bin", ACPX_BIN_NAME);
+  return candidates[0] ?? path.join(installRoot, "node_modules", ".bin", ACPX_BIN_NAME);
 }
 
 export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
@@ -120,6 +155,7 @@ export type ResolvedAcpxPluginConfig = {
   allowPluginLocalInstall: boolean;
   stripProviderAuthEnvVars: boolean;
   installCommand: string;
+  installRoot: string;
   cwd: string;
   permissionMode: AcpxPermissionMode;
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
@@ -404,10 +440,12 @@ export function resolveAcpxPluginConfig(params: {
   const normalized = parsed.value ?? {};
   const fallbackCwd = params.workspaceDir?.trim() || process.cwd();
   const cwd = path.resolve(normalized.cwd?.trim() || fallbackCwd);
+  const managedPluginRoot = params.managedPluginRoot ?? ACPX_PLUGIN_ROOT;
+  const installRoot = resolveManagedAcpxInstallRoot(managedPluginRoot);
   const command = resolveConfiguredCommand({
     configured: normalized.command,
     workspaceDir: params.workspaceDir,
-    managedPluginRoot: params.managedPluginRoot,
+    managedPluginRoot,
   });
   const allowPluginLocalInstall = !normalized.command;
   const stripProviderAuthEnvVars = !normalized.command;
@@ -424,6 +462,7 @@ export function resolveAcpxPluginConfig(params: {
     allowPluginLocalInstall,
     stripProviderAuthEnvVars,
     installCommand,
+    installRoot,
     cwd,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:

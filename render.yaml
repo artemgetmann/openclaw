@@ -42,3 +42,7 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: TELEGRAM_MANAGER_BOT_TOKEN
+        sync: false
+      - key: MANAGER_BOT_USERNAME
+        sync: false

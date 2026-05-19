@@ -209,6 +209,24 @@ describe("createAcpxRuntimeService", () => {
     );
   });
 
+  it("passes the managed install root to acpx ensure", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const service = createAcpxRuntimeService({
+      runtimeFactory: () => runtime,
+    });
+    const context = createServiceContext();
+
+    await service.start(context);
+
+    await vi.waitFor(() => {
+      expect(ensureAcpxSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pluginRoot: expect.any(String),
+        }),
+      );
+    });
+  });
+
   it("uses a short default queue-owner TTL", async () => {
     const { runtime } = createRuntimeStub(true);
     const runtimeFactory = vi.fn(() => runtime);

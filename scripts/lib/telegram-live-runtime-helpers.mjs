@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { copySanitizedTesterTtsPreferences } from "./worktree-tester-baseline.mjs";
 
 const DEFAULT_PORT_BASE = 20000;
 const DEFAULT_PORT_RANGE = 10000;
@@ -488,27 +489,6 @@ function resolveCodexHomePath(codexHome) {
   return path.join(os.homedir(), ".codex");
 }
 
-export function isLocalCodexAuthAvailable(params = {}) {
-  const codexHome = resolveCodexHomePath(params.codexHome);
-  const codexAuthPath = path.join(codexHome, "auth.json");
-  if (!fs.existsSync(codexAuthPath)) {
-    return false;
-  }
-
-  try {
-    const raw = JSON.parse(fs.readFileSync(codexAuthPath, "utf8"));
-    const tokens = raw && typeof raw === "object" ? raw.tokens : null;
-    return Boolean(
-      typeof tokens?.access_token === "string" &&
-      tokens.access_token.trim() &&
-      typeof tokens?.refresh_token === "string" &&
-      tokens.refresh_token.trim(),
-    );
-  } catch {
-    return false;
-  }
-}
-
 function decodeJwtExpiryMs(token) {
   if (typeof token !== "string" || !token) {
     return null;
@@ -531,6 +511,100 @@ function decodeJwtExpiryMs(token) {
   }
 }
 
+export function validateLocalCodexAuth(params = {}) {
+  const codexHome = resolveCodexHomePath(params.codexHome);
+  const codexAuthPath = path.join(codexHome, "auth.json");
+  const nearExpiryWindowMs = Number.isFinite(Number(params.nearExpiryWindowMs))
+    ? Math.max(0, Number(params.nearExpiryWindowMs))
+    : 5 * 60 * 1000;
+  const nowMs = Number.isFinite(Number(params.nowMs)) ? Number(params.nowMs) : Date.now();
+
+  if (!fs.existsSync(codexAuthPath)) {
+    return {
+      ok: false,
+      reason: "codex_auth_missing",
+      codexAuthPath,
+      hasAccessToken: false,
+      hasRefreshToken: false,
+      accessExpiryMs: null,
+      expirySource: "missing",
+    };
+  }
+
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(codexAuthPath, "utf8"));
+  } catch {
+    return {
+      ok: false,
+      reason: "codex_auth_invalid",
+      codexAuthPath,
+      hasAccessToken: false,
+      hasRefreshToken: false,
+      accessExpiryMs: null,
+      expirySource: "unreadable",
+    };
+  }
+
+  const tokens = raw && typeof raw === "object" ? raw.tokens : null;
+  const access = typeof tokens?.access_token === "string" ? tokens.access_token.trim() : "";
+  const refresh = typeof tokens?.refresh_token === "string" ? tokens.refresh_token.trim() : "";
+  if (!access || !refresh) {
+    return {
+      ok: false,
+      reason: "codex_auth_invalid",
+      codexAuthPath,
+      hasAccessToken: Boolean(access),
+      hasRefreshToken: Boolean(refresh),
+      accessExpiryMs: null,
+      expirySource: "token_presence",
+    };
+  }
+
+  const jwtExpiryMs = decodeJwtExpiryMs(access);
+  if (jwtExpiryMs !== null && jwtExpiryMs <= nowMs + nearExpiryWindowMs) {
+    return {
+      ok: false,
+      reason: "codex_auth_expired",
+      codexAuthPath,
+      hasAccessToken: true,
+      hasRefreshToken: true,
+      accessExpiryMs: jwtExpiryMs,
+      expirySource: "jwt_exp",
+    };
+  }
+
+  if (jwtExpiryMs !== null) {
+    return {
+      ok: true,
+      reason: "ok",
+      codexAuthPath,
+      hasAccessToken: true,
+      hasRefreshToken: true,
+      accessExpiryMs: jwtExpiryMs,
+      expirySource: "jwt_exp",
+    };
+  }
+
+  // Older Codex auth files may store opaque access tokens. Preserve the prior
+  // mtime-based freshness behavior for those files, but make the source visible
+  // so shell proof can explain why this is a weaker validation path.
+  const stat = fs.statSync(codexAuthPath);
+  return {
+    ok: true,
+    reason: "ok",
+    codexAuthPath,
+    hasAccessToken: true,
+    hasRefreshToken: true,
+    accessExpiryMs: stat.mtimeMs + 60 * 60 * 1000,
+    expirySource: "mtime_fallback",
+  };
+}
+
+export function isLocalCodexAuthAvailable(params = {}) {
+  return validateLocalCodexAuth(params).ok;
+}
+
 export function bootstrapTelegramLiveCodexAuthStore(params) {
   const runtimeStateDir = path.resolve(String(params?.runtimeStateDir ?? ""));
   const agentId = String(params?.agentId ?? "main").trim() || "main";
@@ -540,34 +614,6 @@ export function bootstrapTelegramLiveCodexAuthStore(params) {
 
   const codexHome = resolveCodexHomePath(params?.codexHome);
   const codexAuthPath = path.join(codexHome, "auth.json");
-  if (!fs.existsSync(codexAuthPath)) {
-    return {
-      ok: false,
-      reason: "codex_auth_missing",
-      codexAuthPath,
-      authStorePath: path.join(runtimeStateDir, "agents", agentId, "agent", "auth-profiles.json"),
-    };
-  }
-
-  const raw = JSON.parse(fs.readFileSync(codexAuthPath, "utf8"));
-  const tokens = raw && typeof raw === "object" ? raw.tokens : null;
-  const access = typeof tokens?.access_token === "string" ? tokens.access_token.trim() : "";
-  const refresh = typeof tokens?.refresh_token === "string" ? tokens.refresh_token.trim() : "";
-  if (!access || !refresh) {
-    return {
-      ok: false,
-      reason: "codex_auth_invalid",
-      codexAuthPath,
-      authStorePath: path.join(runtimeStateDir, "agents", agentId, "agent", "auth-profiles.json"),
-    };
-  }
-
-  let expires = decodeJwtExpiryMs(access);
-  if (expires === null) {
-    const stat = fs.statSync(codexAuthPath);
-    expires = stat.mtimeMs + 60 * 60 * 1000;
-  }
-
   const authStorePath = path.join(
     runtimeStateDir,
     "agents",
@@ -575,6 +621,22 @@ export function bootstrapTelegramLiveCodexAuthStore(params) {
     "agent",
     "auth-profiles.json",
   );
+  const validation = validateLocalCodexAuth(params);
+  if (!validation.ok) {
+    return {
+      ok: false,
+      reason: validation.reason,
+      codexAuthPath,
+      authStorePath,
+      expirySource: validation.expirySource,
+      accessExpiryMs: validation.accessExpiryMs,
+    };
+  }
+
+  const raw = JSON.parse(fs.readFileSync(codexAuthPath, "utf8"));
+  const tokens = raw && typeof raw === "object" ? raw.tokens : null;
+  const access = typeof tokens?.access_token === "string" ? tokens.access_token.trim() : "";
+  const refresh = typeof tokens?.refresh_token === "string" ? tokens.refresh_token.trim() : "";
   fs.mkdirSync(path.dirname(authStorePath), { recursive: true });
   fs.writeFileSync(
     authStorePath,
@@ -587,7 +649,7 @@ export function bootstrapTelegramLiveCodexAuthStore(params) {
             provider: "openai-codex",
             access,
             refresh,
-            expires,
+            expires: validation.accessExpiryMs,
             ...(typeof tokens?.account_id === "string" && tokens.account_id.trim()
               ? { accountId: tokens.account_id.trim() }
               : {}),
@@ -608,6 +670,8 @@ export function bootstrapTelegramLiveCodexAuthStore(params) {
     ok: true,
     codexAuthPath,
     authStorePath,
+    expirySource: validation.expirySource,
+    accessExpiryMs: validation.accessExpiryMs,
   };
 }
 
@@ -870,6 +934,13 @@ export function deriveTelegramLiveRuntimeProfile(params) {
     runtimePort,
     runtimeStateDir,
   };
+}
+
+export function syncTelegramLiveRuntimeTtsPreferences(params) {
+  return copySanitizedTesterTtsPreferences({
+    sourceStateDir: params?.baselineStateDir,
+    targetStateDir: params?.runtimeStateDir,
+  });
 }
 
 export function selectTelegramTesterToken(params) {

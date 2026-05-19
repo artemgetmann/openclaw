@@ -80,10 +80,9 @@ function isSuppressibleAnswerPreviewPrefix(text: string): boolean {
   return isSingleLine && isShortHeading;
 }
 
-function formatToolStartProgressLine(payload: { name?: string; phase?: string }) {
-  const name = normalizeToolProgressLine(payload.name) ?? "tool";
-  const phase = normalizeToolProgressLine(payload.phase);
-  return phase && phase !== "start" ? `🔧 ${name} ${phase}` : `🔧 ${name}`;
+function hasInternalToolTraceText(text?: string) {
+  const normalized = normalizeToolProgressLine(text);
+  return normalized?.startsWith("🔧") === true;
 }
 
 function hasToolPayloadContent(payload: ReplyPayload) {
@@ -560,6 +559,13 @@ export const dispatchTelegramMessage = async ({
     updateAnswerProgressFromBlock(renderToolProgressDraftText());
     return true;
   };
+  const pushToolStartProgressDraft = (payload: { name?: string; phase?: string }) => {
+    // Raw tool lifecycle labels are product-visible trace noise and should not
+    // be streamed into Telegram chats. Keep the status reaction, but suppress
+    // the text transport entirely.
+    void payload;
+    return false;
+  };
 
   const disableBlockStreaming = !previewStreamingEnabled
     ? true
@@ -686,6 +692,15 @@ export const dispatchTelegramMessage = async ({
     }
     return { ...payload, replyToId: implicitQuoteReplyTargetId };
   };
+  const stripInternalToolTraceText = (payload: ReplyPayload): ReplyPayload | undefined => {
+    if (!hasInternalToolTraceText(payload.text)) {
+      return payload;
+    }
+    if (!payload.mediaUrl && !(payload.mediaUrls?.length ?? 0)) {
+      return undefined;
+    }
+    return { ...payload, text: undefined };
+  };
   const sendPayload = async (payload: ReplyPayload) => {
     const normalizedPayload =
       typeof payload.text === "string"
@@ -702,21 +717,26 @@ export const dispatchTelegramMessage = async ({
     return result.delivered;
   };
   const sendToolPayload = async (payload: ReplyPayload) => {
+    const text = normalizeToolProgressLine(payload.text);
+    const sanitizedPayload = stripInternalToolTraceText(payload);
+    if (!sanitizedPayload) {
+      return;
+    }
     if (
       canStreamToolProgressDraft &&
-      !payload.mediaUrl &&
-      !payload.mediaUrls?.length &&
-      pushToolProgressDraft(payload.text)
+      !sanitizedPayload.mediaUrl &&
+      !sanitizedPayload.mediaUrls?.length &&
+      pushToolProgressDraft(text)
     ) {
       return;
     }
     // Tool payloads already arrive fully structured, including media URLs from
     // trusted tool results. Deliver them directly so Telegram does not have to
     // infer media from assistant prose after the model paraphrases the tool.
-    if (!hasToolPayloadContent(payload)) {
+    if (!hasToolPayloadContent(sanitizedPayload)) {
       return;
     }
-    await sendPayload(payload);
+    await sendPayload(sanitizedPayload);
   };
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
@@ -822,6 +842,13 @@ export const dispatchTelegramMessage = async ({
             const previewButtons = (
               payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
             )?.buttons;
+            if (info.kind === "tool") {
+              const sanitizedPayload = stripInternalToolTraceText(payload);
+              if (!sanitizedPayload) {
+                return;
+              }
+              payload = sanitizedPayload;
+            }
             const split = splitTextIntoLaneSegments(payload.text);
             const segments = split.segments;
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
@@ -1027,7 +1054,7 @@ export const dispatchTelegramMessage = async ({
         onToolStart: statusReactionController
           ? async (payload) => {
               const progressPromise = enqueueDraftLaneEvent(async () => {
-                pushToolProgressDraft(formatToolStartProgressLine(payload));
+                pushToolStartProgressDraft(payload);
               });
               await statusReactionController.setTool(payload.name);
               await progressPromise;
@@ -1035,7 +1062,7 @@ export const dispatchTelegramMessage = async ({
           : canStreamToolProgressDraft
             ? (payload) =>
                 enqueueDraftLaneEvent(async () => {
-                  pushToolProgressDraft(formatToolStartProgressLine(payload));
+                  pushToolStartProgressDraft(payload);
                 })
             : undefined,
         onCompactionStart: statusReactionController

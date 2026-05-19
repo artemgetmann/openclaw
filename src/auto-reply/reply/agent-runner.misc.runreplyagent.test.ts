@@ -943,11 +943,89 @@ describe("runReplyAgent auto-compaction token update", () => {
       typingMode: "instant",
     });
 
-    expect(result).toMatchObject({ text: "done" });
+    const resultPayloads = Array.isArray(result) ? result : [result];
+    expect(resultPayloads).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "done" })]),
+    );
+    expect(resultPayloads).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: CONTEXT_PRESSURE_NOTICE_TEXT })]),
+    );
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].contextPressureNoticeAt).toBeUndefined();
     expect(stored[sessionKey].contextPressureNoticeCompactionCount).toBeUndefined();
+  });
+
+  it("does not warn from raw usage when no fresh context snapshot exists", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pressure-raw-usage-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      contextTokens: 200_000,
+      compactionCount: 0,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "sonnet",
+          usage: { input: 160_000, output: 1_000, total: 161_000 },
+        },
+      },
+    });
+
+    const config = {
+      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
+    };
+    const run = createBaseRun({
+      storePath,
+      sessionEntry,
+      config,
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun: run.followupRun,
+      queueKey: "main",
+      resolvedQueue: run.resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing: run.typing,
+      sessionCtx: run.sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "claude-cli/sonnet",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const resultPayloads = Array.isArray(result) ? result : [result];
+    expect(resultPayloads).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "done" })]),
+    );
+    expect(resultPayloads).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: CONTEXT_PRESSURE_NOTICE_TEXT })]),
+    );
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBeUndefined();
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+    expect(stored[sessionKey].contextPressureNoticeAt).toBeUndefined();
   });
 
   it("does not enqueue legacy post-compaction audit warnings", async () => {

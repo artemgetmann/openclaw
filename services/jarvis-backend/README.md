@@ -27,7 +27,16 @@ The source can be public. The hosted environment cannot be.
 - `POST /v1/device/register` - creates or reuses a durable device/license row.
 - `POST /v1/license/status` - returns persisted trial/license status for a device.
 - `POST /v1/admin/devices/{device_id}/license` - manual beta support override.
-- `POST /v1/managed/utilities/{utility}` - placeholder for future managed operations.
+- `POST /v1/managed/utilities/{utility}` - server-held provider-key utilities.
+  Supported utility IDs:
+  - `firecrawl.search` with `input.query` and optional `input.limit`.
+  - `firecrawl.scrape` with `input.url`.
+  - `google_places.search` with `input.query` and optional `input.limit`.
+  - `brave.search` with `input.query`, optional `input.count`/`input.limit`,
+    and optional Brave-safe filters (`country`, `search_lang`, `ui_lang`,
+    `freshness`, `mode`).
+  - `gemini.image.generate` with `input.prompt` and optional
+    `input.resolution` / `input.aspectRatio`.
 
 ## Environment
 
@@ -41,6 +50,14 @@ The source can be public. The hosted environment cannot be.
 - `JARVIS_OFFLINE_GRACE_DAYS` - defaults to `3`.
 - `OPENAI_API_KEY` - optional managed provider key.
 - `ANTHROPIC_API_KEY` - optional managed provider key.
+- `FIRECRAWL_API_KEY` - enables `firecrawl.search` and `firecrawl.scrape`.
+- `GOOGLE_PLACES_API_KEY` - enables `google_places.search`.
+- `BRAVE_API_KEY` - enables `brave.search`.
+- `GEMINI_API_KEY` - enables `gemini.image.generate`.
+- `TELEGRAM_MANAGER_BOT_TOKEN` - Telegram manager bot token for Managed Bots
+  onboarding. Keep this server-side only.
+- `MANAGER_BOT_USERNAME` - Telegram manager bot username used to build the
+  approval link.
 
 In production, protected endpoints refuse requests if
 `JARVIS_BACKEND_API_TOKEN` is missing. In development, the token is optional so
@@ -84,15 +101,25 @@ Render owns production secret values:
 - `NEON_DATABASE_URL` is a `sync: false` value from Neon. Create a Neon Postgres
   database, copy its pooled or direct connection string, and enter it in the
   Render dashboard before using hosted account/license state.
-- `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are `sync: false` values that must be
-  entered in the Render dashboard.
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `FIRECRAWL_API_KEY`,
+  `GOOGLE_PLACES_API_KEY`, `GEMINI_API_KEY`, and `BRAVE_API_KEY` are
+  `sync: false` values that must be entered in the Render dashboard only when
+  the corresponding managed provider is enabled.
+- `TELEGRAM_MANAGER_BOT_TOKEN` and `MANAGER_BOT_USERNAME` are `sync: false`
+  values for Managed Bots onboarding. Never commit the token value.
 - Keep `JARVIS_BACKEND_ENV=production` so protected endpoints fail closed if the
   backend token or Neon URL is missing.
 
 Do not add a Render persistent disk to `jarvis-backend` for account/license
 state. Neon/Postgres is the durable store for production. Google Auth, billing,
 and richer account linking are later slices; this service currently persists
-beta account rows and device/license rows only.
+beta account rows, device/license rows, and Telegram Managed Bots setup
+sessions.
+
+Managed-bot setup sessions use the same durable store. Pending approval state
+and connected child-token handoff state survive a Render restart as long as
+`NEON_DATABASE_URL` is configured. The manager bot token stays in Render env and
+is never stored in the database.
 
 ## Run Locally
 

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { normalizeVerboseLevel, type VerboseLevel } from "../auto-reply/thinking.js";
 import type { FutureThreadDefaultsHistoryEntry, SessionEntry } from "../config/sessions.js";
 import { applyFutureThreadThinkingLevelOverride } from "./level-overrides.js";
 import {
@@ -36,12 +37,14 @@ function snapshotFutureThreadDefaults(parentEntry: SessionEntry) {
   const providerOverride = parentEntry.futureThreadProviderOverride?.trim() || undefined;
   const modelOverride = parentEntry.futureThreadModelOverride?.trim() || undefined;
   const thinkingLevelOverride = parentEntry.futureThreadThinkingLevelOverride?.trim() || undefined;
+  const verboseLevel = normalizeVerboseLevel(parentEntry.verboseLevel);
   const execSecurity = parentEntry.execSecurity?.trim() || undefined;
   const execAsk = parentEntry.execAsk?.trim() || undefined;
   return {
     providerOverride,
     modelOverride,
     thinkingLevelOverride,
+    verboseLevel,
     execSecurity,
     execAsk,
   };
@@ -70,6 +73,7 @@ function upsertFutureThreadDefaultsHistory(params: {
       existing.providerOverride === nextEntry.providerOverride &&
       existing.modelOverride === nextEntry.modelOverride &&
       existing.thinkingLevelOverride === nextEntry.thinkingLevelOverride &&
+      existing.verboseLevel === nextEntry.verboseLevel &&
       existing.execSecurity === nextEntry.execSecurity &&
       existing.execAsk === nextEntry.execAsk
     ) {
@@ -114,6 +118,7 @@ function resolveHistoricalFutureThreadDefaults(params: {
       providerOverride: undefined,
       modelOverride: undefined,
       thinkingLevelOverride: undefined,
+      verboseLevel: undefined,
       execSecurity: undefined,
       execAsk: undefined,
     };
@@ -123,6 +128,7 @@ function resolveHistoricalFutureThreadDefaults(params: {
     providerOverride: match.providerOverride?.trim() || undefined,
     modelOverride: match.modelOverride?.trim() || undefined,
     thinkingLevelOverride: match.thinkingLevelOverride?.trim() || undefined,
+    verboseLevel: normalizeVerboseLevel(match.verboseLevel),
     execSecurity: match.execSecurity?.trim() || undefined,
     execAsk: match.execAsk?.trim() || undefined,
   };
@@ -148,6 +154,7 @@ export function seedSessionEntryFromFutureThreadDefaults(params: {
   const parentProvider = snapshot.providerOverride;
   const parentModel = snapshot.modelOverride;
   const parentThinkingLevel = snapshot.thinkingLevelOverride;
+  const parentVerboseLevel = snapshot.verboseLevel;
   const parentExecSecurity = snapshot.execSecurity;
   const parentExecAsk = snapshot.execAsk;
 
@@ -164,6 +171,12 @@ export function seedSessionEntryFromFutureThreadDefaults(params: {
 
   if (parentThinkingLevel && !entry.thinkingLevel) {
     entry.thinkingLevel = parentThinkingLevel;
+    entry.updatedAt = Date.now();
+    updated = true;
+  }
+
+  if (parentVerboseLevel && !entry.verboseLevel) {
+    entry.verboseLevel = parentVerboseLevel;
     entry.updatedAt = Date.now();
     updated = true;
   }
@@ -226,4 +239,35 @@ export function applyFutureThreadThinkingDefault(params: {
     params.store[params.parentSessionKey] = parentEntry;
   }
   return { updated: result.updated || historyUpdated, parentEntry };
+}
+
+export function applyFutureThreadVerboseDefault(params: {
+  store: Record<string, SessionEntry>;
+  parentSessionKey: string;
+  level: VerboseLevel;
+  afterThreadId?: string | number | null;
+}): { updated: boolean; parentEntry: SessionEntry } {
+  const parentEntry = params.store[params.parentSessionKey] ?? createFutureThreadParentEntry();
+  const currentLevel = normalizeVerboseLevel(parentEntry.verboseLevel);
+  const shouldRecordHistory = normalizeThreadId(params.afterThreadId) != null;
+  if (currentLevel === params.level && !shouldRecordHistory) {
+    return { updated: false, parentEntry };
+  }
+
+  // `/verbose` is a chat-level UX preference. A thread command should update
+  // the parent chat default so sibling and future threads do not leak tool spam.
+  if (currentLevel !== params.level) {
+    parentEntry.verboseLevel = params.level;
+    parentEntry.updatedAt = Date.now();
+  }
+  const historyUpdated = shouldRecordHistory
+    ? upsertFutureThreadDefaultsHistory({
+        parentEntry,
+        afterThreadId: normalizeThreadId(params.afterThreadId)!,
+      })
+    : false;
+  if (currentLevel !== params.level || historyUpdated) {
+    params.store[params.parentSessionKey] = parentEntry;
+  }
+  return { updated: currentLevel !== params.level || historyUpdated, parentEntry };
 }

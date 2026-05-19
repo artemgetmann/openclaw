@@ -249,7 +249,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps tool progress fallback delivery when preview streaming is off", async () => {
+  it("drops raw tool trace fallback delivery when preview streaming is off", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onToolResult?.({ text: "🔧 exec: ls" });
       return { queuedFinal: false };
@@ -259,18 +259,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "off" });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [expect.objectContaining({ text: "🔧 exec: ls" })],
-      }),
-    );
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("batches duplicate tool progress into the answer draft when preview streaming is on", async () => {
-    const draftStream = createTestDraftStream({
-      messageId: 9001,
-      clearMessageIdOnForceNew: true,
-    });
+  it("does not batch raw tool traces into the answer draft when preview streaming is on", async () => {
+    const draftStream = createDraftStream(9001);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -287,16 +280,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(draftStream.update).toHaveBeenCalledWith("🔧 browser.status");
-    expect(draftStream.update).toHaveBeenCalledWith(
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 browser.status");
+    expect(draftStream.update).not.toHaveBeenCalledWith(
       "🔧 browser.status\n\n🔧 browser.status: checking tab state",
     );
-    expect(draftStream.materialize).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [expect.objectContaining({ text: "Done" })],
-      }),
-    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 9001, "Done", expect.any(Object));
     expect(
       deliverReplies.mock.calls.some(
         ([arg]) =>
@@ -304,7 +292,111 @@ describe("dispatchTelegramMessage draft streaming", () => {
           "🔧 browser.status: checking tab state",
       ),
     ).toBe(false);
-    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses internal exec progress draft lines regardless of Telegram verbose state", async () => {
+    const draftStream = createDraftStream(9002);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "update" });
+        await replyOptions?.onToolStart?.({ name: "read", phase: "start" });
+        await replyOptions?.onToolStart?.({ name: "memory_search", phase: "start" });
+        await replyOptions?.onToolResult?.({ text: "🔧 exec: ls" });
+        await replyOptions?.onToolResult?.({ text: "🔧 process" });
+        await dispatcherOptions.deliver({ text: "telegram_voice_sanitize_ok" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9002" });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 exec");
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 exec\n\n🔧 exec update");
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 read");
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 memory_search");
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 exec: ls");
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 process");
+    expect(
+      deliverReplies.mock.calls.some(
+        ([arg]) =>
+          (arg as { replies?: Array<{ text?: string }> }).replies?.[0]?.text === "🔧 exec: ls" ||
+          (arg as { replies?: Array<{ text?: string }> }).replies?.[0]?.text === "🔧 process",
+      ),
+    ).toBe(false);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      9002,
+      "telegram_voice_sanitize_ok",
+      expect.any(Object),
+    );
+  });
+
+  it("suppresses raw tool traces even when a thread has no inherited verbose level", async () => {
+    const threadSessionKey =
+      "agent:main:telegram:default:direct:1336356696:thread:1336356696:49628";
+    const parentSessionKey = "agent:main:telegram:default:direct:1336356696";
+    loadSessionStore.mockReturnValue({
+      [threadSessionKey]: {},
+      [parentSessionKey]: {},
+    });
+    const draftStream = createDraftStream(90027);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "web_search", phase: "start" });
+        await replyOptions?.onToolResult?.({ text: "🔧 web_fetch" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "90027" });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: threadSessionKey,
+          ParentSessionKey: parentSessionKey,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 web_search");
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 web_fetch");
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 90027, "Done", expect.any(Object));
+  });
+
+  it("suppresses raw tool traces even when Telegram verbose is on", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { verboseLevel: "on" },
+    });
+    const draftStream = createDraftStream(90025);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolResult?.({ text: "🔧 memory_search" });
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 memory_search");
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("keeps explicit block progress separate when the final answer replaces it", async () => {
@@ -474,11 +566,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("still delivers media-bearing tool payloads while batching text progress", async () => {
-    const draftStream = createDraftStream(9002);
+  it("suppresses trace captions but still delivers media-bearing tool payloads", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { verboseLevel: "off" },
+    });
+    const draftStream = createDraftStream(90026);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
-      await replyOptions?.onToolStart?.({ name: "browser.screenshot", phase: "start" });
+      await replyOptions?.onToolResult?.({
+        text: "🔧 browser.screenshot",
+        mediaUrls: ["file:///tmp/screenshot.png"],
+      });
       await replyOptions?.onToolResult?.({
         text: "Screenshot captured",
         mediaUrls: ["file:///tmp/screenshot.png"],
@@ -487,19 +585,39 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     deliverReplies.mockResolvedValue({ delivered: true });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
-
-    expect(draftStream.update).toHaveBeenCalledWith("🔧 browser.screenshot");
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [
-          expect.objectContaining({
-            text: "Screenshot captured",
-            mediaUrls: ["file:///tmp/screenshot.png"],
-          }),
-        ],
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
       }),
-    );
+      streamMode: "partial",
+    });
+
+    expect(draftStream.update).not.toHaveBeenCalledWith("🔧 browser.screenshot");
+    const mediaReplies = deliverReplies.mock.calls.flatMap(([arg]) => {
+      const replies = (
+        arg as {
+          replies?: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
+        }
+      ).replies;
+      return replies ?? [];
+    });
+    expect(
+      mediaReplies.some(
+        (reply) =>
+          (reply.mediaUrl === "file:///tmp/screenshot.png" ||
+            reply.mediaUrls?.includes("file:///tmp/screenshot.png")) &&
+          reply.text !== "🔧 browser.screenshot",
+      ),
+    ).toBe(true);
+    expect(
+      mediaReplies.some(
+        (reply) =>
+          (reply.mediaUrl === "file:///tmp/screenshot.png" ||
+            reply.mediaUrls?.includes("file:///tmp/screenshot.png")) &&
+          typeof reply.text === "string" &&
+          reply.text.startsWith("🔧"),
+      ),
+    ).toBe(false);
   });
 
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {

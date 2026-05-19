@@ -138,7 +138,9 @@ describe("new worktree tester baseline bootstrap", () => {
     const sourceStateDir = path.join(homeDir, ".openclaw");
     const sourceConfigPath = path.join(sourceStateDir, "openclaw.json");
     const sourceAuthDir = path.join(sourceStateDir, "agents", "main", "agent");
+    const sourceTtsPath = path.join(sourceStateDir, "settings", "tts.json");
     mkdirSync(sourceAuthDir, { recursive: true });
+    mkdirSync(path.dirname(sourceTtsPath), { recursive: true });
 
     const sourceConfig = {
       channels: {
@@ -202,7 +204,21 @@ describe("new worktree tester baseline bootstrap", () => {
         },
       },
     };
+    const sourceTts = {
+      tts: {
+        auto: "always",
+        provider: "edge",
+        maxLength: 4096,
+        summarize: true,
+        apiKey: "tts-secret",
+        nested: {
+          token: "nested-secret",
+          voice: "en-US-AriaNeural",
+        },
+      },
+    };
     writeFileSync(sourceConfigPath, `${JSON.stringify(sourceConfig, null, 2)}\n`);
+    writeFileSync(sourceTtsPath, `${JSON.stringify(sourceTts, null, 2)}\n`);
     writeFileSync(
       path.join(sourceAuthDir, "auth-profiles.json"),
       `${JSON.stringify(sourceAuth, null, 2)}\n`,
@@ -238,6 +254,9 @@ describe("new worktree tester baseline bootstrap", () => {
     expect(devEnv).toContain(`OPENCLAW_CONFIG_PATH=${baselineConfigPath}`);
 
     const inheritedConfig = JSON.parse(readFileSync(baselineConfigPath!, "utf8"));
+    const inheritedTts = JSON.parse(
+      readFileSync(path.join(baselineStateDir!, "settings", "tts.json"), "utf8"),
+    );
     expect(inheritedConfig.models.providers.openai.baseUrl).toBe("https://api.openai.com/v1");
     expect(inheritedConfig.models.providers.openai.apiKey).toBeUndefined();
     expect(inheritedConfig.channels.telegram.botToken).toBeUndefined();
@@ -250,6 +269,17 @@ describe("new worktree tester baseline bootstrap", () => {
     expect(inheritedConfig.env.vars.OPENCLAW_CONSUMER_OPENAI_API_KEY).toBeUndefined();
     expect(inheritedConfig.messages.tts.openai.apiKey).toBeUndefined();
     expect(inheritedConfig.tools.media.audio.models[0].apiKey).toBeUndefined();
+    expect(inheritedTts).toEqual({
+      tts: {
+        auto: "always",
+        provider: "edge",
+        maxLength: 4096,
+        summarize: true,
+        nested: {
+          voice: "en-US-AriaNeural",
+        },
+      },
+    });
 
     const inheritedAuthPath = path.join(
       baselineStateDir!,
@@ -273,8 +303,11 @@ describe("new worktree tester baseline bootstrap", () => {
     expect(JSON.stringify(baselineMeta)).not.toContain("prod-token");
     expect(JSON.stringify(baselineMeta)).not.toContain("test-account-token");
     expect(JSON.stringify(baselineMeta)).not.toContain("/run/secrets/tester-telegram-token");
+    expect(JSON.stringify(baselineMeta)).not.toContain("tts-secret");
+    expect(JSON.stringify(baselineMeta)).not.toContain("nested-secret");
 
     expect(JSON.parse(readFileSync(sourceConfigPath, "utf8"))).toEqual(sourceConfig);
+    expect(JSON.parse(readFileSync(sourceTtsPath, "utf8"))).toEqual(sourceTts);
     expect(
       JSON.parse(readFileSync(path.join(sourceAuthDir, "auth-profiles.json"), "utf8")),
     ).toEqual(sourceAuth);

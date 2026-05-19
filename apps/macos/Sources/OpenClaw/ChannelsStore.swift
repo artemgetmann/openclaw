@@ -221,6 +221,9 @@ struct ConfigSnapshot: Codable {
 
 enum TelegramSetupPhase: Equatable {
     case idle
+    case startingManagedBot
+    case checkingManagedApproval
+    case installingManagedBot
     case verifyingToken
     case capturingFirstMessage
     case savingSetup
@@ -251,6 +254,10 @@ final class ChannelsStore {
     var telegramSetupBaselineOutboundAt: Double?
     var telegramSetupWaitingForDM = false
     var telegramSetupPhase: TelegramSetupPhase = .idle
+    var telegramManagedSetupId: String?
+    var telegramManagedApprovalURL: String?
+    var telegramManagedSuggestedBotUsername: String?
+    var telegramManagedExpiresAt: Date?
 
     var configStatus: String?
     var isSavingConfig = false

@@ -17,6 +17,69 @@ function normalizeAgentIds(values) {
   return out;
 }
 
+const TTS_PREF_SECRET_KEYS = new Set(["apikey", "key", "token", "access", "refresh"]);
+
+export function sanitizeInheritedTesterTtsPreferences(prefs) {
+  if (!prefs || typeof prefs !== "object") {
+    return {};
+  }
+
+  const clone = structuredClone(prefs);
+  // TTS prefs are a user-preference snapshot, not an auth store. Keep provider
+  // choices and limits, but drop any accidental credentials before copying.
+  const scrub = (node) => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const entry of node) {
+        scrub(entry);
+      }
+      return;
+    }
+
+    for (const key of Object.keys(node)) {
+      if (TTS_PREF_SECRET_KEYS.has(key.toLowerCase())) {
+        delete node[key];
+        continue;
+      }
+      scrub(node[key]);
+    }
+  };
+  scrub(clone);
+  return clone;
+}
+
+export function copySanitizedTesterTtsPreferences(params) {
+  const sourceStateDir = String(params?.sourceStateDir ?? "").trim();
+  const targetStateDir = String(params?.targetStateDir ?? "").trim();
+  if (!sourceStateDir || !targetStateDir) {
+    return { copied: false, reason: "missing_state_dir" };
+  }
+
+  const sourcePath = path.join(sourceStateDir, "settings", "tts.json");
+  if (!fs.existsSync(sourcePath)) {
+    return { copied: false, reason: "missing_source", sourcePath };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
+  } catch {
+    return { copied: false, reason: "invalid_source", sourcePath };
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return { copied: false, reason: "invalid_source", sourcePath };
+  }
+
+  const targetPath = path.join(targetStateDir, "settings", "tts.json");
+  const sanitized = sanitizeInheritedTesterTtsPreferences(parsed);
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, `${JSON.stringify(sanitized, null, 2)}\n`, "utf8");
+  fs.chmodSync(targetPath, 0o600);
+  return { copied: true, sourcePath, targetPath };
+}
+
 function scrubInheritedOpenAiSecrets(node) {
   if (!node || typeof node !== "object") {
     return node;

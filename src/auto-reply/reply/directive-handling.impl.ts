@@ -13,6 +13,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   applyFutureThreadModelDefault,
   applyFutureThreadThinkingDefault,
+  applyFutureThreadVerboseDefault,
 } from "../../sessions/future-thread-defaults.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -352,6 +353,14 @@ export async function handleDirectiveOnly(
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     applyVerboseOverride(sessionEntry, directives.verboseLevel);
+    if (futureThreadParentSessionKey) {
+      applyFutureThreadVerboseDefault({
+        store: sessionStore,
+        parentSessionKey: futureThreadParentSessionKey,
+        level: directives.verboseLevel,
+        afterThreadId: currentThreadId,
+      });
+    }
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {
     if (directives.reasoningLevel === "off") {

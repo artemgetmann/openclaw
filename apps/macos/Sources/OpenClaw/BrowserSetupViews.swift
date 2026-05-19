@@ -48,7 +48,7 @@ struct BrowserSetupCardContent: View {
             Text(self.presentation == .onboarding ? "Connect your Chrome" : "Browser")
                 .font(.headline)
             Text(
-                "\(AppFlavor.current.appName) uses a separate copy of your Chrome profile so it can work with your sessions without touching your active browsing.")
+                "Choose the Chrome profile \(AppFlavor.current.appName) can use for browser tasks. Your normal Chrome windows stay separate.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -69,7 +69,7 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "Google Chrome required",
-                body: "This MVP expects Google Chrome to already be installed on this Mac before browser setup can continue.")
+                body: "Install Google Chrome on this Mac, then come back to finish browser setup.")
 
             HStack(spacing: 10) {
                 Button("Install Chrome") { self.model.openChromeDownloadPage() }
@@ -86,7 +86,7 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "Open Chrome once first",
-                body: "Google Chrome is installed, but \(AppFlavor.current.appName) needs a signed-in Chrome profile before browser setup can continue. Open Chrome, sign in, then click Check Again.")
+                body: "Open Chrome, sign in to the profile you want \(AppFlavor.current.appName) to use, then click Check Again.")
 
             HStack(spacing: 10) {
                 Button("Open Chrome") {
@@ -106,7 +106,7 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "We found your Chrome profile",
-                body: "\(AppFlavor.current.appName) will use a separate copy of this profile. Your regular Chrome windows stay untouched.")
+                body: "\(AppFlavor.current.appName) can use this profile in its own browser window. Your regular Chrome session stays untouched.")
 
             self.profileCard(profile, selected: true, action: nil)
 
@@ -129,7 +129,7 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "Choose a Chrome profile",
-                body: "Pick the Chrome profile \(AppFlavor.current.appName) should copy into its own browser window. You should not need to inspect any Chrome settings or filesystem paths.")
+                body: "Pick the profile with the accounts \(AppFlavor.current.appName) should use for browser tasks.")
 
             ForEach(profiles) { profile in
                 self.profileCard(profile, selected: false) {
@@ -148,7 +148,7 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "Chrome connected",
-                body: "\(AppFlavor.current.appName) can now use \(profile.displayName) for browser tasks on this Mac. If a site needs your account, \(AppFlavor.current.appName) will open the page and wait for you to sign in.")
+                body: "\(AppFlavor.current.appName) can now use \(profile.displayName) for browser tasks. If a site needs a fresh sign-in, you will handle it in the browser.")
 
             self.profileCard(profile, selected: true, action: nil)
 

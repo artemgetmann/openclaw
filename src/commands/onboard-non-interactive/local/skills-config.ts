@@ -4,6 +4,7 @@ import type { OnboardOptions } from "../../onboard-types.js";
 
 export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "consumer-setup",
+  "timezone-preference-updater",
   "checkpoint",
   "monitor-router",
   "apple-notes",
@@ -29,6 +30,26 @@ export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
   "nano-pdf",
 ] as const;
 
+export function buildConsumerBundledSkillAllowlist(config: OpenClawConfig): string[] {
+  const existingAllowlist = config.skills?.allowBundled;
+  if (existingAllowlist?.includes("__none__")) {
+    return [...existingAllowlist];
+  }
+  const allowlist = existingAllowlist ? [...existingAllowlist] : [];
+  const allowed = new Set(allowlist);
+
+  for (const skillName of CONSUMER_DEFAULT_BUNDLED_SKILLS) {
+    const explicitlyDisabled = config.skills?.entries?.[skillName]?.enabled === false;
+    if (explicitlyDisabled || allowed.has(skillName)) {
+      continue;
+    }
+    allowlist.push(skillName);
+    allowed.add(skillName);
+  }
+
+  return allowlist;
+}
+
 export function applyNonInteractiveSkillsConfig(params: {
   nextConfig: OpenClawConfig;
   opts: OnboardOptions;
@@ -49,9 +70,8 @@ export function applyNonInteractiveSkillsConfig(params: {
     ...nextConfig,
     skills: {
       ...nextConfig.skills,
-      // Fresh consumer configs get a broad, useful model-facing skill surface.
-      // Existing allowlists are respected because they are explicit operator policy.
-      allowBundled: nextConfig.skills?.allowBundled ?? [...CONSUMER_DEFAULT_BUNDLED_SKILLS],
+      // Existing allowlists keep operator order while stale consumer configs get repaired.
+      allowBundled: buildConsumerBundledSkillAllowlist(nextConfig),
       install: {
         ...nextConfig.skills?.install,
         nodeManager,

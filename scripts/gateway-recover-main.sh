@@ -222,6 +222,78 @@ http_ready() {
   curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1
 }
 
+launch_agent_registered() {
+  local label="$1"
+  launchctl print "gui/$(id -u)/${label}" >/dev/null 2>&1
+}
+
+launchctl_not_loaded_detail() {
+  local detail="$1"
+  local normalized
+  normalized="$(printf '%s' "${detail}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${normalized}" == *"no such process"* ||
+    "${normalized}" == *"could not find service"* ||
+    "${normalized}" == *"not found"* ]]
+}
+
+bootstrap_launch_agent_or_exit() {
+  local label="$1"
+  local plist_path="$2"
+  local domain="gui/$(id -u)"
+  local target="${domain}/${label}"
+  local output=""
+
+  # launchd can remember a disabled state after bootout. Clearing it here makes
+  # recovery idempotent when the previous install died between plist creation
+  # and service registration.
+  launchctl enable "${target}" 2>/dev/null || true
+
+  if launch_agent_registered "${label}"; then
+    return 0
+  fi
+
+  if output="$(launchctl bootstrap "${domain}" "${plist_path}" 2>&1)"; then
+    return 0
+  fi
+
+  # A concurrent RunAtLoad registration can make bootstrap report an error even
+  # though the label is now present. Trust launchctl print over the bootstrap
+  # exit code so recovery does not stop on a harmless race.
+  if launch_agent_registered "${label}"; then
+    return 0
+  fi
+
+  dump_failure_diagnostics "launchctl bootstrap ${domain} ${plist_path}" "${output}"
+  exit 1
+}
+
+kickstart_launch_agent_or_exit() {
+  local label="$1"
+  local plist_path="$2"
+  local domain="gui/$(id -u)"
+  local target="${domain}/${label}"
+  local output=""
+
+  bootstrap_launch_agent_or_exit "${label}" "${plist_path}"
+
+  if output="$(launchctl kickstart -k "${target}" 2>&1)"; then
+    return 0
+  fi
+
+  # If launchd lost the registration between bootstrap and kickstart, register
+  # once more and retry. Other kickstart errors are real runtime failures and
+  # should still fail loudly with diagnostics.
+  if launchctl_not_loaded_detail "${output}"; then
+    bootstrap_launch_agent_or_exit "${label}" "${plist_path}"
+    if output="$(launchctl kickstart -k "${target}" 2>&1)"; then
+      return 0
+    fi
+  fi
+
+  dump_failure_diagnostics "launchctl kickstart -k ${target}" "${output}"
+  exit 1
+}
+
 assert_main_runtime_path() {
   local output
   if ! output="$(launchctl print "gui/$(id -u)/${GATEWAY_LABEL}" 2>&1)"; then
@@ -250,7 +322,7 @@ wait_for_listener() {
 
     if [[ "${retried}" -eq 0 && "${elapsed}" -ge "${RETRY_KICKSTART_AFTER_SECONDS}" ]]; then
       log "listener not ready after ${elapsed}s; issuing one controlled gateway kickstart"
-      run_strict launchctl kickstart -k "gui/$(id -u)/${GATEWAY_LABEL}"
+      kickstart_launch_agent_or_exit "${GATEWAY_LABEL}" "${HOME}/Library/LaunchAgents/${GATEWAY_LABEL}.plist"
       retried=1
     fi
 
@@ -415,8 +487,7 @@ main() {
   run_strict install_main_launch_agent
 
   log_block "Bootstrap gateway launch agent"
-  launchctl bootstrap "gui/$(id -u)" "${HOME}/Library/LaunchAgents/${GATEWAY_LABEL}.plist" 2>/dev/null || true
-  run_strict launchctl kickstart -k "gui/$(id -u)/${GATEWAY_LABEL}"
+  kickstart_launch_agent_or_exit "${GATEWAY_LABEL}" "${HOME}/Library/LaunchAgents/${GATEWAY_LABEL}.plist"
 
   log_block "Readiness gates"
   wait_for_listener
@@ -424,8 +495,7 @@ main() {
 
   if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
     log_block "Bootstrap watchdog launch agent"
-    launchctl bootstrap "gui/$(id -u)" "${HOME}/Library/LaunchAgents/${WATCHDOG_LABEL}.plist" 2>/dev/null || true
-    run_strict launchctl kickstart -k "gui/$(id -u)/${WATCHDOG_LABEL}"
+    kickstart_launch_agent_or_exit "${WATCHDOG_LABEL}" "${HOME}/Library/LaunchAgents/${WATCHDOG_LABEL}.plist"
     stabilize_watchdog
   fi
 
@@ -443,4 +513,6 @@ main() {
   printf '\nListener result on %s:\n%s\n' "${PORT}" "${listener_result}"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

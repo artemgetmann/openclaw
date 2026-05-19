@@ -2,6 +2,11 @@ import { Type } from "@sinclair/typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import type { JarvisBackendClient } from "../../consumer/jarvis-backend-client.js";
+import {
+  createJarvisManagedUtilityClient,
+  unwrapManagedProviderPayload,
+} from "../../consumer/managed-utilities.js";
 import { logVerbose } from "../../globals.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapWebContent } from "../../security/external-content.js";
@@ -1540,6 +1545,29 @@ function mapBraveLlmContextResults(
   }));
 }
 
+function mapBraveWebResults(data: BraveSearchResponse): Array<{
+  title: string;
+  url: string;
+  description: string;
+  published?: string;
+  siteName?: string;
+}> {
+  const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
+  return results.map((entry) => {
+    const description = entry.description ?? "";
+    const title = entry.title ?? "";
+    const url = entry.url ?? "";
+    const rawSiteName = resolveSiteName(url);
+    return {
+      title: title ? wrapWebContent(title, "web_search") : "",
+      url, // Keep raw for tool chaining
+      description: description ? wrapWebContent(description, "web_search") : "",
+      published: entry.age || undefined,
+      siteName: rawSiteName || undefined,
+    };
+  });
+}
+
 async function runBraveLlmContextSearch(params: {
   query: string;
   apiKey: string;
@@ -1595,6 +1623,58 @@ async function runBraveLlmContextSearch(params: {
   );
 }
 
+function resolveBraveFreshnessParam(params: {
+  freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
+}): string | undefined {
+  if (params.freshness) {
+    return params.freshness;
+  }
+  if (params.dateAfter && params.dateBefore) {
+    return `${params.dateAfter}to${params.dateBefore}`;
+  }
+  if (params.dateAfter) {
+    return `${params.dateAfter}to${new Date().toISOString().slice(0, 10)}`;
+  }
+  if (params.dateBefore) {
+    return `1970-01-01to${params.dateBefore}`;
+  }
+  return undefined;
+}
+
+async function runManagedBraveSearch(params: {
+  client: JarvisBackendClient;
+  query: string;
+  count: number;
+  country?: string;
+  search_lang?: string;
+  ui_lang?: string;
+  freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
+  mode: "web" | "llm-context";
+}): Promise<Record<string, unknown>> {
+  const freshness = resolveBraveFreshnessParam(params);
+  // Managed mode sends only search parameters to Jarvis; the backend owns the
+  // Brave credential and returns a sanitized provider payload.
+  return unwrapManagedProviderPayload(
+    await params.client.callManagedUtility({
+      utility: "brave.search",
+      input: {
+        query: params.query,
+        count: params.count,
+        mode: params.mode,
+        country: params.country,
+        search_lang: params.search_lang,
+        ui_lang: params.ui_lang,
+        freshness,
+      },
+    }),
+    "brave",
+  );
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -1621,8 +1701,11 @@ async function runWebSearch(params: {
   kimiBaseUrl?: string;
   kimiModel?: string;
   braveMode?: "web" | "llm-context";
+  managedBraveClient?: JarvisBackendClient | null;
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
+  const braveTransport =
+    params.provider === "brave" && params.managedBraveClient ? "jarvis-managed" : "direct";
   const providerSpecificKey =
     params.provider === "perplexity"
       ? `${params.perplexityTransport ?? "search_api"}:${params.perplexityBaseUrl ?? PERPLEXITY_DIRECT_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
@@ -1632,10 +1715,10 @@ async function runWebSearch(params: {
           ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-            : "";
+            : braveTransport;
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
-      ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
+      ? `${params.provider}:llm-context:${braveTransport}:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
       : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
@@ -1792,14 +1875,32 @@ async function runWebSearch(params: {
   }
 
   if (effectiveBraveMode === "llm-context") {
-    const { results: llmResults, sources } = await runBraveLlmContextSearch({
-      query: params.query,
-      apiKey: params.apiKey,
-      timeoutSeconds: params.timeoutSeconds,
-      country: params.country,
-      search_lang: params.search_lang,
-      freshness: params.freshness,
-    });
+    const managedPayload = params.managedBraveClient
+      ? await runManagedBraveSearch({
+          client: params.managedBraveClient,
+          query: params.query,
+          count: params.count,
+          country: params.country,
+          search_lang: params.search_lang,
+          freshness: params.freshness,
+          dateAfter: params.dateAfter,
+          dateBefore: params.dateBefore,
+          mode: effectiveBraveMode,
+        })
+      : undefined;
+    const { results: llmResults, sources } = managedPayload
+      ? {
+          results: mapBraveLlmContextResults(managedPayload as BraveLlmContextResponse),
+          sources: (managedPayload as BraveLlmContextResponse).sources,
+        }
+      : await runBraveLlmContextSearch({
+          query: params.query,
+          apiKey: params.apiKey,
+          timeoutSeconds: params.timeoutSeconds,
+          country: params.country,
+          search_lang: params.search_lang,
+          freshness: params.freshness,
+        });
 
     const mapped = llmResults.map((entry) => ({
       title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
@@ -1827,6 +1928,38 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.managedBraveClient) {
+    const data = await runManagedBraveSearch({
+      client: params.managedBraveClient,
+      query: params.query,
+      count: params.count,
+      country: params.country,
+      search_lang: params.search_lang,
+      ui_lang: params.ui_lang,
+      freshness: params.freshness,
+      dateAfter: params.dateAfter,
+      dateBefore: params.dateBefore,
+      mode: "web",
+    });
+    const mapped = mapBraveWebResults(data as BraveSearchResponse);
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      transport: "jarvis-managed" as const,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   const url = new URL(BRAVE_SEARCH_ENDPOINT);
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
@@ -1839,17 +1972,9 @@ async function runWebSearch(params: {
   if (params.ui_lang) {
     url.searchParams.set("ui_lang", params.ui_lang);
   }
-  if (params.freshness) {
-    url.searchParams.set("freshness", params.freshness);
-  } else if (params.dateAfter && params.dateBefore) {
-    url.searchParams.set("freshness", `${params.dateAfter}to${params.dateBefore}`);
-  } else if (params.dateAfter) {
-    url.searchParams.set(
-      "freshness",
-      `${params.dateAfter}to${new Date().toISOString().slice(0, 10)}`,
-    );
-  } else if (params.dateBefore) {
-    url.searchParams.set("freshness", `1970-01-01to${params.dateBefore}`);
+  const directFreshness = resolveBraveFreshnessParam(params);
+  if (directFreshness) {
+    url.searchParams.set("freshness", directFreshness);
   }
 
   const mapped = await withTrustedWebSearchEndpoint(
@@ -1872,20 +1997,7 @@ async function runWebSearch(params: {
       }
 
       const data = (await res.json()) as BraveSearchResponse;
-      const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
-      return results.map((entry) => {
-        const description = entry.description ?? "";
-        const title = entry.title ?? "";
-        const url = entry.url ?? "";
-        const rawSiteName = resolveSiteName(url);
-        return {
-          title: title ? wrapWebContent(title, "web_search") : "",
-          url, // Keep raw for tool chaining
-          description: description ? wrapWebContent(description, "web_search") : "",
-          published: entry.age || undefined,
-          siteName: rawSiteName || undefined,
-        };
-      });
+      return mapBraveWebResults(data);
     },
   );
 
@@ -1960,6 +2072,8 @@ export function createWebSearchTool(options?: {
       // do not touch Perplexity-only credential surfaces during tool construction.
       const perplexityRuntime =
         provider === "perplexity" ? resolvePerplexityTransport(perplexityConfig) : undefined;
+      const managedBraveClient =
+        provider === "brave" ? createJarvisManagedUtilityClient(options?.config) : null;
       const apiKey =
         provider === "perplexity"
           ? perplexityRuntime?.apiKey
@@ -1969,7 +2083,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : managedBraveClient
+                  ? "jarvis-managed"
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -2206,6 +2322,7 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         braveMode,
+        managedBraveClient,
       });
       return jsonResult(result);
     },

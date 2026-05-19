@@ -29,6 +29,34 @@ type AcpDispatchDeliveryState = {
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
 
+const ACP_INTERNAL_TOOL_SUMMARY_LINE_RE =
+  /^🔧\s+[\w./:-]+(?:\s+(?:start|update|completed|failed|cancelled|done|error))?$/iu;
+
+function stripAcpInternalToolSummaryLines(text: string): string {
+  const lines = text.split("\n");
+  const strippedLines = lines.map((line) => ACP_INTERNAL_TOOL_SUMMARY_LINE_RE.test(line.trim()));
+  if (!strippedLines.some(Boolean)) {
+    return text;
+  }
+
+  return lines
+    .filter((line, index) => {
+      if (strippedLines[index]) {
+        return false;
+      }
+      // Last-mile guard for ACP backends that already merged tool lifecycle
+      // labels into visible text before delivery. Keep real output and only
+      // remove blank paragraph separators attached to stripped labels.
+      if (line.trim() !== "") {
+        return true;
+      }
+      const previousStripped = index > 0 && strippedLines[index - 1];
+      const nextStripped = index + 1 < strippedLines.length && strippedLines[index + 1];
+      return !previousStripped && !nextStripped;
+    })
+    .join("\n");
+}
+
 export type AcpDispatchDeliveryCoordinator = {
   startReplyLifecycle: () => Promise<void>;
   deliver: (
@@ -52,6 +80,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  shouldSendToolSummaries?: boolean;
   onReplyStart?: () => Promise<void> | void;
 }): AcpDispatchDeliveryCoordinator {
   const state: AcpDispatchDeliveryState = {
@@ -119,6 +148,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ): Promise<boolean> => {
+    if (params.shouldSendToolSummaries === false && typeof payload.text === "string") {
+      payload = {
+        ...payload,
+        text: stripAcpInternalToolSummaryLines(payload.text),
+      };
+    }
     if (kind === "block" && payload.text?.trim()) {
       if (state.accumulatedBlockText.length > 0) {
         state.accumulatedBlockText += "\n";

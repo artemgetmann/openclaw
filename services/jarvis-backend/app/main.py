@@ -8,13 +8,39 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Protocol
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+import httpx
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel, Field
 
 SERVICE_VERSION = "0.1.0"
+FIRECRAWL_API_BASE_URL = "https://api.firecrawl.dev/v2"
+GOOGLE_PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+BRAVE_LLM_CONTEXT_URL = "https://api.search.brave.com/res/v1/llm/context"
+GEMINI_GENERATE_CONTENT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+GEMINI_IMAGE_GENERATION_MODEL = "gemini-3-pro-image-preview"
+TELEGRAM_BOT_API_BASE_URL = "https://api.telegram.org"
+MANAGED_UTILITY_TIMEOUT_SECONDS = 20.0
+TELEGRAM_MANAGED_BOT_TIMEOUT_SECONDS = 20.0
+TELEGRAM_MANAGED_SETUP_TTL_MINUTES = 15
+MAX_GEMINI_IMAGE_PROMPT_CHARS = 4000
+SUPPORTED_GEMINI_IMAGE_RESOLUTIONS = {"1K", "2K", "4K"}
+SUPPORTED_GEMINI_IMAGE_ASPECT_RATIOS = {
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+}
 
 
 class Settings(BaseModel):
@@ -28,6 +54,12 @@ class Settings(BaseModel):
     neon_database_url: str | None = None
     openai_configured: bool = False
     anthropic_configured: bool = False
+    firecrawl_api_key: str | None = Field(default=None, repr=False)
+    google_places_api_key: str | None = Field(default=None, repr=False)
+    gemini_api_key: str | None = Field(default=None, repr=False)
+    brave_api_key: str | None = Field(default=None, repr=False)
+    telegram_manager_bot_token: str | None = Field(default=None, repr=False)
+    telegram_manager_bot_username: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -43,6 +75,12 @@ def get_settings() -> Settings:
         neon_database_url=os.getenv("NEON_DATABASE_URL") or None,
         openai_configured=bool(os.getenv("OPENAI_API_KEY")),
         anthropic_configured=bool(os.getenv("ANTHROPIC_API_KEY")),
+        firecrawl_api_key=os.getenv("FIRECRAWL_API_KEY") or None,
+        google_places_api_key=os.getenv("GOOGLE_PLACES_API_KEY") or None,
+        gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
+        brave_api_key=os.getenv("BRAVE_API_KEY") or None,
+        telegram_manager_bot_token=os.getenv("TELEGRAM_MANAGER_BOT_TOKEN") or None,
+        telegram_manager_bot_username=os.getenv("MANAGER_BOT_USERNAME") or None,
     )
 
 
@@ -155,9 +193,7 @@ class ManagedUtilityUsage(BaseModel):
 
 
 class ManagedUtilityResult(BaseModel):
-    utility: str
-    providers: dict[str, bool]
-    message: str
+    provider: str
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -165,6 +201,51 @@ class ManagedUtilityResponse(BaseModel):
     ok: Literal[True]
     result: ManagedUtilityResult
     usage: ManagedUtilityUsage | None = None
+
+
+class TelegramManagedStartRequest(BaseModel):
+    deviceId: str | None = Field(default=None, min_length=8, max_length=128)
+    appVersion: str | None = Field(default=None, max_length=64)
+    accountAccessToken: str | None = Field(default=None, min_length=16, max_length=256)
+    suggestedBotName: str | None = Field(default=None, min_length=1, max_length=64)
+    suggestedBotUsername: str | None = Field(default=None, min_length=5, max_length=32)
+
+
+class TelegramManagedStartResponse(BaseModel):
+    setupId: str
+    approvalUrl: str
+    suggestedBotUsername: str
+    expiresAt: datetime
+    status: Literal["pending"]
+
+
+class TelegramManagedStatusResponse(BaseModel):
+    setupId: str
+    expiresAt: datetime
+    status: Literal["pending", "connected"]
+    suggestedBotUsername: str
+    botId: int | None = None
+    botUsername: str | None = None
+    managedChildBotToken: str | None = Field(default=None, repr=False)
+
+
+class TelegramManagedSetupSession(BaseModel):
+    setup_id: str
+    device_id: str | None = None
+    app_version: str | None = None
+    account_id: str | None = None
+    suggested_bot_name: str
+    suggested_bot_username: str
+    approval_url: str
+    expires_at: datetime
+    status: Literal["pending", "connected"] = "pending"
+    bot_id: int | None = None
+    bot_username: str | None = None
+    managed_child_bot_token: str | None = Field(default=None, repr=False)
+    last_update_id: int | None = None
+
+
+telegram_managed_setup_sessions: dict[str, TelegramManagedSetupSession] = {}
 
 
 app = FastAPI(
@@ -311,6 +392,91 @@ async def admin_update_license(
 
 
 @app.post(
+    "/v1/telegram/managed/start",
+    response_model=TelegramManagedStartResponse,
+    dependencies=[Depends(require_api_token)],
+)
+async def telegram_managed_start(
+    request: TelegramManagedStartRequest,
+    settings: Settings = Depends(get_settings),
+) -> TelegramManagedStartResponse:
+    """
+    Start a Telegram managed-bot setup handoff.
+
+    The backend owns the manager bot secret and returns only Telegram's approval
+    link. The child token is not available until the user approves the new bot
+    in Telegram and the manager receives a managed_bot update.
+    """
+
+    _require_telegram_manager_config(settings)
+    store = get_license_store(settings)
+    account_id: str | None = None
+    if request.accountAccessToken:
+        account_id = _account_id_from_access_token(
+            store,
+            request.accountAccessToken,
+        )
+
+    suggested_bot_username = _telegram_suggested_bot_username(request.suggestedBotUsername)
+    suggested_bot_name = (request.suggestedBotName or "Jarvis Assistant").strip()
+    setup_id = f"tgms_{secrets.token_urlsafe(16)}"
+    expires_at = _utcnow() + timedelta(minutes=TELEGRAM_MANAGED_SETUP_TTL_MINUTES)
+    approval_url = _telegram_managed_approval_url(
+        manager_username=settings.telegram_manager_bot_username or "",
+        suggested_bot_username=suggested_bot_username,
+        suggested_bot_name=suggested_bot_name,
+    )
+    session = TelegramManagedSetupSession(
+        setup_id=setup_id,
+        device_id=request.deviceId,
+        app_version=request.appVersion,
+        account_id=account_id,
+        suggested_bot_name=suggested_bot_name,
+        suggested_bot_username=suggested_bot_username,
+        approval_url=approval_url,
+        expires_at=expires_at,
+    )
+    store.save_telegram_managed_setup_session(session=session)
+    telegram_managed_setup_sessions[setup_id] = session
+    _prune_expired_telegram_managed_sessions(store)
+
+    return TelegramManagedStartResponse(
+        setupId=session.setup_id,
+        approvalUrl=session.approval_url,
+        suggestedBotUsername=session.suggested_bot_username,
+        expiresAt=session.expires_at,
+        status="pending",
+    )
+
+
+@app.get(
+    "/v1/telegram/managed/status/{setup_id}",
+    response_model=TelegramManagedStatusResponse,
+    dependencies=[Depends(require_api_token)],
+)
+async def telegram_managed_status(
+    setup_id: str,
+    settings: Settings = Depends(get_settings),
+) -> TelegramManagedStatusResponse:
+    """
+    Poll Telegram for a matching managed-bot approval and finalize setup.
+
+    Setup state is stored through the license-store abstraction so local tests
+    stay SQLite-simple while production survives Render restarts on Neon.
+    """
+
+    _require_telegram_manager_config(settings)
+    store = get_license_store(settings)
+    session = _telegram_managed_setup_session(store, setup_id)
+    if session.status == "pending":
+        await _refresh_telegram_managed_setup_session(session, settings)
+        store.save_telegram_managed_setup_session(session=session)
+        telegram_managed_setup_sessions[setup_id] = session
+
+    return _telegram_managed_status_response(session)
+
+
+@app.post(
     "/v1/managed/utilities/{utility}",
     response_model=ManagedUtilityResponse,
     dependencies=[Depends(require_api_token)],
@@ -321,23 +487,800 @@ async def managed_utility(
     settings: Settings = Depends(get_settings),
 ) -> ManagedUtilityResponse:
     """
-    Placeholder for future server-held provider-key operations.
+    Execute the first server-managed utilities with provider keys held here.
 
-    The response only exposes provider availability. Raw keys remain process
-    env on the server, which is the core safety boundary this service exists to
-    establish before real managed features are wired in.
+    The app sends a small, provider-neutral input. This backend performs the
+    provider call, redacts configured secrets from any echoed JSON, and returns
+    the stable envelope the app already expects.
     """
+
+    if utility == "firecrawl.search":
+        return await _firecrawl_search(request.input, settings)
+    if utility == "firecrawl.scrape":
+        return await _firecrawl_scrape(request.input, settings)
+    if utility == "google_places.search":
+        return await _google_places_search(request.input, settings)
+    if utility == "brave.search":
+        return await _brave_search(request.input, settings)
+    if utility == "gemini.image.generate":
+        return await _gemini_image_generate(request.input, settings)
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Unknown managed utility: {utility}",
+    )
+
+
+def _require_telegram_manager_config(settings: Settings) -> None:
+    """Fail closed until Render has both manager-bot identity values configured."""
+
+    if settings.telegram_manager_bot_token and settings.telegram_manager_bot_username:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="telegram managed bots provider is not configured",
+    )
+
+
+def _telegram_suggested_bot_username(suggested_username: str | None) -> str:
+    """
+    Normalize a Telegram bot username or generate a safe short default.
+
+    Telegram enforces the final uniqueness/availability check during approval.
+    We still validate basic shape here so the app does not show obviously broken
+    links that fail before the user even reaches Telegram.
+    """
+
+    username = (suggested_username or f"jarvis_{secrets.token_hex(4)}_bot").strip().lstrip("@")
+    if (
+        len(username) < 5
+        or len(username) > 32
+        or not username.replace("_", "").isalnum()
+        or not username.lower().endswith("bot")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="suggestedBotUsername must be 5-32 letters, numbers, or underscores and end with bot",
+        )
+    return username
+
+
+def _telegram_managed_approval_url(
+    *,
+    manager_username: str,
+    suggested_bot_username: str,
+    suggested_bot_name: str,
+) -> str:
+    """Build Telegram's managed-bot creation link without exposing the manager token."""
+
+    clean_manager_username = manager_username.strip().lstrip("@")
+    url = f"https://t.me/newbot/{clean_manager_username}/{suggested_bot_username}"
+    if suggested_bot_name:
+        url = f"{url}?name={quote(suggested_bot_name)}"
+    return url
+
+
+def _telegram_managed_setup_session(
+    store: LicenseStore,
+    setup_id: str,
+) -> TelegramManagedSetupSession:
+    """Fetch a non-expired setup session from durable storage by public setup id."""
+
+    # Durable storage is authoritative. The process cache only prevents extra
+    # row decoding inside one worker and must not hide restart/redeploy loss.
+    session = store.get_telegram_managed_setup_session(setup_id=setup_id)
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Telegram setup not found")
+    if session.expires_at <= _utcnow():
+        store.delete_telegram_managed_setup_session(setup_id=setup_id)
+        telegram_managed_setup_sessions.pop(setup_id, None)
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Telegram setup expired")
+    telegram_managed_setup_sessions[setup_id] = session
+    return session
+
+
+def _prune_expired_telegram_managed_sessions(store: LicenseStore) -> None:
+    """Keep durable setup state and the process cache from growing forever."""
+
+    now = _utcnow()
+    store.delete_expired_telegram_managed_setup_sessions(now=now)
+    expired_setup_ids = [
+        setup_id
+        for setup_id, session in telegram_managed_setup_sessions.items()
+        if session.expires_at <= now
+    ]
+    for setup_id in expired_setup_ids:
+        telegram_managed_setup_sessions.pop(setup_id, None)
+
+
+async def _refresh_telegram_managed_setup_session(
+    session: TelegramManagedSetupSession,
+    settings: Settings,
+) -> None:
+    """
+    Poll for the matching managed_bot update, then fetch and restrict the child.
+
+    The child token is returned to the caller but never logged and never echoed
+    in provider error payloads because Telegram provider responses are sanitized
+    against both manager and child secrets.
+    """
+
+    updates = await _telegram_bot_api_call(
+        method="getUpdates",
+        token=settings.telegram_manager_bot_token or "",
+        payload=_telegram_managed_get_updates_payload(session),
+        settings=settings,
+    )
+    if not isinstance(updates, list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="telegram getUpdates returned an invalid result",
+        )
+
+    managed_bot = _matching_managed_bot_update(session, updates)
+    if managed_bot is None:
+        return
+
+    child_token_payload = await _telegram_bot_api_call(
+        method="getManagedBotToken",
+        token=settings.telegram_manager_bot_token or "",
+        payload={"user_id": managed_bot["id"]},
+        settings=settings,
+    )
+    if not isinstance(child_token_payload, str) or not child_token_payload:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="telegram getManagedBotToken returned an invalid result",
+        )
+
+    child_get_me = await _telegram_bot_api_call(
+        method="getMe",
+        token=child_token_payload,
+        payload={},
+        settings=settings,
+        extra_secrets=[child_token_payload],
+    )
+    if not isinstance(child_get_me, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="telegram child getMe returned an invalid result",
+        )
+
+    await _telegram_bot_api_call(
+        method="setManagedBotAccessSettings",
+        token=settings.telegram_manager_bot_token or "",
+        payload={"user_id": managed_bot["id"], "is_access_restricted": True},
+        settings=settings,
+        extra_secrets=[child_token_payload],
+    )
+
+    # Prefer getMe as the final truth because it validates the fetched token.
+    session.status = "connected"
+    session.bot_id = _telegram_int_field(child_get_me, "id") or managed_bot["id"]
+    session.bot_username = _telegram_string_field(child_get_me, "username") or managed_bot["username"]
+    session.managed_child_bot_token = child_token_payload
+
+
+def _telegram_managed_get_updates_payload(session: TelegramManagedSetupSession) -> dict[str, Any]:
+    """Build a narrow getUpdates request that only asks Telegram for managed-bot events."""
+
+    payload: dict[str, Any] = {
+        "limit": 20,
+        "timeout": 0,
+        "allowed_updates": ["managed_bot"],
+    }
+    if session.last_update_id is not None:
+        payload["offset"] = session.last_update_id + 1
+    return payload
+
+
+def _matching_managed_bot_update(
+    session: TelegramManagedSetupSession,
+    updates: list[Any],
+) -> dict[str, Any] | None:
+    """Find the update for this suggested username and advance this session's offset."""
+
+    expected_username = session.suggested_bot_username.lower()
+    for update in updates:
+        if not isinstance(update, dict):
+            continue
+        update_id = update.get("update_id")
+        if isinstance(update_id, int) and not isinstance(update_id, bool):
+            session.last_update_id = update_id
+        managed_bot_update = update.get("managed_bot")
+        if not isinstance(managed_bot_update, dict):
+            continue
+        bot = managed_bot_update.get("bot")
+        if not isinstance(bot, dict):
+            continue
+        bot_id = _telegram_int_field(bot, "id")
+        username = _telegram_string_field(bot, "username")
+        if bot_id is None or username is None:
+            continue
+        if username.lower() == expected_username:
+            return {"id": bot_id, "username": username}
+    return None
+
+
+async def _telegram_bot_api_call(
+    *,
+    method: str,
+    token: str,
+    payload: dict[str, Any],
+    settings: Settings,
+    extra_secrets: list[str] | None = None,
+) -> Any:
+    """Call Telegram Bot API and sanitize failures before they cross our boundary."""
+
+    try:
+        async with httpx.AsyncClient(timeout=TELEGRAM_MANAGED_BOT_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                f"{TELEGRAM_BOT_API_BASE_URL}/bot{token}/{method}",
+                json=payload,
+            )
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="telegram request timed out",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="telegram request failed",
+        ) from exc
+
+    provider_payload = _response_json_or_text(response)
+    sanitized_payload = _sanitize_provider_payload(
+        provider_payload,
+        settings,
+        extra_secrets=extra_secrets,
+    )
+    if response.status_code >= 400 or not isinstance(provider_payload, dict) or not provider_payload.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "provider": "telegram",
+                "method": method,
+                "status": response.status_code,
+                "payload": sanitized_payload,
+            },
+        )
+    return provider_payload.get("result")
+
+
+def _telegram_int_field(payload: dict[str, Any], field_name: str) -> int | None:
+    """Read Telegram integer fields without accepting bools as ids."""
+
+    value = payload.get(field_name)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _telegram_string_field(payload: dict[str, Any], field_name: str) -> str | None:
+    """Read Telegram string fields and collapse empty values to None."""
+
+    value = payload.get(field_name)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _telegram_managed_status_response(
+    session: TelegramManagedSetupSession,
+) -> TelegramManagedStatusResponse:
+    """Convert the internal session model to the app-facing status contract."""
+
+    return TelegramManagedStatusResponse(
+        setupId=session.setup_id,
+        expiresAt=session.expires_at,
+        status=session.status,
+        suggestedBotUsername=session.suggested_bot_username,
+        botId=session.bot_id,
+        botUsername=session.bot_username,
+        managedChildBotToken=session.managed_child_bot_token,
+    )
+
+
+async def _firecrawl_search(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Run a conservative Firecrawl web search using the server-held API key."""
+
+    api_key = _require_provider_key("firecrawl", settings.firecrawl_api_key)
+    query = _required_input_string(input_payload, "query", "firecrawl.search")
+    limit = _optional_limit(input_payload, default=5, maximum=10, utility="firecrawl.search")
+    provider_payload = await _post_provider_json(
+        provider="firecrawl",
+        url=f"{FIRECRAWL_API_BASE_URL}/search",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json_payload={"query": query, "limit": limit},
+        settings=settings,
+    )
+    return _managed_provider_response("firecrawl", provider_payload)
+
+
+async def _firecrawl_scrape(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Scrape one URL through Firecrawl and request markdown by default."""
+
+    api_key = _require_provider_key("firecrawl", settings.firecrawl_api_key)
+    url = _required_input_string(input_payload, "url", "firecrawl.scrape")
+    provider_payload = await _post_provider_json(
+        provider="firecrawl",
+        url=f"{FIRECRAWL_API_BASE_URL}/scrape",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json_payload={"url": url, "formats": ["markdown"]},
+        settings=settings,
+    )
+    return _managed_provider_response("firecrawl", provider_payload)
+
+
+async def _google_places_search(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Run Google Places Text Search with a tight field mask to control payload size."""
+
+    api_key = _require_provider_key("google_places", settings.google_places_api_key)
+    query = _required_input_string(input_payload, "query", "google_places.search")
+    limit = _optional_limit(input_payload, default=5, maximum=10, utility="google_places.search")
+    provider_payload = await _post_provider_json(
+        provider="google_places",
+        url=GOOGLE_PLACES_TEXT_SEARCH_URL,
+        headers={
+            "X-Goog-Api-Key": api_key,
+            "X-Goog-FieldMask": (
+                "places.id,places.displayName,places.formattedAddress,"
+                "places.location,places.googleMapsUri,nextPageToken"
+            ),
+        },
+        json_payload={"textQuery": query, "pageSize": limit},
+        settings=settings,
+    )
+    return _managed_provider_response("google_places", provider_payload)
+
+
+async def _brave_search(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Run Brave Search with the server-held key so managed users stay BYOK-free."""
+
+    api_key = _require_provider_key("brave", settings.brave_api_key)
+    query = _required_input_string(input_payload, "query", "brave.search")
+    count = _optional_count_or_limit(input_payload, default=5, maximum=10, utility="brave.search")
+    mode = _optional_string(input_payload, "mode")
+    if mode not in (None, "web", "llm-context"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="brave.search input.mode must be web or llm-context",
+        )
+
+    query_params = {"q": query}
+    if mode != "llm-context":
+        query_params["count"] = str(count)
+    for field_name in ("country", "search_lang", "ui_lang", "freshness"):
+        value = _optional_string(input_payload, field_name)
+        if value:
+            query_params[field_name] = value
+
+    provider_payload = await _get_provider_json(
+        provider="brave",
+        url=BRAVE_LLM_CONTEXT_URL if mode == "llm-context" else BRAVE_SEARCH_URL,
+        headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
+        params=query_params,
+        settings=settings,
+    )
+    return _managed_provider_response("brave", provider_payload)
+
+
+async def _gemini_image_generate(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Generate one image through Gemini with the server-held API key.
+
+    This first managed slice intentionally supports text-to-image only. Image
+    editing/composition requires client-to-server binary upload limits, storage,
+    and abuse controls, so the local BYOK Nano Banana path remains responsible
+    for input-image workflows until that contract is designed.
+    """
+
+    api_key = _require_provider_key("gemini", settings.gemini_api_key)
+    prompt = _required_input_string(input_payload, "prompt", "gemini.image.generate")
+    if len(prompt) > MAX_GEMINI_IMAGE_PROMPT_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "gemini.image.generate input.prompt must be "
+                f"{MAX_GEMINI_IMAGE_PROMPT_CHARS} characters or fewer"
+            ),
+        )
+
+    resolution = _optional_choice(
+        input_payload,
+        "resolution",
+        "gemini.image.generate",
+        SUPPORTED_GEMINI_IMAGE_RESOLUTIONS,
+        default="1K",
+    )
+    aspect_ratio = _optional_choice(
+        input_payload,
+        "aspectRatio",
+        "gemini.image.generate",
+        SUPPORTED_GEMINI_IMAGE_ASPECT_RATIOS,
+    )
+    provider_payload = await _post_provider_json(
+        provider="gemini",
+        url=f"{GEMINI_GENERATE_CONTENT_BASE_URL}/{GEMINI_IMAGE_GENERATION_MODEL}:generateContent",
+        headers={"x-goog-api-key": api_key},
+        json_payload=_gemini_image_generation_request(
+            prompt=prompt,
+            resolution=resolution,
+            aspect_ratio=aspect_ratio,
+        ),
+        settings=settings,
+    )
+    return _managed_provider_response(
+        "gemini",
+        _extract_gemini_image_generation_payload(
+            provider_payload=provider_payload,
+            model=GEMINI_IMAGE_GENERATION_MODEL,
+        ),
+    )
+
+
+async def _post_provider_json(
+    *,
+    provider: str,
+    url: str,
+    headers: dict[str, str],
+    json_payload: dict[str, Any],
+    settings: Settings,
+) -> dict[str, Any]:
+    """POST provider JSON while converting network failures into clean API errors."""
+
+    try:
+        async with httpx.AsyncClient(timeout=MANAGED_UTILITY_TIMEOUT_SECONDS) as client:
+            response = await client.post(url, headers=headers, json=json_payload)
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"{provider} request timed out",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"{provider} request failed",
+        ) from exc
+
+    provider_payload = _response_json_or_text(response)
+    sanitized_payload = _sanitize_provider_payload(provider_payload, settings)
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "provider": provider,
+                "status": response.status_code,
+                "payload": sanitized_payload,
+            },
+        )
+
+    if isinstance(sanitized_payload, dict):
+        return sanitized_payload
+    return {"value": sanitized_payload}
+
+
+async def _get_provider_json(
+    *,
+    provider: str,
+    url: str,
+    headers: dict[str, str],
+    params: dict[str, str],
+    settings: Settings,
+) -> dict[str, Any]:
+    """GET provider JSON for read-only managed utilities such as Brave Search."""
+
+    try:
+        async with httpx.AsyncClient(timeout=MANAGED_UTILITY_TIMEOUT_SECONDS) as client:
+            response = await client.get(url, headers=headers, params=params)
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"{provider} request timed out",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"{provider} request failed",
+        ) from exc
+
+    provider_payload = _response_json_or_text(response)
+    sanitized_payload = _sanitize_provider_payload(provider_payload, settings)
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "provider": provider,
+                "status": response.status_code,
+                "payload": sanitized_payload,
+            },
+        )
+
+    if isinstance(sanitized_payload, dict):
+        return sanitized_payload
+    return {"value": sanitized_payload}
+
+
+def _response_json_or_text(response: httpx.Response) -> Any:
+    """Keep provider pass-through JSON-first, with text fallback for bad responses."""
+
+    try:
+        return response.json()
+    except ValueError:
+        return {"text": response.text}
+
+
+def _require_provider_key(provider: str, api_key: str | None) -> str:
+    """Fail closed when Render has not been configured for this managed utility."""
+
+    if api_key:
+        return api_key
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=f"{provider} provider is not configured",
+    )
+
+
+def _required_input_string(input_payload: dict[str, Any], field_name: str, utility: str) -> str:
+    """Validate the tiny public utility contract before spending provider quota."""
+
+    raw_value = input_payload.get(field_name)
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} requires input.{field_name}",
+        )
+    return raw_value.strip()
+
+
+def _optional_string(input_payload: dict[str, Any], field_name: str) -> str | None:
+    """Allow only non-empty string provider parameters through the managed boundary."""
+
+    raw_value = input_payload.get(field_name)
+    if not isinstance(raw_value, str):
+        return None
+    value = raw_value.strip()
+    return value or None
+
+
+def _optional_choice(
+    input_payload: dict[str, Any],
+    field_name: str,
+    utility: str,
+    choices: set[str],
+    *,
+    default: str | None = None,
+) -> str | None:
+    """Validate small enum-like fields before a provider call can spend money."""
+
+    raw_value = input_payload.get(field_name)
+    if raw_value is None:
+        return default
+    if not isinstance(raw_value, str) or raw_value not in choices:
+        allowed = ", ".join(sorted(choices))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} input.{field_name} must be one of: {allowed}",
+        )
+    return raw_value
+
+
+def _optional_limit(
+    input_payload: dict[str, Any],
+    *,
+    default: int,
+    maximum: int,
+    utility: str,
+) -> int:
+    """Read a small positive limit so managed calls stay bounded by default."""
+
+    raw_value = input_payload.get("limit")
+    if raw_value is None:
+        return default
+    if (
+        isinstance(raw_value, bool)
+        or not isinstance(raw_value, int)
+        or raw_value < 1
+        or raw_value > maximum
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} input.limit must be an integer between 1 and {maximum}",
+        )
+    return raw_value
+
+
+def _optional_count_or_limit(
+    input_payload: dict[str, Any],
+    *,
+    default: int,
+    maximum: int,
+    utility: str,
+) -> int:
+    """Support both app-facing count and existing managed utility limit names."""
+
+    raw_count = input_payload.get("count")
+    if raw_count is None:
+        return _optional_limit(input_payload, default=default, maximum=maximum, utility=utility)
+    if input_payload.get("limit") is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} input.count and input.limit cannot both be set",
+        )
+    return _optional_limit(
+        {"limit": raw_count},
+        default=default,
+        maximum=maximum,
+        utility=utility,
+    )
+
+
+def _gemini_image_generation_request(
+    *,
+    prompt: str,
+    resolution: str | None,
+    aspect_ratio: str | None,
+) -> dict[str, Any]:
+    """Build the narrow Gemini REST payload for one text-to-image request."""
+
+    image_config: dict[str, str] = {}
+    if resolution:
+        image_config["imageSize"] = resolution
+    if aspect_ratio:
+        image_config["aspectRatio"] = aspect_ratio
+
+    generation_config: dict[str, Any] = {
+        "responseModalities": ["TEXT", "IMAGE"],
+    }
+    if image_config:
+        generation_config["imageConfig"] = image_config
+
+    return {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": generation_config,
+    }
+
+
+def _extract_gemini_image_generation_payload(
+    *,
+    provider_payload: dict[str, Any],
+    model: str,
+) -> dict[str, Any]:
+    """Normalize Gemini's candidate/parts response into a tiny app contract."""
+
+    images: list[dict[str, str]] = []
+    texts: list[str] = []
+    candidates = provider_payload.get("candidates")
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content")
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts")
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    texts.append(text)
+                inline_data = part.get("inlineData") or part.get("inline_data")
+                if not isinstance(inline_data, dict):
+                    continue
+                data = inline_data.get("data")
+                if not isinstance(data, str) or not data.strip():
+                    continue
+                mime_type = inline_data.get("mimeType") or inline_data.get("mime_type")
+                images.append(
+                    {
+                        "mimeType": mime_type if isinstance(mime_type, str) else "image/png",
+                        "data": data,
+                    }
+                )
+
+    if not images:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="gemini returned no generated image",
+        )
+
+    model_version = provider_payload.get("modelVersion")
+    payload: dict[str, Any] = {
+        "model": model_version if isinstance(model_version, str) and model_version else model,
+        "images": images,
+    }
+    if texts:
+        payload["text"] = "\n".join(texts)
+    usage_metadata = provider_payload.get("usageMetadata")
+    if isinstance(usage_metadata, dict):
+        payload["usageMetadata"] = usage_metadata
+    return payload
+
+
+def _managed_provider_response(
+    provider: str,
+    provider_payload: dict[str, Any],
+) -> ManagedUtilityResponse:
+    """Wrap provider JSON in the app-facing envelope without leaking keys."""
 
     return ManagedUtilityResponse(
         ok=True,
         result=ManagedUtilityResult(
-            utility=utility,
-            providers=_provider_presence(settings),
-            message="Managed utility contract is available; provider keys are server-held.",
-            payload={},
+            provider=provider,
+            payload=provider_payload,
         ),
-        usage=ManagedUtilityUsage(),
+        usage=ManagedUtilityUsage(units=_provider_units(provider_payload)),
     )
+
+
+def _provider_units(provider_payload: dict[str, Any]) -> int:
+    """Expose coarse usage when the provider returns it, otherwise count one call."""
+
+    credits_used = provider_payload.get("creditsUsed")
+    if isinstance(credits_used, int) and not isinstance(credits_used, bool) and credits_used >= 0:
+        return credits_used
+    return 1
+
+
+def _sanitize_provider_payload(
+    payload: Any,
+    settings: Settings,
+    *,
+    extra_secrets: list[str] | None = None,
+) -> Any:
+    """Recursively redact known server secrets if a provider ever echoes them."""
+
+    secrets_to_redact = [
+        value
+        for value in (
+            settings.api_token,
+            settings.firecrawl_api_key,
+            settings.google_places_api_key,
+            settings.gemini_api_key,
+            settings.brave_api_key,
+            settings.telegram_manager_bot_token,
+        )
+        if value
+    ]
+    if extra_secrets:
+        secrets_to_redact.extend(secret_value for secret_value in extra_secrets if secret_value)
+    return _redact_known_secrets(payload, secrets_to_redact)
+
+
+def _redact_known_secrets(payload: Any, secrets_to_redact: list[str]) -> Any:
+    """Replace exact configured secret substrings while preserving provider shape."""
+
+    if isinstance(payload, dict):
+        return {
+            key: _redact_known_secrets(value, secrets_to_redact)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [_redact_known_secrets(value, secrets_to_redact) for value in payload]
+    if isinstance(payload, str):
+        redacted_value = payload
+        for secret_value in secrets_to_redact:
+            redacted_value = redacted_value.replace(secret_value, "[redacted]")
+        return redacted_value
+    return payload
 
 
 class LicenseRecord(BaseModel):
@@ -396,6 +1339,26 @@ class LicenseStore(Protocol):
         state: Literal["trial_active", "licensed", "expired"],
     ) -> LicenseRecord:
         """Persist a manual license override for the requested device."""
+
+    def save_telegram_managed_setup_session(
+        self,
+        *,
+        session: TelegramManagedSetupSession,
+    ) -> None:
+        """Persist the Telegram setup session without storing the manager token."""
+
+    def get_telegram_managed_setup_session(
+        self,
+        *,
+        setup_id: str,
+    ) -> TelegramManagedSetupSession | None:
+        """Load one Telegram setup session by public setup id."""
+
+    def delete_telegram_managed_setup_session(self, *, setup_id: str) -> None:
+        """Delete one Telegram setup session after expiry or cleanup."""
+
+    def delete_expired_telegram_managed_setup_sessions(self, *, now: datetime) -> None:
+        """Delete Telegram setup sessions whose approval window has expired."""
 
 
 def get_license_store(settings: Settings) -> LicenseStore:
@@ -574,6 +1537,94 @@ class SQLiteLicenseStore:
 
         return _record_from_row(row)
 
+    def save_telegram_managed_setup_session(
+        self,
+        *,
+        session: TelegramManagedSetupSession,
+    ) -> None:
+        """
+        Upsert one Telegram setup session into the same SQLite store as licenses.
+
+        The manager bot token is intentionally absent from this schema. The
+        child token is sensitive but must survive backend restarts once approval
+        succeeds so the app can finish local runtime setup after a reconnect.
+        """
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                """
+                INSERT INTO telegram_managed_setup_sessions (
+                    setup_id,
+                    device_id,
+                    app_version,
+                    account_id,
+                    suggested_bot_name,
+                    suggested_bot_username,
+                    approval_url,
+                    expires_at,
+                    status,
+                    bot_id,
+                    bot_username,
+                    managed_child_bot_token,
+                    last_update_id,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setup_id) DO UPDATE SET
+                    device_id = excluded.device_id,
+                    app_version = excluded.app_version,
+                    account_id = excluded.account_id,
+                    suggested_bot_name = excluded.suggested_bot_name,
+                    suggested_bot_username = excluded.suggested_bot_username,
+                    approval_url = excluded.approval_url,
+                    expires_at = excluded.expires_at,
+                    status = excluded.status,
+                    bot_id = excluded.bot_id,
+                    bot_username = excluded.bot_username,
+                    managed_child_bot_token = excluded.managed_child_bot_token,
+                    last_update_id = excluded.last_update_id,
+                    updated_at = excluded.updated_at
+                """,
+                _telegram_managed_session_values(session, updated_at=_utcnow()),
+            )
+
+    def get_telegram_managed_setup_session(
+        self,
+        *,
+        setup_id: str,
+    ) -> TelegramManagedSetupSession | None:
+        """Load a Telegram setup session from SQLite without logging sensitive fields."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM telegram_managed_setup_sessions WHERE setup_id = ?",
+                (setup_id,),
+            ).fetchone()
+
+        return _telegram_managed_session_from_row(row) if row else None
+
+    def delete_telegram_managed_setup_session(self, *, setup_id: str) -> None:
+        """Remove one expired or completed setup session from local SQLite."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                "DELETE FROM telegram_managed_setup_sessions WHERE setup_id = ?",
+                (setup_id,),
+            )
+
+    def delete_expired_telegram_managed_setup_sessions(self, *, now: datetime) -> None:
+        """Prune expired Telegram setup sessions from local SQLite."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                "DELETE FROM telegram_managed_setup_sessions WHERE expires_at <= ?",
+                (_format_dt(now),),
+            )
+
     def _connect(self) -> sqlite3.Connection:
         """Open a short-lived connection and create local/Render disk folders."""
 
@@ -597,6 +1648,27 @@ class SQLiteLicenseStore:
                 email TEXT NOT NULL UNIQUE,
                 account_access_token_hash TEXT NOT NULL UNIQUE,
                 created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS telegram_managed_setup_sessions (
+                setup_id TEXT PRIMARY KEY,
+                device_id TEXT,
+                app_version TEXT,
+                account_id TEXT,
+                suggested_bot_name TEXT NOT NULL,
+                suggested_bot_username TEXT NOT NULL,
+                approval_url TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'connected')),
+                bot_id INTEGER,
+                bot_username TEXT,
+                managed_child_bot_token TEXT,
+                last_update_id INTEGER,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -774,6 +1846,99 @@ class PostgresLicenseStore:
 
         return _record_from_row(row)
 
+    def save_telegram_managed_setup_session(
+        self,
+        *,
+        session: TelegramManagedSetupSession,
+    ) -> None:
+        """
+        Upsert one Telegram setup session into Neon/Postgres.
+
+        This deliberately reuses the license-store connection path. Adding a
+        second database layer here would make local/production behavior drift
+        exactly where restart recovery needs to be boring.
+        """
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO telegram_managed_setup_sessions (
+                        setup_id,
+                        device_id,
+                        app_version,
+                        account_id,
+                        suggested_bot_name,
+                        suggested_bot_username,
+                        approval_url,
+                        expires_at,
+                        status,
+                        bot_id,
+                        bot_username,
+                        managed_child_bot_token,
+                        last_update_id,
+                        updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(setup_id) DO UPDATE SET
+                        device_id = excluded.device_id,
+                        app_version = excluded.app_version,
+                        account_id = excluded.account_id,
+                        suggested_bot_name = excluded.suggested_bot_name,
+                        suggested_bot_username = excluded.suggested_bot_username,
+                        approval_url = excluded.approval_url,
+                        expires_at = excluded.expires_at,
+                        status = excluded.status,
+                        bot_id = excluded.bot_id,
+                        bot_username = excluded.bot_username,
+                        managed_child_bot_token = excluded.managed_child_bot_token,
+                        last_update_id = excluded.last_update_id,
+                        updated_at = excluded.updated_at
+                    """,
+                    _telegram_managed_session_values(session, updated_at=_utcnow()),
+                )
+
+    def get_telegram_managed_setup_session(
+        self,
+        *,
+        setup_id: str,
+    ) -> TelegramManagedSetupSession | None:
+        """Load a Telegram setup session from Neon/Postgres."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    "SELECT * FROM telegram_managed_setup_sessions WHERE setup_id = %s",
+                    (setup_id,),
+                )
+                row = cursor.fetchone()
+
+        return _telegram_managed_session_from_row(row) if row else None
+
+    def delete_telegram_managed_setup_session(self, *, setup_id: str) -> None:
+        """Remove one expired or no-longer-needed setup session from Neon/Postgres."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM telegram_managed_setup_sessions WHERE setup_id = %s",
+                    (setup_id,),
+                )
+
+    def delete_expired_telegram_managed_setup_sessions(self, *, now: datetime) -> None:
+        """Prune expired Telegram setup sessions from Neon/Postgres."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM telegram_managed_setup_sessions WHERE expires_at <= %s",
+                    (now,),
+                )
+
     def _connect(self) -> psycopg2.extensions.connection:
         """Open a short-lived Neon connection for request-scoped work."""
 
@@ -812,6 +1977,27 @@ class PostgresLicenseStore:
                     offline_grace_ends_at TIMESTAMPTZ NOT NULL,
                     license_state TEXT NOT NULL
                         CHECK (license_state IN ('trial_active', 'licensed', 'expired')),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS telegram_managed_setup_sessions (
+                    setup_id TEXT PRIMARY KEY,
+                    device_id TEXT,
+                    app_version TEXT,
+                    account_id TEXT,
+                    suggested_bot_name TEXT NOT NULL,
+                    suggested_bot_username TEXT NOT NULL,
+                    approval_url TEXT NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'connected')),
+                    bot_id BIGINT,
+                    bot_username TEXT,
+                    managed_child_bot_token TEXT,
+                    last_update_id BIGINT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
@@ -897,6 +2083,64 @@ def _account_activation_conflict() -> HTTPException:
     )
 
 
+def _telegram_managed_session_values(
+    session: TelegramManagedSetupSession,
+    *,
+    updated_at: datetime,
+) -> tuple[Any, ...]:
+    """
+    Normalize Telegram setup session values for both SQLite and Postgres upserts.
+
+    This intentionally excludes the manager token. The child token is persisted
+    only after approval so a connected setup can survive a backend restart.
+    """
+
+    return (
+        session.setup_id,
+        session.device_id,
+        session.app_version,
+        session.account_id,
+        session.suggested_bot_name,
+        session.suggested_bot_username,
+        session.approval_url,
+        _format_dt(session.expires_at),
+        session.status,
+        session.bot_id,
+        session.bot_username,
+        session.managed_child_bot_token,
+        session.last_update_id,
+        _format_dt(updated_at),
+    )
+
+
+def _telegram_managed_session_from_row(
+    row: sqlite3.Row | dict[str, Any],
+) -> TelegramManagedSetupSession:
+    """Convert a persisted Telegram setup row back into the internal model."""
+
+    status_value = _read_row_value(row, "status")
+    if status_value not in ("pending", "connected"):
+        raise HTTPException(status_code=500, detail="Invalid Telegram setup status")
+
+    bot_id_value = _read_row_value(row, "bot_id")
+    last_update_id_value = _read_row_value(row, "last_update_id")
+    return TelegramManagedSetupSession(
+        setup_id=_read_row_value(row, "setup_id"),
+        device_id=_read_row_value(row, "device_id"),
+        app_version=_read_row_value(row, "app_version"),
+        account_id=_read_row_value(row, "account_id"),
+        suggested_bot_name=_read_row_value(row, "suggested_bot_name"),
+        suggested_bot_username=_read_row_value(row, "suggested_bot_username"),
+        approval_url=_read_row_value(row, "approval_url"),
+        expires_at=_parse_dt(_read_row_value(row, "expires_at")),
+        status=status_value,
+        bot_id=bot_id_value if isinstance(bot_id_value, int) else None,
+        bot_username=_read_row_value(row, "bot_username"),
+        managed_child_bot_token=_read_row_value(row, "managed_child_bot_token"),
+        last_update_id=last_update_id_value if isinstance(last_update_id_value, int) else None,
+    )
+
+
 def _account_id_from_access_token(
     store: LicenseStore,
     account_access_token: str | None,
@@ -921,6 +2165,13 @@ def _provider_presence(settings: Settings) -> dict[str, bool]:
     return {
         "openai": settings.openai_configured,
         "anthropic": settings.anthropic_configured,
+        "firecrawl": bool(settings.firecrawl_api_key),
+        "google_places": bool(settings.google_places_api_key),
+        "gemini": bool(settings.gemini_api_key),
+        "brave": bool(settings.brave_api_key),
+        "telegram_managed_bots": bool(
+            settings.telegram_manager_bot_token and settings.telegram_manager_bot_username
+        ),
     }
 
 

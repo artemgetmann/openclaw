@@ -109,16 +109,16 @@ enum ConsumerRuntime {
         // Keep the consumer lane focused on core Telegram startup.
         // This avoids founder-oriented sidecar phases from blocking first boot.
         self.setEnv("OPENCLAW_CONSUMER_MINIMAL_STARTUP", value: "1")
+        _ = DeviceIdentityStore.migrateLegacyAppSupportIdentityIfNeeded()
+        // Packaged first-run must repair the app-owned helper/runtime before we
+        // derive OPENCLAW_FORK_ROOT or any PATH-sensitive gateway/setup checks.
+        ConsumerBundledRuntime.bootstrapIfNeeded()
         if let projectRoot = CommandResolver.projectRootEnvironmentHint() {
             // The dev mac app often shells out through the local fork wrapper in PATH.
             // Seed the worktree root explicitly so child commands do not fall back to
             // whatever founder checkout happened to export `openclaw` first.
             self.setEnv("OPENCLAW_FORK_ROOT", value: projectRoot)
         }
-        _ = DeviceIdentityStore.migrateLegacyAppSupportIdentityIfNeeded()
-        // Packaged first-run must repair the app-owned helper/runtime before
-        // any PATH-sensitive gateway or setup checks run.
-        ConsumerBundledRuntime.bootstrapIfNeeded()
         ConsumerBootstrap.bootstrapIfNeeded()
     }
 

@@ -58,8 +58,9 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(input)).toBe("Got it, thanks!");
   });
 
-  it("strips all six known sentinel types", () => {
+  it("strips all known sentinel types", () => {
     const sentinels = [
+      "Time context (trusted metadata):",
       "Conversation info (untrusted metadata):",
       "Sender (untrusted metadata):",
       "Thread starter (untrusted, for context):",

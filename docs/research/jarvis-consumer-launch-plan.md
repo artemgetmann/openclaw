@@ -593,17 +593,26 @@ P0 blockers before public strangers:
 - [ ] Better copywriting for every setup page.
 - [ ] Telegram setup simplification.
 
-Telegram/BotFather:
+Telegram/Managed Bots:
 
-- Manual BotFather setup is too much friction for mainstream users.
-- Official Telegram docs now expose a Managed Bots surface: Bot API 9.6 added
-  managed-bot creation/token updates and token retrieval/replacement methods,
-  while Bot API 10.0 added managed-bot access settings. Research whether Jarvis
-  can use this official path to create or connect a personal Jarvis bot inside
-  onboarding without sending normal users through manual BotFather steps.
-- If Telegram supports managed/programmatic bot provisioning through an
-  official/allowed path, investigate and implement it.
-- If not, use shared bot by default and BYO bot token as advanced option.
+- Managed Bots is the primary planned Telegram onboarding path. Manual
+  BotFather/BYO bot setup stays fallback/advanced because it is too much
+  friction for mainstream users.
+- Backend Managed Bots contract landed in PR #766 after the 2026-05-18 live
+  proof. Render must declare `TELEGRAM_MANAGER_BOT_TOKEN` and
+  `MANAGER_BOT_USERNAME` as `sync: false` values; enter actual values only in
+  the Render dashboard.
+- Render has the Managed Bots env configured and redeployed; redacted backend
+  health returned `providers.telegram_managed_bots=true`. Live start/status
+  proof connected setup `tgms_3LBqIilzthPPfPZZ-aIaTw` as
+  `@JarvisManagedSmoke184350Bot` with the managed child token redacted.
+- DM-first remains the main consumer Telegram path for now: create the Jarvis
+  bot, approve in Telegram, send one direct-message task, then verify that first
+  useful task.
+- Group/threaded/forum auto-setup is tracked later. Research whether the
+  backend or userbot can create a group with the user plus bot, enable forum
+  topics, and create topics automatically.
+- Smoke bot cleanup is deferred unless Telegram bot limits block progress.
 - Telegram command/settings strategy lives in
   `docs/consumer/jarvis-launch-package.md`. Normal users should get one
   consumer-safe `/settings` surface with plain names; advanced/developer
@@ -689,27 +698,60 @@ Bootstrap should answer:
 
 ### 11.5 Provider and managed-utility readiness
 
-Provider smoke from the 2026-05-16 clean-copy walkthrough:
+Provider smoke from the 2026-05-16 clean-copy walkthrough, follow-up provider
+worker, and Render deploy:
 
-- Backend `/healthz` is live in production and reports OpenAI configured,
-  Anthropic not configured.
-- Backend `/v1/managed/utilities/{utility}` is still a placeholder contract. It
-  proves server-held provider-key boundaries, but it does not yet perform real
-  OpenAI STT, Brave, Firecrawl, Google Places, Gemini/Nano Banana, or Anthropic
-  work.
+- Backend `/healthz` is live in production and reports OpenAI, Firecrawl,
+  Google Places, Gemini, and Brave configured. Anthropic is still not
+  configured.
+- Backend `/v1/managed/utilities/{utility}` now performs real server-held
+  provider calls for `firecrawl.search`, `firecrawl.scrape`, and
+  `google_places.search`; PR #751 deployed live to Render on 2026-05-16.
+  Follow-up PRs added `brave.search` and `gemini.image.generate`, and both
+  returned HTTP 200 in live redacted Render smokes on 2026-05-18.
 - Local OpenAI STT works through the active OpenClaw config
-  `OPENAI_NON_MODEL_API_KEY`.
-- Brave search works through the active OpenClaw config.
-- Firecrawl, Google Places, and Gemini/Nano Banana-style config entries are
-  present locally but failed live smoke as invalid credentials.
-- Anthropic is missing locally and on the production backend.
+  `OPENAI_NON_MODEL_API_KEY`; the follow-up worker transcribed a valid WAV
+  fixture with HTTP 200 and returned text.
+- Brave search works through the active OpenClaw config; the follow-up worker
+  got HTTP 200 and one result for a harmless query.
+- Managed Brave routing is implemented through backend `brave.search` and
+  runtime `web_search` routing. Render live smoke returned HTTP 200 with real
+  result title/URL fields.
+- Firecrawl key was replaced/recovered and live-smoked both locally and through
+  Render. Render `firecrawl.search` and `firecrawl.scrape` returned HTTP 200
+  with no local secret substring detected in the backend response.
+- Google Places key was replaced/recovered and live-smoked both locally and
+  through Render. Render `google_places.search` returned HTTP 200 with one
+  place and no local secret substring detected in the backend response.
+- Gemini/Nano Banana image generation was live-smoked locally with the recovered
+  key and generated `/tmp/jarvis-nano-banana-smoke-candidate-2.png`. The
+  backend now has a narrow `gemini.image.generate` managed utility code path
+  for text-to-image; Render live smoke returned HTTP 200 with one generated
+  JPEG payload after PR #757 fixed the live Gemini `imageConfig` request shape.
+- Anthropic is not configured locally or in production `/healthz`. No Anthropic
+  live model smoke is counted here.
 
 Before wider beta:
 
-- [ ] Replace or remove invalid Firecrawl, Google Places, and Gemini/Nano
-      Banana credentials before claiming those utilities work.
-- [ ] Add real backend-managed utility endpoints or remove managed-utility
-      claims from consumer copy until they exist.
+- [x] Replace the invalid Firecrawl credential before claiming scraping works.
+- [x] Replace the invalid Google Places credential before claiming Google
+      Places/location search works.
+- [x] Run a real Gemini/Nano Banana image-generation smoke before claiming image
+      generation works, even though model-list validation passes.
+- [x] Add real backend-managed utility endpoints for Firecrawl and Google
+      Places.
+- [x] Route Firecrawl app/runtime utility callers through the Render backend for
+      managed-plan users; landed in the Firecrawl managed-routing slice after
+      PR #751.
+- [x] Route Google Places/goplaces search through the Render backend for
+      managed-plan users. Details/resolve/reviews still require the upstream
+      direct CLI and BYOK key until backend utilities exist for those shapes.
+- [x] Add backend-managed Brave Search utility and route runtime `web_search`
+      through Jarvis in managed mode while preserving direct/BYOK Brave when no
+      managed backend is configured.
+- [x] Add real backend-managed Gemini/Nano Banana text-to-image utility
+      execution. Input-image editing/composition remains local/BYOK-only until
+      the backend has an upload/storage/abuse-control contract.
 - [ ] Keep `OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS=1` out of public
       builds unless the product intentionally ships env-derived provider keys
       inside the bundle for a private bridge.
@@ -786,12 +828,38 @@ Current implementation order:
     `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` from the machine release env;
     keep `NOTARYTOOL_PROFILE` as an emergency/manual fallback only. Artem must
     create or provide the real ASC API key if it is missing locally.
-12. Dry-run preflight lane truth on 2026-05-16: ASC API-key lane is not ready.
-    `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` are missing
-    from Artem's machine release env. The fallback `NOTARYTOOL_PROFILE` is
-    present and usable, but remains fallback-only. The preflight remains
-    read-only and never submits, staples, packages, uploads, or mutates release
-    assets.
+12. Historical dry-run preflight lane truth from earlier on 2026-05-16: ASC
+    API-key lane was not ready because `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`,
+    and `NOTARYTOOL_ISSUER` were missing from Artem's machine release env. The
+    fallback `NOTARYTOOL_PROFILE` was present and usable, but remains
+    fallback-only. The preflight remains read-only and never submits, staples,
+    packages, uploads, or mutates release assets. It must distinguish missing
+    ASC API-key vars from a present/working Keychain fallback, report Sparkle
+    `generate_appcast` availability, and end with the exact next operator
+    action.
+13. Follow-up ASC/Sparkle check on 2026-05-16: Sparkle appcast tooling is not
+    the blocker. `generate_appcast` is available from the repo SwiftPM build at
+    `apps/macos/.build/artifacts/sparkle/Sparkle/bin/generate_appcast`.
+14. Current ASC blocker from the conductor check on 2026-05-16:
+    `/access/integrations/api` is reachable after login, but it does not show
+    API keys. It shows "Permission is required to access the App Store Connect
+    API. You can request access on behalf of your organization." with a Request
+    Access button. Local searches found no existing `AuthKey_*.p8` via
+    Spotlight and no actual `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, or
+    `NOTARYTOOL_ISSUER` in
+    `~/Library/Application Support/OpenClaw/release.env`.
+15. Follow-up ASC state on 2026-05-16: Artem approved and submitted the App
+    Store Connect API access request. Apple immediately showed "Your request to
+    access the App Store Connect API was approved", `Active (0)`, and
+    `Generate API Key`. Screenshot proof:
+    `/tmp/openclaw/asc-api-access-approved-generate-key.png`.
+16. Final ASC credential state on 2026-05-16: Artem approved key generation.
+    The `Jarvis Notary` team key was created with Developer access, its
+    one-time `.p8` was downloaded, moved out of iCloud Downloads, stored at
+    `~/Library/Application Support/OpenClaw/release-keys/`, and locked to mode
+    `600`. The machine release env now has `NOTARYTOOL_KEY`,
+    `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER`. Read-only preflight ended
+    with `Final: ASC API key lane ready.`
 
 Progress:
 
@@ -817,9 +885,21 @@ Progress:
 - [x] Non-secret Sparkle release config is machine-level at
       `~/Library/Application Support/OpenClaw/release.env` so release worktrees
       and chats inherit the same values.
-- [x] Dry-run preflight truth for the ASC release lane was captured on
-      2026-05-16: ASC API-key env is missing; fallback profile is present and
-      usable; the preflight has no submit/staple/package/upload side effects.
+- [x] ASC release credential lane is ready on Artem's machine as of
+      2026-05-16: App Store Connect API access is approved, the `Jarvis Notary`
+      team key exists with Developer access, the `.p8` is stored outside Git in
+      Application Support, the ASC env trio is present in the machine release
+      env, fallback profile is still present, Sparkle appcast tooling is ready,
+      and the preflight has no submit/staple/package/upload side effects.
+- [x] ASC account-access blocker was captured on 2026-05-16: the API
+      integrations page is reachable after login but shows the permission
+      request message instead of keys; no local `AuthKey_*.p8` or actual ASC env
+      trio was found.
+- [x] Packaged Jarvis smoke iteration now has a smoke-only runtime reuse path:
+      after one normal fast package, run
+      `bash scripts/package-consumer-mac-app-fast.sh --instance <id> --reuse-runtime`
+      for app-shell-only loops. Default/shipping packaging still rebuilds and
+      signs the bundled runtime.
 - [x] Produce local Jarvis trusted-tester artifacts from current `main`:
       final `Jarvis.dmg` exists at
       `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg`
@@ -835,27 +915,39 @@ Progress:
       2026.3.14 is up to date; the isolated fresh-user packaged smoke passed
       with real user config unchanged. Sending `Jarvis.dmg` to the 3 trusted
       waiting testers is allowed.
-- [ ] Fix post-launch app-bundle mutation before broader distribution. After
-      launching the trusted build, Jarvis can add extension dependencies under
-      `/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw/dist/extensions/acpx/node_modules`,
-      which mutates the signed app bundle and makes later `codesign --verify`
-      fail with a sealed-resource error until reinstall. This is acceptable as
-      an early trusted-tester caveat, but runtime-writable extension
-      dependencies must move to Application Support or another writable
-      state/cache path outside `/Applications/Jarvis.app` before Reddit/GitHub,
-      public-ish beta, or any wider beta.
+- [x] Fix post-launch app-bundle mutation before broader distribution. Root
+      cause was packaged Jarvis treating
+      `Contents/Resources/OpenClawRuntime/openclaw` as the runtime project root
+      while the `acpx` plugin could lazily run `npm install` in
+      `dist/extensions/acpx`. The fix makes packaged gateway identity prefer
+      the seeded Application Support runtime and routes managed `acpx`
+      installs to `$OPENCLAW_STATE_DIR/cache/extensions/acpx`, outside the
+      signed app bundle. Validation: targeted `acpx` Vitest coverage passed,
+      macOS `ConsumerBundledRuntimeTests` plus `GatewayLaunchAgentManagerTests`
+      passed per suite, an isolated generated-runtime proof installed
+      `acpx@0.3.0` under `$OPENCLAW_STATE_DIR/cache/extensions/acpx`, and
+      copied-app proof kept `dist/extensions/acpx/node_modules` absent while
+      `codesign --verify --deep --strict` passed after the runtime path was
+      exercised on 2026-05-16. No live `/Applications/Jarvis.app` mutation was
+      performed.
 - [ ] Defer full newer-version Sparkle update-cycle smoke for speed unless we
       are about to ship an update to testers. Current proof covers appcast/feed
       reachability and no Update Error; a real download/verify/install/relaunch/
       preserve-state cycle is still required before relying on updates for
       recovery or wider distribution.
-- [ ] Confirm the Channels duplicate connected-bot UI fix in a packaged
-      installed-app GUI build. Source UI duplication is addressed, but there is
-      still no packaged installed-app GUI proof yet.
-- [ ] Run the next release lane with App Store Connect API key auth plus async
-      submit/poll/staple receipts. Keychain-profile notarization remains a
-      fallback only; Artem must create/provide the actual ASC API key if it is
-      not already present.
+- [x] Capture current-main GUI proof for the Channels duplicate connected-bot
+      UI fix. On 2026-05-16, the isolated `channels-proof` native UI-smoke app
+      opened Settings -> Channels with one Telegram detail pane, one
+      `Connected bot` section, one verified card, and one `Open your bot`
+      action. Screenshot:
+      `/tmp/openclaw/full-after-ready-channel-click.png`. Caveat: the existing
+      trusted-tester `Jarvis.dmg` was built before PR #719, so exact
+      release-DMG proof still requires a recut only if we want the latest
+      merged polish/fixes in the artifact being sent.
+- [x] Dry-run release lane checks completed. App Store Connect API key auth and
+      Sparkle tooling are ready, so the real async submit/poll/staple path is
+      unblocked but was not run in this dry-run lane. Keychain-profile
+      notarization remains a fallback only.
 
 Remaining Settings/UI polish after PR #628:
 
@@ -880,32 +972,105 @@ Sparkle update-cycle work.
 Order:
 
 1. Packaged GUI proof of current `main`.
+   - Status: fast GUI copy/layout proof passed on 2026-05-16 using
+     `Jarvis UI Smoke (gui-proof)` from merged `main`.
+   - Computer Use must target the smoke app by app name or bundle ID
+     (`Jarvis UI Smoke (gui-proof)` or
+     `ai.openclaw.consumer.mac.debug.ui-smoke.gui-proof`), not by the full
+     `.app` path.
+   - Verified the Chrome, Mac permissions, AI access, and Telegram pages through
+     Computer Use. The Telegram page screenshot was captured by CG window ID at
+     `/tmp/jarvis-gui-proof/jarvis-telegram-window.png`.
+   - Limit: the fast smoke launches with `--no-launchd`, so it proves
+     page/copy/layout and app-window targeting, not full AI/backend readiness.
+   - For onboarding copy/layout iteration, run
+     `bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <id>` first.
+     It builds the native SwiftUI app from source and launches it through a tiny
+     debug `.app` wrapper without `/Applications` installs, release packaging,
+     or default gateway restarts.
+   - Use packaged GUI proof only when the bundle/release artifact itself is the
+     thing being tested.
    - Build/run an isolated Jarvis app from current `main`.
    - Use Computer Use to inspect the four onboarding pages.
    - Verify Browser/AI access do not visibly reset to "Checking..." on app
      focus or setup-tab return.
    - Do not install into `/Applications` and do not restart the default gateway.
 2. Copy rewrite on the four-page shell.
+   - Status: landed in PR #733 and verified in the fast GUI proof. Telegram copy
+     is shorter and the advanced group/topic guidance is below the main DM path.
    - Rewrite against real Chrome, Mac permissions, AI access, and Telegram
      pages.
    - Rebuild/run the isolated app.
    - Review screenshots/flow as one package rather than sentence-by-sentence.
-3. Telegram Managed Bots proof spike.
-   - Do not do a full migration first.
-   - Manually prepare one Telegram manager bot in BotFather with Bot Management
-     Mode.
-   - Open the official `https://t.me/newbot/{manager}/{suggested_bot}?name=...`
-     flow and let Artem approve bot creation.
-   - Prove the harness receives `managed_bot`, calls `getManagedBotToken`,
-     redacts the token, calls `getMe` with the managed token, and applies
+3. Telegram Managed Bots onboarding migration.
+   - Status: backend contract landed in PR #766 after live proof passed on
+     2026-05-18. The proof created
+     `@jarvis_manager_260518_bot`, enabled BotFather Bot Management Mode,
+     created managed child bot `@JarvisManagedProof260518Bot`, received
+     `managed_bot`, fetched the managed token with output redacted, verified the
+     child bot with `getMe`, and applied
      `setManagedBotAccessSettings(is_access_restricted=true)`.
-   - If this fails, keep BotFather setup as the advanced fallback and avoid
-     migration work.
+   - Spike harness exists at `scripts/telegram-managed-bots-spike.mjs`; dry-run
+     validates link generation and token redaction without network calls.
+   - Target contract: backend stores `TELEGRAM_MANAGER_BOT_TOKEN` and
+     `MANAGER_BOT_USERNAME`; backend returns the Telegram approval link; user
+     approves in Telegram; backend polls or receives `managed_bot`; backend
+     fetches the child token and restricts child access. Managed Bots is the
+     primary planned Telegram onboarding path. Manual BotFather/BYO bot remains
+     fallback/advanced.
+   - Current Render truth: after env/deploy, redacted health reports
+     `telegram_managed_bots=true`; live start/status proof connected setup
+     `tgms_3LBqIilzthPPfPZZ-aIaTw` as `@JarvisManagedSmoke184350Bot` with bot id
+     `8882555895` and token output redacted.
+   - Main path: keep first launch DM-first. Group chats, threaded/forum mode,
+     and automatic topic creation are later work, not part of the first
+     onboarding gate.
+   - Acceptance criteria:
+     - backend can start a managed-bot setup session and return the approval
+       link
+     - backend exposes pending, connected, and actionable error states
+     - setup sessions persist in Neon so a Render restart does not lose pending
+       approval or connected token handoff state
+     - approved session fetches `getManagedBotToken`, verifies child `getMe`,
+       and applies `setManagedBotAccessSettings(is_access_restricted=true)`
+     - provider errors redact manager and child tokens
+     - BotFather/BYO bot remains available as fallback/advanced
+     - smoke-bot cleanup remains deferred unless Telegram limits block progress
+   - Security notes:
+     - manager bot token stays backend-only
+     - no raw founder/provider keys are bundled in the app
+     - managed child bot token is user-specific and must not be logged
+     - connected setup persists the child token only so the app can survive a
+       backend restart between approval and status check
+   - Out of scope: broad onboarding copy polish, `/visibility` command cleanup,
+     group/threaded auto-setup, smoke-bot cleanup,
+     `ai.jarvis.mac` bundle/runtime/update migration, Sparkle update-cycle
+     proof, and wider beta blockers.
 4. Provider/backend utility hardening.
-   - Fix invalid Firecrawl, Google Places, and Gemini/Nano Banana credentials or
-     remove those claims from launch copy.
-   - Decide whether backend-managed utilities become real endpoints now or stay
-     local-only for trusted beta.
+   - Status: OpenAI STT, Brave, Firecrawl, Google Places, and Gemini/Nano
+     Banana local smokes are green after local secret recovery on 2026-05-16.
+   - Render env now has Firecrawl, Google Places, Gemini, and Brave provider
+     keys present; `/healthz` reports `firecrawl=true`, `google_places=true`,
+     `gemini=true`, and `brave=true`.
+   - PR #751 added and deployed real backend-managed `firecrawl.search`,
+     `firecrawl.scrape`, and `google_places.search` endpoints. Live Render
+     smoke returned HTTP 200 for all three with token/key output redacted.
+   - Firecrawl app/runtime routing now uses the Render managed utility endpoint
+     in managed mode and preserves direct/BYOK Firecrawl when the Jarvis backend
+     is absent.
+   - Google Places/goplaces ordinary search now uses the Render managed utility
+     endpoint in managed mode and preserves direct/BYOK search when the Jarvis
+     backend is absent.
+   - Brave `web_search` now has a managed backend utility/routing slice in code;
+     live Render proof returned HTTP 200 with real search results after
+     `BRAVE_API_KEY` was configured on Render.
+   - Remaining Places gap: details/resolve/reviews still require the upstream
+     direct `goplaces` CLI and a BYOK key because the backend only exposes
+     `google_places.search`.
+   - Gemini managed utility execution now exists for text-to-image via
+     `gemini.image.generate`; local Nano Banana proof is green, and Render live
+     smoke returned HTTP 200 with one generated JPEG after the `imageConfig`
+     request-shape fix.
 
 Verified Render truth as of 2026-05-11 before backend creation:
 
@@ -951,12 +1116,32 @@ Verified Render backend state as of 2026-05-12 after Neon configuration:
 - `JARVIS_BACKEND_API_TOKEN` was generated and stored outside Git in local
   macOS Keychain under service `Jarvis Render Backend`, account
   `JARVIS_BACKEND_API_TOKEN`.
+- `TELEGRAM_MANAGER_BOT_TOKEN` and `MANAGER_BOT_USERNAME` are required
+  `sync: false` Render values for Managed Bots onboarding. The token value must
+  stay in Render/local secret storage only.
+- After Render env/deploy, `/healthz` reports
+  `providers.telegram_managed_bots=true`; the live Managed Bots start/status
+  smoke connected and kept the managed child token redacted.
 
 Remaining backend follow-up:
 
 - Anthropic is not configured yet. This is not a blocker for the current
   OpenAI-backed backend smoke, but should be configured before claiming
   Anthropic-managed utility coverage.
+- PR #751 deployed `dep-d848hq57vvec73f2jrm0` live from commit
+  `62ed39851c0eb23b5e007ff1d290b236879204f8` on 2026-05-16.
+- `GET /healthz` returns 200 with `providers.openai=true`,
+  `providers.anthropic=false`, `providers.firecrawl=true`,
+  `providers.google_places=true`, and `providers.gemini=true`.
+- `POST /v1/managed/utilities/firecrawl.search`,
+  `POST /v1/managed/utilities/firecrawl.scrape`, and
+  `POST /v1/managed/utilities/google_places.search` return 200 through Render
+  with the backend token and without exposing local provider/backend secrets in
+  the response body.
+- Firecrawl app/runtime calls and Google Places/goplaces ordinary search now
+  use the Render managed utility endpoints in managed mode. Google Places
+  details/resolve/reviews still require direct BYOK until the backend exposes
+  managed utilities for those operations.
 
 ### Imported from retired consolidation trackers
 
@@ -966,21 +1151,21 @@ docs remain historical proof only:
 - `docs/consumer/archive/openclaw-main-consumer-consolidation-plan.md`
 - `docs/consumer/archive/openclaw-main-consumer-divergence-tracker.md`
 
-| Item                                             | Owner                                            | Status                         | Launch-plan handling                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------------------ | ------------------------------------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Final package through deterministic release lane | Release lane from current `main`                 | Done for trusted testers       | Final 2026-05-14 trusted-tester `Jarvis.dmg` exists at `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg` and `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`, built from commit `ab9c3c1ca1`; the DMG is Gatekeeper-accepted as Notarized Developer ID. It has been installed over `/Applications/Jarvis.app`; installed-app verification, Permissions GUI proof, About update check, and isolated fresh-user package smoke all passed. |
-| Public `v2026.3.15` asset replacement            | Release lane with explicit Artem approval        | Done for Jarvis trusted tester | With Artem approval, uploaded `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml` to public release `v2026.3.15`. The installed Jarvis feed URL `https://github.com/artemgetmann/openclaw/releases/latest/download/jarvis-appcast.xml` now returns 200 and points to the uploaded `Jarvis.zip`. Old OpenClaw-named assets still remain on the release for historical/backward compatibility; do not delete them without a separate compatibility decision.                                       |
-| Release assets involved                          | Release lane                                     | Done for Jarvis trusted tester | Uploaded `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`. No new dSYM zip was produced in the manual continuation after notary profile failure.                                                                                                                                                                                                                                                                                                                                              |
-| Optional Sparkle dialog smoke                    | Release/GUI smoke lane                           | Optional                       | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                                                                                                                                                                                                                                                           |
-| Clean macOS user install smoke                   | Release/GUI smoke lane                           | Passed for trusted testers     | Isolated fresh-user packaged smoke passed from `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`: bundled runtime seeded, isolated gateway became healthy, onboarding was observed, and real user config stayed unchanged. A true separate macOS account smoke was deliberately skipped as unnecessary for the 3 trusted waiting testers. Sending `Jarvis.dmg` to those testers is allowed.                                                                                                  |
-| Post-launch app-bundle mutation                  | Packaging/runtime lane before public-ish launch  | Required before wider beta     | After launch, Jarvis can add extension dependencies under `/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw/dist/extensions/acpx/node_modules`, mutating the signed app bundle and making later `codesign --verify` fail until reinstall. Do not block the 3 trusted waiting testers on this, but move runtime-writable extension dependencies to Application Support or another writable state/cache path before Reddit/GitHub, public-ish beta, or wider beta.              |
-| Full newer-version Sparkle update-cycle smoke    | Release/GUI smoke lane                           | Deferred for speed             | Current proof covers appcast/feed reachability and no Update Error. A real higher-build appcast should still prove download, signature verification, install, relaunch, and state preservation before relying on updates for recovery or wider distribution. Do not block the 3 trusted waiting testers on this unless an immediate tester update is planned.                                                                                                                                     |
-| Channels duplicate connected-bot UI              | UI polish lane                                   | Partially addressed            | Source UI fix removes the duplicated connected-bot Settings copy/buttons, but there is still no packaged installed-app GUI proof yet. Keep this open until the packaged app is verified. Do not block the 3 trusted waiting testers on this.                                                                                                                                                                                                                                                      |
-| Local old-app/package cleanup                    | Cleanup lane after approved delete list          | Done for Artem's machine       | Completed after Artem approved the cleanup list on 2026-05-16: removed `/Applications/OpenClaw.app`, stale GUI smoke app processes, and stale `gui-verify` / `consolidation-gui-smoke` / `macos-ui-cleanup` LaunchAgents. Kept `/Applications/Jarvis.app`, the default gateway, watchdog, mail monitor, and the separate Chrome Telegram-live profile.                                                                                                                                            |
-| Launch audit                                     | Launch/commercial readiness lane                 | Open                           | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                                                                                                                                                                                                                           |
-| Overlay/defaults hygiene                         | Future product/platform lane                     | Deferred, non-blocking         | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                                                                                                                                                                                                                                                             |
-| Bundle ID migration                              | Separate migration lane before public-ish launch | Required before wider beta     | Keep `ai.openclaw.consumer.mac` plus OpenClaw runtime/update paths only for the 3 trusted waiting testers. Before Reddit/GitHub, public-ish beta, or any wider beta, migrate to `ai.jarvis.mac` through a deliberate lane because permissions, state, LaunchAgents, and update continuity can be affected.                                                                                                                                                                                        |
-| Old worktree `dist` cleanup                      | Cleanup lane                                     | Lower priority                 | Cleanup of old worktree `dist` bundles is useful hygiene, but it is lower priority than local smoke, tester send, and release-hardening.                                                                                                                                                                                                                                                                                                                                                          |
+| Item                                             | Owner                                            | Status                            | Launch-plan handling                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------ | ------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Final package through deterministic release lane | Release lane from current `main`                 | Done for trusted testers          | Final 2026-05-14 trusted-tester `Jarvis.dmg` exists at `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg` and `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`, built from commit `ab9c3c1ca1`; the DMG is Gatekeeper-accepted as Notarized Developer ID. It has been installed over `/Applications/Jarvis.app`; installed-app verification, Permissions GUI proof, About update check, and isolated fresh-user package smoke all passed. |
+| Public `v2026.3.15` asset replacement            | Release lane with explicit Artem approval        | Done for Jarvis trusted tester    | With Artem approval, uploaded `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml` to public release `v2026.3.15`. The installed Jarvis feed URL `https://github.com/artemgetmann/openclaw/releases/latest/download/jarvis-appcast.xml` now returns 200 and points to the uploaded `Jarvis.zip`. Old OpenClaw-named assets still remain on the release for historical/backward compatibility; do not delete them without a separate compatibility decision.                                       |
+| Release assets involved                          | Release lane                                     | Done for Jarvis trusted tester    | Uploaded `Jarvis.dmg`, `Jarvis.zip`, and `jarvis-appcast.xml`. No new dSYM zip was produced in the manual continuation after notary profile failure.                                                                                                                                                                                                                                                                                                                                              |
+| Optional Sparkle dialog smoke                    | Release/GUI smoke lane                           | Optional                          | Deterministic non-UI Sparkle update already passed. Run visual interactive Sparkle dialog smoke only if the product claim needs exact popup/user-click proof. Not a blocker by default.                                                                                                                                                                                                                                                                                                           |
+| Clean macOS user install smoke                   | Release/GUI smoke lane                           | Passed for trusted testers        | Isolated fresh-user packaged smoke passed from `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`: bundled runtime seeded, isolated gateway became healthy, onboarding was observed, and real user config stayed unchanged. A true separate macOS account smoke was deliberately skipped as unnecessary for the 3 trusted waiting testers. Sending `Jarvis.dmg` to those testers is allowed.                                                                                                  |
+| Post-launch app-bundle mutation                  | Packaging/runtime lane before public-ish launch  | Fixed and copied-app proof passed | Fixed by treating bundled app resources as seed-only, running packaged gateway identity from the seeded Application Support runtime, and sending managed `acpx` installs to `$OPENCLAW_STATE_DIR/cache/extensions/acpx`. Targeted `acpx` Vitest, macOS bundled-runtime/launch-agent suites, isolated generated-runtime proof, and copied-app signed-bundle proof passed on 2026-05-16 without touching `/Applications/Jarvis.app`.                                                                |
+| Full newer-version Sparkle update-cycle smoke    | Release/GUI smoke lane                           | Deferred for speed                | Current proof covers appcast/feed reachability and no Update Error. A real higher-build appcast should still prove download, signature verification, install, relaunch, and state preservation before relying on updates for recovery or wider distribution. Do not block the 3 trusted waiting testers on this unless an immediate tester update is planned.                                                                                                                                     |
+| Channels duplicate connected-bot UI              | UI polish lane                                   | Current-main GUI proof captured   | Source UI fix removes the duplicated connected-bot Settings copy/buttons. Current-main isolated native UI-smoke proof on 2026-05-16 showed Settings -> Channels with one Telegram detail pane, one `Connected bot` section, one verified card, and one `Open your bot` action; screenshot: `/tmp/openclaw/full-after-ready-channel-click.png`. Existing trusted-tester `Jarvis.dmg` predates PR #719, so recut the release artifact before claiming this polish ships in that DMG.                |
+| Local old-app/package cleanup                    | Cleanup lane after approved delete list          | Done for Artem's machine          | Completed after Artem approved the cleanup list on 2026-05-16: removed `/Applications/OpenClaw.app`, stale GUI smoke app processes, and stale `gui-verify` / `consolidation-gui-smoke` / `macos-ui-cleanup` LaunchAgents. Kept `/Applications/Jarvis.app`, the default gateway, watchdog, mail monitor, and the separate Chrome Telegram-live profile.                                                                                                                                            |
+| Launch audit                                     | Launch/commercial readiness lane                 | Open                              | Track account state, trial/license state, backend-managed surfaces, bundled config/secrets, and public package audit here. This is launch/commercial readiness, not consolidation work.                                                                                                                                                                                                                                                                                                           |
+| Overlay/defaults hygiene                         | Future product/platform lane                     | Deferred, non-blocking            | Keep onboarding/model/default behavior explicit in policy/config layers. Avoid scattered product conditionals. Not a release blocker.                                                                                                                                                                                                                                                                                                                                                             |
+| Bundle ID migration                              | Separate migration lane before public-ish launch | Required before wider beta        | Keep `ai.openclaw.consumer.mac` plus OpenClaw runtime/update paths only for the 3 trusted waiting testers. Before Reddit/GitHub, public-ish beta, or any wider beta, migrate to `ai.jarvis.mac` through a deliberate lane because permissions, state, LaunchAgents, and update continuity can be affected.                                                                                                                                                                                        |
+| Old worktree `dist` cleanup                      | Cleanup lane                                     | Lower priority                    | Cleanup of old worktree `dist` bundles is useful hygiene, but it is lower priority than local smoke, tester send, and release-hardening.                                                                                                                                                                                                                                                                                                                                                          |
 
 Deployment/security boundary:
 
@@ -1013,24 +1198,27 @@ Deployment/security boundary:
       Permissions tab grouping, verify About update check, and run isolated
       fresh-user packaged smoke. The trusted-tester send gate is now open for
       the 3 waiting testers.
-- [ ] Fix signed-app immutability before wider beta: Jarvis must not write
-      extension `node_modules` or other runtime dependencies inside
-      `/Applications/Jarvis.app` after launch.
+- [x] Fix signed-app immutability before wider beta: packaged Jarvis now treats
+      app bundle resources as read-only seed material and routes writable
+      runtime dependencies, including managed `acpx` `node_modules`, under
+      Application Support state/cache outside `/Applications/Jarvis.app`.
 - [ ] Run a real newer-version Sparkle update-cycle smoke before depending on
       updates for tester recovery or wider distribution; defer for the 3 trusted
       waiting testers unless an immediate update is planned.
 - [ ] Run the next release lane with App Store Connect API key auth plus async
       submit/poll/staple receipts. Keep Keychain-profile auth as fallback only,
-      and have Artem create/provide the actual ASC API key if it is missing.
+      and use the now-ready ASC API-key lane from the machine release env.
 - [x] Delete old local OpenClaw app/package variants from Artem's machine after
       the exact delete list is approved. Completed 2026-05-16: removed
       `/Applications/OpenClaw.app`, stale GUI smoke processes, and stale
       `gui-verify` / `consolidation-gui-smoke` / `macos-ui-cleanup`
       LaunchAgents while keeping Jarvis, the default gateway, watchdog, mail
       monitor, and the separate Chrome Telegram-live profile.
-- [ ] Confirm the Channels duplicate connected-bot UI fix in a packaged
-      installed-app GUI build. Source UI duplication is addressed, but there is
-      still no packaged installed-app GUI proof yet.
+- [x] Capture current-main GUI proof for the Channels duplicate connected-bot
+      UI fix. Screenshot:
+      `/tmp/openclaw/full-after-ready-channel-click.png`; recut release-DMG
+      proof is still needed before claiming the existing trusted-tester DMG
+      contains this polish.
 - [ ] Recut/upload public artifacts from current `main` before claiming post-#634/#638 fixes ship broadly.
 - [ ] Implement subscription/trial-gated update entitlement UX.
 - [x] Remove or proxy all founder keys from public builds. Backend/proxy contract exists in PR #560; public-package audit guard landed in PR #565.

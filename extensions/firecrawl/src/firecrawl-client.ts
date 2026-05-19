@@ -9,6 +9,10 @@ import {
   writeCache,
 } from "../../../src/agents/tools/web-shared.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import {
+  createJarvisManagedUtilityClient,
+  unwrapManagedProviderPayload,
+} from "../../../src/consumer/managed-utilities.js";
 import { wrapExternalContent, wrapWebContent } from "../../../src/security/external-content.js";
 import {
   resolveFirecrawlApiKey,
@@ -133,6 +137,16 @@ async function postFirecrawlJson(params: {
   );
 }
 
+function resolveDirectFirecrawlApiKey(label: string, cfg?: OpenClawConfig): string {
+  const apiKey = resolveFirecrawlApiKey(cfg);
+  if (apiKey) {
+    return apiKey;
+  }
+  throw new Error(
+    `${label} needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure tools.web.search.firecrawl.apiKey/tools.web.fetch.firecrawl.apiKey.`,
+  );
+}
+
 function resolveSearchItems(payload: Record<string, unknown>): FirecrawlSearchItem[] {
   const candidates = [
     payload.data,
@@ -231,12 +245,6 @@ function buildSearchPayload(params: {
 export async function runFirecrawlSearch(
   params: FirecrawlSearchParams,
 ): Promise<Record<string, unknown>> {
-  const apiKey = resolveFirecrawlApiKey(params.cfg);
-  if (!apiKey) {
-    throw new Error(
-      "web_search (firecrawl) needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure tools.web.search.firecrawl.apiKey.",
-    );
-  }
   const count =
     typeof params.count === "number" && Number.isFinite(params.count)
       ? Math.max(1, Math.min(10, Math.floor(params.count)))
@@ -246,12 +254,16 @@ export async function runFirecrawlSearch(
   const sources = Array.isArray(params.sources) ? params.sources.filter(Boolean) : [];
   const categories = Array.isArray(params.categories) ? params.categories.filter(Boolean) : [];
   const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
+  const managedClient = createJarvisManagedUtilityClient(params.cfg);
+  const directApiKey = managedClient
+    ? ""
+    : resolveDirectFirecrawlApiKey("web_search (firecrawl)", params.cfg);
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "firecrawl-search",
       q: params.query,
       count,
-      baseUrl,
+      transport: managedClient ? `jarvis-managed:${managedClient.baseUrl ?? ""}` : baseUrl,
       sources,
       categories,
       scrapeResults,
@@ -279,14 +291,25 @@ export async function runFirecrawlSearch(
   }
 
   const start = Date.now();
-  const payload = await postFirecrawlJson({
-    baseUrl,
-    pathname: "/v2/search",
-    apiKey,
-    body,
-    timeoutSeconds,
-    errorLabel: "Firecrawl Search",
-  });
+  const payload = managedClient
+    ? unwrapManagedProviderPayload(
+        await managedClient.callManagedUtility({
+          utility: "firecrawl.search",
+          input: {
+            query: params.query,
+            limit: count,
+          },
+        }),
+        "firecrawl",
+      )
+    : await postFirecrawlJson({
+        baseUrl,
+        pathname: "/v2/search",
+        apiKey: directApiKey,
+        body,
+        timeoutSeconds,
+        errorLabel: "Firecrawl Search",
+      });
   const result = buildSearchPayload({
     query: params.query,
     provider: "firecrawl",
@@ -375,13 +398,11 @@ export function parseFirecrawlScrapePayload(params: {
 export async function runFirecrawlScrape(
   params: FirecrawlScrapeParams,
 ): Promise<Record<string, unknown>> {
-  const apiKey = resolveFirecrawlApiKey(params.cfg);
-  if (!apiKey) {
-    throw new Error(
-      "firecrawl_scrape needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure tools.web.fetch.firecrawl.apiKey.",
-    );
-  }
   const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
+  const managedClient = createJarvisManagedUtilityClient(params.cfg);
+  const directApiKey = managedClient
+    ? ""
+    : resolveDirectFirecrawlApiKey("firecrawl_scrape", params.cfg);
   const timeoutSeconds = resolveFirecrawlScrapeTimeoutSeconds(params.cfg, params.timeoutSeconds);
   const onlyMainContent = resolveFirecrawlOnlyMainContent(params.cfg, params.onlyMainContent);
   const maxAgeMs = resolveFirecrawlMaxAgeMs(params.cfg, params.maxAgeMs);
@@ -396,7 +417,7 @@ export async function runFirecrawlScrape(
       type: "firecrawl-scrape",
       url: params.url,
       extractMode: params.extractMode,
-      baseUrl,
+      transport: managedClient ? `jarvis-managed:${managedClient.baseUrl ?? ""}` : baseUrl,
       onlyMainContent,
       maxAgeMs,
       proxy,
@@ -409,22 +430,32 @@ export async function runFirecrawlScrape(
     return { ...cached.value, cached: true };
   }
 
-  const payload = await postFirecrawlJson({
-    baseUrl,
-    pathname: "/v2/scrape",
-    apiKey,
-    timeoutSeconds,
-    errorLabel: "Firecrawl",
-    body: {
-      url: params.url,
-      formats: ["markdown"],
-      onlyMainContent,
-      timeout: timeoutSeconds * 1000,
-      maxAge: maxAgeMs,
-      proxy,
-      storeInCache,
-    },
-  });
+  const payload = managedClient
+    ? unwrapManagedProviderPayload(
+        await managedClient.callManagedUtility({
+          utility: "firecrawl.scrape",
+          input: {
+            url: params.url,
+          },
+        }),
+        "firecrawl",
+      )
+    : await postFirecrawlJson({
+        baseUrl,
+        pathname: "/v2/scrape",
+        apiKey: directApiKey,
+        timeoutSeconds,
+        errorLabel: "Firecrawl",
+        body: {
+          url: params.url,
+          formats: ["markdown"],
+          onlyMainContent,
+          timeout: timeoutSeconds * 1000,
+          maxAge: maxAgeMs,
+          proxy,
+          storeInCache,
+        },
+      });
   const result = parseFirecrawlScrapePayload({
     payload,
     url: params.url,

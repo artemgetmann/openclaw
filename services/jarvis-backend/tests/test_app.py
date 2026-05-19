@@ -1,10 +1,12 @@
+import json
 import os
 import sqlite3
 
 from fastapi.testclient import TestClient
+import httpx
 import pytest
 
-from app.main import app, get_settings
+from app.main import app, get_settings, telegram_managed_setup_sessions
 
 
 @pytest.fixture(autouse=True)
@@ -12,8 +14,10 @@ def isolated_backend_db(monkeypatch, tmp_path):
     """Give each test its own SQLite file so trial state cannot leak."""
 
     monkeypatch.setenv("JARVIS_BACKEND_DB_PATH", str(tmp_path / "jarvis-test.sqlite3"))
+    telegram_managed_setup_sessions.clear()
     reset_settings()
     yield
+    telegram_managed_setup_sessions.clear()
     reset_settings()
 
 
@@ -23,17 +27,44 @@ def reset_settings() -> None:
     get_settings.cache_clear()
 
 
+def install_mock_async_client(monkeypatch, handler) -> None:
+    """Route provider HTTP through httpx MockTransport so tests never hit the network."""
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+
+    def make_client(*args, **kwargs):
+        return real_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("app.main.httpx.AsyncClient", make_client)
+
+
 def test_health_reports_provider_presence_without_secret_values(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-provider-placeholder")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "test-places-provider-placeholder")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("BRAVE_API_KEY", "test-brave-provider-placeholder")
     reset_settings()
 
     response = TestClient(app).get("/healthz")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["providers"] == {"openai": True, "anthropic": False}
+    assert body["providers"] == {
+        "openai": True,
+        "anthropic": False,
+        "firecrawl": True,
+        "google_places": True,
+        "gemini": False,
+        "brave": True,
+        "telegram_managed_bots": False,
+    }
     assert "test-openai-provider-placeholder" not in response.text
+    assert "test-firecrawl-provider-placeholder" not in response.text
+    assert "test-places-provider-placeholder" not in response.text
+    assert "test-brave-provider-placeholder" not in response.text
 
 
 def test_device_registration_returns_trial_contract_without_token_in_development(monkeypatch):
@@ -235,6 +266,336 @@ def test_admin_license_update_marks_device_licensed_and_expired(monkeypatch):
     assert expired.json()["state"] == "expired"
 
 
+def test_telegram_managed_start_missing_config_fails_closed(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.delenv("TELEGRAM_MANAGER_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("MANAGER_BOT_USERNAME", raising=False)
+    reset_settings()
+
+    response = TestClient(app).post(
+        "/v1/telegram/managed/start",
+        json={"deviceId": "device-telegram", "appVersion": "0.1.0"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "telegram managed bots provider is not configured"
+
+
+def test_telegram_managed_start_returns_approval_url_without_secret_values(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "@JarvisManagerBot")
+    reset_settings()
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/telegram/managed/start",
+        json={
+            "deviceId": "device-telegram",
+            "appVersion": "0.1.0",
+            "suggestedBotName": "Jarvis Founder Bot",
+            "suggestedBotUsername": "@founder_jarvis_bot",
+        },
+    )
+    health = client.get("/healthz")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["setupId"].startswith("tgms_")
+    assert body["approvalUrl"] == (
+        "https://t.me/newbot/JarvisManagerBot/founder_jarvis_bot"
+        "?name=Jarvis%20Founder%20Bot"
+    )
+    assert body["suggestedBotUsername"] == "founder_jarvis_bot"
+    assert body["status"] == "pending"
+    assert health.json()["providers"]["telegram_managed_bots"] is True
+    assert "123456:test-manager-token" not in response.text
+    assert "123456:test-manager-token" not in health.text
+    assert "123456:test-manager-token" not in repr(get_settings())
+
+
+def test_telegram_managed_status_returns_pending_when_no_matching_update(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == (
+            "https://api.telegram.org/bot123456:test-manager-token/getUpdates"
+        )
+        assert json.loads(request.content) == {
+            "limit": 20,
+            "timeout": 0,
+            "allowed_updates": ["managed_bot"],
+        }
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": [
+                    {
+                        "update_id": 101,
+                        "managed_bot": {
+                            "bot": {"id": 9001, "is_bot": True, "username": "other_bot"}
+                        },
+                    }
+                ],
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "founder_jarvis_bot"},
+    )
+
+    response = client.get(f"/v1/telegram/managed/status/{started.json()['setupId']}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["suggestedBotUsername"] == "founder_jarvis_bot"
+    assert body["botId"] is None
+    assert body["managedChildBotToken"] is None
+
+
+def test_telegram_managed_pending_session_survives_memory_clear(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+    requests_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(str(request.url))
+        return httpx.Response(200, json={"ok": True, "result": []})
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"deviceId": "device-telegram", "suggestedBotUsername": "founder_jarvis_bot"},
+    )
+    telegram_managed_setup_sessions.clear()
+
+    response = client.get(f"/v1/telegram/managed/status/{started.json()['setupId']}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["suggestedBotUsername"] == "founder_jarvis_bot"
+    assert body["managedChildBotToken"] is None
+    assert requests_seen == ["https://api.telegram.org/bot123456:test-manager-token/getUpdates"]
+
+
+def test_telegram_managed_status_connects_child_bot_and_returns_token(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+    requests_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(str(request.url))
+        if str(request.url).endswith("/getUpdates"):
+            assert json.loads(request.content) == {
+                "limit": 20,
+                "timeout": 0,
+                "allowed_updates": ["managed_bot"],
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 102,
+                            "managed_bot": {
+                                "bot": {
+                                    "id": 777000,
+                                    "is_bot": True,
+                                    "username": "founder_jarvis_bot",
+                                }
+                            },
+                        }
+                    ],
+                },
+            )
+        if str(request.url).endswith("/getManagedBotToken"):
+            assert json.loads(request.content) == {"user_id": 777000}
+            return httpx.Response(200, json={"ok": True, "result": "777000:test-child-token"})
+        if str(request.url).endswith("/getMe"):
+            assert str(request.url) == "https://api.telegram.org/bot777000:test-child-token/getMe"
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "id": 777000,
+                        "is_bot": True,
+                        "first_name": "Jarvis",
+                        "username": "founder_jarvis_bot",
+                    },
+                },
+            )
+        if str(request.url).endswith("/setManagedBotAccessSettings"):
+            assert json.loads(request.content) == {
+                "user_id": 777000,
+                "is_access_restricted": True,
+            }
+            return httpx.Response(200, json={"ok": True, "result": True})
+        raise AssertionError(f"unexpected Telegram request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "founder_jarvis_bot"},
+    )
+
+    response = client.get(f"/v1/telegram/managed/status/{started.json()['setupId']}")
+    second_status = client.get(f"/v1/telegram/managed/status/{started.json()['setupId']}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "connected"
+    assert body["botId"] == 777000
+    assert body["botUsername"] == "founder_jarvis_bot"
+    assert body["managedChildBotToken"] == "777000:test-child-token"
+    assert second_status.status_code == 200
+    assert second_status.json()["managedChildBotToken"] == "777000:test-child-token"
+    assert len([url for url in requests_seen if url.endswith("/getUpdates")]) == 1
+
+
+def test_telegram_managed_connected_session_survives_memory_clear(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+    requests_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(str(request.url))
+        if str(request.url).endswith("/getUpdates"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 102,
+                            "managed_bot": {
+                                "bot": {
+                                    "id": 777000,
+                                    "is_bot": True,
+                                    "username": "founder_jarvis_bot",
+                                }
+                            },
+                        }
+                    ],
+                },
+            )
+        if str(request.url).endswith("/getManagedBotToken"):
+            return httpx.Response(200, json={"ok": True, "result": "777000:test-child-token"})
+        if str(request.url).endswith("/getMe"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {"id": 777000, "is_bot": True, "username": "founder_jarvis_bot"},
+                },
+            )
+        if str(request.url).endswith("/setManagedBotAccessSettings"):
+            return httpx.Response(200, json={"ok": True, "result": True})
+        raise AssertionError(f"unexpected Telegram request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "founder_jarvis_bot"},
+    )
+    setup_id = started.json()["setupId"]
+
+    connected = client.get(f"/v1/telegram/managed/status/{setup_id}")
+    telegram_managed_setup_sessions.clear()
+    recovered = client.get(f"/v1/telegram/managed/status/{setup_id}")
+
+    assert connected.status_code == 200
+    assert recovered.status_code == 200
+    body = recovered.json()
+    assert body["status"] == "connected"
+    assert body["botId"] == 777000
+    assert body["botUsername"] == "founder_jarvis_bot"
+    assert body["managedChildBotToken"] == "777000:test-child-token"
+    assert len([url for url in requests_seen if url.endswith("/getUpdates")]) == 1
+
+
+def test_telegram_managed_expired_session_returns_gone_and_prunes(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "founder_jarvis_bot"},
+    )
+    setup_id = started.json()["setupId"]
+    expired_at = "2020-01-01T00:00:00+00:00"
+    with sqlite3.connect(os.environ["JARVIS_BACKEND_DB_PATH"]) as connection:
+        connection.execute(
+            "UPDATE telegram_managed_setup_sessions SET expires_at = ? WHERE setup_id = ?",
+            (expired_at, setup_id),
+        )
+    telegram_managed_setup_sessions.clear()
+
+    response = client.get(f"/v1/telegram/managed/status/{setup_id}")
+
+    assert response.status_code == 410
+    assert response.json()["detail"] == "Telegram setup expired"
+    with sqlite3.connect(os.environ["JARVIS_BACKEND_DB_PATH"]) as connection:
+        row = connection.execute(
+            "SELECT setup_id FROM telegram_managed_setup_sessions WHERE setup_id = ?",
+            (setup_id,),
+        ).fetchone()
+    assert row is None
+
+
+def test_telegram_managed_status_sanitizes_telegram_api_error(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={
+                "ok": False,
+                "error_code": 401,
+                "description": "Unauthorized 123456:test-manager-token",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "founder_jarvis_bot"},
+    )
+
+    response = client.get(f"/v1/telegram/managed/status/{started.json()['setupId']}")
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["provider"] == "telegram"
+    assert response.json()["detail"]["method"] == "getUpdates"
+    assert response.json()["detail"]["payload"]["description"] == "Unauthorized [redacted]"
+    assert "123456:test-manager-token" not in response.text
+
+
 def test_development_uses_local_sqlite_without_neon(monkeypatch, tmp_path):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.delenv("NEON_DATABASE_URL", raising=False)
@@ -312,9 +673,267 @@ def test_configured_backend_token_is_required(monkeypatch):
     assert authorized.json()["state"] == "trial_active"
 
 
-def test_managed_utility_never_returns_provider_key(monkeypatch):
+def test_firecrawl_search_calls_provider_and_redacts_echoed_key(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-managed-provider-placeholder")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.firecrawl.dev/v2/search"
+        assert request.headers["authorization"] == "Bearer test-firecrawl-provider-placeholder"
+        assert json.loads(request.content) == {"query": "founder mode", "limit": 3}
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": [{"title": "Jarvis", "url": "https://example.com"}],
+                "creditsUsed": 2,
+                "debug": "test-firecrawl-provider-placeholder",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.search",
+        json={"input": {"query": "founder mode", "limit": 3}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["result"]["provider"] == "firecrawl"
+    assert body["result"]["payload"]["data"][0]["title"] == "Jarvis"
+    assert body["result"]["payload"]["debug"] == "[redacted]"
+    assert body["usage"]["units"] == 2
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_firecrawl_scrape_calls_provider_with_markdown_format(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.firecrawl.dev/v2/scrape"
+        assert request.headers["authorization"] == "Bearer test-firecrawl-provider-placeholder"
+        assert json.loads(request.content) == {
+            "url": "https://example.com",
+            "formats": ["markdown"],
+        }
+        return httpx.Response(
+            200,
+            json={"success": True, "data": {"markdown": "# Example"}, "creditsUsed": 1},
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.scrape",
+        json={"input": {"url": "https://example.com"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["provider"] == "firecrawl"
+    assert response.json()["result"]["payload"]["data"]["markdown"] == "# Example"
+    assert "test-firecrawl-provider-placeholder" not in response.text
+
+
+def test_google_places_search_calls_provider_and_redacts_echoed_key(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "test-places-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://places.googleapis.com/v1/places:searchText"
+        assert request.headers["x-goog-api-key"] == "test-places-provider-placeholder"
+        assert "places.displayName" in request.headers["x-goog-fieldmask"]
+        assert json.loads(request.content) == {"textQuery": "coffee near KLCC", "pageSize": 4}
+        return httpx.Response(
+            200,
+            json={
+                "places": [
+                    {
+                        "id": "place-123",
+                        "displayName": {"text": "Coffee Bar"},
+                        "formattedAddress": "Kuala Lumpur",
+                    }
+                ],
+                "debug": "test-places-provider-placeholder",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/google_places.search",
+        json={"input": {"query": "coffee near KLCC", "limit": 4}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"]["provider"] == "google_places"
+    assert body["result"]["payload"]["places"][0]["id"] == "place-123"
+    assert body["result"]["payload"]["debug"] == "[redacted]"
+    assert "test-places-provider-placeholder" not in response.text
+
+
+def test_brave_search_calls_provider_and_redacts_echoed_key(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("BRAVE_API_KEY", "test-brave-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).startswith("https://api.search.brave.com/res/v1/web/search?")
+        assert request.headers["x-subscription-token"] == "test-brave-provider-placeholder"
+        assert request.url.params["q"] == "managed search"
+        assert request.url.params["count"] == "4"
+        assert request.url.params["country"] == "US"
+        assert request.url.params["search_lang"] == "en"
+        return httpx.Response(
+            200,
+            json={
+                "web": {
+                    "results": [
+                        {
+                            "title": "Jarvis",
+                            "url": "https://example.com",
+                            "description": "Managed result",
+                        }
+                    ]
+                },
+                "debug": "test-brave-provider-placeholder",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/brave.search",
+        json={
+            "input": {
+                "query": "managed search",
+                "count": 4,
+                "country": "US",
+                "search_lang": "en",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["result"]["provider"] == "brave"
+    assert body["result"]["payload"]["web"]["results"][0]["title"] == "Jarvis"
+    assert body["result"]["payload"]["debug"] == "[redacted]"
+    assert "test-brave-provider-placeholder" not in response.text
+
+
+def test_gemini_image_generate_calls_provider_and_returns_inline_image(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert (
+            str(request.url)
+            == "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent"
+        )
+        assert request.headers["x-goog-api-key"] == "test-gemini-provider-placeholder"
+        assert json.loads(request.content) == {
+            "contents": [{"parts": [{"text": "tiny robot assistant"}]}],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"],
+                "imageConfig": {"imageSize": "2K", "aspectRatio": "16:9"},
+            },
+        }
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"text": "Generated a small robot."},
+                                {
+                                    "inlineData": {
+                                        "mimeType": "image/png",
+                                        "data": "ZmFrZS1pbWFnZQ==",
+                                    }
+                                },
+                            ]
+                        }
+                    }
+                ],
+                "usageMetadata": {"totalTokenCount": 1120},
+                "debug": "test-gemini-provider-placeholder",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/gemini.image.generate",
+        json={
+            "input": {
+                "prompt": "tiny robot assistant",
+                "resolution": "2K",
+                "aspectRatio": "16:9",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"]["provider"] == "gemini"
+    assert body["result"]["payload"]["model"] == "gemini-3-pro-image-preview"
+    assert body["result"]["payload"]["text"] == "Generated a small robot."
+    assert body["result"]["payload"]["images"] == [
+        {"mimeType": "image/png", "data": "ZmFrZS1pbWFnZQ=="}
+    ]
+    assert body["result"]["payload"]["usageMetadata"]["totalTokenCount"] == 1120
+    assert body["usage"]["units"] == 1
+    assert "test-gemini-provider-placeholder" not in response.text
+
+
+def test_gemini_image_generate_validates_prompt_before_provider_spend(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected provider request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/gemini.image.generate",
+        json={"input": {"prompt": "tiny robot assistant", "resolution": "8K"}},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "gemini.image.generate input.resolution must be one of: 1K, 2K, 4K"
+    )
+
+
+def test_managed_utility_missing_provider_key_fails_closed(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    reset_settings()
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.search",
+        json={"input": {"query": "founder mode"}},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "firecrawl provider is not configured"
+    assert response.json().get("ok") is None
+
+
+def test_unknown_managed_utility_returns_not_found(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     reset_settings()
 
     response = TestClient(app).post(
@@ -322,10 +941,8 @@ def test_managed_utility_never_returns_provider_key(monkeypatch):
         json={"input": {"ignored": True}},
     )
 
-    assert response.status_code == 200
-    assert response.json()["ok"] is True
-    assert response.json()["result"]["providers"]["openai"] is True
-    assert "test-managed-provider-placeholder" not in response.text
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Unknown managed utility: provider_status"
 
 
 def teardown_function():
@@ -338,5 +955,11 @@ def teardown_function():
         "NEON_DATABASE_URL",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
+        "FIRECRAWL_API_KEY",
+        "GOOGLE_PLACES_API_KEY",
+        "GEMINI_API_KEY",
+        "BRAVE_API_KEY",
+        "TELEGRAM_MANAGER_BOT_TOKEN",
+        "MANAGER_BOT_USERNAME",
     ):
         os.environ.pop(key, None)

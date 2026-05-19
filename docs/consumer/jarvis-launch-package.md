@@ -34,20 +34,36 @@ Current beta backend:
 - Region/plan: `virginia` / `starter`
 - Source: `https://github.com/artemgetmann/openclaw` on `main`
 
-Verified on 2026-05-12:
+Verified on 2026-05-12 and refreshed on 2026-05-18:
 
 - `/healthz` is live and reports production mode.
 - OpenAI is configured server-side.
 - Anthropic is not configured yet.
+- Firecrawl, Google Places, Gemini, and Brave provider env are configured
+  server-side.
 - The managed utility smoke endpoint works with the backend token.
+- Real managed utility endpoints for `firecrawl.search`, `firecrawl.scrape`,
+  `google_places.search`, `brave.search`, and `gemini.image.generate` are
+  deployed on Render and returned HTTP 200 in live redacted smokes.
 - Neon persistence is configured server-side in Render.
+- Render now has the Managed Bots env enabled and redeployed; the redacted
+  health smoke returned `providers.telegram_managed_bots=true`.
+- Live Managed Bots start/status proof passed on 2026-05-18: setup
+  `tgms_3LBqIilzthPPfPZZ-aIaTw` connected as
+  `@JarvisManagedSmoke184350Bot` with bot id `8882555895`; the managed child
+  token was redacted in proof output.
 - Account activation creates a persisted 14-day trial.
 - License status succeeds for a valid account token.
 - Repeated activation for the same email fails closed with 409.
 - Invalid account access tokens reject with 401.
 
-Backend/account persistence is ready for the next beta package smoke. Anthropic
-remains unset, so do not claim Anthropic-managed utility coverage yet.
+Backend/account persistence and the first managed utility endpoints are ready
+for the next beta package smoke. Anthropic remains unset. Firecrawl
+app/runtime calls, Google Places/goplaces ordinary search, Brave `web_search`,
+and the Nano Banana text-to-image wrapper use Render in managed mode when
+configured.
+Google Places details/resolve/reviews and Nano Banana input-image editing still
+require direct BYOK until the backend exposes managed utilities for those shapes.
 
 ## Release package status
 
@@ -98,16 +114,22 @@ Current package truth:
   `Jarvis.dmg` with isolated state, isolated gateway health, onboarding
   observed, and real user config unchanged. A true separate macOS account smoke
   was deliberately skipped as unnecessary for the 3 trusted waiting testers.
-- Known trusted-build caveat: after launch, Jarvis can materialize extension
-  dependencies under
-  `/Applications/Jarvis.app/Contents/Resources/OpenClawRuntime/openclaw/dist/extensions/acpx/node_modules`.
-  That mutates the signed app bundle and makes a later `codesign --verify`
-  report a sealed-resource failure until the app is reinstalled from the DMG.
-  This is acceptable for the 3 trusted waiting testers as an early trusted
-  build caveat, but it is a required fix before Reddit/GitHub, public-ish beta,
-  or any wider beta. Runtime-writable extension dependencies must move to
-  Application Support or another writable state/cache path outside
-  `/Applications/Jarvis.app`.
+- Post-launch app-bundle mutation has a code fix in the packaging/runtime
+  branch. Root cause was packaged Jarvis treating bundled app resources as the
+  gateway project root while the `acpx` plugin could lazily run `npm install`
+  under `dist/extensions/acpx`. The fix treats `OpenClawRuntime` resources as
+  seed-only, prefers the seeded Application Support runtime for packaged
+  gateway identity, and routes managed `acpx` dependencies to
+  `$OPENCLAW_STATE_DIR/cache/extensions/acpx` outside `/Applications/Jarvis.app`.
+  Validation on 2026-05-16: targeted `acpx` Vitest coverage passed, macOS
+  `ConsumerBundledRuntimeTests` plus `GatewayLaunchAgentManagerTests` passed per
+  suite, and an isolated generated-runtime proof installed `acpx@0.3.0` under
+  `$OPENCLAW_STATE_DIR/cache/extensions/acpx` while leaving
+  `dist/extensions/acpx/node_modules` absent. Copied-app proof also passed from
+  a temp signed Jarvis app: `acpx` installed under isolated state/cache, the app
+  bundle still had no `dist/extensions/acpx/node_modules`, and
+  `codesign --verify --deep --strict` passed after the runtime path was
+  exercised.
 - Sending `Jarvis.dmg` to the 3 trusted waiting testers is allowed. Do not send
   wider/public until the `ai.jarvis.mac` identity migration and remaining wider
   beta gates are complete.
@@ -120,12 +142,10 @@ Current package truth:
   `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
   machine release env; leave `NOTARYTOOL_PROFILE` unset unless deliberately
   using the fallback path.
-- Dry-run preflight truth on 2026-05-16: ASC API-key lane is not ready on
-  Artem's machine. `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and
-  `NOTARYTOOL_ISSUER` are missing from the machine release env. The fallback
-  `NOTARYTOOL_PROFILE` is present and usable, but remains fallback-only. The
-  preflight is read-only and does not submit notarization, staple, package,
-  upload, or mutate release assets.
+- Dry-run release preflight truth from 2026-05-16: ASC API-key lane was ready
+  on Artem's machine, the fallback `NOTARYTOOL_PROFILE` was present and usable,
+  and the preflight stayed read-only. It did not submit notarization, staple,
+  package, upload, or mutate release assets.
 - Keychain-profile notarization remains a fallback for emergency/manual
   recovery only. It should not be the default release path because Apple ID
   app-specific password and 2FA recovery made the previous package lane too
@@ -133,6 +153,27 @@ Current package truth:
 - Artem must create or provide the actual App Store Connect API key if it is
   not already present on the machine. Do not block the release docs on fake
   placeholders or commit key material.
+- Follow-up preflight on 2026-05-16 confirmed Sparkle `generate_appcast` is
+  already available from the repo SwiftPM build. Local Spotlight search found
+  no existing `AuthKey_*.p8`, so the missing piece was Apple API-key setup, not
+  Sparkle tooling.
+- Current ASC blocker captured by the conductor on 2026-05-16:
+  `/access/integrations/api` is reachable after login, but it does not show API
+  keys. It shows "Permission is required to access the App Store Connect API.
+  You can request access on behalf of your organization." with a Request Access
+  button.
+- Follow-up ASC state on 2026-05-16: Artem approved and submitted the App Store
+  Connect API access request. Apple immediately showed "Your request to access
+  the App Store Connect API was approved", `Active (0)`, and `Generate API Key`.
+  Screenshot proof:
+  `/tmp/openclaw/asc-api-access-approved-generate-key.png`.
+- Final ASC credential state on 2026-05-16: Artem approved key generation. The
+  `Jarvis Notary` team key was created with Developer access, its one-time
+  `.p8` was downloaded, moved out of iCloud Downloads, stored at
+  `~/Library/Application Support/OpenClaw/release-keys/`, and locked to mode
+  `600`. The machine release env now has `NOTARYTOOL_KEY`,
+  `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER`. Read-only preflight ended with
+  `Final: ASC API key lane ready.`
 - `ai.jarvis.mac` bundle ID/runtime/update identity migration is a required
   launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
 - Do not send to Reddit/GitHub/public-ish beta until the `ai.jarvis.mac`
@@ -143,9 +184,21 @@ Current package truth:
   were removed. `/Applications/Jarvis.app`, the default gateway, watchdog, mail
   monitor, and the separate Chrome Telegram-live profile were kept.
 - The duplicate connected-bot Settings copy/buttons issue has been addressed
-  in source, but there is still no packaged installed-app GUI proof yet. Do
-  not count this as closed for broader launch proof until the packaged app is
-  verified.
+  in source. Current-main GUI proof was captured on 2026-05-16 with the
+  isolated `channels-proof` native UI-smoke app: Settings -> Channels rendered
+  one Telegram detail pane, one `Connected bot` section, one verified card, and
+  one `Open your bot` action. Screenshot:
+  `/tmp/openclaw/full-after-ready-channel-click.png`. This proves the merged
+  UI state, but the existing trusted-tester `Jarvis.dmg` was built before PR
+  #719, so exact release-DMG proof still requires a recut if we want to ship
+  that polish in a public artifact.
+- Packaging-smoke iteration speed note from 2026-05-16: the full fast package
+  loop was slow because it still staged the full bundled runtime, redeployed the
+  large production `node_modules` tree, recopied Node/uv payloads, and signed
+  runtime binaries on every shell-only app smoke. Local smoke lanes can now run
+  `bash scripts/package-consumer-mac-app-fast.sh --instance <id> --reuse-runtime`
+  after one normal fast package, but shipping/default package behavior remains
+  unchanged.
 
 ## v1 commercial decision
 
@@ -402,8 +455,25 @@ Say this directly:
 - focused Channels UI polish to remove duplicated connected-bot text/buttons
 - smoother account login and trial activation
 - cleaner Telegram setup with one consumer-first command/settings surface
-- investigate Telegram Managed Bots as the path to remove or hide manual
-  BotFather setup for mainstream users
+- Telegram Managed Bots proof spike passed on 2026-05-18: a BotFather-created
+  manager bot with Bot Management Mode created a managed child bot, the spike
+  received `managed_bot`, fetched the managed token with redaction, verified it
+  with `getMe`, and applied restricted access
+- Telegram Managed Bots backend contract landed in PR #766. Target flow: the
+  backend stores `TELEGRAM_MANAGER_BOT_TOKEN` and `MANAGER_BOT_USERNAME`,
+  returns the Telegram approval link, receives or polls `managed_bot`, fetches
+  the child token, and restricts child access. Managed Bots is now the primary
+  planned Telegram onboarding path; manual BotFather/BYO bot stays
+  fallback/advanced.
+- PR #767 moved the macOS Telegram onboarding onto the Managed Bots-first path.
+  The current normal-user gate is DM-first: create the Jarvis bot, approve it in
+  Telegram, send one direct-message task, then let Jarvis verify that task.
+- Group/threaded/forum auto-setup is later research and implementation. Track
+  whether the backend or userbot can create a group with the user plus bot,
+  enable forum topics, and create topics automatically; do not block the first
+  DM onboarding gate on it.
+- Managed-bot smoke cleanup is deferred. The throwaway proof bot can remain
+  unless Telegram bot limits start blocking progress.
 - Apple-style signed, verified updates that keep setup, preferences, and local
   data in place
 - App Store Connect API key auth and async submit/poll/staple notarization
@@ -431,16 +501,39 @@ through consumer setup. Candidate shape:
 - `/settings` shows the normal settings menu and an "Advanced settings" toggle.
 - `/advanced` or `/enable advanced` can expose developer/provider/BYO-bot/custom
   command settings for power users.
-- Shared/default bot setup stays the consumer path; BYO bot token, custom
-  commands, verbose developer detail, and internal tool/skill IDs stay in the
-  advanced path.
-- Research Telegram Managed Bots before locking the wider-beta Telegram setup.
-  Official Telegram Bot API 9.6 added managed-bot creation/token flows, and Bot
-  API 10.0 added managed-bot access settings. The next lane should verify
-  whether Jarvis can run a bot-management bot that lets a user create or connect
-  a personal Jarvis bot without leaving onboarding for manual BotFather steps.
-  If the official flow is too constrained, keep a shared Jarvis bot as the
-  default and move BYO BotFather tokens to the advanced path.
+- Managed Bots stays the consumer path; BYO BotFather token, custom commands,
+  verbose developer detail, and internal tool/skill IDs stay in the advanced
+  path.
+- Telegram Managed Bots is viable. The 2026-05-18 live spike proved Jarvis can
+  run a manager bot, let the user approve creation of a personal managed Jarvis
+  bot, fetch the managed token server-side, verify the child bot, and restrict
+  access. The follow-up live smoke proved Render health with
+  `telegram_managed_bots=true` and a connected start/status session with token
+  output redacted. The normal path is now replacing the manual BotFather setup
+  step with this manager-bot approval flow while keeping BYO BotFather tokens in
+  the advanced path.
+- Active implementation slice: durable Managed Bots setup sessions plus small
+  Telegram onboarding copy polish. Acceptance criteria:
+  - app-facing backend can start a managed-bot setup session and return the
+    approval link
+  - backend returns a clear pending/connected/error state for the session
+  - pending and connected setup sessions survive a Render restart by using Neon
+  - approved sessions fetch the managed child token and restrict child access
+  - manager and child tokens are redacted from provider errors
+  - normal onboarding stays DM-first: create bot, approve in Telegram, send one
+    DM task, verify first task
+  - BotFather/BYO bot remains available as fallback/advanced
+  - group/threaded/forum auto-setup stays tracked as later work
+- Security boundary for this slice:
+  - manager bot token stays backend-only
+  - no raw founder/provider keys are bundled in the app
+  - managed child bot token is user-specific and must not be logged
+  - connected setup persists the child token only long enough for the app to
+    recover after backend restart and install the user's bot
+- Out of scope for this slice: broad onboarding copy polish, `/visibility`
+  command cleanup, group/threaded auto-setup, smoke-bot cleanup,
+  `ai.jarvis.mac` identity migration, Sparkle update-cycle proof, final DMG
+  packaging, and wider beta blockers.
 - `/visibility` should replace stale `/verbose` naming in the Telegram command
   list and runtime behavior. Before wider beta, inspect upstream's current
   command/visibility implementation, then prove the Jarvis command list and
