@@ -256,17 +256,24 @@ Recommendation:
 
 ## Current Lane Status
 
-- Skills: product-level OpenClaw CLI proof passed on `claude-cli/sonnet` using
-  the exact Reddit URL
-  `https://www.reddit.com/r/codex/comments/1swq4g4/what_theme_do_you_use_in_codex_app/`.
-  Claude read the OpenClaw `reddit` skill instructions, used
-  `skills/reddit/scripts/reddit.mjs comments`, summarized the post/comments, and
-  confirmed in a same-session follow-up that it used the Reddit skill.
-- Reminder: tester Telegram proof passed on `@Artem_jarvis_email_bot` with the
-  natural prompt `in one minute go to my Twitter profile, click on the first
-post, and check the first comment`. Telegram message `49433` scheduled cron
-  job `a6a44bb6-90e6-4bd2-9147-c53a75433942`, bot reply `49434` confirmed
-  scheduling, delayed run executed as `provider=claude-cli model=sonnet`, and
-  final Telegram message `49435` delivered the first-comment result.
-- Progress UX: intentionally out of the current acceptance gate. Keep it in the
-  separate progress lane; do not block the Claude CLI backend smoke on it.
+- 2026-05-19 main-topic smoke: Jarvis Lab topic
+  `Claude CLI smoke 2026-05-19 2021`, root/message id `11311`, session group
+  `-1003783709877`, topic `11311`.
+- `/status`: passed.
+- `/model claude-cli/sonnet`: passed.
+- Authority/source audit: mixed/open. `~/.claude/CLAUDE.md` was still treated as
+  hard/harness-level authority, so isolation is not clean enough.
+- Reddit URL summary: functionally worked, but follow-up proved it did not use
+  the Reddit skill. Skills visibility and proactive skill use remain
+  blocker/partial.
+- Tone prompt: passed.
+- Simple reminder: passed.
+- Complex reminder: passed. Latest post found: `I 100% agree with Claudes
+disagreement.` with `0` replies.
+- Opus 1M side check: passed with `/model claude-cli/opus[1m]`, `/status`
+  showing `Context 755/1.0m`, and real turn
+  `OPUS_1M_MAIN_TOPIC_OK_20260519`; model was restored to
+  `claude-cli/sonnet` afterward.
+- Remaining blocker lanes: progress newline formatting, memory routing, and
+  skills visibility/proactive use.
+- Lower priority cleanup: model-list polish.
