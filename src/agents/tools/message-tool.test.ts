@@ -120,6 +120,67 @@ describe("message tool agent routing", () => {
     expect(call?.agentId).toBe("alpha");
     expect(call?.sessionKey).toBe("agent:alpha:main");
   });
+
+  it("intercepts same-source Telegram text sends for progress preview delivery", async () => {
+    mockSendResult();
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+      currentChannelId: "telegram:123",
+    });
+
+    const result = await tool.execute("1", {
+      action: "send",
+      message: "Checking example.com.",
+    });
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      ok: true,
+      __openclawSourcePreview: true,
+      message: "Checking example.com.",
+    });
+  });
+
+  it("does not intercept explicit Telegram target sends", async () => {
+    mockSendResult();
+
+    const call = await executeSend({
+      toolOptions: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:123",
+      },
+      action: {
+        target: "telegram:456",
+        message: "Send this elsewhere.",
+      },
+    });
+
+    expect(call?.params).toMatchObject({
+      target: "telegram:456",
+      message: "Send this elsewhere.",
+    });
+  });
+
+  it("does not intercept media-bearing Telegram sends", async () => {
+    mockSendResult();
+
+    const call = await executeSend({
+      toolOptions: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:123",
+      },
+      action: {
+        message: "Screenshot",
+        media: "file:///tmp/screenshot.png",
+      },
+    });
+
+    expect(call?.params).toMatchObject({
+      message: "Screenshot",
+      media: "file:///tmp/screenshot.png",
+    });
+  });
 });
 
 describe("message tool path passthrough", () => {

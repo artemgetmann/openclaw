@@ -574,6 +574,92 @@ type MessageToolOptions = {
   requesterSenderId?: string;
 };
 
+const SOURCE_PREVIEW_RESULT_MARKER = "__openclawSourcePreview";
+
+function hasExplicitMessageTarget(params: Record<string, unknown>): boolean {
+  return (
+    (typeof params.target === "string" && params.target.trim().length > 0) ||
+    (typeof params.to === "string" && params.to.trim().length > 0) ||
+    (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
+    (Array.isArray(params.targets) &&
+      params.targets.some((value) => typeof value === "string" && value.trim().length > 0))
+  );
+}
+
+function hasDirectSendOnlyPayload(params: Record<string, unknown>): boolean {
+  for (const field of [
+    "media",
+    "mediaUrl",
+    "mediaUrls",
+    "filename",
+    "buffer",
+    "contentType",
+    "mimeType",
+    "caption",
+    "path",
+    "filePath",
+    "replyTo",
+    "threadId",
+    "interactive",
+    "buttons",
+    "card",
+    "components",
+    "blocks",
+    "effectId",
+    "effect",
+  ]) {
+    const value = params[field];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return true;
+    }
+    if (Array.isArray(value) && value.length > 0) {
+      return true;
+    }
+    if (value && typeof value === "object") {
+      return true;
+    }
+    if (typeof value === "boolean") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveSameSourceTelegramPreviewMessage(params: {
+  currentChannelProvider?: string;
+  action: ChannelMessageActionName;
+  toolParams: Record<string, unknown>;
+}): string | undefined {
+  if (normalizeMessageChannel(params.currentChannelProvider) !== "telegram") {
+    return undefined;
+  }
+  if (params.action !== "send") {
+    return undefined;
+  }
+  if (hasExplicitMessageTarget(params.toolParams) || hasDirectSendOnlyPayload(params.toolParams)) {
+    return undefined;
+  }
+  const message =
+    readStringParam(params.toolParams, "message") ?? readStringParam(params.toolParams, "content");
+  return message?.trim() ? message : undefined;
+}
+
+export function isSourcePreviewMessageToolResult(result: unknown): string | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  const details =
+    record.details && typeof record.details === "object"
+      ? (record.details as Record<string, unknown>)
+      : record;
+  if (details[SOURCE_PREVIEW_RESULT_MARKER] !== true) {
+    return undefined;
+  }
+  const message = details.message;
+  return typeof message === "string" && message.trim() ? message : undefined;
+}
+
 function resolveMessageToolSchemaActions(params: {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
@@ -833,15 +919,21 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      const sourcePreviewMessage = resolveSameSourceTelegramPreviewMessage({
+        currentChannelProvider: options?.currentChannelProvider,
+        action,
+        toolParams: params,
+      });
+      if (sourcePreviewMessage) {
+        return jsonResult({
+          ok: true,
+          [SOURCE_PREVIEW_RESULT_MARKER]: true,
+          message: sourcePreviewMessage,
+        });
+      }
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
-        const explicitTarget =
-          (typeof params.target === "string" && params.target.trim().length > 0) ||
-          (typeof params.to === "string" && params.to.trim().length > 0) ||
-          (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
-          (Array.isArray(params.targets) &&
-            params.targets.some((value) => typeof value === "string" && value.trim().length > 0));
-        if (!explicitTarget) {
+        if (!hasExplicitMessageTarget(params)) {
           throw new Error(
             "Explicit message target required for this run. Provide target/targets (and channel when needed).",
           );
