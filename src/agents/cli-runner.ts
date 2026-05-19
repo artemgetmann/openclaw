@@ -514,6 +514,31 @@ function buildBridgeSafeClaudeCliSkillsPrompt(params: {
   ].join("\n");
 }
 
+function prependClaudeCliResumedSkillsReminder(params: {
+  prompt: string;
+  skillsPrompt: string;
+}): string {
+  const skillsPrompt = params.skillsPrompt.trim();
+  if (!skillsPrompt) {
+    return params.prompt;
+  }
+
+  // Claude CLI only accepts the appended system prompt when OpenClaw starts a
+  // fresh Claude-native session. Telegram/product chats often resume an older
+  // Claude session, so the current user turn must carry the same OpenClaw skill
+  // contract or Claude falls back to its native slash-skill registry and claims
+  // workspace skills are unavailable.
+  return [
+    "OpenClaw runtime skill reminder for this resumed Claude session:",
+    "These are OpenClaw workspace skills, not Claude Code native slash skills.",
+    "For a Reddit URL or any task that clearly matches one listed skill, read that skill's <location> SKILL.md with Claude's Read tool and follow it before using generic web/search behavior.",
+    "Do not say an OpenClaw skill is missing until you have checked <available_skills> below.",
+    skillsPrompt,
+    "Current user message:",
+    params.prompt,
+  ].join("\n\n");
+}
+
 async function buildCliAgentPromptStack(params: {
   sessionId: string;
   sessionKey?: string;
@@ -1073,6 +1098,9 @@ export async function runCliAgent(params: {
         cliSessionId: cliSessionIdToUse,
       });
       prompt = prependClaudeCliSharedTranscriptReplay({ prompt, replay });
+      if (useResume) {
+        prompt = prependClaudeCliResumedSkillsReminder({ prompt, skillsPrompt });
+      }
     }
     if (params.images && params.images.length > 0) {
       const imagePayload = await writeCliImages(params.images);

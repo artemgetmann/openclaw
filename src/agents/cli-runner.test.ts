@@ -441,6 +441,72 @@ describe("runCliAgent with process supervisor", () => {
     }
   });
 
+  it("reminds resumed claude-cli sessions about OpenClaw workspace skills", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-resume-skills-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "reddit"),
+      name: "reddit",
+      description: "Read and summarize Reddit posts and comments from a Reddit URL",
+      body: "# Reddit\n\nUse the Reddit JSON/comments workflow before generic web search.\n",
+    });
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      const result = await runCliAgent({
+        sessionId: "s1",
+        sessionKey: "agent:main:telegram:direct:123",
+        sessionFile,
+        workspaceDir,
+        config: createTextClaudeCliConfig(),
+        prompt: "summarize this reddit thread: https://www.reddit.com/r/codex/comments/demo",
+        provider: "claude-cli",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-resume-skills",
+        cliSessionId: "existing-claude-session",
+        messageChannel: "telegram",
+      });
+
+      const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+      const argv = spawnInput.argv ?? [];
+      expect(argv).toContain("--resume");
+      expect(argv).toContain("existing-claude-session");
+      expect(argv).not.toContain("--append-system-prompt");
+
+      const promptArg = argv.at(-1) ?? "";
+      expect(promptArg).toContain(
+        "OpenClaw runtime skill reminder for this resumed Claude session",
+      );
+      expect(promptArg).toContain(
+        "These are OpenClaw workspace skills, not Claude Code native slash skills.",
+      );
+      expect(promptArg).toContain("<available_skills>");
+      expect(promptArg).toContain("<name>reddit</name>");
+      expect(promptArg).toContain("Read and summarize Reddit posts and comments from a Reddit URL");
+      expect(promptArg).toContain("Current user message:");
+      expect(promptArg).toContain("summarize this reddit thread");
+      expect(result.meta.systemPromptReport?.skills.entries.map((entry) => entry.name)).toContain(
+        "reddit",
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("forwards streaming callbacks to the claude bridge backend", async () => {
     const preparedBackend = { command: "claude", args: ["--mcp-overlay"] };
     prepareCliBundleMcpConfigMock.mockResolvedValueOnce({ backend: preparedBackend });
