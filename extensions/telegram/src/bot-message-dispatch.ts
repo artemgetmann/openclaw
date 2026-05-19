@@ -70,99 +70,14 @@ function normalizeAnswerPreviewText(text: string): string {
     .trimEnd();
 }
 
-function looksLikeProgressParagraph(text: string): boolean {
-  return /^(?:[-─—]{2,}|🔧|✅|Step\b|Starting\b|Moving\b|Fetching\b|Loading\b|Following\b|Got\b|Comparing\b|Redirect\b|Now\b|I(?:'ll| will)\b|Let me\b)/i.test(
-    text.trim(),
-  );
-}
-
-function hasRetainedProgressTranscriptShape(text: string): boolean {
-  return (
-    text
-      .trim()
-      .split(/\n{2,}/)
-      .filter((paragraph) => paragraph.trim().length > 0).length > 1
-  );
-}
-
-function isRetainableAnswerProgressPreview(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return hasRetainedProgressTranscriptShape(trimmed) || looksLikeProgressParagraph(trimmed);
-}
-
 function isSuppressibleAnswerPreviewPrefix(text: string): boolean {
   const trimmed = normalizeAnswerPreviewText(text).trim();
-  if (!trimmed || isRetainableAnswerProgressPreview(trimmed)) {
+  if (!trimmed) {
     return false;
   }
   const isSingleLine = !/\n/.test(trimmed);
   const isShortHeading = trimmed.length <= 120 && /^[^!?\n]{1,80}[:：]\s*[^.!?\n]*$/.test(trimmed);
   return isSingleLine && isShortHeading;
-}
-
-function splitProgressBeforeFinalHeading(text: string) {
-  const normalized = normalizeAnswerPreviewText(text).trim();
-  const match =
-    /^(?<progress>[\s\S]*?[.!?])\s*(?<final>(?:Comparison|Summary|Final answer)\s*:[\s\S]*)$/i.exec(
-      normalized,
-    );
-  if (!match?.groups) {
-    return { progress: "", remainder: "" };
-  }
-  return {
-    progress: match.groups.progress.trim(),
-    remainder: match.groups.final.trim(),
-  };
-}
-
-function splitRetainedProgressPrefix(text: string) {
-  const normalized = normalizeAnswerPreviewText(text).trim();
-  if (!normalized) {
-    return { progress: "", remainder: "" };
-  }
-  const paragraphs = normalized.split(/\n{2,}/);
-  const progressParagraphs: string[] = [];
-  const remainderParagraphs: string[] = [];
-  let inRemainder = false;
-  for (const paragraph of paragraphs) {
-    const trimmed = paragraph.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (!inRemainder && looksLikeProgressParagraph(trimmed)) {
-      progressParagraphs.push(trimmed);
-      continue;
-    }
-    inRemainder = true;
-    remainderParagraphs.push(trimmed);
-  }
-  return {
-    progress: progressParagraphs.join("\n\n"),
-    remainder: remainderParagraphs.join("\n\n"),
-  };
-}
-
-function looksLikeFinalAnswerRemainder(text: string): boolean {
-  const trimmed = text.trim();
-  return (
-    trimmed.length >= 32 ||
-    /^(?:[-─—]{2,}|comparison\s*:|summary\b|here\b|short version\b|final answer\s*:|\||[-*]\s+)/i.test(
-      trimmed,
-    )
-  );
-}
-
-function findRetainedProgressFinalOverlap(progressText: string, finalText: string): number {
-  const max = Math.min(progressText.length, finalText.length);
-  for (let length = max; length > 0; length -= 1) {
-    if (progressText.slice(progressText.length - length) === finalText.slice(0, length)) {
-      return length;
-    }
-  }
-  return 0;
 }
 
 function formatToolStartProgressLine(payload: { name?: string; phase?: string }) {
@@ -403,6 +318,7 @@ export const dispatchTelegramMessage = async ({
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
   let retainedAnswerProgressPreviewText = "";
+  let retainedAnswerProgressFromExplicitBoundary = false;
   let forceNextAnswerFinalSend = false;
   let toolProgressLines: string[] = [];
   let draftLaneEventQueue = Promise.resolve();
@@ -440,7 +356,24 @@ export const dispatchTelegramMessage = async ({
     lane.hasStreamedMessage = false;
     if (lane === answerLane) {
       retainedAnswerProgressPreviewText = "";
+      retainedAnswerProgressFromExplicitBoundary = false;
     }
+  };
+  const appendAnswerProgressText = (text: string) => {
+    const normalized = text.trim();
+    if (!normalized) {
+      return "";
+    }
+    const current = retainedAnswerProgressPreviewText.trim();
+    if (!current) {
+      retainedAnswerProgressPreviewText = normalized;
+    } else if (normalized.startsWith(current)) {
+      retainedAnswerProgressPreviewText = normalized;
+    } else if (normalized !== current && !current.includes(normalized)) {
+      retainedAnswerProgressPreviewText = `${current}\n\n${normalized}`;
+    }
+    retainedAnswerProgressFromExplicitBoundary = true;
+    return retainedAnswerProgressPreviewText;
   };
   const rotateAnswerLaneForNewAssistantMessage = async () => {
     let didForceNewMessage = false;
@@ -471,59 +404,21 @@ export const dispatchTelegramMessage = async ({
     return didForceNewMessage;
   };
   const stripRetainedProgressFromFinal = (text: string) => {
-    const normalizedFinal = normalizeAdjacentProgressBoundaries(text).trim();
-    const progressComparableFinal = normalizeAnswerPreviewText(text).trim();
-    const retainedProgress = retainedAnswerProgressPreviewText.trim()
-      ? retainedAnswerProgressPreviewText.trim()
-      : isRetainableAnswerProgressPreview(answerLane.lastPartialText)
-        ? answerLane.lastPartialText.trim()
-        : "";
-    if (!retainedProgress || normalizedFinal === retainedProgress) {
-      return { text: normalizedFinal, stripped: false };
-    }
-    if (!progressComparableFinal.startsWith(retainedProgress)) {
-      const overlap = findRetainedProgressFinalOverlap(retainedProgress, progressComparableFinal);
-      if (overlap >= 16) {
-        const overlapRemainder = progressComparableFinal
-          .slice(overlap)
-          .replace(/^(?:[-─—]{2,}\s*)+/, "")
-          .trim();
-        if (looksLikeFinalAnswerRemainder(overlapRemainder)) {
-          return { text: overlapRemainder, stripped: true };
-        }
-      }
-      return { text: normalizedFinal, stripped: false };
-    }
-    const remainder = progressComparableFinal
-      .slice(retainedProgress.length)
-      .replace(/^(?:[-─—]{2,}\s*)+/, "")
-      .trim();
-    if (remainder.replace(/[.\s]+/g, "").length === 0) {
-      return { text: normalizedFinal, stripped: false };
-    }
-    return remainder.length > 0
-      ? { text: remainder, stripped: true }
-      : { text: normalizedFinal, stripped: false };
+    return { text: normalizeAdjacentProgressBoundaries(text).trim(), stripped: false };
   };
   const materializeAnswerProgressBeforeFinal = async () => {
     if (
       !answerLane.stream ||
       !answerLane.hasStreamedMessage ||
-      !(retainedAnswerProgressPreviewText.trim() || answerLane.lastPartialText.trim())
+      !retainedAnswerProgressFromExplicitBoundary ||
+      !retainedAnswerProgressPreviewText.trim()
     ) {
       return false;
     }
-    const retainedProgress =
-      retainedAnswerProgressPreviewText.trim() || answerLane.lastPartialText.trim();
-    const headingSplit = splitProgressBeforeFinalHeading(retainedProgress);
-    const progressToMaterialize =
-      headingSplit.progress && looksLikeFinalAnswerRemainder(headingSplit.remainder)
-        ? headingSplit.progress
-        : retainedProgress;
-    // A provider can emit a late partial that already contains progress plus
-    // final text. Restore the visible preview to the retained progress prefix
-    // before materializing, otherwise Telegram keeps the final answer in the
-    // progress bubble and the final sender duplicates it below.
+    const progressToMaterialize = retainedAnswerProgressPreviewText.trim();
+    // Only explicit non-final message boundaries become retained progress.
+    // Plain answer partials stay preview-only so final text cannot be split by
+    // English-looking status phrases.
     if (progressToMaterialize && progressToMaterialize !== answerLane.lastPartialText.trim()) {
       answerLane.stream.update(progressToMaterialize);
       answerLane.lastPartialText = progressToMaterialize;
@@ -552,7 +447,7 @@ export const dispatchTelegramMessage = async ({
     const hasSeparateFinalText =
       prepared.text.trim() !== (retainedProgress || answerLane.lastPartialText.trim());
     const hasRetainedProgressTranscript =
-      retainedProgress || isRetainableAnswerProgressPreview(answerLane.lastPartialText);
+      retainedAnswerProgressFromExplicitBoundary && retainedProgress;
     if (
       !opts?.hasMedia &&
       !opts?.isError &&
@@ -588,31 +483,10 @@ export const dispatchTelegramMessage = async ({
       if (isSuppressibleAnswerPreviewPrefix(previewText)) {
         return;
       }
-      const previousPreviewText = lane.lastPartialText.trim();
-      const split = splitRetainedProgressPrefix(previewText);
-      if (split.progress) {
-        retainedAnswerProgressPreviewText = split.progress;
-      }
-      // Some providers append the final answer to the last progress snapshot
-      // before the formal final callback arrives. When the old snapshot is a
-      // prefix, keep that old snapshot as the retained progress bubble and let
-      // final delivery own the answer text.
       if (
-        !retainedAnswerProgressPreviewText &&
-        previousPreviewText &&
-        previewText.startsWith(previousPreviewText)
-      ) {
-        const appendedText = previewText.slice(previousPreviewText.length).trim();
-        if (looksLikeFinalAnswerRemainder(appendedText)) {
-          retainedAnswerProgressPreviewText = previousPreviewText;
-          previewText = previousPreviewText;
-        }
-      }
-      if (
-        retainedAnswerProgressPreviewText &&
+        retainedAnswerProgressFromExplicitBoundary &&
         previewText !== retainedAnswerProgressPreviewText &&
-        previewText.startsWith(retainedAnswerProgressPreviewText) &&
-        looksLikeFinalAnswerRemainder(split.remainder)
+        previewText.startsWith(retainedAnswerProgressPreviewText)
       ) {
         previewText = retainedAnswerProgressPreviewText;
       }
@@ -649,6 +523,19 @@ export const dispatchTelegramMessage = async ({
     }
     await lane.stream.flush();
   };
+  const updateAnswerProgressFromBlock = (text: string | undefined) => {
+    if (!answerLane.stream || !text) {
+      return false;
+    }
+    const progressText = appendAnswerProgressText(text);
+    if (!progressText) {
+      return false;
+    }
+    answerLane.hasStreamedMessage = true;
+    answerLane.lastPartialText = progressText;
+    answerLane.stream.update(progressText);
+    return true;
+  };
   const canStreamToolProgressDraft = Boolean(answerLane.stream);
   const renderToolProgressDraftText = () => toolProgressLines.join("\n\n");
   const renderTextWithToolProgress = (text: string) => {
@@ -670,7 +557,7 @@ export const dispatchTelegramMessage = async ({
       return true;
     }
     toolProgressLines = [...toolProgressLines, normalized].slice(-TOOL_PROGRESS_MAX_LINES);
-    updateDraftFromPartial(answerLane, renderToolProgressDraftText());
+    updateAnswerProgressFromBlock(renderToolProgressDraftText());
     return true;
   };
 
@@ -972,6 +859,14 @@ export const dispatchTelegramMessage = async ({
               if (segment.lane === "reasoning") {
                 reasoningStepState.noteReasoningHint();
               }
+              if (segment.lane === "answer" && info.kind !== "final") {
+                if (hasMedia || payload.isError) {
+                  await sendPayload(payload);
+                } else {
+                  updateAnswerProgressFromBlock(renderTextWithToolProgress(segment.text));
+                }
+                continue;
+              }
               const result =
                 segment.lane === "answer" && info.kind === "final"
                   ? await deliverFinalAnswerText({
@@ -1032,6 +927,15 @@ export const dispatchTelegramMessage = async ({
               if (info.kind === "final") {
                 await flushBufferedFinalAnswer();
               }
+              return;
+            }
+            if (
+              info.kind !== "final" &&
+              typeof payload.text === "string" &&
+              !hasMedia &&
+              !payload.isError
+            ) {
+              updateAnswerProgressFromBlock(renderTextWithToolProgress(payload.text));
               return;
             }
             await sendPayload(

@@ -307,32 +307,35 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps non-prefix answer preview progress separate when the final answer replaces it", async () => {
+  it("keeps explicit block progress separate when the final answer replaces it", async () => {
     const draftStream = createTestDraftStream({
       messageId: 9003,
       clearMessageIdOnForceNew: true,
     });
     createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
           text: "Fetching all three in parallel.All three fetched. Here's what each source contributes:",
-        });
-        await dispatcherOptions.deliver(
-          {
-            text: "All three fetched. Here's what each source contributes:\n\nFinal answer.",
-          },
-          { kind: "final" },
-        );
-        return { queuedFinal: true };
-      },
-    );
+        },
+        { kind: "block" },
+      );
+      await dispatcherOptions.deliver(
+        {
+          text: "All three fetched. Here's what each source contributes:\n\nFinal answer.",
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "9003" });
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(draftStream.update).toHaveBeenCalledWith("Fetching all three in parallel.");
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Fetching all three in parallel.\n\nAll three fetched. Here's what each source contributes:",
+    );
     expect(draftStream.materialize).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -345,47 +348,49 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("separates adjacent progress phrases retained in final answer text", async () => {
+  it("accumulates explicit block progress into one bubble before the final answer", async () => {
     const draftStream = createTestDraftStream({
       messageId: 9004,
       clearMessageIdOnForceNew: true,
     });
     createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({
-          text: "On it — fetching both pages step by step.**Step 1 — Fetching example.com...**",
-        });
-        await dispatcherOptions.deliver(
-          {
-            text: "On it — fetching both pages step by step.**Step 1 — Fetching example.com...****Step 2 — Fetching IANA example domains page...**Redirect detected.\n\nFinal answer.",
-          },
-          { kind: "final" },
-        );
-        return { queuedFinal: true };
-      },
-    );
-    deliverReplies.mockResolvedValue({ delivered: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "On it — fetching both pages step by step." },
+        { kind: "block" },
+      );
+      await dispatcherOptions.deliver(
+        { text: "Fetching IANA example domains page." },
+        { kind: "block" },
+      );
+      await dispatcherOptions.deliver({ text: "Final answer." }, { kind: "final" });
+      return { queuedFinal: true };
+    });
     deliverReplies.mockResolvedValue({ delivered: true });
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "On it — fetching both pages step by step.\n\n**Step 1 — Fetching example.com**",
+    expect(draftStream.update).toHaveBeenNthCalledWith(
+      1,
+      "On it — fetching both pages step by step.",
+    );
+    expect(draftStream.update).toHaveBeenNthCalledWith(
+      2,
+      "On it — fetching both pages step by step.\n\nFetching IANA example domains page.",
     );
     expect(draftStream.materialize).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [
           expect.objectContaining({
-            text: "**Step 2 — Fetching IANA example domains page**\n\nRedirect detected.\n\nFinal answer.",
+            text: "Final answer.",
           }),
         ],
       }),
     );
   });
 
-  it("keeps retained progress as a separate bubble before the final answer", async () => {
+  it("does not retain answer partials as progress before the final answer", async () => {
     const draftStream = createTestDraftStream({
       messageId: 9005,
       clearMessageIdOnForceNew: true,
@@ -418,25 +423,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith(
       "Fetching example.com first.\n\nStep 1: Fetching example.com\n\nStep 2: Fetching IANA example domains page",
     );
-    expect(draftStream.materialize).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [
-          expect.objectContaining({
-            text: "Final answer.",
-          }),
-        ],
-      }),
-    );
-    expect(editMessageTelegram).not.toHaveBeenCalledWith(
+    expect(draftStream.materialize).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       9005,
-      expect.stringContaining("Fetching example.com first"),
+      "Fetching example.com first.\n\nStep 1: Fetching example.com...\n\nStep 2: Fetching IANA example domains page...\n\nFinal answer.",
       expect.any(Object),
     );
   });
 
-  it("keeps natural progress narration as one bubble and sends the final answer separately", async () => {
+  it("keeps natural block progress narration as one bubble and sends the final answer separately", async () => {
     const answerDraftStream = createSequencedDraftStream(1001);
     const reasoningDraftStream = createDraftStream();
     createTelegramDraftStream
@@ -448,14 +444,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
       "",
       "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
     ].join("\n");
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "I'll check the first page now." });
-        await replyOptions?.onPartialReply?.({ text: progressText });
-        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "I'll check the first page now." },
+        { kind: "block" },
+      );
+      await dispatcherOptions.deliver({ text: "Now checking the IANA page." }, { kind: "block" });
+      await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
     deliverReplies.mockResolvedValue({ delivered: true });
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
@@ -829,171 +826,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps retained progress separate when a late partial already contains the final answer", async () => {
-    const answerDraftStream = createSequencedDraftStream(1001);
-    const reasoningDraftStream = createDraftStream();
-    createTelegramDraftStream
-      .mockImplementationOnce(() => answerDraftStream)
-      .mockImplementationOnce(() => reasoningDraftStream);
-    const finalText = [
-      "Fetching both pages now.",
-      "",
-      "Summary of what changed between the two pages:",
-      "",
-      "The IANA page is deeper and explains the policy behind the example domains.",
-      "",
-      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-    ].join("\n");
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "Fetching both pages now..." });
-        // Some backends emit the completed answer as one last partial before
-        // the final delivery callback. That partial must not contaminate the
-        // retained progress bubble.
-        await replyOptions?.onPartialReply?.({ text: finalText });
-        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-    deliverReplies.mockResolvedValue({ delivered: true });
-    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1002" });
-
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
-
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Fetching both pages now");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Fetching both pages now.");
-    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
-      expect.stringContaining("Fetching both pages now.\n\nSummary"),
-    );
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(editMessageTelegram).not.toHaveBeenCalled();
-    expect(
-      deliverReplies.mock.calls.filter((call: unknown[]) =>
-        ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).some((reply) =>
-          reply.text?.includes("CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516"),
-        ),
-      ),
-    ).toHaveLength(1);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [
-          expect.objectContaining({
-            text: [
-              "Summary of what changed between the two pages:",
-              "",
-              "The IANA page is deeper and explains the policy behind the example domains.",
-              "",
-              "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-            ].join("\n"),
-          }),
-        ],
-      }),
-    );
-  });
-
-  it("restores natural progress when a late partial appends the final answer", async () => {
-    const answerDraftStream = createSequencedDraftStream(1001);
-    const reasoningDraftStream = createDraftStream();
-    createTelegramDraftStream
-      .mockImplementationOnce(() => answerDraftStream)
-      .mockImplementationOnce(() => reasoningDraftStream);
-    const progressText = "I'll check the first page now.\n\nNow checking the IANA page.";
-    const finalText = [
-      "The main difference is that example.com is a short placeholder, while the IANA page explains the policy.",
-      "",
-      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-    ].join("\n");
-    const combinedText = `${progressText}\n\n${finalText}`;
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: progressText });
-        await replyOptions?.onPartialReply?.({ text: combinedText });
-        await dispatcherOptions.deliver({ text: combinedText }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-    deliverReplies.mockResolvedValue({ delivered: true });
-
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
-
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, progressText);
-    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
-      expect.stringContaining("The main difference is that example.com"),
-    );
-    expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(editMessageTelegram).not.toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [
-          expect.objectContaining({
-            text: finalText,
-          }),
-        ],
-      }),
-    );
-  });
-
-  it("splits a glued natural progress sentence from the final comparison heading", async () => {
-    const answerDraftStream = createSequencedDraftStream(1001);
-    const reasoningDraftStream = createDraftStream();
-    createTelegramDraftStream
-      .mockImplementationOnce(() => answerDraftStream)
-      .mockImplementationOnce(() => reasoningDraftStream);
-    const contaminatedText = [
-      "Fetching both pages now.Comparison:",
-      "",
-      "example.com says it is a placeholder page.",
-      "",
-      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-    ].join("\n");
-    const finalText = [
-      "Comparison:",
-      "",
-      "example.com says it is a placeholder page.",
-      "",
-      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-    ].join("\n");
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: contaminatedText });
-        await dispatcherOptions.deliver({ text: contaminatedText }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-    deliverReplies.mockResolvedValue({ delivered: true });
-
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
-
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Fetching both pages now.");
-    const restoredUpdateCall = answerDraftStream.update.mock.calls.findIndex(
-      ([text]) => text === "Fetching both pages now.",
-    );
-    const restoredUpdateOrder =
-      answerDraftStream.update.mock.invocationCallOrder[restoredUpdateCall];
-    const flushOrder = answerDraftStream.flush.mock.invocationCallOrder[0];
-    const materializeOrder = answerDraftStream.materialize.mock.invocationCallOrder[0];
-    expect(restoredUpdateOrder).toBeLessThan(flushOrder);
-    expect(flushOrder).toBeLessThan(materializeOrder);
-    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
-      expect.stringContaining("Comparison:"),
-    );
-    expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(editMessageTelegram).not.toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [
-          expect.objectContaining({
-            text: finalText,
-          }),
-        ],
-      }),
-    );
-  });
-
   it("does not retain a plain final-answer prefix as progress", async () => {
     const answerDraftStream = createSequencedDraftStream(1001);
     const reasoningDraftStream = createDraftStream();
@@ -1060,212 +892,46 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).toHaveBeenCalledWith(123, 1001, finalText, expect.any(Object));
   });
 
-  it("strips a retained progress suffix when the final answer starts from the last progress step", async () => {
+  it("does not retain multi-paragraph final-answer content as progress", async () => {
     const answerDraftStream = createSequencedDraftStream(1001);
     const reasoningDraftStream = createDraftStream();
     createTelegramDraftStream
       .mockImplementationOnce(() => answerDraftStream)
       .mockImplementationOnce(() => reasoningDraftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({
-          text: [
-            "Step 1 of 3 — fetching example.com",
-            "",
-            "Got it. example.com is a minimal stub.",
-            "",
-            "Step 2 of 3 — fetching IANA reserved domains page",
-            "",
-            "Got it. Rich policy page with multiple sections. Now comparing.",
-            "",
-            "Step 3 of 3 — summary of differences:",
-          ].join("\n"),
-        });
-        await dispatcherOptions.deliver(
-          {
-            text: [
-              "Got it. Rich policy page with multiple sections. Now comparing.",
-              "",
-              "Step 3 of 3 — summary of differences:",
-              "",
-              "| example.com | IANA Reserved Domains |",
-              "| --- | --- |",
-              "| Stub | Policy source |",
-              "",
-              "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-            ].join("\n"),
-          },
-          { kind: "final" },
-        );
-        return { queuedFinal: true };
-      },
-    );
-    deliverReplies.mockResolvedValue({ delivered: true });
-    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1002" });
-
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
-
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(editMessageTelegram).not.toHaveBeenCalled();
-    expect(
-      deliverReplies.mock.calls.filter((call: unknown[]) =>
-        ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).some((reply) =>
-          reply.text?.includes("CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516"),
-        ),
-      ),
-    ).toHaveLength(1);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [
-          expect.objectContaining({
-            text: [
-              "| example.com | IANA Reserved Domains |",
-              "| --- | --- |",
-              "| Stub | Policy source |",
-              "",
-              "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-            ].join("\n"),
-          }),
-        ],
-      }),
-    );
-  });
-
-  it("keeps progress separate when the first partial already contains the final answer", async () => {
-    const answerDraftStream = createSequencedDraftStream(1001);
-    const reasoningDraftStream = createDraftStream();
-    createTelegramDraftStream
-      .mockImplementationOnce(() => answerDraftStream)
-      .mockImplementationOnce(() => reasoningDraftStream);
-    const combinedText = [
-      "Starting step 1 of 3 — fetching example.com now✅ Step 1 done. Tiny page.",
+    const partialFinalAnswer = [
+      "example.com: For documentation examples, no permission needed, avoid use in operations, links to IANA.",
       "",
-      "Moving to step 2 of 3 — fetching the IANA example domains page✅ Step 2 done. Rich policy page.",
+      "IANA reserved domains page: example.com and example.org maintained per RFC 2606 and RFC",
+    ].join("\n");
+    const finalText = [
+      "example.com: For documentation examples, no permission needed, avoid use in operations, links to IANA.",
       "",
-      "Step 3 of 3 — comparing the two pages:",
+      "IANA reserved domains page: example.com and example.org maintained per RFC 2606 and RFC 6761 for documentation, usable without prior coordination, not available for registration or transfer.",
       "",
-      "example.com is a minimal placeholder:",
-      "",
-      "• One sentence of content",
+      'Comparison: Fully consistent on purpose — documentation use, no permission required. IANA adds the RFC legal basis and registration/transfer restriction. example.com uniquely adds the "avoid use in operations" warning.',
       "",
       "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
     ].join("\n");
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: combinedText });
-        await dispatcherOptions.deliver({ text: combinedText }, { kind: "final" });
+        await replyOptions?.onPartialReply?.({ text: partialFinalAnswer });
+        await dispatcherOptions.deliver({ text: finalText }, { kind: "final" });
         return { queuedFinal: true };
       },
     );
     deliverReplies.mockResolvedValue({ delivered: true });
-    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1002" });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
-      1,
-      [
-        "Starting step 1 of 3 — fetching example.com now",
-        "",
-        "✅ Step 1 done. Tiny page.",
-        "",
-        "Moving to step 2 of 3 — fetching the IANA example domains page",
-        "",
-        "✅ Step 2 done. Rich policy page.",
-        "",
-        "Step 3 of 3 — comparing the two pages:",
-      ].join("\n"),
-    );
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
-      1,
-      expect.not.stringContaining("example.com is a minimal placeholder"),
-    );
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(editMessageTelegram).not.toHaveBeenCalled();
-    expect(
-      deliverReplies.mock.calls.filter((call: unknown[]) =>
-        ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).some((reply) =>
-          reply.text?.includes("CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516"),
-        ),
-      ),
-    ).toHaveLength(1);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [
-          expect.objectContaining({
-            text: [
-              "example.com is a minimal placeholder:",
-              "",
-              "• One sentence of content",
-              "",
-              "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-            ].join("\n"),
-          }),
-        ],
-      }),
-    );
-  });
-
-  it("strips separator-delimited progress from a final that matches the latest preview", async () => {
-    const answerDraftStream = createSequencedDraftStream(1001);
-    const reasoningDraftStream = createDraftStream();
-    createTelegramDraftStream
-      .mockImplementationOnce(() => answerDraftStream)
-      .mockImplementationOnce(() => reasoningDraftStream);
-    const combinedText = [
-      "Step 1 of 5 — Fetching example.com",
-      "",
-      "✅ example.com fetched.",
-      "",
-      "───",
-      "",
-      "Step 2 of 5 — Waiting 8 seconds",
-      "",
-      "✅ 8 seconds elapsed.",
-      "",
-      "───",
-      "",
-      "Step 3 of 5 — Detailed comparison:",
-      "",
-      "example.com is the public stub. IANA is the policy source behind it.",
-      "",
-      "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-    ].join("\n");
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: combinedText });
-        await dispatcherOptions.deliver({ text: combinedText }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-    deliverReplies.mockResolvedValue({ delivered: true });
-
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
-
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(editMessageTelegram).not.toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [
-          expect.objectContaining({
-            text: [
-              "example.com is the public stub. IANA is the policy source behind it.",
-              "",
-              "CLAUDE_PROGRESS_UX_TESTER_CHECK_20260516",
-            ].join("\n"),
-          }),
-        ],
-      }),
-    );
+    expect(answerDraftStream.materialize).not.toHaveBeenCalled();
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        replies: [
-          expect.objectContaining({
-            text: expect.stringContaining("Step 1 of 5"),
-          }),
-        ],
+        replies: [expect.objectContaining({ text: expect.stringMatching(/^6761/) })],
       }),
     );
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 1001, finalText, expect.any(Object));
   });
 
   it("clears active preview even when an unrelated boundary archive exists", async () => {
