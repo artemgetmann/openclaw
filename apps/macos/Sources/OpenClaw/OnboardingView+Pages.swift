@@ -110,8 +110,10 @@ extension OnboardingView {
     }
 
     func consumerSetupPage() -> some View {
-        self.onboardingPage {
-            VStack(spacing: 22) {
+        let scrollIndicatorGutter: CGFloat = 18
+
+        return VStack(spacing: 18) {
+            VStack(spacing: 8) {
                 Text("Set up \(AppFlavor.current.appName)")
                     .font(.largeTitle.weight(.semibold))
                 Text(self.consumerSetupStep.subtitle)
@@ -120,16 +122,23 @@ extension OnboardingView {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 560)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 16)
 
-                self.consumerSetupStepIndicator()
-
+            // Keep the Jarvis/page identity anchored while longer setup content,
+            // especially Telegram Advanced, scrolls inside the card area.
+            ScrollView {
                 self.onboardingCard(spacing: 10, padding: 14) {
                     self.consumerSetupStepContent()
                 }
                 .frame(maxWidth: 520)
+                .padding(.trailing, scrollIndicatorGutter)
             }
-            .padding(.top, 16)
+            .scrollIndicators(.automatic)
+            .frame(maxHeight: .infinity, alignment: .top)
         }
+        .padding(.horizontal, 28)
+        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
     }
 
     @ViewBuilder
@@ -151,58 +160,6 @@ extension OnboardingView {
                 store: self.channelsStore,
                 presentation: .onboarding)
         }
-    }
-
-    private func consumerSetupStepIndicator() -> some View {
-        HStack(spacing: 8) {
-            ForEach(ConsumerSetupStep.allCases) { step in
-                self.consumerSetupStepPill(step)
-            }
-        }
-        .frame(maxWidth: 520)
-    }
-
-    private func consumerSetupStepPill(_ step: ConsumerSetupStep) -> some View {
-        Button {
-            withAnimation { self.consumerSetupStep = step }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: self.consumerSetupStepIcon(for: step))
-                    .font(.caption.weight(.semibold))
-                    .frame(width: 14)
-                Text(step.title)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(self.consumerSetupStep == step ? Color.accentColor : .primary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(self.consumerSetupStep == step ? Color.accentColor.opacity(0.12) : Color.clear))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(self.consumerSetupStepBorder(for: step), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func consumerSetupStepIcon(for step: ConsumerSetupStep) -> String {
-        if self.isConsumerSetupStepComplete(step) {
-            return "checkmark.circle.fill"
-        }
-        return step.systemImage
-    }
-
-    private func consumerSetupStepBorder(for step: ConsumerSetupStep) -> Color {
-        if self.consumerSetupStep == step {
-            return Color.accentColor.opacity(0.45)
-        }
-        if self.isConsumerSetupStepComplete(step) {
-            return Color.green.opacity(0.35)
-        }
-        return Color.secondary.opacity(0.2)
     }
 
     func isConsumerSetupStepComplete(_ step: ConsumerSetupStep) -> Bool {

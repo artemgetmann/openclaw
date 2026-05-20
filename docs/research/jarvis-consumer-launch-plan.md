@@ -609,9 +609,16 @@ Telegram/Managed Bots:
 - DM-first remains the main consumer Telegram path for now: create the Jarvis
   bot, approve in Telegram, send one direct-message task, then verify that first
   useful task.
-- Group/threaded/forum auto-setup is tracked later. Research whether the
-  backend or userbot can create a group with the user plus bot, enable forum
-  topics, and create topics automatically.
+- Group/threaded/forum setup is important and should be the next Telegram setup
+  step after the first DM task works. Research boundary: a managed bot can create
+  forum topics only after it is added to a forum supergroup with topic-management
+  admin rights; the backend/userbot path still needs research for creating the
+  group, adding the user plus bot, enabling forum mode, and seeding topics.
+- Account activation is a separate onboarding sequencing gap. Managed Bots needs
+  a Jarvis account token, but the current Telegram page can show "Sign in to
+  Jarvis" before the app has a clear activation page. Track a later slice to put
+  account activation before Telegram, likely as the first or third/fourth setup
+  page after Chrome/permissions decisions are settled.
 - Smoke bot cleanup is deferred unless Telegram bot limits block progress.
 - Telegram command/settings strategy lives in
   `docs/consumer/jarvis-launch-package.md`. Normal users should get one
@@ -983,6 +990,12 @@ Order:
      `/tmp/jarvis-gui-proof/jarvis-telegram-window.png`.
    - Limit: the fast smoke launches with `--no-launchd`, so it proves
      page/copy/layout and app-window targeting, not full AI/backend readiness.
+   - Runtime-backed Telegram proof is a different gate. Use
+     `bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <id> --with-runtime`
+     when Verify first task must talk to a local gateway websocket. The runtime
+     mode must keep the default gateway untouched, install the isolated
+     instance gateway from the current worktree, and relaunch the smoke app only
+     after the app-side LaunchAgent snapshot and shell-installed plist agree.
    - For onboarding copy/layout iteration, run
      `bash scripts/relaunch-consumer-mac-ui-smoke.sh --instance <id>` first.
      It builds the native SwiftUI app from source and launches it through a tiny
@@ -1023,8 +1036,10 @@ Order:
      `tgms_3LBqIilzthPPfPZZ-aIaTw` as `@JarvisManagedSmoke184350Bot` with bot id
      `8882555895` and token output redacted.
    - Main path: keep first launch DM-first. Group chats, threaded/forum mode,
-     and automatic topic creation are later work, not part of the first
-     onboarding gate.
+     and automatic topic creation are the next Telegram setup step after the DM
+     proof, not part of the first onboarding gate.
+   - Telegram-not-installed fallback stays deferred; do not block the Managed
+     Bots DM proof on that branch.
    - Acceptance criteria:
      - backend can start a managed-bot setup session and return the approval
        link

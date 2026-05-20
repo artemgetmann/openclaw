@@ -20,8 +20,12 @@ source is wired in.
 Current Telegram onboarding status: Managed Bots is live-proven on Render with
 redacted health and start/status smokes. The normal beta path stays DM-first:
 create the Jarvis Telegram bot, approve it in Telegram, send one direct-message
-task, then verify the first useful task. Group/threaded auto-setup is tracked
-as later work.
+task, then verify the first useful task. Visual-only macOS smoke can prove
+onboarding copy and layout, but first-task verification needs a reachable local
+runtime websocket, so use runtime-backed isolated smoke for that gate. Telegram
+not-installed fallback is still deferred. Group/threaded setup is important and
+tracked as the next Telegram setup step after DM proof. Account activation before
+Telegram is still a separate onboarding sequencing gap.
 
 These numbers expire after `stale_after_days`. Once expired, they are not
 decision-grade and must not be used for pricing, launch, investor, or resourcing

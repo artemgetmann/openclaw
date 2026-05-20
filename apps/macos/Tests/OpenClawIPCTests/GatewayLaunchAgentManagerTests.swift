@@ -150,6 +150,7 @@ struct GatewayLaunchAgentManagerTests {
 
             #expect(CommandResolver.daemonProjectRootEnvironmentHint() == seededRoot.path)
             #expect(CommandResolver.canonicalGatewayProjectRoot().path == seededRoot.path)
+            #expect(GatewayLaunchAgentManager._testDaemonCommandProjectRoot().path == seededRoot.path)
             #expect(env["OPENCLAW_FORK_ROOT"] == seededRoot.path)
             #expect(env["OPENCLAW_FORK_ROOT"] != sourceRoot.path)
             #expect(ownership.expectedEntrypoint == seededEntrypoint)
@@ -272,6 +273,50 @@ struct GatewayLaunchAgentManagerTests {
         }
     }
 
+    @MainActor
+    @Test func `daemon command root canonicalizes default shared gateway worktrees`() async throws {
+        let fixture = try self.makeWorktreeRepoRoot()
+        defer { try? FileManager().removeItem(at: fixture.parentRoot) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_TEST": "1",
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": fixture.worktreeRoot.path,
+            ])
+        {
+            let commandRoot = GatewayLaunchAgentManager._testDaemonCommandProjectRoot()
+
+            #expect(CommandResolver.projectRoot().path == fixture.worktreeRoot.path)
+            #expect(commandRoot.path == fixture.parentRoot.path)
+        }
+    }
+
+    @MainActor
+    @Test func `daemon command root keeps isolated consumer worktree root`() async throws {
+        let fixture = try self.makeWorktreeRepoRoot()
+        defer { try? FileManager().removeItem(at: fixture.parentRoot) }
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: "telegram-smoke",
+                "OPENCLAW_TEST": "1",
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": fixture.worktreeRoot.path,
+            ])
+        {
+            let commandRoot = GatewayLaunchAgentManager._testDaemonCommandProjectRoot()
+
+            #expect(CommandResolver.projectRoot().path == fixture.worktreeRoot.path)
+            #expect(commandRoot.path == fixture.worktreeRoot.path)
+        }
+    }
+
     @Test func `enable skips loaded matching launch agent`() async throws {
         let home = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
@@ -376,6 +421,7 @@ struct GatewayLaunchAgentManagerTests {
         let error = try await TestIsolation.withIsolatedState(
             env: [
                 "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
             ],
@@ -980,6 +1026,15 @@ extension GatewayLaunchAgentManagerTests {
         try Data().write(to: root.appendingPathComponent("package.json"))
         try Data().write(to: root.appendingPathComponent("openclaw.mjs"))
         return root
+    }
+
+    private func makeWorktreeRepoRoot() throws -> (parentRoot: URL, worktreeRoot: URL) {
+        let parentRoot = try self.makeRepoRoot(named: "openclaw-parent-\(UUID().uuidString)")
+        let worktreeRoot = parentRoot
+            .appendingPathComponent(".worktrees", isDirectory: true)
+            .appendingPathComponent("telegram-smoke", isDirectory: true)
+        _ = try self.makeRepoRoot(at: worktreeRoot)
+        return (parentRoot: parentRoot, worktreeRoot: worktreeRoot)
     }
 
     private func repoRoot(filePath: StaticString = #filePath) -> URL {

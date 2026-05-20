@@ -738,6 +738,44 @@ struct BrowserSetupSupportTests {
         }
     }
 
+    @Test func `consumer browser readiness hides raw command failure details`() async {
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let result = await BrowserSetupModel.verifyConsumerBrowserSelection(
+                expectedProfile: selected,
+                runBrowserStatus: { _, _, _ in
+                    ConsumerShellCommandResult(
+                        stdout: "",
+                        stderr: """
+                        file:///tmp/openclaw.mjs:88
+                          throw new Error("missing dist/entry.mjs");
+                        Error: missing dist/entry.mjs
+                        """,
+                        exitCode: 1,
+                        success: false)
+                })
+
+            #expect(
+                result ==
+                    "Jarvis saved the Chrome profile, but could not finish the browser check. Try again in a moment.")
+        }
+    }
+
     @Test func `refresh migrates legacy defaults selection into config`() async {
         let defaults = self.makeDefaults()
         defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)

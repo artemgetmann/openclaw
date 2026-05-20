@@ -69,6 +69,20 @@ struct OnboardingViewSmokeTests {
         }
     }
 
+    @Test func `debug step override opens consumer setup to telegram for ui smoke`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let state = AppState(preview: true)
+            state.connectionMode = .local
+            let view = OnboardingView(
+                state: state,
+                permissionMonitor: PermissionMonitor.shared,
+                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
+                consumerSetupDebugStepEnvironment: ["OPENCLAW_CONSUMER_SETUP_DEBUG_STEP": "telegram"])
+
+            #expect(view.consumerSetupStep == .telegram)
+        }
+    }
+
     @Test func `consumer setup navigation does not finish when prior steps are incomplete`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             let state = AppState(preview: true)
