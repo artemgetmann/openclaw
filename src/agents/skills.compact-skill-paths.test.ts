@@ -49,7 +49,7 @@ describe("compactSkillPaths", () => {
         description: "WhatsApp helper",
         filePath,
         baseDir: path.dirname(filePath),
-        source: "workspace",
+        source: "openclaw-workspace",
         disableModelInvocation: false,
       },
       frontmatter: {},
