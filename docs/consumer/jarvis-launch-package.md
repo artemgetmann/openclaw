@@ -4,6 +4,13 @@ Status: v1 launch package draft
 Owner: Artem
 Last updated: 2026-05-14
 
+Purpose: launch-facing package, pricing, copy, and artifact truth.
+
+Use this document for what Jarvis says, sells, packages, and ships once the
+launch plan is ready. Do not duplicate detailed implementation tracker state
+here; link to `docs/research/jarvis-consumer-launch-plan.md` for current task
+status, owners, and proof.
+
 This document turns the launch plan into decisions that can be shipped into the
 GitHub README, release notes, pricing copy, and the first 60-second demo.
 
@@ -15,14 +22,15 @@ technical, developer, repo, or "powered by OpenClaw" language only.
 Public-facing app/docs, visible app name, release artifacts, and app icon are
 Jarvis now.
 
-For the 3 trusted waiting testers only, bundle ID, runtime identity, update
+For the small trusted tester ring only, bundle ID, runtime identity, update
 feed identity, and deeper internal renames intentionally stay on
-`ai.openclaw.consumer.mac` and OpenClaw paths so the notarized package can ship
-fastest. Before Reddit/GitHub, public-ish beta, or any wider beta beyond that
-tiny trusted ring, `ai.jarvis.mac` bundle ID/runtime/update identity migration
-is a required launch gate. Do not treat that migration as a quick rename; it
-needs a deliberate lane because it can affect permissions, state, LaunchAgents,
-and update continuity.
+`ai.openclaw.consumer.mac` and OpenClaw paths so the next package can ship
+fastest. That trusted ring includes the already-prepared tester package and the
+next 4-5 waiting testers after the P0 onboarding fixes. Before Reddit/GitHub,
+public-ish beta, or any broader beta, `ai.jarvis.mac` bundle
+ID/runtime/update identity migration is a required launch gate. Do not treat
+that migration as a quick rename; it needs a deliberate lane because it can
+affect permissions, state, LaunchAgents, and update continuity.
 
 ## Backend deployment status
 
@@ -72,7 +80,7 @@ Current package truth:
 - Jarvis visible branding is in place for the app name, release artifacts, and
   app icon.
 - Bundle ID/runtime/update identity remain `ai.openclaw.consumer.mac` and
-  OpenClaw paths only for the 3 trusted waiting testers by deliberate 80/20
+  OpenClaw paths only for the small trusted tester ring by deliberate 80/20
   decision.
 - Non-secret Sparkle release config lives at
   `~/Library/Application Support/OpenClaw/release.env` and should be inherited
@@ -130,9 +138,10 @@ Current package truth:
   bundle still had no `dist/extensions/acpx/node_modules`, and
   `codesign --verify --deep --strict` passed after the runtime path was
   exercised.
-- Sending `Jarvis.dmg` to the 3 trusted waiting testers is allowed. Do not send
-  wider/public until the `ai.jarvis.mac` identity migration and remaining wider
-  beta gates are complete.
+- The 2026-05-14 `Jarvis.dmg` remains a trusted-ring artifact only. The next
+  4-5 waiting testers should receive a recut from current `main` after P0
+  onboarding fixes. Do not send wider/public until the `ai.jarvis.mac` identity
+  migration and remaining wider beta gates are complete.
 - Full newer-version Sparkle update-cycle testing is deferred for speed. Current
   proof covers appcast/feed reachability and no Update Error; a real
   download/verify/install/relaunch/preserve-state cycle should be tested before
@@ -425,8 +434,8 @@ Say this directly:
   reviewed
 - external tools should be installed only from sources the user trusts
 - visible app/artifact/icon branding is Jarvis, but internal bundle/runtime/
-  update identities stay on `ai.openclaw.consumer.mac` only for the 3 trusted
-  waiting testers
+  update identities stay on `ai.openclaw.consumer.mac` only for the small
+  trusted tester ring
 - `ai.jarvis.mac` migration is required before Reddit/GitHub, public-ish beta,
   or a wider beta, and needs a deliberate migration lane because permissions,
   state, LaunchAgents, and update continuity can be affected
@@ -436,70 +445,23 @@ Say this directly:
 - final 2026-05-14 trusted-tester `Jarvis.dmg` from commit `ab9c3c1ca1` is
   notarized, Gatekeeper-accepted, copied to the sacred repo root, uploaded with
   its Jarvis ZIP/appcast assets, installed over Artem's current app, and smoke
-  tested. Sending to the 3 trusted waiting testers is allowed; wider
+  tested. It remains a trusted-ring artifact only; the next 4-5 waiting testers
+  should receive a current-main recut after P0 onboarding fixes. Wider
   distribution still waits on `ai.jarvis.mac` migration, post-launch bundle
   immutability, and the remaining beta gates.
 
 ### Roadmap
 
-- send the final `/Users/user/Programming_Projects/openclaw/Jarvis.dmg` to the
-  3 trusted waiting testers
-- page-based setup shell landed on `main` in PR #725: Chrome, Mac permissions,
-  AI access, and Telegram are separate guided steps that reuse the existing
-  setup cards
-- passive Browser/AI readiness flicker is fixed on `main` in PR #723: completed
-  readiness stays visible during focus/view refreshes while background probes
-  run
-- rewrite setup copy now that the page split exists so each step explains one thing:
-  what Jarvis needs, why it matters, what happens next, and how to recover
-- focused Channels UI polish to remove duplicated connected-bot text/buttons
-- smoother account login and trial activation
-- cleaner Telegram setup with one consumer-first command/settings surface
-- Telegram Managed Bots proof spike passed on 2026-05-18: a BotFather-created
-  manager bot with Bot Management Mode created a managed child bot, the spike
-  received `managed_bot`, fetched the managed token with redaction, verified it
-  with `getMe`, and applied restricted access
-- Telegram Managed Bots backend contract landed in PR #766. Target flow: the
-  backend stores `TELEGRAM_MANAGER_BOT_TOKEN` and `MANAGER_BOT_USERNAME`,
-  returns the Telegram approval link, receives or polls `managed_bot`, fetches
-  the child token, and restricts child access. Managed Bots is now the primary
-  planned Telegram onboarding path; manual BotFather/BYO bot stays
-  fallback/advanced.
-- PR #767 moved the macOS Telegram onboarding onto the Managed Bots-first path.
-  The current normal-user gate is DM-first: create the Jarvis bot, approve it in
-  Telegram, send one direct-message task, then let Jarvis verify that task.
-- Visual-only macOS smoke is enough for onboarding copy/layout checks, but not
-  for Verify first task. That button needs a reachable local runtime websocket,
-  so use the runtime-backed isolated smoke path before claiming Telegram
-  first-task proof.
-- Group/threaded/forum setup is important and belongs immediately after the
-  first DM task works. Track whether the backend or userbot can create a group
-  with the user plus bot, enable forum mode, grant the managed bot topic
-  permissions, and create topics automatically; do not block the first DM
-  onboarding gate on it.
-- Account activation is still a product/onboarding sequencing gap. Managed Bots
-  needs a Jarvis account token, but the app can currently reach Telegram before
-  there is a clear account activation page. Track a later slice to add
-  account activation before Telegram, likely as the first or third/fourth setup
-  page.
-- Managed-bot smoke cleanup is deferred. The throwaway proof bot can remain
-  unless Telegram bot limits start blocking progress.
-- Telegram-not-installed fallback remains deferred; keep Managed Bots primary
-  and BotFather/BYO as the advanced fallback.
-- Apple-style signed, verified updates that keep setup, preferences, and local
-  data in place
-- App Store Connect API key auth and async submit/poll/staple notarization
-  receipts as the default repeatable release packaging path
-- move runtime-writable extension dependencies out of the signed app bundle
-  before wider beta
-- run a real newer-version Sparkle update cycle before relying on updates for
-  recovery or wider distribution
-- better first-run permission copy
-- backend-managed utility cap hardening
-- skill audit and safer third-party skill install flow
-- `ai.jarvis.mac` bundle ID/runtime/update identity migration before
-  Reddit/GitHub, public-ish beta, or any wider beta
-- website after GitHub/Reddit signal
+Use `docs/research/jarvis-consumer-launch-plan.md` for the live task tracker,
+owners, proof, and P0/P1/P2 status. This package doc keeps only launch-facing
+truth:
+
+| State                                                            | Launch-facing item                                                                                                                                                                                      |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Completed for trusted testers                                    | Jarvis visible branding, notarized trusted-tester DMG, public Jarvis ZIP/appcast assets, account/trial backend, managed utility backend, page-based onboarding shell, Managed Bots-first Telegram path. |
+| Needed before the next 4-5 waiting testers receive a new package | A recut from current `main` after the P0 onboarding fixes, plus package verification that source polish and secret-safety gates are actually in the shipped artifact.                                   |
+| Needed before Reddit / broad public beta                         | `ai.jarvis.mac` bundle/runtime/update identity migration, full Sparkle update-cycle proof, broader onboarding polish, and public-copy cleanup.                                                          |
+| Deferred until evidence of friction                              | Maintenance polish that does not block current testers.                                                                                                                                                 |
 
 ### Telegram command/settings strategy
 
@@ -524,27 +486,10 @@ through consumer setup. Candidate shape:
   output redacted. The normal path is now replacing the manual BotFather setup
   step with this manager-bot approval flow while keeping BYO BotFather tokens in
   the advanced path.
-- Active implementation slice: durable Managed Bots setup sessions plus small
-  Telegram onboarding copy polish. Acceptance criteria:
-  - app-facing backend can start a managed-bot setup session and return the
-    approval link
-  - backend returns a clear pending/connected/error state for the session
-  - pending and connected setup sessions survive a Render restart by using Neon
-  - approved sessions fetch the managed child token and restrict child access
-  - manager and child tokens are redacted from provider errors
-  - normal onboarding stays DM-first: create bot, approve in Telegram, send one
-    DM task, verify first task
-  - BotFather/BYO bot remains available as fallback/advanced
-  - group/threaded/forum auto-setup stays tracked as the next Telegram setup
-    step after DM proof
-- Security boundary for this slice:
-  - manager bot token stays backend-only
-  - no raw founder/provider keys are bundled in the app
-  - managed child bot token is user-specific and must not be logged
-  - connected setup persists the child token only long enough for the app to
-    recover after backend restart and install the user's bot
+- Current implementation state, acceptance criteria, and remaining Telegram
+  gates live in `docs/research/jarvis-consumer-launch-plan.md`.
 - Out of scope for this slice: broad onboarding copy polish, `/visibility`
-  command cleanup, group/threaded auto-setup, smoke-bot cleanup,
+  command cleanup, group/threaded auto-setup,
   `ai.jarvis.mac` identity migration, Sparkle update-cycle proof, final DMG
   packaging, and wider beta blockers.
 - `/visibility` should replace stale `/verbose` naming in the Telegram command
