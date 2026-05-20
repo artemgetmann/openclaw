@@ -20,6 +20,7 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
     case chrome
     case permissions
     case aiAccess
+    case accountActivation
     case telegram
 
     var id: Int { self.rawValue }
@@ -32,6 +33,8 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
             return "Mac permissions"
         case .aiAccess:
             return "AI access"
+        case .accountActivation:
+            return "Activate Jarvis"
         case .telegram:
             return "Telegram"
         }
@@ -45,6 +48,8 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
             return "Allow the Mac access real tasks need."
         case .aiAccess:
             return "Confirm \(AppFlavor.current.appName) has an AI path before tasks start."
+        case .accountActivation:
+            return "Activate your account before connecting Telegram."
         case .telegram:
             return "Connect the bot and prove one real task works."
         }
@@ -58,6 +63,8 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
             return "lock.shield"
         case .aiAccess:
             return "sparkles"
+        case .accountActivation:
+            return "checkmark.seal"
         case .telegram:
             return "paperplane"
         }
@@ -134,6 +141,7 @@ struct OnboardingView: View {
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var browserSetup = BrowserSetupModel()
     @State var modelSetup = ConsumerModelSetupModel()
+    @State var accountActivation = JarvisAccountActivationModel()
     @State var channelsStore = ChannelsStore.shared
     @State var setupResume = ConsumerSetupResumeModel()
     @State var onboardingSkillsModel = SkillsSettingsModel()
@@ -259,6 +267,12 @@ struct OnboardingView: View {
             !self.channelsStore.consumerTelegramReadyForFirstTask()
     }
 
+    var isAccountActivationBlocking: Bool {
+        self.isConsumerSetupShellActive &&
+            self.consumerSetupStep == .accountActivation &&
+            !self.accountActivation.isActivated
+    }
+
     var areCorePermissionsGranted: Bool {
         ConsumerPermissionCatalog.coreCapabilities.allSatisfy { capability in
             self.permissionMonitor.status[capability] == true
@@ -276,6 +290,7 @@ struct OnboardingView: View {
             self.browserSetup.isComplete &&
             self.areCorePermissionsGranted &&
             self.modelSetup.isComplete &&
+            self.accountActivation.isActivated &&
             self.channelsStore.consumerTelegramReadyForFirstTask()
     }
 
@@ -291,6 +306,11 @@ struct OnboardingView: View {
             return self.browserSetup.isComplete &&
                 self.areCorePermissionsGranted &&
                 self.modelSetup.isComplete
+        case .accountActivation:
+            return self.browserSetup.isComplete &&
+                self.areCorePermissionsGranted &&
+                self.modelSetup.isComplete &&
+                self.accountActivation.isActivated
         case .telegram:
             return self.canFinishConsumerInlineSetup
         }
@@ -304,6 +324,7 @@ struct OnboardingView: View {
             !self.isConsumerInlineSetupBlocking &&
             !self.isBrowserSetupBlocking &&
             !self.isModelSetupBlocking &&
+            !self.isAccountActivationBlocking &&
             !self.isCorePermissionsBlocking &&
             !self.isTelegramSetupBlocking
     }

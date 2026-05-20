@@ -63,7 +63,12 @@ extension ChannelsStore {
 
         self.telegramSetupStatus = "Creating your Telegram bot..."
         do {
-            let client = try self.managedTelegramBotClient()
+            let configuration = try self.managedTelegramBotConfiguration()
+            guard configuration.accountAccessToken?.isEmpty == false else {
+                self.telegramSetupStatus = "Activate Jarvis before creating a managed Telegram bot."
+                return
+            }
+            let client = JarvisTelegramManagedBotClient(configuration: configuration)
             let response = try await client.start(suggestedBotName: "\(AppFlavor.current.appName) Assistant")
             self.telegramManagedSetupId = response.setupId
             self.telegramManagedApprovalURL = response.approvalUrl
@@ -420,9 +425,12 @@ extension ChannelsStore {
     }
 
     private func managedTelegramBotClient() throws -> JarvisTelegramManagedBotClient {
+        try JarvisTelegramManagedBotClient(configuration: self.managedTelegramBotConfiguration())
+    }
+
+    private func managedTelegramBotConfiguration() throws -> JarvisTelegramManagedBotClient.Configuration {
         let config = self.configRoot.isEmpty ? OpenClawConfigFile.loadDict() : self.configRoot
-        return try JarvisTelegramManagedBotClient(
-            configuration: JarvisTelegramManagedBotClient.resolveConfiguration(root: config))
+        return try JarvisTelegramManagedBotClient.resolveConfiguration(root: config)
     }
 
     private func pollManagedTelegramSetupStatus(

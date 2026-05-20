@@ -74,6 +74,7 @@ struct TelegramSetupBootstrapTests {
     @Test func `consumer telegram setup field reads nested default-account token`() async throws {
         await TestIsolation.withEnvValues([
             "OPENCLAW_APP_VARIANT": "consumer",
+            "JARVIS_ACCOUNT_ACCESS_TOKEN": nil,
         ]) {
             let store = ChannelsStore(isPreview: true)
             store.configDraft = [:]
@@ -347,6 +348,27 @@ struct TelegramSetupBootstrapTests {
         #expect(started.approvalUrl == "https://t.me/JarvisManagerBot?start=abc")
         #expect(connected.status == "connected")
         #expect(connected.managedChildBotToken == "777000:test-child-token")
+    }
+
+    @Test func `managed telegram start requires activated Jarvis account token`() async throws {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.configRoot = [
+                "jarvis": [
+                    "backend": [
+                        "baseUrl": "https://jarvis.example.test",
+                        "accessToken": "server-token",
+                    ],
+                ],
+            ]
+
+            await store.startManagedTelegramSetup()
+
+            #expect(store.telegramManagedSetupId == nil)
+            #expect(store.telegramSetupStatus == "Activate Jarvis before creating a managed Telegram bot.")
+        }
     }
 
     @Test func `managed telegram status installs child token without exposing it in status text`() async throws {

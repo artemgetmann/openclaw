@@ -97,6 +97,7 @@ extension OnboardingView {
         let decision = await self.setupResume.evaluate(
             browserSetup: self.browserSetup,
             modelSetup: self.modelSetup,
+            accountActivation: self.accountActivation,
             channelsStore: self.channelsStore,
             corePermissionsGranted: self.areCorePermissionsGranted)
         guard decision == .complete else { return false }
