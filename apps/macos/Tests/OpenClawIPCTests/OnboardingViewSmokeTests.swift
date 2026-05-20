@@ -54,6 +54,58 @@ struct OnboardingViewSmokeTests {
         }
     }
 
+    @Test func `account step copy reads as public email sign in`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            #expect(ConsumerSetupStep.accountActivation.title == "Continue with Email")
+            #expect(ConsumerSetupStep.accountActivation.subtitle == "Enter your email to set up Jarvis on this Mac.")
+            #expect(JarvisAccountActivationCopy.emailPlaceholder == "email@example.com")
+            #expect(JarvisAccountActivationCopy.primaryButton == "Continue")
+            #expect(JarvisAccountActivationCopy.inactiveEmail == "No Jarvis access found for that email. Try a different address.")
+        }
+    }
+
+    @Test func `activated account step advances to telegram without success copy`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let state = AppState(preview: true)
+            state.connectionMode = .local
+            let view = OnboardingView(
+                state: state,
+                permissionMonitor: PermissionMonitor.shared,
+                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
+                consumerSetupDebugStepEnvironment: ["OPENCLAW_CONSUMER_SETUP_DEBUG_STEP": "accountActivation"])
+            view.consumerSetupStep = .accountActivation
+            view.accountActivation.state = .activated(JarvisAccountActivationSummary(
+                accountId: "acct_123",
+                email: "user@example.com",
+                licenseSummary: "trial_active"))
+
+            #expect(view._testAccountActivationStatusMessage == nil)
+            #expect(view.isConsumerSetupStepComplete(.accountActivation))
+            #expect(OnboardingView.consumerSetupStepAfterAccountActivation(
+                current: .accountActivation,
+                isActivated: view.accountActivation.isActivated) == .telegram)
+        }
+    }
+
+    @Test func `failed account step stays on email page with recovery copy`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let state = AppState(preview: true)
+            state.connectionMode = .local
+            let view = OnboardingView(
+                state: state,
+                permissionMonitor: PermissionMonitor.shared,
+                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
+                consumerSetupDebugStepEnvironment: ["OPENCLAW_CONSUMER_SETUP_DEBUG_STEP": "accountActivation"])
+            view.consumerSetupStep = .accountActivation
+            view.accountActivation.state = .failed("No Jarvis access found for that email. Try a different address.")
+
+            #expect(OnboardingView.consumerSetupStepAfterAccountActivation(
+                current: .accountActivation,
+                isActivated: view.accountActivation.isActivated) == .accountActivation)
+            #expect(view._testAccountActivationStatusMessage == "No Jarvis access found for that email. Try a different address.")
+        }
+    }
+
     @Test func `consumer setup shell builds each step page`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             let state = AppState(preview: true)

@@ -95,8 +95,8 @@ extension OnboardingView {
                                         subtitle: "Make sure \(AppFlavor.current.appName) has an AI path before tasks start.",
                                         systemImage: "sparkles")
                                     self.featureRow(
-                                        title: "Activate Jarvis",
-                                        subtitle: "Use your invite email before connecting Telegram.",
+                                        title: JarvisAccountActivationCopy.stepTitle,
+                                        subtitle: JarvisAccountActivationCopy.stepSubtitle,
                                         systemImage: "checkmark.seal")
                                     self.featureRow(
                                         title: "Verify Telegram",
@@ -118,7 +118,7 @@ extension OnboardingView {
 
         return VStack(spacing: 18) {
             VStack(spacing: 8) {
-                Text("Set up \(AppFlavor.current.appName)")
+                Text(self.consumerSetupStepTitle)
                     .font(.largeTitle.weight(.semibold))
                 Text(self.consumerSetupStep.subtitle)
                     .font(.body)
@@ -143,6 +143,15 @@ extension OnboardingView {
         }
         .padding(.horizontal, 28)
         .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
+    }
+
+    private var consumerSetupStepTitle: String {
+        switch self.consumerSetupStep {
+        case .accountActivation:
+            return JarvisAccountActivationCopy.stepTitle
+        case .chrome, .permissions, .aiAccess, .telegram:
+            return "Set up \(AppFlavor.current.appName)"
+        }
     }
 
     @ViewBuilder
@@ -185,89 +194,55 @@ extension OnboardingView {
 
     private func accountActivationCardContent() -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: self.accountActivation.isActivated ? "checkmark.circle.fill" : "envelope.badge")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(self.accountActivation.isActivated ? Color.green : Color.accentColor)
-                    .frame(width: 28)
+            if !self.accountActivation.isActivated {
+                TextField(JarvisAccountActivationCopy.emailPlaceholder, text: self.$accountActivation.email)
+                    .textFieldStyle(.roundedBorder)
+                    .textContentType(.emailAddress)
+                    .disabled(self.accountActivation.state == .activating)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(self.accountActivation.isActivated ? "Jarvis is activated" : "Enter your Jarvis email")
-                        .font(.headline)
-                    Text(self.accountActivationCopy)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            TextField("you@example.com", text: self.$accountActivation.email)
-                .textFieldStyle(.roundedBorder)
-                .textContentType(.emailAddress)
-                .disabled(self.accountActivation.isActivated || self.accountActivation.state == .activating)
-
-            HStack(spacing: 10) {
-                Button {
-                    Task { await self.accountActivation.activate() }
-                } label: {
-                    if self.accountActivation.state == .activating {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(minWidth: 92)
-                    } else {
-                        Text(self.accountActivationButtonTitle)
-                            .frame(minWidth: 92)
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await self.activateAccountAndAdvanceIfReady() }
+                    } label: {
+                        if self.accountActivation.state == .activating {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(minWidth: 92)
+                        } else {
+                            Text(self.accountActivationButtonTitle)
+                                .frame(minWidth: 92)
+                        }
                     }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!self.accountActivation.canActivate || self.accountActivation.isActivated)
-
-                if self.accountActivation.isActivated {
-                    Label("Ready for Telegram", systemImage: "checkmark.circle.fill")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.green)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!self.accountActivation.canActivate)
                 }
             }
 
             if let message = self.accountActivationStatusMessage {
                 Text(message)
                     .font(.caption)
-                    .foregroundStyle(self.accountActivation.isActivated ? Color.secondary : Color.orange)
+                    .foregroundStyle(Color.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    private var accountActivationCopy: String {
-        switch self.accountActivation.state {
-        case .activated:
-            return "Telegram can now use your Jarvis account."
-        case .activating:
-            return "Checking your invite now."
-        case .failed:
-            return "We could not activate this account yet."
-        case .idle:
-            return "Use the email from your Jarvis invite."
-        }
-    }
-
     private var accountActivationButtonTitle: String {
         if case .failed = self.accountActivation.state {
-            return "Retry"
+            return JarvisAccountActivationCopy.retryButton
         }
-        return "Activate"
+        return JarvisAccountActivationCopy.primaryButton
     }
 
-    private var accountActivationStatusMessage: String? {
+    var accountActivationStatusMessage: String? {
         switch self.accountActivation.state {
-        case let .activated(summary):
-            if let license = summary.licenseSummary, !license.isEmpty {
-                return "Activated for \(summary.email). \(license)"
-            }
-            return "Activated for \(summary.email)."
+        case .activated:
+            return nil
         case let .failed(message):
-            return "\(message) If this keeps failing, use your latest invite email or try again when you are online."
-        case .activating, .idle:
+            return message
+        case .activating:
+            return JarvisAccountActivationCopy.activatingHelper
+        case .idle:
             return nil
         }
     }

@@ -43,7 +43,7 @@ struct JarvisAccountActivationTests {
         #expect(response.licenseSummary == "beta")
     }
 
-    @Test func `activation client maps invalid invite to recovery error without token logging`() async throws {
+    @Test func `activation client maps inactive email to recovery error without token logging`() async throws {
         let client = JarvisAccountActivationClient(
             configuration: .init(
                 baseURL: try #require(URL(string: "https://jarvis.example.test")),
@@ -56,6 +56,40 @@ struct JarvisAccountActivationTests {
             })
 
         await #expect(throws: JarvisAccountActivationError.invalidOrExpired("Invite expired.")) {
+            _ = try await client.login(email: "user@example.com", deviceId: "device-1")
+        }
+    }
+
+    @Test func `activation client uses public account recovery copy when backend omits detail`() async throws {
+        let client = JarvisAccountActivationClient(
+            configuration: .init(
+                baseURL: try #require(URL(string: "https://jarvis.example.test")),
+                backendAccessToken: "backend-token"),
+            transport: { request in
+                try Self.httpResponse(
+                    url: #require(request.url),
+                    statusCode: 403,
+                    body: #"{}"#)
+            })
+
+        await #expect(throws: JarvisAccountActivationError.invalidOrExpired(JarvisAccountActivationCopy.inactiveEmail)) {
+            _ = try await client.login(email: "user@example.com", deviceId: "device-1")
+        }
+    }
+
+    @Test func `activation client hides future otp recovery internals for existing email conflict`() async throws {
+        let client = JarvisAccountActivationClient(
+            configuration: .init(
+                baseURL: try #require(URL(string: "https://jarvis.example.test")),
+                backendAccessToken: "backend-token"),
+            transport: { request in
+                try Self.httpResponse(
+                    url: #require(request.url),
+                    statusCode: 409,
+                    body: #"{"detail":"Account recovery requires a future OTP or magic-code flow."}"#)
+            })
+
+        await #expect(throws: JarvisAccountActivationError.rejected(JarvisAccountActivationCopy.accountRecoveryUnavailable)) {
             _ = try await client.login(email: "user@example.com", deviceId: "device-1")
         }
     }

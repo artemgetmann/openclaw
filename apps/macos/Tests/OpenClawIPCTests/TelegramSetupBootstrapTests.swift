@@ -367,7 +367,7 @@ struct TelegramSetupBootstrapTests {
             await store.startManagedTelegramSetup()
 
             #expect(store.telegramManagedSetupId == nil)
-            #expect(store.telegramSetupStatus == "Activate Jarvis before creating a managed Telegram bot.")
+            #expect(store.telegramSetupStatus == "Create or sign in to Jarvis before creating a managed Telegram bot.")
         }
     }
 

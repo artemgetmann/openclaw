@@ -34,7 +34,7 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
         case .aiAccess:
             return "AI access"
         case .accountActivation:
-            return "Activate Jarvis"
+            return JarvisAccountActivationCopy.stepTitle
         case .telegram:
             return "Telegram"
         }
@@ -49,7 +49,7 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
         case .aiAccess:
             return "Confirm \(AppFlavor.current.appName) has an AI path before tasks start."
         case .accountActivation:
-            return "Activate your account before connecting Telegram."
+            return JarvisAccountActivationCopy.stepSubtitle
         case .telegram:
             return "Connect the bot and prove one real task works."
         }
@@ -69,6 +69,17 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
             return "paperplane"
         }
     }
+}
+
+enum JarvisAccountActivationCopy {
+    static let stepTitle = "Continue with Email"
+    static let stepSubtitle = "Enter your email to set up Jarvis on this Mac."
+    static let activatingHelper = "Checking your access."
+    static let emailPlaceholder = "email@example.com"
+    static let primaryButton = "Continue"
+    static let retryButton = "Retry"
+    static let inactiveEmail = "No Jarvis access found for that email. Try a different address."
+    static let accountRecoveryUnavailable = "That email is already active. Try a different address or contact Jarvis support."
 }
 
 @MainActor
@@ -151,6 +162,7 @@ struct OnboardingView: View {
     @State var localGatewayProbe: LocalGatewayProbe?
     @Bindable var state: AppState
     var permissionMonitor: PermissionMonitor
+    let consumerSetupDebugStep: ConsumerSetupStep?
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
@@ -296,6 +308,13 @@ struct OnboardingView: View {
 
     var canAdvanceConsumerSetupStep: Bool {
         guard self.isConsumerSetupShellActive else { return false }
+        // Debug smoke opens one setup page directly, without walking through
+        // earlier prerequisites. In that mode the current page owns the gate so
+        // visual proof can verify the page state without changing production
+        // setup ordering.
+        if self.consumerSetupDebugStep == self.consumerSetupStep {
+            return self.isConsumerSetupStepComplete(self.consumerSetupStep)
+        }
         switch self.consumerSetupStep {
         case .chrome:
             return self.browserSetup.isComplete
@@ -351,8 +370,9 @@ struct OnboardingView: View {
     {
         self.state = state
         self.permissionMonitor = permissionMonitor
+        self.consumerSetupDebugStep = Self.consumerSetupDebugStep(environment: consumerSetupDebugStepEnvironment)
         self._consumerSetupStep = State(
-            initialValue: Self.consumerSetupDebugStep(environment: consumerSetupDebugStepEnvironment) ?? .chrome)
+            initialValue: self.consumerSetupDebugStep ?? .chrome)
         self._gatewayDiscovery = State(initialValue: discoveryModel)
         self._browserSetup = State(
             initialValue: BrowserSetupModel(

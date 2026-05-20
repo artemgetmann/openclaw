@@ -26,7 +26,7 @@ enum JarvisAccountActivationError: LocalizedError, Equatable {
         case .missingBackendAccessToken:
             return "Jarvis activation is not enabled for this build."
         case .invalidEmail:
-            return "Enter the email you used for Jarvis."
+            return "Enter your email address."
         case let .invalidOrExpired(message):
             return message
         case let .offline(message):
@@ -153,12 +153,16 @@ struct JarvisAccountActivationClient: Sendable {
 
     private static func activationHTTPError(statusCode: Int, data: Data) -> JarvisAccountActivationError {
         let fallback = statusCode == 401 || statusCode == 403
-            ? "Your Jarvis invite is invalid or expired. Use the email from your latest invite."
+            ? JarvisAccountActivationCopy.inactiveEmail
             : "Jarvis could not activate this account. Try again in a moment."
-        let message = Self.httpErrorMessage(data: data) ?? fallback
         if statusCode == 401 || statusCode == 403 {
+            let message = Self.httpErrorMessage(data: data) ?? fallback
             return .invalidOrExpired(message)
         }
+        if statusCode == 409 {
+            return .rejected(JarvisAccountActivationCopy.accountRecoveryUnavailable)
+        }
+        let message = Self.httpErrorMessage(data: data) ?? fallback
         return .rejected(message)
     }
 

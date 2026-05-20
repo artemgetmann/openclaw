@@ -78,5 +78,9 @@ extension OnboardingView {
         _ = view.gatewaySubtitle(for: gateway)
         _ = view.isSelectedGateway(gateway)
     }
+
+    var _testAccountActivationStatusMessage: String? {
+        self.accountActivationStatusMessage
+    }
 }
 #endif

@@ -65,7 +65,7 @@ extension ChannelsStore {
         do {
             let configuration = try self.managedTelegramBotConfiguration()
             guard configuration.accountAccessToken?.isEmpty == false else {
-                self.telegramSetupStatus = "Activate Jarvis before creating a managed Telegram bot."
+                self.telegramSetupStatus = "Create or sign in to Jarvis before creating a managed Telegram bot."
                 return
             }
             let client = JarvisTelegramManagedBotClient(configuration: configuration)
