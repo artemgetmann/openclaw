@@ -95,6 +95,10 @@ extension OnboardingView {
                                         subtitle: "Make sure \(AppFlavor.current.appName) has an AI path before tasks start.",
                                         systemImage: "sparkles")
                                     self.featureRow(
+                                        title: JarvisAccountActivationCopy.stepTitle,
+                                        subtitle: JarvisAccountActivationCopy.stepSubtitle,
+                                        systemImage: "checkmark.seal")
+                                    self.featureRow(
                                         title: "Verify Telegram",
                                         subtitle: "Connect the bot and prove one real task works.",
                                         systemImage: "paperplane")
@@ -114,7 +118,7 @@ extension OnboardingView {
 
         return VStack(spacing: 18) {
             VStack(spacing: 8) {
-                Text("Set up \(AppFlavor.current.appName)")
+                Text(self.consumerSetupStepTitle)
                     .font(.largeTitle.weight(.semibold))
                 Text(self.consumerSetupStep.subtitle)
                     .font(.body)
@@ -141,6 +145,15 @@ extension OnboardingView {
         .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
     }
 
+    private var consumerSetupStepTitle: String {
+        switch self.consumerSetupStep {
+        case .accountActivation:
+            return JarvisAccountActivationCopy.stepTitle
+        case .chrome, .permissions, .aiAccess, .telegram:
+            return "Set up \(AppFlavor.current.appName)"
+        }
+    }
+
     @ViewBuilder
     private func consumerSetupStepContent() -> some View {
         switch self.consumerSetupStep {
@@ -155,6 +168,8 @@ extension OnboardingView {
                 presentation: .onboarding)
         case .aiAccess:
             ConsumerModelSetupCardContent(model: self.modelSetup)
+        case .accountActivation:
+            self.accountActivationCardContent()
         case .telegram:
             ConsumerTelegramSetupCardContent(
                 store: self.channelsStore,
@@ -170,8 +185,65 @@ extension OnboardingView {
             return self.areCorePermissionsGranted
         case .aiAccess:
             return self.modelSetup.isComplete
+        case .accountActivation:
+            return self.accountActivation.isActivated
         case .telegram:
             return self.channelsStore.consumerTelegramReadyForFirstTask()
+        }
+    }
+
+    private func accountActivationCardContent() -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if !self.accountActivation.isActivated {
+                TextField(JarvisAccountActivationCopy.emailPlaceholder, text: self.$accountActivation.email)
+                    .textFieldStyle(.roundedBorder)
+                    .textContentType(.emailAddress)
+                    .disabled(self.accountActivation.state == .activating)
+
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await self.activateAccountAndAdvanceIfReady() }
+                    } label: {
+                        if self.accountActivation.state == .activating {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(minWidth: 92)
+                        } else {
+                            Text(self.accountActivationButtonTitle)
+                                .frame(minWidth: 92)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!self.accountActivation.canActivate)
+                }
+            }
+
+            if let message = self.accountActivationStatusMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var accountActivationButtonTitle: String {
+        if case .failed = self.accountActivation.state {
+            return JarvisAccountActivationCopy.retryButton
+        }
+        return JarvisAccountActivationCopy.primaryButton
+    }
+
+    var accountActivationStatusMessage: String? {
+        switch self.accountActivation.state {
+        case .activated:
+            return nil
+        case let .failed(message):
+            return message
+        case .activating:
+            return JarvisAccountActivationCopy.activatingHelper
+        case .idle:
+            return nil
         }
     }
 

@@ -5,6 +5,7 @@ enum ConsumerSetupResumeBlocker: Equatable {
     case browser
     case permissions
     case model
+    case accountActivation
     case telegram
 }
 
@@ -40,6 +41,7 @@ final class ConsumerSetupResumeModel {
     func evaluate(
         browserSetup: BrowserSetupModel,
         modelSetup: ConsumerModelSetupModel,
+        accountActivation: JarvisAccountActivationModel,
         channelsStore: ChannelsStore,
         corePermissionsGranted: Bool
     ) async -> ConsumerSetupResumeDecision {
@@ -73,6 +75,12 @@ final class ConsumerSetupResumeModel {
         guard modelSetup.isComplete else {
             self.decision = .blocked(.model)
             return .blocked(.model)
+        }
+
+        await accountActivation.loadStoredActivation()
+        guard accountActivation.isActivated else {
+            self.decision = .blocked(.accountActivation)
+            return .blocked(.accountActivation)
         }
 
         await self.loadTelegramState(channelsStore)

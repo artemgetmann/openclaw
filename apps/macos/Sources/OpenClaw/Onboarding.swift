@@ -20,6 +20,7 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
     case chrome
     case permissions
     case aiAccess
+    case accountActivation
     case telegram
 
     var id: Int { self.rawValue }
@@ -32,6 +33,8 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
             return "Mac permissions"
         case .aiAccess:
             return "AI access"
+        case .accountActivation:
+            return JarvisAccountActivationCopy.stepTitle
         case .telegram:
             return "Telegram"
         }
@@ -45,6 +48,8 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
             return "Allow the Mac access real tasks need."
         case .aiAccess:
             return "Confirm \(AppFlavor.current.appName) has an AI path before tasks start."
+        case .accountActivation:
+            return JarvisAccountActivationCopy.stepSubtitle
         case .telegram:
             return "Connect the bot and prove one real task works."
         }
@@ -58,10 +63,23 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
             return "lock.shield"
         case .aiAccess:
             return "sparkles"
+        case .accountActivation:
+            return "checkmark.seal"
         case .telegram:
             return "paperplane"
         }
     }
+}
+
+enum JarvisAccountActivationCopy {
+    static let stepTitle = "Continue with Email"
+    static let stepSubtitle = "Enter your email to set up Jarvis on this Mac."
+    static let activatingHelper = "Checking your access."
+    static let emailPlaceholder = "email@example.com"
+    static let primaryButton = "Continue"
+    static let retryButton = "Retry"
+    static let inactiveEmail = "No Jarvis access found for that email. Try a different address."
+    static let accountRecoveryUnavailable = "That email is already active. Try a different address or contact Jarvis support."
 }
 
 @MainActor
@@ -134,6 +152,7 @@ struct OnboardingView: View {
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var browserSetup = BrowserSetupModel()
     @State var modelSetup = ConsumerModelSetupModel()
+    @State var accountActivation = JarvisAccountActivationModel()
     @State var channelsStore = ChannelsStore.shared
     @State var setupResume = ConsumerSetupResumeModel()
     @State var onboardingSkillsModel = SkillsSettingsModel()
@@ -143,6 +162,7 @@ struct OnboardingView: View {
     @State var localGatewayProbe: LocalGatewayProbe?
     @Bindable var state: AppState
     var permissionMonitor: PermissionMonitor
+    let consumerSetupDebugStep: ConsumerSetupStep?
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
@@ -259,6 +279,12 @@ struct OnboardingView: View {
             !self.channelsStore.consumerTelegramReadyForFirstTask()
     }
 
+    var isAccountActivationBlocking: Bool {
+        self.isConsumerSetupShellActive &&
+            self.consumerSetupStep == .accountActivation &&
+            !self.accountActivation.isActivated
+    }
+
     var areCorePermissionsGranted: Bool {
         ConsumerPermissionCatalog.coreCapabilities.allSatisfy { capability in
             self.permissionMonitor.status[capability] == true
@@ -276,11 +302,19 @@ struct OnboardingView: View {
             self.browserSetup.isComplete &&
             self.areCorePermissionsGranted &&
             self.modelSetup.isComplete &&
+            self.accountActivation.isActivated &&
             self.channelsStore.consumerTelegramReadyForFirstTask()
     }
 
     var canAdvanceConsumerSetupStep: Bool {
         guard self.isConsumerSetupShellActive else { return false }
+        // Debug smoke opens one setup page directly, without walking through
+        // earlier prerequisites. In that mode the current page owns the gate so
+        // visual proof can verify the page state without changing production
+        // setup ordering.
+        if self.consumerSetupDebugStep == self.consumerSetupStep {
+            return self.isConsumerSetupStepComplete(self.consumerSetupStep)
+        }
         switch self.consumerSetupStep {
         case .chrome:
             return self.browserSetup.isComplete
@@ -291,6 +325,11 @@ struct OnboardingView: View {
             return self.browserSetup.isComplete &&
                 self.areCorePermissionsGranted &&
                 self.modelSetup.isComplete
+        case .accountActivation:
+            return self.browserSetup.isComplete &&
+                self.areCorePermissionsGranted &&
+                self.modelSetup.isComplete &&
+                self.accountActivation.isActivated
         case .telegram:
             return self.canFinishConsumerInlineSetup
         }
@@ -304,6 +343,7 @@ struct OnboardingView: View {
             !self.isConsumerInlineSetupBlocking &&
             !self.isBrowserSetupBlocking &&
             !self.isModelSetupBlocking &&
+            !self.isAccountActivationBlocking &&
             !self.isCorePermissionsBlocking &&
             !self.isTelegramSetupBlocking
     }
@@ -330,8 +370,9 @@ struct OnboardingView: View {
     {
         self.state = state
         self.permissionMonitor = permissionMonitor
+        self.consumerSetupDebugStep = Self.consumerSetupDebugStep(environment: consumerSetupDebugStepEnvironment)
         self._consumerSetupStep = State(
-            initialValue: Self.consumerSetupDebugStep(environment: consumerSetupDebugStepEnvironment) ?? .chrome)
+            initialValue: self.consumerSetupDebugStep ?? .chrome)
         self._gatewayDiscovery = State(initialValue: discoveryModel)
         self._browserSetup = State(
             initialValue: BrowserSetupModel(

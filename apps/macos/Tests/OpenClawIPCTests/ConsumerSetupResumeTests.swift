@@ -56,6 +56,7 @@ struct ConsumerSetupResumeTests {
                     loadProfiles: { [] }),
                 modelSetup: ConsumerModelSetupModel(
                     probeReadiness: { Self.readyReadinessPayload() }),
+                accountActivation: Self.activatedAccountModel(),
                 channelsStore: channels,
                 corePermissionsGranted: true)
 
@@ -103,6 +104,7 @@ struct ConsumerSetupResumeTests {
                         ConsumerModelsAuthListPayload(options: [Self.subscriptionOptionPayload()], activeOptionId: "openai-codex-oauth")
                     },
                     listModels: { Self.curatedModelsPayload() }),
+                accountActivation: Self.activatedAccountModel(),
                 channelsStore: channels,
                 corePermissionsGranted: true)
 
@@ -141,6 +143,7 @@ struct ConsumerSetupResumeTests {
                     verifySelectionReadiness: { _ in nil }),
                 modelSetup: ConsumerModelSetupModel(
                     probeReadiness: { Self.readinessFailedPayload() }),
+                accountActivation: Self.activatedAccountModel(),
                 channelsStore: channels,
                 corePermissionsGranted: true)
 
@@ -181,6 +184,7 @@ struct ConsumerSetupResumeTests {
                         ConsumerModelsAuthListPayload(options: [Self.subscriptionOptionPayload()], activeOptionId: "openai-codex-oauth")
                     },
                     listModels: { Self.curatedModelsPayload() }),
+                accountActivation: Self.activatedAccountModel(),
                 channelsStore: channels,
                 corePermissionsGranted: true)
 
@@ -202,6 +206,14 @@ struct ConsumerSetupResumeTests {
             subtitle: "user@example.com",
             lastUsedAt: nil,
             isDefaultProfile: true)
+    }
+
+    private static func activatedAccountModel() -> JarvisAccountActivationModel {
+        JarvisAccountActivationModel(
+            state: .activated(JarvisAccountActivationSummary(
+                accountId: "acct_123",
+                email: "user@example.com",
+                licenseSummary: "beta")))
     }
 
     private static func clearTelegramVerificationMarker() {

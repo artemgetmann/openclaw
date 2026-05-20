@@ -62,7 +62,10 @@ struct JarvisTelegramManagedBotClient: Sendable {
         self.transport = transport
     }
 
-    static func resolveConfiguration(root: [String: Any]) throws -> Configuration {
+    static func resolveConfiguration(
+        root: [String: Any],
+        accountTokenStore: JarvisAccountAccessTokenReading = JarvisAccountActivationKeychainStore.shared
+    ) throws -> Configuration {
         let env = ProcessInfo.processInfo.environment
         let backend = ((root["jarvis"] as? [String: Any])?["backend"] as? [String: Any]) ?? [:]
         let rawBaseURL = Self.firstNonEmptyString(
@@ -75,6 +78,7 @@ struct JarvisTelegramManagedBotClient: Sendable {
             env["JARVIS_BACKEND_API_TOKEN"])
         let rawAccountAccessToken = Self.firstNonEmptyString(
             backend["accountAccessToken"],
+            accountTokenStore.loadAccountAccessToken(),
             env["JARVIS_ACCOUNT_ACCESS_TOKEN"])
 
         guard let rawBaseURL else {

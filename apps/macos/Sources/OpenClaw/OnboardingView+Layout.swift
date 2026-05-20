@@ -53,6 +53,10 @@ extension OnboardingView {
             guard newValue, self.activePageIndex == self.wizardPageIndex else { return }
             self.handleNext()
         }
+        .onChange(of: self.accountActivation.isActivated) { _, newValue in
+            guard newValue else { return }
+            self.advancePastAccountActivationIfReady()
+        }
         .onDisappear {
             self.stopPermissionMonitoring()
             self.stopDiscovery()
@@ -70,7 +74,9 @@ extension OnboardingView {
                 // user presses the first button so the reduced page order stays stable.
                 self.selectLocalGateway()
             }
+            await self.accountActivation.loadStoredActivation()
             self.applyConsumerSetupDebugStepOverrideIfNeeded()
+            self.advancePastAccountActivationIfReady()
             if !(await self.attemptConsumerSetupResume()) {
                 await self.loadConsumerTelegramSetupStateIfNeeded()
             }

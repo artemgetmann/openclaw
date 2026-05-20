@@ -80,6 +80,36 @@ extension OnboardingView {
         }
     }
 
+    func activateAccountAndAdvanceIfReady() async {
+        await self.accountActivation.activate()
+        self.advancePastAccountActivationIfReady()
+    }
+
+    func advancePastAccountActivationIfReady() {
+        let nextStep = Self.consumerSetupStepAfterAccountActivation(
+            current: self.consumerSetupStep,
+            isActivated: self.accountActivation.isActivated)
+        guard nextStep != self.consumerSetupStep else { return }
+
+        // Activation is the whole job of this page. Once it succeeds, Telegram
+        // is the next user-visible job; making the user confirm a success page
+        // would only add ceremony.
+        self.consumerSetupStep = nextStep
+    }
+
+    static func consumerSetupStepAfterAccountActivation(
+        current: ConsumerSetupStep,
+        isActivated: Bool) -> ConsumerSetupStep
+    {
+        guard current == .accountActivation,
+              isActivated,
+              let next = current.next
+        else {
+            return current
+        }
+        return next
+    }
+
     func finish() {
         self.markOnboardingComplete()
         OnboardingController.shared.close()
@@ -97,6 +127,7 @@ extension OnboardingView {
         let decision = await self.setupResume.evaluate(
             browserSetup: self.browserSetup,
             modelSetup: self.modelSetup,
+            accountActivation: self.accountActivation,
             channelsStore: self.channelsStore,
             corePermissionsGranted: self.areCorePermissionsGranted)
         guard decision == .complete else { return false }
