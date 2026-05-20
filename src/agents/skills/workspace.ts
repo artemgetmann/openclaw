@@ -50,7 +50,10 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   return skills.map((s) => ({
     ...s,
     filePath:
-      s.source === "workspace"
+      // Loader-emitted workspace skills use `openclaw-workspace`; older tests
+      // and callers may still pass `workspace`. Preserve both as exact paths so
+      // model-side file reads do not depend on shell-style `~` expansion.
+      s.source === "openclaw-workspace" || s.source === "workspace"
         ? s.filePath
         : s.filePath.startsWith(prefix)
           ? "~/" + s.filePath.slice(prefix.length)
