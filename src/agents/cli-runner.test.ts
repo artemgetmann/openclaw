@@ -1056,7 +1056,10 @@ describe("runCliAgent with process supervisor", () => {
       });
 
       const prompt = extractPromptArgFromSpawn();
-      expect(prompt).toBe("Continue natively.");
+      expect(prompt).toContain('<openclaw_runtime_instructions priority="system">');
+      expect(prompt).toContain("## OpenClaw Memory Recall (mandatory)");
+      expect(prompt).toContain("Call mcp__openclaw__memory_search over MEMORY.md and memory/*.md");
+      expect(prompt).toContain("<user_turn>\nContinue natively.\n</user_turn>");
       expect(prompt).not.toContain("Recent shared OpenClaw session history");
       expect(prompt).not.toContain("Claude-native answer.");
     } finally {
