@@ -752,6 +752,7 @@ config = buildTelegramLiveRuntimeConfig({
   preferredModel,
   preferCodexAuth: isLocalCodexAuthAvailable(),
   runtimePort,
+  runtimeStateDir: path.dirname(runtimeConfigPath),
   worktreePath: process.cwd(),
   workspaceDir,
   dmPolicy,
@@ -835,6 +836,7 @@ const { deriveWorktreeTesterBaseline, resolveTesterBaselineAgentIds } = await im
 const {
   bootstrapTelegramLiveCodexAuthStore,
   pruneTesterRuntimeAuthStore,
+  syncTelegramLiveRuntimeMemoryStore,
   syncTelegramLiveRuntimeTtsPreferences,
   validateLocalCodexAuth,
 } = await import(pathToFileURL(path.join(path.dirname(helperPath), "telegram-live-runtime-helpers.mjs")).href);
@@ -875,6 +877,10 @@ const agentIds = resolveTesterBaselineAgentIds(config);
 
 syncTelegramLiveRuntimeTtsPreferences({
   baselineStateDir,
+  runtimeStateDir,
+});
+
+syncTelegramLiveRuntimeMemoryStore({
   runtimeStateDir,
 });
 

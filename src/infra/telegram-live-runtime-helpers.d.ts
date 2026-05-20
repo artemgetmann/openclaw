@@ -11,6 +11,7 @@ declare module "*telegram-live-runtime-helpers.mjs" {
       port: number;
       bind: string;
       mode: string;
+      auth?: Record<string, unknown>;
       controlUi: {
         enabled: boolean;
         allowedOrigins: string[];
@@ -33,6 +34,12 @@ declare module "*telegram-live-runtime-helpers.mjs" {
           fallbacks?: string[];
         };
         models?: Record<string, unknown>;
+        memorySearch?: {
+          store?: {
+            path?: string;
+          };
+        };
+        heartbeat?: Record<string, unknown>;
       };
       list?: Array<{ id: string }>;
     };
@@ -55,19 +62,40 @@ declare module "*telegram-live-runtime-helpers.mjs" {
       profiles?: Record<string, { provider?: string; mode?: string }>;
       order?: Record<string, unknown>;
     };
-    env?: Record<string, string>;
+    env?: Record<string, unknown>;
+    messages?: Record<string, unknown>;
+    models?: Record<string, unknown>;
     tools?: Record<string, unknown>;
   };
 
+  export function bootstrapTelegramLiveAcpValidationAuthStore(
+    params?: unknown,
+  ): Record<string, unknown>;
+  export function bootstrapTelegramLiveCodexAuthStore(params?: unknown): Record<string, unknown>;
+  export function buildTelegramLiveRuntimeChildEnv(params?: unknown): Record<string, unknown>;
   export function collectActiveTelegramTokenLeaseEntries(
     params?: unknown,
   ): TelegramTokenLeaseEntry[];
+  export function collectActiveReservedTelegramBotTokensFromCanonicalConfig(
+    params?: unknown,
+  ): string[];
   export function deriveTelegramLiveRuntimeProfile(params?: unknown): {
     worktreePath: string;
     profileId: string;
     runtimePort: number;
     runtimeStateDir: string;
   };
+  export function syncTelegramLiveRuntimeMemoryStore(params?: unknown): {
+    copied: boolean;
+    reason?: string;
+    sourceMemoryDir?: string;
+    targetMemoryDir?: string;
+  };
+  export function syncTelegramLiveRuntimeTtsPreferences(params?: unknown): Record<string, unknown>;
+  export function isLocalCodexAuthAvailable(params?: unknown): boolean;
+  export function isCanonicalSharedGatewayActive(params?: unknown): boolean;
+  export function pruneTesterRuntimeAuthStore(params?: unknown): Record<string, unknown>;
+  export function validateLocalCodexAuth(params?: unknown): Record<string, unknown>;
   export function selectTelegramTesterToken(params?: unknown): {
     ok: boolean;
     action: string;
