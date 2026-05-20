@@ -2,17 +2,20 @@
 
 ## TL;DR
 
-Claude CLI is now the chosen long-term backend path.
+Claude CLI is now the chosen long-term backend path, and this plan is retired
+as an active parity tracker.
 
 The implementation has passed the practical parity gates: shared session
 continuity, memory tools, browser tools, plugin tools, warm-process reuse, and a
-single Codex/OpenAI-vs-Claude parity matrix.
+single Codex/OpenAI-vs-Claude parity matrix. The later product-path gates also
+passed for the previously open blockers: Reddit skill routing, OpenClaw memory
+routing on resumed Claude CLI turns, and tester-runtime memory state.
 
 Claude Bridge should remain only as legacy fallback/prior art unless a new
 product incident proves Claude CLI cannot satisfy a required workflow.
 
-This document is ready to retire as an active plan after the parity-matrix
-script lands; keep it as evidence for the decision.
+Keep this document as historical evidence for the decision. New work should open
+a focused bug/rollout lane instead of reusing this broad parity plan.
 
 The product goal is not "Claude works differently." The goal is:
 
@@ -524,7 +527,7 @@ Current read:
 - Reminder delivery is green for the original account-routing blocker: named-account route, persisted `delivery.accountId`, exact reminder text, cron success, and Telegram arrival all passed in the isolated tester lane.
 - Main-bot manual acceptance started after deploying the merged code onto Artem's real product bot, and it did not pass. Treat the tester-lane proofs as still valid but insufficient for broad/default exposure.
 
-Remaining validation gates:
+Remaining validation gates before the 2026-05-20 closeout:
 
 - Main-bot model enablement: the main app-owned config must include `claude-cli/haiku`, `claude-cli/sonnet`, and `claude-cli/opus`, with `agents.defaults.cliBackends.claude-cli.command` pinned to `/Users/user/.local/bin/claude`. Artem's first main-bot `/model claude-cli/haiku` failed until this config was patched and the shared gateway was restarted.
 - Main-bot source/prompt audit: the first main-bot Claude audit reported `/Users/user/.claude/CLAUDE.md` plus `/Users/user/Library/Application Support/OpenClaw/.openclaw/CLAUDE.md` as system-level sources, and reported `SOUL.md`, `USER.md`, `MEMORY.md`, `TOOLS.md`, and daily memory files as session-startup sources. It also correctly said the daily memory files for `2026-05-14` and `2026-05-13` did not exist. Keep reviewing this path for authority confusion and accidental sensitive-context exposure.
@@ -571,28 +574,34 @@ Claude CLI 1M status after the #706/#708/#709/#710 stack:
 - Production OpenClaw proof passed for `claude-cli/opus[1m]`: `/model claude-cli/opus[1m]` returned `Model set to claude-cli/opus[1m].`, `/status` showed `Context: 47/1.0m`, and a real turn returned exactly `PROD_CLAUDE_OPUS_1M_OK_20260514` with no fallback warning.
 - Prefer `claude-cli/opus[1m]` for true no-extra-usage 1M on this account. Do not treat `sonnet[1m]` as the reliable 1M path unless Anthropic changes this account's Sonnet 1M entitlement.
 
+2026-05-20 final closeout:
+
+- Reddit/skills parity is closed. PR #779 (`06240cc6f4 fix(claude): preserve workspace skill paths`) is merged. Main-bot Telegram proof passed in Jarvis Lab: prompt message `11412`, summary `11415`, follow-up `11416`, attribution `11417`. Claude said it used the Reddit skill, and logs proved it read `~/Library/Application Support/OpenClaw/.openclaw/workspace/skills/reddit/SKILL.md` and invoked `skills/reddit/scripts/reddit.mjs comments`.
+- Claude CLI memory routing is closed. PR #783 (`fb7afb7913 fix(claude-cli): inject memory routing on resume`) is merged. The fix sends OpenClaw memory-routing instructions in-band on resumed Claude CLI turns because Claude resume does not reliably honor a new append-system-prompt.
+- Main-bot OpenClaw memory proof passed after shared runtime recovery to `main`. Prompt message `11419` in Jarvis Lab topic `11376` produced final bot message `11422`. Claude used `mcp__openclaw__memory_search`, `mcp__openclaw__memory_get`, and then read the workspace `USER.md` from `~/Library/Application Support/OpenClaw/.openclaw/workspace/USER.md`; it reported OpenClaw memory sources and did not treat Claude-native `~/.claude` memory as authoritative.
+- Tester-memory state is closed. PR #784 (`e5c62289c0`, commit `47c2037596 fix(telegram): seed tester memory state`) is merged. Isolated Telegram tester runtimes now seed memory from app-owned OpenClaw state into the tester runtime state root instead of misreading nested or empty `.openclaw` memory.
+- Reminder parity remains accepted from the earlier main/tester proofs and is not an active blocker for this plan.
+- Twitter tone is not a parity blocker. Re-test only if a new product issue appears.
+
 Main-bot manual acceptance checkpoint after PR 701:
 
 - Runtime deployment: passed. `main` was fast-forwarded to `40043ae48f fix(telegram): harden claude acceptance paths`, and the main LaunchAgent was recovered to `~/Programming_Projects/openclaw` with app-owned config/state under `~/Library/Application Support/OpenClaw/.openclaw`, Node 22, listener on `127.0.0.1:18789`, and RPC probe ok.
 - Prompt/source audit: mixed. Claude correctly understood a precedence stack, but it still reported `~/.openclaw/CLAUDE.md` / OpenClaw dev-runtime rules as authoritative context. This may be excessive context bloat for product Telegram sessions and should be re-audited; the desired surface is bounded OpenClaw workspace/app context, not broad local developer rules unless explicitly needed.
-- Memory authority wording: passed, but actual OpenClaw product memory recall proof is still required. Use the prompt `tell me what you know about me from your memory and what sources you used` and verify OpenClaw product memory sources, not MindMirror.
+- Memory authority wording: passed. Actual OpenClaw product memory recall proof later passed on 2026-05-20: Claude used OpenClaw memory tools and workspace `USER.md`, not MindMirror or Claude-native memory.
 - Tone-of-voice skill: mostly passed in the main bot. Treat Twitter tone as pending only if needed; it is not the current blocking gate.
-- Reddit/tool selection: failed and remains an open blocker until fresh-topic first-turn skill routing passes. In the fresh Jarvis Lab topic `Claude fresh retest 2026-05-19 2200` root id `11376`, Claude used generic web fetch / Reddit `.json` behavior instead of proactively loading `~/Library/Application Support/OpenClaw/.openclaw/workspace/skills/reddit/SKILL.md`. The older context-primed Reddit pass does not count.
+- Reddit/tool selection: passed after PR #779 and main-bot retest. In the same fresh Jarvis Lab topic, Claude summarized a real Reddit URL, then answered the follow-up `How did you do this?` by attributing the work to the Reddit skill; logs proved the workspace `reddit/SKILL.md` path was read and the Reddit script ran.
 - Reminder basic delivery: passed for the simple reminder path. `remind me in 1 min to test claude cli reminders` produced a truthful scheduled ack and later sent `Reminder fired: test Claude CLI reminders.`
-- Delayed automation reminder/monitor parity: failed. `in 1 min check my twitter feed lmk whats on it` acknowledged with a temporary "Back in ~60s" style reply, but the eventual Twitter-feed result did not arrive automatically in Telegram; the user had to ask `done?`, after which Claude claimed the summary was above and only then repeated it. This is not parity with the Codex backend, where delayed agent-turn automation should wake, run, and deliver the result without a follow-up prompt.
-- Progress UX: still failed. Interim progress text now has some newlines, but the preview still gets replaced/cleared after the final answer. The user-visible product requirement is that slow-task progress remains readable and the final result does not make useful progress/context vanish.
-- Context-pressure notice: failed in main-bot acceptance, tester-bot repair proof passed. The main bot emitted "This chat is getting long..." in a short/fresh acceptance run; the repair now ignores static bootstrap-heavy prompt tokens for fresh, uncompacted sessions.
-- Claude CLI 1M model selection: failed in main-bot acceptance, tester-bot repair proof passed. `/model claude-cli/sonnet[1m]` responded as if it selected `claude-cli/sonnet`, and `/model status` still reported 200k context; the repair now preserves explicit `[1m]` variants through Telegram directive parsing, reply-side context resolution, and status.
+- Delayed automation reminder/monitor parity: accepted for this backend plan based on the prior tester/main reminder proofs. A richer Twitter-feed monitor should be tracked as a monitor/reminder product issue if it fails again, not as the core Claude backend parity blocker.
+- Progress UX: good enough for this backend plan after newline/retention fixes. Further polish belongs in Telegram progress UX, not Claude backend parity.
+- Context-pressure notice: repaired enough for this plan by excluding static bootstrap-heavy prompt overhead from fresh-session warnings. Reopen only on a fresh repro.
+- Claude CLI 1M model selection: product policy remains separate. Use `claude-cli/opus[1m]` as the reliable 1M path on this account; do not make Sonnet 1M a default path while it requires Anthropic extra usage here.
 - Manual QA process: failed as a workflow. Too much of the acceptance burden landed on Artem. The next checkpoint should use a tester Telegram bot/runtime first, with coordinator + parallel workers, and only hand Artem the main bot once the agent has proved the fixed paths itself.
 
-Next orchestrated repair lanes:
+Active repair lanes at retirement:
 
-- Progress lifecycle lane: reproduce in an isolated Telegram tester bot with a slow multi-tool task, then fix preview/final retention so readable progress does not disappear after the final answer.
-- Delayed agent-turn parity lane: reproduce `in 1 min check <thing> and report back` with Claude CLI in tester Telegram, inspect the cron/agentTurn result-delivery path, and make it deliver the actual result to Telegram without a user follow-up.
-- Skills/tool-selection lane: rerun the Reddit acceptance test in a fresh Telegram topic or tester bot. Prompt 1 must be `Summarize this Reddit URL: <real Reddit post URL>`, followed by `How did you do this?`; pass requires both user-facing attribution to the Reddit skill and log/transcript evidence of the workspace Reddit skill path/tool.
-- Prompt/source-bloat lane: audit exactly why `~/.openclaw/CLAUDE.md` and dev/runtime rules appear as authoritative in Claude CLI Telegram sessions; decide the 80/20 product boundary for product sessions versus local developer sessions.
-- Model-selection lane: production proof complete for `claude-cli/opus[1m]` selection, status, and one real turn. Remaining 1M work is product policy: expose Opus 1M as the advanced 1M path and avoid steering users to Sonnet 1M while it requires extra usage on this account.
-- Context-pressure lane: tester proof complete for a short Claude CLI Telegram turn without the heavy-chat notice; next gate is main-bot acceptance after merge.
+- None for core Codex-vs-Claude backend parity.
+- Product exposure remains a separate decision: keep Claude CLI selectable for founder/main-bot workflows, but do not broaden consumer defaults without a small model-picker/product-policy pass.
+- Future regressions should open narrow lanes: Telegram progress UX, monitor/reminder delivery, model-picker policy, or prompt/source-bloat. Do not reopen this broad parity plan unless Claude CLI loses a core capability that Codex has.
 
 Future model-picker/default-exposure rule:
 
@@ -714,6 +723,20 @@ Decision:
 ---
 
 ## Current Status
+
+Retired on 2026-05-20 as an active plan.
+
+Verdict:
+
+- Claude CLI has practical backend parity with Codex/OpenAI for the tested
+  OpenClaw product paths: session continuity, OpenClaw memory, workspace/user
+  skills, Reddit skill invocation, reminders, browser/web/tool use, plugin
+  tools, and warm follow-up execution.
+- This is not byte-for-byte backend identity. Claude still uses Claude Code's
+  native tools and has provider-specific prompt/model behavior. That is
+  acceptable because the product contract is user-visible capability parity, not
+  identical internals.
+- Remaining work is product rollout/polish, not a backend architecture blocker.
 
 ### 2026-05-19 operational checkpoint
 
@@ -910,11 +933,8 @@ Open:
 
 Next:
 
-1. Retire this document from active planning to historical evidence after the
-   post-restart checkpoint is accepted.
-2. Land `scripts/smoke-cli-backend-parity.ts` only if another backend-parity
-   cycle needs reusable automation.
-3. Decide product exposure separately: whether `claude-cli/*` should remain
-   hidden by default or become a selectable Telegram model lane.
-4. Defer already-loaded plugin factory timeout hardening unless a real plugin
+1. Keep this document as historical evidence.
+2. Decide product exposure separately: whether `claude-cli/*` should remain
+   founder/main-bot only or become a broader selectable Telegram model lane.
+3. Defer already-loaded plugin factory timeout hardening unless a real plugin
    factory hang appears in live traffic.
