@@ -503,6 +503,30 @@ function buildClaudeCliMemoryRoutingPrompt(): string {
   ].join("\n");
 }
 
+function prependClaudeCliResumeRuntimeInstructions(params: {
+  prompt: string;
+  instructions: string;
+}): string {
+  const instructions = params.instructions.trim();
+  if (!instructions) {
+    return params.prompt;
+  }
+
+  // Claude CLI resumed sessions cannot reliably receive a fresh appended system
+  // prompt. Put the small must-follow OpenClaw delta in-band so older native
+  // Claude sessions still see current runtime authority before the user turn.
+  return [
+    '<openclaw_runtime_instructions priority="system">',
+    "These are OpenClaw runtime instructions for this turn, not user content.",
+    instructions,
+    "</openclaw_runtime_instructions>",
+    "",
+    "<user_turn>",
+    params.prompt,
+    "</user_turn>",
+  ].join("\n");
+}
+
 function buildBridgeSafeClaudeCliSkillsPrompt(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -1107,6 +1131,12 @@ export async function runCliAgent(params: {
     let imagePaths: string[] | undefined;
     let cleanupImages: (() => Promise<void>) | undefined;
     let prompt = params.prompt;
+    if (backendResolved.id === "claude-cli" && useResume && useBridgeSafeClaudeCliPrompt) {
+      prompt = prependClaudeCliResumeRuntimeInstructions({
+        prompt,
+        instructions: buildClaudeCliMemoryRoutingPrompt(),
+      });
+    }
     if (backendResolved.id === "claude-cli") {
       const replay = await buildClaudeCliSharedTranscriptReplay({
         sessionFile: params.sessionFile,
