@@ -489,6 +489,78 @@ function resolveCodexHomePath(codexHome) {
   return path.join(os.homedir(), ".codex");
 }
 
+function resolveTelegramLiveSeedStateDir(seedStateDir) {
+  const configured = String(
+    seedStateDir ?? process.env.OPENCLAW_TELEGRAM_LIVE_MEMORY_SEED_STATE_DIR ?? "",
+  ).trim();
+  if (configured) {
+    return path.resolve(configured.replace(/^~(?=$|\/)/, os.homedir()));
+  }
+  return path.join(os.homedir(), ".openclaw");
+}
+
+function resolveDefaultTelegramLiveStateRoot() {
+  return path.join(
+    os.homedir(),
+    "Library",
+    "Application Support",
+    "OpenClaw",
+    "telegram-live-worktrees",
+  );
+}
+
+function copyDirectoryContents(sourceDir, targetDir) {
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      copyDirectoryContents(sourcePath, targetPath);
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    fs.copyFileSync(sourcePath, targetPath);
+    try {
+      fs.chmodSync(targetPath, 0o600);
+    } catch {
+      // Best-effort privacy hardening; copy success is the important invariant.
+    }
+  }
+}
+
+export function syncTelegramLiveRuntimeMemoryStore(params = {}) {
+  const runtimeStateDir = String(params?.runtimeStateDir ?? "").trim();
+  if (!runtimeStateDir) {
+    return { copied: false, reason: "missing_runtime_state_dir" };
+  }
+
+  const sourceStateDir = resolveTelegramLiveSeedStateDir(params?.sourceStateDir);
+  const sourceMemoryDir = path.join(sourceStateDir, "memory");
+  const targetMemoryDir = path.join(path.resolve(runtimeStateDir), "memory");
+
+  if (!fs.existsSync(sourceMemoryDir)) {
+    return {
+      copied: false,
+      reason: "missing_source",
+      sourceMemoryDir,
+      targetMemoryDir,
+    };
+  }
+
+  // Replace the isolated snapshot before boot so a prior empty tester DB cannot
+  // shadow the real seed. The source is never opened for writes by this helper.
+  fs.rmSync(targetMemoryDir, { recursive: true, force: true });
+  copyDirectoryContents(sourceMemoryDir, targetMemoryDir);
+
+  return {
+    copied: true,
+    sourceMemoryDir,
+    targetMemoryDir,
+  };
+}
+
 function decodeJwtExpiryMs(token) {
   if (typeof token !== "string" || !token) {
     return null;
@@ -910,10 +982,10 @@ function parseEnvAssignmentLine(line, key) {
 
 export function deriveTelegramLiveRuntimeProfile(params) {
   const worktreePath = path.resolve(String(params?.worktreePath ?? ""));
-  const stateRoot =
-    params?.stateRoot && String(params.stateRoot).trim().length > 0
-      ? path.resolve(String(params.stateRoot))
-      : path.join(os.homedir(), ".openclaw", "telegram-live-worktrees");
+  const hasCustomStateRoot = params?.stateRoot && String(params.stateRoot).trim().length > 0;
+  const stateRoot = hasCustomStateRoot
+    ? path.resolve(String(params.stateRoot))
+    : resolveDefaultTelegramLiveStateRoot();
   const acpValidation = isTelegramLiveAcpValidationEnabled(params);
   const portBase = Number.isFinite(params?.portBase) ? Number(params.portBase) : DEFAULT_PORT_BASE;
   const portRange =
@@ -929,7 +1001,9 @@ export function deriveTelegramLiveRuntimeProfile(params) {
   // stale auth/session artifacts can leak a different provider back in.
   const runtimeStateDir = acpValidation
     ? path.join(stateRoot, profileId, "acp-validation")
-    : path.join(stateRoot, profileId);
+    : hasCustomStateRoot
+      ? path.join(stateRoot, profileId)
+      : path.join(stateRoot, profileId, ".openclaw");
 
   return {
     worktreePath,
@@ -1113,6 +1187,10 @@ export function buildTelegramLiveRuntimeConfig(params) {
       ? params.dmPolicy.trim()
       : null;
   const preferredModel = resolveTelegramLivePreferredModel(params);
+  const runtimeStateDir =
+    typeof params?.runtimeStateDir === "string" && params.runtimeStateDir.trim().length > 0
+      ? path.resolve(params.runtimeStateDir.trim())
+      : null;
   const baseConfig =
     params?.baseConfig && typeof params.baseConfig === "object"
       ? structuredClone(params.baseConfig)
@@ -1198,6 +1276,21 @@ export function buildTelegramLiveRuntimeConfig(params) {
   });
   if (workspaceDir) {
     agentDefaults.workspace = workspaceDir;
+  }
+  if (runtimeStateDir) {
+    const memorySearch =
+      agentDefaults.memorySearch && typeof agentDefaults.memorySearch === "object"
+        ? structuredClone(agentDefaults.memorySearch)
+        : {};
+    const memorySearchStore =
+      memorySearch.store && typeof memorySearch.store === "object" ? memorySearch.store : {};
+    agentDefaults.memorySearch = {
+      ...memorySearch,
+      store: {
+        ...memorySearchStore,
+        path: path.join(runtimeStateDir, "memory", "{agentId}.sqlite"),
+      },
+    };
   }
 
   // Product config loading can inject default heartbeat settings later if this

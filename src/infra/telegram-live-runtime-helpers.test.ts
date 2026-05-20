@@ -16,6 +16,7 @@ import {
   isCanonicalSharedGatewayActive,
   pruneTesterRuntimeAuthStore,
   selectTelegramTesterToken,
+  syncTelegramLiveRuntimeMemoryStore,
   syncTelegramLiveRuntimeTtsPreferences,
   validateLocalCodexAuth,
 } from "../../scripts/lib/telegram-live-runtime-helpers.mjs";
@@ -164,7 +165,7 @@ describe("telegram live runtime helpers", () => {
       "utf8",
     );
 
-    const execTextFn = (command, args) => {
+    const execTextFn = (command: string, args: string[]) => {
       const joined = `${command} ${args.join(" ")}`;
       if (joined.includes("launchctl print")) {
         return `pid = 456\nprogram = "${canonicalMainRepoReal}/dist/index.js"\n`;
@@ -282,12 +283,22 @@ describe("telegram live runtime helpers", () => {
         botToken: "tester-token",
       },
     });
-    expect(config.env?.OPENAI_API_KEY).toBeUndefined();
-    expect(config.env?.OPENCLAW_CONSUMER_OPENAI_API_KEY).toBeUndefined();
-    expect(config.env?.vars?.OPENAI_API_KEY).toBeUndefined();
-    expect(config.messages?.tts?.openai?.apiKey).toBeUndefined();
-    expect(config.tools?.media?.audio?.models?.[0]?.apiKey).toBeUndefined();
-    expect(config.models?.providers?.openai?.apiKey).toBeUndefined();
+    const nestedConfig = config as {
+      env?: {
+        OPENAI_API_KEY?: string;
+        OPENCLAW_CONSUMER_OPENAI_API_KEY?: string;
+        vars?: { OPENAI_API_KEY?: string };
+      };
+      messages?: { tts?: { openai?: { apiKey?: string } } };
+      tools?: { media?: { audio?: { models?: Array<{ apiKey?: string }> } } };
+      models?: { providers?: { openai?: { apiKey?: string } } };
+    };
+    expect(nestedConfig.env?.OPENAI_API_KEY).toBeUndefined();
+    expect(nestedConfig.env?.OPENCLAW_CONSUMER_OPENAI_API_KEY).toBeUndefined();
+    expect(nestedConfig.env?.vars?.OPENAI_API_KEY).toBeUndefined();
+    expect(nestedConfig.messages?.tts?.openai?.apiKey).toBeUndefined();
+    expect(nestedConfig.tools?.media?.audio?.models?.[0]?.apiKey).toBeUndefined();
+    expect(nestedConfig.models?.providers?.openai?.apiKey).toBeUndefined();
     expect(config.agents?.defaults?.model).toBeUndefined();
     expect(config.agents?.defaults?.heartbeat).toEqual({
       every: "0m",
@@ -428,6 +439,30 @@ describe("telegram live runtime helpers", () => {
       mode: "token",
       token: "isolated-gateway-token",
     });
+  });
+
+  it("derives default tester state under app-owned Application Support, not legacy ~/.openclaw", () => {
+    const home = makeTempDir();
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const profile = deriveTelegramLiveRuntimeProfile({
+        worktreePath: "/repo/current",
+      });
+
+      expect(profile.runtimeStateDir).toMatch(
+        new RegExp(
+          `${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/Library/Application Support/OpenClaw/telegram-live-worktrees/tg-live-[0-9a-f]{10}/\\.openclaw$`,
+        ),
+      );
+      expect(profile.runtimeStateDir).not.toContain(`${home}/.openclaw/telegram-live-worktrees`);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
   });
 
   it("derives a safe effective model when the inherited default is plain openai", () => {
@@ -707,6 +742,57 @@ describe("telegram live runtime helpers", () => {
     );
   });
 
+  it("pins tester memory search to the isolated copied memory store", () => {
+    const runtimeStateDir = path.join(makeTempDir(), ".openclaw");
+    const config = buildTelegramLiveRuntimeConfig({
+      baseConfig: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              store: {
+                path: "/Users/test/.openclaw/memory/{agentId}.sqlite",
+              },
+            },
+          },
+        },
+      },
+      assignedToken: "tester-token",
+      runtimePort: 24567,
+      runtimeStateDir,
+    });
+
+    expect(config.agents?.defaults?.memorySearch?.store?.path).toBe(
+      path.join(runtimeStateDir, "memory", "{agentId}.sqlite"),
+    );
+    expect(config.agents?.defaults?.memorySearch?.store?.path).not.toBe(
+      "/Users/test/.openclaw/memory/{agentId}.sqlite",
+    );
+  });
+
+  it("copies the user memory seed into the isolated runtime and replaces old empty tester memory", () => {
+    const sourceStateDir = makeTempDir();
+    const runtimeStateDir = makeTempDir();
+    const sourceDbPath = path.join(sourceStateDir, "memory", "main.sqlite");
+    const targetDbPath = path.join(runtimeStateDir, "memory", "main.sqlite");
+    fs.mkdirSync(path.dirname(sourceDbPath), { recursive: true });
+    fs.mkdirSync(path.dirname(targetDbPath), { recursive: true });
+    fs.writeFileSync(sourceDbPath, "seed-memory");
+    fs.writeFileSync(targetDbPath, "");
+
+    const result = syncTelegramLiveRuntimeMemoryStore({
+      sourceStateDir,
+      runtimeStateDir,
+    });
+
+    expect(result).toMatchObject({
+      copied: true,
+      sourceMemoryDir: path.join(sourceStateDir, "memory"),
+      targetMemoryDir: path.join(runtimeStateDir, "memory"),
+    });
+    expect(fs.readFileSync(targetDbPath, "utf8")).toBe("seed-memory");
+    expect(fs.readFileSync(sourceDbPath, "utf8")).toBe("seed-memory");
+  });
+
   it("syncs sanitized baseline TTS preferences into isolated runtime state", () => {
     const baselineStateDir = makeTempDir();
     const runtimeStateDir = makeTempDir();
@@ -743,7 +829,7 @@ describe("telegram live runtime helpers", () => {
       sourcePath: baselineTtsPath,
       targetPath: path.join(runtimeStateDir, "settings", "tts.json"),
     });
-    expect(JSON.parse(fs.readFileSync(result.targetPath, "utf8"))).toEqual({
+    expect(JSON.parse(fs.readFileSync(String(result.targetPath), "utf8"))).toEqual({
       tts: {
         auto: "always",
         provider: "edge",
@@ -787,7 +873,7 @@ describe("telegram live runtime helpers", () => {
       authStorePath: path.join(runtimeStateDir, "agents", "main", "agent", "auth-profiles.json"),
     });
     expect(
-      JSON.parse(fs.readFileSync(result.authStorePath, "utf8")) as {
+      JSON.parse(fs.readFileSync(String(result.authStorePath), "utf8")) as {
         profiles: Record<string, Record<string, unknown>>;
         order: Record<string, string[]>;
       },
@@ -929,7 +1015,7 @@ describe("telegram live runtime helpers", () => {
     });
 
     expect(result.ok).toBe(true);
-    const store = JSON.parse(fs.readFileSync(result.authStorePath, "utf8")) as {
+    const store = JSON.parse(fs.readFileSync(String(result.authStorePath), "utf8")) as {
       profiles: Record<string, Record<string, unknown>>;
       order: Record<string, string[]>;
     };

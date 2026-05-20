@@ -9,6 +9,12 @@ export function deriveTelegramLiveRuntimeProfile(params?: unknown): {
   runtimePort: number;
   runtimeStateDir: string;
 };
+export function syncTelegramLiveRuntimeMemoryStore(params?: unknown): {
+  copied: boolean;
+  reason?: string;
+  sourceMemoryDir?: string;
+  targetMemoryDir?: string;
+};
 export function selectTelegramTesterToken(params?: unknown): {
   ok: boolean;
   action: string;
