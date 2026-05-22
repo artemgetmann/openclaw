@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildConfirmedModelSelectionCallbackData,
   buildModelSelectionCallbackData,
   buildModelFamilyKeyboard,
   buildModelHomeKeyboard,
@@ -18,14 +19,19 @@ describe("parseModelCallbackData", () => {
     const cases = [
       ["mdl_prov", { type: "providers" }],
       ["mdl_home", { type: "home" }],
-      ["mdl_fam_claude", { type: "family", family: "claude", more: false }],
-      ["mdl_fam_chatgpt_more", { type: "family", family: "chatgpt", more: true }],
+      ["mdl_fam_claude", { type: "family", family: "claude", more: false, context: false }],
+      ["mdl_fam_claude_ctx", { type: "family", family: "claude", more: false, context: true }],
+      ["mdl_fam_chatgpt_more", { type: "family", family: "chatgpt", more: true, context: false }],
       ["mdl_back", { type: "back" }],
       ["mdl_list_anthropic_2", { type: "list", provider: "anthropic", page: 2 }],
       ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
       [
         "mdl_sel_anthropic/claude-sonnet-4-5",
         { type: "select", provider: "anthropic", model: "claude-sonnet-4-5" },
+      ],
+      [
+        "mdl_cfm_claude-cli/sonnet[1m]",
+        { type: "confirmSelect", provider: "claude-cli", model: "sonnet[1m]" },
       ],
       ["mdl_sel_openai/gpt-4/turbo", { type: "select", provider: "openai", model: "gpt-4/turbo" }],
       [
@@ -129,6 +135,17 @@ describe("buildModelSelectionCallbackData", () => {
   it("returns null when even compact callback exceeds Telegram limit", () => {
     const tooLongModel = "x".repeat(80);
     expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBeNull();
+  });
+});
+
+describe("buildConfirmedModelSelectionCallbackData", () => {
+  it("builds confirmed selection callbacks for warning-gated models", () => {
+    expect(
+      buildConfirmedModelSelectionCallbackData({
+        provider: "claude-cli",
+        model: "sonnet[1m]",
+      }),
+    ).toBe("mdl_cfm_claude-cli/sonnet[1m]");
   });
 });
 
@@ -347,42 +364,64 @@ describe("buildModelHomeKeyboard", () => {
         { text: "Claude", callback_data: "mdl_fam_claude" },
         { text: "ChatGPT", callback_data: "mdl_fam_chatgpt" },
       ],
-      [{ text: "More", callback_data: "mdl_prov" }],
+      [{ text: "Model Providers", callback_data: "mdl_prov" }],
     ]);
   });
 });
 
 describe("buildModelFamilyKeyboard", () => {
-  it("shows the recommended Claude model without selecting on family tap", () => {
+  it("shows Claude Sonnet 4.6 as the recommended CLI model", () => {
     const result = buildModelFamilyKeyboard({
       family: "claude",
-      byProvider: new Map([["anthropic", new Set(["claude-opus-4-6", "claude-sonnet-4-6"])]]),
-      currentModel: "anthropic/claude-sonnet-4-6",
+      byProvider: new Map([["claude-cli", new Set(["opus", "sonnet"])]]),
+      currentModel: "claude-cli/sonnet",
     });
 
     expect(result[0]?.[0]).toEqual({
       text: "Sonnet 4.6 ✓",
-      callback_data: "mdl_sel_anthropic/claude-sonnet-4-6",
+      callback_data: "mdl_sel_claude-cli/sonnet",
     });
     expect(result[1]?.[0]).toEqual({ text: "More", callback_data: "mdl_fam_claude_more" });
   });
 
-  it("dedupes Claude variants and shows product labels behind More", () => {
+  it("keeps Claude More focused on Opus and larger context", () => {
     const byProvider = new Map([
-      ["anthropic", new Set(["claude-haiku-4-5", "claude-opus-4-6", "claude-sonnet-4-6"])],
-      ["claude-bridge", new Set(["haiku", "opus", "sonnet"])],
+      ["claude-cli", new Set(["haiku", "opus", "opus[1m]", "sonnet", "sonnet[1m]"])],
     ]);
 
     const more = buildModelFamilyKeyboard({ family: "claude", byProvider, more: true });
-    expect(more.map((row) => row[0]?.text)).toEqual(["Haiku 4.5", "Opus 4.6", "<< Back"]);
+    expect(more.map((row) => row[0]?.text)).toEqual(["Opus 4.7", "Larger context", "<< Back"]);
     expect(more.map((row) => row[0]?.callback_data)).toEqual([
-      "mdl_sel_anthropic/claude-haiku-4-5",
-      "mdl_sel_anthropic/claude-opus-4-6",
+      "mdl_sel_claude-cli/opus",
+      "mdl_fam_claude_ctx",
       "mdl_home",
     ]);
   });
 
-  it("prefers ChatGPT GPT 5.5 when configured and lists other chat models behind More", () => {
+  it("hides Claude larger context when no 1M CLI models are available", () => {
+    const byProvider = new Map([["claude-cli", new Set(["opus", "sonnet"])]]);
+
+    const more = buildModelFamilyKeyboard({ family: "claude", byProvider, more: true });
+    expect(more.map((row) => row[0]?.text)).toEqual(["Opus 4.7", "<< Back"]);
+  });
+
+  it("shows Claude larger-context choices without Haiku", () => {
+    const byProvider = new Map([["claude-cli", new Set(["haiku", "opus[1m]", "sonnet[1m]"])]]);
+
+    const context = buildModelFamilyKeyboard({ family: "claude", byProvider, context: true });
+    expect(context.map((row) => row[0]?.text)).toEqual([
+      "Opus 4.7 (1M)",
+      "Sonnet 4.6 (1M, Max only)",
+      "<< Back",
+    ]);
+    expect(context.map((row) => row[0]?.callback_data)).toEqual([
+      "mdl_sel_claude-cli/opus[1m]",
+      "mdl_sel_claude-cli/sonnet[1m]",
+      "mdl_fam_claude_more",
+    ]);
+  });
+
+  it("prefers ChatGPT GPT 5.5 and keeps mini models out of normal More", () => {
     const byProvider = new Map([
       ["openai-codex", new Set(["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.5"])],
       ["openai", new Set(["gpt-5.4", "gpt-5.4-mini", "gpt-image-2"])],
@@ -390,21 +429,15 @@ describe("buildModelFamilyKeyboard", () => {
 
     const recommended = buildModelFamilyKeyboard({ family: "chatgpt", byProvider });
     expect(recommended[0]?.[0]).toEqual({
-      text: "GPT 5.5",
+      text: "GPT-5.5",
       callback_data: "mdl_sel_openai-codex/gpt-5.5",
     });
 
     const more = buildModelFamilyKeyboard({ family: "chatgpt", byProvider, more: true });
-    expect(more.map((row) => row[0]?.text)).toEqual([
-      "GPT 5.3 Codex Spark",
-      "GPT 5.4",
-      "GPT 5.4 Mini",
-      "<< Back",
-    ]);
+    expect(more.map((row) => row[0]?.text)).toEqual(["GPT-5.4", "GPT-5.3 Codex Spark", "<< Back"]);
     expect(more.map((row) => row[0]?.callback_data)).toEqual([
-      "mdl_sel_openai-codex/gpt-5.3-codex-spark",
       "mdl_sel_openai-codex/gpt-5.4",
-      "mdl_sel_openai/gpt-5.4-mini",
+      "mdl_sel_openai-codex/gpt-5.3-codex-spark",
       "mdl_home",
     ]);
   });

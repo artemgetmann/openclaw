@@ -223,6 +223,53 @@ export function formatModelsAvailableHeader(params: {
   return `Models (${providerLabel}) — ${params.total} available`;
 }
 
+export function formatTelegramProviderBrowserText(providers: readonly string[]): string {
+  const providerSet = new Set(providers);
+  const lines = ["Model Providers:"];
+
+  const subscriptionRows: string[] = [];
+  if (providerSet.has("openai-codex")) {
+    subscriptionRows.push("- ChatGPT / Codex");
+  }
+  if (providerSet.has("claude-cli")) {
+    subscriptionRows.push("- Claude / Claude Code");
+  }
+  if (subscriptionRows.length > 0) {
+    lines.push("", "Subscription logins:", ...subscriptionRows);
+  }
+
+  const apiRows: string[] = [];
+  if (providerSet.has("openai")) {
+    apiRows.push("- OpenAI");
+  }
+  if (providerSet.has("anthropic")) {
+    apiRows.push("- Anthropic");
+  }
+  if (providerSet.has("google")) {
+    apiRows.push("- Gemini");
+  }
+  const knownGroupedProviders = new Set([
+    "openai-codex",
+    "claude-cli",
+    "openai",
+    "anthropic",
+    "google",
+    "claude-bridge",
+  ]);
+  const otherApiProviders = providers
+    .filter((provider) => !knownGroupedProviders.has(provider))
+    .map((provider) => `- ${provider}`);
+  if (apiRows.length > 0 || otherApiProviders.length > 0) {
+    lines.push("", "API key providers:", ...apiRows, ...otherApiProviders);
+  }
+
+  if (providerSet.has("claude-bridge")) {
+    lines.push("", "Developer / legacy:", "- Claude Bridge");
+  }
+
+  return lines.join("\n");
+}
+
 export async function resolveModelsCommandReply(params: {
   cfg: OpenClawConfig;
   commandBodyNormalized: string;
@@ -264,7 +311,7 @@ export async function resolveModelsCommandReply(params: {
         count: byProvider.get(p)?.size ?? 0,
       }));
       const buttons = buildProviderKeyboard(providerInfos);
-      const text = "Select a provider:";
+      const text = formatTelegramProviderBrowserText(providers);
       return {
         text,
         channelData: { telegram: { buttons } },

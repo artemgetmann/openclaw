@@ -597,6 +597,7 @@ Current execution priorities:
 | P1       | Full Sparkle update-cycle proof.                                                                                                | Deferred until after the 4-5 waiting testers package.                                                                 | Release/package lane                   | Prove download, verify, install, relaunch, and state preservation.                                                                      |
 | P1       | Group/threaded/forum Telegram setup after DM proof.                                                                             | Deferred until DM-first onboarding works for testers.                                                                 | Telegram lane                          | Research backend/userbot path for creating group, adding user plus bot, enabling forum mode, and seeding topics.                        |
 | P1       | Rename verbose/debug UX into `/visibility` language.                                                                            | Deferred until after the 4-5 waiting testers package; required before Reddit/broad public launch.                     | Telegram/product polish lane           | Normal users should see visibility controls, not developer verbose naming.                                                              |
+| P1       | Expose Claude Code as a consumer model lane and clean up the Telegram model picker.                                             | Deferred until after the next 4-5 waiting testers and more founder use of the Claude CLI backend.                     | Telegram/model picker lane             | Required before website, Stripe, Reddit/GitHub, or public-ish beta launch.                                                              |
 | P1       | Keep launch tracker docs as completed/open/deferred checklists.                                                                 | In progress                                                                                                           | Docs lane                              | This document is the source of truth for launch task state.                                                                             |
 
 Completed foundation:
@@ -636,6 +637,13 @@ Current Telegram product boundary:
   consumer-safe `/settings` surface with plain names; advanced/developer
   controls such as BYO bot token, custom commands, verbose detail, and internal
   IDs should be exposed intentionally through an advanced mode/toggle.
+- Claude Code is no longer founder-only as a product direction. It should
+  become a consumer-facing model lane after the next 4-5 tester package, once
+  Artem has used the Claude CLI backend enough to trust it. Before wider
+  Reddit/GitHub, website, Stripe, or public-ish beta launch, Telegram `/model`
+  should expose Claude through the local Claude Code subscription path when it
+  is installed, authenticated, and intentionally enabled. Claude API/BYOK paths
+  stay in provider settings, not the default consumer model path.
 
 ### 11.1 First beta goal
 
@@ -978,6 +986,11 @@ Remaining Settings/UI polish after PR #628:
   Permissions.
 - Rewrite onboarding copy after the page split, then check each page with real
   screenshots before wider beta.
+- After the Claude CLI backend has enough founder confidence for broader
+  exposure, AI access onboarding and Settings should stop treating Claude as
+  "Coming soon". They should show Claude / Claude Code when the local Claude
+  Code command is installed, authenticated, and enabled; Anthropic API-key
+  setup remains an advanced/BYOK path.
 - Keep the next pass focused on beta onboarding clarity rather than a full
   Liquid Glass redesign.
 

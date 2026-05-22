@@ -39,7 +39,7 @@ describe("resolveModelsCommandReply", () => {
         { text: "Claude", callback_data: "mdl_fam_claude" },
         { text: "ChatGPT", callback_data: "mdl_fam_chatgpt" },
       ],
-      [{ text: "More", callback_data: "mdl_prov" }],
+      [{ text: "Model Providers", callback_data: "mdl_prov" }],
     ]);
   });
 
@@ -52,7 +52,11 @@ describe("resolveModelsCommandReply", () => {
 
     const buttons =
       (reply?.channelData as TelegramButtonsPayload | undefined)?.telegram?.buttons ?? [];
-    expect(reply?.text).toBe("Select a provider:");
+    expect(reply?.text).toContain("Model Providers:");
+    expect(reply?.text).toContain("Subscription logins:");
+    expect(reply?.text).toContain("- ChatGPT / Codex");
+    expect(reply?.text).toContain("API key providers:");
+    expect(reply?.text).toContain("- Gemini");
     expect(buttons.flat().map((button) => button.callback_data)).toContain("mdl_list_google_1");
   });
 

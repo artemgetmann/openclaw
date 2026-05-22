@@ -456,12 +456,12 @@ Use `docs/research/jarvis-consumer-launch-plan.md` for the live task tracker,
 owners, proof, and P0/P1/P2 status. This package doc keeps only launch-facing
 truth:
 
-| State                                                            | Launch-facing item                                                                                                                                                                                      |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Completed for trusted testers                                    | Jarvis visible branding, notarized trusted-tester DMG, public Jarvis ZIP/appcast assets, account/trial backend, managed utility backend, page-based onboarding shell, Managed Bots-first Telegram path. |
-| Needed before the next 4-5 waiting testers receive a new package | A recut from current `main` after the P0 onboarding fixes, plus package verification that source polish and secret-safety gates are actually in the shipped artifact.                                   |
-| Needed before Reddit / broad public beta                         | `ai.jarvis.mac` bundle/runtime/update identity migration, full Sparkle update-cycle proof, broader onboarding polish, and public-copy cleanup.                                                          |
-| Deferred until evidence of friction                              | Maintenance polish that does not block current testers.                                                                                                                                                 |
+| State                                                            | Launch-facing item                                                                                                                                                                                           |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Completed for trusted testers                                    | Jarvis visible branding, notarized trusted-tester DMG, public Jarvis ZIP/appcast assets, account/trial backend, managed utility backend, page-based onboarding shell, Managed Bots-first Telegram path.      |
+| Needed before the next 4-5 waiting testers receive a new package | A recut from current `main` after the P0 onboarding fixes, plus package verification that source polish and secret-safety gates are actually in the shipped artifact.                                        |
+| Needed before Reddit / broad public beta                         | `ai.jarvis.mac` bundle/runtime/update identity migration, full Sparkle update-cycle proof, broader onboarding polish, Claude Code consumer exposure, Telegram model-picker cleanup, and public-copy cleanup. |
+| Deferred until evidence of friction                              | Maintenance polish that does not block current testers.                                                                                                                                                      |
 
 ### Telegram command/settings strategy
 
@@ -486,6 +486,40 @@ through consumer setup. Candidate shape:
   output redacted. The normal path is now replacing the manual BotFather setup
   step with this manager-bot approval flow while keeping BYO BotFather tokens in
   the advanced path.
+- Claude Code should become a consumer-facing model lane, not founder-only, but
+  not for the immediate next 4-5 tester package. Gate broader exposure on more
+  founder use of the Claude CLI backend. Before website, Stripe, Reddit/GitHub,
+  or public-ish beta launch, `/model` should expose Claude when the local
+  Claude Code command is installed, authenticated, and intentionally enabled.
+- Consumer `/model` should stay decision-oriented, not catalog-oriented:
+  - Top level: `Claude`, `ChatGPT`, and `Model Providers`.
+  - `Claude` shows `Sonnet 4.6` as the recommended model, mapping to
+    `claude-cli/sonnet`.
+  - `Claude` -> `More` shows `Opus 4.7` and `Larger context`.
+  - `Claude` -> `Larger context` shows `Opus 4.7 (1M)` mapping to
+    `claude-cli/opus[1m]` and `Sonnet 4.6 (1M, Max only)` mapping to
+    `claude-cli/sonnet[1m]`.
+  - Selecting `Sonnet 4.6 (1M, Max only)` should warn that Claude Max may be
+    required and that Claude Pro may use paid extra usage instead of
+    subscription quota.
+  - `ChatGPT` shows `GPT-5.5` as the recommended model; `ChatGPT` -> `More`
+    keeps useful mainstream alternatives such as `GPT-5.4` and
+    `GPT-5.3 Codex Spark`.
+  - Smaller/debug models such as Claude Haiku and GPT mini should not clutter
+    the normal `More` menus. Keep them behind `Model Providers` or an advanced
+    provider surface for benchmarking, fallback, or power-user use.
+  - `Model Providers` groups access paths, not normal model choices:
+    subscription logins (`ChatGPT / Codex`, `Claude / Claude Code`), API key
+    providers (`OpenAI`, `Anthropic`, `Gemini`, etc.), and developer/legacy
+    providers such as `Claude Bridge`.
+  - Hide Claude CLI rows unless local Claude Code is installed, authenticated,
+    and enabled. Hide Claude API rows unless an Anthropic API key or advanced
+    provider settings exist. Hide `Claude Bridge` unless developer/legacy mode
+    is enabled.
+- macOS onboarding and Settings should follow the same product direction after
+  the Claude confidence gate: do not show Claude as "Coming soon" once this
+  ships. Show `Claude / Claude Code` when the local Claude Code path is ready;
+  keep Anthropic API setup in advanced/BYOK provider settings.
 - Current implementation state, acceptance criteria, and remaining Telegram
   gates live in `docs/research/jarvis-consumer-launch-plan.md`.
 - Out of scope for this slice: broad onboarding copy polish, `/visibility`

@@ -6,9 +6,11 @@
  * - mdl_prov              - show providers list
  * - mdl_fam_{family}      - show recommended model for a family
  * - mdl_fam_{family}_more - show remaining models for a family
+ * - mdl_fam_claude_ctx    - show larger-context Claude CLI models
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
  * - mdl_sel_{provider/id} - select model (standard)
  * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
+ * - mdl_cfm_{provider/id} - confirmed select for models with cost/quota warnings
  * - mdl_back              - back to providers list
  */
 
@@ -17,9 +19,10 @@ export type ButtonRow = Array<{ text: string; callback_data: string }>;
 export type ParsedModelCallback =
   | { type: "home" }
   | { type: "providers" }
-  | { type: "family"; family: ModelFamilyId; more: boolean }
+  | { type: "family"; family: ModelFamilyId; more: boolean; context?: boolean }
   | { type: "list"; provider: string; page: number }
   | { type: "select"; provider?: string; model: string }
+  | { type: "confirmSelect"; provider?: string; model: string }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -68,16 +71,18 @@ const CALLBACK_PREFIX = {
   back: "mdl_back",
   family: "mdl_fam_",
   familyMoreSuffix: "_more",
+  familyContextSuffix: "_ctx",
   list: "mdl_list_",
   selectStandard: "mdl_sel_",
   selectCompact: "mdl_sel/",
+  confirmStandard: "mdl_cfm_",
 } as const;
 
 const CLAUDE_MODEL_FAMILY: ModelFamilyInfo = {
   family: "claude",
   label: "Claude",
   providers: ["anthropic", "claude-bridge", "claude-cli"],
-  recommended: ["anthropic/claude-sonnet-4-6", "claude-bridge/sonnet"],
+  recommended: ["claude-cli/sonnet", "anthropic/claude-sonnet-4-6", "claude-bridge/sonnet"],
 };
 
 export const MODEL_FAMILIES: readonly ModelFamilyInfo[] = [
@@ -116,10 +121,15 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     return { type: trimmed === CALLBACK_PREFIX.providers ? "providers" : "back" };
   }
 
-  const familyMatch = trimmed.match(/^mdl_fam_(claude|chatgpt)(_more)?$/);
+  const familyMatch = trimmed.match(/^mdl_fam_(claude|chatgpt)(_more|_ctx)?$/);
   if (familyMatch) {
     const family = familyMatch[1] as ModelFamilyId;
-    return { type: "family", family, more: Boolean(familyMatch[2]) };
+    return {
+      type: "family",
+      family,
+      more: familyMatch[2] === CALLBACK_PREFIX.familyMoreSuffix,
+      context: familyMatch[2] === CALLBACK_PREFIX.familyContextSuffix,
+    };
   }
 
   // mdl_list_{provider}_{page}
@@ -160,6 +170,21 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
+  const confirmMatch = trimmed.match(/^mdl_cfm_(.+)$/);
+  if (confirmMatch) {
+    const modelRef = confirmMatch[1];
+    if (modelRef) {
+      const slashIndex = modelRef.indexOf("/");
+      if (slashIndex > 0 && slashIndex < modelRef.length - 1) {
+        return {
+          type: "confirmSelect",
+          provider: modelRef.slice(0, slashIndex),
+          model: modelRef.slice(slashIndex + 1),
+        };
+      }
+    }
+  }
+
   return null;
 }
 
@@ -177,8 +202,23 @@ export function buildModelSelectionCallbackData(params: {
     : null;
 }
 
+export function buildConfirmedModelSelectionCallbackData(params: {
+  provider: string;
+  model: string;
+}): string | null {
+  const callbackData = `${CALLBACK_PREFIX.confirmStandard}${params.provider}/${params.model}`;
+  return Buffer.byteLength(callbackData, "utf8") <= MAX_CALLBACK_DATA_BYTES ? callbackData : null;
+}
+
+export function modelSelectionRequiresConfirmation(params: {
+  provider: string;
+  model: string;
+}): boolean {
+  return params.provider === "claude-cli" && params.model === "sonnet[1m]";
+}
+
 export function resolveModelSelection(params: {
-  callback: Extract<ParsedModelCallback, { type: "select" }>;
+  callback: Extract<ParsedModelCallback, { type: "select" | "confirmSelect" }>;
   providers: readonly string[];
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
 }): ResolveModelSelectionResult {
@@ -245,7 +285,7 @@ export function buildModelHomeKeyboard(): ButtonRow[] {
       { text: "Claude", callback_data: "mdl_fam_claude" },
       { text: "ChatGPT", callback_data: "mdl_fam_chatgpt" },
     ],
-    [{ text: "More", callback_data: CALLBACK_PREFIX.providers }],
+    [{ text: "Model Providers", callback_data: CALLBACK_PREFIX.providers }],
   ];
 }
 
@@ -400,7 +440,15 @@ export function buildModelFamilyKeyboard(params: {
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
   currentModel?: string;
   more?: boolean;
+  context?: boolean;
 }): ButtonRow[] {
+  if (params.family === "claude") {
+    return buildClaudeFamilyKeyboard(params);
+  }
+  if (params.family === "chatgpt") {
+    return buildChatGptFamilyKeyboard(params);
+  }
+
   const recommended = resolveRecommendedFamilyModel({
     family: params.family,
     byProvider: params.byProvider,
@@ -439,6 +487,139 @@ export function buildModelFamilyKeyboard(params: {
   }
   rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.home }]);
   return rows;
+}
+
+function buildClaudeFamilyKeyboard(params: {
+  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+  currentModel?: string;
+  more?: boolean;
+  context?: boolean;
+}): ButtonRow[] {
+  const rows: ButtonRow[] = [];
+  if (params.context) {
+    appendStaticModelButton(rows, params, {
+      label: "Opus 4.7 (1M)",
+      provider: "claude-cli",
+      model: "opus[1m]",
+    });
+    appendStaticModelButton(rows, params, {
+      label: "Sonnet 4.6 (1M, Max only)",
+      provider: "claude-cli",
+      model: "sonnet[1m]",
+    });
+    rows.push([{ text: "<< Back", callback_data: "mdl_fam_claude_more" }]);
+    return rows;
+  }
+
+  if (params.more) {
+    appendStaticModelButton(rows, params, {
+      label: "Opus 4.7",
+      provider: "claude-cli",
+      model: "opus",
+    });
+    if (hasClaudeLargerContextModels(params.byProvider)) {
+      rows.push([{ text: "Larger context", callback_data: "mdl_fam_claude_ctx" }]);
+    }
+    rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.home }]);
+    return rows;
+  }
+
+  appendStaticModelButton(rows, params, {
+    label: "Sonnet 4.6",
+    provider: "claude-cli",
+    model: "sonnet",
+  });
+  rows.push([{ text: "More", callback_data: "mdl_fam_claude_more" }]);
+  rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.home }]);
+  return rows;
+}
+
+function hasClaudeLargerContextModels(
+  byProvider: ReadonlyMap<string, ReadonlySet<string>>,
+): boolean {
+  const models = byProvider.get("claude-cli");
+  return models?.has("opus[1m]") === true || models?.has("sonnet[1m]") === true;
+}
+
+function buildChatGptFamilyKeyboard(params: {
+  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+  currentModel?: string;
+  more?: boolean;
+}): ButtonRow[] {
+  const rows: ButtonRow[] = [];
+  if (params.more) {
+    appendFirstAvailableStaticModelButton(rows, params, {
+      label: "GPT-5.4",
+      refs: [
+        { provider: "openai-codex", model: "gpt-5.4" },
+        { provider: "openai", model: "gpt-5.4" },
+      ],
+    });
+    appendFirstAvailableStaticModelButton(rows, params, {
+      label: "GPT-5.3 Codex Spark",
+      refs: [
+        { provider: "openai-codex", model: "gpt-5.3-codex-spark" },
+        { provider: "openai", model: "gpt-5.3-codex-spark" },
+      ],
+    });
+    rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.home }]);
+    return rows;
+  }
+
+  appendFirstAvailableStaticModelButton(rows, params, {
+    label: "GPT-5.5",
+    refs: [
+      { provider: "openai-codex", model: "gpt-5.5" },
+      { provider: "openai", model: "gpt-5.5" },
+    ],
+  });
+  rows.push([{ text: "More", callback_data: "mdl_fam_chatgpt_more" }]);
+  rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.home }]);
+  return rows;
+}
+
+function appendFirstAvailableStaticModelButton(
+  rows: ButtonRow[],
+  params: {
+    byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+    currentModel?: string;
+  },
+  entry: {
+    label: string;
+    refs: readonly FamilyModelRef[];
+  },
+) {
+  const ref = entry.refs.find((candidate) =>
+    hasModelRef({ byProvider: params.byProvider, ...candidate }),
+  );
+  if (!ref) {
+    return;
+  }
+  appendStaticModelButton(rows, params, { label: entry.label, ...ref });
+}
+
+function appendStaticModelButton(
+  rows: ButtonRow[],
+  params: {
+    byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+    currentModel?: string;
+  },
+  ref: FamilyModelRef & { label: string },
+) {
+  if (!hasModelRef({ byProvider: params.byProvider, provider: ref.provider, model: ref.model })) {
+    return;
+  }
+  const callbackData = buildModelSelectionCallbackData(ref);
+  if (!callbackData) {
+    return;
+  }
+  const currentRef = `${ref.provider}/${ref.model}`;
+  rows.push([
+    {
+      text: currentRef === params.currentModel ? `${ref.label} ✓` : ref.label,
+      callback_data: callbackData,
+    },
+  ]);
 }
 
 /**

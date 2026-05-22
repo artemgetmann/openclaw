@@ -9,6 +9,7 @@ import { buildCommandsPaginationKeyboard } from "../../../src/auto-reply/reply/c
 import {
   buildModelsProviderData,
   formatModelsAvailableHeader,
+  formatTelegramProviderBrowserText,
 } from "../../../src/auto-reply/reply/commands-models.js";
 import { resolveStoredModelOverride } from "../../../src/auto-reply/reply/model-selection.js";
 import { listSkillCommandsForAgents } from "../../../src/auto-reply/skill-commands.js";
@@ -92,12 +93,14 @@ import {
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
+  buildConfirmedModelSelectionCallbackData,
   buildModelFamilyKeyboard,
   buildModelHomeKeyboard,
   buildModelsKeyboard,
   buildProviderKeyboard,
   calculateTotalPages,
   getModelsPageSize,
+  modelSelectionRequiresConfirmation,
   parseModelCallbackData,
   resolveModelSelection,
   type ProviderInfo,
@@ -1819,7 +1822,7 @@ export const registerTelegramHandlers = ({
             count: byProvider.get(p)?.size ?? 0,
           }));
           const buttons = buildProviderKeyboard(providerInfos);
-          await editMessageWithButtons("Select a provider:", buttons);
+          await editMessageWithButtons(formatTelegramProviderBrowserText(providers), buttons);
           return;
         }
 
@@ -1837,8 +1840,15 @@ export const registerTelegramHandlers = ({
             byProvider,
             currentModel: currentSessionState.model,
             more: modelCallback.more,
+            context: modelCallback.context,
           });
-          const text = modelCallback.more ? "More models:" : "Recommended model:";
+          const text = modelCallback.context
+            ? "Larger context:"
+            : modelCallback.more
+              ? modelCallback.family === "claude"
+                ? "More Claude models:"
+                : "More ChatGPT models:"
+              : "Recommended model:";
           await editMessageWithButtons(text, buttons);
           return;
         }
@@ -1894,7 +1904,7 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        if (modelCallback.type === "select") {
+        if (modelCallback.type === "select" || modelCallback.type === "confirmSelect") {
           const selection = resolveModelSelection({
             callback: modelCallback,
             providers,
@@ -1918,6 +1928,30 @@ export const registerTelegramHandlers = ({
             await editMessageWithButtons(
               `❌ Model "${selection.provider}/${selection.model}" is not allowed.`,
               [],
+            );
+            return;
+          }
+
+          if (
+            modelCallback.type === "select" &&
+            modelSelectionRequiresConfirmation({
+              provider: selection.provider,
+              model: selection.model,
+            })
+          ) {
+            const confirmCallbackData = buildConfirmedModelSelectionCallbackData({
+              provider: selection.provider,
+              model: selection.model,
+            });
+            const buttons = confirmCallbackData
+              ? [
+                  [{ text: "Apply", callback_data: confirmCallbackData }],
+                  [{ text: "<< Back", callback_data: "mdl_fam_claude_ctx" }],
+                ]
+              : [[{ text: "<< Back", callback_data: "mdl_fam_claude_ctx" }]];
+            await editMessageWithButtons(
+              "Sonnet 4.6 (1M) may require Claude Max. On Pro, Claude may use paid extra usage instead of your subscription quota.",
+              buttons,
             );
             return;
           }
