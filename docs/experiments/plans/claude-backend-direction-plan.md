@@ -586,7 +586,7 @@ Claude CLI 1M status after the #706/#708/#709/#710 stack:
 Main-bot manual acceptance checkpoint after PR 701:
 
 - Runtime deployment: passed. `main` was fast-forwarded to `40043ae48f fix(telegram): harden claude acceptance paths`, and the main LaunchAgent was recovered to `~/Programming_Projects/openclaw` with app-owned config/state under `~/Library/Application Support/OpenClaw/.openclaw`, Node 22, listener on `127.0.0.1:18789`, and RPC probe ok.
-- Prompt/source audit: mixed. Claude correctly understood a precedence stack, but it still reported `~/.openclaw/CLAUDE.md` / OpenClaw dev-runtime rules as authoritative context. This may be excessive context bloat for product Telegram sessions and should be re-audited; the desired surface is bounded OpenClaw workspace/app context, not broad local developer rules unless explicitly needed.
+- Prompt/source audit: closed for core parity after commit `3a4cde3ff1`. Fresh personal Claude CLI starts inject `AGENTS.md`, `USER.md`, `MEMORY.md`, and today's/yesterday's daily memory at session start; resumed live turns intentionally preserve the existing Claude session-start bootstrap contract. Any future prompt/source bloat should be tracked as product polish or exposure policy, not as a core backend parity blocker.
 - Memory authority wording: passed. Actual OpenClaw product memory recall proof later passed on 2026-05-20: Claude used OpenClaw memory tools and workspace `USER.md`, not MindMirror or Claude-native memory.
 - Tone-of-voice skill: mostly passed in the main bot. Treat Twitter tone as pending only if needed; it is not the current blocking gate.
 - Reddit/tool selection: passed after PR #779 and main-bot retest. In the same fresh Jarvis Lab topic, Claude summarized a real Reddit URL, then answered the follow-up `How did you do this?` by attributing the work to the Reddit skill; logs proved the workspace `reddit/SKILL.md` path was read and the Reddit script ran.
@@ -736,6 +736,10 @@ Verdict:
   native tools and has provider-specific prompt/model behavior. That is
   acceptable because the product contract is user-visible capability parity, not
   identical internals.
+- Fresh personal Claude CLI sessions now have focused test proof that the
+  session-start bootstrap injects `AGENTS.md`, `USER.md`, `MEMORY.md`, and the
+  current plus previous daily memory files. Resumed live turns keep the existing
+  Claude session-start contract instead of re-reading bootstrap files per turn.
 - Remaining work is product rollout/polish, not a backend architecture blocker.
 
 ### 2026-05-19 operational checkpoint
