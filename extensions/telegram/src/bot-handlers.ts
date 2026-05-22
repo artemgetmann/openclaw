@@ -10,6 +10,7 @@ import {
   buildModelsProviderData,
   formatModelsAvailableHeader,
   formatTelegramProviderBrowserText,
+  formatTelegramProviderCategoryText,
 } from "../../../src/auto-reply/reply/commands-models.js";
 import { resolveStoredModelOverride } from "../../../src/auto-reply/reply/model-selection.js";
 import { listSkillCommandsForAgents } from "../../../src/auto-reply/skill-commands.js";
@@ -97,7 +98,8 @@ import {
   buildModelFamilyKeyboard,
   buildModelHomeKeyboard,
   buildModelsKeyboard,
-  buildProviderKeyboard,
+  buildProviderCategoryHomeKeyboard,
+  buildProviderCategoryKeyboard,
   calculateTotalPages,
   getModelsPageSize,
   modelSelectionRequiresConfirmation,
@@ -1763,7 +1765,7 @@ export const registerTelegramHandlers = ({
 
         const editMessageWithButtons = async (
           text: string,
-          buttons: ReturnType<typeof buildProviderKeyboard>,
+          buttons: ReturnType<typeof buildProviderCategoryHomeKeyboard>,
         ) => {
           const keyboard = buildInlineKeyboard(buttons);
           try {
@@ -1817,12 +1819,25 @@ export const registerTelegramHandlers = ({
             await editMessageWithButtons("No providers available.", []);
             return;
           }
+          await editMessageWithButtons(
+            formatTelegramProviderBrowserText(providers),
+            buildProviderCategoryHomeKeyboard(providers),
+          );
+          return;
+        }
+
+        if (modelCallback.type === "providerCategory") {
           const providerInfos: ProviderInfo[] = providers.map((p) => ({
             id: p,
             count: byProvider.get(p)?.size ?? 0,
           }));
-          const buttons = buildProviderKeyboard(providerInfos);
-          await editMessageWithButtons(formatTelegramProviderBrowserText(providers), buttons);
+          await editMessageWithButtons(
+            formatTelegramProviderCategoryText(modelCallback.category),
+            buildProviderCategoryKeyboard({
+              category: modelCallback.category,
+              providers: providerInfos,
+            }),
+          );
           return;
         }
 
@@ -1858,14 +1873,9 @@ export const registerTelegramHandlers = ({
           const modelSet = byProvider.get(provider);
           if (!modelSet || modelSet.size === 0) {
             // Provider not found or no models - show providers list
-            const providerInfos: ProviderInfo[] = providers.map((p) => ({
-              id: p,
-              count: byProvider.get(p)?.size ?? 0,
-            }));
-            const buttons = buildProviderKeyboard(providerInfos);
             await editMessageWithButtons(
-              `Unknown provider: ${provider}\n\nSelect a provider:`,
-              buttons,
+              `Unknown provider: ${provider}\n\nModel Providers:`,
+              buildProviderCategoryHomeKeyboard(providers),
             );
             return;
           }
@@ -1911,14 +1921,9 @@ export const registerTelegramHandlers = ({
             byProvider,
           });
           if (selection.kind !== "resolved") {
-            const providerInfos: ProviderInfo[] = providers.map((p) => ({
-              id: p,
-              count: byProvider.get(p)?.size ?? 0,
-            }));
-            const buttons = buildProviderKeyboard(providerInfos);
             await editMessageWithButtons(
-              `Could not resolve model "${selection.model}".\n\nSelect a provider:`,
-              buttons,
+              `Could not resolve model "${selection.model}".\n\nModel Providers:`,
+              buildProviderCategoryHomeKeyboard(providers),
             );
             return;
           }

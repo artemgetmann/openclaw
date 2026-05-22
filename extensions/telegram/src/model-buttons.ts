@@ -3,7 +3,8 @@
  *
  * Callback data patterns (max 64 bytes for Telegram):
  * - mdl_home              - show consumer-friendly model families
- * - mdl_prov              - show providers list
+ * - mdl_prov              - show provider category list
+ * - mdl_prov_{category}   - show providers within a category
  * - mdl_fam_{family}      - show recommended model for a family
  * - mdl_fam_{family}_more - show remaining models for a family
  * - mdl_fam_claude_ctx    - show larger-context Claude CLI models
@@ -19,6 +20,7 @@ export type ButtonRow = Array<{ text: string; callback_data: string }>;
 export type ParsedModelCallback =
   | { type: "home" }
   | { type: "providers" }
+  | { type: "providerCategory"; category: ProviderCategoryId }
   | { type: "family"; family: ModelFamilyId; more: boolean; context?: boolean }
   | { type: "list"; provider: string; page: number }
   | { type: "select"; provider?: string; model: string }
@@ -28,6 +30,14 @@ export type ParsedModelCallback =
 export type ProviderInfo = {
   id: string;
   count: number;
+};
+
+export type ProviderCategoryId = "subscription" | "api" | "legacy";
+
+export type ProviderCategoryInfo = {
+  id: ProviderCategoryId;
+  label: string;
+  providers: readonly string[];
 };
 
 export type ResolveModelSelectionResult =
@@ -68,6 +78,7 @@ const MAX_CALLBACK_DATA_BYTES = 64;
 const CALLBACK_PREFIX = {
   home: "mdl_home",
   providers: "mdl_prov",
+  providerCategory: "mdl_prov_",
   back: "mdl_back",
   family: "mdl_fam_",
   familyMoreSuffix: "_more",
@@ -77,6 +88,33 @@ const CALLBACK_PREFIX = {
   selectCompact: "mdl_sel/",
   confirmStandard: "mdl_cfm_",
 } as const;
+
+export const PROVIDER_CATEGORIES: readonly ProviderCategoryInfo[] = [
+  {
+    id: "subscription",
+    label: "Subscription logins",
+    providers: ["openai-codex", "claude-cli"],
+  },
+  {
+    id: "api",
+    label: "API key providers",
+    providers: ["openai", "anthropic", "google"],
+  },
+  {
+    id: "legacy",
+    label: "Developer / legacy",
+    providers: ["claude-bridge"],
+  },
+] as const;
+
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  anthropic: "Anthropic",
+  "claude-bridge": "Claude Bridge",
+  "claude-cli": "Claude / Claude Code",
+  google: "Gemini",
+  openai: "OpenAI",
+  "openai-codex": "ChatGPT / Codex",
+};
 
 const CLAUDE_MODEL_FAMILY: ModelFamilyInfo = {
   family: "claude",
@@ -119,6 +157,14 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
       return { type: "home" };
     }
     return { type: trimmed === CALLBACK_PREFIX.providers ? "providers" : "back" };
+  }
+
+  const categoryMatch = trimmed.match(/^mdl_prov_(subscription|api|legacy)$/);
+  if (categoryMatch?.[1]) {
+    return {
+      type: "providerCategory",
+      category: categoryMatch[1] as ProviderCategoryId,
+    };
   }
 
   const familyMatch = trimmed.match(/^mdl_fam_(claude|chatgpt)(_more|_ctx)?$/);
@@ -249,7 +295,10 @@ export function resolveModelSelection(params: {
 /**
  * Build provider selection keyboard with 2 providers per row.
  */
-export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
+export function buildProviderKeyboard(
+  providers: ProviderInfo[],
+  options: { labelProvider?: (provider: ProviderInfo) => string } = {},
+): ButtonRow[] {
   if (providers.length === 0) {
     return [];
   }
@@ -259,7 +308,7 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
 
   for (const provider of providers) {
     const button = {
-      text: `${provider.id} (${provider.count})`,
+      text: `${options.labelProvider?.(provider) ?? provider.id} (${provider.count})`,
       callback_data: `mdl_list_${provider.id}_1`,
     };
 
@@ -277,6 +326,72 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   }
 
   return rows;
+}
+
+export function buildProviderCategoryHomeKeyboard(providers: readonly string[]): ButtonRow[] {
+  const providerSet = new Set(providers);
+  const groupedProviders = new Set(PROVIDER_CATEGORIES.flatMap((category) => category.providers));
+  const rows: ButtonRow[] = [];
+
+  for (const category of PROVIDER_CATEGORIES) {
+    const hasCategoryProvider = category.providers.some((provider) => providerSet.has(provider));
+    const hasCustomApiProvider =
+      category.id === "api" && providers.some((provider) => !groupedProviders.has(provider));
+    if (!hasCategoryProvider && !hasCustomApiProvider) {
+      continue;
+    }
+    rows.push([
+      {
+        text: category.label,
+        callback_data: `${CALLBACK_PREFIX.providerCategory}${category.id}`,
+      },
+    ]);
+  }
+
+  rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.home }]);
+  return rows;
+}
+
+export function resolveProviderCategoryInfo(category: ProviderCategoryId): ProviderCategoryInfo {
+  return (
+    PROVIDER_CATEGORIES.find((entry) => entry.id === category) ?? {
+      id: "subscription",
+      label: "Subscription logins",
+      providers: ["openai-codex", "claude-cli"],
+    }
+  );
+}
+
+export function buildProviderCategoryKeyboard(params: {
+  category: ProviderCategoryId;
+  providers: readonly ProviderInfo[];
+}): ButtonRow[] {
+  const info = resolveProviderCategoryInfo(params.category);
+  const providerById = new Map(params.providers.map((provider) => [provider.id, provider]));
+  const rows: ButtonRow[] = [];
+  let categoryProviders = info.providers
+    .map((provider) => providerById.get(provider))
+    .filter((provider): provider is ProviderInfo => Boolean(provider));
+
+  if (params.category === "api") {
+    const groupedProviders = new Set(PROVIDER_CATEGORIES.flatMap((category) => category.providers));
+    const extraApiProviders = params.providers.filter(
+      (provider) => !groupedProviders.has(provider.id),
+    );
+    categoryProviders = [...categoryProviders, ...extraApiProviders];
+  }
+
+  rows.push(
+    ...buildProviderKeyboard(categoryProviders, {
+      labelProvider: formatProviderDisplayName,
+    }),
+  );
+  rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.providers }]);
+  return rows;
+}
+
+function formatProviderDisplayName(provider: ProviderInfo): string {
+  return PROVIDER_DISPLAY_NAMES[provider.id] ?? provider.id;
 }
 
 export function buildModelHomeKeyboard(): ButtonRow[] {

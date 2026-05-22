@@ -52,12 +52,12 @@ describe("resolveModelsCommandReply", () => {
 
     const buttons =
       (reply?.channelData as TelegramButtonsPayload | undefined)?.telegram?.buttons ?? [];
-    expect(reply?.text).toContain("Model Providers:");
-    expect(reply?.text).toContain("Subscription logins:");
-    expect(reply?.text).toContain("- ChatGPT / Codex");
-    expect(reply?.text).toContain("API key providers:");
-    expect(reply?.text).toContain("- Gemini");
-    expect(buttons.flat().map((button) => button.callback_data)).toContain("mdl_list_google_1");
+    expect(reply?.text).toBe("Model Providers:");
+    expect(buttons).toEqual([
+      [{ text: "Subscription logins", callback_data: "mdl_prov_subscription" }],
+      [{ text: "API key providers", callback_data: "mdl_prov_api" }],
+      [{ text: "<< Back", callback_data: "mdl_home" }],
+    ]);
   });
 
   it("lists Claude CLI 1M variants as explicit advanced models", async () => {
