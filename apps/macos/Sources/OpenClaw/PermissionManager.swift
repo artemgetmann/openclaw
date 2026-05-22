@@ -100,12 +100,15 @@ enum PermissionManager {
     private static func ensureScreenRecording(interactive: Bool) async -> Bool {
         let granted = ScreenRecordingProbe.isAuthorized()
         if interactive, !granted {
-            // On recent macOS releases, the system often skips the in-app prompt and
-            // expects users to toggle Screen Recording in System Settings instead.
-            await MainActor.run { ScreenRecordingPermissionHelper.openSettings() }
+            // Ask macOS for the native Screen Recording prompt before opening
+            // Settings. Jumping straight to Settings can skip the only system
+            // prompt first-run users understand.
             await ScreenRecordingProbe.requestAuthorization()
         }
         let updated = ScreenRecordingProbe.isAuthorized()
+        if interactive, !updated {
+            await MainActor.run { ScreenRecordingPermissionHelper.openSettings() }
+        }
         return updated
     }
 

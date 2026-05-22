@@ -59,7 +59,8 @@ import Testing
             subcommand: "rpc",
             defaults: defaults,
             configRoot: [:],
-            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path],
+            projectRoot: tmp)
 
         #expect(cmd.count >= 3)
         if cmd.count >= 3 {
@@ -138,7 +139,8 @@ import Testing
             subcommand: "gateway",
             defaults: defaults,
             configRoot: [:],
-            searchPaths: [nodeDir.path, globalBinDir.path])
+            searchPaths: [nodeDir.path, globalBinDir.path],
+            projectRoot: tmp)
 
         #expect(cmd.count >= 3)
         if cmd.count >= 3 {
@@ -169,7 +171,8 @@ import Testing
             subcommand: "gateway",
             defaults: defaults,
             configRoot: [:],
-            searchPaths: [projectBinDir.path])
+            searchPaths: [projectBinDir.path],
+            projectRoot: tmp)
 
         #expect(cmd.count >= 3)
         if cmd.count >= 3 {
@@ -179,7 +182,7 @@ import Testing
         }
     }
 
-    @Test func `project root override keeps gateway commands pinned to canonical repo entrypoint`() throws {
+    @Test func `project root override keeps default gateway commands pinned to canonical repo entrypoint`() async throws {
         let defaults = self.makeLocalDefaults()
 
         let repoRoot = try makeTempDirForTests()
@@ -215,7 +218,12 @@ import Testing
             withIntermediateDirectories: true)
         try "export {}\n".write(to: worktreeEntry, atomically: true, encoding: .utf8)
 
-        let resolvedRoot = CommandResolver.canonicalGatewayProjectRoot(projectRoot: worktreeRoot)
+        let resolvedRoot = await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: nil,
+        ]) {
+            CommandResolver.canonicalGatewayProjectRoot(projectRoot: worktreeRoot)
+        }
         #expect(resolvedRoot.path == repoRoot.path)
 
         let globalBinDir = repoRoot.appendingPathComponent("global-bin")
@@ -244,6 +252,80 @@ import Testing
             #expect(cmd[1] == canonicalEntry.path)
             #expect(cmd[2] == "gateway")
         }
+    }
+
+    @Test func `isolated consumer instance keeps gateway commands pinned to worktree entrypoint`() async throws {
+        let repoRoot = try makeTempDirForTests()
+        let worktreeRoot = repoRoot.appendingPathComponent(".worktrees/ui-smoke")
+        try FileManager().createDirectory(at: worktreeRoot, withIntermediateDirectories: true)
+
+        let packageJson = "{\n  \"name\": \"openclaw\"\n}\n"
+        try packageJson.write(
+            to: repoRoot.appendingPathComponent("package.json"),
+            atomically: true,
+            encoding: .utf8)
+        let canonicalEntry = repoRoot.appendingPathComponent("dist/index.js")
+        try FileManager().createDirectory(
+            at: canonicalEntry.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try "export {}\n".write(to: canonicalEntry, atomically: true, encoding: .utf8)
+
+        try packageJson.write(
+            to: worktreeRoot.appendingPathComponent("package.json"),
+            atomically: true,
+            encoding: .utf8)
+        let worktreeEntry = worktreeRoot.appendingPathComponent("dist/index.js")
+        try FileManager().createDirectory(
+            at: worktreeEntry.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try "export {}\n".write(to: worktreeEntry, atomically: true, encoding: .utf8)
+
+        let resolvedRoot = await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: "ui-smoke",
+        ]) {
+            CommandResolver.canonicalGatewayProjectRoot(projectRoot: worktreeRoot)
+        }
+        #expect(resolvedRoot.path == worktreeRoot.path)
+    }
+
+    @Test func `isolated consumer instance launch root prefers fork root over canonical repo root`() async throws {
+        let canonicalRoot = try makeTempDirForTests()
+        let worktreeRoot = try makeTempDirForTests()
+
+        for root in [canonicalRoot, worktreeRoot] {
+            try "{\n  \"name\": \"openclaw\"\n}\n".write(
+                to: root.appendingPathComponent("package.json"),
+                atomically: true,
+                encoding: .utf8)
+            try "export {}\n".write(
+                to: root.appendingPathComponent("openclaw.mjs"),
+                atomically: true,
+                encoding: .utf8)
+            try FileManager().createDirectory(
+                at: root.appendingPathComponent("dist", isDirectory: true),
+                withIntermediateDirectories: true)
+            try "export {}\n".write(
+                to: root.appendingPathComponent("dist/index.js"),
+                atomically: true,
+                encoding: .utf8)
+        }
+
+        let resolvedRoot = await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: "ui-smoke",
+                "OPENCLAW_FORK_ROOT": worktreeRoot.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": canonicalRoot.path,
+            ])
+        {
+            CommandResolver.gatewayLaunchProjectRoot()
+        }
+
+        #expect(resolvedRoot.path == worktreeRoot.path)
+        #expect(CommandResolver.gatewayEntrypoint(in: resolvedRoot) == worktreeRoot.appendingPathComponent("dist/index.js").path)
     }
 
     @Test func `consumer bundled runtime wins over stale project root override`() throws {

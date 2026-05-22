@@ -28,26 +28,26 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .chrome:
-            return "Chrome"
+            return "Choose Your Main Chrome Account"
         case .permissions:
-            return "Mac permissions"
+            return "Allow Mac Access"
         case .aiAccess:
-            return "AI access"
+            return "AI Model"
         case .accountActivation:
             return JarvisAccountActivationCopy.stepTitle
         case .telegram:
-            return "Telegram"
+            return "Connect Telegram"
         }
     }
 
     var subtitle: String {
         switch self {
         case .chrome:
-            return "Choose the browser profile \(AppFlavor.current.appName) can use."
+            return "\(AppFlavor.current.appName) will use this Chrome browser, so you don’t have to log in everywhere again."
         case .permissions:
-            return "Allow the Mac access real tasks need."
+            return "\(AppFlavor.current.appName) needs access to control apps and read the screen when a task requires it."
         case .aiAccess:
-            return "Confirm \(AppFlavor.current.appName) has an AI path before tasks start."
+            return "\(AppFlavor.current.appName) needs one working AI model before it can run tasks."
         case .accountActivation:
             return JarvisAccountActivationCopy.stepSubtitle
         case .telegram:

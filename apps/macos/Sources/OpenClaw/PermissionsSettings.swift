@@ -297,6 +297,8 @@ struct PermissionRow: View {
     let compact: Bool
     let actionLabel: String?
     let statusText: String?
+    let titleOverride: String?
+    let subtitleOverride: String?
     let detailText: String?
     let statusColor: Color?
     let action: () -> Void
@@ -308,6 +310,8 @@ struct PermissionRow: View {
         compact: Bool = false,
         actionLabel: String? = nil,
         statusText: String? = nil,
+        titleOverride: String? = nil,
+        subtitleOverride: String? = nil,
         detailText: String? = nil,
         statusColor: Color? = nil,
         action: @escaping () -> Void)
@@ -318,6 +322,8 @@ struct PermissionRow: View {
         self.compact = compact
         self.actionLabel = actionLabel
         self.statusText = statusText
+        self.titleOverride = titleOverride
+        self.subtitleOverride = subtitleOverride
         self.detailText = detailText
         self.statusColor = statusColor
         self.action = action
@@ -393,7 +399,10 @@ struct PermissionRow: View {
     }
 
     private var title: String {
-        switch self.capability {
+        if let titleOverride {
+            return titleOverride
+        }
+        return switch self.capability {
         case .appleScript: "Automation (AppleScript)"
         case .notifications: "Notifications"
         case .accessibility: "Accessibility"
@@ -406,12 +415,15 @@ struct PermissionRow: View {
     }
 
     private var subtitle: String {
-        switch self.capability {
+        if let subtitleOverride {
+            return subtitleOverride
+        }
+        return switch self.capability {
         case .appleScript:
             "Control other apps (e.g. Terminal) for automation actions"
         case .notifications: "Show desktop alerts for agent activity"
-        case .accessibility: "Control UI elements when an action requires it"
-        case .screenRecording: "Capture the screen for context or screenshots"
+        case .accessibility: "Click buttons and use menus when a task needs it"
+        case .screenRecording: "See your screen for context or screenshots"
         case .microphone: "Allow Voice Wake and audio capture"
         case .speechRecognition: "Transcribe Voice Wake trigger phrases on-device"
         case .camera: "Capture photos and video from the camera"

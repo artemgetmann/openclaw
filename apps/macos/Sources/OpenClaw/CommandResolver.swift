@@ -108,6 +108,14 @@ enum CommandResolver {
 
     static func canonicalGatewayProjectRoot(projectRoot: URL? = nil) -> URL {
         let resolvedRoot = projectRoot ?? self.projectRoot()
+        // Named consumer instances are isolated tester/smoke lanes. They own
+        // their own state, config, port, and LaunchAgent label, so stripping a
+        // worktree path back to the sacred home clone points that isolated
+        // gateway at stale code and makes onboarding validate the wrong build.
+        if AppFlavor.current.isConsumer, !ConsumerInstance.current.isDefault {
+            return resolvedRoot
+        }
+
         // A packaged app built inside a worktree contains ".worktrees" in its
         // bundle path. Do not strip that bundled runtime back to the source clone.
         if let bundledRoot = self.bundledConsumerRuntimeProjectRoot(),
@@ -132,19 +140,26 @@ enum CommandResolver {
         return resolvedRoot
     }
 
+    static func gatewayLaunchProjectRoot() -> URL {
+        if AppFlavor.current.isConsumer,
+           !ConsumerInstance.current.isDefault,
+           let isolatedRoot = self.isolatedConsumerGatewayProjectRoot()
+        {
+            return isolatedRoot
+        }
+        return self.canonicalGatewayProjectRoot()
+    }
+
     static func projectRootEnvironmentHint() -> String? {
         let root = self.projectRoot()
         return self.isRepoRoot(root) ? root.path : nil
     }
 
     static func daemonProjectRootEnvironmentHint() -> String? {
-        // The CLI install command snapshots OPENCLAW_FORK_ROOT into launchd.
-        // For packaged consumer apps, that must be the seeded Application Support
-        // runtime root, not the read-only bundle resources.
-        if let bundledRoot = self.bundledConsumerRuntimeProjectRoot() {
-            return bundledRoot.path
-        }
-        return self.projectRootEnvironmentHint()
+        // Keep the launchd install command aligned with the exact gateway root
+        // this process would validate. Named consumer instances stay on their
+        // worktree root; the shared lane keeps the canonical checkout.
+        return self.gatewayLaunchProjectRoot().path
     }
 
     static func preferredPaths() -> [String] {
@@ -199,6 +214,20 @@ enum CommandResolver {
             .split(separator: ":")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty } ?? []
+    }
+
+    private static func isolatedConsumerGatewayProjectRoot() -> URL? {
+        guard
+            let forkRoot = ProcessInfo.processInfo.environment["OPENCLAW_FORK_ROOT"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !forkRoot.isEmpty
+        else {
+            return nil
+        }
+
+        let root = URL(fileURLWithPath: forkRoot, isDirectory: true)
+        guard self.isRepoRoot(root), self.gatewayEntrypoint(in: root) != nil else { return nil }
+        return root
     }
 
     private static func openclawManagedPaths(home: URL) -> [String] {

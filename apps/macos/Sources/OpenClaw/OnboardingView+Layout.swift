@@ -4,9 +4,9 @@ import SwiftUI
 extension OnboardingView {
     var body: some View {
         VStack(spacing: 0) {
-            GlowingOpenClawIcon(size: 130, glowIntensity: 0.28)
-                .offset(y: 10)
-                .frame(height: 145)
+            GlowingOpenClawIcon(size: 96, glowIntensity: 0.22)
+                .offset(y: 8)
+                .frame(height: 124)
 
             GeometryReader { _ in
                 HStack(spacing: 0) {
@@ -123,7 +123,6 @@ extension OnboardingView {
         if self.isConsumerSetupShellActive {
             return AnyView(self.consumerSetupNavigationBar)
         }
-        let wizardLockIndex = self.wizardPageOrderIndex
         return AnyView(HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
@@ -145,25 +144,6 @@ extension OnboardingView {
                 }
             }
             .frame(minWidth: 80, alignment: .leading)
-
-            Spacer()
-
-            HStack(spacing: 8) {
-                ForEach(0..<self.pageCount, id: \.self) { index in
-                    let isLocked = wizardLockIndex != nil && !self.onboardingWizard
-                        .isComplete && index > (wizardLockIndex ?? 0)
-                    Button {
-                        withAnimation { self.currentPage = index }
-                    } label: {
-                        Circle()
-                            .fill(index == self.currentPage ? Color.accentColor : Color.gray.opacity(0.3))
-                            .frame(width: 8, height: 8)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isLocked)
-                    .opacity(isLocked ? 0.3 : 1)
-                }
-            }
 
             Spacer()
 
@@ -207,18 +187,12 @@ extension OnboardingView {
     }
 
     func onboardingPage(@ViewBuilder _ content: () -> some View) -> some View {
-        let scrollIndicatorGutter: CGFloat = 18
-        return ScrollView {
-            VStack(spacing: 16) {
-                content()
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, alignment: .top)
-            .padding(.trailing, scrollIndicatorGutter)
+        VStack(spacing: 16) {
+            content()
+            Spacer(minLength: 0)
         }
-        .scrollIndicators(.automatic)
         .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, alignment: .top)
+        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
     }
 
     func onboardingCard(
@@ -251,6 +225,27 @@ extension OnboardingView {
         .background(Color.clear)
         .clipShape(shape)
         .overlay(shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+    }
+
+    func onboardingScrollableCard(
+        maxHeight: CGFloat,
+        spacing: CGFloat = 12,
+        padding: CGFloat = 16,
+        @ViewBuilder _ content: () -> some View) -> some View
+    {
+        ScrollView {
+            VStack(alignment: .leading, spacing: spacing) {
+                content()
+            }
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollIndicators(.automatic)
+        .frame(maxHeight: maxHeight)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor))
+                .shadow(color: .black.opacity(0.06), radius: 8, y: 3))
     }
 
     func featureRow(title: String, subtitle: String, systemImage: String) -> some View {

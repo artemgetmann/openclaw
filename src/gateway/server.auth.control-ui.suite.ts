@@ -875,6 +875,67 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
+  test("silently repairs local macOS app role upgrade after node pairing", async () => {
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+    const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "openclaw-device-macos-role-upgrade-",
+    );
+    const devicePublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+    const macosClient = {
+      id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+      mode: GATEWAY_CLIENT_MODES.UI,
+      version: "test",
+      platform: "darwin",
+      displayName: "Jarvis",
+    };
+    const seeded = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey: devicePublicKey,
+      role: "node",
+      scopes: [],
+      clientId: macosClient.id,
+      clientMode: macosClient.mode,
+      displayName: "Jarvis",
+      platform: "darwin",
+    });
+    await approveDevicePairing(seeded.request.requestId);
+
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    let ws2: WebSocket | undefined;
+    try {
+      ws.close();
+
+      ws2 = await openWs(port);
+      const nonce = await readConnectChallengeNonce(ws2);
+      const res = await connectReq(ws2, {
+        token: "secret",
+        scopes: ["operator.admin", "operator.read"],
+        client: macosClient,
+        device: await buildSignedDeviceForIdentity({
+          identityPath,
+          client: macosClient,
+          scopes: ["operator.admin", "operator.read"],
+          nonce,
+        }),
+      });
+      expect(res.ok).toBe(true);
+
+      const repaired = await getPairedDevice(identity.deviceId);
+      expect(repaired?.roles ?? []).toContain("operator");
+      expect(repaired?.scopes ?? []).toEqual(
+        expect.arrayContaining(["operator.admin", "operator.read"]),
+      );
+      const pending = await listDevicePairing();
+      expect(pending.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
+    } finally {
+      ws2?.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("requires pairing for gateway backend clients when connection is not local-direct", async () => {
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     ws.close();

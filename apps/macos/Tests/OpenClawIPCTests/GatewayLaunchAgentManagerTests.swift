@@ -238,6 +238,70 @@ struct GatewayLaunchAgentManagerTests {
     }
 
     @MainActor
+    @Test func `isolated consumer install uses current worktree entrypoint`() async throws {
+        let home = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-\(UUID().uuidString)", isDirectory: true)
+        let canonicalRoot = try self.makeRepoRoot(named: "canonical-openclaw-\(UUID().uuidString)")
+        let worktreeRoot = try self.makeRepoRoot(named: "worktree-openclaw-\(UUID().uuidString)")
+        defer {
+            try? FileManager().removeItem(at: home)
+            try? FileManager().removeItem(at: canonicalRoot)
+            try? FileManager().removeItem(at: worktreeRoot)
+        }
+
+        var calls: [[String]] = []
+        GatewayLaunchAgentManager._setTestingHooks(
+            launchAgentWriteDisabled: { false },
+            readDaemonLoaded: { false },
+            runDaemonCommand: { args, _, _ in
+                calls.append(args)
+                return nil
+            })
+        defer { GatewayLaunchAgentManager._clearTestingHooks() }
+        var expectedPort = 0
+
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: "ui-smoke",
+                "OPENCLAW_FORK_ROOT": worktreeRoot.path,
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+            ],
+            defaults: [
+                "openclaw.gatewayProjectRootPath": canonicalRoot.path,
+            ])
+        {
+            let identity = RuntimeIdentity.current
+            expectedPort = identity.gatewayPort
+            let worktreeEntry = worktreeRoot.appendingPathComponent("dist/index.js").path
+            let ownership = GatewayLaunchAgentManager.currentEntrypointOwnership(
+                snapshot: LaunchAgentPlistSnapshot(
+                    programArguments: ["/usr/bin/node", canonicalRoot.appendingPathComponent("dist/index.js").path, "gateway"],
+                    environment: [:],
+                    stdoutPath: nil,
+                    stderrPath: nil,
+                    port: identity.gatewayPort,
+                    bind: identity.gatewayBind,
+                    token: nil,
+                    password: nil))
+            #expect(ownership.expectedEntrypoint == worktreeEntry)
+            #expect(ownership.actualEntrypoint == canonicalRoot.appendingPathComponent("dist/index.js").path)
+            #expect(!ownership.matchesCurrentEntrypoint)
+
+            let error = await GatewayLaunchAgentManager.set(
+                enabled: true,
+                bundlePath: "/Applications/OpenClaw.app",
+                port: expectedPort)
+
+            #expect(error == nil)
+        }
+
+        #expect(calls.count == 1)
+        #expect(calls.first == ["install", "--force", "--allow-shared-service-takeover", "--port", "\(expectedPort)", "--runtime", "node"])
+    }
+
+    @MainActor
     @Test func `source launch agent ownership still uses configured project root`() async throws {
         let sourceRoot = try self.makeRepoRoot(named: "source-openclaw-\(UUID().uuidString)")
         defer {
@@ -476,8 +540,9 @@ struct GatewayLaunchAgentManagerTests {
         try Data().write(to: entrypoint)
         try Data().write(to: root.appendingPathComponent("package.json"))
         try Data().write(to: root.appendingPathComponent("openclaw.mjs"))
+        let staleEntrypoint = home.appendingPathComponent("stale/dist/index.js")
         let plist: [String: Any] = [
-            "ProgramArguments": ["/usr/bin/node", entrypoint.path, "gateway", "--port", "18789"],
+            "ProgramArguments": ["/usr/bin/node", staleEntrypoint.path, "gateway", "--port", "18789"],
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         try data.write(to: plistURL, options: [.atomic])
@@ -498,6 +563,9 @@ struct GatewayLaunchAgentManagerTests {
 
         let error = try await TestIsolation.withIsolatedState(
             env: [
+                "OPENCLAW_APP_VARIANT": "standard",
+                ConsumerInstance.envKey: nil,
+                "OPENCLAW_FORK_ROOT": nil,
                 "OPENCLAW_TEST": "1",
                 "OPENCLAW_TEST_HOME": home.path,
             ],

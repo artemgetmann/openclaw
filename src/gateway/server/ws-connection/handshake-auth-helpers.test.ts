@@ -96,6 +96,30 @@ describe("handshake auth helpers", () => {
         reason: "role-upgrade",
       }),
     ).toBe(false);
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        clientId: GATEWAY_CLIENT_IDS.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.UI,
+        authMethod: "token",
+        reason: "role-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: true,
+        isControlUi: false,
+        isWebchat: false,
+        clientId: GATEWAY_CLIENT_IDS.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.UI,
+        authMethod: "token",
+        reason: "role-upgrade",
+      }),
+    ).toBe(false);
   });
 
   it("skips backend self-pairing for local trusted backend clients", () => {
