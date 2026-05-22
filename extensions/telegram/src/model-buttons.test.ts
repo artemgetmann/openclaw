@@ -6,6 +6,8 @@ import {
   buildModelHomeKeyboard,
   buildModelsKeyboard,
   buildBrowseProvidersButton,
+  buildProviderCategoryHomeKeyboard,
+  buildProviderCategoryKeyboard,
   buildProviderKeyboard,
   calculateTotalPages,
   getModelsPageSize,
@@ -18,6 +20,9 @@ describe("parseModelCallbackData", () => {
   it("parses supported callback variants", () => {
     const cases = [
       ["mdl_prov", { type: "providers" }],
+      ["mdl_prov_subscription", { type: "providerCategory", category: "subscription" }],
+      ["mdl_prov_api", { type: "providerCategory", category: "api" }],
+      ["mdl_prov_legacy", { type: "providerCategory", category: "legacy" }],
       ["mdl_home", { type: "home" }],
       ["mdl_fam_claude", { type: "family", family: "claude", more: false, context: false }],
       ["mdl_fam_claude_ctx", { type: "family", family: "claude", more: false, context: true }],
@@ -199,6 +204,75 @@ describe("buildProviderKeyboard", () => {
     for (const testCase of cases) {
       expect(buildProviderKeyboard(testCase.input), testCase.name).toEqual(testCase.expected);
     }
+  });
+});
+
+describe("buildProviderCategoryHomeKeyboard", () => {
+  it("shows provider categories instead of dumping every provider", () => {
+    const result = buildProviderCategoryHomeKeyboard([
+      "anthropic",
+      "claude-bridge",
+      "claude-cli",
+      "google",
+      "openai",
+      "openai-codex",
+    ]);
+
+    expect(result).toEqual([
+      [{ text: "Subscription logins", callback_data: "mdl_prov_subscription" }],
+      [{ text: "API key providers", callback_data: "mdl_prov_api" }],
+      [{ text: "Developer / legacy", callback_data: "mdl_prov_legacy" }],
+      [{ text: "<< Back", callback_data: "mdl_home" }],
+    ]);
+  });
+});
+
+describe("buildProviderCategoryKeyboard", () => {
+  const providers: ProviderInfo[] = [
+    { id: "anthropic", count: 3 },
+    { id: "claude-bridge", count: 3 },
+    { id: "claude-cli", count: 5 },
+    { id: "google", count: 2 },
+    { id: "kimi-coding", count: 1 },
+    { id: "minimax", count: 1 },
+    { id: "moonshot", count: 1 },
+    { id: "openai", count: 1 },
+    { id: "openai-codex", count: 4 },
+  ];
+
+  it("shows only subscription login providers", () => {
+    expect(buildProviderCategoryKeyboard({ category: "subscription", providers })).toEqual([
+      [
+        { text: "ChatGPT / Codex (4)", callback_data: "mdl_list_openai-codex_1" },
+        { text: "Claude / Claude Code (5)", callback_data: "mdl_list_claude-cli_1" },
+      ],
+      [{ text: "<< Back", callback_data: "mdl_prov" }],
+    ]);
+  });
+
+  it("shows API key providers and custom API providers", () => {
+    expect(buildProviderCategoryKeyboard({ category: "api", providers })).toEqual([
+      [
+        { text: "OpenAI (1)", callback_data: "mdl_list_openai_1" },
+        { text: "Anthropic (3)", callback_data: "mdl_list_anthropic_1" },
+      ],
+      [
+        { text: "Gemini (2)", callback_data: "mdl_list_google_1" },
+        { text: "kimi-coding (1)", callback_data: "mdl_list_kimi-coding_1" },
+      ],
+      [
+        { text: "minimax (1)", callback_data: "mdl_list_minimax_1" },
+        { text: "moonshot (1)", callback_data: "mdl_list_moonshot_1" },
+      ],
+      [{ text: "<< Back", callback_data: "mdl_prov" }],
+    ]);
+  });
+
+  it("shows only developer legacy providers", () => {
+    expect(buildProviderCategoryKeyboard({ category: "legacy", providers })).toEqual([
+      [{ text: "Claude Bridge (3)", callback_data: "mdl_list_claude-bridge_1" }],
+      [{ text: "<< Back", callback_data: "mdl_prov" }],
+    ]);
   });
 });
 

@@ -89,9 +89,13 @@ export {
   buildModelFamilyKeyboard,
   buildModelHomeKeyboard,
   buildModelsKeyboard,
+  buildProviderCategoryHomeKeyboard,
+  buildProviderCategoryKeyboard,
   buildProviderKeyboard,
   calculateTotalPages,
   getModelsPageSize,
+  resolveProviderCategoryInfo,
+  type ProviderCategoryId,
   resolveModelFamilyInfo,
   type ProviderInfo,
 } from "../../extensions/telegram/src/model-buttons.js";
