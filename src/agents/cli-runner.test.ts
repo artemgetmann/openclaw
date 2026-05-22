@@ -155,6 +155,16 @@ function createTextClaudeCliConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function createStreamJsonClaudeCliConfig(): OpenClawConfig {
+  const config = createTextClaudeCliConfig();
+  const backend = config.agents?.defaults?.cliBackends?.["claude-cli"];
+  if (backend) {
+    backend.output = "jsonl";
+    backend.input = "stdin";
+  }
+  return config;
+}
+
 function appendTranscriptMessages(
   sessionFile: string,
   messages: Array<Parameters<SessionManager["appendMessage"]>[0]>,
@@ -281,20 +291,19 @@ describe("runCliAgent with process supervisor", () => {
       }),
     ].join("\n");
     supervisorSpawnMock.mockImplementationOnce(
-      async (input: { onStdout?: (chunk: string) => void }) => ({
-        runId: "run-supervisor",
-        pid: 1234,
-        startedAtMs: Date.now(),
-        stdin: {
-          write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
-            input.onStdout?.(`${stdout}\n`);
-            cb?.();
-          }),
-          end: vi.fn(),
-        },
-        wait: vi.fn().mockImplementation(async () => {
-          await new Promise(() => {});
-          return {
+      async (input: { onStdout?: (chunk: string) => void }) => {
+        input.onStdout?.(`${stdout}\n`);
+        return {
+          runId: "run-supervisor",
+          pid: 1234,
+          startedAtMs: Date.now(),
+          stdin: {
+            write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+              cb?.();
+            }),
+            end: vi.fn(),
+          },
+          wait: vi.fn().mockResolvedValue({
             reason: "exit",
             exitCode: 0,
             exitSignal: null,
@@ -303,10 +312,10 @@ describe("runCliAgent with process supervisor", () => {
             stderr: "",
             timedOut: false,
             noOutputTimedOut: false,
-          };
-        }),
-        cancel: vi.fn(),
-      }),
+          }),
+          cancel: vi.fn(),
+        };
+      },
     );
     const onAssistantMessageStart = vi.fn();
     const onPartialReply = vi.fn();
@@ -316,7 +325,7 @@ describe("runCliAgent with process supervisor", () => {
         sessionId: "s1",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir,
-        config: createTextClaudeCliConfig(),
+        config: createStreamJsonClaudeCliConfig(),
         prompt: "hi",
         provider: "claude-cli",
         model: "opus",
@@ -348,6 +357,119 @@ describe("runCliAgent with process supervisor", () => {
       expect(systemPrompt).toContain("Workspace bootstrap marker for Claude CLI source isolation.");
       expect(systemPrompt).not.toContain("# Project Context");
       expect(JSON.stringify(argv)).not.toContain("Tools are disabled");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("injects personal workspace bootstrap files into a fresh claude-cli start prompt", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-cli-bootstrap-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionStorePath = path.join(tempDir, "sessions.json");
+    const formatLocalDateKey = (date: Date) =>
+      [
+        date.getFullYear(),
+        String(date.getMonth() + 1).padStart(2, "0"),
+        String(date.getDate()).padStart(2, "0"),
+      ].join("-");
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const todayMemoryName = `memory/${formatLocalDateKey(today)}.md`;
+    const yesterdayMemoryName = `memory/${formatLocalDateKey(yesterday)}.md`;
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.md"),
+      "# AGENTS.md\n\nFresh Claude CLI must read workspace rules.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "USER.md"),
+      "# USER.md\n\nPersonal user profile marker.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      "# MEMORY.md\n\nLong-term personal memory marker.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, todayMemoryName),
+      "# Today\n\nToday memory marker.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, yesterdayMemoryName),
+      "# Yesterday\n\nYesterday memory marker.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      sessionStorePath,
+      JSON.stringify({
+        personal: {
+          sessionId: "personal",
+          updatedAt: Date.now(),
+          chatType: "direct",
+          memoryScope: "personal",
+        },
+      }),
+      "utf-8",
+    );
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      const result = await runCliAgent({
+        sessionId: "s-bootstrap-personal",
+        sessionKey: "personal",
+        sessionFile: path.join(tempDir, "session.jsonl"),
+        workspaceDir,
+        config: {
+          ...createTextClaudeCliConfig(),
+          session: { store: sessionStorePath },
+        } as OpenClawConfig,
+        prompt: "fresh start",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-bootstrap-personal",
+      });
+
+      const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+      const argv = spawnInput.argv ?? [];
+      const systemPromptIndex = argv.indexOf("--append-system-prompt");
+      expect(systemPromptIndex).toBeGreaterThanOrEqual(0);
+      expect(argv).not.toContain("--resume");
+      const systemPrompt = argv[systemPromptIndex + 1] ?? "";
+      const expectedBootstrapFiles = [
+        "AGENTS.md",
+        "USER.md",
+        "MEMORY.md",
+        todayMemoryName,
+        yesterdayMemoryName,
+      ];
+      expect(systemPrompt).toContain("# OpenClaw Workspace Bootstrap");
+      for (const relativePath of expectedBootstrapFiles) {
+        expect(systemPrompt).toContain(path.join(workspaceDir, relativePath));
+      }
+      expect(systemPrompt).toContain("Fresh Claude CLI must read workspace rules.");
+      expect(systemPrompt).toContain("Personal user profile marker.");
+      expect(systemPrompt).toContain("Long-term personal memory marker.");
+      expect(systemPrompt).toContain("Today memory marker.");
+      expect(systemPrompt).toContain("Yesterday memory marker.");
+      expect(
+        result.meta.systemPromptReport?.injectedWorkspaceFiles.map((file) => file.name),
+      ).toEqual(expect.arrayContaining(expectedBootstrapFiles));
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
