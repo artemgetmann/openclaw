@@ -1033,11 +1033,14 @@ Order:
      focus or setup-tab return.
    - Do not install into `/Applications` and do not restart the default gateway.
 2. Copy rewrite on the four-page shell.
-   - Status: landed in PR #733 and verified in the fast GUI proof. Telegram copy
-     is shorter and the advanced group/topic guidance is below the main DM path.
-   - Rewrite against real Chrome, Mac permissions, AI access, and Telegram
-     pages.
-   - Rebuild/run the isolated app.
+   - Status: Chrome, Mac permissions, and AI Model were reviewed in the
+     `onboarding-ai-access-v1` isolated native smoke lane on 2026-05-22.
+     AI Model now uses the simple primary `Continue with ChatGPT` path, disabled
+     `Continue with Claude`, and API key fallback without nested advanced copy.
+   - Remaining page: Telegram still shows the old BotFather-first setup in the
+     current smoke app. The next worker lane must make Managed Bots/Jarvis-created
+     bot the primary path and keep BotFather/BYO token as advanced fallback only.
+   - Rebuild/run the isolated app after each page slice.
    - Review screenshots/flow as one package rather than sentence-by-sentence.
 3. Telegram Managed Bots onboarding migration.
    - Status: backend contract, Render env, macOS Managed Bots path, and

@@ -114,43 +114,33 @@ extension OnboardingView {
     }
 
     func consumerSetupPage() -> some View {
-        let scrollIndicatorGutter: CGFloat = 18
-
-        return VStack(spacing: 18) {
-            VStack(spacing: 8) {
-                Text(self.consumerSetupStepTitle)
+        self.onboardingPage {
+            VStack(spacing: 18) {
+                Text(self.consumerSetupStep.title)
                     .font(.largeTitle.weight(.semibold))
+                    .multilineTextAlignment(.center)
                 Text(self.consumerSetupStep.subtitle)
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 560)
+                    .frame(maxWidth: 500)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.top, 16)
 
-            // Keep the Jarvis/page identity anchored while longer setup content,
-            // especially Telegram Advanced, scrolls inside the card area.
-            ScrollView {
-                self.onboardingCard(spacing: 10, padding: 14) {
+                self.onboardingScrollableCard(maxHeight: self.consumerSetupCardMaxHeight, spacing: 10, padding: 14) {
                     self.consumerSetupStepContent()
                 }
                 .frame(maxWidth: 520)
-                .padding(.trailing, scrollIndicatorGutter)
             }
-            .scrollIndicators(.automatic)
-            .frame(maxHeight: .infinity, alignment: .top)
+            .padding(.top, 18)
         }
-        .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
     }
 
-    private var consumerSetupStepTitle: String {
+    private var consumerSetupCardMaxHeight: CGFloat {
         switch self.consumerSetupStep {
-        case .accountActivation:
-            return JarvisAccountActivationCopy.stepTitle
-        case .chrome, .permissions, .aiAccess, .telegram:
-            return "Set up \(AppFlavor.current.appName)"
+        case .chrome:
+            return 260
+        case .permissions, .aiAccess, .accountActivation, .telegram:
+            return 345
         }
     }
 

@@ -189,7 +189,7 @@ struct BrowserSetupSupportTests {
                 subtitle: nil,
                 lastUsedAt: nil,
                 isDefaultProfile: false)))
-            #expect(model.statusLine == "Connected to Artem. Jarvis can use your live Chrome tabs for signed-in tasks and its own browser when needed.")
+            #expect(model.statusLine == "Connected to Artem. \(AppFlavor.current.appName) can use your live Chrome tabs for signed-in tasks and its own browser when needed.")
 
             pendingVerification.continuation?.resume(returning: nil)
             await refreshTask.value
@@ -234,6 +234,48 @@ struct BrowserSetupSupportTests {
             #expect(model.isComplete == false)
             #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
             #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
+        }
+    }
+
+    @Test func `onboarding passive restore shows confirmation instead of readiness probe`() async {
+        let defaults = self.makeDefaults()
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: "artem@example.com",
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        var readinessProbeCount = 0
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)
+            defaults.set("Artem", forKey: browserSelectedChromeProfileNameKey)
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                restoredSelectionRequiresConfirmation: true,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in
+                    readinessProbeCount += 1
+                    return "This should not run before the user confirms."
+                })
+
+            #expect(model.phase == .idle)
+
+            await model.refreshIfNeeded()
+
+            #expect(model.phase == .confirm(selected))
+            #expect(model.isComplete == false)
+            #expect(readinessProbeCount == 0)
         }
     }
 
@@ -305,6 +347,47 @@ struct BrowserSetupSupportTests {
             #expect(model.phase == .failed("Chrome is still unavailable."))
             #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
             #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
+            #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
+        }
+    }
+
+    @Test func `setup resume trusts restored browser profile without readiness probe`() async {
+        let defaults = self.makeDefaults()
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        var verificationAttempts = 0
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            defaults.set("Profile 4", forKey: browserSelectedChromeProfileIDKey)
+            defaults.set("Artem", forKey: browserSelectedChromeProfileNameKey)
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let model = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [selected] },
+                verifySelectionReadiness: { _ in
+                    verificationAttempts += 1
+                    return "Chrome is still unavailable."
+                })
+
+            await model.refreshForSetupResume()
+
+            #expect(model.phase == .ready(selected))
+            #expect(model.isComplete)
+            #expect(verificationAttempts == 0)
+            #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
             #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
         }
     }
@@ -498,7 +581,7 @@ struct BrowserSetupSupportTests {
         }
     }
 
-    @Test func `choose profile preserves selection when runtime browser readiness fails`() async {
+    @Test func `choose profile completes after saving without blocking on runtime readiness`() async {
         let defaults = self.makeDefaults()
         let work = ChromeProfileCandidate(
             directoryName: "Profile 4",
@@ -528,11 +611,11 @@ struct BrowserSetupSupportTests {
             await model.refresh()
             await model.chooseProfile(work)
 
-            #expect(model.phase == .failed("Chrome is still unavailable."))
-            #expect(model.isComplete == false)
+            #expect(model.phase == .ready(work))
+            #expect(model.isComplete == true)
             #expect(defaults.string(forKey: browserSelectedChromeProfileIDKey) == "Profile 4")
             #expect(defaults.string(forKey: browserSelectedChromeProfileNameKey) == "Artem")
-            #expect(verifiedProfileName == "Profile 4")
+            #expect(verifiedProfileName == nil)
             #expect(OpenClawConfigFile.selectedChromeProfileDirectoryName() == "Profile 4")
         }
     }
@@ -734,7 +817,44 @@ struct BrowserSetupSupportTests {
 
             #expect(
                 result ==
-                    "This Mac is out of disk space, so Jarvis could not finish browser setup. Free some space and try again.")
+                    "This Mac is out of disk space, so \(AppFlavor.current.appName) could not finish browser setup. Free some space and try again.")
+        }
+    }
+
+    @Test func `consumer browser readiness hides local missing build stack traces`() async {
+        let selected = ChromeProfileCandidate(
+            directoryName: "Profile 4",
+            displayName: "Artem",
+            subtitle: nil,
+            lastUsedAt: nil,
+            isDefaultProfile: false)
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName("Profile 4"))
+
+            let result = await BrowserSetupModel.verifyConsumerBrowserSelection(
+                expectedProfile: selected,
+                runBrowserStatus: { _, _, _ in
+                    ConsumerShellCommandResult(
+                        stdout: "",
+                        stderr: """
+                        Error: openclaw: missing dist/entry.(m)js (build output).
+                            at file:///Users/user/Programming_Projects/openclaw/.worktrees/demo/openclaw.mjs:88:9
+                        """,
+                        exitCode: 1,
+                        success: false)
+                })
+
+            #expect(
+                result ==
+                    "\(AppFlavor.current.appName) could not finish browser setup because the local test runtime is not built. Relaunch the UI smoke app so it can rebuild the browser checker.")
         }
     }
 

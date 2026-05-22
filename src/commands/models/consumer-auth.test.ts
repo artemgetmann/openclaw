@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 
@@ -77,6 +77,10 @@ const anthropicProvider: ProviderPlugin = {
     },
   ],
 };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("consumer auth Claude CLI setup detection", () => {
   it("hides Continue with Claude until the local claude command and auth are both detected", async () => {
@@ -199,5 +203,40 @@ describe("consumer auth Claude CLI setup detection", () => {
         }),
       }),
     ).rejects.toThrow("Install Claude Code so the `claude` command is executable");
+  });
+});
+
+describe("consumer auth ChatGPT OAuth setup", () => {
+  it("surfaces a zero-profile openai-codex OAuth result without retrying provider auth", async () => {
+    const runOpenAiCodexOAuth = vi.fn(async () => ({
+      profiles: [],
+      notes: ["ChatGPT OAuth completed but did not return a usable profile."],
+    }));
+    const openAiCodexProvider: ProviderPlugin = {
+      id: "openai-codex",
+      label: "ChatGPT / Codex",
+      auth: [
+        {
+          id: "oauth",
+          label: "OAuth",
+          kind: "oauth",
+          run: runOpenAiCodexOAuth,
+        },
+      ],
+    };
+
+    await expect(
+      applyConsumerAuth({
+        optionId: "openai-codex-oauth",
+        config: baseConfig,
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+        providers: [openAiCodexProvider],
+      }),
+    ).rejects.toThrow("ChatGPT OAuth completed but did not return a usable profile.");
+
+    expect(runOpenAiCodexOAuth).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 });

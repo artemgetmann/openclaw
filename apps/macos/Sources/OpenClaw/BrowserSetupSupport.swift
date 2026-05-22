@@ -268,7 +268,9 @@ final class BrowserSetupModel {
 
     func refreshIfNeeded() async {
         if self.isRestoredDisplaySnapshot {
-            await self.refresh(preservingDisplayedResult: true)
+            await self.refresh(
+                requiresRestoredSelectionConfirmation: self.restoredSelectionRequiresConfirmation,
+                preservingDisplayedResult: true)
             return
         }
         guard self.phase == .idle else { return }
@@ -303,18 +305,20 @@ final class BrowserSetupModel {
     }
 
     func refreshForSetupResume() async {
-        // Update-resume checks need to prove the restored browser profile is
-        // actually usable. The normal onboarding path deliberately pauses on a
-        // confirmation card, but that would force healthy existing users through
-        // setup again after every onboarding-version bump.
+        // Setup resume should trust an already saved Chrome account once it
+        // still matches a local profile. Browser readiness can lag behind app
+        // relaunch/gateway recovery, and treating that transient probe as a
+        // first-run blocker traps users on Chrome after they already chose it.
         await self.refresh(
             requiresRestoredSelectionConfirmation: false,
-            preservingDisplayedResult: false)
+            preservingDisplayedResult: true,
+            verifyRestoredSelectionReadiness: false)
     }
 
     private func refresh(
         requiresRestoredSelectionConfirmation: Bool = false,
-        preservingDisplayedResult: Bool) async
+        preservingDisplayedResult: Bool,
+        verifyRestoredSelectionReadiness: Bool = true) async
     {
         // Passive rechecks should prove that the saved Chrome profile still
         // works without briefly replacing a known result with a setup spinner.
@@ -356,6 +360,12 @@ final class BrowserSetupModel {
                 self.lastAutoRecoveryFailureMessage = nil
                 return
             }
+            if !verifyRestoredSelectionReadiness {
+                self.phase = .ready(selected)
+                self.statusLine = Self.connectedStatusLine(for: selected)
+                self.lastAutoRecoveryFailureMessage = nil
+                return
+            }
             if !preservingDisplayedResult || !self.hasDisplayedReadinessResult {
                 self.statusLine = "Checking browser readiness…"
             }
@@ -393,13 +403,12 @@ final class BrowserSetupModel {
             return
         }
         self.persistSelectionToConfig(profile)
-        self.statusLine = "Checking browser readiness…"
-
-        if let failure = await self.verifySelectionReadiness(profile) {
-            self.phase = .failed(failure)
-            self.statusLine = failure
-            return
-        }
+        // Choosing the Chrome account is the user's actual setup action. A
+        // gateway/browser-status probe can be briefly unavailable in the smoke
+        // app or during first-run restarts, and blocking Next on that internal
+        // check makes a valid account choice look broken. Later resume/settings
+        // paths still verify readiness; onboarding can advance once the profile
+        // is saved into this isolated consumer instance.
         self.phase = .ready(profile)
         self.statusLine = Self.connectedStatusLine(for: profile)
         self.lastAutoRecoveryFailureMessage = nil

@@ -64,6 +64,35 @@ struct ConsumerSetupResumeTests {
         }
     }
 
+    @Test func `incomplete permissions block before browser readiness probe`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let defaults = Self.makeDefaults()
+            let profile = Self.profile()
+            defaults.set(profile.directoryName, forKey: browserSelectedChromeProfileIDKey)
+            defaults.set(profile.displayName, forKey: browserSelectedChromeProfileNameKey)
+            var browserProbeCalled = false
+
+            let model = ConsumerSetupResumeModel(configExists: { true })
+            let decision = await model.evaluate(
+                browserSetup: BrowserSetupModel(
+                    defaults: defaults,
+                    detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                    loadProfiles: { [profile] },
+                    verifySelectionReadiness: { _ in
+                        browserProbeCalled = true
+                        return nil
+                    }),
+                modelSetup: ConsumerModelSetupModel(
+                    probeReadiness: { Self.readyReadinessPayload() }),
+                accountActivation: Self.activatedAccountModel(),
+                channelsStore: ChannelsStore(isPreview: true),
+                corePermissionsGranted: false)
+
+            #expect(decision == .blocked(.permissions))
+            #expect(!browserProbeCalled)
+        }
+    }
+
     @Test func `existing healthy setup auto completes and promotes telegram marker`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             Self.clearTelegramVerificationMarker()
@@ -111,6 +140,64 @@ struct ConsumerSetupResumeTests {
             #expect(decision == .complete)
             #expect(channels.consumerTelegramFirstTaskVerified)
             #expect(channels.telegramSetupStatus == "Telegram bot is live as @openclawbot. First task verified from existing setup.")
+        }
+    }
+
+    @Test func `saved browser selection does not block setup resume on readiness probe churn`() async {
+        let stateDir = try! makeTempDirForTests()
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            Self.clearTelegramVerificationMarker()
+            let defaults = Self.makeDefaults()
+            let profile = Self.profile()
+            var browserProbeCalled = false
+            defaults.set(profile.directoryName, forKey: browserSelectedChromeProfileIDKey)
+            defaults.set(profile.displayName, forKey: browserSelectedChromeProfileNameKey)
+            #expect(OpenClawConfigFile.setSelectedChromeProfileDirectoryName(profile.directoryName))
+
+            let channels = ChannelsStore(isPreview: true)
+            channels.configDraft = [
+                "channels": [
+                    "telegram": [
+                        "enabled": false,
+                        "botToken": "",
+                    ],
+                ],
+            ]
+
+            let browserSetup = BrowserSetupModel(
+                defaults: defaults,
+                detectChromeExecutable: { URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                loadProfiles: { [profile] },
+                verifySelectionReadiness: { _ in
+                    browserProbeCalled = true
+                    return "Browser readiness failed during gateway restart."
+                })
+            let model = ConsumerSetupResumeModel(
+                configExists: { true },
+                loadTelegramState: { _ in })
+
+            let decision = await model.evaluate(
+                browserSetup: browserSetup,
+                modelSetup: ConsumerModelSetupModel(
+                    probeReadiness: { Self.readyReadinessPayload() },
+                    listAuthOptions: {
+                        ConsumerModelsAuthListPayload(options: [Self.subscriptionOptionPayload()], activeOptionId: "openai-codex-oauth")
+                    },
+                    listModels: { Self.curatedModelsPayload() }),
+                accountActivation: Self.activatedAccountModel(),
+                channelsStore: channels,
+                corePermissionsGranted: true)
+
+            #expect(decision == .blocked(.telegram))
+            #expect(browserSetup.phase == .ready(profile))
+            #expect(!browserProbeCalled)
         }
     }
 

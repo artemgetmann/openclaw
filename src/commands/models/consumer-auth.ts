@@ -781,20 +781,8 @@ export async function applyConsumerAuth(
           createVpsAwareHandlers: createVpsAwareOAuthHandlers,
         },
       });
-    let result = await runProviderAuth();
+    const result = await runProviderAuth();
     notesFromProvider = trimConsumerAuthNotes(result.notes ?? []);
-    if (
-      result.profiles.length === 0 &&
-      choice.providerId === "openai-codex" &&
-      choice.kind === "oauth"
-    ) {
-      // First-run consumer OAuth can lose the localhost callback handoff once
-      // while the bundled app and browser finish spinning up. Retry the exact
-      // same provider-owned flow once before we make the user do it manually.
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      result = await runProviderAuth();
-      notesFromProvider = trimConsumerAuthNotes(result.notes ?? []);
-    }
     if (result.profiles.length === 0) {
       throw new Error(
         consumerAuthFailureMessage({

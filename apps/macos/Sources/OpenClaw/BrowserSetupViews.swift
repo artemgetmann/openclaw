@@ -43,15 +43,18 @@ struct BrowserSetupCardContent: View {
         }
     }
 
+    @ViewBuilder
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(self.presentation == .onboarding ? "Connect your Chrome" : "Browser")
-                .font(.headline)
-            Text(
-                "Choose the Chrome profile \(AppFlavor.current.appName) can use for browser tasks. Your normal Chrome windows stay separate.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        if self.presentation == .settings {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Browser")
+                    .font(.headline)
+                Text(
+                    "Choose the Chrome profile \(AppFlavor.current.appName) can use for browser tasks. Your normal Chrome windows stay separate.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -104,14 +107,13 @@ struct BrowserSetupCardContent: View {
 
     private func confirmState(profile: ChromeProfileCandidate) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            self.callout(
-                title: "We found your Chrome profile",
-                body: "\(AppFlavor.current.appName) can use this profile in its own browser window. Your regular Chrome session stays untouched.")
+            Text("Use \(profile.displayName)?")
+                .font(.subheadline.weight(.semibold))
 
             self.profileCard(profile, selected: true, action: nil)
 
             HStack(spacing: 10) {
-                Button("Use This Profile") {
+                Button("Use This Account") {
                     Task { await self.model.chooseProfile(profile) }
                 }
                 .buttonStyle(.borderedProminent)
@@ -127,10 +129,6 @@ struct BrowserSetupCardContent: View {
 
     private func chooseState(profiles: [ChromeProfileCandidate]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            self.callout(
-                title: "Choose a Chrome profile",
-                body: "Pick the profile with the accounts \(AppFlavor.current.appName) should use for browser tasks.")
-
             ForEach(profiles) { profile in
                 self.profileCard(profile, selected: false) {
                     Task { await self.model.chooseProfile(profile) }
@@ -148,36 +146,38 @@ struct BrowserSetupCardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             self.callout(
                 title: "Chrome connected",
-                body: "\(AppFlavor.current.appName) can now use \(profile.displayName) for browser tasks. If a site needs a fresh sign-in, you will handle it in the browser.")
+                body: "\(AppFlavor.current.appName) will use \(profile.displayName) when browser tasks need your signed-in sites.")
 
             self.profileCard(profile, selected: true, action: nil)
 
             HStack(spacing: 10) {
-                Button("Choose Another Profile") {
+                Button("Choose Another Account") {
                     self.model.clearProfileSelection()
                 }
                 .buttonStyle(.bordered)
 
-                Button("Refresh Status") {
+                Button("Check Again") {
                     Task { await self.model.refresh() }
                 }
                 .buttonStyle(.bordered)
             }
 
-            Divider()
-                .padding(.vertical, 2)
+            if self.presentation == .settings {
+                Divider()
+                    .padding(.vertical, 2)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("If a website needs extra help")
-                    .font(.subheadline.weight(.semibold))
-                ForEach(BrowserRuntimeFailureTemplateKind.allCases, id: \.self) { kind in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(kind.title)
-                            .font(.caption.weight(.semibold))
-                        Text(kind.body)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("If a website needs extra help")
+                        .font(.subheadline.weight(.semibold))
+                    ForEach(BrowserRuntimeFailureTemplateKind.allCases, id: \.self) { kind in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(kind.title)
+                                .font(.caption.weight(.semibold))
+                            Text(kind.body)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
             }

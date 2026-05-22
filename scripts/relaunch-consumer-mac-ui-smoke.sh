@@ -38,6 +38,21 @@ Cleanup:
 EOF
 }
 
+ensure_cli_build_output() {
+  local entry_js="$ROOT_DIR/dist/entry.js"
+  local entry_mjs="$ROOT_DIR/dist/entry.mjs"
+
+  if [[ -f "$entry_js" || -f "$entry_mjs" ]]; then
+    return
+  fi
+
+  echo "Building OpenClaw CLI runtime for browser readiness checks..."
+  (
+    cd "$ROOT_DIR"
+    pnpm build
+  )
+}
+
 app_binary_has_matching_pids() {
   local binary_path="$1"
   local pid=""
@@ -574,6 +589,50 @@ write_debug_app_wrapper() {
 EOF
 }
 
+select_ui_smoke_signing_identity() {
+  if [[ -n "${OPENCLAW_UI_SMOKE_SIGN_IDENTITY:-}" ]]; then
+    echo "$OPENCLAW_UI_SMOKE_SIGN_IDENTITY"
+    return 0
+  fi
+
+  local identity=""
+  identity="$(security find-identity -p codesigning -v 2>/dev/null \
+    | awk -F '"' '/Apple Development:/ { print $2; exit }')"
+  if [[ -n "$identity" ]]; then
+    echo "$identity"
+    return 0
+  fi
+
+  identity="$(security find-identity -p codesigning -v 2>/dev/null \
+    | awk -F '"' '/Developer ID Application:/ { print $2; exit }')"
+  if [[ -n "$identity" ]]; then
+    echo "$identity"
+    return 0
+  fi
+
+  return 1
+}
+
+sign_debug_app_wrapper() {
+  local app_path="$1"
+  local signing_identity=""
+
+  if ! signing_identity="$(select_ui_smoke_signing_identity)"; then
+    echo "warning: no codesigning identity found; UI smoke permissions may reset after rebuilds" >&2
+    return 0
+  fi
+
+  # TCC tracks Accessibility and Screen Recording against the app's code
+  # requirement. SwiftPM outputs are ad-hoc signed, so every rebuild otherwise
+  # looks like a new app to macOS even when the bundle id is stable.
+  /usr/bin/codesign \
+    --force \
+    --deep \
+    --sign "$signing_identity" \
+    --timestamp=none \
+    "$app_path"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --instance)
@@ -656,6 +715,8 @@ fi
 resolve_backend_api_token
 
 if [[ "$BUILD_APP" == "1" ]]; then
+  ensure_cli_build_output
+
   echo "Building Jarvis macOS UI smoke from source..."
   swift build \
     --package-path "$ROOT_DIR/apps/macos" \
@@ -674,6 +735,7 @@ if [[ ! -x "$BINARY_PATH" ]]; then
 fi
 
 write_debug_app_wrapper "$BINARY_PATH" "$APP_PATH" "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH" "$LOGS_DIR" "$CONSUMER_STEP"
+sign_debug_app_wrapper "$APP_PATH"
 
 if [[ "$OPEN_APP" == "0" ]]; then
   print_proof "$BINARY_PATH" "$APP_PATH" "$NORMALIZED_INSTANCE_ID" "$STATE_DIR" "$CONFIG_PATH" "$LOGS_DIR" "$LOG_PATH" "$((SECONDS - STARTED_AT))" "$RUNTIME_MODE" "$GATEWAY_LAUNCHD_LABEL" "$GATEWAY_PORT" "$LAUNCHAGENT_DISABLE_MARKER"

@@ -92,6 +92,13 @@ private enum ConsumerSetupCommandRunner {
             normalized.contains("no space left on device") ||
             normalized.contains("disk is full")
     }
+
+    static func isMissingBuildOutputFailure(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("missing dist/entry") ||
+            normalized.contains("missing dist/index") ||
+            normalized.contains("build output")
+    }
 }
 
 private struct ConsumerBrowserStatusPayload: Decodable {
@@ -126,7 +133,7 @@ extension ConsumerAIAccessFailureKind {
         case .gatewayUnreachable:
             return "\(AppFlavor.current.appName) is still starting"
         case .providerAuthFailed:
-            return "AI account needs attention"
+            return "AI model needs attention"
         case .readinessFailed:
             return "AI is reachable, but not ready"
         }
@@ -165,7 +172,7 @@ final class ConsumerModelSetupModel {
         var title: String {
             switch self {
             case .subscription:
-                return "Subscription"
+                return "Account login"
             case .apiKey:
                 return "API key"
             }
@@ -179,6 +186,7 @@ final class ConsumerModelSetupModel {
     typealias ModelApply = @Sendable (_ modelId: String) async throws -> ConsumerModelsSetPayload
     typealias RuntimeOwnershipBlocker = @Sendable () -> String?
     typealias RestartGateway = @Sendable () async -> Void
+    typealias RecoverySleep = @Sendable (_ nanoseconds: UInt64) async -> Void
 
     enum Phase: Equatable {
         case idle
@@ -193,6 +201,8 @@ final class ConsumerModelSetupModel {
     private(set) var authOptionsLoaded = false
     private(set) var authError: String?
     private(set) var authNotes: [String] = []
+    private(set) var chatGPTSignInURL: URL?
+    private(set) var isWaitingForChatGPTSignIn = false
     private(set) var applyingOptionId: String?
     private(set) var activeAuthOptionId: String?
     private(set) var activeModelId: String?
@@ -206,6 +216,7 @@ final class ConsumerModelSetupModel {
     var authCategory: AuthCategory = .subscription
     var authSectionExpanded = true
     var alternateMethodExpanded = false
+    var signInHelpExpanded = false
     var selectedOptionId: String?
     var selectedModelId: String?
     var draftSecret = ""
@@ -216,9 +227,14 @@ final class ConsumerModelSetupModel {
     private let applyModel: ModelApply
     private let runtimeOwnershipBlocker: RuntimeOwnershipBlocker
     private let restartGateway: RestartGateway
+    private let restartGatewayTimeoutSeconds: Double
+    private let gatewayRecoveryProbeDelaysMs: [UInt64]
+    private let gatewayRecoverySleep: RecoverySleep
     private let readinessProbeTimeoutSeconds: Double
     private let postAuthReconnectProbeDelaysMs: [UInt64]
     private var lastReadiness: ConsumerModelsReadinessPayload?
+    private var gatewayRecoveryTask: Task<Void, Never>?
+    private var gatewayRecoveryAttempt = 0
 
     init(
         probeReadiness: ReadinessProbe? = nil,
@@ -228,7 +244,10 @@ final class ConsumerModelSetupModel {
         applyModel: ModelApply? = nil,
         runtimeOwnershipBlocker: RuntimeOwnershipBlocker? = nil,
         restartGateway: RestartGateway? = nil,
+        restartGatewayTimeoutSeconds: Double? = nil,
         readinessProbeTimeoutSeconds: Double? = nil,
+        gatewayRecoveryProbeDelaysMs: [UInt64]? = nil,
+        gatewayRecoverySleep: RecoverySleep? = nil,
         postAuthReconnectProbeDelaysMs: [UInt64]? = nil)
     {
         self.probeReadiness = probeReadiness ?? Self.gatewayReadinessProbe
@@ -263,11 +282,22 @@ final class ConsumerModelSetupModel {
         // Cold-start readiness can briefly lag the UI. Keep the first probe
         // bounded so the onboarding card can fail open and retry on the next
         // activation instead of sitting on a permanent spinner.
+        self.restartGatewayTimeoutSeconds = restartGatewayTimeoutSeconds ?? 10.0
         self.readinessProbeTimeoutSeconds = readinessProbeTimeoutSeconds ?? 20.0
+        // macOS device/network prompts can resolve while onboarding stays active,
+        // so NSApplication.didBecomeActive may never fire. Quietly re-probe
+        // transient gateway failures instead of trapping the user on stale copy.
+        self.gatewayRecoveryProbeDelaysMs = gatewayRecoveryProbeDelaysMs ?? [1_000, 2_000, 4_000, 8_000, 12_000]
+        self.gatewayRecoverySleep = gatewayRecoverySleep ?? { nanoseconds in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+        }
         self.postAuthReconnectProbeDelaysMs = postAuthReconnectProbeDelaysMs ?? [150, 400, 900, 1_500]
     }
 
     var isComplete: Bool {
+        guard !self.isWaitingForChatGPTSignIn, !self.isApplyingAuth else {
+            return false
+        }
         if case .ready = self.phase {
             return true
         }
@@ -293,12 +323,39 @@ final class ConsumerModelSetupModel {
         return !self.isRestartingOperator
     }
 
+    var isAuthChoiceInteractionBlocked: Bool {
+        self.failureKind == .gatewayUnreachable
+    }
+
+    var canShowChatGPTSignInHelp: Bool {
+        self.isWaitingForChatGPTSignIn && self.chatGPTSignInURL != nil
+    }
+
+    var canOpenChatGPTSignInAgain: Bool {
+        self.chatGPTSignInURL != nil
+    }
+
     var hasModelOptions: Bool {
         !self.modelOptions.isEmpty
     }
 
     var hasModelError: Bool {
         !(self.modelError ?? "").isEmpty
+    }
+
+    var showActiveAccessSummary: Bool {
+        self.isComplete && (self.activeAccessTitle?.isEmpty == false)
+    }
+
+    var showsAdvancedAuthControls: Bool {
+        self.availableAuthCategories.count > 1 ||
+            self.visibleAuthProviders.count > 1 ||
+            self.selectedProviderOptions.count > 1
+    }
+
+    var shouldShowReadinessFailureCallout: Bool {
+        guard self.failureKind == .providerAuthFailed else { return true }
+        return self.selectedOption == nil
     }
 
     var availableAuthCategories: [AuthCategory] {
@@ -322,9 +379,30 @@ final class ConsumerModelSetupModel {
         var providers: [ConsumerAuthProviderChoice] = []
         for option in self.visibleAuthOptions {
             guard seen.insert(option.providerId).inserted else { continue }
-            providers.append(.init(id: option.providerId, label: option.providerLabel))
+            providers.append(.init(id: option.providerId, label: option.consumerProviderLabel))
         }
         return providers
+    }
+
+    var readyAuthProviders: [ConsumerAuthProviderChoice] {
+        let providers = self.visibleAuthProviders
+        guard
+            self.authCategory == .subscription,
+            let selectedOption = self.selectedOption,
+            selectedOption.providerId == "openai-codex",
+            selectedOption.inputKind == .none
+        else {
+            return providers
+        }
+        return providers.filter { $0.id != "openai-codex" }
+    }
+
+    func preferredProviderId(for providers: [ConsumerAuthProviderChoice], fallback: String) -> String {
+        let current = self.selectedProviderId ?? fallback
+        if providers.contains(where: { $0.id == current }) {
+            return current
+        }
+        return providers.first?.id ?? current
     }
 
     var selectedProviderId: String? {
@@ -345,6 +423,60 @@ final class ConsumerModelSetupModel {
         return self.selectedProviderOptions.filter { $0.id != selectedOption.id }
     }
 
+    var chatGPTSubscriptionOption: ConsumerModelsAuthOptionPayload? {
+        self.authOptions.first { option in
+            option.providerId == "openai-codex" && option.inputKind == .none
+        }
+    }
+
+    var apiKeyOptions: [ConsumerModelsAuthOptionPayload] {
+        self.authOptions.filter { $0.inputKind == .apiKey }
+    }
+
+    var apiKeyProviders: [ConsumerAuthProviderChoice] {
+        var seen = Set<String>()
+        var providers: [ConsumerAuthProviderChoice] = []
+        for option in self.apiKeyOptions {
+            guard seen.insert(option.providerId).inserted else { continue }
+            providers.append(.init(id: option.providerId, label: option.consumerProviderLabel))
+        }
+        return providers
+    }
+
+    var selectedAPIKeyOption: ConsumerModelsAuthOptionPayload? {
+        if let selectedOption, selectedOption.inputKind == .apiKey {
+            return selectedOption
+        }
+        let providerId = self.apiKeyProviders.first?.id
+        return self.apiKeyOptions.first { $0.providerId == providerId } ?? self.apiKeyOptions.first
+    }
+
+    var selectedAPIKeyProviderId: String {
+        self.selectedAPIKeyOption?.providerId ?? self.apiKeyProviders.first?.id ?? ""
+    }
+
+    var isAPIKeySelected: Bool {
+        self.selectedOption?.inputKind == .apiKey
+    }
+
+    var hasAPIKeySupport: Bool {
+        !self.apiKeyOptions.isEmpty
+    }
+
+    func isActiveAuthOption(_ option: ConsumerModelsAuthOptionPayload) -> Bool {
+        self.isComplete && self.activeAuthOptionId == option.id
+    }
+
+    func selectAPIKeySetup() {
+        guard let option = self.selectedAPIKeyOption ?? self.apiKeyOptions.first else { return }
+        self.selectOption(option.id)
+    }
+
+    func selectAPIKeyProvider(_ providerId: String) {
+        guard let option = self.apiKeyOptions.first(where: { $0.providerId == providerId }) else { return }
+        self.selectOption(option.id)
+    }
+
     func selectOption(_ optionId: String) {
         guard self.selectedOptionId != optionId else { return }
         self.selectedOptionId = optionId
@@ -355,6 +487,7 @@ final class ConsumerModelSetupModel {
         self.draftSecret = ""
         self.authError = nil
         self.authNotes = []
+        self.clearChatGPTSignInState()
     }
 
     func selectProvider(_ providerId: String) {
@@ -369,12 +502,13 @@ final class ConsumerModelSetupModel {
         guard self.authCategory != category else { return }
         self.authCategory = category
         self.alternateMethodExpanded = false
-        if let option = self.visibleAuthOptions.first {
+        if let option = self.preferredVisibleAuthOption() {
             self.selectedOptionId = option.id
         }
         self.draftSecret = ""
         self.authError = nil
         self.authNotes = []
+        self.clearChatGPTSignInState()
     }
 
     func refreshIfNeeded() async {
@@ -417,7 +551,14 @@ final class ConsumerModelSetupModel {
         }
     }
 
-    private func refresh(preservingDisplayedResult: Bool) async {
+    private func refresh(
+        preservingDisplayedResult: Bool,
+        automaticGatewayRecovery: Bool = false) async
+    {
+        if !automaticGatewayRecovery {
+            self.cancelGatewayRecoveryProbe()
+        }
+
         // Passive probes come from view re-appearance or app activation. They
         // should update stale data, but they should not make a healthy card look
         // like setup restarted unless there is no prior result to show.
@@ -428,13 +569,15 @@ final class ConsumerModelSetupModel {
         }
 
         if ProcessInfo.processInfo.environment["OPENCLAW_SKIP_RUNTIME_OWNERSHIP_BLOCKER"] != "1",
-           let blocker = self.runtimeOwnershipBlocker()
+           self.runtimeOwnershipBlocker() != nil
         {
             // If launchd is pinned to a different checkout, do not let the UI
             // probe auth or model readiness. That would just lie about the real
             // runtime the user is about to rely on.
-            self.phase = .failed(blocker)
-            self.statusLine = blocker
+            self.cancelGatewayRecoveryProbe(resetAttempt: true)
+            let detail = Self.consumerFriendlyRuntimeOwnershipBlockerStatusLine()
+            self.phase = .failed(detail)
+            self.statusLine = detail
             self.failureKind = nil
             self.authSectionExpanded = true
             return
@@ -453,7 +596,15 @@ final class ConsumerModelSetupModel {
             self.failureKind = Self.consumerAccessFailureKind(for: error)
             self.phase = .failed(detail)
             self.statusLine = detail
-            if self.failureKind != .gatewayUnreachable {
+            if self.failureKind == .gatewayUnreachable {
+                // Readiness and auth-option listing are separate questions.
+                // A cold-start readiness miss should not make the choices look
+                // unsupported when the gateway can still answer the cheaper
+                // auth-options request.
+                await self.loadAuthOptionsIfNeeded(suppressError: true)
+                self.scheduleGatewayRecoveryProbeIfNeeded()
+            } else {
+                self.cancelGatewayRecoveryProbe(resetAttempt: true)
                 await self.loadAuthOptionsIfNeeded()
             }
         }
@@ -466,11 +617,15 @@ final class ConsumerModelSetupModel {
 
         self.phase = .checking
         self.statusLine = "Restarting \(AppFlavor.current.appName)…"
-        await self.restartGateway()
+        if !(await self.waitForRestartGateway()) {
+            self.restoreGatewayRestartFailureState()
+            await self.refresh(preservingDisplayedResult: true, automaticGatewayRecovery: true)
+            return
+        }
         await self.refresh()
     }
 
-    func loadAuthOptionsIfNeeded() async {
+    func loadAuthOptionsIfNeeded(suppressError: Bool = false) async {
         guard !self.authOptionsLoaded else { return }
         do {
             let payload = try await self.listAuthOptions()
@@ -480,7 +635,12 @@ final class ConsumerModelSetupModel {
             self.reconcileAuthSelection()
             self.syncActiveAccessFromReadiness()
         } catch {
-            self.authError = error.localizedDescription
+            // During startup recovery the main failure callout already tells
+            // the user what to do. Do not stack a raw transport/auth-options
+            // error under the choices when the helper is simply not ready yet.
+            if !suppressError {
+                self.authError = error.localizedDescription
+            }
         }
     }
 
@@ -500,18 +660,54 @@ final class ConsumerModelSetupModel {
         self.applyingOptionId = option.id
         self.authError = nil
         self.authNotes = []
+        let isChatGPTOAuth = option.providerId == "openai-codex" && option.inputKind == .none
+        if isChatGPTOAuth {
+            self.isWaitingForChatGPTSignIn = true
+            self.signInHelpExpanded = false
+        } else {
+            self.clearChatGPTSignInState()
+        }
         do {
             let payload = try await self.applyAuth(option.id, option.inputKind.requiresSecret ? secret : nil)
             self.authNotes = payload.notes
+            if isChatGPTOAuth {
+                self.chatGPTSignInURL = Self.signInURL(from: payload.notes)
+            }
             self.activeAuthOptionId = payload.optionId
             self.draftSecret = ""
             await self.refreshAfterAuthApply(
                 optimisticReadiness: payload.readiness,
                 defaultStatusLine: "Reconnecting \(AppFlavor.current.appName) after sign-in…")
         } catch {
-            self.authError = error.localizedDescription
+            if isChatGPTOAuth {
+                self.authError = "Could not finish sign-in. Try again."
+                self.isWaitingForChatGPTSignIn = false
+            } else {
+                self.authError = error.localizedDescription
+            }
         }
         self.applyingOptionId = nil
+    }
+
+    func openChatGPTSignInLink() {
+        guard let chatGPTSignInURL else { return }
+        NSWorkspace.shared.open(chatGPTSignInURL)
+    }
+
+    func openChatGPTSignInAgain() async {
+        if let chatGPTSignInURL {
+            NSWorkspace.shared.open(chatGPTSignInURL)
+            return
+        }
+
+        guard self.isWaitingForChatGPTSignIn, !self.isApplyingAuth else { return }
+        await self.submitSelectedAuth()
+    }
+
+    func copyChatGPTSignInLink() {
+        guard let chatGPTSignInURL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(chatGPTSignInURL.absoluteString, forType: .string)
     }
 
     func submitSelectedModel() async {
@@ -616,15 +812,55 @@ final class ConsumerModelSetupModel {
     }
 
     private func enterGatewayReconnectState(_ statusLine: String) {
+        self.cancelGatewayRecoveryProbe()
         self.phase = .checking
         self.statusLine = statusLine
         self.failureKind = nil
         self.activeModelId = nil
     }
 
+    private func waitForRestartGateway() async -> Bool {
+        let completion = RestartGatewayCompletion()
+        let restartGateway = self.restartGateway
+
+        // The gateway restart path crosses launchd and process shutdown. If it
+        // wedges, the onboarding card still needs to become clickable again.
+        let restartTask = Task {
+            await restartGateway()
+            await completion.markCompleted()
+        }
+
+        let timeoutNanos = UInt64(max(0, self.restartGatewayTimeoutSeconds) * 1_000_000_000)
+        let deadline = ContinuousClock.now.advanced(by: .nanoseconds(Int(timeoutNanos)))
+        while ContinuousClock.now < deadline {
+            if await completion.isCompleted {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        if await completion.isCompleted {
+            return true
+        }
+        restartTask.cancel()
+        return false
+    }
+
+    private func restoreGatewayRestartFailureState() {
+        let statusLine = Self.gatewayRestartFailureStatusLine()
+        self.cancelGatewayRecoveryProbe(resetAttempt: true)
+        self.phase = .failed(statusLine)
+        self.statusLine = statusLine
+        self.failureKind = .gatewayUnreachable
+        self.activeModelId = nil
+        self.authSectionExpanded = true
+    }
+
     private func applyReadiness(_ payload: ConsumerModelsReadinessPayload) {
+        self.cancelGatewayRecoveryProbe(resetAttempt: true)
         self.lastReadiness = payload
         if payload.status == "ready" {
+            self.clearChatGPTSignInState()
             let trimmedModel = payload.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines)
             let display = (trimmedModel?.isEmpty == false ? trimmedModel : nil) ?? "the default model"
             self.activeModelId = trimmedModel
@@ -639,10 +875,53 @@ final class ConsumerModelSetupModel {
         let detail = payload.consumerFailureMessage
         self.activeModelId = nil
         self.failureKind = payload.consumerFailureKind
+        if payload.consumerFailureKind == .providerAuthFailed {
+            self.isWaitingForChatGPTSignIn = false
+        }
         self.phase = .failed(detail)
         self.statusLine = detail
         self.authSectionExpanded = true
         self.syncActiveAccessFromReadiness()
+    }
+
+    private func clearChatGPTSignInState() {
+        self.isWaitingForChatGPTSignIn = false
+        self.chatGPTSignInURL = nil
+        self.signInHelpExpanded = false
+    }
+
+    private func scheduleGatewayRecoveryProbeIfNeeded() {
+        guard self.failureKind == .gatewayUnreachable else { return }
+        guard self.gatewayRecoveryTask == nil else { return }
+        guard self.gatewayRecoveryAttempt < self.gatewayRecoveryProbeDelaysMs.count else { return }
+
+        let delayMs = self.gatewayRecoveryProbeDelaysMs[self.gatewayRecoveryAttempt]
+        self.gatewayRecoveryAttempt += 1
+        let sleep = self.gatewayRecoverySleep
+        self.gatewayRecoveryTask = Task { [weak self] in
+            await sleep(delayMs * 1_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.runGatewayRecoveryProbe()
+        }
+    }
+
+    private func runGatewayRecoveryProbe() async {
+        self.gatewayRecoveryTask = nil
+        guard self.failureKind == .gatewayUnreachable else { return }
+        guard !self.isApplyingAuth else { return }
+        guard !self.isApplyingModel else { return }
+        guard !self.isRestartingOperator else { return }
+        await self.refresh(
+            preservingDisplayedResult: self.hasDisplayedReadinessResult,
+            automaticGatewayRecovery: true)
+    }
+
+    private func cancelGatewayRecoveryProbe(resetAttempt: Bool = false) {
+        self.gatewayRecoveryTask?.cancel()
+        self.gatewayRecoveryTask = nil
+        if resetAttempt {
+            self.gatewayRecoveryAttempt = 0
+        }
     }
 
     private func syncModelOptions(readiness: ConsumerModelsReadinessPayload) async {
@@ -697,7 +976,7 @@ final class ConsumerModelSetupModel {
             return
         }
 
-        self.selectedOptionId = self.visibleAuthOptions.first?.id ?? self.authOptions.first?.id
+        self.selectedOptionId = self.preferredVisibleAuthOption()?.id ?? self.visibleAuthOptions.first?.id ?? self.authOptions.first?.id
     }
 
     private func preferredOption(for providerId: String) -> ConsumerModelsAuthOptionPayload? {
@@ -708,6 +987,15 @@ final class ConsumerModelSetupModel {
         return options.first(where: { $0.inputKind == .none })
             ?? options.first(where: { !$0.inputKind.requiresSecret })
             ?? options.first
+    }
+
+    private func preferredVisibleAuthOption() -> ConsumerModelsAuthOptionPayload? {
+        if let chatgptLogin = self.visibleAuthOptions.first(where: { $0.providerId == "openai-codex" && $0.inputKind == .none }) {
+            return chatgptLogin
+        }
+        return self.visibleAuthOptions.first(where: { $0.inputKind == .none })
+            ?? self.visibleAuthOptions.first(where: { !$0.inputKind.requiresSecret })
+            ?? self.visibleAuthOptions.first
     }
 
     private func resolveActiveOption() -> ConsumerModelsAuthOptionPayload? {
@@ -733,9 +1021,15 @@ final class ConsumerModelSetupModel {
             return
         }
 
+        guard readiness.status == "ready" else {
+            self.activeAccessTitle = nil
+            self.activeAccessDetail = nil
+            return
+        }
+
         if readiness.mode == "managed", readiness.probe?.provider == "openai-codex" {
-            self.activeAccessTitle = "\(AppFlavor.current.appName)-managed ChatGPT / Codex"
-            self.activeAccessDetail = "Managed AI access is active for this Mac."
+            self.activeAccessTitle = "ChatGPT subscription"
+            self.activeAccessDetail = "Uses your ChatGPT subscription on this Mac."
             return
         }
 
@@ -765,11 +1059,11 @@ final class ConsumerModelSetupModel {
     private static func activeAccessTitle(for option: ConsumerModelsAuthOptionPayload) -> String {
         switch option.inputKind {
         case .none:
-            return "\(option.providerLabel) login"
+            return "\(option.consumerProviderLabel) login"
         case .apiKey:
-            return "\(option.providerLabel) API key"
+            return "\(option.consumerProviderLabel) account"
         case .token:
-            return "\(option.providerLabel) setup token"
+            return "\(option.consumerProviderLabel) account"
         }
     }
 
@@ -778,16 +1072,16 @@ final class ConsumerModelSetupModel {
         case .none:
             return "Uses the current sign-in already available on this Mac."
         case .apiKey:
-            return "Uses the saved API key for this Mac."
+            return "Uses saved sign-in details on this Mac."
         case .token:
-            return "Uses a setup token stored in local auth state on this Mac."
+            return "Uses saved sign-in details on this Mac."
         }
     }
 
     private static func fallbackActiveAccessTitle(providerId: String, probeMode: String?) -> String {
         let providerLabel = switch providerId {
         case "openai-codex":
-            "ChatGPT / Codex"
+            "ChatGPT"
         case "openai":
             "OpenAI"
         case "anthropic":
@@ -798,9 +1092,9 @@ final class ConsumerModelSetupModel {
 
         switch probeMode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "api_key":
-            return "\(providerLabel) API key"
+            return "\(providerLabel) account"
         case "token":
-            return "\(providerLabel) setup token"
+            return "\(providerLabel) account"
         case "oauth":
             return "\(providerLabel) login"
         default:
@@ -830,13 +1124,44 @@ final class ConsumerModelSetupModel {
 
         if Self.consumerAccessFailureKind(for: error) == .gatewayUnreachable
         {
-            return "\(AppFlavor.current.appName) is still starting or needs a restart. This is not an AI account issue. Wait a moment, then try again."
+            return Self.gatewayRestartFailureStatusLine()
         }
 
         return detail
     }
 
+    private static func gatewayRestartFailureStatusLine() -> String {
+        "\(AppFlavor.current.appName) is still starting. Wait a moment, then try again."
+    }
+
+    private static func signInURL(from notes: [String]) -> URL? {
+        for note in notes {
+            for rawToken in note.split(whereSeparator: { $0.isWhitespace }) {
+                let trimmed = rawToken.trimmingCharacters(in: CharacterSet(charactersIn: "<>()[]{}\"'.,"))
+                guard
+                    trimmed.hasPrefix("https://"),
+                    let url = URL(string: trimmed),
+                    url.host?.contains("openai.com") == true
+                else {
+                    continue
+                }
+                return url
+            }
+        }
+        return nil
+    }
+
+    private static func consumerFriendlyRuntimeOwnershipBlockerStatusLine() -> String {
+        "\(AppFlavor.current.appName) is still updating its local helper. Restart \(AppFlavor.current.appName), then try again."
+    }
+
     private static func consumerAccessFailureKind(for error: Error) -> ConsumerAIAccessFailureKind {
+        if let authError = error as? GatewayConnectAuthError,
+           authError.detail == .pairingRequired
+        {
+            return .gatewayUnreachable
+        }
+
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain {
             switch URLError.Code(rawValue: nsError.code) {
@@ -863,6 +1188,7 @@ final class ConsumerModelSetupModel {
             || lowercased.contains("gateway closed")
             || lowercased.contains("gateway connection dropped")
             || lowercased.contains("gateway not connected")
+            || lowercased.contains("pairing required")
             || lowercased.contains("socket is not connected")
             || lowercased.contains("timed out")
             || lowercased.contains("timeout")
@@ -930,6 +1256,18 @@ final class ConsumerModelSetupModel {
 private struct ReadinessProbeTimeoutError: LocalizedError, Sendable {
     var errorDescription: String? {
         "\(AppFlavor.current.appName)'s AI access check timed out."
+    }
+}
+
+private actor RestartGatewayCompletion {
+    private var completed = false
+
+    var isCompleted: Bool {
+        self.completed
+    }
+
+    func markCompleted() {
+        self.completed = true
     }
 }
 
@@ -1008,7 +1346,7 @@ struct ConsumerModelsReadinessPayload: Decodable {
         }
         switch self.consumerFailureKind {
         case .gatewayUnreachable:
-            return "\(AppFlavor.current.appName) is still starting or needs a restart."
+            return "\(AppFlavor.current.appName) is still starting. Wait a moment, then try again."
         case .providerAuthFailed:
             return "\(AppFlavor.current.appName) could not verify a usable AI account yet."
         case .readinessFailed:
@@ -1055,6 +1393,18 @@ struct ConsumerModelsAuthOptionPayload: Decodable, Equatable, Identifiable {
 
     var authCategory: ConsumerModelSetupModel.AuthCategory {
         self.inputKind == .apiKey ? .apiKey : .subscription
+    }
+
+    var consumerProviderLabel: String {
+        switch self.providerId {
+        case "openai-codex":
+            return "ChatGPT"
+        case "anthropic":
+            return "Claude"
+        default:
+            let trimmed = self.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? self.providerId : trimmed
+        }
     }
 }
 
@@ -1178,11 +1528,15 @@ extension BrowserSetupModel {
                 if ConsumerSetupCommandRunner.isDiskFullFailure(message) {
                     return "This Mac is out of disk space, so \(AppFlavor.current.appName) could not finish browser setup. Free some space and try again."
                 }
-                if ConsumerSetupCommandRunner.isTransientBrowserStatusFailure(message) &&
-                    nowImpl().addingTimeInterval(1) < deadline
-                {
-                    await sleepImpl(retryIntervalNanos)
-                    continue
+                if ConsumerSetupCommandRunner.isMissingBuildOutputFailure(message) {
+                    return "\(AppFlavor.current.appName) could not finish browser setup because the local test runtime is not built. Relaunch the UI smoke app so it can rebuild the browser checker."
+                }
+                if ConsumerSetupCommandRunner.isTransientBrowserStatusFailure(message) {
+                    if nowImpl().addingTimeInterval(1) < deadline {
+                        await sleepImpl(retryIntervalNanos)
+                        continue
+                    }
+                    return nil
                 }
                 // Keep raw command output out of onboarding. The underlying
                 // failure can include file paths, stack traces, or runtime
@@ -1217,65 +1571,23 @@ struct ConsumerModelSetupCardContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("AI access")
-                    .font(.headline)
-                Text("Confirm \(AppFlavor.current.appName) has an AI path before tasks start.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            self.choiceList()
 
-            switch self.model.phase {
-            case .idle, .checking:
-                HStack(spacing: 10) {
+            if case .checking = self.model.phase {
+                HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(self.model.statusLine ?? "Checking \(AppFlavor.current.appName)'s AI access…")
-                        .font(.subheadline)
+                    Text("Checking sign-in options…")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            case let .ready(modelRef):
-                self.callout(
-                    title: "AI is ready",
-                    body: "\(AppFlavor.current.appName) is ready to run tasks with \(modelRef).")
-            case let .failed(message):
+            } else if case let .failed(message) = self.model.phase,
+                      self.model.shouldShowReadinessFailureCallout
+            {
                 self.failureCallout(message: message)
             }
 
-            if let activeAccessTitle = self.model.activeAccessTitle, !activeAccessTitle.isEmpty {
-                self.activeAccessSummary(
-                    title: activeAccessTitle,
-                    detail: self.model.activeAccessDetail)
-            }
-
-            if self.model.isComplete,
-               (self.model.hasModelOptions || self.model.hasModelError)
-            {
-                Divider()
-                    .padding(.vertical, 2)
-
-                self.modelPickerSection()
-            }
-
-            if let option = self.model.selectedOption {
-                Divider()
-                    .padding(.vertical, 2)
-
-                if self.model.isComplete {
-                    DisclosureGroup("Switch provider or auth mode", isExpanded: self.$model.authSectionExpanded) {
-                        self.authEditor(option: option, isReady: true)
-                            .padding(.top, 8)
-                    }
-                } else {
-                    self.authEditor(option: option, isReady: false)
-                }
-            } else if let authError = self.model.authError, !authError.isEmpty {
-                Text(authError)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            self.authFeedback()
         }
         .task {
             await self.model.refreshIfNeeded()
@@ -1286,11 +1598,159 @@ struct ConsumerModelSetupCardContent: View {
     }
 
     @ViewBuilder
+    private func choiceList() -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let option = self.model.chatGPTSubscriptionOption {
+                self.choiceButton(
+                    title: "Continue with ChatGPT",
+                    helper: "Use your ChatGPT subscription.",
+                    isSelected: self.model.selectedOptionId == option.id,
+                    isDisabled: self.model.isApplyingAuth || self.model.isAuthChoiceInteractionBlocked,
+                    badge: nil,
+                    showsCheckmark: self.model.isActiveAuthOption(option))
+                {
+                    self.model.selectOption(option.id)
+                    Task { await self.model.submitSelectedAuth() }
+                }
+            } else {
+                self.choiceButton(
+                    title: "Continue with ChatGPT",
+                    helper: "Use your ChatGPT subscription.",
+                    isSelected: false,
+                    isDisabled: true,
+                    badge: self.model.authOptionsLoaded ? "Unavailable" : nil,
+                    showsCheckmark: false,
+                    action: {})
+            }
+
+            self.choiceButton(
+                title: "Continue with Claude",
+                helper: "Use your Claude subscription.",
+                isSelected: false,
+                isDisabled: true,
+                badge: "Coming soon",
+                showsCheckmark: false,
+                action: {})
+
+            self.choiceButton(
+                title: "API key",
+                helper: "Use an API key from OpenAI, Anthropic, or another provider.",
+                isSelected: self.model.isAPIKeySelected,
+                isDisabled: !self.model.hasAPIKeySupport || self.model.isApplyingAuth || self.model.isAuthChoiceInteractionBlocked,
+                badge: self.model.hasAPIKeySupport || !self.model.authOptionsLoaded ? nil : "Coming soon",
+                showsCheckmark: self.model.selectedAPIKeyOption.map { self.model.isActiveAuthOption($0) } ?? false)
+            {
+                self.model.selectAPIKeySetup()
+            }
+
+            if self.model.isAPIKeySelected,
+               let option = self.model.selectedAPIKeyOption
+            {
+                self.apiKeyEditor(option: option)
+                    .padding(.leading, 2)
+            }
+        }
+    }
+
+    private func choiceButton(
+        title: String,
+        helper: String?,
+        isSelected: Bool,
+        isDisabled: Bool,
+        badge: String?,
+        showsCheckmark: Bool,
+        action: @escaping () -> Void) -> some View
+    {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(isDisabled && !isSelected ? .secondary : .primary)
+                    if let helper, !helper.isEmpty {
+                        Text(helper)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Spacer(minLength: 12)
+
+                if let badge {
+                    Text(badge)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule()
+                                .fill(Color(nsColor: .controlBackgroundColor)))
+                }
+
+                if showsCheckmark {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color(nsColor: .systemGreen))
+                }
+            }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.10) : Color(nsColor: .controlBackgroundColor)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? Color(nsColor: .systemBlue) : Color(nsColor: .separatorColor), lineWidth: isSelected ? 1.2 : 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled && !isSelected ? 0.62 : 1)
+    }
+
+    @ViewBuilder
+    private func apiKeyEditor(option: ConsumerModelsAuthOptionPayload) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if self.model.apiKeyProviders.count > 1 {
+                Picker("Provider", selection: Binding(
+                    get: { self.model.selectedAPIKeyProviderId },
+                    set: { self.model.selectAPIKeyProvider($0) }))
+                {
+                    ForEach(self.model.apiKeyProviders) { provider in
+                        Text(provider.label)
+                            .tag(provider.id)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            Text("API key")
+                .font(.caption.weight(.semibold))
+
+            SecureField("Paste your API key", text: self.$model.draftSecret)
+
+            HStack(spacing: 10) {
+                Button("Save and check") {
+                    Task { await self.model.submitSelectedAuth() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.model.isApplyingAuth)
+
+                if self.model.isApplyingAuth {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(.top, 2)
+    }
+
+    @ViewBuilder
     private func modelPickerSection() -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Model")
                 .font(.subheadline.weight(.semibold))
-            Text("Pick the default model \(AppFlavor.current.appName) should use. Readiness is checked again after you switch.")
+            Text("Choose the model \(AppFlavor.current.appName) should use.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1307,13 +1767,6 @@ struct ConsumerModelSetupCardContent: View {
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
-            }
-
-            if let activeModelId = self.model.activeModelId, !activeModelId.isEmpty {
-                Text("Current default: \(activeModelId)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let modelError = self.model.modelError, !modelError.isEmpty {
@@ -1353,21 +1806,6 @@ struct ConsumerModelSetupCardContent: View {
         }
     }
 
-    private func activeAccessSummary(title: String, detail: String?) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Current access")
-                .font(.caption.weight(.semibold))
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-            if let detail, !detail.isEmpty {
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
     @ViewBuilder
     private func failureCallout(message: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1397,126 +1835,388 @@ struct ConsumerModelSetupCardContent: View {
 
     @ViewBuilder
     private func authEditor(option: ConsumerModelsAuthOptionPayload, isReady: Bool) -> some View {
+        if isReady {
+            self.readyAuthEditor(option: option)
+        } else {
+            self.notReadyAuthEditor(option: option)
+        }
+    }
+
+    @ViewBuilder
+    private func readyAuthEditor(option: ConsumerModelsAuthOptionPayload) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(isReady ? "Switch AI provider or billing source" : "Use your own AI account")
+            Text("Use a different AI account")
                 .font(.subheadline.weight(.semibold))
-            Text(
-                isReady
-                    ? "You’re already ready to run tasks. Change this only if you want a different provider, subscription, setup token, or API key. Credentials stay in local auth state on this Mac, not in the app bundle."
-                    : "Choose how \(AppFlavor.current.appName) should use your subscription, setup token, or API key. Credentials stay in local auth state on this Mac, not in the app bundle.")
+            Text("Change this only if you want a different sign-in method.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             if self.model.availableAuthCategories.count > 1 {
-                Picker("Access type", selection: Binding(
-                    get: { self.model.authCategory },
-                    set: { self.model.selectAuthCategory($0) }))
-                {
-                    ForEach(self.model.availableAuthCategories) { category in
-                        Text(category.title)
-                            .tag(category)
-                    }
-                }
-                .pickerStyle(.segmented)
-            }
-
-            Picker("Provider", selection: Binding(
-                get: { self.model.selectedProviderId ?? option.providerId },
-                set: { self.model.selectProvider($0) }))
-            {
-                ForEach(self.model.visibleAuthProviders) { provider in
-                    Text(provider.label)
-                        .tag(provider.id)
-                }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-
-            Text(option.title)
-                .font(.caption.weight(.semibold))
-
-            Text(option.detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if self.model.selectedProviderOptions.count > 1 {
-                DisclosureGroup(
-                    "Other \(option.providerLabel) sign-in methods",
-                    isExpanded: self.$model.alternateMethodExpanded)
-                {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Use this only if the main \(option.providerLabel) path is not the right fit on this Mac.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Picker("Method", selection: Binding(
-                            get: { self.model.selectedOptionId ?? option.id },
-                            set: { self.model.selectOption($0) }))
-                        {
-                            ForEach(self.model.selectedProviderOptions) { method in
-                                Text(method.title)
-                                    .tag(method.id)
-                            }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Access type")
+                        .font(.caption.weight(.semibold))
+                    Picker("", selection: Binding(
+                        get: { self.model.authCategory },
+                        set: { self.model.selectAuthCategory($0) }))
+                    {
+                        ForEach(self.model.availableAuthCategories) { category in
+                            Text(category.title)
+                                .tag(category)
                         }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
                     }
-                    .padding(.top, 6)
+                    .pickerStyle(.menu)
+                    .labelsHidden()
                 }
             }
 
-            if option.inputKind.requiresSecret {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let inputLabel = option.inputLabel {
-                        Text(inputLabel)
-                            .font(.caption.weight(.semibold))
+            let providers = self.model.readyAuthProviders
+            if !providers.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(self.model.authCategory == .apiKey ? "Saved key provider" : "Account login")
+                        .font(.caption.weight(.semibold))
+                    Picker("", selection: Binding(
+                        get: { self.model.preferredProviderId(for: providers, fallback: option.providerId) },
+                        set: { self.model.selectProvider($0) }))
+                    {
+                        ForEach(providers) { provider in
+                            Text(provider.label)
+                                .tag(provider.id)
+                        }
                     }
-                    SecureField(
-                        option.inputPlaceholder ?? "",
-                        text: self.$model.draftSecret)
-                    if let inputHelp = option.inputHelp, !inputHelp.isEmpty {
-                        Text(inputHelp)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
                 }
             }
 
-            if let authError = self.model.authError, !authError.isEmpty {
-                Text(authError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            if option.inputKind != .none {
+                Text(self.displayTitle(for: option))
+                    .font(.caption.weight(.semibold))
 
-            if let note = self.model.authNotes.last, !note.isEmpty {
-                Text(note)
+                Text(self.displayDetail(for: option))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: 10) {
-                Button(option.submitLabel) {
-                    Task { await self.model.submitSelectedAuth() }
+            if self.model.selectedProviderOptions.count > 1 {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Sign-in method")
+                        .font(.caption.weight(.semibold))
+                    Picker("", selection: Binding(
+                        get: { self.model.selectedOptionId ?? option.id },
+                        set: { self.model.selectOption($0) }))
+                    {
+                        ForEach(self.model.selectedProviderOptions) { method in
+                            Text(self.displayTitle(for: method))
+                                .tag(method.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(self.model.isApplyingAuth)
+            }
 
-                if self.model.isApplyingAuth {
-                    ProgressView()
-                        .controlSize(.small)
+            self.authSecretFieldIfNeeded(option: option)
+            self.authActionRow(label: option.submitLabel, showsCheckAgain: !option.inputKind.requiresSecret)
+            self.authFeedback()
+        }
+    }
+
+    @ViewBuilder
+    private func notReadyAuthEditor(option: ConsumerModelsAuthOptionPayload) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if option.providerId != "openai-codex" || option.inputKind != .none {
+                Text(self.primaryAuthTitle(for: option))
+                    .font(.subheadline.weight(.semibold))
+                if let body = self.primaryAuthBody(for: option) {
+                    Text(body)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+            }
 
+            if option.inputKind.requiresSecret {
+                self.advancedAuthControls(option: option)
+            }
+
+            self.authSecretFieldIfNeeded(option: option)
+            self.authActionRow(
+                label: self.primaryAuthButtonLabel(for: option),
+                showsCheckAgain: !option.inputKind.requiresSecret)
+            self.authFeedback()
+
+            if !option.inputKind.requiresSecret, self.model.showsAdvancedAuthControls {
+                DisclosureGroup("Use another sign-in method", isExpanded: self.$model.alternateMethodExpanded) {
+                    self.advancedAuthControls(option: option)
+                        .padding(.top, 8)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func authSecretFieldIfNeeded(option: ConsumerModelsAuthOptionPayload) -> some View {
+        if option.inputKind.requiresSecret {
+            VStack(alignment: .leading, spacing: 6) {
+                if let inputLabel = self.displayInputLabel(for: option) {
+                    Text(inputLabel)
+                        .font(.caption.weight(.semibold))
+                }
+                SecureField(
+                    option.inputPlaceholder ?? "",
+                    text: self.$model.draftSecret)
+                if let inputHelp = self.displayInputHelp(for: option), !inputHelp.isEmpty {
+                    Text(inputHelp)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func authActionRow(label: String, showsCheckAgain: Bool = true) -> some View {
+        HStack(spacing: 10) {
+            Button(label) {
+                Task { await self.model.submitSelectedAuth() }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(self.model.isApplyingAuth)
+
+            if self.model.isApplyingAuth {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            if showsCheckAgain {
                 Button("Check Again") {
                     Task { await self.model.refresh() }
                 }
                 .disabled(self.model.isApplyingAuth)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func authFeedback() -> some View {
+        if self.model.isWaitingForChatGPTSignIn {
+            self.chatGPTSignInStatus()
+        } else if let authError = self.model.authError, !authError.isEmpty {
+            Text(authError)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if let note = self.consumerSafeAuthNote, !note.isEmpty {
+            Text(note)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private func chatGPTSignInStatus() -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Opening ChatGPT sign-in in your browser...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if self.model.canShowChatGPTSignInHelp {
+                HStack(spacing: 10) {
+                    Button("Trouble signing in?") {
+                        self.model.signInHelpExpanded.toggle()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
+
+                if self.model.signInHelpExpanded {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("If your browser did not open, open the sign-in link.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if self.model.chatGPTSignInURL != nil {
+                            HStack(spacing: 10) {
+                                Button("Open sign-in link") {
+                                    self.model.openChatGPTSignInLink()
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button("Copy sign-in link") {
+                                    self.model.copyChatGPTSignInLink()
+                                }
+                                .buttonStyle(.bordered)
+                            }
+
+                            Text("Paste it into any browser to continue.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Text("Once you sign in, return to Jarvis.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 2)
+                }
+            }
+        }
+    }
+
+    private var consumerSafeAuthNote: String? {
+        guard let note = self.model.authNotes.last?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty else {
+            return nil
+        }
+        guard !note.lowercased().hasPrefix("open:") else {
+            return nil
+        }
+        guard URL(string: note) == nil else {
+            return nil
+        }
+        return note
+    }
+
+    private func primaryAuthTitle(for option: ConsumerModelsAuthOptionPayload) -> String {
+        if option.providerId == "openai-codex", option.inputKind == .none {
+            return "Continue with ChatGPT"
+        }
+        if option.inputKind == .apiKey {
+            return "Paste your API key"
+        }
+        if option.inputKind == .token {
+            return "Paste your sign-in code"
+        }
+        return option.title
+    }
+
+    private func primaryAuthBody(for option: ConsumerModelsAuthOptionPayload) -> String? {
+        if option.providerId == "openai-codex", option.inputKind == .none {
+            return "Use your ChatGPT account for Jarvis tasks."
+        }
+        if option.inputKind == .apiKey {
+            return nil
+        }
+        return self.displayDetail(for: option)
+    }
+
+    private func primaryAuthButtonLabel(for option: ConsumerModelsAuthOptionPayload) -> String {
+        if option.providerId == "openai-codex", option.inputKind == .none {
+            return "Continue with ChatGPT"
+        }
+        return option.submitLabel
+    }
+
+    private func displayTitle(for option: ConsumerModelsAuthOptionPayload) -> String {
+        switch option.inputKind {
+        case .none:
+            return option.title
+        case .apiKey:
+            return "Paste your API key"
+        case .token:
+            return "Paste your sign-in code"
+        }
+    }
+
+    @ViewBuilder
+    private func advancedAuthControls(option: ConsumerModelsAuthOptionPayload) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if self.model.availableAuthCategories.count > 1 {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Access type")
+                        .font(.caption.weight(.semibold))
+                    Picker("", selection: Binding(
+                        get: { self.model.authCategory },
+                        set: { self.model.selectAuthCategory($0) }))
+                    {
+                        ForEach(self.model.availableAuthCategories) { category in
+                            Text(category.title)
+                                .tag(category)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+            }
+
+            let providers = self.model.readyAuthProviders
+            if !providers.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(self.model.authCategory == .apiKey ? "Saved key provider" : "Account login")
+                        .font(.caption.weight(.semibold))
+                    Picker("", selection: Binding(
+                        get: { self.model.preferredProviderId(for: providers, fallback: option.providerId) },
+                        set: { self.model.selectProvider($0) }))
+                    {
+                        ForEach(providers) { provider in
+                            Text(provider.label)
+                                .tag(provider.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+            }
+
+            if self.model.selectedProviderOptions.count > 1 {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Sign-in method")
+                        .font(.caption.weight(.semibold))
+                    Picker("", selection: Binding(
+                        get: { self.model.selectedOptionId ?? option.id },
+                        set: { self.model.selectOption($0) }))
+                    {
+                        ForEach(self.model.selectedProviderOptions) { method in
+                            Text(self.displayTitle(for: method))
+                                .tag(method.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+            }
+        }
+    }
+
+    private func displayDetail(for option: ConsumerModelsAuthOptionPayload) -> String {
+        switch option.inputKind {
+        case .none:
+            return option.detail
+        case .apiKey:
+            return "Saved key only."
+        case .token:
+            return "Sign-in code only."
+        }
+    }
+
+    private func displayInputLabel(for option: ConsumerModelsAuthOptionPayload) -> String? {
+        switch option.inputKind {
+        case .none:
+            return option.inputLabel
+        case .apiKey:
+            return "API key"
+        case .token:
+            return "Sign-in code"
+        }
+    }
+
+    private func displayInputHelp(for option: ConsumerModelsAuthOptionPayload) -> String? {
+        switch option.inputKind {
+        case .none:
+            return option.inputHelp
+        case .apiKey:
+            return nil
+        case .token:
+            return nil
         }
     }
 }

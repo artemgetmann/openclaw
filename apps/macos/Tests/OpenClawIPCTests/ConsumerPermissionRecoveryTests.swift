@@ -14,7 +14,7 @@ struct ConsumerPermissionRecoveryTests {
 
         #expect(presentation.displayState == .notRequested)
         #expect(presentation.actionLabel == "Grant")
-        #expect(presentation.statusText == "Grant access")
+        #expect(presentation.statusText == "Not allowed yet")
         #expect(presentation.detailText == nil)
     }
 
@@ -26,13 +26,13 @@ struct ConsumerPermissionRecoveryTests {
             context: .init(attemptedSettingsRecovery: true, reactivatedAfterSettings: false))
 
         #expect(presentation.displayState == .needsSystemSettings)
-        #expect(presentation.actionLabel == "Open Privacy & Security")
-        #expect(presentation.statusText == "Open Privacy & Security")
+        #expect(presentation.actionLabel == "Help")
+        #expect(presentation.statusText == "Needs approval")
         #expect(presentation.detailText?.contains("Screen & System Audio Recording") == true)
-        #expect(presentation.detailText?.contains("Wait for the list") == true)
+        #expect(presentation.detailText?.contains("Turn on") == true)
     }
 
-    @Test func `special permission offers restart after app reactivation`() {
+    @Test func `accessibility keeps settings help after app reactivation`() {
         let presentation = ConsumerPermissionRecoverySupport.presentation(
             for: .accessibility,
             granted: false,
@@ -42,11 +42,11 @@ struct ConsumerPermissionRecoveryTests {
                 requestedExplicitSettingsFollowUp: true,
                 reactivatedAfterSettings: true))
 
-        #expect(presentation.displayState == .restartRequired)
-        #expect(presentation.actionLabel == "Restart app")
-        #expect(presentation.statusText == "Enabled already? Restart app")
-        #expect(presentation.detailText?.contains("click Accessibility") == true)
-        #expect(presentation.detailText?.contains("10-15 seconds") == true)
+        #expect(presentation.displayState == .needsSystemSettings)
+        #expect(presentation.actionLabel == "Help")
+        #expect(presentation.statusText == "Needs approval")
+        #expect(presentation.detailText?.contains("Accessibility") == true)
+        #expect(presentation.detailText?.contains("Turn on") == true)
     }
 
     @Test func `special permission stays on open settings after passive reactivation`() {
@@ -60,11 +60,11 @@ struct ConsumerPermissionRecoveryTests {
                 reactivatedAfterSettings: true))
 
         #expect(presentation.displayState == .needsSystemSettings)
-        #expect(presentation.actionLabel == "Open Privacy & Security")
-        #expect(presentation.statusText == "Open Privacy & Security")
+        #expect(presentation.actionLabel == "Help")
+        #expect(presentation.statusText == "Needs approval")
     }
 
-    @Test func `screen recording restart copy calls out stale generic row`() {
+    @Test func `screen recording keeps help action when restart recovery is available`() {
         let presentation = ConsumerPermissionRecoverySupport.presentation(
             for: .screenRecording,
             granted: false,
@@ -74,10 +74,17 @@ struct ConsumerPermissionRecoveryTests {
                 requestedExplicitSettingsFollowUp: true,
                 reactivatedAfterSettings: true))
 
-        #expect(presentation.displayState == .restartRequired)
-        #expect(presentation.actionLabel == "Restart app")
+        #expect(presentation.displayState == .needsSystemSettings)
+        #expect(presentation.actionLabel == "Help")
         #expect(presentation.detailText?.contains("Screen & System Audio Recording") == true)
-        #expect(presentation.detailText?.contains("reopen the app once") == true)
+        let needsRestart = ConsumerPermissionRecoverySupport.needsRestartRecovery(
+            for: .screenRecording,
+            granted: false,
+            context: .init(
+                attemptedSettingsRecovery: true,
+                requestedExplicitSettingsFollowUp: true,
+                reactivatedAfterSettings: true))
+        #expect(needsRestart)
     }
 
     @Test func `accessibility recovery detail explains exactly what to click`() {
@@ -87,10 +94,9 @@ struct ConsumerPermissionRecoveryTests {
             isChecking: false,
             context: .init(attemptedSettingsRecovery: true, reactivatedAfterSettings: false))
 
-        #expect(presentation.actionLabel == "Open Privacy & Security")
-        #expect(presentation.detailText?.contains("click Accessibility") == true)
-        #expect(presentation.detailText?.contains("10-15 seconds") == true)
-        #expect(presentation.detailText?.contains("enable this app") == true)
+        #expect(presentation.actionLabel == "Help")
+        #expect(presentation.detailText?.contains("Accessibility") == true)
+        #expect(presentation.detailText?.contains("Turn on") == true)
     }
 
     @Test func `granted permission wins over stale recovery context`() {
@@ -105,7 +111,7 @@ struct ConsumerPermissionRecoveryTests {
         #expect(presentation.statusText == "Granted")
     }
 
-    @Test func `recommended summary points to system settings after attempted flow`() {
+    @Test func `recommended summary stays compact after attempted flow`() {
         let summary = ConsumerPermissionRecoverySupport.recommendedSummary(
             status: [
                 .screenRecording: false,
@@ -121,8 +127,7 @@ struct ConsumerPermissionRecoveryTests {
             hasAttemptedRecommendedFlow: true,
             isChecking: false)
 
-        #expect(summary?.contains("Screen & System Audio Recording") == true)
-        #expect(summary?.contains("Accessibility") == true)
+        #expect(summary == "2 recommended permissions still need attention.")
     }
 
     @Test func `recommended summary points to restart after reactivation`() {
@@ -147,6 +152,29 @@ struct ConsumerPermissionRecoveryTests {
         #expect(summary?.contains("reopen the app once") == true)
     }
 
+    @Test func `accessibility never enters restart recovery`() {
+        let needsRestart = ConsumerPermissionRecoverySupport.needsRestartRecovery(
+            for: .accessibility,
+            granted: false,
+            context: .init(
+                attemptedSettingsRecovery: true,
+                requestedExplicitSettingsFollowUp: true,
+                reactivatedAfterSettings: true))
+        #expect(!needsRestart)
+    }
+
+    @Test func `explicit settings follow-up marks context for restart recovery eligibility`() {
+        let context = ConsumerPermissionRecoverySupport.explicitSettingsFollowUpContext(
+            from: .init(
+                attemptedSettingsRecovery: false,
+                requestedExplicitSettingsFollowUp: false,
+                reactivatedAfterSettings: true))
+
+        #expect(context.attemptedSettingsRecovery)
+        #expect(context.requestedExplicitSettingsFollowUp)
+        #expect(!context.reactivatedAfterSettings)
+    }
+
     @Test func `screen recording detail explains blank system settings fallback`() {
         let presentation = ConsumerPermissionRecoverySupport.presentation(
             for: .screenRecording,
@@ -154,26 +182,15 @@ struct ConsumerPermissionRecoveryTests {
             isChecking: false,
             context: .init(attemptedSettingsRecovery: true, reactivatedAfterSettings: false))
 
-        #expect(presentation.detailText?.contains("Privacy & Security") == true)
-        #expect(presentation.detailText?.contains("enable this app") == true)
+        #expect(presentation.detailText?.contains("Screen & System Audio Recording") == true)
+        #expect(presentation.detailText?.contains("Turn on") == true)
     }
 
-    @Test func `instruction card lists both macos click paths after attempted flow`() {
-        let instructions = ConsumerPermissionRecoverySupport.stepInstructions(
-            status: [
-                .screenRecording: false,
-                .accessibility: false,
-            ],
-            contexts: [
-                .screenRecording: .init(attemptedSettingsRecovery: true),
-                .accessibility: .init(attemptedSettingsRecovery: true),
-            ],
-            hasAttemptedRecommendedFlow: true)
-
-        #expect(instructions.count == 2)
-        #expect(instructions[0].body.contains("10-15 seconds") == true)
-        #expect(instructions[0].body.contains("click Accessibility") == true)
-        #expect(instructions[1].body.contains("click Screen & System Audio Recording") == true)
+    @Test func `recovery sheet maps only manual privacy capabilities`() {
+        #expect(ConsumerPermissionRecoverySupport.RecoverySheet(capability: .accessibility)?.capability == .accessibility)
+        #expect(ConsumerPermissionRecoverySupport.RecoverySheet(capability: .screenRecording)?.capability == .screenRecording)
+        #expect(ConsumerPermissionRecoverySupport.RecoverySheet(capability: .location) == nil)
+        #expect(ConsumerPermissionRecoverySupport.RecoverySheet(capability: .appleScript) == nil)
     }
 
     @Test func `bulk grant excludes manual privacy permissions`() {
@@ -194,17 +211,20 @@ struct ConsumerPermissionRecoveryTests {
         #expect(!PermissionsSettings.consumerRecommendedCapabilities.contains(.microphone))
     }
 
-    @Test func `core onboarding permissions include apple script and location`() {
+    @Test func `core onboarding permissions include app control but keep location recommended`() {
         #expect(ConsumerPermissionCatalog.coreCapabilities.contains(.accessibility))
         #expect(ConsumerPermissionCatalog.coreCapabilities.contains(.screenRecording))
-        #expect(ConsumerPermissionCatalog.coreCapabilities.contains(.appleScript))
-        #expect(ConsumerPermissionCatalog.coreCapabilities.contains(.location))
+        #expect(!ConsumerPermissionCatalog.coreCapabilities.contains(.appleScript))
+        #expect(!ConsumerPermissionCatalog.coreCapabilities.contains(.location))
+        #expect(!ConsumerPermissionCatalog.recommendedOnboardingCapabilities.contains(.appleScript))
+        #expect(ConsumerPermissionCatalog.recommendedOnboardingCapabilities.contains(.location))
     }
 
     @Test func `core request order asks for screen recording before accessibility`() {
         let screenIndex = ConsumerPermissionCatalog.coreRequestOrder.firstIndex(of: .screenRecording)
         let accessibilityIndex = ConsumerPermissionCatalog.coreRequestOrder.firstIndex(of: .accessibility)
 
+        #expect(!ConsumerPermissionCatalog.coreRequestOrder.contains(.appleScript))
         #expect(screenIndex != nil)
         #expect(accessibilityIndex != nil)
         #expect(screenIndex! < accessibilityIndex!)

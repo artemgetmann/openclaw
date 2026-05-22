@@ -361,13 +361,7 @@ extension GatewayLaunchAgentManager {
     }
 
     private static func expectedLaunchAgentEntrypoint() -> String? {
-        if let bundledEntrypoint = CommandResolver.bundledConsumerRuntimeEntrypoint() {
-            return bundledEntrypoint
-        }
-
-        return CommandResolver.projectRootEnvironmentHint().flatMap { expectedRoot in
-            CommandResolver.gatewayEntrypoint(in: URL(fileURLWithPath: expectedRoot, isDirectory: true))
-        }
+        CommandResolver.gatewayEntrypoint(in: CommandResolver.gatewayLaunchProjectRoot())
     }
 
     private static func launchAgentMatchesCurrentServiceVersion(snapshot: LaunchAgentPlistSnapshot?) -> Bool {
