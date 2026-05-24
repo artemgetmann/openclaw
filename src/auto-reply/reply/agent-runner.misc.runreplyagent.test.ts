@@ -2718,28 +2718,40 @@ describe("runReplyAgent reply liveness", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not auto-continue after a direct visible reply already delivered", async () => {
+  it("auto-continues after a progress block reply if the run still times out", async () => {
     const onBlockReply = vi.fn();
-    runEmbeddedPiAgentMock.mockImplementationOnce(
-      async (params: { onBlockReply?: (payload: { text?: string }) => Promise<void> | void }) => {
-        await params.onBlockReply?.({ text: "visible before timeout" });
-        return {
-          payloads: [
-            {
-              text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
-              isError: true,
-            },
-          ],
-          meta: {},
-        };
-      },
-    );
+    runEmbeddedPiAgentMock
+      .mockImplementationOnce(
+        async (params: { onBlockReply?: (payload: { text?: string }) => Promise<void> | void }) => {
+          await params.onBlockReply?.({ text: "visible before timeout" });
+          return {
+            payloads: [
+              {
+                text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                isError: true,
+              },
+            ],
+            meta: {},
+          };
+        },
+      )
+      .mockResolvedValueOnce({
+        payloads: [{ text: "done after continuing" }],
+        meta: {},
+      });
 
     const result = await createRun({ opts: { onBlockReply }, blockStreamingEnabled: true });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(result).toBeUndefined();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "visible before timeout" }),
+      expect.anything(),
+    );
+    expect(onBlockReply).toHaveBeenNthCalledWith(2, {
+      text: "Still working. I hit the run limit and am continuing automatically.",
+    });
+    expect(result).toMatchObject({ text: "done after continuing" });
   });
 });
 

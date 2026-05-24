@@ -65,7 +65,6 @@ export function shouldContinueAfterReplyTimeout(params: {
   isHeartbeat: boolean;
   attemptsUsed: number;
   payloads: ReplyPayload[];
-  didSendVisibleReply: boolean;
   messagingToolSentTargets?: MessagingToolSend[];
   messageProvider?: string;
   originatingTo?: string;
@@ -75,7 +74,7 @@ export function shouldContinueAfterReplyTimeout(params: {
   if (!config.enabled || params.attemptsUsed >= config.maxAttempts) {
     return { shouldContinue: false, config };
   }
-  if (!isUserVisibleRun(params.opts, params.isHeartbeat) || params.didSendVisibleReply) {
+  if (!isUserVisibleRun(params.opts, params.isHeartbeat)) {
     return { shouldContinue: false, config };
   }
   if (
@@ -91,8 +90,12 @@ export function shouldContinueAfterReplyTimeout(params: {
   if (params.payloads.length !== 1 || !isExplicitAgentTimeoutPayload(params.payloads[0])) {
     return { shouldContinue: false, config };
   }
-  // Defensive guard: the timeout payload itself is renderable, but any additional
-  // renderable payload means the run produced a real user-facing answer/error.
+  // A streamed/block progress update is not a final answer. Browser-heavy tasks
+  // commonly send "still working" status before the run timeout; treating that
+  // as completion strands the task after the timeout instead of resuming it.
+  //
+  // Still require the terminal payload list to be only the explicit timeout.
+  // That keeps real final answers/errors from being auto-continued.
   if (
     params.payloads.some(
       (payload) => !isExplicitAgentTimeoutPayload(payload) && isRenderablePayload(payload),

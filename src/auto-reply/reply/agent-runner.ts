@@ -214,7 +214,7 @@ export async function runReplyAgent(params: {
           chunking: blockReplyChunking,
         }).coalescing
       : undefined;
-  const blockReplyPipeline =
+  const createRunBlockReplyPipeline = (): ReturnType<typeof createBlockReplyPipeline> | null =>
     blockStreamingEnabled && runOpts?.onBlockReply
       ? createBlockReplyPipeline({
           onBlockReply: runOpts.onBlockReply,
@@ -223,6 +223,7 @@ export async function runReplyAgent(params: {
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
+  let blockReplyPipeline = createRunBlockReplyPipeline();
   const touchActiveSessionEntry = async () => {
     if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
       return;
@@ -450,7 +451,6 @@ export async function runReplyAgent(params: {
         isHeartbeat,
         attemptsUsed: continuationAttempts,
         payloads: runOutcome.runResult.payloads ?? [],
-        didSendVisibleReply: didSendVisibleReply.value,
         messagingToolSentTargets: runOutcome.runResult.messagingToolSentTargets,
         messageProvider: followupRun.run.messageProvider,
         originatingTo: sessionCtx.OriginatingTo,
@@ -466,6 +466,11 @@ export async function runReplyAgent(params: {
       defaultRuntime.log(
         `reply run timed out before final answer; auto-continuing attempt ${continuationAttempts}/${timeoutContinuation.config.maxAttempts}`,
       );
+      // Progress blocks from the timed-out attempt should remain visible, but
+      // they must not make the continuation's final payload look already
+      // satisfied. Start the next attempt with fresh stream-dedupe state.
+      blockReplyPipeline?.stop();
+      blockReplyPipeline = createRunBlockReplyPipeline();
       runOutcome = await runSingleTurn(REPLY_TIMEOUT_CONTINUATION_PROMPT);
     }
 
