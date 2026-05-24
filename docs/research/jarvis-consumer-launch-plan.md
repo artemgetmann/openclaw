@@ -1037,9 +1037,10 @@ Order:
      `onboarding-ai-access-v1` isolated native smoke lane on 2026-05-22.
      AI Model now uses the simple primary `Continue with ChatGPT` path, disabled
      `Continue with Claude`, and API key fallback without nested advanced copy.
-   - Remaining page: Telegram still shows the old BotFather-first setup in the
-     current smoke app. The next worker lane must make Managed Bots/Jarvis-created
-     bot the primary path and keep BotFather/BYO token as advanced fallback only.
+   - Remaining page: Telegram source/UI now exists and is Managed-Bots-first.
+     BotFather/BYO token remains advanced fallback. Remaining work is visual
+     copy/layout review plus runtime-backed first-DM proof if needed, not initial
+     implementation from scratch.
    - Rebuild/run the isolated app after each page slice.
    - Review screenshots/flow as one package rather than sentence-by-sentence.
 3. Telegram Managed Bots onboarding migration.
@@ -1054,7 +1055,7 @@ Order:
      `MANAGER_BOT_USERNAME`; backend returns the Telegram approval link; user
      approves in Telegram; backend polls or receives `managed_bot`; backend
      fetches the child token and restricts child access. Managed Bots is the
-     primary planned Telegram onboarding path. Manual BotFather/BYO bot remains
+     primary Telegram onboarding path in source/UI. Manual BotFather/BYO bot remains
      fallback/advanced.
    - Current Render truth: after env/deploy, redacted health reports
      `telegram_managed_bots=true`; live start/status proof connected setup
