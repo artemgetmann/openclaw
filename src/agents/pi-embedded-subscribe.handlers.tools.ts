@@ -357,10 +357,25 @@ async function emitToolResultOutput(params: {
 
   emitSafeToolCompletionSummary({ ctx, toolName, meta, isToolError, result, sanitizedResult });
 
+  // Keep raw media extraction separate from emitToolOutput().
+  // Verbose mode wraps text in a code block, so the media parser cannot
+  // recover MEDIA: directives from there.
+  const mediaPaths = isToolError
+    ? []
+    : filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
+
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
+    }
+    if (isToolError || mediaPaths.length === 0) {
+      return;
+    }
+    try {
+      void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+    } catch {
+      // ignore delivery failures
     }
     return;
   }
@@ -369,9 +384,6 @@ async function emitToolResultOutput(params: {
     return;
   }
 
-  // emitToolOutput() already handles MEDIA: directives when enabled; this path
-  // only sends raw media URLs for non-verbose delivery mode.
-  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
   if (mediaPaths.length === 0) {
     return;
   }
