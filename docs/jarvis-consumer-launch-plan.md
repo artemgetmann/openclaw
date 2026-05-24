@@ -34,6 +34,7 @@ This section is the implementation-oriented summary. If a coding agent needs one
 12. **Operator education:** teach users that agents work best through clear natural-language delegation. The website/GitHub should say: tell Jarvis what you want, be specific, give preferences, correct it like a human assistant.
 13. **Bootstrap/setup:** initial setup needs redesign around first value. Reduce steps, simplify copy, make blockers obvious, and avoid developer jargon.
 14. **Distribution:** start with GitHub/Reddit plus a downloadable signed/notarized macOS app. Website comes when the message and install flow are proven.
+15. **Website positioning research:** before writing/redesigning the website, run a focused market scan of adjacent consumer agents like Simple Claw and Manus Telegram agent. Use it to sharpen positioning and user expectations, not to reopen architecture decisions.
 
 ## 1. Positioning
 
@@ -57,7 +58,32 @@ Target users:
 - technical power users
 - non-technical ambitious users who want leverage without learning APIs, terminals, or agent frameworks
 
-### 1.1 User education: how to operate Jarvis
+### 1.1 Website positioning research: agent market scan
+
+Before writing or redesigning the public website, run a focused market scan of adjacent consumer agent products such as Simple Claw and Manus Telegram agent.
+
+Purpose:
+
+- understand what normal users think an AI agent should do
+- identify what users praise, complain about, and misunderstand
+- map competitor promises against what Jarvis already does better
+- avoid building the website around abstract architecture language
+- sharpen the Jarvis wedge before broader launch
+
+Questions to answer:
+
+- What do these products promise in one sentence?
+- What jobs do users actually try to delegate?
+- What do users praise as magical or useful?
+- What breaks trust or causes churn?
+- What do they fail to do that Jarvis can do because it runs on the user's Mac?
+- What positioning language creates demand without overpromising?
+
+Output should be a short positioning memo for the website/build agent, not a product architecture debate.
+
+Do not let this block immediate user feedback work. Run it when preparing the website, demo page, or public launch copy.
+
+### 1.2 User education: how to operate Jarvis
 
 Jarvis should teach users that agents are operated through clear natural language, not button-click determinism.
 
