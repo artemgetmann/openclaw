@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
@@ -1611,6 +1612,20 @@ describe("runReplyAgent claude-bridge Telegram prompt envelope", () => {
     expect(call?.provider).toBe("claude-cli");
     expect(call?.extraSystemPrompt).toBe("keep this extra system prompt");
     expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("registers CLI runs so Stop aborts the active CLI signal", async () => {
+    runCliAgentMock.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
+      expect(params.abortSignal?.aborted).toBe(false);
+      expect(abortEmbeddedPiRun("session")).toBe(true);
+      expect(params.abortSignal?.aborted).toBe(true);
+      const err = new Error("CLI run aborted");
+      err.name = "AbortError";
+      throw err;
+    });
+
+    await expect(createCliRun({ provider: "claude-cli" })).resolves.toBeUndefined();
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses the existing Telegram block streaming path for claude-bridge output", async () => {

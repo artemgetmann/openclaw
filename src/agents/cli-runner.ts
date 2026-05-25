@@ -850,6 +850,7 @@ export async function runCliAgent(params: {
   /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
+  abortSignal?: AbortSignal;
   onAssistantMessageStart?: () => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onBlockReply?: (payload: import("../auto-reply/types.js").ReplyPayload) => Promise<void> | void;
@@ -1242,6 +1243,9 @@ export async function runCliAgent(params: {
         let streamedAssistantStarted = false;
         const enqueueStreamingCallback = (task: () => Promise<void> | void) => {
           streamingCallbackChain = streamingCallbackChain.then(async () => {
+            if (params.abortSignal?.aborted) {
+              return;
+            }
             await task();
           });
           void streamingCallbackChain.catch((error) => {
@@ -1255,6 +1259,9 @@ export async function runCliAgent(params: {
                 providerId: backendResolved.id,
                 onAssistantDelta: ({ text }) => {
                   enqueueStreamingCallback(async () => {
+                    if (params.abortSignal?.aborted) {
+                      return;
+                    }
                     if (!streamedAssistantStarted) {
                       streamedAssistantStarted = true;
                       await params.onAssistantMessageStart?.();
@@ -1318,6 +1325,7 @@ export async function runCliAgent(params: {
               systemPrompt,
               mcpConfigHash: preparedBackend.mcpConfigHash,
               mcpResumeHash: preparedBackend.mcpResumeHash,
+              abortSignal: params.abortSignal,
             },
             args,
             env: env as Record<string, string>,
@@ -1327,6 +1335,9 @@ export async function runCliAgent(params: {
             getProcessSupervisor,
             onAssistantDelta: ({ text }) => {
               enqueueStreamingCallback(async () => {
+                if (params.abortSignal?.aborted) {
+                  return;
+                }
                 if (!streamedAssistantStarted) {
                   streamedAssistantStarted = true;
                   await params.onAssistantMessageStart?.();
@@ -1354,9 +1365,46 @@ export async function runCliAgent(params: {
           cwd: workspaceDir,
           env,
           input: stdinPayload,
-          onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
+          onStdout: streamingParser
+            ? (chunk: string) => {
+                if (params.abortSignal?.aborted) {
+                  return;
+                }
+                streamingParser.push(chunk);
+              }
+            : undefined,
         });
-        const result = await managedRun.wait();
+        const abortError = (): Error => {
+          const err = new Error("CLI run aborted");
+          err.name = "AbortError";
+          return err;
+        };
+        let abortListener: (() => void) | undefined;
+        const abortSignal = params.abortSignal;
+        const abortPromise =
+          abortSignal &&
+          new Promise<never>((_resolve, reject) => {
+            abortListener = () => {
+              managedRun.cancel("manual-cancel");
+              reject(abortError());
+            };
+            if (abortSignal.aborted) {
+              abortListener();
+              return;
+            }
+            abortSignal.addEventListener("abort", abortListener, { once: true });
+          });
+        const result = await (async () => {
+          try {
+            return await (abortPromise
+              ? Promise.race([managedRun.wait(), abortPromise])
+              : managedRun.wait());
+          } finally {
+            if (abortListener) {
+              abortSignal?.removeEventListener("abort", abortListener);
+            }
+          }
+        })();
         streamingParser?.finish();
         await streamingCallbackChain;
 
@@ -1556,6 +1604,7 @@ export async function runClaudeCliAgent(params: {
   ownerNumbers?: string[];
   claudeSessionId?: string;
   images?: ImageContent[];
+  abortSignal?: AbortSignal;
 }): Promise<EmbeddedPiRunResult> {
   return runCliAgent({
     sessionId: params.sessionId,
@@ -1574,5 +1623,6 @@ export async function runClaudeCliAgent(params: {
     ownerNumbers: params.ownerNumbers,
     cliSessionId: params.claudeSessionId,
     images: params.images,
+    abortSignal: params.abortSignal,
   });
 }
