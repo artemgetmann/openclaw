@@ -51,7 +51,7 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
         case .accountActivation:
             return JarvisAccountActivationCopy.stepSubtitle
         case .telegram:
-            return "Connect the bot and prove one real task works."
+            return "Telegram will open so you can approve Jarvis."
         }
     }
 

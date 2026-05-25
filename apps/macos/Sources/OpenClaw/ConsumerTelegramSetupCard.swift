@@ -32,6 +32,36 @@ struct ConsumerTelegramSetupCardContent: View {
         }
     }
 
+    private var readyForFirstTaskVerification: Bool {
+        // Show the first-DM step only after setup has real bot evidence. The
+        // default screen should stay focused on creating/approving the managed
+        // bot instead of asking for a message the user cannot send yet.
+        !self.normalizedToken.isEmpty
+            || self.store.consumerTelegramLooksLive()
+            || self.store.consumerTelegramBotUsername() != nil
+    }
+
+    private var managedSetupCanBeChecked: Bool {
+        self.store.telegramManagedSetupId != nil || self.store.telegramManagedApprovalURL != nil
+    }
+
+    private var awaitingManagedApproval: Bool {
+        !self.readyForFirstTaskVerification
+            && (self.managedSetupCanBeChecked || self.store.telegramManagedSuggestedBotUsername != nil)
+    }
+
+    private var pendingApprovalInstruction: String? {
+        guard self.awaitingManagedApproval else { return nil }
+        return self.store.telegramManagedSuggestedBotUsername.map {
+            "In Telegram, approve @\($0), click Create, then click Check status here."
+        } ?? "In Telegram, approve the bot, click Create, then click Check status here."
+    }
+
+    private var showsInitialSetupAction: Bool {
+        (!self.awaitingManagedApproval && !self.readyForFirstTaskVerification)
+            || self.managedSetupIsBusy
+    }
+
     private var statusText: String? {
         if let conflict = self.store.consumerTelegramConflictMessage(self.store.telegramSetupStatus) {
             return conflict
@@ -42,16 +72,23 @@ struct ConsumerTelegramSetupCardContent: View {
         return self.store.telegramSetupStatus
     }
 
+    private var visibleStatusText: String? {
+        guard let statusText else { return nil }
+        if self.awaitingManagedApproval, self.isManagedApprovalInstruction(statusText) {
+            return nil
+        }
+        if self.readyForFirstTaskVerification, self.isFirstTaskInstruction(statusText) {
+            return nil
+        }
+        return statusText
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if self.presentation == .onboarding {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Connect Telegram")
-                        .font(.headline)
-                    Text("Create your Jarvis bot, approve it in Telegram, then send one DM task to confirm it works.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Jarvis works through a private Telegram bot on this Mac.")
+                        .font(.subheadline.weight(.semibold))
                 }
             }
 
@@ -89,81 +126,93 @@ struct ConsumerTelegramSetupCardContent: View {
 
     private var setupState: some View {
         VStack(alignment: .leading, spacing: 14) {
-            self.callout(
-                title: self.store.consumerTelegramLooksLive() ? "One task left" : "Create your Telegram bot",
-                body: self.store.consumerTelegramLooksLive()
-                    ? "The bot is connected. Click Verify to approve your sender, then send one fresh DM."
-                    : "\(AppFlavor.current.appName) will open Telegram so you can approve and create a new bot. Use Jarvis or edit the bot name, then click Create.")
+            if self.presentation == .settings
+                || (self.store.consumerTelegramLooksLive() && !self.readyForFirstTaskVerification)
+            {
+                self.callout(
+                    title: self.store.consumerTelegramLooksLive() ? "One task left" : "Private Telegram bot",
+                    body: self.store.consumerTelegramLooksLive()
+                        ? "The bot is ready for the final Telegram check."
+                        : "\(AppFlavor.current.appName) will open Telegram so you can approve the bot.")
+            }
 
-            HStack(spacing: 10) {
-                Button("Create Telegram bot") {
-                    Task { await self.store.startManagedTelegramSetup() }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(self.store.telegramBusy || self.store.telegramSetupPhase != .idle)
+            if self.showsInitialSetupAction {
+                HStack(spacing: 10) {
+                    Button("Set Up in Telegram") {
+                        Task { await self.store.startManagedTelegramSetup() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.store.telegramBusy || self.store.telegramSetupPhase != .idle)
 
-                if self.managedSetupIsBusy {
-                    ProgressView().controlSize(.small)
+                    if self.managedSetupIsBusy {
+                        ProgressView().controlSize(.small)
+                    }
                 }
             }
 
-            if let suggestedUsername = self.store.telegramManagedSuggestedBotUsername {
-                Text("In Telegram, approve @\(suggestedUsername), use Jarvis or edit the bot name, then click Create.")
+            if let pendingApprovalInstruction {
+                Text(pendingApprovalInstruction)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: 10) {
-                if self.store.telegramManagedApprovalURL != nil {
-                    Button("Open approval") {
-                        self.store.openTelegramManagedApproval()
+            if self.awaitingManagedApproval {
+                HStack(spacing: 10) {
+                    if self.store.telegramManagedApprovalURL != nil {
+                        Button("Open Telegram") {
+                            self.store.openTelegramManagedApproval()
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
-                }
 
-                Button("Check status") {
-                    Task { await self.store.checkManagedTelegramSetupStatus() }
-                }
-                .buttonStyle(.bordered)
-                .disabled(
-                    self.store.telegramBusy
-                        || self.store.telegramManagedSetupId == nil
-                        || self.store.telegramSetupPhase != .idle)
-
-                if let username = self.store.consumerTelegramBotUsername() {
-                    Button("Open your bot") {
-                        self.store.openTelegramBot(username: username)
+                    if self.managedSetupCanBeChecked {
+                        Button("Check status") {
+                            Task { await self.store.checkManagedTelegramSetupStatus() }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(
+                            self.store.telegramBusy
+                                || self.store.telegramManagedSetupId == nil
+                                || self.store.telegramSetupPhase != .idle)
                     }
-                    .buttonStyle(.bordered)
                 }
             }
 
-            Text("Click Verify first task. When access is approved, send \"Wake up my friend!\" to the bot in Telegram.")
-                .font(.callout)
+            if self.readyForFirstTaskVerification {
+                Text("Bot connected. Send \"Wake up my friend\" to Jarvis in Telegram, then click Verify Telegram.")
+                    .font(.callout)
 
-            HStack(spacing: 10) {
-                Button("Verify first task") {
-                    self.tokenFieldFocused = false
-                    Task { await self.store.verifyConsumerTelegramFirstTask() }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(
-                    self.store.telegramBusy
-                        || self.normalizedToken.isEmpty
-                        || self.runtimeOwnershipIssue != nil)
+                HStack(spacing: 10) {
+                    if let username = self.store.consumerTelegramBotUsername() {
+                        Button("Open your bot") {
+                            self.store.openTelegramBot(username: username)
+                        }
+                        .buttonStyle(.bordered)
+                    }
 
-                if self.store.telegramSetupWaitingForDM
-                    || self.store.telegramSetupPhase == .savingSetup
-                    || self.store.telegramSetupPhase == .startingFirstReply
-                {
-                    ProgressView().controlSize(.small)
-                }
+                    Button("Verify Telegram") {
+                        self.tokenFieldFocused = false
+                        Task { await self.store.verifyConsumerTelegramFirstTask() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        self.store.telegramBusy
+                            || self.normalizedToken.isEmpty
+                            || self.runtimeOwnershipIssue != nil)
 
-                if let senderId = self.store.telegramSetupFirstSenderId {
-                    Text("Verified sender: \(senderId)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if self.store.telegramSetupWaitingForDM
+                        || self.store.telegramSetupPhase == .savingSetup
+                        || self.store.telegramSetupPhase == .startingFirstReply
+                    {
+                        ProgressView().controlSize(.small)
+                    }
+
+                    if let senderId = self.store.telegramSetupFirstSenderId {
+                        Text("Verified sender: \(senderId)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -174,17 +223,18 @@ struct ConsumerTelegramSetupCardContent: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if let statusText {
+            if let statusText = self.visibleStatusText {
                 Text(statusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            DisclosureGroup("Advanced: use BotFather instead", isExpanded: self.$manualSetupExpanded) {
+            DisclosureGroup("Advanced: use an existing bot with BotFather", isExpanded: self.$manualSetupExpanded) {
                 self.manualBotFatherSetup
             }
             .font(.callout)
+            .padding(.top, self.presentation == .onboarding ? 28 : 8)
         }
     }
 
@@ -243,7 +293,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 }
             }
 
-            Text("Start with a DM. Groups and topics are the next setup step after the first task works.")
+            Text("Start with a direct message. Group setup comes later.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -258,5 +308,19 @@ struct ConsumerTelegramSetupCardContent: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func isManagedApprovalInstruction(_ text: String) -> Bool {
+        let normalized = text.lowercased()
+        return normalized.contains("approve")
+            && normalized.contains("click create")
+            && (normalized.contains("check status") || normalized.contains("check again"))
+    }
+
+    private func isFirstTaskInstruction(_ text: String) -> Bool {
+        let normalized = text.lowercased()
+        return normalized.contains("click verify first task")
+            || normalized.contains("send \"wake up my friend")
+            || normalized.contains("first task to approve sender access")
     }
 }
