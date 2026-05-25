@@ -489,12 +489,14 @@ export function createBrowserTool(opts?: {
             );
           }
           return jsonResult(await browserStatus(baseUrl, { profile }));
-        case "start":
+        case "start": {
+          const { timeoutMs: startTimeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             await proxyRequest({
               method: "POST",
               path: "/start",
               profile,
+              timeoutMs: startTimeoutMs ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS,
             });
             return jsonResult(
               await proxyRequest({
@@ -504,8 +506,12 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          await browserStart(baseUrl, { profile });
+          await browserStart(baseUrl, {
+            profile,
+            timeoutMs: startTimeoutMs ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS,
+          });
           return jsonResult(await browserStatus(baseUrl, { profile }));
+        }
         case "stop":
           if (proxyRequest) {
             await proxyRequest({
