@@ -76,6 +76,29 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out[3]?.role).toBe("user");
   });
 
+  it("uses neutral model-facing text for synthesized missing tool results", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "browser", arguments: {} }],
+        stopReason: "toolUse",
+      },
+      { role: "user", content: "next message" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+    const synthetic = result.added[0];
+    const text = synthetic?.content.find((block) => block.type === "text")?.text ?? "";
+
+    expect(result.added).toHaveLength(1);
+    expect(text).toContain("interrupted before returning a result");
+    expect(text).toContain("current state is unknown");
+    expect(text).toContain("re-check state before making claims");
+    expect(text).not.toContain("missing tool result");
+    expect(text).not.toContain("session history");
+    expect(text).not.toContain("transcript repair");
+  });
+
   it("repairs blank tool result names from matching tool calls", () => {
     const input = castAgentMessages([
       {
