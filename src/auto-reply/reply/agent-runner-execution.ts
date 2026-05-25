@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { abortProcessSessionsForScope } from "../../agents/bash-process-abort.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
@@ -318,6 +319,12 @@ export async function runAgentTurnWithFallback(params: {
                 }
                 const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
                 const cliAbortController = new AbortController();
+                const createCliRunAbortReason = () => {
+                  const err = new Error("CLI run aborted");
+                  err.name = "AbortError";
+                  (err as Error & { code?: string }).code = "OPENCLAW_AGENT_RUN_ABORT";
+                  return err;
+                };
                 const abortFromOuterSignal = () => {
                   if (!cliAbortController.signal.aborted) {
                     cliAbortController.abort(params.opts?.abortSignal?.reason);
@@ -339,8 +346,9 @@ export async function runAgentTurnWithFallback(params: {
                   isCompacting: () => false,
                   abort: () => {
                     if (!cliAbortController.signal.aborted) {
-                      cliAbortController.abort(new Error("CLI run aborted"));
+                      cliAbortController.abort(createCliRunAbortReason());
                     }
+                    abortProcessSessionsForScope(params.sessionKey);
                   },
                 };
                 setActiveEmbeddedRun(

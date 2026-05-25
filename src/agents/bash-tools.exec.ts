@@ -55,6 +55,11 @@ export type {
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 
+function isManualAgentRunAbort(signal?: AbortSignal): boolean {
+  const reason = signal?.reason as { code?: unknown } | undefined;
+  return reason?.code === "OPENCLAW_AGENT_RUN_ABORT";
+}
+
 function resolveExecPermissionDefaults(agentId?: string) {
   try {
     return resolvePermissionDefaults({
@@ -598,9 +603,12 @@ export function createExecTool(
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
 
-      // Tool-call abort should not kill backgrounded sessions; timeouts still must.
+      // Ordinary tool-call aborts should not kill backgrounded sessions; those
+      // are intentionally handed off to the process tool. A manual agent-run
+      // abort is different: the user asked the whole run to stop, so any
+      // command it just backgrounded must stop too.
       const onAbortSignal = () => {
-        if (yielded || run.session.backgrounded) {
+        if ((yielded || run.session.backgrounded) && !isManualAgentRunAbort(signal)) {
           return;
         }
         run.kill();

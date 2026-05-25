@@ -260,6 +260,10 @@ export function listRunningSessions() {
   return Array.from(runningSessions.values()).filter((s) => s.backgrounded);
 }
 
+export function listActiveSessions() {
+  return Array.from(runningSessions.values());
+}
+
 export function listFinishedSessions() {
   return Array.from(finishedSessions.values());
 }
