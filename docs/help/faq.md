@@ -1057,11 +1057,22 @@ Showcase: [https://openclaw.ai/showcase](https://openclaw.ai/showcase)
 
 ### How do I customize skills without keeping the repo dirty
 
-Use managed overrides instead of editing the repo copy. Put your changes in `~/.openclaw/skills/<name>/SKILL.md` (or add a folder via `skills.load.extraDirs` in `~/.openclaw/openclaw.json`). Precedence is `<workspace>/skills` > `~/.openclaw/skills` > bundled, so managed overrides win without touching git. Only upstream-worthy edits should live in the repo and go out as PRs.
+Use managed overrides instead of editing the repo copy. Put shared personal
+skills in `~/.agents/skills/<name>/SKILL.md`; skills onboarding links
+OpenClaw's managed root (`~/.openclaw/skills`, or the app-owned state dir) there
+when safe. You can also add a folder via `skills.load.extraDirs` in
+`~/.openclaw/openclaw.json`. Precedence is `<workspace>/skills` >
+`<workspace>/.agents/skills` > managed skills > bundled, so managed overrides
+win without touching git. Only upstream-worthy edits should live in the repo and
+go out as PRs.
 
 ### Can I load skills from a custom folder
 
-Yes. Add extra directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence). Default precedence remains: `<workspace>/skills` → `~/.openclaw/skills` → bundled → `skills.load.extraDirs`. `clawhub` installs into `./skills` by default, which OpenClaw treats as `<workspace>/skills`.
+Yes. Add extra directories via `skills.load.extraDirs` in
+`~/.openclaw/openclaw.json` (lowest precedence). Default precedence remains:
+`<workspace>/skills` → `<workspace>/.agents/skills` → managed skills → bundled
+→ `skills.load.extraDirs`. `clawhub` installs into `./skills` by default, which
+OpenClaw treats as `<workspace>/skills`.
 
 ### How can I use different models for different tasks
 
@@ -1212,7 +1223,7 @@ clawhub install <skill-slug>
 clawhub update --all
 ```
 
-ClawHub installs into `./skills` under your current directory (or falls back to your configured OpenClaw workspace); OpenClaw treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawHub](/tools/clawhub).
+ClawHub installs into `./skills` under your current directory (or falls back to your configured OpenClaw workspace); OpenClaw treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.agents/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawHub](/tools/clawhub).
 
 ### How do I use my existing signed-in Chrome with OpenClaw
 
@@ -1361,8 +1372,9 @@ These files live in the **agent workspace**, not `~/.openclaw`.
 - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
   `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
   `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
-- **State dir (`~/.openclaw`)**: config, credentials, auth profiles, sessions, logs,
-  and shared skills (`~/.openclaw/skills`).
+- **State dir (`~/.openclaw`)**: config, credentials, auth profiles, sessions,
+  logs, and the managed skills link (`~/.openclaw/skills`) to
+  `~/.agents/skills` when skills onboarding can set it up safely.
 
 Default workspace is `~/.openclaw/workspace`, configurable via:
 

@@ -52,8 +52,8 @@ hide the skill.
 
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
   For personal skills shared across agents, keep the real folders in
-  `~/.agents/skills` and symlink the active OpenClaw managed root
-  (`$OPENCLAW_STATE_DIR/skills`) to that directory.
+  `~/.agents/skills`. Skills onboarding creates that directory and symlinks the
+  active OpenClaw managed root (`$OPENCLAW_STATE_DIR/skills`) to it when safe.
 - `load.watch`: watch skill folders and refresh the skills snapshot (default: true).
 - `load.watchDebounceMs`: debounce for skill watcher events in milliseconds (default: 250).
 - `install.preferBrew`: prefer brew installers when available (default: true).
@@ -77,9 +77,11 @@ Per-skill fields:
 - Workspace skill symlinks that resolve outside the workspace root are blocked
   for safety. If you want OpenClaw, Codex, and Claude Code to share skills, keep
   the real folders under `~/.agents/skills` and symlink each tool's skills root
-  to that directory. For OpenClaw, that means `~/.openclaw/skills` for the
-  legacy runtime or `~/Library/Application Support/OpenClaw/.openclaw/skills`
-  for the app-owned runtime.
+  to that directory. OpenClaw skills onboarding handles its managed root
+  automatically when the target is missing or empty. For OpenClaw, that managed
+  root is `~/.openclaw/skills` for the legacy runtime or
+  `~/Library/Application Support/OpenClaw/.openclaw/skills` for the app-owned
+  runtime.
 
 ### Sandboxed skills + env vars
 

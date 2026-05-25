@@ -6,6 +6,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
+import { ensureSharedPersonalSkillsManagedRoot } from "./onboard-shared-skills-root.js";
 
 function summarizeInstallFailure(message: string): string | undefined {
   const cleaned = message.replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "").trim();
@@ -53,6 +54,7 @@ export async function setupSkills(
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
+  ensureSharedPersonalSkillsManagedRoot();
   const report = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
   const eligible = report.skills.filter((s) => s.eligible);
   const unsupportedOs = report.skills.filter(

@@ -18,6 +18,9 @@ vi.mock("./onboard-helpers.js", () => ({
     { value: "bun", label: "bun" },
   ]),
 }));
+vi.mock("./onboard-shared-skills-root.js", () => ({
+  ensureSharedPersonalSkillsManagedRoot: vi.fn(),
+}));
 
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";

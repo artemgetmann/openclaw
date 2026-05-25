@@ -25,12 +25,18 @@ If a skill name conflicts, precedence is:
 `<workspace>/skills` (highest) → `<workspace>/.agents/skills` → `$OPENCLAW_STATE_DIR/skills` → bundled skills → `skills.load.extraDirs` (lowest)
 
 For personal cross-agent skills, use `~/.agents/skills` as the canonical
-filesystem root and symlink the active OpenClaw managed root to it. For the
-legacy CLI runtime that means `~/.openclaw/skills`; for the app-owned runtime
-that means `~/Library/Application Support/OpenClaw/.openclaw/skills`. That keeps
-OpenClaw, Codex, Claude Code, and other agents on the same skill directory
-without adding a second OpenClaw-only discovery path. Workspace symlinks that
-resolve outside the workspace root are blocked by design.
+filesystem root. During skills onboarding, OpenClaw creates that directory and
+symlinks the active OpenClaw managed root to it when the managed root is missing
+or empty. For the legacy CLI runtime that means `~/.openclaw/skills`; for the
+app-owned runtime that means
+`~/Library/Application Support/OpenClaw/.openclaw/skills`.
+
+Run `scripts/migrate-personal-skills-to-agents-root.sh` to copy existing skills
+from Codex, Claude Code, and OpenClaw roots into `~/.agents/skills` and set up
+those managed-root symlinks when safe. That keeps OpenClaw, Codex, Claude Code,
+and other agents on the same skill directory without adding a second
+OpenClaw-only discovery path. Workspace symlinks that resolve outside the
+workspace root are blocked by design.
 
 ## Per-agent vs shared skills
 
