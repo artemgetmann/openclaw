@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
+import { ensureSharedPersonalSkillsManagedRoot } from "../../onboard-shared-skills-root.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 export const CONSUMER_DEFAULT_BUNDLED_SKILLS = [
@@ -59,6 +60,7 @@ export function applyNonInteractiveSkillsConfig(params: {
   if (opts.skipSkills) {
     return nextConfig;
   }
+  ensureSharedPersonalSkillsManagedRoot();
 
   const nodeManager = opts.nodeManager ?? "npm";
   if (!["npm", "pnpm", "bun"].includes(nodeManager)) {

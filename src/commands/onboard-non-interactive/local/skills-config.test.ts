@@ -7,6 +7,11 @@ import { buildWorkspaceSkillsPrompt } from "../../../agents/skills.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
+
+vi.mock("../../onboard-shared-skills-root.js", () => ({
+  ensureSharedPersonalSkillsManagedRoot: vi.fn(),
+}));
+
 import {
   applyNonInteractiveSkillsConfig,
   buildConsumerBundledSkillAllowlist,
