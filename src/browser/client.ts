@@ -9,6 +9,11 @@ const BROWSER_PAGE_LOAD_TIMEOUT_MS = 45_000;
 const BROWSER_STATUS_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
 const BROWSER_PROFILES_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
 const BROWSER_TABS_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
+// Starting a managed profile can include profile cloning, Chrome launch, and
+// post-launch CDP readiness checks. Keep this aligned with other heavy browser
+// operations so cold signed-in starts do not false-fail while Chrome is still
+// coming up.
+const BROWSER_START_TIMEOUT_MS = BROWSER_PAGE_LOAD_TIMEOUT_MS;
 // Tab focus/close can be the first attach-sensitive call after the model picks
 // a target tab. If these stay on a generic 5s budget, existing-session Chrome
 // lanes false-timeout even though the same lane succeeds via status/tabs/snapshot.
@@ -148,11 +153,15 @@ export async function browserProfiles(baseUrl?: string): Promise<ProfileStatus[]
   return res.profiles ?? [];
 }
 
-export async function browserStart(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
+export async function browserStart(
+  baseUrl?: string,
+  opts?: { profile?: string; timeoutMs?: number },
+): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
+  const timeoutMs = Math.max(BROWSER_START_TIMEOUT_MS, opts?.timeoutMs ?? 0);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
-    timeoutMs: 15000,
+    timeoutMs,
   });
 }
 

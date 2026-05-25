@@ -245,6 +245,35 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined);
   });
 
+  it("uses the heavy browser timeout budget for browser start", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "start",
+      profile: "signed-in",
+    });
+
+    expect(browserClientMocks.browserStart).toHaveBeenCalledWith(undefined, {
+      profile: "signed-in",
+      timeoutMs: 45_000,
+    });
+  });
+
+  it("passes larger browser start timeout overrides through", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "start",
+      profile: "signed-in",
+      timeoutMs: 60_000,
+    });
+
+    expect(browserClientMocks.browserStart).toHaveBeenCalledWith(undefined, {
+      profile: "signed-in",
+      timeoutMs: 60_000,
+    });
+  });
+
   it("passes refs mode through to browser snapshot", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai", refs: "aria" });

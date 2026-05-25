@@ -14,6 +14,7 @@ import {
   browserOpenTab,
   browserProfiles,
   browserSnapshot,
+  browserStart,
   browserStatus,
   browserTabs,
 } from "./client.js";
@@ -225,6 +226,49 @@ describe("browser client", () => {
 
     expect(calls[0]?.init?.timeoutMs).toBe(45_000);
     expect(calls[1]?.init?.timeoutMs).toBe(45_000);
+  });
+
+  it("uses the heavy browser timeout budget for managed browser starts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          json: async () => ({ ok: true }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserStart("http://127.0.0.1:18791", { profile: "signed-in" });
+
+    expect(calls[0]?.url).toBe("http://127.0.0.1:18791/start?profile=signed-in");
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(calls[0]?.init?.timeoutMs).toBe(45_000);
+  });
+
+  it("honors larger caller timeout overrides for managed browser starts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          json: async () => ({ ok: true }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserStart("http://127.0.0.1:18791", {
+      profile: "signed-in",
+      timeoutMs: 60_000,
+    });
+
+    expect(calls[0]?.init?.timeoutMs).toBe(60_000);
   });
 
   it("omits format when the caller wants server-side snapshot capability defaults", async () => {
