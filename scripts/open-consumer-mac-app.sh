@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/worktree-guards.sh"
+source "$ROOT_DIR/scripts/lib/gateway-launchagent-guard.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
@@ -32,56 +33,11 @@ terminate_matching_app_binary() {
   /bin/kill "${pids[@]}" 2>/dev/null || true
 }
 
-plist_value() {
-  local plist_path="$1"
-  local key_path="$2"
-  /usr/libexec/PlistBuddy -c "Print :${key_path}" "$plist_path" 2>/dev/null || true
-}
-
 bootout_conflicting_gateway_label() {
-  local label="$1"
-  local target_label="$2"
-  local target_state_dir="$3"
-  local target_config_path="$4"
-  local target_port="$5"
-
   # This helper is advisory cleanup for stale launchd labels, not a required
-  # gate. It runs under `set -e`, so every "nothing to do" exit path must return
-  # success explicitly or the relaunch flow aborts before the gateway refresh.
-  [[ "$label" == "$target_label" ]] && return 0
-
-  local plist_path="$HOME/Library/LaunchAgents/${label}.plist"
-  [[ -f "$plist_path" ]] || return 0
-
-  local existing_state_dir
-  local existing_config_path
-  local existing_port=""
-  local index=0
-  local arg=""
-
-  existing_state_dir="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_STATE_DIR')"
-  existing_config_path="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_CONFIG_PATH')"
-
-  while true; do
-    arg="$(plist_value "$plist_path" "ProgramArguments:${index}")"
-    [[ -n "$arg" ]] || break
-    if [[ "$arg" == "--port" ]]; then
-      existing_port="$(plist_value "$plist_path" "ProgramArguments:$((index + 1))")"
-      break
-    fi
-    if [[ "$arg" == --port=* ]]; then
-      existing_port="${arg#--port=}"
-      break
-    fi
-    index=$((index + 1))
-  done
-
-  if [[ "$existing_state_dir" != "$target_state_dir" && "$existing_config_path" != "$target_config_path" && "$existing_port" != "$target_port" ]]; then
-    return 0
-  fi
-
-  /bin/launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
-  /bin/launchctl unload "$plist_path" >/dev/null 2>&1 || true
+  # gate. It delegates the default-gateway invariant to a shared guard so named
+  # consumer lanes cannot accidentally unload the main Jarvis gateway.
+  openclaw_bootout_conflicting_gateway_label "$@"
 }
 
 refresh_gateway_service_env() {

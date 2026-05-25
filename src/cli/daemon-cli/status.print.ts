@@ -265,6 +265,26 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
+  if (status.canonicalDefaultGateway?.missing) {
+    defaultRuntime.error(
+      errorText(
+        `Canonical shared gateway ${status.canonicalDefaultGateway.label} is missing/not loaded.`,
+      ),
+    );
+    defaultRuntime.error(errorText(`Root cause: ${status.canonicalDefaultGateway.reason}.`));
+    defaultRuntime.error(
+      errorText(
+        "Other gateway-like services or openclaw-gateway processes do not satisfy the main Jarvis runtime.",
+      ),
+    );
+    defaultRuntime.error(
+      errorText(
+        `Fix: from ~/Programming_Projects/openclaw on main, run ${status.canonicalDefaultGateway.recoveryCommand}.`,
+      ),
+    );
+    spacer();
+  }
+
   if (service.runtime?.cachedLabel) {
     const env = service.command?.environment ?? process.env;
     const daemonEnv = resolveGatewayRuntimeIdentityEnv(env);

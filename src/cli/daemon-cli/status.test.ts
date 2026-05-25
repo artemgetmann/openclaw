@@ -130,4 +130,39 @@ describe("runDaemonStatus", () => {
 
     expect(printDaemonStatus).toHaveBeenCalledTimes(1);
   });
+
+  it("exits when the canonical default gateway is missing", async () => {
+    gatherDaemonStatus.mockResolvedValueOnce({
+      service: {
+        label: "LaunchAgent",
+        loaded: false,
+        loadedText: "loaded",
+        notLoadedText: "not loaded",
+      },
+      canonicalDefaultGateway: {
+        missing: true,
+        label: "ai.openclaw.gateway",
+        reason: "canonical shared gateway LaunchAgent is not loaded",
+        recoveryCommand: "bash scripts/gateway-recover-main.sh",
+      },
+      extraServices: [
+        {
+          label: "ai.openclaw.consumer.foo.gateway",
+          detail: "plist: /tmp/foo.plist",
+          scope: "user",
+        },
+      ],
+    });
+
+    await expect(
+      runDaemonStatus({
+        rpc: {},
+        probe: true,
+        requireRpc: false,
+        json: false,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(printDaemonStatus).toHaveBeenCalledTimes(1);
+  });
 });

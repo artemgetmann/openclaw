@@ -9,6 +9,7 @@ import type {
   GatewayBindMode,
   GatewayControlUiConfig,
 } from "../../config/types.js";
+import { GATEWAY_LAUNCH_AGENT_LABEL } from "../../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import { findExtraGatewayServices } from "../../daemon/inspect.js";
@@ -73,6 +74,13 @@ type GatewayPortMismatchSummary = {
   serviceConfigPath: string;
   expectedConfigPath: string;
   issues: string[];
+};
+
+type CanonicalDefaultGatewaySummary = {
+  missing: boolean;
+  label: string;
+  reason: string;
+  recoveryCommand: string;
 };
 
 type DaemonConfigContext = {
@@ -149,6 +157,7 @@ export type DaemonStatus = {
     healthy: boolean;
     staleGatewayPids: number[];
   };
+  canonicalDefaultGateway?: CanonicalDefaultGatewaySummary;
   extraServices: Array<{ label: string; detail: string; scope: string }>;
 };
 
@@ -181,6 +190,21 @@ function isCanonicalAppOwnedDefaultServiceEnv(serviceEnv: Record<string, string>
   // command should inspect the loaded service env instead of inventing
   // ~/.openclaw as the expected config root.
   return stateDir === `${home}/.openclaw` && configPath === `${stateDir}/openclaw.json`;
+}
+
+function isDefaultGatewayStatusTarget(params: {
+  cliEnv: Record<string, string | undefined>;
+  serviceEnv?: Record<string, string>;
+}): boolean {
+  const label =
+    params.serviceEnv?.OPENCLAW_LAUNCHD_LABEL?.trim() ||
+    params.cliEnv.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const profile = params.serviceEnv?.OPENCLAW_PROFILE?.trim() || params.cliEnv.OPENCLAW_PROFILE;
+
+  if (label) {
+    return label === GATEWAY_LAUNCH_AGENT_LABEL;
+  }
+  return !profile || profile === "default" || profile === "consumer";
 }
 
 function shouldAdoptCanonicalServiceEnv(params: {
@@ -488,6 +512,23 @@ export async function gatherDaemonStatus(
     lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
   }
 
+  const isDefaultTarget = isDefaultGatewayStatusTarget({
+    cliEnv,
+    serviceEnv: command?.environment,
+  });
+  const canonicalDefaultGateway =
+    isDefaultTarget && !loaded
+      ? {
+          missing: true,
+          label: GATEWAY_LAUNCH_AGENT_LABEL,
+          reason:
+            runtime?.missingUnit === true
+              ? "canonical shared gateway LaunchAgent is missing or not registered"
+              : "canonical shared gateway LaunchAgent is not loaded",
+          recoveryCommand: "bash scripts/gateway-recover-main.sh",
+        }
+      : undefined;
+
   return {
     runtimeFingerprint: resolveRuntimeFingerprint({
       env: serviceEnv,
@@ -529,6 +570,7 @@ export async function gatherDaemonStatus(
           },
         }
       : {}),
+    ...(canonicalDefaultGateway ? { canonicalDefaultGateway } : {}),
     extraServices,
   };
 }

@@ -15,6 +15,7 @@ WATCHDOG_ERR_LOG="/tmp/openclaw/gateway-watchdog.err.log"
 WATCHDOG_STABILIZE_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_STABILIZE_SECONDS:-8}"
 WATCHDOG_AUTO_DISABLE_ON_DUPLICATE="${OPENCLAW_GATEWAY_WATCHDOG_AUTO_DISABLE_ON_DUPLICATE:-1}"
 MANAGE_WATCHDOG="${OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG:-1}"
+DEFAULT_GATEWAY_STOPPED_FOR_RECOVERY=0
 OPENCLAW_ENTRYPOINT="${MAIN_REPO}/openclaw.mjs"
 VALIDATED_NODE_HELPER="${MAIN_REPO}/scripts/lib/validated-node.sh"
 SHARED_RUNTIME_BUILD_SCRIPT="${MAIN_REPO}/scripts/build-shared-runtime.sh"
@@ -120,6 +121,17 @@ log_block() {
   local title="$1"
   printf '\n[gateway-recover-main] %s\n' "$title"
 }
+
+report_stopped_default_gateway_on_exit() {
+  local exit_code="$?"
+  if [[ "${DEFAULT_GATEWAY_STOPPED_FOR_RECOVERY}" == "1" ]]; then
+    printf '[gateway-recover-main] ERROR: recovery exited while %s was intentionally stopped and not reloaded.\n' "${GATEWAY_LABEL}" >&2
+    printf '[gateway-recover-main] Rerun from %s: bash scripts/gateway-recover-main.sh\n' "${MAIN_REPO}" >&2
+  fi
+  exit "${exit_code}"
+}
+
+trap report_stopped_default_gateway_on_exit EXIT
 
 resolve_fd_path() {
   local fd="$1"
@@ -306,6 +318,20 @@ assert_main_runtime_path() {
   fi
 }
 
+assert_launch_agent_running_or_exit() {
+  local label="$1"
+  local output=""
+  if ! output="$(launchctl print "gui/$(id -u)/${label}" 2>&1)"; then
+    dump_failure_diagnostics "launchctl print gui/\$(id -u)/${label}" "$output"
+    exit 1
+  fi
+
+  if ! printf '%s\n' "$output" | grep -E -q 'state = running|pid = [1-9][0-9]*'; then
+    dump_failure_diagnostics "assert ${label} launch agent is running" "$output"
+    exit 1
+  fi
+}
+
 wait_for_listener() {
   local start_epoch
   start_epoch="$(date +%s)"
@@ -468,6 +494,7 @@ main() {
   log_block "Full clean stop"
   local uid
   uid="$(id -u)"
+  DEFAULT_GATEWAY_STOPPED_FOR_RECOVERY=1
   launchctl bootout "gui/${uid}/${GATEWAY_LABEL}" 2>/dev/null || true
   if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
     launchctl bootout "gui/${uid}/${WATCHDOG_LABEL}" 2>/dev/null || true
@@ -488,6 +515,8 @@ main() {
 
   log_block "Bootstrap gateway launch agent"
   kickstart_launch_agent_or_exit "${GATEWAY_LABEL}" "${HOME}/Library/LaunchAgents/${GATEWAY_LABEL}.plist"
+  assert_launch_agent_running_or_exit "${GATEWAY_LABEL}"
+  DEFAULT_GATEWAY_STOPPED_FOR_RECOVERY=0
 
   log_block "Readiness gates"
   wait_for_listener
@@ -496,19 +525,33 @@ main() {
   if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
     log_block "Bootstrap watchdog launch agent"
     kickstart_launch_agent_or_exit "${WATCHDOG_LABEL}" "${HOME}/Library/LaunchAgents/${WATCHDOG_LABEL}.plist"
+    assert_launch_agent_running_or_exit "${WATCHDOG_LABEL}"
     stabilize_watchdog
+  else
+    printf '[gateway-recover-main] Watchdog management disabled by OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG=0; not asserting %s.\n' "${WATCHDOG_LABEL}" >&2
   fi
 
   log_block "Final verification"
   assert_main_runtime_path
+  assert_launch_agent_running_or_exit "${GATEWAY_LABEL}"
+  if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
+    assert_launch_agent_running_or_exit "${WATCHDOG_LABEL}"
+  fi
   local launch_command
   launch_command="$(launchctl print "gui/$(id -u)/${GATEWAY_LABEL}" | grep -F -- "${EXPECTED_RUNTIME}" || true)"
+  local watchdog_command=""
+  if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
+    watchdog_command="$(launchctl print "gui/$(id -u)/${WATCHDOG_LABEL}" | grep -F -- "gateway-watchdog.sh" || true)"
+  fi
   local http_result
   http_result="$(curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/healthz" 2>&1 | head -n 5)"
   local listener_result
   listener_result="$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>&1)"
 
   printf 'LaunchAgent command path:\n%s\n' "${launch_command}"
+  if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
+    printf '\nWatchdog LaunchAgent command path:\n%s\n' "${watchdog_command}"
+  fi
   printf '\nHTTP probe result:\n%s\n' "${http_result}"
   printf '\nListener result on %s:\n%s\n' "${PORT}" "${listener_result}"
 }
