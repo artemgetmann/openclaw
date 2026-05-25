@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = path.join(process.cwd(), "scripts", "gateway-recover-main.sh");
+const WATCHDOG_SCRIPT_PATH = path.join(process.cwd(), "scripts", "gateway-watchdog.sh");
 
 describe("scripts/gateway-recover-main.sh", () => {
   it("reinstalls the shared gateway with canonical App Support env only", () => {
@@ -34,5 +35,68 @@ describe("scripts/gateway-recover-main.sh", () => {
 
     expect(script).toContain('"http://127.0.0.1:${PORT}/healthz"');
     expect(script).not.toContain('"http://127.0.0.1:${PORT}/"');
+  });
+
+  it("exits before restart work when the canonical gateway is already healthy", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    const healthyCallIndex = script.indexOf("if canonical_gateway_healthy; then");
+    const healthyMessageIndex = script.indexOf(
+      "canonical gateway is already healthy; exiting without restart",
+    );
+    const shallowRecoveryIndex = script.indexOf('log_block "Shallow launchd recovery"');
+    const fullStopIndex = script.indexOf('log_block "Full clean stop"');
+
+    expect(script).toContain("canonical_gateway_healthy() {");
+    expect(healthyCallIndex).toBeGreaterThanOrEqual(0);
+    expect(healthyMessageIndex).toBeGreaterThan(healthyCallIndex);
+    expect(healthyMessageIndex).toBeLessThan(shallowRecoveryIndex);
+    expect(healthyMessageIndex).toBeLessThan(fullStopIndex);
+  });
+
+  it("supports shallow launchd recovery without full stop, build, or reinstall", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    const shallowStart = script.indexOf('if [[ "${RECOVERY_MODE}" == "shallow" ]]; then');
+    const shallowEnd = script.indexOf('log_block "Full clean stop"', shallowStart);
+    const shallowBlock = script.slice(shallowStart, shallowEnd);
+
+    expect(script).toContain('RECOVERY_MODE="${OPENCLAW_GATEWAY_RECOVER_MODE:-full}"');
+    expect(script).toContain("--shallow");
+    expect(shallowBlock).toContain('log_block "Shallow launchd recovery"');
+    expect(script).toContain("ensure_gateway_launch_agent_started_or_exit() {");
+    expect(shallowBlock).toContain("ensure_gateway_launch_agent_started_or_exit");
+    expect(shallowBlock).toContain("wait_for_listener");
+    expect(shallowBlock).toContain("wait_for_http_probe");
+    expect(shallowBlock).not.toContain("stop_canonical_main_runtime_pids");
+    expect(shallowBlock).not.toContain("run_shared_runtime_build");
+    expect(shallowBlock).not.toContain("install_main_launch_agent");
+    expect(shallowBlock).not.toContain("bootout");
+  });
+
+  it("avoids broad process cleanup and only kills filtered canonical runtime pids", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).not.toMatch(/\bpkill\b/);
+    expect(script).not.toContain("run_openclaw_cli gateway stop");
+    expect(script).toContain("collect_canonical_main_runtime_pids() {");
+    expect(script).toContain("pid_matches_main_runtime");
+    expect(script).toContain("pgrep -x openclaw-gateway");
+    expect(script).toContain("ps -axo pid=,command=");
+    expect(script).toContain('kill -TERM "${pids[@]}"');
+    expect(script).toContain('kill -KILL "${remaining[@]}"');
+  });
+});
+
+describe("scripts/gateway-watchdog.sh", () => {
+  it("uses shallow recovery and disables watchdog self-management", () => {
+    const script = fs.readFileSync(WATCHDOG_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG=0");
+    expect(script).toContain("OPENCLAW_GATEWAY_RECOVER_MODE=shallow");
+    expect(script).toContain('"${RECOVER_SCRIPT}" --shallow');
+    expect(script).toContain("RECOVERY_BACKOFF_SECONDS=");
+    expect(script).toContain("shallow recovery failed; backing off");
+    expect(script).not.toContain('"${RECOVER_SCRIPT}"\n');
   });
 });
