@@ -17,6 +17,10 @@ export async function runDaemonStatus(opts: DaemonStatusOptions) {
       deep: Boolean(opts.deep),
     });
     printDaemonStatus(status, { json: Boolean(opts.json) });
+    if (status.canonicalDefaultGateway?.missing) {
+      defaultRuntime.exit(1);
+      return;
+    }
     if (status.portMismatch) {
       defaultRuntime.exit(1);
       return;

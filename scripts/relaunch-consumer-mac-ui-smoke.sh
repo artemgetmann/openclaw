@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+source "$ROOT_DIR/scripts/lib/gateway-launchagent-guard.sh"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 
@@ -160,57 +161,11 @@ find_launchd_owned_app_binary_pids() {
   /bin/ps -axo pid=,ppid=,command= | /usr/bin/awk -v target="$binary_path" 'index($0, target) > 0 && $2 == 1 { print $1 }'
 }
 
-plist_value() {
-  local plist_path="$1"
-  local key_path="$2"
-  /usr/libexec/PlistBuddy -c "Print :${key_path}" "$plist_path" 2>/dev/null || true
-}
-
 bootout_conflicting_gateway_label() {
-  local label="$1"
-  local target_label="$2"
-  local target_state_dir="$3"
-  local target_config_path="$4"
-  local target_port="$5"
-
   # This does not manage the default gateway. It only unloads stale labels when
-  # their saved env already points at this isolated consumer lane, which keeps
-  # retries from being blocked by old smoke state.
-  [[ "$label" == "$target_label" ]] && return 0
-
-  local plist_path="$HOME/Library/LaunchAgents/${label}.plist"
-  [[ -f "$plist_path" ]] || return 0
-
-  local existing_state_dir
-  local existing_config_path
-  local existing_port=""
-  local index=0
-  local arg=""
-
-  existing_state_dir="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_STATE_DIR')"
-  existing_config_path="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_CONFIG_PATH')"
-
-  while true; do
-    arg="$(plist_value "$plist_path" "ProgramArguments:${index}")"
-    [[ -n "$arg" ]] || break
-    if [[ "$arg" == "--port" ]]; then
-      existing_port="$(plist_value "$plist_path" "ProgramArguments:$((index + 1))")"
-      break
-    fi
-    if [[ "$arg" == --port=* ]]; then
-      existing_port="${arg#--port=}"
-      break
-    fi
-    index=$((index + 1))
-  done
-
-  if [[ "$existing_state_dir" != "$target_state_dir" && "$existing_config_path" != "$target_config_path" && "$existing_port" != "$target_port" ]]; then
-    return 0
-  fi
-
-  /bin/launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
-  /bin/launchctl unload "$plist_path" >/dev/null 2>&1 || true
-  return 0
+  # their saved env already points at this isolated consumer lane, and the
+  # shared guard refuses default-gateway bootout for named smoke targets.
+  openclaw_bootout_conflicting_gateway_label "$@"
 }
 
 gateway_plist_port() {
@@ -411,7 +366,7 @@ refresh_gateway_service_env() {
       scope_runtime_backed_smoke_plugins "$config_path"
       bootout_conflicting_gateway_label "ai.openclaw.gateway" "$launchd_label" "$state_dir" "$config_path" "$gateway_port"
       bootout_conflicting_gateway_label "ai.openclaw.consumer.gateway" "$launchd_label" "$state_dir" "$config_path" "$gateway_port"
-      /bin/launchctl bootout "gui/$(id -u)/${launchd_label}" >/dev/null 2>&1 || true
+      "${OPENCLAW_LAUNCHCTL_BIN}" bootout "gui/$(id -u)/${launchd_label}" >/dev/null 2>&1 || true
       OPENCLAW_STATE_DIR="$state_dir" \
         OPENCLAW_CONFIG_PATH="$config_path" \
         OPENCLAW_PROFILE="$profile" \

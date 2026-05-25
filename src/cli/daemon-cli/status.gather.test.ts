@@ -321,6 +321,51 @@ describe("gatherDaemonStatus", () => {
     expect(status.portMismatch).toBeUndefined();
   });
 
+  it("flags a missing canonical default gateway even when orphan gateway services exist", async () => {
+    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_PROFILE;
+    delete process.env.OPENCLAW_LAUNCHD_LABEL;
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_HOME: "/Users/test/Library/Application Support/OpenClaw",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_STATE_DIR: "/Users/test/Library/Application Support/OpenClaw/.openclaw",
+        OPENCLAW_CONFIG_PATH:
+          "/Users/test/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      },
+    });
+    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "unknown",
+      missingUnit: true,
+      detail: "Could not find service",
+    });
+    findExtraGatewayServices.mockResolvedValueOnce([
+      {
+        label: "ai.openclaw.consumer.foo.gateway",
+        detail: "plist: /Users/test/Library/LaunchAgents/ai.openclaw.consumer.foo.gateway.plist",
+        scope: "user",
+      },
+    ]);
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: true,
+    });
+
+    expect(status.canonicalDefaultGateway).toEqual({
+      missing: true,
+      label: "ai.openclaw.gateway",
+      reason: "canonical shared gateway LaunchAgent is missing or not registered",
+      recoveryCommand: "bash scripts/gateway-recover-main.sh",
+    });
+    expect(status.extraServices).toHaveLength(1);
+  });
+
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
     const status = await gatherDaemonStatus({
       rpc: { url: "wss://override.example:18790" },

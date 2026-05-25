@@ -285,6 +285,46 @@ describe("printDaemonStatus", () => {
     );
   });
 
+  it("prints a hard missing-canonical diagnosis even when orphan services exist", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: false,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "unknown", missingUnit: true },
+        },
+        canonicalDefaultGateway: {
+          missing: true,
+          label: "ai.openclaw.gateway",
+          reason: "canonical shared gateway LaunchAgent is missing or not registered",
+          recoveryCommand: "bash scripts/gateway-recover-main.sh",
+        },
+        extraServices: [
+          {
+            label: "ai.openclaw.consumer.foo.gateway",
+            detail: "plist: /tmp/foo.plist",
+            scope: "user",
+          },
+        ],
+      },
+      { json: false },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Canonical shared gateway ai.openclaw.gateway is missing/not loaded"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Other gateway-like services or openclaw-gateway processes do not satisfy",
+      ),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("bash scripts/gateway-recover-main.sh"),
+    );
+  });
+
   it("keeps the runtime fingerprint in json mode", () => {
     const status: DaemonStatus = {
       runtimeFingerprint: {
