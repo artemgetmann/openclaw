@@ -785,8 +785,27 @@ if (!runtimeStateDir || !helperPath) {
   throw new Error("Missing ACP validation auth bootstrap inputs.");
 }
 
+const home = process.env.HOME || os.homedir();
+const sourceAuthPaths = [
+  path.join(
+    home,
+    "Library",
+    "Application Support",
+    "OpenClaw",
+    ".openclaw",
+    "agents",
+    "main",
+    "agent",
+    "auth-profiles.json",
+  ),
+  path.join(home, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
+];
 const { bootstrapTelegramLiveAcpValidationAuthStore } = await import(pathToFileURL(helperPath).href);
-const result = bootstrapTelegramLiveAcpValidationAuthStore({ runtimeStateDir, agentId: "main" });
+const result = bootstrapTelegramLiveAcpValidationAuthStore({
+  runtimeStateDir,
+  agentId: "main",
+  sourceAuthPaths,
+});
 if (!result?.ok) {
   throw new Error(
     `ACP validation auth bootstrap failed: ${result?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
@@ -834,11 +853,11 @@ const { deriveWorktreeTesterBaseline, resolveTesterBaselineAgentIds } = await im
   pathToFileURL(helperPath).href
 );
 const {
-  bootstrapTelegramLiveCodexAuthStore,
+  bootstrapTelegramLiveCodexAuthStoreFromSources,
   pruneTesterRuntimeAuthStore,
+  readUsableOpenClawCodexAuthStore,
   syncTelegramLiveRuntimeMemoryStore,
   syncTelegramLiveRuntimeTtsPreferences,
-  validateLocalCodexAuth,
 } = await import(pathToFileURL(path.join(path.dirname(helperPath), "telegram-live-runtime-helpers.mjs")).href);
 
 let config = {};
@@ -861,18 +880,16 @@ const preferredModel =
       : "";
 const needsCodexAuth = preferredModel.trim().toLowerCase().startsWith("openai-codex/");
 
-if (needsCodexAuth) {
-  const codexAuth = validateLocalCodexAuth();
-  if (!codexAuth.ok) {
-    throw new Error(
-      `Codex auth validation failed before tester runtime start: ${codexAuth.reason}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
-    );
-  }
-}
-
 const baseline = deriveWorktreeTesterBaseline({ worktreePath });
 const baselineStateDir = baseline.stateDir;
 const fallbackStateDir = path.join(os.homedir(), ".openclaw");
+const sharedMainStateDir = path.join(
+  os.homedir(),
+  "Library",
+  "Application Support",
+  "OpenClaw",
+  ".openclaw",
+);
 const agentIds = resolveTesterBaselineAgentIds(config);
 
 syncTelegramLiveRuntimeTtsPreferences({
@@ -899,12 +916,24 @@ for (const agentId of agentIds) {
     "agent",
     "auth-profiles.json",
   );
+  const sharedMainAuthPath = path.join(
+    sharedMainStateDir,
+    "agents",
+    agentId,
+    "agent",
+    "auth-profiles.json",
+  );
   const targetAuthPath = path.join(runtimeStateDir, "agents", agentId, "agent", "auth-profiles.json");
-  const resolvedSourcePath = fs.existsSync(sourceAuthPath) ? sourceAuthPath : fallbackAuthPath;
+  const sourceAuthPaths = [sourceAuthPath, fallbackAuthPath, sharedMainAuthPath];
+  const resolvedSourcePath = sourceAuthPaths.find((candidate) => fs.existsSync(candidate)) ?? "";
 
-  if (!fs.existsSync(resolvedSourcePath)) {
+  if (!resolvedSourcePath) {
     if (needsCodexAuth) {
-      const bootstrap = bootstrapTelegramLiveCodexAuthStore({ runtimeStateDir, agentId });
+      const bootstrap = bootstrapTelegramLiveCodexAuthStoreFromSources({
+        runtimeStateDir,
+        agentId,
+        sourceAuthPaths,
+      });
       if (!bootstrap?.ok) {
         throw new Error(
           `Codex auth bootstrap failed for ${agentId}: ${bootstrap?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
@@ -912,6 +941,26 @@ for (const agentId of agentIds) {
       }
     }
     continue;
+  }
+
+  if (needsCodexAuth) {
+    const sourceCodexAuth = readUsableOpenClawCodexAuthStore({
+      authStorePath: resolvedSourcePath,
+      preferredModel,
+    });
+    if (sourceCodexAuth.ok) {
+      const bootstrap = bootstrapTelegramLiveCodexAuthStoreFromSources({
+        runtimeStateDir,
+        agentId,
+        sourceAuthPaths,
+      });
+      if (!bootstrap?.ok) {
+        throw new Error(
+          `Codex auth bootstrap failed for ${agentId}: ${bootstrap?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,
+        );
+      }
+      continue;
+    }
   }
 
   let sourceStore = { version: 1, profiles: {} };
@@ -930,7 +979,11 @@ for (const agentId of agentIds) {
   });
 
   if (needsCodexAuth && Object.keys(runtimeStore.profiles ?? {}).length === 0) {
-    const bootstrap = bootstrapTelegramLiveCodexAuthStore({ runtimeStateDir, agentId });
+    const bootstrap = bootstrapTelegramLiveCodexAuthStoreFromSources({
+      runtimeStateDir,
+      agentId,
+      sourceAuthPaths,
+    });
     if (!bootstrap?.ok) {
       throw new Error(
         `Codex auth bootstrap failed for ${agentId}: ${bootstrap?.reason ?? "unknown"}. Re-run Codex login or sync ~/.codex/auth.json, then retry.`,

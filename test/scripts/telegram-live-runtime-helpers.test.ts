@@ -1,9 +1,19 @@
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  bootstrapTelegramLiveCodexAuthStoreFromSources,
   buildTelegramLiveRuntimeConfig,
   clearEnvAssignmentText,
+  readUsableOpenClawCodexAuthStore,
   summarizeTelegramTesterTokenPool,
 } from "../../scripts/lib/telegram-live-runtime-helpers.mjs";
+
+function writeAuthStore(filePath: string, store: unknown) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+}
 
 describe("summarizeTelegramTesterTokenPool", () => {
   it("reports pool exhaustion after claimed and reserved tokens are removed", () => {
@@ -95,5 +105,82 @@ describe("clearEnvAssignmentText", () => {
     expect(result.removed).toBe(true);
     expect(result.removedValue).toBe("bot-b");
     expect(result.content).toBe(["FOO=1", "BAR=2", ""].join("\n"));
+  });
+});
+
+describe("Codex auth store inheritance", () => {
+  it("copies a usable OpenClaw Codex profile into an isolated tester runtime", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-codex-auth-"));
+    const sourceAuthPath = path.join(root, "source", "auth-profiles.json");
+    const runtimeStateDir = path.join(root, "runtime-state");
+    const futureExpiry = Date.now() + 60 * 60 * 1000;
+    writeAuthStore(sourceAuthPath, {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "fake-access-token",
+          refresh: "fake-refresh-token",
+          expires: futureExpiry,
+        },
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "fake-anthropic-key",
+        },
+      },
+      order: {
+        "openai-codex": ["openai-codex:default"],
+        anthropic: ["anthropic:default"],
+      },
+    });
+
+    const result = bootstrapTelegramLiveCodexAuthStoreFromSources({
+      runtimeStateDir,
+      agentId: "main",
+      sourceAuthPaths: [sourceAuthPath],
+      nowMs: Date.now(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.sourceKind).toBe("openclaw_auth_store");
+    const targetAuthPath = path.join(
+      runtimeStateDir,
+      "agents",
+      "main",
+      "agent",
+      "auth-profiles.json",
+    );
+    const copied = JSON.parse(readFileSync(targetAuthPath, "utf8"));
+    expect(Object.keys(copied.profiles)).toEqual(["openai-codex:default"]);
+    expect(copied.profiles["openai-codex:default"].access).toBe("fake-access-token");
+    expect(copied.profiles["anthropic:default"]).toBeUndefined();
+    expect(statSync(targetAuthPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("rejects expired OpenClaw Codex profiles before tester runtime import", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-codex-expired-"));
+    const sourceAuthPath = path.join(root, "source", "auth-profiles.json");
+    writeAuthStore(sourceAuthPath, {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "fake-access-token",
+          refresh: "fake-refresh-token",
+          expires: Date.now() - 1000,
+        },
+      },
+    });
+
+    const result = readUsableOpenClawCodexAuthStore({
+      authStorePath: sourceAuthPath,
+      nowMs: Date.now(),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("no_usable_codex_profile");
   });
 });

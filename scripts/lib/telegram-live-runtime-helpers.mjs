@@ -747,8 +747,157 @@ export function bootstrapTelegramLiveCodexAuthStore(params) {
   };
 }
 
+function validateOpenClawCodexAuthProfile(credential, params = {}) {
+  if (!credential || typeof credential !== "object") {
+    return { ok: false, reason: "invalid_profile" };
+  }
+  const provider = normalizeProviderId(credential.provider);
+  if (provider !== "openai-codex") {
+    return { ok: false, reason: "wrong_provider" };
+  }
+  const access =
+    typeof credential.access === "string"
+      ? credential.access.trim()
+      : typeof credential.token === "string"
+        ? credential.token.trim()
+        : "";
+  const refresh = typeof credential.refresh === "string" ? credential.refresh.trim() : "";
+  if (!access || (credential.type === "oauth" && !refresh)) {
+    return { ok: false, reason: "missing_token" };
+  }
+
+  const nearExpiryWindowMs = Number.isFinite(Number(params.nearExpiryWindowMs))
+    ? Math.max(0, Number(params.nearExpiryWindowMs))
+    : 5 * 60 * 1000;
+  const nowMs = Number.isFinite(Number(params.nowMs)) ? Number(params.nowMs) : Date.now();
+  const explicitExpiry = Number(credential.expires);
+  const jwtExpiryMs = decodeJwtExpiryMs(access);
+  // Prefer OpenClaw's persisted OAuth expiry when present; fall back to JWT
+  // introspection for imported CLI-shaped tokens.
+  const accessExpiryMs =
+    Number.isFinite(explicitExpiry) && explicitExpiry > 0 ? explicitExpiry : jwtExpiryMs;
+  if (accessExpiryMs !== null && accessExpiryMs <= nowMs + nearExpiryWindowMs) {
+    return { ok: false, reason: "expired", accessExpiryMs };
+  }
+
+  return {
+    ok: true,
+    reason: "ok",
+    accessExpiryMs,
+    expirySource:
+      Number.isFinite(explicitExpiry) && explicitExpiry > 0 ? "profile_expires" : "jwt_exp",
+  };
+}
+
+export function readUsableOpenClawCodexAuthStore(params = {}) {
+  const authStorePath = String(params?.authStorePath ?? "").trim();
+  if (!authStorePath || !fs.existsSync(authStorePath)) {
+    return { ok: false, reason: "missing_auth_store", authStorePath };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(authStorePath, "utf8"));
+  } catch {
+    return { ok: false, reason: "invalid_auth_store", authStorePath };
+  }
+
+  const profiles = parsed?.profiles && typeof parsed.profiles === "object" ? parsed.profiles : {};
+  const codexProfiles = Object.entries(profiles).filter(([, credential]) => {
+    return normalizeProviderId(credential?.provider) === "openai-codex";
+  });
+  if (codexProfiles.length === 0) {
+    return { ok: false, reason: "missing_codex_profile", authStorePath };
+  }
+
+  const usableProfileIds = [];
+  for (const [profileId, credential] of codexProfiles) {
+    const validation = validateOpenClawCodexAuthProfile(credential, params);
+    if (validation.ok) {
+      usableProfileIds.push(profileId);
+    }
+  }
+  if (usableProfileIds.length === 0) {
+    return { ok: false, reason: "no_usable_codex_profile", authStorePath };
+  }
+
+  return {
+    ok: true,
+    authStorePath,
+    // Import only Codex profiles into Codex-pinned tester lanes. Pulling the
+    // whole shared store back in can reintroduce Anthropic/Google fallbacks.
+    store: pruneTesterRuntimeAuthStore({
+      store: parsed,
+      preferredModel: params?.preferredModel ?? "openai-codex/gpt-5.4",
+    }),
+    profileCount: usableProfileIds.length,
+    profileIds: usableProfileIds,
+  };
+}
+
+function copyOpenClawCodexAuthStore(params) {
+  const runtimeStateDir = path.resolve(String(params?.runtimeStateDir ?? ""));
+  const agentId = String(params?.agentId ?? "main").trim() || "main";
+  const source = readUsableOpenClawCodexAuthStore(params);
+  if (!source.ok) {
+    return source;
+  }
+
+  const targetAuthPath = path.join(
+    runtimeStateDir,
+    "agents",
+    agentId,
+    "agent",
+    "auth-profiles.json",
+  );
+  fs.mkdirSync(path.dirname(targetAuthPath), { recursive: true });
+  fs.writeFileSync(targetAuthPath, `${JSON.stringify(source.store, null, 2)}\n`, "utf8");
+  fs.chmodSync(targetAuthPath, 0o600);
+
+  return {
+    ok: true,
+    reason: "ok",
+    sourceAuthPath: source.authStorePath,
+    authStorePath: targetAuthPath,
+    profileCount: source.profileCount,
+    profileIds: source.profileIds,
+  };
+}
+
+export function bootstrapTelegramLiveCodexAuthStoreFromSources(params = {}) {
+  const runtimeStateDir = path.resolve(String(params?.runtimeStateDir ?? ""));
+  const agentId = String(params?.agentId ?? "main").trim() || "main";
+  const sourceAuthPaths = normalizeStringList(params?.sourceAuthPaths ?? []);
+  // Try OpenClaw runtime auth first because main Jarvis can have a refreshed
+  // auth-profiles.json even when ~/.codex/auth.json is stale or absent.
+  for (const authStorePath of sourceAuthPaths) {
+    const copied = copyOpenClawCodexAuthStore({
+      ...params,
+      authStorePath,
+      runtimeStateDir,
+      agentId,
+    });
+    if (copied.ok) {
+      return {
+        ...copied,
+        sourceKind: "openclaw_auth_store",
+      };
+    }
+  }
+
+  const codexBootstrap = bootstrapTelegramLiveCodexAuthStore({
+    ...params,
+    runtimeStateDir,
+    agentId,
+  });
+  return {
+    ...codexBootstrap,
+    sourceKind: "codex_cli_auth_json",
+  };
+}
+
 export function bootstrapTelegramLiveAcpValidationAuthStore(params) {
-  return bootstrapTelegramLiveCodexAuthStore(params);
+  return bootstrapTelegramLiveCodexAuthStoreFromSources(params);
 }
 
 export function buildTelegramLiveRuntimeChildEnv(params) {
