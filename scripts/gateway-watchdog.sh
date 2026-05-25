@@ -8,6 +8,7 @@ OPENCLAW_ENTRYPOINT="${MAIN_REPO}/openclaw.mjs"
 PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 CHECK_INTERVAL_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_CHECK_INTERVAL_SECONDS:-15}"
 FAIL_THRESHOLD="${OPENCLAW_GATEWAY_WATCHDOG_FAIL_THRESHOLD:-2}"
+RECOVERY_BACKOFF_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_RECOVERY_BACKOFF_SECONDS:-300}"
 RECOVER_SCRIPT="${OPENCLAW_GATEWAY_RECOVER_SCRIPT:-${MAIN_REPO}/scripts/gateway-recover-main.sh}"
 WATCHDOG_STDOUT_PATH="${OPENCLAW_GATEWAY_WATCHDOG_STDOUT_PATH:-/tmp/openclaw/gateway-watchdog.log}"
 WATCHDOG_STDERR_PATH="${OPENCLAW_GATEWAY_WATCHDOG_STDERR_PATH:-/tmp/openclaw/gateway-watchdog.err.log}"
@@ -187,7 +188,18 @@ while true; do
       # restart logic here. The flag prevents recovery from tearing down the
       # watchdog process that invoked it.
       echo "[gateway-watchdog] reclaiming shared gateway from canonical main"
-      OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG=0 "${RECOVER_SCRIPT}"
+      if OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG=0 \
+        OPENCLAW_GATEWAY_RECOVER_MODE=shallow \
+        "${RECOVER_SCRIPT}" --shallow; then
+        echo "[gateway-watchdog] shallow recovery completed"
+      else
+        # A failed recovery should not crash the watchdog into a launchd
+        # relaunch storm. Keep the watcher alive, reset the counter, and give
+        # an operator-sized window for the gateway or LaunchAgent plist to
+        # settle before the next guarded attempt.
+        echo "[gateway-watchdog] shallow recovery failed; backing off for ${RECOVERY_BACKOFF_SECONDS}s"
+        sleep "${RECOVERY_BACKOFF_SECONDS}"
+      fi
       failures=0
     fi
   fi

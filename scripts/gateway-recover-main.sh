@@ -16,6 +16,7 @@ WATCHDOG_STABILIZE_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_STABILIZE_SECONDS:-8}"
 WATCHDOG_AUTO_DISABLE_ON_DUPLICATE="${OPENCLAW_GATEWAY_WATCHDOG_AUTO_DISABLE_ON_DUPLICATE:-1}"
 MANAGE_WATCHDOG="${OPENCLAW_GATEWAY_RECOVER_MANAGE_WATCHDOG:-1}"
 DEFAULT_GATEWAY_STOPPED_FOR_RECOVERY=0
+RECOVERY_MODE="${OPENCLAW_GATEWAY_RECOVER_MODE:-full}"
 OPENCLAW_ENTRYPOINT="${MAIN_REPO}/openclaw.mjs"
 VALIDATED_NODE_HELPER="${MAIN_REPO}/scripts/lib/validated-node.sh"
 SHARED_RUNTIME_BUILD_SCRIPT="${MAIN_REPO}/scripts/build-shared-runtime.sh"
@@ -67,16 +68,26 @@ resolve_node_bin() {
   resolve_node_bin_fallback
 }
 
-NODE_BIN="$(resolve_node_bin)" || {
-  printf '[gateway-recover-main] node runtime not found; set OPENCLAW_NODE_BIN to a launchd-visible node binary\n' >&2
-  exit 1
+NODE_BIN="${OPENCLAW_NODE_BIN:-}"
+
+ensure_node_bin() {
+  if [[ -n "${NODE_BIN}" && -x "${NODE_BIN}" ]]; then
+    return 0
+  fi
+
+  NODE_BIN="$(resolve_node_bin)" || {
+    printf '[gateway-recover-main] node runtime not found; set OPENCLAW_NODE_BIN to a launchd-visible node binary\n' >&2
+    exit 1
+  }
 }
 
 run_openclaw_cli() {
+  ensure_node_bin
   "${NODE_BIN}" "${OPENCLAW_ENTRYPOINT}" "$@"
 }
 
 run_repo_pnpm() {
+  ensure_node_bin
   if declare -F openclaw_run_repo_pnpm >/dev/null 2>&1; then
     # Propagate the helper exit code so recovery stops on a failed build rather
     # than reinstalling whatever stale dist/ happened to already exist.
@@ -210,6 +221,34 @@ run_strict() {
   fi
 }
 
+parse_args() {
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --full)
+        RECOVERY_MODE="full"
+        ;;
+      --shallow)
+        RECOVERY_MODE="shallow"
+        ;;
+      *)
+        printf '[gateway-recover-main] unknown argument: %s\n' "$1" >&2
+        printf '[gateway-recover-main] usage: %s [--full|--shallow]\n' "$0" >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+
+  case "${RECOVERY_MODE}" in
+    full | shallow)
+      ;;
+    *)
+      printf '[gateway-recover-main] invalid OPENCLAW_GATEWAY_RECOVER_MODE=%s; expected full or shallow\n' "${RECOVERY_MODE}" >&2
+      exit 2
+      ;;
+  esac
+}
+
 capture_best_effort() {
   local title="$1"
   shift
@@ -232,6 +271,30 @@ http_ready() {
   # non-2xx even after the WebSocket gateway is listening, which makes recovery
   # falsely report failure after it has already repaired launchd.
   curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1
+}
+
+canonical_gateway_healthy() {
+  local launch_state=""
+  if ! launch_state="$(launchctl print "gui/$(id -u)/${GATEWAY_LABEL}" 2>/dev/null)"; then
+    return 1
+  fi
+
+  # A listener on the right port is not enough: prove launchd is running the
+  # canonical main runtime before treating recovery as already complete.
+  if ! printf '%s\n' "${launch_state}" | grep -F -q -- "${EXPECTED_RUNTIME}"; then
+    return 1
+  fi
+  if ! printf '%s\n' "${launch_state}" | grep -E -q 'state = running|pid = [1-9][0-9]*'; then
+    return 1
+  fi
+  if ! listener_ready; then
+    return 1
+  fi
+  if ! http_ready; then
+    return 1
+  fi
+
+  return 0
 }
 
 launch_agent_registered() {
@@ -332,6 +395,30 @@ assert_launch_agent_running_or_exit() {
   fi
 }
 
+launch_agent_running() {
+  local label="$1"
+  local output=""
+  if ! output="$(launchctl print "gui/$(id -u)/${label}" 2>/dev/null)"; then
+    return 1
+  fi
+
+  printf '%s\n' "$output" | grep -E -q 'state = running|pid = [1-9][0-9]*'
+}
+
+ensure_gateway_launch_agent_started_or_exit() {
+  local plist_path="${HOME}/Library/LaunchAgents/${GATEWAY_LABEL}.plist"
+
+  # Shallow recovery is the watchdog path. It must repair a missing launchd
+  # registration without reflexively restarting a gateway that launchd already
+  # reports as running and that may only be warming its HTTP health route.
+  bootstrap_launch_agent_or_exit "${GATEWAY_LABEL}" "${plist_path}"
+  if launch_agent_running "${GATEWAY_LABEL}"; then
+    return 0
+  fi
+
+  kickstart_launch_agent_or_exit "${GATEWAY_LABEL}" "${plist_path}"
+}
+
 wait_for_listener() {
   local start_epoch
   start_epoch="$(date +%s)"
@@ -415,8 +502,78 @@ pid_matches_main_runtime() {
   return 1
 }
 
+collect_canonical_main_runtime_pids() {
+  local pid=""
+  local seen=" "
+
+  # Start with launchd's recorded pid because that is the canonical owner for
+  # the shared main gateway. Then add only same-named processes that prove they
+  # belong to the canonical repo/runtime, leaving isolated tester runtimes alone.
+  pid="$(resolve_launchctl_gateway_pid || true)"
+  if [[ -n "${pid}" && "${pid}" =~ ^[0-9]+$ ]] && pid_matches_main_runtime "${pid}"; then
+    printf '%s\n' "${pid}"
+    seen=" ${pid} "
+  fi
+
+  while IFS= read -r pid; do
+    [[ -n "${pid}" && "${pid}" =~ ^[0-9]+$ ]] || continue
+    [[ "${seen}" == *" ${pid} "* ]] && continue
+    if pid_matches_main_runtime "${pid}"; then
+      printf '%s\n' "${pid}"
+      seen="${seen}${pid} "
+    fi
+  done < <(pgrep -x openclaw-gateway 2>/dev/null || true)
+
+  while IFS= read -r pid; do
+    [[ -n "${pid}" && "${pid}" =~ ^[0-9]+$ ]] || continue
+    [[ "${seen}" == *" ${pid} "* ]] && continue
+    if pid_matches_main_runtime "${pid}"; then
+      printf '%s\n' "${pid}"
+      seen="${seen}${pid} "
+    fi
+  done < <(
+    ps -axo pid=,command= 2>/dev/null |
+      awk -v runtime="${EXPECTED_RUNTIME}" -v entrypoint="${OPENCLAW_ENTRYPOINT}" '
+        index($0, runtime) > 0 || (index($0, entrypoint) > 0 && index($0, " gateway") > 0) {
+          print $1
+        }
+      '
+  )
+}
+
+stop_canonical_main_runtime_pids() {
+  local pids=()
+  local pid=""
+
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] && pids+=("${pid}")
+  done < <(collect_canonical_main_runtime_pids)
+
+  if [[ "${#pids[@]}" -eq 0 ]]; then
+    log "no canonical main runtime pids required cleanup"
+    return 0
+  fi
+
+  log "stopping canonical main runtime pids: ${pids[*]}"
+  kill -TERM "${pids[@]}" 2>/dev/null || true
+  sleep 2
+
+  local remaining=()
+  for pid in "${pids[@]}"; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      remaining+=("${pid}")
+    fi
+  done
+
+  if [[ "${#remaining[@]}" -gt 0 ]]; then
+    log "force-stopping canonical main runtime pids: ${remaining[*]}"
+    kill -KILL "${remaining[@]}" 2>/dev/null || true
+  fi
+}
+
 install_main_launch_agent() {
   mkdir -p "${CANONICAL_OPENCLAW_LOG_DIR}"
+  ensure_node_bin
   (
     cd "${MAIN_REPO}"
     # Recovery always reclaims the default shared gateway for the app-owned
@@ -483,13 +640,35 @@ stabilize_watchdog() {
 }
 
 main() {
-  log "starting deterministic recovery (port=${PORT}, main=${MAIN_REPO})"
+  parse_args "$@"
+  log "starting deterministic recovery (mode=${RECOVERY_MODE}, port=${PORT}, main=${MAIN_REPO})"
 
   capture_best_effort "Baseline: HTTP health probe" curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/healthz"
   capture_best_effort "Baseline: lsof listener check" lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN
   capture_best_effort \
     "Baseline: launchctl print (program/arguments/pid/state)" \
     bash -lc "launchctl print gui/\$(id -u)/${GATEWAY_LABEL} | grep -E 'program =|arguments =|pid =|state ='"
+
+  if canonical_gateway_healthy; then
+    log "canonical gateway is already healthy; exiting without restart"
+    return 0
+  fi
+
+  if [[ "${RECOVERY_MODE}" == "shallow" ]]; then
+    log_block "Shallow launchd recovery"
+    ensure_gateway_launch_agent_started_or_exit
+    assert_launch_agent_running_or_exit "${GATEWAY_LABEL}"
+
+    log_block "Readiness gates"
+    wait_for_listener
+    wait_for_http_probe
+
+    log_block "Final verification"
+    assert_main_runtime_path
+    assert_launch_agent_running_or_exit "${GATEWAY_LABEL}"
+    log "shallow recovery complete"
+    return 0
+  fi
 
   log_block "Full clean stop"
   local uid
@@ -499,10 +678,7 @@ main() {
   if [[ "${MANAGE_WATCHDOG}" == "1" ]]; then
     launchctl bootout "gui/${uid}/${WATCHDOG_LABEL}" 2>/dev/null || true
   fi
-  run_openclaw_cli gateway stop 2>/dev/null || true
-  pkill -9 -f openclaw-gateway 2>/dev/null || true
-  pkill -9 -f 'dist/index.js gateway' 2>/dev/null || true
-  pkill -9 -f 'openclaw.mjs gateway' 2>/dev/null || true
+  stop_canonical_main_runtime_pids
   run_strict bash -lc "ps aux | grep -E 'openclaw-gateway|dist/index.js gateway|openclaw.mjs gateway|ai.openclaw.gateway|gateway-health-watchdog' || true"
   run_strict bash -lc "lsof -nP -iTCP:${PORT} -sTCP:LISTEN || true"
 
