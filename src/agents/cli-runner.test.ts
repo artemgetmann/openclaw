@@ -362,6 +362,102 @@ describe("runCliAgent with process supervisor", () => {
     }
   });
 
+  it("cancels supervisor-backed CLI runs when the abort signal fires", async () => {
+    const abortController = new AbortController();
+    const managedRun = createManagedRun({
+      reason: "manual-cancel",
+      exitCode: null,
+      exitSignal: "SIGKILL",
+      durationMs: 50,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+    managedRun.wait.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          abortController.abort();
+          return resolve;
+        }),
+    );
+    supervisorSpawnMock.mockResolvedValueOnce(managedRun);
+
+    await expect(
+      runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        prompt: "hi",
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-abort",
+        abortSignal: abortController.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(managedRun.cancel).toHaveBeenCalledWith("manual-cancel");
+  });
+
+  it("suppresses claude-cli partial output after abort", async () => {
+    const abortController = new AbortController();
+    const onPartialReply = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const stdout = [
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: "late" },
+        },
+      }),
+    ].join("\n");
+    const managedRun = createManagedRun({
+      reason: "manual-cancel",
+      exitCode: null,
+      exitSignal: "SIGKILL",
+      durationMs: 50,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+    supervisorSpawnMock.mockImplementationOnce(
+      async (input: { onStdout?: (chunk: string) => void }) => {
+        managedRun.wait.mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              abortController.abort();
+              input.onStdout?.(`${stdout}\n`);
+              return resolve;
+            }),
+        );
+        return managedRun;
+      },
+    );
+
+    await expect(
+      runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: createStreamJsonClaudeCliConfig(),
+        prompt: "hi",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-abort-stream",
+        abortSignal: abortController.signal,
+        onAssistantMessageStart,
+        onPartialReply,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(onAssistantMessageStart).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
   it("injects personal workspace bootstrap files into a fresh claude-cli start prompt", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-cli-bootstrap-"));
     const workspaceDir = path.join(tempDir, "workspace");

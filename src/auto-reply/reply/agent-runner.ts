@@ -435,6 +435,9 @@ export async function runReplyAgent(params: {
     let continuationAttempts = 0;
     let runOutcome = await runSingleTurn(commandBody);
     while (runOutcome.kind !== "final") {
+      if (runOutcome.runResult.meta?.aborted) {
+        return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      }
       // Direct block/tool deliveries may still be queued locally when the model
       // returns. Drain them before deciding whether the user already saw a real
       // answer; watchdog/status pings still bypass this wrapped path.

@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "vitest";
+import { abortProcessSessionsForScope } from "./bash-process-abort.js";
 import {
   getFinishedSession,
   getSession,
@@ -119,6 +120,51 @@ test("background exec is not killed when tool signal aborts", async () => {
     tool,
     executeParams: { command: BACKGROUND_HOLD_CMD, background: true },
   });
+});
+
+test("manual agent-run abort kills backgrounded exec", async () => {
+  const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+  const abortController = new AbortController();
+  const result = await tool.execute(
+    "toolcall",
+    { command: BACKGROUND_HOLD_CMD, background: true },
+    abortController.signal,
+  );
+  expect(result.details.status).toBe("running");
+  const sessionId = (result.details as { sessionId: string }).sessionId;
+  const reason = new Error("CLI run aborted") as Error & { code?: string };
+  reason.code = "OPENCLAW_AGENT_RUN_ABORT";
+
+  abortController.abort(reason);
+
+  const finished = await waitForFinishedSession(sessionId);
+  try {
+    expect(finished?.status).toBe("failed");
+    expect(finished?.exitSignal).toBeTruthy();
+  } finally {
+    cleanupRunningSession(sessionId);
+  }
+});
+
+test("active run abort kills scoped backgrounded exec sessions", async () => {
+  const scopeKey = "agent:main:telegram-proof";
+  const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0, scopeKey });
+  const result = await tool.execute("toolcall", {
+    command: BACKGROUND_HOLD_CMD,
+    background: true,
+  });
+  expect(result.details.status).toBe("running");
+  const sessionId = (result.details as { sessionId: string }).sessionId;
+
+  expect(abortProcessSessionsForScope(scopeKey)).toBe(1);
+
+  const finished = await waitForFinishedSession(sessionId);
+  try {
+    expect(finished?.status).toBe("failed");
+    expect(finished?.exitSignal).toBeTruthy();
+  } finally {
+    cleanupRunningSession(sessionId);
+  }
 });
 
 test("pty background exec is not killed when tool signal aborts", async () => {

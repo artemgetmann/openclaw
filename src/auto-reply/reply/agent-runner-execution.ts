@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { abortProcessSessionsForScope } from "../../agents/bash-process-abort.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
@@ -14,6 +15,11 @@ import {
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
+import {
+  clearActiveEmbeddedRun,
+  type EmbeddedPiQueueHandle,
+  setActiveEmbeddedRun,
+} from "../../agents/pi-embedded-runner/runs.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   resolveGroupSessionKey,
@@ -136,6 +142,10 @@ function resolveCliExtraSystemPromptForReplyRun(params: {
     );
   }
   return trimmedPrompt;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 export async function runAgentTurnWithFallback(params: {
@@ -308,57 +318,129 @@ export async function runAgentTurnWithFallback(params: {
                   await params.typingSignals.signalToolStart();
                 }
                 const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
-                const result = await runCliAgent({
-                  sessionId: params.followupRun.run.sessionId,
-                  sessionKey: params.sessionKey,
-                  agentId: params.followupRun.run.agentId,
-                  sessionFile: params.followupRun.run.sessionFile,
-                  workspaceDir: params.followupRun.run.workspaceDir,
-                  config: params.followupRun.run.config,
-                  prompt: params.commandBody,
-                  provider,
-                  model,
-                  thinkLevel: params.followupRun.run.thinkLevel,
-                  timeoutMs: params.followupRun.run.timeoutMs,
-                  runId,
-                  extraSystemPrompt: resolveCliExtraSystemPromptForReplyRun({
-                    provider,
-                    extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-                  }),
-                  ownerNumbers: params.followupRun.run.ownerNumbers,
-                  messageChannel: params.followupRun.run.messageProvider,
-                  agentAccountId: params.followupRun.run.agentAccountId,
-                  senderIsOwner: params.followupRun.run.senderIsOwner,
-                  cliSessionId,
-                  bootstrapPromptWarningSignaturesSeen,
-                  bootstrapPromptWarningSignature:
-                    bootstrapPromptWarningSignaturesSeen[
-                      bootstrapPromptWarningSignaturesSeen.length - 1
-                    ],
-                  images: params.opts?.images,
-                  onAssistantMessageStart:
-                    params.typingSignals.shouldStartOnMessageStart ||
-                    params.opts?.onAssistantMessageStart
-                      ? async () => {
-                          await params.typingSignals.signalMessageStart();
-                          await params.opts?.onAssistantMessageStart?.();
-                        }
-                      : undefined,
-                  onPartialReply:
-                    params.typingSignals.shouldStartOnText || params.opts?.onPartialReply
-                      ? async (payload) => {
-                          const textForTyping = await handlePartialForTyping(payload);
-                          if (!params.opts?.onPartialReply || textForTyping === undefined) {
-                            return;
+                const cliAbortController = new AbortController();
+                const createCliRunAbortReason = () => {
+                  const err = new Error("CLI run aborted");
+                  err.name = "AbortError";
+                  (err as Error & { code?: string }).code = "OPENCLAW_AGENT_RUN_ABORT";
+                  return err;
+                };
+                const abortFromOuterSignal = () => {
+                  if (!cliAbortController.signal.aborted) {
+                    cliAbortController.abort(params.opts?.abortSignal?.reason);
+                  }
+                };
+                if (params.opts?.abortSignal?.aborted) {
+                  abortFromOuterSignal();
+                } else {
+                  params.opts?.abortSignal?.addEventListener("abort", abortFromOuterSignal, {
+                    once: true,
+                  });
+                }
+                const cliRunHandle: EmbeddedPiQueueHandle = {
+                  queueMessage: async () => {
+                    // CLI backends do not support in-process steering. Keeping
+                    // isStreaming false makes follow-ups use the normal queue path.
+                  },
+                  isStreaming: () => false,
+                  isCompacting: () => false,
+                  abort: () => {
+                    if (!cliAbortController.signal.aborted) {
+                      cliAbortController.abort(createCliRunAbortReason());
+                    }
+                    abortProcessSessionsForScope(params.sessionKey);
+                  },
+                };
+                setActiveEmbeddedRun(
+                  params.followupRun.run.sessionId,
+                  cliRunHandle,
+                  params.sessionKey,
+                );
+                const result = await (async () => {
+                  try {
+                    return await runCliAgent({
+                      sessionId: params.followupRun.run.sessionId,
+                      sessionKey: params.sessionKey,
+                      agentId: params.followupRun.run.agentId,
+                      sessionFile: params.followupRun.run.sessionFile,
+                      workspaceDir: params.followupRun.run.workspaceDir,
+                      config: params.followupRun.run.config,
+                      prompt: params.commandBody,
+                      provider,
+                      model,
+                      thinkLevel: params.followupRun.run.thinkLevel,
+                      timeoutMs: params.followupRun.run.timeoutMs,
+                      runId,
+                      extraSystemPrompt: resolveCliExtraSystemPromptForReplyRun({
+                        provider,
+                        extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                      }),
+                      ownerNumbers: params.followupRun.run.ownerNumbers,
+                      messageChannel: params.followupRun.run.messageProvider,
+                      agentAccountId: params.followupRun.run.agentAccountId,
+                      senderIsOwner: params.followupRun.run.senderIsOwner,
+                      cliSessionId,
+                      bootstrapPromptWarningSignaturesSeen,
+                      bootstrapPromptWarningSignature:
+                        bootstrapPromptWarningSignaturesSeen[
+                          bootstrapPromptWarningSignaturesSeen.length - 1
+                        ],
+                      images: params.opts?.images,
+                      abortSignal: cliAbortController.signal,
+                      onAssistantMessageStart:
+                        params.typingSignals.shouldStartOnMessageStart ||
+                        params.opts?.onAssistantMessageStart
+                          ? async () => {
+                              if (cliAbortController.signal.aborted) {
+                                return;
+                              }
+                              await params.typingSignals.signalMessageStart();
+                              await params.opts?.onAssistantMessageStart?.();
+                            }
+                          : undefined,
+                      onPartialReply:
+                        params.typingSignals.shouldStartOnText || params.opts?.onPartialReply
+                          ? async (payload) => {
+                              if (cliAbortController.signal.aborted) {
+                                return;
+                              }
+                              const textForTyping = await handlePartialForTyping(payload);
+                              if (
+                                !params.opts?.onPartialReply ||
+                                textForTyping === undefined ||
+                                cliAbortController.signal.aborted
+                              ) {
+                                return;
+                              }
+                              await params.opts.onPartialReply({
+                                text: textForTyping,
+                                mediaUrls: payload.mediaUrls,
+                              });
+                            }
+                          : undefined,
+                      onBlockReply: streamBlockReply
+                        ? async (payload) => {
+                            if (cliAbortController.signal.aborted) {
+                              return;
+                            }
+                            await streamBlockReply(payload);
                           }
-                          await params.opts.onPartialReply({
-                            text: textForTyping,
-                            mediaUrls: payload.mediaUrls,
-                          });
-                        }
-                      : undefined,
-                  onBlockReply: streamBlockReply,
-                });
+                        : undefined,
+                    });
+                  } finally {
+                    params.opts?.abortSignal?.removeEventListener("abort", abortFromOuterSignal);
+                    clearActiveEmbeddedRun(
+                      params.followupRun.run.sessionId,
+                      cliRunHandle,
+                      params.sessionKey,
+                    );
+                  }
+                })();
+                if (cliAbortController.signal.aborted) {
+                  throw cliAbortController.signal.reason instanceof Error
+                    ? cliAbortController.signal.reason
+                    : new Error("CLI run aborted");
+                }
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
                 );
@@ -388,6 +470,30 @@ export async function runAgentTurnWithFallback(params: {
 
                 return result;
               } catch (err) {
+                if (isAbortError(err)) {
+                  emitAgentEvent({
+                    runId,
+                    stream: "lifecycle",
+                    data: {
+                      phase: "end",
+                      startedAt,
+                      endedAt: Date.now(),
+                    },
+                  });
+                  lifecycleTerminalEmitted = true;
+                  return {
+                    payloads: [],
+                    meta: {
+                      durationMs: Date.now() - startedAt,
+                      aborted: true,
+                      agentMeta: {
+                        sessionId: params.followupRun.run.sessionId,
+                        provider,
+                        model,
+                      },
+                    },
+                  };
+                }
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
