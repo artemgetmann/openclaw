@@ -204,25 +204,21 @@ describe("handleToolExecutionEnd media emission", () => {
     });
   });
 
-  it("does NOT emit media when verbose is full (emitToolOutput handles it)", async () => {
+  it("emits text via emitToolOutput and still sends trusted media when verbose is full", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult });
 
     await emitPngMediaToolResult(ctx);
 
-    // onToolResult should NOT be called by the new media path (emitToolOutput handles it).
-    // It may be called by emitToolOutput, but the new block should not fire.
-    // Verify emitToolOutput was called instead.
-    expect(ctx.emitToolOutput).toHaveBeenCalled();
-    // The direct media emission should not have been called with just mediaUrls.
-    const directMediaCalls = onToolResult.mock.calls.filter(
-      (call: unknown[]) =>
-        call[0] &&
-        typeof call[0] === "object" &&
-        "mediaUrls" in (call[0] as Record<string, unknown>) &&
-        !("text" in (call[0] as Record<string, unknown>)),
+    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+      "browser",
+      undefined,
+      "MEDIA:/tmp/screenshot.png",
     );
-    expect(directMediaCalls).toHaveLength(0);
+    expect(onToolResult).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/screenshot.png"],
+    });
+    expect(onToolResult).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT emit media for error results", async () => {
