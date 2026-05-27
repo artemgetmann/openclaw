@@ -49,6 +49,86 @@ struct AgentWorkspaceTests {
     }
 
     @Test
+    func `consumer bootstrap restores legacy Jarvis preset flow`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+
+        _ = try AgentWorkspace.bootstrap(workspaceURL: tmp)
+        try AgentWorkspace.bootstrapConsumerJarvisPresetIfSafe(workspaceURL: tmp)
+
+        let identity = try String(
+            contentsOf: tmp.appendingPathComponent(AgentWorkspace.identityFilename),
+            encoding: .utf8)
+        let bootstrap = try String(
+            contentsOf: tmp.appendingPathComponent(AgentWorkspace.bootstrapFilename),
+            encoding: .utf8)
+
+        #expect(identity.contains("- **Name:**"))
+        #expect(identity.contains("- **Role / persona:**"))
+        #expect(identity.contains("- **Emoji/signature:**"))
+        #expect(!identity.contains("- Name: Jarvis"))
+
+        #expect(bootstrap.contains("1. What should I be called?"))
+        #expect(bootstrap.contains("2. What role should I play for the human?"))
+        #expect(bootstrap.contains("3. What vibe should I have most of the time?"))
+        #expect(bootstrap.contains("4. What should I call the human?"))
+        #expect(bootstrap.contains("5. Emoji/signature."))
+        #expect(bootstrap.contains("offer a `Jarvis preset` vs `custom setup` choice"))
+        #expect(bootstrap.contains("role = `engineering copilot + personal assistant`"))
+        #expect(bootstrap.contains("do **not** ask role or vibe again"))
+        #expect(bootstrap.contains("warm, capable, and memorable, not robotic"))
+        #expect(bootstrap.contains("light dry wit"))
+        #expect(bootstrap.contains("call out weak assumptions when appropriate"))
+        #expect(!bootstrap.contains("Jarvis is already configured"))
+        #expect(!bootstrap.contains("Who am I?"))
+        #expect(!bootstrap.contains("What am I?"))
+        #expect(!bootstrap.contains("creature/vibe"))
+        #expect(!bootstrap.contains("chaos coordinator"))
+        #expect(!bootstrap.contains("tiny menace"))
+    }
+
+    @Test
+    func `consumer Jarvis preset preserves existing identity`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+        try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
+        let identityURL = tmp.appendingPathComponent(AgentWorkspace.identityFilename)
+        try """
+        # IDENTITY.md - Agent Identity
+
+        - Name: Friday
+        - Role / persona: Existing custom assistant
+        """.write(to: identityURL, atomically: true, encoding: .utf8)
+
+        try AgentWorkspace.bootstrapConsumerJarvisPresetIfSafe(workspaceURL: tmp)
+
+        let identity = try String(contentsOf: identityURL, encoding: .utf8)
+        #expect(identity.contains("- Name: Friday"))
+        #expect(!identity.contains("- Name: Jarvis"))
+    }
+
+    @Test
+    func `empty markdown identity labels do not count as customized`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+        try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
+        try AgentWorkspace.defaultIdentityTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.identityFilename),
+            atomically: true,
+            encoding: .utf8)
+        try AgentWorkspace.defaultBootstrapTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.bootstrapFilename),
+            atomically: true,
+            encoding: .utf8)
+
+        #expect(!AgentWorkspace.hasIdentity(workspaceURL: tmp))
+        #expect(AgentWorkspace.needsBootstrap(workspaceURL: tmp))
+    }
+
+    @Test
     func `bootstrap safety rejects non empty folder without agents`() throws {
         let tmp = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)

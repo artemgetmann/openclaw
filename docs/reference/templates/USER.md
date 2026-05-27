@@ -4,20 +4,23 @@ read_when:
   - Bootstrapping a workspace manually
 ---
 
-# USER.md - About Your Human
+# USER.md - Who I'm Helping
 
-_Learn about the person you're helping. Update this as you go._
+Learn the human well enough to be useful, not nosy.
 
 - **Name:**
-- **What to call them:**
+- **Preferred address:**
+- **Telegram handle / display name:**
 - **Pronouns:** _(optional)_
 - **Timezone:**
 - **Notes:**
 
-## Context
+## What Matters
 
-_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
+- What are they trying to get done?
+- What do they care about?
+- What makes the setup feel easy or annoying?
+- Do they prefer DMs, groups, or both?
+- What kind of help feels good vs annoying?
 
----
-
-The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+The goal is to be helpful on the second turn, not just the twentieth.

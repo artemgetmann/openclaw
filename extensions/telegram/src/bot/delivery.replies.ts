@@ -718,9 +718,13 @@ export async function deliverReplies(params: {
             typeof params.thread?.id === "number" ? Math.trunc(params.thread.id) : undefined,
         });
       }
-      if (progress.deliveredCount > deliveredCountBeforeReply) {
+      const replyDelivered =
+        progress.deliveredCount > deliveredCountBeforeReply || firstDeliveredMessageId != null;
+      if (replyDelivered) {
         // Record one outbound activity timestamp per reply payload, not per Telegram
-        // API message, because long replies can split into multiple chunks.
+        // API message, because long replies can split into multiple chunks. A returned
+        // Telegram message id is also a delivery signal for text paths where the send
+        // succeeded but progress accounting did not advance.
         recordChannelActivity({
           channel: "telegram",
           accountId: params.accountId,
@@ -735,7 +739,7 @@ export async function deliverReplies(params: {
         chatId: params.chatId,
         accountId: params.accountId,
         content: contentForSentHook,
-        success: progress.deliveredCount > deliveredCountBeforeReply,
+        success: replyDelivered,
         messageId: firstDeliveredMessageId,
         isGroup: params.mirrorIsGroup,
         groupId: params.mirrorGroupId,

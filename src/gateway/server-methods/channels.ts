@@ -1,3 +1,8 @@
+import {
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
+} from "../../../extensions/telegram/src/accounts.js";
+import { createTelegramBot } from "../../../extensions/telegram/src/bot.js";
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
@@ -30,6 +35,106 @@ type ChannelLogoutPayload = {
   cleared: boolean;
   [key: string]: unknown;
 };
+
+type TelegramSetupReplayPayload = {
+  updateId: number;
+  messageId: number;
+  chatId: number;
+  senderId: number;
+  date: number;
+  text?: string;
+  caption?: string;
+  chatUsername?: string;
+  senderUsername?: string;
+  senderFirstName?: string;
+  messageThreadId?: number;
+};
+
+function readFiniteNumber(value: unknown, label: string): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  throw new Error(`${label} must be a finite number`);
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function parseTelegramSetupReplayParams(params: Record<string, unknown>): {
+  payload: TelegramSetupReplayPayload;
+  timeoutMs: number;
+} {
+  const rawPayload = params.payload;
+  if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) {
+    throw new Error("payload must be an object");
+  }
+  const payloadRecord = rawPayload as Record<string, unknown>;
+  const text = readOptionalString(payloadRecord.text);
+  const caption = readOptionalString(payloadRecord.caption);
+  if (!text && !caption) {
+    throw new Error("payload.text or payload.caption is required");
+  }
+  const timeoutMsRaw = params.timeoutMs;
+  const timeoutMs =
+    typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
+      ? Math.max(1000, Math.trunc(timeoutMsRaw))
+      : 8000;
+
+  const chatUsername = readOptionalString(payloadRecord.chatUsername);
+  const senderUsername = readOptionalString(payloadRecord.senderUsername);
+  const senderFirstName = readOptionalString(payloadRecord.senderFirstName);
+
+  return {
+    timeoutMs,
+    payload: {
+      updateId: readFiniteNumber(payloadRecord.updateId, "payload.updateId"),
+      messageId: readFiniteNumber(payloadRecord.messageId, "payload.messageId"),
+      chatId: readFiniteNumber(payloadRecord.chatId, "payload.chatId"),
+      senderId: readFiniteNumber(payloadRecord.senderId, "payload.senderId"),
+      date: readFiniteNumber(payloadRecord.date, "payload.date"),
+      ...(text ? { text } : {}),
+      ...(caption ? { caption } : {}),
+      ...(chatUsername ? { chatUsername } : {}),
+      ...(senderUsername ? { senderUsername } : {}),
+      ...(senderFirstName ? { senderFirstName } : {}),
+      ...(typeof payloadRecord.messageThreadId === "number" &&
+      Number.isFinite(payloadRecord.messageThreadId)
+        ? { messageThreadId: Math.trunc(payloadRecord.messageThreadId) }
+        : {}),
+    },
+  };
+}
+
+function buildTelegramSetupReplayUpdate(payload: TelegramSetupReplayPayload) {
+  const username = payload.senderUsername?.replace(/^@/, "");
+  return {
+    update_id: payload.updateId,
+    message: {
+      message_id: payload.messageId,
+      date: payload.date,
+      chat: {
+        id: payload.chatId,
+        type: "private",
+        ...(payload.chatUsername ? { username: payload.chatUsername.replace(/^@/, "") } : {}),
+        ...(payload.senderFirstName ? { first_name: payload.senderFirstName } : {}),
+      },
+      from: {
+        id: payload.senderId,
+        is_bot: false,
+        first_name: payload.senderFirstName ?? username ?? "Telegram user",
+        ...(username ? { username } : {}),
+      },
+      ...(payload.text ? { text: payload.text } : {}),
+      ...(payload.caption ? { caption: payload.caption } : {}),
+      ...(payload.messageThreadId != null ? { message_thread_id: payload.messageThreadId } : {}),
+    },
+  };
+}
 
 export async function logoutChannelAccount(params: {
   channelId: ChannelId;
@@ -68,6 +173,79 @@ export async function logoutChannelAccount(params: {
 }
 
 export const channelsHandlers: GatewayRequestHandlers = {
+  "channels.telegram.setup-replay": async ({ params, respond }) => {
+    // Consumer setup captures the first DM while polling is paused. Replay that
+    // update through the normal Telegram bot middleware so verification proves
+    // the real reply path rather than only checking token/config state.
+    let replayParams: ReturnType<typeof parseTelegramSetupReplayParams>;
+    try {
+      replayParams = parseTelegramSetupReplayParams(params);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid channels.telegram.setup-replay params: ${formatForLog(err)}`,
+        ),
+      );
+      return;
+    }
+
+    const cfg = loadConfig();
+    const accountId = resolveDefaultTelegramAccountId(cfg);
+    const account = resolveTelegramAccount({ cfg, accountId });
+    const token = account.token.trim();
+    if (!token) {
+      respond(true, {
+        ok: false,
+        replyStarted: false,
+        replyCompleted: false,
+        error: "Telegram bot token is not configured.",
+      });
+      return;
+    }
+
+    const before = getChannelActivity({ channel: "telegram", accountId: account.accountId });
+    const update = buildTelegramSetupReplayUpdate(replayParams.payload);
+    try {
+      const bot = createTelegramBot({
+        token,
+        accountId: account.accountId,
+        config: cfg,
+        runtime: defaultRuntime,
+      });
+      await withTimeout(
+        bot.handleUpdate(update as Parameters<typeof bot.handleUpdate>[0]),
+        replayParams.timeoutMs,
+      );
+      const after = getChannelActivity({ channel: "telegram", accountId: account.accountId });
+      // The Telegram delivery layer records outbound activity after a reply is
+      // actually sent. Return that as the app-visible setup completion signal.
+      const replyCompleted =
+        after.outboundAt != null &&
+        (before.outboundAt == null || after.outboundAt > before.outboundAt);
+      respond(true, {
+        ok: replyCompleted,
+        replyStarted: true,
+        replyCompleted,
+        ...(replyCompleted
+          ? {}
+          : {
+              error:
+                "Jarvis processed the first Telegram message, but no reply activity was confirmed.",
+            }),
+      });
+    } catch (err) {
+      respond(true, {
+        ok: false,
+        replyStarted: true,
+        replyCompleted: false,
+        error: formatForLog(err),
+      });
+    }
+  },
+
   "channels.status": async ({ params, respond, context }) => {
     if (!validateChannelsStatusParams(params)) {
       respond(

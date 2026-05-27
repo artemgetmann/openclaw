@@ -45,12 +45,14 @@ struct OnboardingViewSmokeTests {
 
     @Test func `consumer setup steps stay in expected order`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
-            #expect(ConsumerSetupStep.allCases == [.chrome, .permissions, .aiAccess, .accountActivation, .telegram])
+            #expect(ConsumerSetupStep.allCases == [.chrome, .permissions, .aiAccess, .accountActivation, .telegram, .telegramGroup])
             #expect(ConsumerSetupStep.chrome.next == .permissions)
             #expect(ConsumerSetupStep.permissions.previous == .chrome)
             #expect(ConsumerSetupStep.aiAccess.next == .accountActivation)
             #expect(ConsumerSetupStep.accountActivation.previous == .aiAccess)
-            #expect(ConsumerSetupStep.telegram.next == nil)
+            #expect(ConsumerSetupStep.telegram.next == .telegramGroup)
+            #expect(ConsumerSetupStep.telegramGroup.previous == .telegram)
+            #expect(ConsumerSetupStep.telegramGroup.next == nil)
         }
     }
 

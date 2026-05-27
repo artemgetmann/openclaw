@@ -329,6 +329,7 @@ extension ChannelsStore {
         enabled: Bool = true
     ) async throws -> [String: Any] {
         await self.restoreConfigDraftFromCurrentSource()
+        try self.seedConsumerJarvisWorkspaceForTelegramSetup()
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("enabled")], value: enabled)
         self.updateConfigValue(
             path: [.key("channels"), .key("telegram"), .key("defaultAccount")],
@@ -367,6 +368,13 @@ extension ChannelsStore {
         await self.reconnectConsumerGatewayAfterConfigBootstrap()
         Task { await self.refresh(probe: true) }
         return persisted
+    }
+
+    private func seedConsumerJarvisWorkspaceForTelegramSetup() throws {
+        guard AppFlavor.current.isConsumer else { return }
+        let workspace = AgentWorkspaceConfig.workspace(from: self.configDraft)
+        let workspaceURL = AgentWorkspace.resolveWorkspaceURL(from: workspace)
+        try AgentWorkspace.bootstrapConsumerJarvisPresetIfSafe(workspaceURL: workspaceURL)
     }
 
     private func openTelegramURL(_ raw: String) {
@@ -478,8 +486,6 @@ extension ChannelsStore {
         guard let pending = Self.latestPendingTelegramPairingRequest() else { return false }
 
         self.telegramSetupFirstSenderId = pending.id
-        self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestInboundAt()
-        self.telegramSetupBaselineOutboundAt = self.consumerTelegramLatestOutboundAt()
         self.telegramSetupStatus = "Approving Telegram access for your first DM..."
 
         _ = try await self.applyTelegramSetupBootstrap(
@@ -488,6 +494,17 @@ extension ChannelsStore {
             allowFrom: [pending.id],
             enabled: true)
 
+        if await self.completePendingTelegramPairingFromExistingObservedActivityAfterBootstrap() {
+            return true
+        }
+
+        // Only start a new baseline after giving already-observed Telegram
+        // activity one chance to complete setup. A stale /start pairing request
+        // can coexist with a real DM/reply that happened before Verify was
+        // clicked; treating that reply as the baseline forces the user to send a
+        // duplicate message for no product reason.
+        self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestInboundAt()
+        self.telegramSetupBaselineOutboundAt = self.consumerTelegramLatestOutboundAt()
         self.telegramSetupWaitingForDM = true
         self.telegramSetupStatus = "Access approved. Now send \"\(Self.consumerTelegramFirstTaskText)\" to the bot in Telegram."
         if await self.waitForConsumerTelegramFirstTaskActivityRefreshes(
@@ -502,6 +519,23 @@ extension ChannelsStore {
         self.clearConsumerTelegramFirstTaskVerified()
         self.telegramSetupStatus = "Telegram access is approved. Send \"\(Self.consumerTelegramFirstTaskText)\" as a new DM, then click Verify first task again."
         return true
+    }
+
+    private func completePendingTelegramPairingFromExistingObservedActivityAfterBootstrap(
+        refresh: (() async -> Void)? = nil
+    ) async -> Bool {
+        // Pending pairing is recovery from runtime-observed state, not a fresh
+        // direct-message capture. Drop any stale setup baseline before the
+        // refresh so a DM/reply that already happened can be accepted as the
+        // proof instead of being converted into "old" activity.
+        self.telegramSetupBaselineInboundAt = nil
+        self.telegramSetupBaselineOutboundAt = nil
+        if let refresh {
+            await refresh()
+        } else {
+            await self.refresh(probe: true)
+        }
+        return self.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible()
     }
 
     private func handleManagedTelegramSetupStatusError(_ error: Error) {
@@ -1061,6 +1095,13 @@ extension ChannelsStore {
         stateDirURL: URL
     ) -> ConsumerTelegramPendingPairingRequest? {
         self.latestPendingTelegramPairingRequest(now: now, stateDirURL: stateDirURL)
+    }
+
+    func _testCompletePendingTelegramPairingFromExistingObservedActivityAfterBootstrap(
+        refresh: (() async -> Void)? = nil
+    ) async -> Bool {
+        await self.completePendingTelegramPairingFromExistingObservedActivityAfterBootstrap(
+            refresh: refresh)
     }
 }
 #endif
