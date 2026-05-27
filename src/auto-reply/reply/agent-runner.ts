@@ -63,6 +63,7 @@ import {
   recordDurableTaskPayloadEvidence,
   recordDurableTaskTimeout,
   startDurableReplyTask,
+  type DurableReplyTaskRecord,
 } from "./durable-task-state.js";
 import {
   buildEmptyFinalFallbackPayload,
@@ -185,13 +186,7 @@ export async function runReplyAgent(params: {
   const cfg = followupRun.run.config;
   const didSendVisibleReply = { value: opts?.hasRepliedRef?.value === true };
   const didSendFinalVisibleReply = { value: opts?.hasRepliedRef?.value === true };
-  const timeoutContinuationConfig = resolveReplyTimeoutContinuationConfig(cfg);
-  const durableTask = startDurableReplyTask({
-    sessionKey: sessionKey ?? followupRun.run.sessionKey,
-    sessionId: followupRun.run.sessionId,
-    maxAttempts: timeoutContinuationConfig.maxAttempts,
-    maxWallClockMs: timeoutContinuationConfig.maxWallClockMs,
-  });
+  let durableTask: DurableReplyTaskRecord | undefined;
   const markVisibleReply = (payload: ReplyPayload) => {
     if (shouldSuppressReasoningPayload(payload) || !isRenderablePayload(payload)) {
       return;
@@ -209,21 +204,27 @@ export async function runReplyAgent(params: {
       onBlockReply: opts.onBlockReply
         ? async (payload, context) => {
             await opts.onBlockReply?.(payload, context);
-            recordDurableTaskEvidence(durableTask, "block_reply", payload);
+            if (durableTask) {
+              recordDurableTaskEvidence(durableTask, "block_reply", payload);
+            }
             markFinalVisibleReply(payload);
           }
         : undefined,
       onPartialReply: opts.onPartialReply
         ? async (payload) => {
             await opts.onPartialReply?.(payload);
-            recordDurableTaskEvidence(durableTask, "partial_reply", payload);
+            if (durableTask) {
+              recordDurableTaskEvidence(durableTask, "partial_reply", payload);
+            }
             markFinalVisibleReply(payload);
           }
         : undefined,
       onToolResult: opts.onToolResult
         ? async (payload) => {
             await opts.onToolResult?.(payload);
-            recordDurableTaskEvidence(durableTask, "tool_result", payload);
+            if (durableTask) {
+              recordDurableTaskEvidence(durableTask, "tool_result", payload);
+            }
             markVisibleReply(payload);
           }
         : undefined,
@@ -294,6 +295,14 @@ export async function runReplyAgent(params: {
     typing.cleanup();
     return undefined;
   }
+
+  const timeoutContinuationConfig = resolveReplyTimeoutContinuationConfig(cfg);
+  durableTask = startDurableReplyTask({
+    sessionKey: sessionKey ?? followupRun.run.sessionKey,
+    sessionId: followupRun.run.sessionId,
+    maxAttempts: timeoutContinuationConfig.maxAttempts,
+    maxWallClockMs: timeoutContinuationConfig.maxWallClockMs,
+  });
 
   await typingSignals.signalRunStart();
 

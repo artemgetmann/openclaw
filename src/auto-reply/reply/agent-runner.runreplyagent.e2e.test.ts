@@ -9,6 +9,10 @@ import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  getDurableReplyTaskCountForTest,
+  resetDurableReplyTasksForTest,
+} from "./durable-task-state.js";
+import {
   enqueueFollowupRun,
   scheduleFollowupDrain,
   type FollowupRun,
@@ -96,6 +100,7 @@ beforeEach(() => {
   state.runCliAgentMock.mockClear();
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
+  resetDurableReplyTasksForTest();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
@@ -306,6 +311,20 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it("does not create a durable task for early dropped runs", async () => {
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(getDurableReplyTaskCountForTest()).toBe(0);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
   it("still enqueues non-heartbeat runs when another run is active", async () => {
     const { run } = createMinimalRun({
       opts: { isHeartbeat: false },
@@ -317,6 +336,21 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("does not create a durable task for early enqueued runs", async () => {
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(getDurableReplyTaskCountForTest()).toBe(0);
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });

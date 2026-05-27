@@ -72,6 +72,11 @@ function removeTaskIndex(record: DurableReplyTaskRecord): void {
   }
 }
 
+function removeTaskRecord(record: DurableReplyTaskRecord): void {
+  removeTaskIndex(record);
+  TASKS_BY_ID.delete(record.taskId);
+}
+
 function truncateEvidenceText(text: string | undefined): string | undefined {
   const normalized = text?.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -193,13 +198,13 @@ export function canStartAnotherDurableTaskAttempt(
 export function completeDurableReplyTask(record: DurableReplyTaskRecord): void {
   record.status = "completed";
   record.updatedAt = nowMs();
-  removeTaskIndex(record);
+  removeTaskRecord(record);
 }
 
 export function exhaustDurableReplyTask(record: DurableReplyTaskRecord): void {
   record.status = record.cancelRequested ? "canceled" : "exhausted";
   record.updatedAt = nowMs();
-  removeTaskIndex(record);
+  removeTaskRecord(record);
 }
 
 export function cancelDurableReplyTasksForKeys(keys: Array<string | undefined>): number {
@@ -243,6 +248,10 @@ export function formatDurableTaskExhaustedFailure(record: DurableReplyTaskRecord
 
 export function getDurableReplyTaskForTest(taskId: string): DurableReplyTaskRecord | undefined {
   return TASKS_BY_ID.get(taskId);
+}
+
+export function getDurableReplyTaskCountForTest(): number {
+  return TASKS_BY_ID.size;
 }
 
 export function resetDurableReplyTasksForTest(): void {

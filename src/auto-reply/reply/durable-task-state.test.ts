@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   canStartAnotherDurableTaskAttempt,
   cancelDurableReplyTasksForKeys,
+  completeDurableReplyTask,
+  exhaustDurableReplyTask,
   formatDurableTaskExhaustedFailure,
+  getDurableReplyTaskCountForTest,
+  getDurableReplyTaskForTest,
   recordDurableTaskAttemptStart,
   recordDurableTaskEvidence,
   recordDurableTaskFallbackNotice,
@@ -82,5 +86,34 @@ describe("durable reply task state", () => {
     expect(
       recordDurableTaskFallbackNotice(task, "Claude CLI unavailable; continuing with GPT-5.4."),
     ).toBe(false);
+  });
+
+  it("removes terminal completed records from the primary task store", () => {
+    const task = startDurableReplyTask({
+      sessionKey: "main",
+      sessionId: "session",
+      maxAttempts: 5,
+      maxWallClockMs: 60_000,
+    });
+
+    expect(getDurableReplyTaskForTest(task.taskId)).toBe(task);
+    completeDurableReplyTask(task);
+
+    expect(getDurableReplyTaskForTest(task.taskId)).toBeUndefined();
+    expect(getDurableReplyTaskCountForTest()).toBe(0);
+  });
+
+  it("removes terminal exhausted records from the primary task store", () => {
+    const task = startDurableReplyTask({
+      sessionKey: "main",
+      sessionId: "session",
+      maxAttempts: 1,
+      maxWallClockMs: 60_000,
+    });
+
+    exhaustDurableReplyTask(task);
+
+    expect(getDurableReplyTaskForTest(task.taskId)).toBeUndefined();
+    expect(getDurableReplyTaskCountForTest()).toBe(0);
   });
 });
