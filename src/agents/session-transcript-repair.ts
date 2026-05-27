@@ -3,6 +3,8 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
+const DEFAULT_MISSING_TOOL_RESULT_TEXT =
+  "The previous tool action was interrupted before returning a result. The current state is unknown; re-check state before making claims.";
 
 type RawToolCallBlock = {
   type?: unknown;
@@ -143,7 +145,7 @@ function makeMissingToolResult(params: {
     content: [
       {
         type: "text",
-        text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+        text: DEFAULT_MISSING_TOOL_RESULT_TEXT,
       },
     ],
     isError: true,
