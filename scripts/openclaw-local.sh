@@ -75,6 +75,20 @@ has_explicit_runtime_selector() {
     [[ -n "${OPENCLAW_GATEWAY_PORT:-}" ]]
 }
 
+is_gateway_restart_command() {
+  if [[ $# -eq 1 && "$1" == "restart" ]]; then
+    return 0
+  fi
+  if [[ $# -eq 2 ]]; then
+    case "$1:$2" in
+      gateway:restart|daemon:restart)
+        return 0
+        ;;
+    esac
+  fi
+  return 1
+}
+
 if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
@@ -99,6 +113,7 @@ DEV_ENV_FILE="$ROOT/.dev-launch.env"
 lane_state_dir=""
 lane_config_path=""
 lane_gateway_port=""
+DEFAULT_SHARED_MAIN_CONTEXT=0
 if [[ -f "$DEV_ENV_FILE" ]]; then
   # Linked worktree operator commands must use the lane's generated baseline,
   # not silently drift back to ~/.openclaw because the shell lacked explicit env.
@@ -132,6 +147,7 @@ if [[ -z "$lane_state_dir" && -z "$lane_config_path" && -z "$lane_gateway_port" 
   export OPENCLAW_HOME="$HOME/Library/Application Support/OpenClaw"
   export OPENCLAW_STATE_DIR="$OPENCLAW_HOME/.openclaw"
   export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+  DEFAULT_SHARED_MAIN_CONTEXT=1
 fi
 
 RAW_INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
@@ -151,18 +167,15 @@ if [[ -x "$LOCAL_RESTART" ]]; then
   export OPENCLAW_LOCAL_RESTART_SCRIPT="${OPENCLAW_LOCAL_RESTART_SCRIPT:-$LOCAL_RESTART}"
 fi
 
-# Hard-pin restart commands to the local fork service script.
-if [[ "${OPENCLAW_USE_LOCAL_RESTART_SCRIPT:-1}" != "0" && -x "$LOCAL_RESTART" ]]; then
-  if [[ $# -eq 1 && "$1" == "restart" ]]; then
-    exec "$LOCAL_RESTART"
-  fi
-  if [[ $# -eq 2 ]]; then
-    case "$1:$2" in
-      gateway:restart|daemon:restart)
-        exec "$LOCAL_RESTART"
-        ;;
-    esac
-  fi
+# Hard-pin lane restart commands to the local fork service script, but never
+# intercept the canonical shared-main restart. That path belongs to the real CLI
+# service lifecycle so it can use launchd/recovery guards instead of recursing
+# into scripts/restart-local-gateway.sh, whose job is to refuse ai.openclaw.gateway.
+if [[ "${OPENCLAW_USE_LOCAL_RESTART_SCRIPT:-1}" != "0" && \
+  "$DEFAULT_SHARED_MAIN_CONTEXT" != "1" && \
+  -x "$LOCAL_RESTART" ]] && \
+  is_gateway_restart_command "$@"; then
+  exec "$LOCAL_RESTART"
 fi
 
 exec "$NODE" "$CLI" "$@"
