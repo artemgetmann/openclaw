@@ -445,7 +445,26 @@ async function probeBrowserUrlFromUserDataDir(
       profileDirectory,
     });
   }
-  return await probeBrowserUrlFromPort(profileName, port, "browserUrl-discovered");
+  const discoveredTarget = await probeBrowserUrlFromPort(
+    profileName,
+    port,
+    "browserUrl-discovered",
+  );
+  if (discoveredTarget) {
+    return discoveredTarget;
+  }
+  // DevToolsActivePort can outlive the actual debug listener after Chrome restarts.
+  // Treat a stale default user-live endpoint like the missing-file case so the
+  // runtime either relaunches a closed Chrome safely or explains why an active
+  // non-debuggable profile cannot be upgraded in place.
+  if (profileName !== "user-live" || resolvedUserDataDir !== defaultChromeUserDataDir) {
+    return null;
+  }
+  return await maybeLaunchUserLiveChrome({
+    profileName,
+    userDataDir: resolvedUserDataDir,
+    profileDirectory,
+  });
 }
 
 type ChromeMcpAttachTarget = {

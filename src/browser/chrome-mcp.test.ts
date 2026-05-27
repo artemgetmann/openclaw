@@ -241,6 +241,35 @@ describe("chrome MCP page parsing", () => {
     }
   });
 
+  it("fails with setup guidance when user-live has a stale DevToolsActivePort", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-user-live-"));
+    await fs.writeFile(path.join(tempDir, "DevToolsActivePort"), "9222\n/devtools/browser/stale\n");
+    const fetchMock = vi.fn(async () => {
+      throw new Error("connect ECONNREFUSED 127.0.0.1:9222");
+    });
+    const launcher = vi.fn(async () => {});
+    vi.stubGlobal("fetch", fetchMock);
+    setChromeMcpDefaultUserDataDirForTest(tempDir);
+    setChromeMcpProcessCommandsForTest(() => [
+      `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir="${tempDir}"`,
+    ]);
+    setChromeMcpLiveChromeLauncherForTest(launcher);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("user-live")).rejects.toThrow(
+        /already running.*not exposing a verified DevTools endpoint.*Quit Google Chrome and retry/i,
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:9222/json/version",
+        expect.anything(),
+      );
+      expect(launcher).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps non-user-live missing DevToolsActivePort on Chrome MCP autoConnect", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-custom-"));
     const launcher = vi.fn(async () => {});
