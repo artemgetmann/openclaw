@@ -2,8 +2,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import type { BlockReplyContext, ReplyPayload } from "../types.js";
 
 export const DEFAULT_REPLY_RUN_WATCHDOG_INTERVAL_MS = 90_000;
-export const DEFAULT_REPLY_RUN_WATCHDOG_TEXT =
-  "Still working on it. This is taking longer than usual.";
+export const DEFAULT_REPLY_RUN_WATCHDOG_TEXT = "";
 
 export type ReplyRunWatchdogConfig = {
   enabled: boolean;
@@ -29,7 +28,9 @@ export function resolveReplyRunWatchdogConfig(cfg: OpenClawConfig): ReplyRunWatc
       : DEFAULT_REPLY_RUN_WATCHDOG_INTERVAL_MS;
   const text = raw?.text?.trim() || DEFAULT_REPLY_RUN_WATCHDOG_TEXT;
   return {
-    enabled: raw?.enabled !== false,
+    // The watchdog has no evidence snapshot, so it must stay silent unless an
+    // operator explicitly opts in with a concrete, configured status message.
+    enabled: raw?.enabled === true && text.length > 0,
     intervalMs,
     text,
   };

@@ -5,24 +5,25 @@ import { isRenderablePayload, shouldSuppressMessagingToolReplies } from "./reply
 
 const TIMEOUT_PREFIX = "Request timed out before a response was generated.";
 
-export const DEFAULT_REPLY_TIMEOUT_CONTINUATION_STATUS_TEXT =
-  "Still working. I hit the run limit and am continuing automatically.";
-// Continuation attempts are runs after the original user-triggered run. With the
-// default 600s run timeout, 5 continuations gives roughly one hour total budget:
-// original run + 5 continuation runs.
+export const DEFAULT_REPLY_TIMEOUT_CONTINUATION_STATUS_TEXT = "";
+// Total attempts include the original user-triggered run. With the default 600s
+// run timeout, 5 total attempts keeps the task under the roughly one-hour cap.
 export const DEFAULT_REPLY_TIMEOUT_CONTINUATION_MAX_ATTEMPTS = 5;
+export const DEFAULT_REPLY_TIMEOUT_CONTINUATION_MAX_WALL_CLOCK_MS = 60 * 60 * 1000;
 export const REPLY_TIMEOUT_CONTINUATION_PROMPT =
   "Continue the previous user task from the last known state. Do not ask the user to confirm. Provide the final answer when done.";
 
 export type ReplyTimeoutContinuationConfig = {
   enabled: boolean;
   maxAttempts: number;
+  maxWallClockMs: number;
   statusText: string;
 };
 
 type TimeoutContinuationConfigRecord = {
   enabled?: boolean;
   maxAttempts?: number;
+  maxWallClockMs?: number;
   statusText?: string;
 };
 
@@ -38,9 +39,16 @@ export function resolveReplyTimeoutContinuationConfig(
     typeof raw?.maxAttempts === "number" && Number.isFinite(raw.maxAttempts) && raw.maxAttempts > 0
       ? Math.floor(raw.maxAttempts)
       : DEFAULT_REPLY_TIMEOUT_CONTINUATION_MAX_ATTEMPTS;
+  const maxWallClockMs =
+    typeof raw?.maxWallClockMs === "number" &&
+    Number.isFinite(raw.maxWallClockMs) &&
+    raw.maxWallClockMs > 0
+      ? Math.floor(raw.maxWallClockMs)
+      : DEFAULT_REPLY_TIMEOUT_CONTINUATION_MAX_WALL_CLOCK_MS;
   return {
     enabled: raw?.enabled !== false,
     maxAttempts,
+    maxWallClockMs,
     statusText: raw?.statusText?.trim() || DEFAULT_REPLY_TIMEOUT_CONTINUATION_STATUS_TEXT,
   };
 }
@@ -63,19 +71,18 @@ export function shouldContinueAfterReplyTimeout(params: {
   cfg: OpenClawConfig;
   opts?: GetReplyOptions;
   isHeartbeat: boolean;
-  attemptsUsed: number;
   payloads: ReplyPayload[];
-  didSendVisibleReply: boolean;
+  didSendFinalVisibleReply: boolean;
   messagingToolSentTargets?: MessagingToolSend[];
   messageProvider?: string;
   originatingTo?: string;
   accountId?: string;
 }): { shouldContinue: boolean; config: ReplyTimeoutContinuationConfig } {
   const config = resolveReplyTimeoutContinuationConfig(params.cfg);
-  if (!config.enabled || params.attemptsUsed >= config.maxAttempts) {
+  if (!config.enabled) {
     return { shouldContinue: false, config };
   }
-  if (!isUserVisibleRun(params.opts, params.isHeartbeat) || params.didSendVisibleReply) {
+  if (!isUserVisibleRun(params.opts, params.isHeartbeat) || params.didSendFinalVisibleReply) {
     return { shouldContinue: false, config };
   }
   if (
