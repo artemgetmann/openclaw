@@ -4,7 +4,8 @@ import { fetchBrowserJson } from "./client-fetch.js";
 // read, especially while Chrome shows approval prompts or the MCP bridge warms
 // up. Keep attach-sensitive discovery calls aligned with the CLI budget so the
 // agent path does not false-fail while the raw browser CLI still succeeds.
-const BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS = 45_000;
+export const BROWSER_EXISTING_SESSION_ATTACH_TIMEOUT_MS = 60_000;
+const BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS = BROWSER_EXISTING_SESSION_ATTACH_TIMEOUT_MS;
 const BROWSER_PAGE_LOAD_TIMEOUT_MS = 45_000;
 const BROWSER_STATUS_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
 const BROWSER_PROFILES_TIMEOUT_MS = BROWSER_ATTACH_DISCOVERY_TIMEOUT_MS;
@@ -133,13 +134,14 @@ function withBaseUrl(baseUrl: string | undefined, path: string): string {
 
 export async function browserStatus(
   baseUrl?: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; timeoutMs?: number },
 ): Promise<BrowserStatus> {
   const q = buildProfileQuery(opts?.profile);
+  const timeoutMs = Math.max(BROWSER_STATUS_TIMEOUT_MS, opts?.timeoutMs ?? 0);
   return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
     // Existing-session profile checks can spin up Chrome MCP and attach to a
     // live browser, so a 1.5s budget creates false "browser unavailable" errors.
-    timeoutMs: BROWSER_STATUS_TIMEOUT_MS,
+    timeoutMs,
   });
 }
 

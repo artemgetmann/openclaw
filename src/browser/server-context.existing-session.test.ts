@@ -4,9 +4,13 @@ import { createBrowserRouteContext } from "./server-context.js";
 import type { BrowserServerState } from "./server-context.js";
 
 vi.mock("./chrome-mcp.js", () => ({
+  CHROME_MCP_EXISTING_SESSION_ATTACH_TIMEOUT_MS: 60_000,
   closeChromeMcpSession: vi.fn(async () => true),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   focusChromeMcpTab: vi.fn(async () => {}),
+  isRetryableChromeMcpAttachError: vi.fn((err: unknown) =>
+    err instanceof Error ? /MCP error -32001|Request timed out/i.test(err.message) : false,
+  ),
   listChromeMcpTabs: vi.fn(async () => [
     { targetId: "7", title: "", url: "https://example.com", type: "page" },
   ]),
@@ -108,7 +112,12 @@ describe("browser server-context existing-session profile", () => {
     expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
       "chrome-live",
       "/tmp/brave-profile",
-      expect.objectContaining({ timeoutMs: 15_000 }),
+      expect.objectContaining({ timeoutMs: 60_000 }),
+    );
+    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith(
+      "chrome-live",
+      "/tmp/brave-profile",
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
     expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith("chrome-live", "/tmp/brave-profile");
     expect(chromeMcp.openChromeMcpTab).toHaveBeenCalledWith(
@@ -122,5 +131,32 @@ describe("browser server-context existing-session profile", () => {
       "/tmp/brave-profile",
     );
     expect(chromeMcp.closeChromeMcpSession).toHaveBeenCalledWith("chrome-live");
+  });
+
+  it("keeps retryable Chrome MCP readiness timeouts inside the outer attach budget", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    const state = makeState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("chrome-live");
+
+    vi.mocked(chromeMcp.listChromeMcpTabs)
+      .mockRejectedValueOnce(new Error("MCP error -32001: Request timed out"))
+      .mockResolvedValueOnce([
+        { targetId: "7", title: "", url: "https://example.com", type: "page" },
+      ]);
+
+    await live.ensureBrowserAvailable();
+
+    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
+      "chrome-live",
+      "/tmp/brave-profile",
+      expect.objectContaining({ timeoutMs: 60_000 }),
+    );
+    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledTimes(2);
+    expect(chromeMcp.listChromeMcpTabs).toHaveBeenLastCalledWith(
+      "chrome-live",
+      "/tmp/brave-profile",
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+    );
   });
 });

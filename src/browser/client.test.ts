@@ -200,9 +200,42 @@ describe("browser client", () => {
     await browserProfiles("http://127.0.0.1:18791");
     await browserTabs("http://127.0.0.1:18791");
 
-    expect(calls[0]?.init?.timeoutMs).toBe(45_000);
-    expect(calls[1]?.init?.timeoutMs).toBe(45_000);
-    expect(calls[2]?.init?.timeoutMs).toBe(45_000);
+    expect(calls[0]?.init?.timeoutMs).toBe(60_000);
+    expect(calls[1]?.init?.timeoutMs).toBe(60_000);
+    expect(calls[2]?.init?.timeoutMs).toBe(60_000);
+  });
+
+  it("honors larger caller timeout overrides for browser status", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          json: async () => ({
+            enabled: true,
+            running: true,
+            pid: null,
+            cdpPort: null,
+            chosenBrowser: "chrome",
+            userDataDir: null,
+            color: "#00AA00",
+            headless: false,
+            attachOnly: true,
+          }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserStatus("http://127.0.0.1:18791", {
+      profile: "user-live",
+      timeoutMs: 75_000,
+    });
+
+    expect(calls[0]?.url).toBe("http://127.0.0.1:18791/?profile=user-live");
+    expect(calls[0]?.init?.timeoutMs).toBe(75_000);
   });
 
   it("uses the attach-ready timeout budget for attach-sensitive tab control calls", async () => {
@@ -224,8 +257,8 @@ describe("browser client", () => {
     await browserFocusTab("http://127.0.0.1:18791", "tab-1");
     await browserCloseTab("http://127.0.0.1:18791", "tab-1");
 
-    expect(calls[0]?.init?.timeoutMs).toBe(45_000);
-    expect(calls[1]?.init?.timeoutMs).toBe(45_000);
+    expect(calls[0]?.init?.timeoutMs).toBe(60_000);
+    expect(calls[1]?.init?.timeoutMs).toBe(60_000);
   });
 
   it("uses the heavy browser timeout budget for managed browser starts", async () => {
