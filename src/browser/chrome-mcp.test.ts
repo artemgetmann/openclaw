@@ -13,6 +13,8 @@ import {
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   resolveChromeMcpArgsForTest,
+  setChromeMcpDefaultUserDataDirForTest,
+  setChromeMcpLiveChromeLauncherForTest,
   setChromeMcpProcessCommandsForTest,
   setChromeMcpProfileDirectoryForTest,
   setChromeMcpSessionFactoryForTest,
@@ -173,6 +175,89 @@ describe("chrome MCP page parsing", () => {
       );
     } finally {
       vi.unstubAllGlobals();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("auto-launches user-live Chrome when the default profile is not running", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-user-live-"));
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        webSocketDebuggerUrl: "ws://127.0.0.1:9227/devtools/browser/live",
+      }),
+    }));
+    const launcher = vi.fn(async () => {
+      await fs.writeFile(
+        path.join(tempDir, "DevToolsActivePort"),
+        "9227\n/devtools/browser/launched\n",
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setChromeMcpDefaultUserDataDirForTest(tempDir);
+    setChromeMcpProcessCommandsForTest(() => []);
+    setChromeMcpLiveChromeLauncherForTest(launcher);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("user-live")).resolves.toEqual([
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--experimentalStructuredContent",
+        "--experimental-page-id-routing",
+        "--browserUrl",
+        "http://127.0.0.1:9227",
+      ]);
+      expect(launcher).toHaveBeenCalledWith({
+        profileName: "user-live",
+        userDataDir: tempDir,
+        profileDirectory: undefined,
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:9227/json/version",
+        expect.anything(),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails with setup guidance when user-live Chrome is running without remote debugging", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-user-live-"));
+    const launcher = vi.fn(async () => {});
+    setChromeMcpDefaultUserDataDirForTest(tempDir);
+    setChromeMcpProcessCommandsForTest(() => [
+      `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir="${tempDir}"`,
+    ]);
+    setChromeMcpLiveChromeLauncherForTest(launcher);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("user-live")).rejects.toThrow(
+        /already running.*not exposing a verified DevTools endpoint.*Quit Google Chrome and retry/i,
+      );
+      expect(launcher).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps non-user-live missing DevToolsActivePort on Chrome MCP autoConnect", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-custom-"));
+    const launcher = vi.fn(async () => {});
+    setChromeMcpLiveChromeLauncherForTest(launcher);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("custom-live", tempDir)).resolves.toEqual([
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--autoConnect",
+        "--experimentalStructuredContent",
+        "--experimental-page-id-routing",
+        "--userDataDir",
+        tempDir,
+      ]);
+      expect(launcher).not.toHaveBeenCalled();
+    } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });

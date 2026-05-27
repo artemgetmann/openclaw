@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { loadConfig } from "../config/config.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
+import { resolveGoogleChromeExecutableForPlatform } from "./chrome.executables.js";
 import type { BrowserTab } from "./client.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
 
@@ -34,6 +35,11 @@ type ChromeMcpSessionFactory = (
   userDataDir?: string,
   profileDirectory?: string,
 ) => Promise<ChromeMcpSession>;
+type ChromeMcpLiveChromeLauncher = (params: {
+  profileName: string;
+  userDataDir: string;
+  profileDirectory?: string;
+}) => Promise<void>;
 type ChromeMcpCallOptions = {
   timeoutMs?: number;
   userDataDir?: string;
@@ -58,11 +64,15 @@ let sessionFactory: ChromeMcpSessionFactory | null = null;
 const DEFAULT_CHROME_MCP_REQUEST_TIMEOUT_MS = 30_000;
 export const CHROME_MCP_EXISTING_SESSION_ATTACH_TIMEOUT_MS = 60_000;
 const CHROME_MCP_ATTACH_RETRY_POLL_MS = 500;
-const DEFAULT_CHROME_USER_DATA_DIR = path.join(
+const CHROME_MCP_LIVE_CHROME_LAUNCH_READY_WINDOW_MS = 10_000;
+const CHROME_MCP_LIVE_CHROME_LAUNCH_POLL_MS = 250;
+const INITIAL_DEFAULT_CHROME_USER_DATA_DIR = path.join(
   os.homedir(),
   "Library/Application Support/Google/Chrome",
 );
+let defaultChromeUserDataDir = INITIAL_DEFAULT_CHROME_USER_DATA_DIR;
 let processCommandLinesReader: (() => string[]) | null = null;
+let liveChromeLauncher: ChromeMcpLiveChromeLauncher | null = null;
 const profileDirectoryOverrides = new Map<string, string>();
 
 function traceChromeMcpStage(stage: string): void {
@@ -167,8 +177,13 @@ function isMainBrowserProcessCommand(commandLine: string): boolean {
   return !commandLine.includes(" --type=") && !commandLine.includes(" Helper");
 }
 
+function commandLooksLikeGoogleChrome(commandLine: string): boolean {
+  const lower = commandLine.toLowerCase();
+  return lower.includes("google chrome") || lower.includes("google-chrome");
+}
+
 function resolveExpectedUserDataDir(userDataDir?: string): string | undefined {
-  return normalizeChromeMcpUserDataDir(userDataDir) ?? DEFAULT_CHROME_USER_DATA_DIR;
+  return normalizeChromeMcpUserDataDir(userDataDir) ?? defaultChromeUserDataDir;
 }
 
 function findRunningBrowserPortForProfileDirectory(params: {
@@ -197,7 +212,7 @@ function findRunningBrowserPortForProfileDirectory(params: {
       if (normalizeChromeMcpUserDataDir(processUserDataDir) !== expectedUserDataDir) {
         continue;
       }
-    } else if (expectedUserDataDir !== DEFAULT_CHROME_USER_DATA_DIR) {
+    } else if (expectedUserDataDir !== defaultChromeUserDataDir) {
       continue;
     }
     const port = Number.parseInt(remoteDebuggingPort, 10);
@@ -209,6 +224,35 @@ function findRunningBrowserPortForProfileDirectory(params: {
     }
   }
   return null;
+}
+
+function hasRunningGoogleChromeForUserDataDir(params: {
+  userDataDir: string;
+  profileDirectory?: string;
+}): boolean {
+  const expectedUserDataDir = normalizeChromeMcpUserDataDir(params.userDataDir);
+  if (!expectedUserDataDir) {
+    return false;
+  }
+  for (const commandLine of readProcessCommandLines()) {
+    if (!isMainBrowserProcessCommand(commandLine) || !commandLooksLikeGoogleChrome(commandLine)) {
+      continue;
+    }
+    const processUserDataDir = extractCommandFlagValue(commandLine, "user-data-dir");
+    if (processUserDataDir) {
+      if (normalizeChromeMcpUserDataDir(processUserDataDir) !== expectedUserDataDir) {
+        continue;
+      }
+    } else if (expectedUserDataDir !== defaultChromeUserDataDir) {
+      continue;
+    }
+    const processProfileDirectory = extractCommandFlagValue(commandLine, "profile-directory");
+    if (params.profileDirectory && processProfileDirectory !== params.profileDirectory) {
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 
 async function probeBrowserUrlFromPort(
@@ -244,6 +288,91 @@ async function probeBrowserUrlFromPort(
   }
 }
 
+async function waitForLaunchedLiveChromeTarget(params: {
+  profileName: string;
+  userDataDir: string;
+}): Promise<ChromeMcpAttachTarget | null> {
+  const deadlineMs = Date.now() + CHROME_MCP_LIVE_CHROME_LAUNCH_READY_WINDOW_MS;
+  while (Date.now() < deadlineMs) {
+    const port = readDevToolsActivePortPort(params.userDataDir);
+    if (port) {
+      const target = await probeBrowserUrlFromPort(
+        params.profileName,
+        port,
+        "browserUrl-auto-launched-user-live",
+      );
+      if (target) {
+        return target;
+      }
+    }
+    await new Promise((r) => setTimeout(r, CHROME_MCP_LIVE_CHROME_LAUNCH_POLL_MS));
+  }
+  return null;
+}
+
+async function launchLiveGoogleChrome(params: {
+  profileName: string;
+  userDataDir: string;
+  profileDirectory?: string;
+}): Promise<void> {
+  if (liveChromeLauncher) {
+    await liveChromeLauncher(params);
+    return;
+  }
+  const executable = resolveGoogleChromeExecutableForPlatform(process.platform);
+  if (!executable) {
+    throw new BrowserProfileUnavailableError(
+      `Chrome MCP existing-session attach failed for profile "${params.profileName}". Google Chrome was not found on this host. Install Google Chrome on the same host as OpenClaw, then retry.`,
+    );
+  }
+  const args = [
+    "--remote-debugging-port=0",
+    `--user-data-dir=${params.userDataDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    ...(params.profileDirectory ? [`--profile-directory=${params.profileDirectory}`] : []),
+  ];
+  const child = spawn(executable.path, args, {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+}
+
+async function maybeLaunchUserLiveChrome(params: {
+  profileName: string;
+  userDataDir: string;
+  profileDirectory?: string;
+}): Promise<ChromeMcpAttachTarget | null> {
+  const running = hasRunningGoogleChromeForUserDataDir({
+    userDataDir: params.userDataDir,
+    profileDirectory: params.profileDirectory,
+  });
+  if (running) {
+    const profileLabel = params.profileDirectory
+      ? ` profile directory "${params.profileDirectory}"`
+      : " default profile";
+    throw new BrowserProfileUnavailableError(
+      `Chrome MCP existing-session attach failed for profile "${params.profileName}". Google Chrome is already running for the${profileLabel}, but it is not exposing a verified DevTools endpoint. Chrome cannot enable remote debugging on an already-running profile in place. Quit Google Chrome and retry so OpenClaw can relaunch it in attachable mode, or open chrome://inspect/#remote-debugging in Chrome, enable remote debugging/approve the attach prompt if shown, then retry.`,
+    );
+  }
+
+  traceChromeMcpStage(
+    `chrome-mcp-attach-mode profile=${params.profileName} mode=auto-launch-user-live-start path=${params.userDataDir}`,
+  );
+  await launchLiveGoogleChrome(params);
+  const launchedTarget = await waitForLaunchedLiveChromeTarget({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+  });
+  if (!launchedTarget) {
+    throw new BrowserProfileUnavailableError(
+      `Chrome MCP existing-session attach failed for profile "${params.profileName}". OpenClaw launched Google Chrome in attachable mode, but Chrome did not expose DevToolsActivePort before the attach timeout. Keep Chrome open, approve any browser attach prompt, and retry.`,
+    );
+  }
+  return launchedTarget;
+}
+
 function resolveExistingSessionUserDataDir(
   profileName: string,
   userDataDir?: string,
@@ -253,7 +382,7 @@ function resolveExistingSessionUserDataDir(
     return normalized;
   }
   // The built-in live lane targets the user's active Chrome profile by default.
-  return profileName === "user-live" ? DEFAULT_CHROME_USER_DATA_DIR : null;
+  return profileName === "user-live" ? defaultChromeUserDataDir : null;
 }
 
 function readDevToolsActivePortPort(userDataDir: string): number | null {
@@ -304,7 +433,17 @@ async function probeBrowserUrlFromUserDataDir(
   }
   const port = readDevToolsActivePortPort(resolvedUserDataDir);
   if (!port) {
-    return null;
+    // Only the built-in Google Chrome live lane is self-healed here. Custom
+    // existing-session profiles may point at Brave/Edge/custom Chromium data,
+    // so launching Google Chrome against those directories would be data-risky.
+    if (profileName !== "user-live" || resolvedUserDataDir !== defaultChromeUserDataDir) {
+      return null;
+    }
+    return await maybeLaunchUserLiveChrome({
+      profileName,
+      userDataDir: resolvedUserDataDir,
+      profileDirectory,
+    });
   }
   return await probeBrowserUrlFromPort(profileName, port, "browserUrl-discovered");
 }
@@ -915,6 +1054,16 @@ export function setChromeMcpProcessCommandsForTest(reader: (() => string[]) | nu
   processCommandLinesReader = reader;
 }
 
+export function setChromeMcpLiveChromeLauncherForTest(
+  launcher: ChromeMcpLiveChromeLauncher | null,
+): void {
+  liveChromeLauncher = launcher;
+}
+
+export function setChromeMcpDefaultUserDataDirForTest(userDataDir: string | null): void {
+  defaultChromeUserDataDir = userDataDir?.trim() || INITIAL_DEFAULT_CHROME_USER_DATA_DIR;
+}
+
 export function setChromeMcpProfileDirectoryForTest(
   profileName: string,
   profileDirectory: string | null,
@@ -1324,6 +1473,8 @@ export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFacto
 export async function resetChromeMcpSessionsForTest(): Promise<void> {
   sessionFactory = null;
   processCommandLinesReader = null;
+  liveChromeLauncher = null;
+  defaultChromeUserDataDir = INITIAL_DEFAULT_CHROME_USER_DATA_DIR;
   profileDirectoryOverrides.clear();
   pendingSessions.clear();
   await stopAllChromeMcpSessions();
