@@ -8,6 +8,7 @@ import {
   closeChromeMcpSession,
   evaluateChromeMcpScript,
   fillChromeMcpElement,
+  ensureChromeMcpAvailable,
   listChromeMcpTabs,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
@@ -246,6 +247,67 @@ describe("chrome MCP page parsing", () => {
       url: "https://example.com/",
       type: "page",
     });
+  });
+
+  it("retries retryable attach timeouts until the caller budget succeeds", async () => {
+    let attempts = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      attempts += 1;
+      if (attempts < 3) {
+        throw new Error("MCP error -32001: Request timed out");
+      }
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const tabs = await listChromeMcpTabs("chrome-live", { timeoutMs: 60_000 });
+
+    expect(attempts).toBe(3);
+    expect(tabs.map((tab) => tab.targetId)).toEqual(["1", "2"]);
+  });
+
+  it("retries retryable availability attach timeouts until the caller budget succeeds", async () => {
+    let attempts = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      attempts += 1;
+      if (attempts < 3) {
+        throw new Error("MCP error -32001: Request timed out");
+      }
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await ensureChromeMcpAvailable("chrome-live", { timeoutMs: 60_000 });
+
+    expect(attempts).toBe(3);
+  });
+
+  it("retries retryable list_pages timeouts until the caller budget succeeds", async () => {
+    const { session, callTool } = createFakeSessionBundle();
+    callTool
+      .mockRejectedValueOnce(new Error("MCP error -32001: Request timed out"))
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: "text",
+            text: "## Pages\n9: https://example.com/ [selected]",
+          },
+        ],
+      });
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const tabs = await listChromeMcpTabs("chrome-live", { timeoutMs: 60_000 });
+
+    expect(callTool).toHaveBeenCalledTimes(2);
+    expect(tabs).toEqual([
+      {
+        targetId: "9",
+        title: "",
+        url: "https://example.com/",
+        type: "page",
+      },
+    ]);
   });
 
   it("forwards timeout overrides to new_page", async () => {

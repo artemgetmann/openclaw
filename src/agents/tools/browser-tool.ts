@@ -15,6 +15,7 @@ import {
   browserStart,
   browserStatus,
   browserStop,
+  BROWSER_EXISTING_SESSION_ATTACH_TIMEOUT_MS,
 } from "../../browser/client.js";
 import { resolveBrowserConfig, resolveProfile } from "../../browser/config.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
@@ -200,6 +201,7 @@ type BrowserProxyResult = {
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 45_000;
 const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 10_000;
 const BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS = 45_000;
+const BROWSER_TOOL_EXISTING_SESSION_ATTACH_TIMEOUT_MS = BROWSER_EXISTING_SESSION_ATTACH_TIMEOUT_MS;
 
 type BrowserNodeTarget = {
   nodeId: string;
@@ -478,17 +480,25 @@ export function createBrowserTool(opts?: {
         : null;
 
       switch (action) {
-        case "status":
+        case "status": {
+          const { timeoutMs: statusTimeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             return jsonResult(
               await proxyRequest({
                 method: "GET",
                 path: "/",
                 profile,
+                timeoutMs: statusTimeoutMs ?? BROWSER_TOOL_EXISTING_SESSION_ATTACH_TIMEOUT_MS,
               }),
             );
           }
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          return jsonResult(
+            await browserStatus(baseUrl, {
+              profile,
+              timeoutMs: statusTimeoutMs ?? BROWSER_TOOL_EXISTING_SESSION_ATTACH_TIMEOUT_MS,
+            }),
+          );
+        }
         case "start": {
           const { timeoutMs: startTimeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
@@ -503,6 +513,7 @@ export function createBrowserTool(opts?: {
                 method: "GET",
                 path: "/",
                 profile,
+                timeoutMs: startTimeoutMs ?? BROWSER_TOOL_EXISTING_SESSION_ATTACH_TIMEOUT_MS,
               }),
             );
           }
@@ -510,7 +521,12 @@ export function createBrowserTool(opts?: {
             profile,
             timeoutMs: startTimeoutMs ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS,
           });
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          return jsonResult(
+            await browserStatus(baseUrl, {
+              profile,
+              timeoutMs: startTimeoutMs ?? BROWSER_TOOL_EXISTING_SESSION_ATTACH_TIMEOUT_MS,
+            }),
+          );
         }
         case "stop":
           if (proxyRequest) {

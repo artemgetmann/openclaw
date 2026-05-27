@@ -7,8 +7,10 @@ import {
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
 import {
+  CHROME_MCP_EXISTING_SESSION_ATTACH_TIMEOUT_MS,
   closeChromeMcpSession,
   ensureChromeMcpAvailable,
+  isRetryableChromeMcpAttachError,
   listChromeMcpTabs,
 } from "./chrome-mcp.js";
 import {
@@ -70,7 +72,7 @@ export function createProfileAvailability({
     // Existing-session Chrome MCP attach can take materially longer when the
     // browser is backgrounded or the first attach spins up the MCP bridge.
     // Keep status/availability checks out of the "false negative" zone.
-    const minimumReadyTimeoutMs = 15_000;
+    const minimumReadyTimeoutMs = CHROME_MCP_EXISTING_SESSION_ATTACH_TIMEOUT_MS;
     if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
       return minimumReadyTimeoutMs;
     }
@@ -190,11 +192,14 @@ export function createProfileAvailability({
     while (Date.now() < deadlineMs) {
       try {
         await listChromeMcpTabs(profile.name, profile.userDataDir, {
-          timeoutMs: readyTimeoutMs,
+          timeoutMs: Math.max(1, Math.min(readyTimeoutMs, deadlineMs - Date.now())),
         });
         return;
       } catch (err) {
         lastError = err;
+        if (!isRetryableChromeMcpAttachError(err)) {
+          throw err;
+        }
       }
       await new Promise((r) => setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS));
     }

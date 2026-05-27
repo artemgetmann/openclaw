@@ -56,6 +56,8 @@ const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
 // the very next retry should reconnect instead of failing closed for a minute.
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 const DEFAULT_CHROME_MCP_REQUEST_TIMEOUT_MS = 30_000;
+export const CHROME_MCP_EXISTING_SESSION_ATTACH_TIMEOUT_MS = 60_000;
+const CHROME_MCP_ATTACH_RETRY_POLL_MS = 500;
 const DEFAULT_CHROME_USER_DATA_DIR = path.join(
   os.homedir(),
   "Library/Application Support/Google/Chrome",
@@ -668,6 +670,29 @@ function normalizeAttachFailure(profileName: string, err: unknown): BrowserProfi
   );
 }
 
+export function isRetryableChromeMcpAttachError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("mcp error -32001") ||
+    lower.includes("request timed out") ||
+    lower.includes("chrome mcp attach timed out")
+  );
+}
+
+function remainingTimeoutMs(deadlineMs: number): number {
+  return Math.max(0, deadlineMs - Date.now());
+}
+
+async function waitBeforeChromeMcpAttachRetry(deadlineMs: number): Promise<boolean> {
+  const remainingMs = remainingTimeoutMs(deadlineMs);
+  if (remainingMs <= 0) {
+    return false;
+  }
+  await new Promise((r) => setTimeout(r, Math.min(CHROME_MCP_ATTACH_RETRY_POLL_MS, remainingMs)));
+  return remainingTimeoutMs(deadlineMs) > 0;
+}
+
 async function getSession(
   profileName: string,
   options: ChromeMcpCallOptions = {},
@@ -747,41 +772,64 @@ async function callTool(
   options: ChromeMcpCallOptions = {},
 ): Promise<ChromeMcpToolResult> {
   const timeoutMs = resolveTimeoutMs(options.timeoutMs);
+  const deadlineMs = Date.now() + timeoutMs;
   traceChromeMcpStage(
     `chrome-mcp-tool-start profile=${profileName} tool=${name} timeoutMs=${timeoutMs}`,
   );
   const sessionProfileDirectory = resolveSessionProfileDirectory(profileName, profileDirectory);
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir, sessionProfileDirectory);
-  const session = await getSession(profileName, {
-    ...options,
-    userDataDir,
-    profileDirectory: sessionProfileDirectory,
-  });
-  let result: ChromeMcpToolResult;
-  try {
-    result = (await session.client.callTool(
-      {
-        name,
-        arguments: args,
-      },
-      undefined,
-      {
-        timeout: timeoutMs,
-      },
-    )) as ChromeMcpToolResult;
-  } catch (err) {
-    // Transport/connection error — tear down session so it reconnects on next call
-    sessions.delete(cacheKey);
-    await session.client.close().catch(() => {});
-    throw normalizeAttachFailure(profileName, err);
+  let lastError: unknown;
+
+  while (remainingTimeoutMs(deadlineMs) > 0) {
+    const attemptTimeoutMs = Math.max(1, Math.min(timeoutMs, remainingTimeoutMs(deadlineMs) + 1));
+    let session: ChromeMcpSession | undefined;
+    let result: ChromeMcpToolResult;
+    try {
+      session = await getSession(profileName, {
+        ...options,
+        timeoutMs: attemptTimeoutMs,
+        userDataDir,
+        profileDirectory: sessionProfileDirectory,
+      });
+      result = (await session.client.callTool(
+        {
+          name,
+          arguments: args,
+        },
+        undefined,
+        {
+          timeout: attemptTimeoutMs,
+        },
+      )) as ChromeMcpToolResult;
+    } catch (err) {
+      lastError = err;
+      if (session) {
+        // Transport/connection error — tear down session so attach can reconnect.
+        sessions.delete(cacheKey);
+        await session.client.close().catch(() => {});
+      }
+      if (!isRetryableChromeMcpAttachError(err)) {
+        throw normalizeAttachFailure(profileName, err);
+      }
+      traceChromeMcpStage(
+        `chrome-mcp-tool-retry profile=${profileName} tool=${name} remainingMs=${remainingTimeoutMs(
+          deadlineMs,
+        )}`,
+      );
+      if (!(await waitBeforeChromeMcpAttachRetry(deadlineMs))) {
+        break;
+      }
+      continue;
+    }
+    // Tool-level errors (element not found, script error, etc.) don't indicate a
+    // broken connection — don't tear down the session for these.
+    if (result.isError) {
+      throw new Error(extractToolErrorMessage(result, name));
+    }
+    traceChromeMcpStage(`chrome-mcp-tool-done profile=${profileName} tool=${name}`);
+    return result;
   }
-  // Tool-level errors (element not found, script error, etc.) don't indicate a
-  // broken connection — don't tear down the session for these.
-  if (result.isError) {
-    throw new Error(extractToolErrorMessage(result, name));
-  }
-  traceChromeMcpStage(`chrome-mcp-tool-done profile=${profileName} tool=${name}`);
-  return result;
+  throw normalizeAttachFailure(profileName, lastError ?? new Error("Chrome MCP attach timed out."));
 }
 
 async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
@@ -817,11 +865,34 @@ export async function ensureChromeMcpAvailable(
   options: ChromeMcpCallOptions = {},
 ): Promise<void> {
   const resolved = resolveUserDataDirAndOptions(userDataDirOrOptions, options);
-  await getSession(profileName, {
-    ...resolved.options,
-    userDataDir: resolved.userDataDir,
-    profileDirectory: resolved.profileDirectory,
-  });
+  const timeoutMs = resolveTimeoutMs(resolved.options.timeoutMs);
+  const deadlineMs = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (remainingTimeoutMs(deadlineMs) > 0) {
+    try {
+      await getSession(profileName, {
+        ...resolved.options,
+        timeoutMs: Math.max(1, Math.min(timeoutMs, remainingTimeoutMs(deadlineMs) + 1)),
+        userDataDir: resolved.userDataDir,
+        profileDirectory: resolved.profileDirectory,
+      });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (!isRetryableChromeMcpAttachError(err)) {
+        throw normalizeAttachFailure(profileName, err);
+      }
+      traceChromeMcpStage(
+        `chrome-mcp-ensure-retry profile=${profileName} remainingMs=${remainingTimeoutMs(
+          deadlineMs,
+        )}`,
+      );
+      if (!(await waitBeforeChromeMcpAttachRetry(deadlineMs))) {
+        break;
+      }
+    }
+  }
+  throw normalizeAttachFailure(profileName, lastError ?? new Error("Chrome MCP attach timed out."));
 }
 
 export function getChromeMcpPid(profileName: string): number | null {

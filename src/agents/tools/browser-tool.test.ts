@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const browserClientMocks = vi.hoisted(() => ({
+  BROWSER_EXISTING_SESSION_ATTACH_TIMEOUT_MS: 60_000,
   browserCloseTab: vi.fn(async (..._args: unknown[]) => ({})),
   browserFocusTab: vi.fn(async (..._args: unknown[]) => ({})),
   browserOpenTab: vi.fn(async (..._args: unknown[]) => ({})),
@@ -509,12 +510,12 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 55000 },
+      { timeoutMs: 70000 },
       expect.objectContaining({
         nodeId: "node-1",
         command: "browser.proxy",
         params: expect.objectContaining({
-          timeoutMs: 45000,
+          timeoutMs: 60000,
         }),
       }),
     );
@@ -554,7 +555,7 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
       "http://127.0.0.1:9999",
-      expect.objectContaining({ profile: undefined }),
+      expect.objectContaining({ profile: undefined, timeoutMs: 60_000 }),
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
@@ -578,7 +579,7 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
       undefined,
-      expect.objectContaining({ profile: "signed-in" }),
+      expect.objectContaining({ profile: "signed-in", timeoutMs: 60_000 }),
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
