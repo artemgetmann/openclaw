@@ -77,15 +77,42 @@ struct AgentWorkspaceTests {
         #expect(bootstrap.contains("offer a `Jarvis preset` vs `custom setup` choice"))
         #expect(bootstrap.contains("role = `engineering copilot + personal assistant`"))
         #expect(bootstrap.contains("do **not** ask role or vibe again"))
+        #expect(bootstrap.contains("Hey. Your workspace is ready. What should I be called?"))
         #expect(bootstrap.contains("warm, capable, and memorable, not robotic"))
         #expect(bootstrap.contains("light dry wit"))
         #expect(bootstrap.contains("call out weak assumptions when appropriate"))
+        #expect(!bootstrap.contains("BotFather"))
+        #expect(!bootstrap.contains("consumer workspace"))
         #expect(!bootstrap.contains("Jarvis is already configured"))
         #expect(!bootstrap.contains("Who am I?"))
         #expect(!bootstrap.contains("What am I?"))
         #expect(!bootstrap.contains("creature/vibe"))
         #expect(!bootstrap.contains("chaos coordinator"))
         #expect(!bootstrap.contains("tiny menace"))
+    }
+
+    @Test
+    func `consumer templates keep useful workspace scaffolding`() throws {
+        let agents = AgentWorkspace.defaultTemplate()
+        let identity = AgentWorkspace.defaultIdentityTemplate()
+        let soul = AgentWorkspace.defaultSoulTemplate()
+
+        #expect(agents.contains("`IDENTITY.md` defines who the agent is"))
+        #expect(agents.contains("`USER.md` defines who the human is"))
+        #expect(agents.contains("Use files, not session memory"))
+        #expect(agents.contains("## Make It Yours"))
+        #expect(agents.contains("check the relevant `SKILL.md`"))
+        #expect(agents.contains("Never send streaming, partial, or half-written replies"))
+        #expect(agents.contains("Avoid tables or fancy formatting"))
+        #expect(agents.contains("Be warm, capable, memorable, professional, and a little fun"))
+
+        #expect(identity.contains("This isn't just metadata. It's the start of figuring out who you are."))
+        #expect(identity.contains("workspace-relative path, https URL, or data URI"))
+        #expect(identity.contains("avatars/openclaw.png"))
+        #expect(identity.contains("Save this file at the workspace root as `IDENTITY.md`"))
+
+        #expect(soul.contains("A little fun when the moment fits"))
+        #expect(soul.contains("should not drift silently"))
     }
 
     @Test
