@@ -13,6 +13,8 @@ import {
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   resolveChromeMcpArgsForTest,
+  setChromeMcpDefaultUserDataDirForTest,
+  setChromeMcpLiveChromeLauncherForTest,
   setChromeMcpProcessCommandsForTest,
   setChromeMcpProfileDirectoryForTest,
   setChromeMcpSessionFactoryForTest,
@@ -173,6 +175,125 @@ describe("chrome MCP page parsing", () => {
       );
     } finally {
       vi.unstubAllGlobals();
+      setChromeMcpLiveChromeLauncherForTest(null);
+      setChromeMcpProcessCommandsForTest(null);
+      setChromeMcpDefaultUserDataDirForTest(null);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("defaults user-live to autoConnect without probing DevToolsActivePort", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-user-live-"));
+    await fs.writeFile(path.join(tempDir, "DevToolsActivePort"), "9227\n/devtools/browser/live\n");
+    const fetchMock = vi.fn(async () => {
+      throw new Error("fetch should not be called for user-live autoConnect");
+    });
+    const launcher = vi.fn(async () => {});
+    vi.stubGlobal("fetch", fetchMock);
+    setChromeMcpDefaultUserDataDirForTest(tempDir);
+    setChromeMcpProcessCommandsForTest(() => []);
+    setChromeMcpLiveChromeLauncherForTest(launcher);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("user-live")).resolves.toEqual([
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--autoConnect",
+        "--experimentalStructuredContent",
+        "--experimental-page-id-routing",
+      ]);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(launcher).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      setChromeMcpLiveChromeLauncherForTest(null);
+      setChromeMcpProcessCommandsForTest(null);
+      setChromeMcpDefaultUserDataDirForTest(null);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes --userDataDir for user-live while staying on autoConnect", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-user-live-"));
+    const fetchMock = vi.fn(async () => {
+      throw new Error("fetch should not be called for user-live autoConnect");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setChromeMcpLiveChromeLauncherForTest(vi.fn(async () => {}));
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("user-live", tempDir)).resolves.toEqual([
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--autoConnect",
+        "--experimentalStructuredContent",
+        "--experimental-page-id-routing",
+        "--userDataDir",
+        tempDir,
+      ]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      setChromeMcpLiveChromeLauncherForTest(null);
+      setChromeMcpProcessCommandsForTest(null);
+      setChromeMcpDefaultUserDataDirForTest(null);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets an explicit user-live attach target win over autoConnect", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-user-live-"));
+    await fs.writeFile(path.join(tempDir, "DevToolsActivePort"), "9227\n/devtools/browser/live\n");
+    const fetchMock = vi.fn(async () => {
+      throw new Error("fetch should not be called when an explicit attach target is set");
+    });
+    const previousBrowserUrl = process.env.OPENCLAW_CHROME_MCP_BROWSER_URL;
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = "http://127.0.0.1:9444";
+    setChromeMcpDefaultUserDataDirForTest(tempDir);
+    setChromeMcpProcessCommandsForTest(() => []);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("user-live")).resolves.toEqual([
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--experimentalStructuredContent",
+        "--experimental-page-id-routing",
+        "--browserUrl",
+        "http://127.0.0.1:9444/",
+      ]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      if (previousBrowserUrl === undefined) {
+        delete process.env.OPENCLAW_CHROME_MCP_BROWSER_URL;
+      } else {
+        process.env.OPENCLAW_CHROME_MCP_BROWSER_URL = previousBrowserUrl;
+      }
+      setChromeMcpLiveChromeLauncherForTest(null);
+      setChromeMcpProcessCommandsForTest(null);
+      setChromeMcpDefaultUserDataDirForTest(null);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps non-user-live missing DevToolsActivePort on Chrome MCP autoConnect", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-custom-"));
+    const launcher = vi.fn(async () => {});
+    setChromeMcpLiveChromeLauncherForTest(launcher);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("custom-live", tempDir)).resolves.toEqual([
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--autoConnect",
+        "--experimentalStructuredContent",
+        "--experimental-page-id-routing",
+        "--userDataDir",
+        tempDir,
+      ]);
+      expect(launcher).not.toHaveBeenCalled();
+    } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
