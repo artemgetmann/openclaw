@@ -1230,6 +1230,39 @@ describe("secrets runtime snapshot", () => {
     ).rejects.toThrow(/must not include "\." or "\.\." path segments/i);
   });
 
+  it("resolves Jarvis backend token refs for managed runtime utilities", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        jarvis: {
+          backend: {
+            baseUrl: "https://jarvis.example",
+            accessToken: { source: "env", provider: "default", id: "JARVIS_BACKEND_TOKEN_REF" },
+            accountAccessToken: {
+              source: "env",
+              provider: "default",
+              id: "JARVIS_ACCOUNT_TOKEN_REF",
+            },
+          },
+          managedServices: { mode: "managed" },
+        },
+      }),
+      env: {
+        JARVIS_BACKEND_TOKEN_REF: "resolved-backend-token",
+        JARVIS_ACCOUNT_TOKEN_REF: "resolved-account-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.jarvis?.backend?.accessToken).toBe("resolved-backend-token");
+    expect(snapshot.config.jarvis?.backend?.accountAccessToken).toBe("resolved-account-token");
+    expect(snapshot.sourceConfig.jarvis?.backend?.accountAccessToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "JARVIS_ACCOUNT_TOKEN_REF",
+    });
+  });
+
   it("treats gateway.auth.password ref as inactive when auth mode is trusted-proxy", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

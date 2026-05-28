@@ -94,7 +94,7 @@ struct JarvisAccountActivationTests {
         }
     }
 
-    @Test func `activation model stores token securely and writes only non secret summary to config`() async throws {
+    @Test func `activation model stores token securely and writes keychain token ref to config`() async throws {
         let tokenStore = MockAccountTokenStore()
         let savedRoot = SavedActivationRoot()
         let model = JarvisAccountActivationModel(
@@ -141,7 +141,16 @@ struct JarvisAccountActivationTests {
         #expect(account["accountId"] as? String == "acct_123")
         #expect(account["email"] as? String == "user@example.com")
         #expect(account["license"] as? String == "beta")
-        #expect(backend["accountAccessToken"] == nil)
+        #expect(backend["accountAccessToken"] as? [String: String] == [
+            "source": "exec",
+            "provider": "jarvis-keychain",
+            "id": "account-access-token",
+        ])
+        let providers = try #require((savedRoot.value()["secrets"] as? [String: Any])?["providers"] as? [String: Any])
+        let keychain = try #require(providers["jarvis-keychain"] as? [String: Any])
+        #expect(keychain["source"] as? String == "exec")
+        #expect(keychain["command"] as? String == "/usr/bin/security")
+        #expect(keychain["jsonOnly"] as? Bool == false)
     }
 
     @Test func `managed bot configuration resolves account token from activation storage`() throws {

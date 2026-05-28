@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.js";
-import type { SecretInput } from "../config/types.secrets.js";
+import { normalizeResolvedSecretInputString, type SecretInput } from "../config/types.secrets.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "../memory/remote-http.js";
 
 export type JarvisLicenseState =
@@ -98,12 +98,14 @@ function normalizeBaseUrl(baseUrl: string | undefined): string | null {
   return parsed.toString().replace(/\/$/, "");
 }
 
-function resolvePlainSecretInput(value: SecretInput | undefined): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
+function resolveSecretInputString(
+  value: SecretInput | undefined,
+  path: string,
+): string | undefined {
+  return normalizeResolvedSecretInputString({
+    value,
+    path,
+  });
 }
 
 function buildUrl(baseUrl: string, path: string): string {
@@ -207,8 +209,19 @@ export function createJarvisBackendClient(
   const managedServicesMode = normalizeManagedServicesMode(config);
   const baseUrl = normalizeBaseUrl(config.jarvis?.backend?.baseUrl);
   const enabled = Boolean(baseUrl && managedServicesMode !== "off");
-  const accessToken = resolvePlainSecretInput(config.jarvis?.backend?.accessToken);
-  const accountAccessToken = resolvePlainSecretInput(config.jarvis?.backend?.accountAccessToken);
+  const accessToken = enabled
+    ? resolveSecretInputString(config.jarvis?.backend?.accessToken, "jarvis.backend.accessToken")
+    : undefined;
+  const accountAccessToken = enabled
+    ? resolveSecretInputString(
+        config.jarvis?.backend?.accountAccessToken,
+        "jarvis.backend.accountAccessToken",
+      )
+    : undefined;
+  // Packaged onboarding stores the user-scoped Jarvis account token in
+  // Keychain and exposes it as accountAccessToken. Managed utility calls can
+  // use that token when no build-scoped backend token is present.
+  const managedUtilityAccessToken = accessToken ?? accountAccessToken;
   const timeoutMs = config.jarvis?.backend?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const configuredDeviceId = config.jarvis?.backend?.deviceId;
   const fetchResponse = deps.fetchResponse ?? withRemoteHttpResponse;
@@ -266,7 +279,7 @@ export function createJarvisBackendClient(
           auditContext: "jarvis-license-status",
           init: {
             method: "POST",
-            headers: buildHeaders(accessToken),
+            headers: buildHeaders(managedUtilityAccessToken),
             signal: controller.signal,
             body: JSON.stringify({
               accountAccessToken: params.accountAccessToken ?? accountAccessToken,
@@ -304,7 +317,7 @@ export function createJarvisBackendClient(
           auditContext: "jarvis-managed-utility",
           init: {
             method: "POST",
-            headers: buildHeaders(accessToken),
+            headers: buildHeaders(managedUtilityAccessToken),
             signal: controller.signal,
             body: JSON.stringify({
               appVersion: params.appVersion,

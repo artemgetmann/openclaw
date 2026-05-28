@@ -214,13 +214,15 @@ protocol JarvisAccountAccessTokenStoring: JarvisAccountAccessTokenReading {
 
 struct JarvisAccountActivationKeychainStore: JarvisAccountAccessTokenStoring {
     static let shared = JarvisAccountActivationKeychainStore()
+    static var defaultService: String { Bundle.main.bundleIdentifier ?? "ai.openclaw.jarvis" }
+    static let defaultAccount = "jarvis.backend.accountAccessToken"
 
     private let service: String
     private let account: String
 
     init(
-        service: String = Bundle.main.bundleIdentifier ?? "ai.openclaw.jarvis",
-        account: String = "jarvis.backend.accountAccessToken"
+        service: String = Self.defaultService,
+        account: String = Self.defaultAccount
     ) {
         self.service = service
         self.account = account
@@ -273,6 +275,9 @@ struct JarvisAccountActivationKeychainStore: JarvisAccountAccessTokenStoring {
 }
 
 enum JarvisAccountActivationConfig {
+    private static let accountTokenProviderName = "jarvis-keychain"
+    private static let accountTokenRefId = "account-access-token"
+
     static func summary(root: [String: Any]) -> JarvisAccountActivationSummary? {
         guard let backend = (root["jarvis"] as? [String: Any])?["backend"] as? [String: Any],
               let account = backend["account"] as? [String: Any],
@@ -297,9 +302,64 @@ enum JarvisAccountActivationConfig {
             "email": summary.email,
             "license": summary.licenseSummary ?? "",
         ]
-        backend.removeValue(forKey: "accountAccessToken")
+        backend["accountAccessToken"] = Self.accountAccessTokenSecretRef()
         jarvis["backend"] = backend
         root["jarvis"] = jarvis
+        Self.installAccountAccessTokenSecretProvider(into: &root)
+    }
+
+    static func configureManagedRuntime(into root: inout [String: Any], fallbackBaseURL: String? = nil) {
+        var jarvis = root["jarvis"] as? [String: Any] ?? [:]
+        var backend = jarvis["backend"] as? [String: Any] ?? [:]
+        let existingBaseURL = (backend["baseUrl"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let envBaseURL = ProcessInfo.processInfo.environment["JARVIS_BACKEND_BASE_URL"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = fallbackBaseURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if existingBaseURL?.isEmpty != false {
+            backend["baseUrl"] = [envBaseURL, fallback, "https://jarvis-backend-klvq.onrender.com"]
+                .compactMap { $0 }
+                .first { !$0.isEmpty }
+        }
+
+        // Node resolves SecretInput refs at runtime, so config can point at
+        // Keychain without ever persisting the account token as plaintext.
+        backend["accountAccessToken"] = Self.accountAccessTokenSecretRef()
+        jarvis["backend"] = backend
+        var managedServices = jarvis["managedServices"] as? [String: Any] ?? [:]
+        managedServices["mode"] = "managed"
+        jarvis["managedServices"] = managedServices
+        root["jarvis"] = jarvis
+        Self.installAccountAccessTokenSecretProvider(into: &root)
+    }
+
+    static func accountAccessTokenSecretRef() -> [String: String] {
+        [
+            "source": "exec",
+            "provider": Self.accountTokenProviderName,
+            "id": Self.accountTokenRefId,
+        ]
+    }
+
+    private static func installAccountAccessTokenSecretProvider(into root: inout [String: Any]) {
+        var secrets = root["secrets"] as? [String: Any] ?? [:]
+        var providers = secrets["providers"] as? [String: Any] ?? [:]
+        providers[Self.accountTokenProviderName] = [
+            "source": "exec",
+            "command": "/usr/bin/security",
+            "args": [
+                "find-generic-password",
+                "-s",
+                JarvisAccountActivationKeychainStore.defaultService,
+                "-a",
+                JarvisAccountActivationKeychainStore.defaultAccount,
+                "-w",
+            ],
+            "timeoutMs": 3000,
+            "jsonOnly": false,
+        ]
+        secrets["providers"] = providers
+        root["secrets"] = secrets
     }
 }
 
