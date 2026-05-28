@@ -194,6 +194,64 @@ describe("fetchBrowserJson loopback auth", () => {
     );
   });
 
+  it("surfaces remote-debugging approval guidance for user-live absolute loopback timeouts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        await new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        });
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }),
+    );
+
+    await expectThrownBrowserFetchError(
+      () =>
+        fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/tabs/open?profile=user-live", {
+          timeoutMs: 1,
+        }),
+      {
+        contains: [
+          "Chrome is waiting for remote-debugging approval",
+          "chrome://inspect/#remote-debugging",
+          "click Allow if prompted",
+        ],
+        omits: [
+          "Restart the OpenClaw gateway",
+          "Do NOT retry the browser tool",
+          "Can't reach the OpenClaw browser control service",
+        ],
+      },
+    );
+  });
+
+  it("maps user-live absolute loopback service timeouts to remote-debugging approval guidance", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("timed out", { status: 504 })),
+    );
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/tabs/open?profile=user-live"),
+      {
+        contains: [
+          "Chrome is waiting for remote-debugging approval",
+          "chrome://inspect/#remote-debugging",
+          "click Allow if prompted",
+        ],
+        omits: [
+          "Restart the OpenClaw gateway",
+          "Do NOT retry the browser tool",
+          "Can't reach the OpenClaw browser control service",
+        ],
+      },
+    );
+  });
+
   it("keeps restart and no-retry hints for non-user-live dispatcher timeouts", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("timed out"));
 

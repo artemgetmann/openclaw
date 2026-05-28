@@ -110,6 +110,9 @@ const BROWSERBASE_RATE_LIMIT_MESSAGE =
   "Browserbase rate limit reached (max concurrent sessions). " +
   "Wait for the current session to complete, or upgrade your plan.";
 
+const USER_LIVE_REMOTE_DEBUGGING_GUIDANCE =
+  "Chrome is waiting for remote-debugging approval. Open Chrome, click Allow if prompted, or enable remote debugging at chrome://inspect/#remote-debugging, then retry.";
+
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
 }
@@ -175,12 +178,13 @@ function isTimeoutOrAbortLikeMessage(message: string): boolean {
   );
 }
 
-function isUserLiveDispatcherRequest(url: string): boolean {
-  if (isAbsoluteHttp(url)) {
+function isUserLiveBrowserControlRequest(url: string): boolean {
+  const absoluteHttp = isAbsoluteHttp(url);
+  if (absoluteHttp && !isLoopbackHttpUrl(url)) {
     return false;
   }
   try {
-    const parsed = new URL(url, "http://localhost");
+    const parsed = absoluteHttp ? new URL(url) : new URL(url, "http://localhost");
     return parsed.searchParams.get("profile") === "user-live";
   } catch {
     return false;
@@ -197,12 +201,12 @@ async function discardResponseBody(res: Response): Promise<void> {
 
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const msg = normalizeErrorMessage(err);
-  if (isUserLiveDispatcherRequest(url) && isTimeoutOrAbortLikeMessage(msg)) {
+  if (isUserLiveBrowserControlRequest(url) && isTimeoutOrAbortLikeMessage(msg)) {
     // `user-live` attach failures often mean Chrome is paused on the remote-debugging
     // approval prompt. That is actionable for the caller, so surface the approval
     // guidance instead of the generic gateway restart/no-retry messaging.
     return new Error(
-      "Chrome is waiting for remote-debugging approval. Open Chrome, click Allow if prompted, or enable remote debugging at chrome://inspect/#remote-debugging, then retry.",
+      USER_LIVE_REMOTE_DEBUGGING_GUIDANCE,
       err instanceof Error ? { cause: err } : undefined,
     );
   }
@@ -227,6 +231,15 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     msgLower.includes("aborted") ||
     msgLower.includes("abort") ||
     msgLower.includes("aborterror");
+  if (isUserLiveBrowserControlRequest(url) && looksLikeTimeout) {
+    // Absolute loopback calls bypass the in-process dispatcher path. Keep their
+    // `user-live` timeout surface aligned with dispatcher calls: the likely fix
+    // is Chrome attach approval/setup, not restarting the OpenClaw gateway.
+    return new Error(
+      USER_LIVE_REMOTE_DEBUGGING_GUIDANCE,
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
   if (looksLikeTimeout) {
     return new Error(
       appendBrowserToolModelHint(
@@ -378,6 +391,9 @@ export async function fetchBrowserJson<T>(
     return result.body as T;
   } catch (err) {
     if (err instanceof BrowserServiceError) {
+      if (isUserLiveBrowserControlRequest(url) && isTimeoutOrAbortLikeMessage(err.message)) {
+        throw new Error(USER_LIVE_REMOTE_DEBUGGING_GUIDANCE, { cause: err });
+      }
       throw err;
     }
     // Dispatcher-path failures are service-operation failures, not network
