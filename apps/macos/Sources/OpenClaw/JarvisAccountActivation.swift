@@ -1,7 +1,6 @@
 import Foundation
 import Observation
 import OpenClawKit
-import Security
 
 struct JarvisAccountActivationResponse: Equatable, Sendable {
     let accountId: String
@@ -212,31 +211,28 @@ protocol JarvisAccountAccessTokenStoring: JarvisAccountAccessTokenReading {
     func saveAccountAccessToken(_ token: String) throws
 }
 
-struct JarvisAccountActivationKeychainStore: JarvisAccountAccessTokenStoring {
-    static let shared = JarvisAccountActivationKeychainStore()
-    static var defaultService: String { Bundle.main.bundleIdentifier ?? "ai.openclaw.jarvis" }
-    static let defaultAccount = "jarvis.backend.accountAccessToken"
+struct JarvisAccountActivationFileStore: JarvisAccountAccessTokenStoring {
+    static let shared = JarvisAccountActivationFileStore()
 
-    private let service: String
-    private let account: String
+    private static let tokenDirectoryName = "credentials"
+    private static let tokenFileName = "jarvis-account-token"
+
+    private let tokenFileURL: URL
 
     init(
-        service: String = Self.defaultService,
-        account: String = Self.defaultAccount
+        tokenFileURL: URL = Self.defaultTokenFileURL()
     ) {
-        self.service = service
-        self.account = account
+        self.tokenFileURL = tokenFileURL
+    }
+
+    static func defaultTokenFileURL() -> URL {
+        OpenClawPaths.stateDirURL
+            .appendingPathComponent(Self.tokenDirectoryName, isDirectory: true)
+            .appendingPathComponent(Self.tokenFileName, isDirectory: false)
     }
 
     func loadAccountAccessToken() -> String? {
-        var query = self.baseQuery()
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess,
-              let data = item as? Data,
+        guard let data = try? Data(contentsOf: self.tokenFileURL),
               let token = String(data: data, encoding: .utf8)
         else {
             return nil
@@ -248,35 +244,67 @@ struct JarvisAccountActivationKeychainStore: JarvisAccountAccessTokenStoring {
     func saveAccountAccessToken(_ token: String) throws {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw JarvisAccountActivationError.invalidResponse }
-        let data = Data(trimmed.utf8)
-        let attributes: [String: Any] = [kSecValueData as String: data]
-        let status = SecItemUpdate(self.baseQuery() as CFDictionary, attributes as CFDictionary)
-        if status == errSecSuccess { return }
-        if status != errSecItemNotFound {
-            throw JarvisAccountActivationError.rejected("Jarvis could not save activation securely. Try again.")
-        }
 
-        var item = self.baseQuery()
-        item[kSecValueData as String] = data
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let addStatus = SecItemAdd(item as CFDictionary, nil)
-        guard addStatus == errSecSuccess else {
+        do {
+            try self.ensureSecureParentDirectories()
+            let data = Data(trimmed.utf8)
+            let fileManager = FileManager.default
+            if !fileManager.fileExists(atPath: self.tokenFileURL.path) {
+                let created = fileManager.createFile(
+                    atPath: self.tokenFileURL.path,
+                    contents: nil,
+                    attributes: [.posixPermissions: 0o600])
+                guard created else { throw CocoaError(.fileWriteUnknown) }
+            }
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: self.tokenFileURL.path)
+            let handle = try FileHandle(forWritingTo: self.tokenFileURL)
+            defer { try? handle.close() }
+            try handle.truncate(atOffset: 0)
+            try handle.write(contentsOf: data)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: self.tokenFileURL.path)
+        } catch {
             throw JarvisAccountActivationError.rejected("Jarvis could not save activation securely. Try again.")
         }
     }
 
-    private func baseQuery() -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: self.service,
-            kSecAttrAccount as String: self.account,
-        ]
+    private func ensureSecureParentDirectories() throws {
+        // The state dir can be instance-scoped for UI smoke runs. Keep the
+        // token bridge under that root so parallel app instances never share
+        // account tokens, then harden only the app-owned directories we need.
+        let stateDir = self.tokenFileURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let tokenDir = self.tokenFileURL.deletingLastPathComponent()
+        try self.ensureDirectoryExistsAndIsNotWorldWritable(stateDir, defaultPermissions: 0o700)
+        try self.ensureDirectoryExistsAndIsNotWorldWritable(tokenDir, defaultPermissions: 0o700)
+    }
+
+    private func ensureDirectoryExistsAndIsNotWorldWritable(
+        _ url: URL,
+        defaultPermissions: Int
+    ) throws {
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: url.path) {
+            try fileManager.createDirectory(
+                at: url,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: defaultPermissions])
+        }
+
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        let currentPermissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? defaultPermissions
+        let hardenedPermissions = currentPermissions & ~0o002
+        if hardenedPermissions != currentPermissions {
+            try fileManager.setAttributes(
+                [.posixPermissions: hardenedPermissions],
+                ofItemAtPath: url.path)
+        }
     }
 }
 
 enum JarvisAccountActivationConfig {
-    private static let accountTokenProviderName = "jarvis-keychain"
-    private static let accountTokenRefId = "account-access-token"
+    private static let accountTokenProviderName = "jarvis-account-token"
+    private static let accountTokenRefId = "value"
 
     static func summary(root: [String: Any]) -> JarvisAccountActivationSummary? {
         guard let backend = (root["jarvis"] as? [String: Any])?["backend"] as? [String: Any],
@@ -322,8 +350,8 @@ enum JarvisAccountActivationConfig {
                 .first { !$0.isEmpty }
         }
 
-        // Node resolves SecretInput refs at runtime, so config can point at
-        // Keychain without ever persisting the account token as plaintext.
+        // Node resolves SecretInput refs at runtime, so config points at the
+        // app-owned token file without ever persisting the token as JSON.
         backend["accountAccessToken"] = Self.accountAccessTokenSecretRef()
         jarvis["backend"] = backend
         var managedServices = jarvis["managedServices"] as? [String: Any] ?? [:]
@@ -335,7 +363,7 @@ enum JarvisAccountActivationConfig {
 
     static func accountAccessTokenSecretRef() -> [String: String] {
         [
-            "source": "exec",
+            "source": "file",
             "provider": Self.accountTokenProviderName,
             "id": Self.accountTokenRefId,
         ]
@@ -345,18 +373,9 @@ enum JarvisAccountActivationConfig {
         var secrets = root["secrets"] as? [String: Any] ?? [:]
         var providers = secrets["providers"] as? [String: Any] ?? [:]
         providers[Self.accountTokenProviderName] = [
-            "source": "exec",
-            "command": "/usr/bin/security",
-            "args": [
-                "find-generic-password",
-                "-s",
-                JarvisAccountActivationKeychainStore.defaultService,
-                "-a",
-                JarvisAccountActivationKeychainStore.defaultAccount,
-                "-w",
-            ],
-            "timeoutMs": 3000,
-            "jsonOnly": false,
+            "source": "file",
+            "path": JarvisAccountActivationFileStore.defaultTokenFileURL().path,
+            "mode": "singleValue",
         ]
         secrets["providers"] = providers
         root["secrets"] = secrets
@@ -390,7 +409,7 @@ final class JarvisAccountActivationModel {
     init(
         email: String = "",
         state: State = .idle,
-        tokenStore: JarvisAccountAccessTokenStoring = JarvisAccountActivationKeychainStore.shared,
+        tokenStore: JarvisAccountAccessTokenStoring = JarvisAccountActivationFileStore.shared,
         loadConfig: @escaping @MainActor @Sendable () async -> [String: Any] = { await ConfigStore.load() },
         saveConfig: @escaping @MainActor @Sendable ([String: Any]) async throws -> Void = { root in
             try await ConfigStore.save(root)

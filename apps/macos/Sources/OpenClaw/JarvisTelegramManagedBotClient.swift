@@ -64,7 +64,7 @@ struct JarvisTelegramManagedBotClient: Sendable {
 
     static func resolveConfiguration(
         root: [String: Any],
-        accountTokenStore: JarvisAccountAccessTokenReading = JarvisAccountActivationKeychainStore.shared
+        accountTokenStore: JarvisAccountAccessTokenReading = JarvisAccountActivationFileStore.shared
     ) throws -> Configuration {
         let env = ProcessInfo.processInfo.environment
         let backend = ((root["jarvis"] as? [String: Any])?["backend"] as? [String: Any]) ?? [:]

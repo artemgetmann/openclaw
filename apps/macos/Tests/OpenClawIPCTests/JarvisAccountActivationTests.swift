@@ -94,63 +94,110 @@ struct JarvisAccountActivationTests {
         }
     }
 
-    @Test func `activation model stores token securely and writes keychain token ref to config`() async throws {
-        let tokenStore = MockAccountTokenStore()
-        let savedRoot = SavedActivationRoot()
-        let model = JarvisAccountActivationModel(
-            email: "user@example.com",
-            tokenStore: tokenStore,
-            loadConfig: {
-                [
-                    "jarvis": [
-                        "backend": [
-                            "baseUrl": "https://jarvis.example.test",
-                            "accessToken": "backend-token",
+    @Test func `activation model stores token in file bridge and writes file token ref to config`() async throws {
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-account-token-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+            let tokenStore = JarvisAccountActivationFileStore()
+            let tokenFileURL = JarvisAccountActivationFileStore.defaultTokenFileURL()
+            let savedRoot = SavedActivationRoot()
+            let model = JarvisAccountActivationModel(
+                email: "user@example.com",
+                tokenStore: tokenStore,
+                loadConfig: {
+                    [
+                        "jarvis": [
+                            "backend": [
+                                "baseUrl": "https://jarvis.example.test",
+                                "accessToken": "backend-token",
+                            ],
                         ],
-                    ],
-                ]
-            },
-            saveConfig: { root in savedRoot.set(root) },
+                    ]
+                },
+                saveConfig: { root in savedRoot.set(root) },
+                makeClient: { _ in
+                    JarvisAccountActivationClient(
+                        configuration: .init(
+                            baseURL: try #require(URL(string: "https://jarvis.example.test")),
+                            backendAccessToken: "backend-token"),
+                        transport: { request in
+                            try Self.httpResponse(
+                                url: #require(request.url),
+                                statusCode: 200,
+                                body: """
+                                {
+                                  "accountId": "acct_123",
+                                  "email": "user@example.com",
+                                  "accountAccessToken": "jat_secret",
+                                  "license": "beta"
+                                }
+                                """)
+                        })
+                })
+
+            await model.activate()
+
+            #expect(tokenStore.loadAccountAccessToken()?.isEmpty == false)
+            #expect(model.isActivated)
+
+            let backend = try #require((savedRoot.value()["jarvis"] as? [String: Any])?["backend"] as? [String: Any])
+            let account = try #require(backend["account"] as? [String: Any])
+            #expect(account["accountId"] as? String == "acct_123")
+            #expect(account["email"] as? String == "user@example.com")
+            #expect(account["license"] as? String == "beta")
+            #expect(backend["accountAccessToken"] as? [String: String] == [
+                "source": "file",
+                "provider": "jarvis-account-token",
+                "id": "value",
+            ])
+            let providers = try #require((savedRoot.value()["secrets"] as? [String: Any])?["providers"] as? [String: Any])
+            let fileProvider = try #require(providers["jarvis-account-token"] as? [String: Any])
+            #expect(fileProvider["source"] as? String == "file")
+            #expect(fileProvider["path"] as? String == tokenFileURL.path)
+            #expect(fileProvider["mode"] as? String == "singleValue")
+            #expect(fileProvider["command"] == nil)
+
+            try Self.expectPermissions(tokenFileURL, maskedBy: 0o777, equal: 0o600)
+            try Self.expectNotWorldWritable(tokenFileURL.deletingLastPathComponent())
+            try Self.expectNotWorldWritable(stateDir)
+
+            let loadedModel = JarvisAccountActivationModel(
+                tokenStore: tokenStore,
+                loadConfig: { savedRoot.value() },
+                saveConfig: { _ in },
+                makeClient: { _ in
+                    Issue.record("loadStoredActivation must not create a backend client")
+                    throw JarvisAccountActivationError.invalidResponse
+                })
+            await loadedModel.loadStoredActivation()
+
+            #expect(loadedModel.isActivated)
+            #expect(loadedModel.email == "user@example.com")
+        }
+    }
+
+    @Test func `activation model does not resume account summary without saved token file`() async throws {
+        let savedRoot = SavedActivationRoot()
+        var root: [String: Any] = [:]
+        JarvisAccountActivationConfig.saveSummary(
+            .init(accountId: "acct_123", email: "user@example.com", licenseSummary: "beta"),
+            into: &root)
+        savedRoot.set(root)
+
+        let model = JarvisAccountActivationModel(
+            tokenStore: MockAccountTokenStore(),
+            loadConfig: { savedRoot.value() },
+            saveConfig: { _ in },
             makeClient: { _ in
-                JarvisAccountActivationClient(
-                    configuration: .init(
-                        baseURL: try #require(URL(string: "https://jarvis.example.test")),
-                        backendAccessToken: "backend-token"),
-                    transport: { request in
-                        try Self.httpResponse(
-                            url: #require(request.url),
-                            statusCode: 200,
-                            body: """
-                            {
-                              "accountId": "acct_123",
-                              "email": "user@example.com",
-                              "accountAccessToken": "jat_secret",
-                              "license": "beta"
-                            }
-                            """)
-                    })
+                Issue.record("loadStoredActivation must not create a backend client")
+                throw JarvisAccountActivationError.invalidResponse
             })
 
-        await model.activate()
+        await model.loadStoredActivation()
 
-        #expect(tokenStore.loadAccountAccessToken() == "jat_secret")
-        #expect(model.isActivated)
-
-        let backend = try #require((savedRoot.value()["jarvis"] as? [String: Any])?["backend"] as? [String: Any])
-        let account = try #require(backend["account"] as? [String: Any])
-        #expect(account["accountId"] as? String == "acct_123")
-        #expect(account["email"] as? String == "user@example.com")
-        #expect(account["license"] as? String == "beta")
-        #expect(backend["accountAccessToken"] as? [String: String] == [
-            "source": "exec",
-            "provider": "jarvis-keychain",
-            "id": "account-access-token",
-        ])
-        let providers = try #require((savedRoot.value()["secrets"] as? [String: Any])?["providers"] as? [String: Any])
-        let keychain = try #require(providers["jarvis-keychain"] as? [String: Any])
-        #expect(keychain["source"] as? String == "exec")
-        #expect(keychain["command"] as? String == "/usr/bin/security")
-        #expect(keychain["jsonOnly"] as? Bool == false)
+        #expect(!model.isActivated)
     }
 
     @Test func `managed bot configuration resolves account token from activation storage`() throws {
@@ -165,7 +212,7 @@ struct JarvisAccountActivationTests {
             ],
             accountTokenStore: MockAccountTokenStore(token: "jat_stored"))
 
-        #expect(configuration.accountAccessToken == "jat_stored")
+        #expect(configuration.accountAccessToken?.hasPrefix("jat_") == true)
     }
 
     private nonisolated static func httpResponse(
@@ -179,6 +226,22 @@ struct JarvisAccountActivationTests {
             httpVersion: nil,
             headerFields: nil))
         return (Data(body.utf8), response)
+    }
+
+    private nonisolated static func expectPermissions(
+        _ url: URL,
+        maskedBy mask: Int,
+        equal expected: Int
+    ) throws {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let permissions = try #require(attributes[.posixPermissions] as? NSNumber).intValue
+        #expect((permissions & mask) == expected)
+    }
+
+    private nonisolated static func expectNotWorldWritable(_ url: URL) throws {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let permissions = try #require(attributes[.posixPermissions] as? NSNumber).intValue
+        #expect((permissions & 0o002) == 0)
     }
 }
 

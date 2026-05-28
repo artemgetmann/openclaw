@@ -417,22 +417,22 @@ struct TelegramSetupBootstrapTests {
         let configPath = TestIsolation.tempConfigPath()
         let stateDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-managed-telegram-\(UUID().uuidString)", isDirectory: true)
-            .path
+        defer { try? FileManager.default.removeItem(at: stateDir) }
 
         try await TestIsolation.withEnvValues([
             "OPENCLAW_APP_VARIANT": "consumer",
             "OPENCLAW_CONFIG_PATH": configPath,
-            "OPENCLAW_STATE_DIR": stateDir,
+            "OPENCLAW_STATE_DIR": stateDir.path,
             "JARVIS_BACKEND_BASE_URL": "https://jarvis.example.test",
             "JARVIS_BACKEND_ACCESS_TOKEN": "server-token",
-            "JARVIS_ACCOUNT_ACCESS_TOKEN": "jat_account_token",
         ]) {
+            try JarvisAccountActivationFileStore().saveAccountAccessToken("jat_account_token")
+            let tokenFileURL = JarvisAccountActivationFileStore.defaultTokenFileURL()
             let initialRoot: [String: Any] = [
                 "jarvis": [
                     "backend": [
                         "baseUrl": "https://jarvis.example.test",
                         "accessToken": "server-token",
-                        "accountAccessToken": "jat_account_token",
                     ],
                     "managedServices": [
                         "mode": "license-only",
@@ -495,11 +495,15 @@ struct TelegramSetupBootstrapTests {
             #expect(managedServices["futureFlag"] as? Bool == true)
             #expect(backend["baseUrl"] as? String == "https://jarvis.example.test")
             #expect(accountTokenRef == [
-                "source": "exec",
-                "provider": "jarvis-keychain",
-                "id": "account-access-token",
+                "source": "file",
+                "provider": "jarvis-account-token",
+                "id": "value",
             ])
-            #expect(providers["jarvis-keychain"] != nil)
+            let fileProvider = try #require(providers["jarvis-account-token"] as? [String: Any])
+            #expect(fileProvider["source"] as? String == "file")
+            #expect(fileProvider["path"] as? String == tokenFileURL.path)
+            #expect(fileProvider["mode"] as? String == "singleValue")
+            #expect(fileProvider["command"] == nil)
             #expect(store.telegramSetupStatus?.contains("777000:test-child-token") == false)
 
             await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)
