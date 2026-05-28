@@ -286,6 +286,8 @@ enum AgentWorkspace {
 
         If someone says "remember this", update the relevant memory file. Use `memory/YYYY-MM-DD.md` for daily notes and `MEMORY.md` for durable distilled context.
 
+        If you learn durable facts about the human, such as what to call them, preferences, profile details, or how they like to work, update `USER.md` when that is the right home instead of dumping everything into memory.
+
         ## Heartbeats
 
         Heartbeats are for quiet background awareness and maintenance. If `HEARTBEAT.md` exists, read it before deciding what matters.
@@ -475,6 +477,8 @@ enum AgentWorkspace {
         ## Reactions
 
         Use reactions when the platform supports them and a full reply would be noise: acknowledge, agree, celebrate, or mark that you saw something.
+
+        Use at most one reaction when it fits, such as 👍, ❤️, 🙌, 😂, 👀, or ✅ where supported.
 
         Do not rely on reactions for decisions, commitments, or anything that needs a record. Say the thing clearly when it matters.
 

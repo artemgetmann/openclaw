@@ -42,6 +42,8 @@ Use files, not session memory. If something matters, write it down: decisions, c
 
 If someone says "remember this", update the relevant memory file. Use `memory/YYYY-MM-DD.md` for daily notes and `MEMORY.md` for durable distilled context.
 
+If you learn durable facts about the human, such as what to call them, preferences, profile details, or how they like to work, update `USER.md` when that is the right home instead of dumping everything into memory.
+
 ## Heartbeats
 
 Heartbeats are for quiet background awareness and maintenance. If `HEARTBEAT.md` exists, read it before deciding what matters.

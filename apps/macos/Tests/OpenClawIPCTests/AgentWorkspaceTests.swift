@@ -110,6 +110,7 @@ struct AgentWorkspaceTests {
         #expect(agents.contains("If someone says \"remember this\""))
         #expect(agents.contains("For safe internal workspace work: Don't ask permission. Just do it."))
         #expect(agents.contains("Use files, not session memory"))
+        #expect(agents.contains("update `USER.md` when that is the right home"))
         #expect(agents.contains("## Make It Yours"))
         #expect(agents.contains("check the relevant `SKILL.md`"))
         #expect(agents.contains("## Heartbeats"))
@@ -132,6 +133,8 @@ struct AgentWorkspaceTests {
 
         #expect(groups.contains("Group chat is a room, not a command line"))
         #expect(groups.contains("One useful answer beats a triple-tap"))
+        #expect(groups.contains("Use at most one reaction when it fits"))
+        #expect(groups.contains("👍, ❤️, 🙌, 😂, 👀, or ✅"))
         #expect(groups.contains("No Private Leakage"))
         #expect(groups.contains("In DMs, you can be more proactive and personal"))
 
