@@ -174,10 +174,10 @@ gateway_plist_port() {
   local arg=""
 
   while true; do
-    arg="$(plist_value "$plist_path" "ProgramArguments:${index}")"
+    arg="$(openclaw_gateway_plist_value "$plist_path" "ProgramArguments:${index}")"
     [[ -n "$arg" ]] || break
     if [[ "$arg" == "--port" ]]; then
-      plist_value "$plist_path" "ProgramArguments:$((index + 1))"
+      openclaw_gateway_plist_value "$plist_path" "ProgramArguments:$((index + 1))"
       return 0
     fi
     if [[ "$arg" == --port=* ]]; then
@@ -213,15 +213,15 @@ verify_gateway_plist_matches_instance() {
     return 1
   fi
 
-  actual_label="$(plist_value "$plist_path" 'Label')"
-  actual_entry="$(plist_value "$plist_path" 'ProgramArguments:1')"
+  actual_label="$(openclaw_gateway_plist_value "$plist_path" 'Label')"
+  actual_entry="$(openclaw_gateway_plist_value "$plist_path" 'ProgramArguments:1')"
   actual_port="$(gateway_plist_port "$plist_path")"
-  actual_state_dir="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_STATE_DIR')"
-  actual_config_path="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_CONFIG_PATH')"
-  actual_profile="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_PROFILE')"
-  actual_launchd_label="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL')"
-  actual_consumer_instance="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_CONSUMER_INSTANCE_ID')"
-  actual_gateway_port="$(plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_GATEWAY_PORT')"
+  actual_state_dir="$(openclaw_gateway_plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_STATE_DIR')"
+  actual_config_path="$(openclaw_gateway_plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_CONFIG_PATH')"
+  actual_profile="$(openclaw_gateway_plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_PROFILE')"
+  actual_launchd_label="$(openclaw_gateway_plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_LAUNCHD_LABEL')"
+  actual_consumer_instance="$(openclaw_gateway_plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_CONSUMER_INSTANCE_ID')"
+  actual_gateway_port="$(openclaw_gateway_plist_value "$plist_path" 'EnvironmentVariables:OPENCLAW_GATEWAY_PORT')"
 
   if [[ "$actual_label" != "$launchd_label" ]]; then
     echo "ERROR: isolated gateway plist label mismatch: expected=$launchd_label actual=${actual_label:-missing}" >&2
