@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyToMode } from "../../../../src/config/config.js";
 import {
   getChannelActivity,
   resetChannelActivityForTest,
@@ -13,6 +14,9 @@ const messageHookRunner = vi.hoisted(() => ({
   hasHooks: vi.fn<(name: string) => boolean>(() => false),
   runMessageSending: vi.fn(),
   runMessageSent: vi.fn(),
+}));
+const replyThreadingControl = vi.hoisted(() => ({
+  suppressDeliveredAccounting: false,
 }));
 const baseDeliveryParams = {
   chatId: "123",
@@ -43,6 +47,61 @@ vi.mock("../../../../src/hooks/internal-hooks.js", async () => {
   return {
     ...actual,
     triggerInternalHook,
+  };
+});
+
+vi.mock("./reply-threading.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./reply-threading.js")>();
+  type MockChunkParams = {
+    chunks: readonly unknown[];
+    progress: { hasReplied: boolean; hasDelivered: boolean };
+    replyToId?: number;
+    replyToMode: ReplyToMode;
+    replyMarkup?: unknown;
+    replyQuoteText?: string;
+    quoteOnlyOnFirstChunk?: boolean;
+    sendChunk: (opts: {
+      chunk: unknown;
+      isFirstChunk: boolean;
+      replyToMessageId?: number;
+      replyMarkup?: unknown;
+      replyQuoteText?: string;
+    }) => Promise<void>;
+  };
+  return {
+    ...actual,
+    sendChunkedTelegramReplyText: async (params: MockChunkParams): Promise<void> => {
+      if (!replyThreadingControl.suppressDeliveredAccounting) {
+        await actual.sendChunkedTelegramReplyText(params);
+        return;
+      }
+      for (let i = 0; i < params.chunks.length; i += 1) {
+        const chunk = params.chunks[i];
+        if (!chunk) {
+          continue;
+        }
+        const isFirstChunk = i === 0;
+        const replyToMessageId = actual.resolveReplyToForSend({
+          replyToId: params.replyToId,
+          replyToMode: params.replyToMode,
+          progress: params.progress,
+        });
+        const shouldAttachQuote =
+          Boolean(replyToMessageId) &&
+          Boolean(params.replyQuoteText) &&
+          (params.quoteOnlyOnFirstChunk !== true || isFirstChunk);
+        await params.sendChunk({
+          chunk,
+          isFirstChunk,
+          replyToMessageId,
+          replyMarkup: isFirstChunk ? params.replyMarkup : undefined,
+          replyQuoteText: shouldAttachQuote ? params.replyQuoteText : undefined,
+        });
+        actual.markReplyApplied(params.progress, replyToMessageId);
+        // Deliberately skip delivered-count accounting to reproduce the runtime
+        // drift where Telegram returned a message id but lastOutboundAt stayed null.
+      }
+    },
   };
 });
 
@@ -129,6 +188,7 @@ describe("deliverReplies", () => {
     messageHookRunner.hasHooks.mockReturnValue(false);
     messageHookRunner.runMessageSending.mockReset();
     messageHookRunner.runMessageSent.mockReset();
+    replyThreadingControl.suppressDeliveredAccounting = false;
   });
 
   it("skips audioAsVoice-only payloads without logging an error", async () => {
@@ -235,6 +295,32 @@ describe("deliverReplies", () => {
       inboundAt: null,
       outboundAt: 111,
     });
+    dateNow.mockRestore();
+  });
+
+  it("records outbound activity when Telegram returns a message id even if delivery accounting does not advance", async () => {
+    replyThreadingControl.suppressDeliveredAccounting = true;
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const dateNow = vi.spyOn(Date, "now").mockReturnValueOnce(333);
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 19, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      accountId: "work",
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+
+    expect(getChannelActivity({ channel: "telegram", accountId: "work" })).toEqual({
+      inboundAt: null,
+      outboundAt: 333,
+    });
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true }),
+      expect.objectContaining({ channelId: "telegram", accountId: "work", conversationId: "123" }),
+    );
     dateNow.mockRestore();
   });
 

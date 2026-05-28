@@ -95,6 +95,22 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     await expectBootstrapSeeded(tempDir);
+    const identity = await fs.readFile(path.join(tempDir, DEFAULT_IDENTITY_FILENAME), "utf-8");
+    expect(identity).toContain("- **Name:**");
+    expect(identity).toContain("- **Role / persona:**");
+    expect(identity).toContain("- **Emoji/signature:**");
+    expect(identity).not.toContain("Who Am I?");
+    expect(identity).not.toContain("- Name: Jarvis");
+    const bootstrap = await fs.readFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), "utf-8");
+    expect(bootstrap).toContain("Jarvis preset");
+    expect(bootstrap).toContain("1. What should I be called?");
+    expect(bootstrap).toContain("2. What role should I play for the human?");
+    expect(bootstrap).toContain("do **not** ask role or vibe again");
+    expect(bootstrap).toContain("warm, capable, and memorable, not robotic");
+    expect(bootstrap).not.toContain("I was just born");
+    expect(bootstrap).not.toContain("Who am I?");
+    expect(bootstrap).not.toContain("What am I?");
+    expect(bootstrap).not.toContain("creature/vibe");
     expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
   });
 

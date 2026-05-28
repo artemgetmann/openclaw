@@ -139,7 +139,7 @@ extension OnboardingView {
         switch self.consumerSetupStep {
         case .chrome:
             return 260
-        case .permissions, .aiAccess, .accountActivation, .telegram:
+        case .permissions, .aiAccess, .accountActivation, .telegram, .telegramGroup:
             return 345
         }
     }
@@ -164,6 +164,8 @@ extension OnboardingView {
             ConsumerTelegramSetupCardContent(
                 store: self.channelsStore,
                 presentation: .onboarding)
+        case .telegramGroup:
+            self.telegramGroupSetupHintCardContent()
         }
     }
 
@@ -179,6 +181,27 @@ extension OnboardingView {
             return self.accountActivation.isActivated
         case .telegram:
             return self.channelsStore.consumerTelegramReadyForFirstTask()
+        case .telegramGroup:
+            return true
+        }
+    }
+
+    private func telegramGroupSetupHintCardContent() -> some View {
+        let botHandle = self.channelsStore.consumerTelegramBotUsername().map { "@\($0)" } ?? "your Jarvis bot"
+
+        return VStack(alignment: .leading, spacing: 14) {
+            self.featureRow(
+                title: "Use a regular group",
+                subtitle: "Open the group in Telegram, add \(botHandle), then send a normal message.",
+                systemImage: "person.2")
+            self.featureRow(
+                title: "Keep the direct message",
+                subtitle: "The private chat stays your control room. Groups are only for shared conversations.",
+                systemImage: "bubble.left.and.bubble.right")
+            self.featureRow(
+                title: "Finish setup now",
+                subtitle: "You can add a group later from Telegram. Nothing else is required here.",
+                systemImage: "checkmark.circle")
         }
     }
 

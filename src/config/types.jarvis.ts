@@ -9,6 +9,12 @@ export type JarvisBackendConfig = {
   accessToken?: SecretInput;
   /** Stable app/device identifier for license checks. */
   deviceId?: string;
+  /** Non-secret account summary used by onboarding UI state. */
+  account?: {
+    accountId: string;
+    email: string;
+    license?: string;
+  };
   /**
    * Account token returned by Jarvis beta login. This is user-scoped and must
    * be treated like a password until OAuth or email-link login replaces it.

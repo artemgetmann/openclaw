@@ -39,13 +39,158 @@ struct AgentWorkspaceTests {
 
         let identityURL = tmp.appendingPathComponent(AgentWorkspace.identityFilename)
         let userURL = tmp.appendingPathComponent(AgentWorkspace.userFilename)
+        let groupsURL = tmp.appendingPathComponent(AgentWorkspace.groupsFilename)
         let bootstrapURL = tmp.appendingPathComponent(AgentWorkspace.bootstrapFilename)
         #expect(FileManager().fileExists(atPath: identityURL.path))
         #expect(FileManager().fileExists(atPath: userURL.path))
+        #expect(FileManager().fileExists(atPath: groupsURL.path))
         #expect(FileManager().fileExists(atPath: bootstrapURL.path))
 
         let second = try AgentWorkspace.bootstrap(workspaceURL: tmp)
         #expect(second == agentsURL)
+    }
+
+    @Test
+    func `consumer bootstrap restores legacy Jarvis preset flow`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+
+        _ = try AgentWorkspace.bootstrap(workspaceURL: tmp)
+        try AgentWorkspace.bootstrapConsumerJarvisPresetIfSafe(workspaceURL: tmp)
+
+        let identity = try String(
+            contentsOf: tmp.appendingPathComponent(AgentWorkspace.identityFilename),
+            encoding: .utf8)
+        let bootstrap = try String(
+            contentsOf: tmp.appendingPathComponent(AgentWorkspace.bootstrapFilename),
+            encoding: .utf8)
+
+        #expect(identity.contains("- **Name:**"))
+        #expect(identity.contains("- **Role / persona:**"))
+        #expect(identity.contains("- **Emoji/signature:**"))
+        #expect(!identity.contains("- Name: Jarvis"))
+
+        #expect(bootstrap.contains("1. What should I be called?"))
+        #expect(bootstrap.contains("2. What role should I play for the human?"))
+        #expect(bootstrap.contains("3. What vibe should I have most of the time?"))
+        #expect(bootstrap.contains("4. What should I call the human?"))
+        #expect(bootstrap.contains("5. Emoji/signature."))
+        #expect(bootstrap.contains("offer a `Jarvis preset` vs `custom setup` choice"))
+        #expect(bootstrap.contains("role = `engineering copilot + personal assistant`"))
+        #expect(bootstrap.contains("do **not** ask role or vibe again"))
+        #expect(bootstrap.contains("Hey. I just came online. What should I be called?"))
+        #expect(bootstrap.contains("warm, capable, and memorable, not robotic"))
+        #expect(bootstrap.contains("light dry wit"))
+        #expect(bootstrap.contains("call out weak assumptions when appropriate"))
+        #expect(!bootstrap.contains("BotFather"))
+        #expect(!bootstrap.contains("consumer workspace"))
+        #expect(!bootstrap.contains("Jarvis is already configured"))
+        #expect(!bootstrap.contains("Who am I?"))
+        #expect(!bootstrap.contains("What am I?"))
+        #expect(!bootstrap.contains("creature/vibe"))
+        #expect(!bootstrap.contains("chaos coordinator"))
+        #expect(!bootstrap.contains("tiny menace"))
+    }
+
+    @Test
+    func `consumer templates keep useful workspace scaffolding`() throws {
+        let agents = AgentWorkspace.defaultTemplate()
+        let identity = AgentWorkspace.defaultIdentityTemplate()
+        let groups = AgentWorkspace.defaultGroupsTemplate()
+        let soul = AgentWorkspace.defaultSoulTemplate()
+        let user = AgentWorkspace.defaultUserTemplate()
+
+        #expect(agents.contains("`IDENTITY.md` defines who the agent is"))
+        #expect(agents.contains("`USER.md` defines who the human is"))
+        #expect(agents.contains("Read `GROUPS.md` if this is a group chat"))
+        #expect(agents.contains("Read `MEMORY.md` only in direct main chat"))
+        #expect(agents.contains("Do not load `MEMORY.md` in shared or multi-person contexts"))
+        #expect(agents.contains("Write It Down - No Mental Notes"))
+        #expect(agents.contains("If someone says \"remember this\""))
+        #expect(agents.contains("For safe internal workspace work: Don't ask permission. Just do it."))
+        #expect(agents.contains("Use files, not session memory"))
+        #expect(agents.contains("update `USER.md` when that is the right home"))
+        #expect(agents.contains("## Make It Yours"))
+        #expect(agents.contains("check the relevant `SKILL.md`"))
+        #expect(agents.contains("## Heartbeats"))
+        #expect(agents.contains("Use heartbeats for broad sweeps"))
+        #expect(agents.contains("reply `HEARTBEAT_OK`"))
+        #expect(agents.contains("never ask the human about Git/repo/commit/sync details"))
+        #expect(agents.contains("## Platform Formatting"))
+        #expect(agents.contains("Never send streaming, partial, or half-written replies"))
+        #expect(agents.contains("Avoid tables on Telegram, WhatsApp, and Discord"))
+        #expect(agents.contains("Do not force bullets for every reply"))
+        #expect(agents.contains("## Voice & Storytelling"))
+        #expect(agents.contains("Do not pretend a voice tool exists"))
+        #expect(agents.contains("Do not use voice for private, sensitive, or surprising output"))
+        #expect(agents.contains("Be warm, capable, memorable, professional, and a little fun"))
+
+        #expect(identity.contains("This isn't just metadata. It's the start of figuring out who you are."))
+        #expect(identity.contains("workspace-relative path, https URL, or data URI"))
+        #expect(identity.contains("avatars/openclaw.png"))
+        #expect(identity.contains("Save this file at the workspace root as `IDENTITY.md`"))
+
+        #expect(groups.contains("Group chat is a room, not a command line"))
+        #expect(groups.contains("One useful answer beats a triple-tap"))
+        #expect(groups.contains("Use at most one reaction when it fits"))
+        #expect(groups.contains("👍, ❤️, 🙌, 😂, 👀, or ✅"))
+        #expect(groups.contains("No Private Leakage"))
+        #expect(groups.contains("In DMs, you can be more proactive and personal"))
+
+        #expect(user.contains("Update this as you go."))
+        #expect(user.contains("- **What to call them:**"))
+        #expect(user.contains("- **Preferred address:**"))
+        #expect(user.contains("- **Telegram handle / display name:**"))
+        #expect(user.contains("not a dossier"))
+
+        #expect(soul.contains("A little fun when the moment fits"))
+        #expect(soul.contains("Actions over filler"))
+        #expect(soul.contains("search engine with extra steps"))
+        #expect(soul.contains("Privacy is intimacy"))
+        #expect(soul.contains("Not a corporate drone"))
+        #expect(!soul.contains("## Workspace Defaults"))
+        #expect(soul.contains("should not drift silently"))
+    }
+
+    @Test
+    func `consumer Jarvis preset preserves existing identity`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+        try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
+        let identityURL = tmp.appendingPathComponent(AgentWorkspace.identityFilename)
+        try """
+        # IDENTITY.md - Agent Identity
+
+        - Name: Friday
+        - Role / persona: Existing custom assistant
+        """.write(to: identityURL, atomically: true, encoding: .utf8)
+
+        try AgentWorkspace.bootstrapConsumerJarvisPresetIfSafe(workspaceURL: tmp)
+
+        let identity = try String(contentsOf: identityURL, encoding: .utf8)
+        #expect(identity.contains("- Name: Friday"))
+        #expect(!identity.contains("- Name: Jarvis"))
+    }
+
+    @Test
+    func `empty markdown identity labels do not count as customized`() throws {
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: tmp) }
+        try FileManager().createDirectory(at: tmp, withIntermediateDirectories: true)
+        try AgentWorkspace.defaultIdentityTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.identityFilename),
+            atomically: true,
+            encoding: .utf8)
+        try AgentWorkspace.defaultBootstrapTemplate().write(
+            to: tmp.appendingPathComponent(AgentWorkspace.bootstrapFilename),
+            atomically: true,
+            encoding: .utf8)
+
+        #expect(!AgentWorkspace.hasIdentity(workspaceURL: tmp))
+        #expect(AgentWorkspace.needsBootstrap(workspaceURL: tmp))
     }
 
     @Test

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { listGatewayMethods } from "./server-methods-list.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -129,6 +130,103 @@ describe("gateway server channels", () => {
     expect(signal?.configured).toBe(false);
     expect(signal?.probe).toBeUndefined();
     expect(signal?.lastProbeAt).toBeNull();
+  });
+
+  test.each([
+    {
+      name: "rejects a non-object replay payload",
+      payload: { payload: "bad-payload" },
+      message: "payload must be an object",
+    },
+    {
+      name: "rejects a replay payload without text or caption",
+      payload: {
+        payload: {
+          updateId: 1001,
+          messageId: 42,
+          chatId: 1336356696,
+          senderId: 1336356696,
+          date: 1_700_000_000,
+        },
+      },
+      message: "payload.text or payload.caption is required",
+    },
+  ])("$name", async ({ payload, message }) => {
+    const res = await rpcReq<{
+      ok?: boolean;
+      replyStarted?: boolean;
+      replyCompleted?: boolean;
+      error?: string;
+    }>(ws, "channels.telegram.setup-replay", payload);
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("INVALID_REQUEST");
+    expect(res.error?.message).toContain("invalid channels.telegram.setup-replay params");
+    expect(res.error?.message).toContain(message);
+    expect(res.payload).toBeUndefined();
+  });
+
+  test("channels.telegram.setup-replay is registered and reports missing setup token", async () => {
+    expect(listGatewayMethods()).toContain("channels.telegram.setup-replay");
+    await writeConfigFile({ channels: { telegram: {} } });
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      replyStarted?: boolean;
+      replyCompleted?: boolean;
+      error?: string;
+    }>(ws, "channels.telegram.setup-replay", {
+      payload: {
+        updateId: 1001,
+        messageId: 42,
+        chatId: 1336356696,
+        senderId: 1336356696,
+        date: 1_700_000_000,
+        text: "Wake up my friend",
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.error?.message).toBeUndefined();
+    expect(res.payload).toMatchObject({
+      ok: false,
+      replyStarted: false,
+      replyCompleted: false,
+      error: "Telegram bot token is not configured.",
+    });
+  });
+
+  test("channels.telegram.setup-replay reaches replay handling on valid token config", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
+    await writeConfigFile({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+        },
+      },
+    });
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      replyStarted?: boolean;
+      replyCompleted?: boolean;
+      error?: string;
+    }>(ws, "channels.telegram.setup-replay", {
+      payload: {
+        updateId: 1001,
+        messageId: 42,
+        chatId: 1336356696,
+        senderId: 1336356696,
+        date: 1_700_000_000,
+        text: "Wake up my friend",
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.error?.message).toBeUndefined();
+    expect(res.payload).toMatchObject({
+      replyStarted: true,
+    });
   });
 
   test("channels.logout reports no session when missing", async () => {

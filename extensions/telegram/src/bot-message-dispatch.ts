@@ -26,6 +26,7 @@ import type {
   TelegramAccountConfig,
 } from "../../../src/config/types.js";
 import { danger, logVerbose } from "../../../src/globals.js";
+import { recordChannelActivity } from "../../../src/infra/channel-activity.js";
 import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -271,6 +272,13 @@ export const dispatchTelegramMessage = async ({
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
+          onMessageDelivered: () => {
+            recordChannelActivity({
+              channel: "telegram",
+              accountId: route.accountId,
+              direction: "outbound",
+            });
+          },
           onSupersededPreview:
             laneName === "answer" || laneName === "reasoning"
               ? (preview) => {

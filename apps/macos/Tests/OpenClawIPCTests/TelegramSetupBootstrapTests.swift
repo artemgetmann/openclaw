@@ -273,6 +273,47 @@ struct TelegramSetupBootstrapTests {
         }
     }
 
+    @Test func `pending pairing bootstrap completes from already observed live activity`() async throws {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.clearConsumerTelegramFirstTaskVerified()
+            store.telegramSetupBotId = 8_582_422_927
+            store.telegramSetupBotUsername = "jarvis_consumer_smoke_2_bot"
+            store.telegramSetupFirstSenderId = "42"
+
+            let snapshot = makeConsumerTelegramSnapshot(
+                running: true,
+                inboundAt: 1_700_000_060,
+                outboundAt: 1_700_000_090,
+                snapshotTs: 1_700_000_120,
+                botId: 8_582_422_927,
+                username: "jarvis_consumer_smoke_2_bot")
+            store.snapshot = snapshot
+
+            // This is the production failure shape: the pending-pairing path
+            // had already treated the successful DM/reply as its baseline, so
+            // the normal "did activity advance?" check would wait forever for
+            // another DM unless the recovery path deliberately accepts recent
+            // paired activity that is already in the channel snapshot.
+            store.telegramSetupBaselineInboundAt = 1_700_000_060
+            store.telegramSetupBaselineOutboundAt = 1_700_000_090
+            store.telegramSetupWaitingForDM = true
+
+            var refreshCount = 0
+            let completed = await store._testCompletePendingTelegramPairingFromExistingObservedActivityAfterBootstrap {
+                refreshCount += 1
+            }
+
+            #expect(refreshCount == 1)
+            #expect(completed)
+            #expect(store.consumerTelegramFirstTaskVerified)
+            #expect(!store.telegramSetupWaitingForDM)
+            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. First task verified.")
+        }
+    }
+
     @Test func `telegram replay params keep messageId as integer`() throws {
         let store = ChannelsStore(isPreview: true)
         let params = try #require(store._testTelegramReplayGatewayParams(

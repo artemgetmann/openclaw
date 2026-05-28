@@ -161,6 +161,23 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
   });
 
+  it("notifies when message transport creates a real Telegram message", async () => {
+    const api = createMockDraftApi();
+    const onMessageDelivered = vi.fn();
+    const stream = createDraftStream(api, {
+      previewTransport: "message",
+      onMessageDelivered,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    stream.update("Hello again");
+    await stream.flush();
+
+    expect(onMessageDelivered).toHaveBeenCalledTimes(1);
+    expect(onMessageDelivered).toHaveBeenCalledWith(17);
+  });
+
   it("falls back to message transport when sendMessageDraft is unavailable", async () => {
     const api = createMockDraftApi();
     delete (api as { sendMessageDraft?: unknown }).sendMessageDraft;

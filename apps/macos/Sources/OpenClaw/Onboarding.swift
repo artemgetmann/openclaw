@@ -22,6 +22,7 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
     case aiAccess
     case accountActivation
     case telegram
+    case telegramGroup
 
     var id: Int { self.rawValue }
 
@@ -37,6 +38,8 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
             return JarvisAccountActivationCopy.stepTitle
         case .telegram:
             return "Connect Telegram"
+        case .telegramGroup:
+            return "Add Jarvis to a Group"
         }
     }
 
@@ -52,6 +55,8 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
             return JarvisAccountActivationCopy.stepSubtitle
         case .telegram:
             return "Telegram will open so you can approve Jarvis."
+        case .telegramGroup:
+            return "Use the same bot in a regular Telegram group when you want Jarvis with other people."
         }
     }
 
@@ -67,6 +72,8 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
             return "checkmark.seal"
         case .telegram:
             return "paperplane"
+        case .telegramGroup:
+            return "person.2"
         }
     }
 }
@@ -221,7 +228,7 @@ struct OnboardingView: View {
     var buttonTitle: String {
         if AppFlavor.current.isConsumer {
             if self.isConsumerSetupShellActive {
-                return self.consumerSetupStep == .telegram ? "Finish" : "Next"
+                return self.consumerSetupStep == .telegramGroup ? "Finish" : "Next"
             }
             if self.pageCount == 1, self.activePageIndex == 0 {
                 if self.isCorePermissionsBlocking {
@@ -332,6 +339,8 @@ struct OnboardingView: View {
                 self.accountActivation.isActivated
         case .telegram:
             return self.canFinishConsumerInlineSetup
+        case .telegramGroup:
+            return self.channelsStore.consumerTelegramReadyForFirstTask()
         }
     }
 

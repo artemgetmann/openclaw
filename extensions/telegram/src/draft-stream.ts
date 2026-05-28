@@ -106,6 +106,8 @@ export function createTelegramDraftStream(params: {
   renderText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
+  /** Called when the stream creates a real Telegram message, not a draft/edit. */
+  onMessageDelivered?: (messageId: number) => void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -237,6 +239,7 @@ export function createTelegramDraftStream(params: {
       return false;
     }
     const normalizedMessageId = Math.trunc(sentMessageId);
+    params.onMessageDelivered?.(normalizedMessageId);
     if (sendGeneration !== generation) {
       params.onSupersededPreview?.({
         messageId: normalizedMessageId,
@@ -417,6 +420,7 @@ export function createTelegramDraftStream(params: {
       const sentId = sent?.message_id;
       if (typeof sentId === "number" && Number.isFinite(sentId)) {
         streamMessageId = Math.trunc(sentId);
+        params.onMessageDelivered?.(streamMessageId);
         // Clear the draft so Telegram's input area doesn't briefly show a
         // stale copy alongside the newly materialized real message.
         if (resolvedDraftApi != null && streamDraftId != null) {
