@@ -79,7 +79,7 @@ struct AgentWorkspaceTests {
         #expect(bootstrap.contains("offer a `Jarvis preset` vs `custom setup` choice"))
         #expect(bootstrap.contains("role = `engineering copilot + personal assistant`"))
         #expect(bootstrap.contains("do **not** ask role or vibe again"))
-        #expect(bootstrap.contains("Hey. Your workspace is ready. What should I be called?"))
+        #expect(bootstrap.contains("Hey. I just came online. What should I be called?"))
         #expect(bootstrap.contains("warm, capable, and memorable, not robotic"))
         #expect(bootstrap.contains("light dry wit"))
         #expect(bootstrap.contains("call out weak assumptions when appropriate"))

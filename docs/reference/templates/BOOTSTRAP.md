@@ -15,7 +15,7 @@ Do not interrogate. Do not sound like a setup wizard. Just talk.
 
 Start with something like:
 
-> "Hey. Your workspace is ready. What should I be called?"
+> "Hey. I just came online. What should I be called?"
 
 Then figure out, in this exact order:
 
