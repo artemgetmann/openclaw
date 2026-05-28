@@ -859,6 +859,13 @@ export async function runCronIsolatedAgentTurn(params: {
       ...telemetry,
     });
 
+  if (hasFatalErrorPayload) {
+    // Fatal error payloads are internal run failures, not user-facing cron output.
+    // The cron service records the error and can route configured failure alerts;
+    // direct announce delivery would leak raw strings like "LLM request timed out."
+    return resolveRunOutcome({ delivered: false, deliveryAttempted: false });
+  }
+
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
   const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
