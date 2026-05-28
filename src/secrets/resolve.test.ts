@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,19 @@ async function writeSecureFile(filePath: string, content: string, mode = 0o600):
 
 describe("secret ref resolver", () => {
   const isWindows = process.platform === "win32";
+  const rootOwnedSystemShell = (() => {
+    if (isWindows) {
+      return null;
+    }
+    try {
+      const stat = fsSync.statSync("/bin/sh");
+      const modeBits = stat.mode & 0o777;
+      const writableByOthers = (modeBits & 0o022) !== 0;
+      return stat.uid === 0 && !writableByOthers ? "/bin/sh" : null;
+    } catch {
+      return null;
+    }
+  })();
   function itPosix(name: string, fn: () => Promise<void> | void) {
     if (isWindows) {
       it.skip(name, fn);
@@ -236,6 +250,20 @@ describe("secret ref resolver", () => {
     const value = await resolveExecSecret(execPlainScriptPath, { jsonOnly: false });
     expect(value).toBe("plain-secret");
   });
+
+  (rootOwnedSystemShell ? it : it.skip)(
+    "allows root-owned system commands when they are not group or world writable",
+    async () => {
+      const value = await resolveExecSecret(rootOwnedSystemShell as string, {
+        args: [
+          "-c",
+          'printf \'{"protocolVersion":1,"values":{"openai/api-key":"system-command-ok"}}\'',
+        ],
+      });
+
+      expect(value).toBe("system-command-ok");
+    },
+  );
 
   itPosix(
     "tolerates stdin write errors when exec provider exits before consuming a large request",

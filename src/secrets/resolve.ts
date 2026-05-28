@@ -37,6 +37,7 @@ const DEFAULT_EXEC_TIMEOUT_MS = 5_000;
 const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
+const POSIX_ROOT_UID = 0;
 
 export type SecretRefResolveCache = {
   resolvedByRefKey?: Map<string, Promise<unknown>>;
@@ -266,9 +267,14 @@ async function assertSecurePath(params: {
 
   if (process.platform !== "win32" && typeof process.getuid === "function" && stat.uid != null) {
     const uid = process.getuid();
-    if (stat.uid !== uid) {
+    // Root-owned system paths such as /usr/bin/security are acceptable once
+    // the mode checks above prove that untrusted users cannot replace them.
+    // Non-root foreign owners remain rejected because their account may still
+    // mutate the provider executable or secret file outside this process.
+    if (stat.uid !== uid && stat.uid !== POSIX_ROOT_UID) {
       throw new Error(
-        `${params.label} must be owned by the current user (uid=${uid}): ${effectivePath}`,
+        `${params.label} must be owned by the current user (uid=${uid}) or root ` +
+          `(uid=${POSIX_ROOT_UID}): ${effectivePath}`,
       );
     }
   }
