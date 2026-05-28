@@ -738,6 +738,17 @@ async function resolveChromeMcpArgs(profileName: string, userDataDir?: string): 
     );
     return [...DEFAULT_CHROME_MCP_ARGS, attachTarget.flag, attachTarget.url];
   }
+  if (profileName === "user-live") {
+    const normalizedUserDataDir = normalizeChromeMcpUserDataDir(userDataDir);
+    if (normalizedUserDataDir) {
+      traceChromeMcpStage(
+        `chrome-mcp-attach-mode profile=${profileName} mode=autoConnect+userDataDir path=${normalizedUserDataDir}`,
+      );
+      return buildChromeMcpArgs(normalizedUserDataDir);
+    }
+    traceChromeMcpStage(`chrome-mcp-attach-mode profile=${profileName} mode=autoConnect`);
+    return buildChromeMcpArgs();
+  }
   const discoveredTarget = await probeBrowserUrlFromUserDataDir(profileName, userDataDir);
   if (discoveredTarget) {
     return [...DEFAULT_CHROME_MCP_ARGS, discoveredTarget.flag, discoveredTarget.url];
