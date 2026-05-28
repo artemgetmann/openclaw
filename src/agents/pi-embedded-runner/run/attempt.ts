@@ -34,6 +34,7 @@ import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
+import { createAgentActivityLease } from "../../activity-lease.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
@@ -1391,7 +1392,8 @@ export async function runEmbeddedAttempt(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
   const attemptStartedAt = Date.now();
-  const attemptDeadlineMs = attemptStartedAt + params.timeoutMs;
+  const activityLeaseEnabled = params.trigger !== "heartbeat";
+  const activityLease = createAgentActivityLease({ timeoutMs: params.timeoutMs });
   const runAbortController = new AbortController();
   let cleanupShouldSkipIdleWait = false;
   const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
@@ -1421,7 +1423,11 @@ export async function runEmbeddedAttempt(
 
   let restoreSkillEnv: (() => void) | undefined;
   const getRemainingAttemptTimeoutMs = (): number =>
-    resolveRemainingAttemptTimeoutMs({ attemptDeadlineMs });
+    activityLeaseEnabled
+      ? activityLease.nextDelayMs()
+      : resolveRemainingAttemptTimeoutMs({
+          attemptDeadlineMs: attemptStartedAt + params.timeoutMs,
+        });
   process.chdir(effectiveWorkspace);
   try {
     const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
@@ -2273,6 +2279,14 @@ export async function runEmbeddedAttempt(
           );
         });
       };
+      let rescheduleAbortTimer: (() => void) | undefined;
+      const touchAttemptActivity = () => {
+        if (!activityLeaseEnabled || aborted || timedOut) {
+          return;
+        }
+        activityLease.touch();
+        rescheduleAbortTimer?.();
+      };
 
       traceStage("pre-subscribe-embedded-session");
       const subscription = subscribeEmbeddedPiSession({
@@ -2284,16 +2298,46 @@ export async function runEmbeddedAttempt(
         toolResultFormat: params.toolResultFormat,
         shouldEmitToolResult: params.shouldEmitToolResult,
         shouldEmitToolOutput: params.shouldEmitToolOutput,
-        onToolResult: params.onToolResult,
-        onReasoningStream: params.onReasoningStream,
+        onToolResult: params.onToolResult
+          ? async (payload) => {
+              touchAttemptActivity();
+              await params.onToolResult?.(payload);
+            }
+          : undefined,
+        onReasoningStream: params.onReasoningStream
+          ? async (payload) => {
+              touchAttemptActivity();
+              await params.onReasoningStream?.(payload);
+            }
+          : undefined,
         onReasoningEnd: params.onReasoningEnd,
-        onBlockReply: params.onBlockReply,
+        onBlockReply: params.onBlockReply
+          ? async (payload) => {
+              touchAttemptActivity();
+              await params.onBlockReply?.(payload);
+            }
+          : undefined,
         onBlockReplyFlush: params.onBlockReplyFlush,
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
-        onPartialReply: params.onPartialReply,
-        onAssistantMessageStart: params.onAssistantMessageStart,
-        onAgentEvent: params.onAgentEvent,
+        onPartialReply: params.onPartialReply
+          ? async (payload) => {
+              touchAttemptActivity();
+              await params.onPartialReply?.(payload);
+            }
+          : undefined,
+        onAssistantMessageStart: params.onAssistantMessageStart
+          ? async () => {
+              touchAttemptActivity();
+              await params.onAssistantMessageStart?.();
+            }
+          : undefined,
+        onAgentEvent: (evt) => {
+          if (evt.stream === "tool" || evt.stream === "assistant" || evt.stream === "compaction") {
+            touchAttemptActivity();
+          }
+          params.onAgentEvent?.(evt);
+        },
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
         sessionKey: sandboxSessionKey,
@@ -2335,8 +2379,16 @@ export async function runEmbeddedAttempt(
       let abortTimer: NodeJS.Timeout | undefined;
       let compactionGraceUsed = false;
       const scheduleAbortTimer = (delayMs: number, reason: "initial" | "compaction-grace") => {
+        if (abortTimer) {
+          clearTimeout(abortTimer);
+        }
         abortTimer = setTimeout(
           () => {
+            const nextDelayMs = getRemainingAttemptTimeoutMs();
+            if (nextDelayMs > 0) {
+              scheduleAbortTimer(nextDelayMs, reason);
+              return;
+            }
             const timeoutAction = resolveRunTimeoutDuringCompaction({
               isCompactionPendingOrRetrying: subscription.isCompacting(),
               isCompactionInFlight: activeSession.isCompacting,
@@ -2386,6 +2438,17 @@ export async function runEmbeddedAttempt(
           },
           Math.max(1, delayMs),
         );
+      };
+      rescheduleAbortTimer = () => {
+        if (aborted || timedOut) {
+          return;
+        }
+        const nextDelayMs = getRemainingAttemptTimeoutMs();
+        if (nextDelayMs <= 0) {
+          abortRun(true, makeTimeoutAbortReason());
+          return;
+        }
+        scheduleAbortTimer(nextDelayMs, "initial");
       };
       traceStage("pre-arm-timeout");
       const remainingTimeoutMs = getRemainingAttemptTimeoutMs();

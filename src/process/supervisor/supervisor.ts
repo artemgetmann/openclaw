@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { createAgentActivityLease } from "../../agents/activity-lease.js";
 import { getShellConfig } from "../../agents/shell-utils.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createChildAdapter } from "./adapters/child.js";
@@ -86,6 +87,12 @@ export function createProcessSupervisor(): ProcessSupervisor {
     const captureOutput = input.captureOutput !== false;
 
     const overallTimeoutMs = clampTimeout(input.timeoutMs);
+    const activityLease = overallTimeoutMs
+      ? createAgentActivityLease({
+          timeoutMs: overallTimeoutMs,
+          maxWallClockMs: input.maxWallClockMs,
+        })
+      : undefined;
     const noOutputTimeoutMs = clampTimeout(input.noOutputTimeoutMs);
 
     const setForcedReason = (reason: TerminationReason) => {
@@ -114,6 +121,32 @@ export function createProcessSupervisor(): ProcessSupervisor {
       noOutputTimer = setTimeout(() => {
         requestCancel("no-output-timeout");
       }, noOutputTimeoutMs);
+    };
+    const armOverallTimeout = () => {
+      if (!activityLease || settled) {
+        return;
+      }
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+      }
+      timeoutTimer = setTimeout(
+        () => {
+          const nextDelayMs = activityLease.nextDelayMs();
+          if (nextDelayMs > 0) {
+            armOverallTimeout();
+            return;
+          }
+          requestCancel("overall-timeout");
+        },
+        Math.max(1, activityLease.nextDelayMs()),
+      );
+    };
+    const touchActivity = () => {
+      if (!activityLease || settled) {
+        return;
+      }
+      activityLease.touch();
+      armOverallTimeout();
     };
 
     try {
@@ -165,9 +198,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
       };
 
       if (overallTimeoutMs) {
-        timeoutTimer = setTimeout(() => {
-          requestCancel("overall-timeout");
-        }, overallTimeoutMs);
+        armOverallTimeout();
       }
       if (noOutputTimeoutMs) {
         noOutputTimer = setTimeout(() => {
@@ -180,6 +211,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
           stdout += chunk;
         }
         input.onStdout?.(chunk);
+        touchActivity();
         touchOutput();
       });
       adapter.onStderr((chunk) => {
@@ -187,6 +219,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
           stderr += chunk;
         }
         input.onStderr?.(chunk);
+        touchActivity();
         touchOutput();
       });
 
@@ -251,6 +284,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
         },
+        touch: touchActivity,
       };
 
       active.set(runId, {

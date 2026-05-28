@@ -99,6 +99,7 @@ function createManagedRun(exit: MockRunExit, pid = 1234) {
     stdin: undefined,
     wait: vi.fn().mockResolvedValue(exit),
     cancel: vi.fn(),
+    touch: vi.fn(),
   };
 }
 
@@ -1876,10 +1877,11 @@ describe("runCliAgent with process supervisor", () => {
           toolCallId: "bridge-call-missing-result",
           toolName: "read",
           isError: true,
+          timestamp: expect.any(Number),
           content: [
             expect.objectContaining({
               type: "text",
-              text: expect.stringContaining("missing tool result"),
+              text: expect.stringContaining("current state is unknown"),
             }),
           ],
         }),

@@ -43,6 +43,7 @@ export type ManagedRun = {
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
   cancel: (reason?: TerminationReason) => void;
+  touch: () => void;
 };
 
 export type SpawnMode = "child" | "pty";
@@ -73,6 +74,7 @@ type SpawnBaseInput = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  maxWallClockMs?: number;
   noOutputTimeoutMs?: number;
   /**
    * When false, stdout/stderr are streamed via callbacks only and not retained in RunExit payload.

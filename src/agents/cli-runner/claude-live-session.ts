@@ -3,6 +3,7 @@ import type { CliBackendConfig } from "../../config/types.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ManagedRun, ProcessSupervisor } from "../../process/supervisor/types.js";
+import { createAgentActivityLease, type AgentActivityLease } from "../activity-lease.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import {
@@ -49,6 +50,7 @@ type ClaudeLiveTurn = {
   sessionId?: string;
   noOutputTimer: NodeJS.Timeout | null;
   timeoutTimer: NodeJS.Timeout | null;
+  activityLease: AgentActivityLease;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
@@ -492,6 +494,37 @@ function resetNoOutputTimer(session: ClaudeLiveSession): void {
   }, session.noOutputTimeoutMs);
 }
 
+function resetTurnTimeoutTimer(session: ClaudeLiveSession): void {
+  const turn = session.currentTurn;
+  if (!turn) {
+    return;
+  }
+  if (turn.timeoutTimer) {
+    clearTimeout(turn.timeoutTimer);
+  }
+  turn.timeoutTimer = setTimeout(
+    () => {
+      const nextDelayMs = turn.activityLease.nextDelayMs();
+      if (nextDelayMs > 0) {
+        resetTurnTimeoutTimer(session);
+        return;
+      }
+      debugClaudeLiveSession(
+        `turn-overall-timer-fired key=${session.key} timeoutMs=${turn.activityLease.idleTimeoutMs}`,
+      );
+      closeLiveSession(
+        session,
+        "abort",
+        createTimeoutError(
+          session,
+          `CLI exceeded timeout (${Math.round(turn.activityLease.idleTimeoutMs / 1000)}s) and was terminated.`,
+        ),
+      );
+    },
+    Math.max(1, turn.activityLease.nextDelayMs()),
+  );
+}
+
 function parseSessionId(parsed: Record<string, unknown>): string | undefined {
   const sessionId =
     typeof parsed.session_id === "string"
@@ -556,6 +589,8 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     return;
   }
   turn.rawLines.push(trimmed);
+  turn.activityLease.touch();
+  resetTurnTimeoutTimer(session);
   turn.streamingParser.push(`${trimmed}\n`);
   turn.sessionId = parseSessionId(parsed) ?? turn.sessionId;
   if (parsed.type !== "result") {
@@ -781,6 +816,7 @@ function createTurn(params: {
     rawChars: 0,
     noOutputTimer: null,
     timeoutTimer: null,
+    activityLease: createAgentActivityLease({ timeoutMs: params.context.timeoutMs }),
     streamingParser: createCliJsonlStreamingParser({
       backend: params.context.backend,
       providerId: params.context.backendId,
@@ -802,19 +838,7 @@ function createTurn(params: {
       ),
     );
   }, params.noOutputTimeoutMs);
-  turn.timeoutTimer = setTimeout(() => {
-    debugClaudeLiveSession(
-      `turn-overall-timer-fired key=${params.session.key} timeoutMs=${params.context.timeoutMs}`,
-    );
-    closeLiveSession(
-      params.session,
-      "abort",
-      createTimeoutError(
-        params.session,
-        `CLI exceeded timeout (${Math.round(params.context.timeoutMs / 1000)}s) and was terminated.`,
-      ),
-    );
-  }, params.context.timeoutMs);
+  resetTurnTimeoutTimer(params.session);
   return turn;
 }
 

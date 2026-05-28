@@ -121,6 +121,7 @@ describe("Claude CLI live session helpers", () => {
       },
       wait: vi.fn(async () => await new Promise<never>(() => {})),
       cancel: cancelMock,
+      touch: vi.fn(),
     } satisfies ManagedRun;
     const supervisor = {
       spawn: vi.fn(async (_input: SpawnInput) => managedRun),
@@ -180,6 +181,7 @@ describe("Claude CLI live session helpers", () => {
       },
       wait: vi.fn(async () => await new Promise<never>(() => {})),
       cancel: cancelMock,
+      touch: vi.fn(),
     } satisfies ManagedRun;
     const supervisor = {
       spawn: vi.fn(async (_input: SpawnInput) => managedRun),

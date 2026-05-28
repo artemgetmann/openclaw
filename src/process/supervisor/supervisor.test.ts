@@ -89,6 +89,37 @@ describe("process supervisor", () => {
     expect(exit.timedOut).toBe(true);
   });
 
+  it("renews the overall timeout when the run is touched", async () => {
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "s-activity",
+      argv: [process.execPath, "-e", "setTimeout(() => process.exit(0), 300)"],
+      timeoutMs: 200,
+      maxWallClockMs: 1_000,
+      stdinMode: "pipe-closed",
+    });
+    const leasePulse = setInterval(() => run.touch(), 100);
+    const exit = await run.wait();
+    clearInterval(leasePulse);
+    expect(exit.reason).toBe("exit");
+  });
+
+  it("keeps a hard wall-clock timeout despite repeated activity touches", async () => {
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "s-hard-cap",
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 1_000)"],
+      timeoutMs: 80,
+      maxWallClockMs: 170,
+      stdinMode: "pipe-closed",
+    });
+    const leasePulse = setInterval(() => run.touch(), 30);
+    const exit = await run.wait();
+    clearInterval(leasePulse);
+    expect(exit.reason).toBe("overall-timeout");
+    expect(exit.timedOut).toBe(true);
+  });
+
   it("can stream output without retaining it in RunExit payload", async () => {
     const supervisor = createProcessSupervisor();
     let streamed = "";
