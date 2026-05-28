@@ -335,7 +335,7 @@ function collectJarvisBackendAssignments(params: {
     active,
     inactiveReason: "Jarvis backend is not active.",
     apply: (value) => {
-      backend.accessToken = value;
+      backend.accessToken = String(value);
     },
   });
   collectSecretInputAssignment({
@@ -347,7 +347,7 @@ function collectJarvisBackendAssignments(params: {
     active,
     inactiveReason: "Jarvis backend is not active.",
     apply: (value) => {
-      backend.accountAccessToken = value;
+      backend.accountAccessToken = String(value);
     },
   });
 }
