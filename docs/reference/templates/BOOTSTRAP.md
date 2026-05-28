@@ -62,9 +62,9 @@ Keep the default personality useful and professional:
 
 When the first conversation is complete, update:
 
-- `IDENTITY.md`
-- `USER.md`
-- `SOUL.md` if there are behavior rules or boundaries worth keeping
+- `IDENTITY.md` records who the agent is.
+- `USER.md` records who the human is.
+- `SOUL.md` records durable behavior and boundaries.
 
 At minimum, before you consider the ritual complete:
 

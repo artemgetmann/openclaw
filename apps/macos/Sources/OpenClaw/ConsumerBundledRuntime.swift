@@ -24,6 +24,7 @@ enum ConsumerBundledRuntime {
         "TOOLS.md",
         "IDENTITY.md",
         "USER.md",
+        "GROUPS.md",
         "HEARTBEAT.md",
         "BOOTSTRAP.md",
         "MEMORY.md",

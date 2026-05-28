@@ -39,9 +39,11 @@ struct AgentWorkspaceTests {
 
         let identityURL = tmp.appendingPathComponent(AgentWorkspace.identityFilename)
         let userURL = tmp.appendingPathComponent(AgentWorkspace.userFilename)
+        let groupsURL = tmp.appendingPathComponent(AgentWorkspace.groupsFilename)
         let bootstrapURL = tmp.appendingPathComponent(AgentWorkspace.bootstrapFilename)
         #expect(FileManager().fileExists(atPath: identityURL.path))
         #expect(FileManager().fileExists(atPath: userURL.path))
+        #expect(FileManager().fileExists(atPath: groupsURL.path))
         #expect(FileManager().fileExists(atPath: bootstrapURL.path))
 
         let second = try AgentWorkspace.bootstrap(workspaceURL: tmp)
@@ -95,10 +97,18 @@ struct AgentWorkspaceTests {
     func `consumer templates keep useful workspace scaffolding`() throws {
         let agents = AgentWorkspace.defaultTemplate()
         let identity = AgentWorkspace.defaultIdentityTemplate()
+        let groups = AgentWorkspace.defaultGroupsTemplate()
         let soul = AgentWorkspace.defaultSoulTemplate()
+        let user = AgentWorkspace.defaultUserTemplate()
 
         #expect(agents.contains("`IDENTITY.md` defines who the agent is"))
         #expect(agents.contains("`USER.md` defines who the human is"))
+        #expect(agents.contains("Read `GROUPS.md` if this is a group chat"))
+        #expect(agents.contains("Read `MEMORY.md` only in direct main chat"))
+        #expect(agents.contains("Do not load `MEMORY.md` in shared or multi-person contexts"))
+        #expect(agents.contains("Write It Down - No Mental Notes"))
+        #expect(agents.contains("If someone says \"remember this\""))
+        #expect(agents.contains("For safe internal workspace work: Don't ask permission. Just do it."))
         #expect(agents.contains("Use files, not session memory"))
         #expect(agents.contains("## Make It Yours"))
         #expect(agents.contains("check the relevant `SKILL.md`"))
@@ -120,7 +130,23 @@ struct AgentWorkspaceTests {
         #expect(identity.contains("avatars/openclaw.png"))
         #expect(identity.contains("Save this file at the workspace root as `IDENTITY.md`"))
 
+        #expect(groups.contains("Group chat is a room, not a command line"))
+        #expect(groups.contains("One useful answer beats a triple-tap"))
+        #expect(groups.contains("No Private Leakage"))
+        #expect(groups.contains("In DMs, you can be more proactive and personal"))
+
+        #expect(user.contains("Update this as you go."))
+        #expect(user.contains("- **What to call them:**"))
+        #expect(user.contains("- **Preferred address:**"))
+        #expect(user.contains("- **Telegram handle / display name:**"))
+        #expect(user.contains("not a dossier"))
+
         #expect(soul.contains("A little fun when the moment fits"))
+        #expect(soul.contains("Actions over filler"))
+        #expect(soul.contains("search engine with extra steps"))
+        #expect(soul.contains("Privacy is intimacy"))
+        #expect(soul.contains("Not a corporate drone"))
+        #expect(!soul.contains("## Workspace Defaults"))
         #expect(soul.contains("should not drift silently"))
     }
 

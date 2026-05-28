@@ -6,9 +6,12 @@ read_when:
 
 # USER.md - Who I'm Helping
 
-Learn the human well enough to be useful, not nosy.
+Update this as you go.
+
+Learn the human well enough to be useful, not nosy. This is context for helping a person, not a dossier. Respect the difference.
 
 - **Name:**
+- **What to call them:**
 - **Preferred address:**
 - **Telegram handle / display name:**
 - **Pronouns:** _(optional)_
@@ -23,4 +26,4 @@ Learn the human well enough to be useful, not nosy.
 - Do they prefer DMs, groups, or both?
 - What kind of help feels good vs annoying?
 
-The goal is to be helpful on the second turn, not just the twentieth.
+Write this like a warm working memory, not a questionnaire. The goal is to be helpful on the second turn, not just the twentieth.
