@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { prepareSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createJarvisBackendClient } from "./jarvis-backend-client.js";
 
 describe("createJarvisBackendClient", () => {
@@ -198,6 +199,49 @@ describe("createJarvisBackendClient", () => {
     ).resolves.toEqual({
       ok: true,
       result: { text: "short" },
+      usage: undefined,
+    });
+  });
+
+  it("uses resolved runtime SecretInput refs for managed utility auth", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: {
+        jarvis: {
+          backend: {
+            baseUrl: "https://jarvis.example",
+            accountAccessToken: {
+              source: "env",
+              provider: "default",
+              id: "JARVIS_ACCOUNT_TOKEN_REF",
+            },
+          },
+          managedServices: { mode: "managed" },
+        },
+      },
+      env: {
+        JARVIS_ACCOUNT_TOKEN_REF: "resolved-account-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+    const fetchResponse = vi.fn(async (params) => {
+      expect(params.url).toBe("https://jarvis.example/v1/managed/utilities/firecrawl.scrape");
+      expect(params.init.headers.Authorization).toBe("Bearer resolved-account-token");
+      return await params.onResponse(
+        new Response(JSON.stringify({ ok: true, result: { text: "managed" } }), {
+          status: 200,
+        }),
+      );
+    });
+
+    const client = createJarvisBackendClient(snapshot.config, { fetchResponse });
+
+    expect(client.enabled).toBe(true);
+    expect(client.baseUrl).toBe("https://jarvis.example");
+    expect(client.managedServicesMode).toBe("managed");
+    await expect(client.callManagedUtility({ utility: "firecrawl.scrape" })).resolves.toEqual({
+      ok: true,
+      result: { text: "managed" },
       usage: undefined,
     });
   });

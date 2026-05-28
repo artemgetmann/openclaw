@@ -434,6 +434,10 @@ struct TelegramSetupBootstrapTests {
                         "accessToken": "server-token",
                         "accountAccessToken": "jat_account_token",
                     ],
+                    "managedServices": [
+                        "mode": "license-only",
+                        "futureFlag": true,
+                    ],
                 ],
             ]
             await ConfigStore._testSetOverrides(.init(
@@ -477,10 +481,25 @@ struct TelegramSetupBootstrapTests {
 
             let telegram = try #require(
                 ((savedRoot.value()["channels"] as? [String: Any])?["telegram"] as? [String: Any]))
+            let jarvis = try #require(savedRoot.value()["jarvis"] as? [String: Any])
+            let backend = try #require(jarvis["backend"] as? [String: Any])
+            let managedServices = try #require(jarvis["managedServices"] as? [String: Any])
+            let secrets = try #require(savedRoot.value()["secrets"] as? [String: Any])
+            let providers = try #require(secrets["providers"] as? [String: Any])
+            let accountTokenRef = try #require(backend["accountAccessToken"] as? [String: String])
             let accounts = try #require(telegram["accounts"] as? [String: Any])
             let defaultAccount = try #require(accounts["default"] as? [String: Any])
             #expect(telegram["botToken"] as? String == "777000:test-child-token")
             #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
+            #expect(managedServices["mode"] as? String == "managed")
+            #expect(managedServices["futureFlag"] as? Bool == true)
+            #expect(backend["baseUrl"] as? String == "https://jarvis.example.test")
+            #expect(accountTokenRef == [
+                "source": "exec",
+                "provider": "jarvis-keychain",
+                "id": "account-access-token",
+            ])
+            #expect(providers["jarvis-keychain"] != nil)
             #expect(store.telegramSetupStatus?.contains("777000:test-child-token") == false)
 
             await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)

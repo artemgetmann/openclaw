@@ -313,6 +313,45 @@ function collectCronAssignments(params: {
   });
 }
 
+function collectJarvisBackendAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const backend = params.config.jarvis?.backend;
+  if (!backend) {
+    return;
+  }
+  const active = Boolean(backend.baseUrl && params.config.jarvis?.managedServices?.mode !== "off");
+  // Jarvis backend tokens are read by consumer managed utilities after the
+  // runtime snapshot is prepared, so resolve SecretInput refs before callers
+  // decide whether to use managed or BYOK routes.
+  collectSecretInputAssignment({
+    value: backend.accessToken,
+    path: "jarvis.backend.accessToken",
+    expected: "string",
+    defaults: params.defaults,
+    context: params.context,
+    active,
+    inactiveReason: "Jarvis backend is not active.",
+    apply: (value) => {
+      backend.accessToken = value;
+    },
+  });
+  collectSecretInputAssignment({
+    value: backend.accountAccessToken,
+    path: "jarvis.backend.accountAccessToken",
+    expected: "string",
+    defaults: params.defaults,
+    context: params.context,
+    active,
+    inactiveReason: "Jarvis backend is not active.",
+    apply: (value) => {
+      backend.accountAccessToken = value;
+    },
+  });
+}
+
 function collectSandboxSshAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -423,6 +462,7 @@ export function collectCoreConfigAssignments(params: {
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);
+  collectJarvisBackendAssignments(params);
   collectSandboxSshAssignments(params);
   collectMessagesTtsAssignments(params);
   collectCronAssignments(params);

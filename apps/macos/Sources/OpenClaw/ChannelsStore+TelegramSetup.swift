@@ -351,6 +351,7 @@ extension ChannelsStore {
             path: [.key("channels"), .key("telegram"), .key("groups"), .key("*"), .key("requireMention")],
             value: false)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("allowFrom")], value: allowFrom)
+        JarvisAccountActivationConfig.configureManagedRuntime(into: &self.configDraft)
         let persisted: [String: Any]
         if AppFlavor.current.isConsumer,
            !self.isPreview,
