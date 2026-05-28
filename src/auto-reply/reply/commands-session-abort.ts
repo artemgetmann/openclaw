@@ -17,6 +17,7 @@ import {
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { persistAbortTargetEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
+import { cancelDurableReplyTasksForKeys } from "./durable-task-state.js";
 import { clearSessionQueues } from "./queue.js";
 
 export type AbortTarget = {
@@ -70,6 +71,7 @@ async function applyAbortTarget(params: {
   abortCutoff?: AbortCutoff;
 }) {
   const { abortTarget } = params;
+  cancelDurableReplyTasksForKeys([abortTarget.key, abortTarget.sessionId, params.abortKey]);
   if (abortTarget.sessionId) {
     abortEmbeddedPiRun(abortTarget.sessionId);
   }

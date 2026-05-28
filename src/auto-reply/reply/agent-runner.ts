@@ -53,6 +53,19 @@ import {
   resolveContextPressureNotice,
 } from "./context-pressure-notice.js";
 import {
+  canStartAnotherDurableTaskAttempt,
+  completeDurableReplyTask,
+  exhaustDurableReplyTask,
+  formatDurableTaskExhaustedFailure,
+  recordDurableTaskAttemptStart,
+  recordDurableTaskEvidence,
+  recordDurableTaskFallbackNotice,
+  recordDurableTaskPayloadEvidence,
+  recordDurableTaskTimeout,
+  startDurableReplyTask,
+  type DurableReplyTaskRecord,
+} from "./durable-task-state.js";
+import {
   buildEmptyFinalFallbackPayload,
   shouldReturnEmptyFinalFallback,
 } from "./empty-final-reply.js";
@@ -68,6 +81,7 @@ import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-t
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import {
   REPLY_TIMEOUT_CONTINUATION_PROMPT,
+  resolveReplyTimeoutContinuationConfig,
   shouldContinueAfterReplyTimeout,
 } from "./timeout-continuation.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -171,11 +185,17 @@ export async function runReplyAgent(params: {
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
   const didSendVisibleReply = { value: opts?.hasRepliedRef?.value === true };
+  const didSendFinalVisibleReply = { value: opts?.hasRepliedRef?.value === true };
+  let durableTask: DurableReplyTaskRecord | undefined;
   const markVisibleReply = (payload: ReplyPayload) => {
     if (shouldSuppressReasoningPayload(payload) || !isRenderablePayload(payload)) {
       return;
     }
     didSendVisibleReply.value = true;
+  };
+  const markFinalVisibleReply = (payload: ReplyPayload) => {
+    markVisibleReply(payload);
+    didSendFinalVisibleReply.value = true;
   };
   const runOpts =
     opts &&
@@ -184,18 +204,27 @@ export async function runReplyAgent(params: {
       onBlockReply: opts.onBlockReply
         ? async (payload, context) => {
             await opts.onBlockReply?.(payload, context);
-            markVisibleReply(payload);
+            if (durableTask) {
+              recordDurableTaskEvidence(durableTask, "block_reply", payload);
+            }
+            markFinalVisibleReply(payload);
           }
         : undefined,
       onPartialReply: opts.onPartialReply
         ? async (payload) => {
             await opts.onPartialReply?.(payload);
-            markVisibleReply(payload);
+            if (durableTask) {
+              recordDurableTaskEvidence(durableTask, "partial_reply", payload);
+            }
+            markFinalVisibleReply(payload);
           }
         : undefined,
       onToolResult: opts.onToolResult
         ? async (payload) => {
             await opts.onToolResult?.(payload);
+            if (durableTask) {
+              recordDurableTaskEvidence(durableTask, "tool_result", payload);
+            }
             markVisibleReply(payload);
           }
         : undefined,
@@ -266,6 +295,14 @@ export async function runReplyAgent(params: {
     typing.cleanup();
     return undefined;
   }
+
+  const timeoutContinuationConfig = resolveReplyTimeoutContinuationConfig(cfg);
+  durableTask = startDurableReplyTask({
+    sessionKey: sessionKey ?? followupRun.run.sessionKey,
+    sessionId: followupRun.run.sessionId,
+    maxAttempts: timeoutContinuationConfig.maxAttempts,
+    maxWallClockMs: timeoutContinuationConfig.maxWallClockMs,
+  });
 
   await typingSignals.signalRunStart();
 
@@ -432,10 +469,11 @@ export async function runReplyAgent(params: {
       }
     };
 
-    let continuationAttempts = 0;
+    recordDurableTaskAttemptStart(durableTask);
     let runOutcome = await runSingleTurn(commandBody);
     while (runOutcome.kind !== "final") {
       if (runOutcome.runResult.meta?.aborted) {
+        exhaustDurableReplyTask(durableTask);
         return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
       }
       // Direct block/tool deliveries may still be queued locally when the model
@@ -447,13 +485,13 @@ export async function runReplyAgent(params: {
       if (pendingToolTasks.size > 0) {
         await Promise.allSettled(pendingToolTasks);
       }
+      recordDurableTaskPayloadEvidence(durableTask, runOutcome.runResult.payloads);
       const timeoutContinuation = shouldContinueAfterReplyTimeout({
         cfg,
         opts: runOpts,
         isHeartbeat,
-        attemptsUsed: continuationAttempts,
         payloads: runOutcome.runResult.payloads ?? [],
-        didSendVisibleReply: didSendVisibleReply.value,
+        didSendFinalVisibleReply: didSendFinalVisibleReply.value,
         messagingToolSentTargets: runOutcome.runResult.messagingToolSentTargets,
         messageProvider: followupRun.run.messageProvider,
         originatingTo: sessionCtx.OriginatingTo,
@@ -462,17 +500,25 @@ export async function runReplyAgent(params: {
       if (!timeoutContinuation.shouldContinue) {
         break;
       }
-      continuationAttempts += 1;
-      // This notice is visible, but it is not the final answer and must not mark
-      // the turn as satisfied. The continuation still owes the user a real reply.
-      await opts?.onBlockReply?.({ text: timeoutContinuation.config.statusText });
+      recordDurableTaskTimeout(durableTask);
+      const budget = canStartAnotherDurableTaskAttempt(durableTask);
+      if (!budget.ok) {
+        exhaustDurableReplyTask(durableTask);
+        return finalizeWithFollowup(
+          formatDurableTaskExhaustedFailure(durableTask),
+          queueKey,
+          runFollowupTurn,
+        );
+      }
       defaultRuntime.log(
-        `reply run timed out before final answer; auto-continuing attempt ${continuationAttempts}/${timeoutContinuation.config.maxAttempts}`,
+        `reply durable task ${durableTask.taskId} timed out before final answer; auto-continuing attempt ${durableTask.attemptCount + 1}/${durableTask.maxAttempts}`,
       );
+      recordDurableTaskAttemptStart(durableTask);
       runOutcome = await runSingleTurn(REPLY_TIMEOUT_CONTINUATION_PROMPT);
     }
 
     if (runOutcome.kind === "final") {
+      completeDurableReplyTask(durableTask);
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
@@ -598,8 +644,10 @@ export async function runReplyAgent(params: {
           accountId: sessionCtx.AccountId,
         })
       ) {
+        completeDurableReplyTask(durableTask);
         return finalizeWithFollowup(buildEmptyFinalFallbackPayload(), queueKey, runFollowupTurn);
       }
+      completeDurableReplyTask(durableTask);
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -642,8 +690,10 @@ export async function runReplyAgent(params: {
           accountId: sessionCtx.AccountId,
         })
       ) {
+        completeDurableReplyTask(durableTask);
         return finalizeWithFollowup(buildEmptyFinalFallbackPayload(), queueKey, runFollowupTurn);
       }
+      completeDurableReplyTask(durableTask);
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -815,7 +865,7 @@ export async function runReplyAgent(params: {
         activeModel: modelUsed,
         attempts: fallbackAttempts,
       });
-      if (fallbackNotice) {
+      if (fallbackNotice && recordDurableTaskFallbackNotice(durableTask, fallbackNotice)) {
         runNotices.push({ text: fallbackNotice });
       }
     }
@@ -879,6 +929,7 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
+    completeDurableReplyTask(durableTask);
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,

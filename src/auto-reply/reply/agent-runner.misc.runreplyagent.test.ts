@@ -2455,7 +2455,7 @@ describe("runReplyAgent reply liveness", () => {
     });
   }
 
-  it("sends one visible progress ping when a user run stays active past the watchdog interval", async () => {
+  it("sends one explicitly enabled progress ping when a user run stays active past the watchdog interval", async () => {
     vi.useFakeTimers();
     const onBlockReply = vi.fn();
     let finishRun: (() => void) | undefined;
@@ -2472,8 +2472,9 @@ describe("runReplyAgent reply liveness", () => {
         agents: {
           defaults: {
             replyRunWatchdog: {
+              enabled: true,
               intervalMs: 10,
-              text: "Still working.",
+              text: "Reading the checkpoint skill file.",
             },
           },
         },
@@ -2485,7 +2486,7 @@ describe("runReplyAgent reply liveness", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith({ text: "Still working." });
+    expect(onBlockReply).toHaveBeenCalledWith({ text: "Reading the checkpoint skill file." });
 
     finishRun?.();
     const result = await runPromise;
@@ -2518,7 +2519,7 @@ describe("runReplyAgent reply liveness", () => {
       config: {
         agents: {
           defaults: {
-            replyRunWatchdog: { intervalMs: 5 },
+            replyRunWatchdog: { enabled: true, intervalMs: 5 },
           },
         },
       },
@@ -2635,13 +2636,11 @@ describe("runReplyAgent reply liveness", () => {
     expect(runEmbeddedPiAgentMock.mock.calls[1]?.[0]).toMatchObject({
       prompt: expect.stringContaining("Continue the previous user task"),
     });
-    expect(onBlockReply).toHaveBeenCalledWith({
-      text: "Still working. I hit the run limit and am continuing automatically.",
-    });
+    expect(onBlockReply).not.toHaveBeenCalled();
     expect(result).toMatchObject({ text: "done after continuing" });
   });
 
-  it("uses the default five continuation attempts before surfacing the sixth timeout", async () => {
+  it("uses the default five total attempts before surfacing an honest exhausted failure", async () => {
     const onBlockReply = vi.fn();
     const timeoutPayload = {
       text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
@@ -2651,23 +2650,20 @@ describe("runReplyAgent reply liveness", () => {
 
     const result = await createRun({ opts: { onBlockReply } });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(6);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(5);
     for (const call of runEmbeddedPiAgentMock.mock.calls.slice(1)) {
       expect(call[0]).toMatchObject({
         prompt: expect.stringContaining("Continue the previous user task"),
       });
     }
-    expect(onBlockReply).toHaveBeenCalledTimes(5);
-    expect(onBlockReply).toHaveBeenNthCalledWith(1, {
-      text: "Still working. I hit the run limit and am continuing automatically.",
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("task safety budget"),
     });
-    expect(onBlockReply).toHaveBeenNthCalledWith(5, {
-      text: "Still working. I hit the run limit and am continuing automatically.",
-    });
-    expect(result).toMatchObject({ text: expect.stringContaining("Request timed out") });
   });
 
-  it("honors maxAttempts as continuation attempts after the original run", async () => {
+  it("honors maxAttempts as total task attempts", async () => {
     const onBlockReply = vi.fn();
     const timeoutPayload = {
       text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
@@ -2686,9 +2682,9 @@ describe("runReplyAgent reply liveness", () => {
       },
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ text: expect.stringContaining("Request timed out") });
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ text: expect.stringContaining("task safety budget") });
   });
 
   it("surfaces the timeout when timeout continuation is disabled", async () => {
