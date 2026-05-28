@@ -559,19 +559,23 @@ export function createBrowserTool(opts?: {
         case "open": {
           const targetUrl = readTargetUrlParam(params);
           const { timeoutMs } = readOptionalTargetAndTimeout(params);
+          const effectiveTimeoutMs =
+            profile === "user-live"
+              ? Math.max(timeoutMs ?? 0, BROWSER_TOOL_EXISTING_SESSION_ATTACH_TIMEOUT_MS)
+              : timeoutMs;
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
               path: "/tabs/open",
               profile,
               body: { url: targetUrl },
-              timeoutMs: timeoutMs ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS,
+              timeoutMs: effectiveTimeoutMs ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS,
             });
             return jsonResult(result);
           }
           const opened = await browserOpenTab(baseUrl, targetUrl, {
             profile,
-            timeoutMs,
+            timeoutMs: effectiveTimeoutMs,
           });
           trackSessionBrowserTab({
             sessionKey: opts?.agentSessionKey,

@@ -648,6 +648,37 @@ describe("browser tool url alias support", () => {
     );
   });
 
+  it("uses the existing-session attach timeout by default for user-live open", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "open",
+      profile: "user-live",
+      url: "https://example.com",
+    });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ profile: "user-live", timeoutMs: 60000 }),
+    );
+  });
+
+  it("preserves higher explicit timeout values for user-live open", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "open",
+      profile: "user-live",
+      url: "https://example.com",
+      timeoutMs: 70000,
+    });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ profile: "user-live", timeoutMs: 70000 }),
+    );
+  });
+
   it("tracks opened tabs when session context is available", async () => {
     browserClientMocks.browserOpenTab.mockResolvedValueOnce({
       targetId: "tab-123",

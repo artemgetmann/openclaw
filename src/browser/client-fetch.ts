@@ -164,6 +164,29 @@ function isRetryableChromeAttachMessage(message: string): boolean {
   );
 }
 
+function isTimeoutOrAbortLikeMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("timed out") ||
+    lower.includes("timeout") ||
+    lower.includes("aborted") ||
+    lower.includes("abort") ||
+    lower.includes("aborterror")
+  );
+}
+
+function isUserLiveDispatcherRequest(url: string): boolean {
+  if (isAbsoluteHttp(url)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url, "http://localhost");
+    return parsed.searchParams.get("profile") === "user-live";
+  } catch {
+    return false;
+  }
+}
+
 async function discardResponseBody(res: Response): Promise<void> {
   try {
     await res.body?.cancel();
@@ -174,6 +197,15 @@ async function discardResponseBody(res: Response): Promise<void> {
 
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const msg = normalizeErrorMessage(err);
+  if (isUserLiveDispatcherRequest(url) && isTimeoutOrAbortLikeMessage(msg)) {
+    // `user-live` attach failures often mean Chrome is paused on the remote-debugging
+    // approval prompt. That is actionable for the caller, so surface the approval
+    // guidance instead of the generic gateway restart/no-retry messaging.
+    return new Error(
+      "Chrome is waiting for remote-debugging approval. Open Chrome, click Allow if prompted, or enable remote debugging at chrome://inspect/#remote-debugging, then retry.",
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
   if (isRetryableChromeAttachMessage(msg)) {
     // Existing-session attach errors are browser-session availability issues,
     // not control-service reachability failures. Preserve the direct guidance

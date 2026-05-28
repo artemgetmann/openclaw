@@ -174,6 +174,41 @@ describe("fetchBrowserJson loopback auth", () => {
     });
   });
 
+  it("surfaces remote-debugging approval guidance for user-live dispatcher timeouts", async () => {
+    mocks.dispatch.mockRejectedValueOnce(new Error("timed out"));
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("/tabs/open?profile=user-live"),
+      {
+        contains: [
+          "Chrome is waiting for remote-debugging approval",
+          "chrome://inspect/#remote-debugging",
+          "click Allow if prompted",
+        ],
+        omits: [
+          "Restart the OpenClaw gateway",
+          "Do NOT retry the browser tool",
+          "Can't reach the OpenClaw browser control service",
+        ],
+      },
+    );
+  });
+
+  it("keeps restart and no-retry hints for non-user-live dispatcher timeouts", async () => {
+    mocks.dispatch.mockRejectedValueOnce(new Error("timed out"));
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("/tabs/open?profile=openclaw"),
+      {
+        contains: ["Restart the OpenClaw gateway", "Do NOT retry the browser tool"],
+        omits: [
+          "Chrome is waiting for remote-debugging approval",
+          "chrome://inspect/#remote-debugging",
+        ],
+      },
+    );
+  });
+
   it("surfaces 429 from HTTP URL as rate-limit error with no-retry hint", async () => {
     const response = new Response("max concurrent sessions exceeded", { status: 429 });
     const text = vi.spyOn(response, "text");
