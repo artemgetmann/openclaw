@@ -17,6 +17,90 @@ function readActTimeoutMs(request: Parameters<typeof browserAct>[1]): number | u
     : undefined;
 }
 
+function shouldIncludeSnapshotAfterAct(request: Parameters<typeof browserAct>[1]): boolean {
+  return (request as { includeSnapshot?: unknown }).includeSnapshot === true;
+}
+
+function buildActSnapshotInput(params: {
+  request: Parameters<typeof browserAct>[1];
+  result: unknown;
+}): Record<string, unknown> {
+  const requestSnapshot = params.request as Record<string, unknown>;
+  const resultSnapshot =
+    params.result && typeof params.result === "object"
+      ? (params.result as Record<string, unknown>)
+      : {};
+  const targetId =
+    typeof resultSnapshot.targetId === "string"
+      ? resultSnapshot.targetId
+      : typeof requestSnapshot.targetId === "string"
+        ? requestSnapshot.targetId
+        : undefined;
+
+  return {
+    action: "snapshot",
+    // Fresh snapshots after mutations should be compact, structured, and ref-rich
+    // by default. Callers can still override these knobs explicitly.
+    snapshotFormat:
+      requestSnapshot.snapshotFormat === "aria" || requestSnapshot.snapshotFormat === "ai"
+        ? requestSnapshot.snapshotFormat
+        : "ai",
+    refs:
+      requestSnapshot.refs === "role" || requestSnapshot.refs === "aria"
+        ? requestSnapshot.refs
+        : "aria",
+    mode: requestSnapshot.mode === "efficient" ? requestSnapshot.mode : "efficient",
+    targetId,
+    compact: typeof requestSnapshot.compact === "boolean" ? requestSnapshot.compact : undefined,
+    depth:
+      typeof requestSnapshot.depth === "number" && Number.isFinite(requestSnapshot.depth)
+        ? requestSnapshot.depth
+        : undefined,
+    maxChars:
+      typeof requestSnapshot.maxChars === "number" &&
+      Number.isFinite(requestSnapshot.maxChars) &&
+      requestSnapshot.maxChars > 0
+        ? requestSnapshot.maxChars
+        : undefined,
+    labels: requestSnapshot.labels === true ? true : undefined,
+  };
+}
+
+async function formatActResultWithOptionalSnapshot(params: {
+  request: Parameters<typeof browserAct>[1];
+  result: unknown;
+  baseUrl?: string;
+  profile?: string;
+  proxyRequest: BrowserProxyRequest | null;
+}): Promise<AgentToolResult<unknown>> {
+  if (!shouldIncludeSnapshotAfterAct(params.request)) {
+    return jsonResult(params.result);
+  }
+
+  const snapshotResult = await executeSnapshotAction({
+    input: buildActSnapshotInput({ request: params.request, result: params.result }),
+    baseUrl: params.baseUrl,
+    profile: params.profile,
+    proxyRequest: params.proxyRequest,
+  });
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({ act: params.result, includeSnapshot: true }, null, 2),
+      },
+      ...snapshotResult.content,
+    ],
+    details: {
+      ok: true,
+      act: params.result,
+      includeSnapshot: true,
+      snapshot: snapshotResult.details,
+    },
+  };
+}
+
 type BrowserProxyRequest = (opts: {
   method: string;
   path: string;
@@ -371,7 +455,13 @@ export async function executeActAction(params: {
       : await browserAct(baseUrl, request, {
           profile,
         });
-    return jsonResult(result);
+    return await formatActResultWithOptionalSnapshot({
+      request,
+      result,
+      baseUrl,
+      profile,
+      proxyRequest,
+    });
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
       const retryRequest = stripTargetIdFromActRequest(request);
@@ -400,7 +490,13 @@ export async function executeActAction(params: {
             : await browserAct(baseUrl, retryRequest, {
                 profile,
               });
-          return jsonResult(retryResult);
+          return await formatActResultWithOptionalSnapshot({
+            request: retryRequest,
+            result: retryResult,
+            baseUrl,
+            profile,
+            proxyRequest,
+          });
         } catch {
           // Fall through to explicit stale-target guidance.
         }

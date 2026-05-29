@@ -2,10 +2,12 @@ import { Type } from "@sinclair/typebox";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 
 const BROWSER_ACT_KINDS = [
+  "batch",
   "click",
   "type",
   "press",
   "hover",
+  "scrollIntoView",
   "drag",
   "select",
   "fill",
@@ -50,6 +52,14 @@ const BrowserActSchema = Type.Object({
   // Common fields
   targetId: Type.Optional(Type.String()),
   ref: Type.Optional(Type.String()),
+  includeSnapshot: Type.Optional(Type.Boolean()),
+  snapshotFormat: optionalStringEnum(BROWSER_SNAPSHOT_FORMATS),
+  refs: optionalStringEnum(BROWSER_SNAPSHOT_REFS),
+  mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES),
+  compact: Type.Optional(Type.Boolean()),
+  depth: Type.Optional(Type.Number()),
+  maxChars: Type.Optional(Type.Number()),
+  labels: Type.Optional(Type.Boolean()),
   // click
   doubleClick: Type.Optional(Type.Boolean()),
   button: Type.Optional(Type.String()),
@@ -68,6 +78,9 @@ const BrowserActSchema = Type.Object({
   values: Type.Optional(Type.Array(Type.String())),
   // fill - use permissive array of objects
   fields: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
+  // batch
+  actions: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
+  stopOnError: Type.Optional(Type.Boolean()),
   // resize
   width: Type.Optional(Type.Number()),
   height: Type.Optional(Type.Number()),
@@ -116,6 +129,7 @@ export const BrowserToolSchema = Type.Object({
   promptText: Type.Optional(Type.String()),
   // Legacy flattened act params (preferred: request={...})
   kind: Type.Optional(stringEnum(BROWSER_ACT_KINDS)),
+  includeSnapshot: Type.Optional(Type.Boolean()),
   doubleClick: Type.Optional(Type.Boolean()),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),
@@ -134,5 +148,7 @@ export const BrowserToolSchema = Type.Object({
   textGone: Type.Optional(Type.String()),
   loadState: Type.Optional(Type.String()),
   fn: Type.Optional(Type.String()),
+  actions: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
+  stopOnError: Type.Optional(Type.Boolean()),
   request: Type.Optional(BrowserActSchema),
 });
