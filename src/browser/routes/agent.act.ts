@@ -162,11 +162,15 @@ function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): str
       const className = String(el.className || "");
       return el.getAttribute("aria-disabled") === "true" || el.hasAttribute("disabled") || /\\b(disabled|ant-select-item-option-disabled)\\b/i.test(className);
     };
+    const matchTexts = [optionText];
+    if (matchMode === "contains" && queryText && queryText.toLowerCase() !== optionText.toLowerCase()) {
+      matchTexts.push(queryText);
+    }
     const matches = (text) => {
       const actual = normalize(text);
       if (!optionText) return false;
-      if (matchMode === "exact") return actual === optionText;
-      if (matchMode === "contains") return actual.toLowerCase().includes(optionText.toLowerCase());
+      if (matchMode === "exact") return actual === optionText || actual.toLowerCase() === optionText.toLowerCase();
+      if (matchMode === "contains") return matchTexts.some((expected) => actual.toLowerCase().includes(expected.toLowerCase()));
       try {
         return new RegExp(rawOptionText, "i").test(actual);
       } catch {
@@ -191,10 +195,16 @@ function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): str
       el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
       el.click();
     };
-    const beforeText = normalize(control.textContent);
-    control.scrollIntoView({ block: "center", inline: "center" });
-    clickElement(control);
-    const editable = control.querySelector(editableSelector) || document.activeElement;
+    const controlRoot = visible(control)
+      ? control
+      : control.parentElement?.closest('.ant-select, .ant-select-selector, .ant-select-content, [role="combobox"]') || control;
+    const beforeText = normalize(controlRoot.textContent);
+    controlRoot.scrollIntoView({ block: "center", inline: "center" });
+    clickElement(controlRoot);
+    const editable =
+      controlRoot.querySelector(editableSelector) ||
+      (control.matches(editableSelector) ? control : null) ||
+      document.activeElement;
     if (editable instanceof Element && editable.matches(editableSelector)) {
       setValue(editable, queryText);
     }
@@ -208,7 +218,7 @@ function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): str
         const matchedText = normalize(option.textContent);
         clickElement(option);
         setTimeout(() => {
-          const selectedText = normalize(control.textContent);
+          const selectedText = normalize(controlRoot.textContent);
           resolve({
             optionText,
             matchedText,

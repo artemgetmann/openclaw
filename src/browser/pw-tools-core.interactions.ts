@@ -43,6 +43,14 @@ const PORTAL_OPTION_SELECTOR = [
   ".select2-results__option",
   "[data-option-index]",
 ].join(", ");
+const SEARCHABLE_CONTROL_ANCESTOR_XPATH = [
+  "ancestor::*[",
+  "contains(concat(' ', normalize-space(@class), ' '), ' ant-select ')",
+  " or contains(concat(' ', normalize-space(@class), ' '), ' ant-select-selector ')",
+  " or contains(concat(' ', normalize-space(@class), ' '), ' ant-select-content ')",
+  " or @role='combobox'",
+  "][1]",
+].join("");
 
 function resolveBoundedDelayMs(value: number | undefined, label: string, maxMs: number): number {
   const normalized = Math.floor(value ?? 0);
@@ -106,6 +114,63 @@ async function fillEditableTarget(params: {
   }
 }
 
+async function fillSearchableControlTarget(params: {
+  page: Page;
+  locator: Locator;
+  value: string;
+  timeout: number;
+}): Promise<void> {
+  const probeTimeout = Math.min(params.timeout, 1500);
+
+  // Searchable selects usually expose a stable wrapper ref while the actual
+  // editable input is nested or portal-focused. Probe those surfaces first so a
+  // wrapper ref does not burn the full action timeout on a doomed fill().
+  try {
+    await params.locator
+      .locator(EDITABLE_DESCENDANT_SELECTOR)
+      .first()
+      .fill(params.value, { timeout: probeTimeout });
+    return;
+  } catch {
+    // The search input may be body-portal focused after opening the control.
+  }
+  try {
+    await params.page
+      .locator(FOCUSED_EDITABLE_SELECTOR)
+      .first()
+      .fill(params.value, { timeout: probeTimeout });
+    return;
+  } catch {
+    // Some accessible comboboxes are editable themselves; try that last with
+    // the caller's full budget because this path can legitimately wait.
+  }
+  await params.locator.fill(params.value, { timeout: params.timeout });
+}
+
+async function openSearchableControl(params: {
+  locator: Locator;
+  timeout: number;
+}): Promise<Locator> {
+  const probeTimeout = Math.min(params.timeout, 1500);
+
+  try {
+    await params.locator.click({ timeout: probeTimeout });
+    return params.locator;
+  } catch (directErr) {
+    // Ant Design sometimes exposes the actual search input as a zero-width or
+    // visually hidden combobox while the clickable surface is a parent select
+    // wrapper. If the model gives that input selector/ref, climb to the nearest
+    // select-like ancestor instead of forcing it to invent portal CSS.
+    const ancestor = params.locator.locator(`xpath=${SEARCHABLE_CONTROL_ANCESTOR_XPATH}`);
+    try {
+      await ancestor.click({ timeout: params.timeout });
+      return ancestor;
+    } catch {
+      throw directErr;
+    }
+  }
+}
+
 function normalizeOptionText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -127,7 +192,7 @@ function optionTextMatches(
     return false;
   }
   if (matchMode === "exact") {
-    return actual === expected;
+    return actual === expected || actual.toLowerCase() === expected.toLowerCase();
   }
   if (matchMode === "contains") {
     return actual.toLowerCase().includes(expected.toLowerCase());
@@ -179,6 +244,7 @@ async function isDisabledOption(locator: Locator): Promise<boolean> {
 async function clickVisibleMatchingOption(params: {
   page: Page;
   optionText: string;
+  queryText?: string;
   matchMode: BrowserChooseOptionMatchMode;
   timeout: number;
 }): Promise<string> {
@@ -188,7 +254,10 @@ async function clickVisibleMatchingOption(params: {
   });
   try {
     const option = roleLocator.first();
-    await option.waitFor({ state: "visible", timeout: params.timeout });
+    // Role locators are ideal when the framework exposes proper semantics, but
+    // Ant Design often renders class-only portal rows. Keep this probe short
+    // and fall back to text-matching portal nodes for the rest of the budget.
+    await option.waitFor({ state: "visible", timeout: Math.min(params.timeout, 1500) });
     const matchedText = (await readLocatorText(option)) ?? params.optionText;
     await option.click({ timeout: params.timeout });
     return matchedText;
@@ -198,25 +267,43 @@ async function clickVisibleMatchingOption(params: {
     // portals instead of making the model invent CSS.
   }
 
-  const textFilter =
-    params.matchMode === "regex"
-      ? roleNameForOptionMatch(params.optionText, "regex")
-      : params.optionText;
-  const candidates = params.page.locator(PORTAL_OPTION_SELECTOR).filter({ hasText: textFilter });
-  await candidates.first().waitFor({ state: "visible", timeout: params.timeout });
-  const count = Math.min(await candidates.count(), 50);
-  for (let i = 0; i < count; i += 1) {
-    const option = candidates.nth(i);
-    const visible = await option.isVisible().catch(() => false);
-    if (!visible || (await isDisabledOption(option))) {
+  const expectedTexts = [params.optionText];
+  const normalizedQueryText = normalizeOptionText(params.queryText ?? "");
+  if (
+    params.matchMode === "contains" &&
+    normalizedQueryText &&
+    normalizeOptionText(params.optionText).toLowerCase() !== normalizedQueryText.toLowerCase()
+  ) {
+    // Airline and Ant Design labels often expand the user's typed query into a
+    // longer display label, for example "Kuala Lumpur Intl Airport (KUL)".
+    // If the model requests contains matching and gave a separate query, allow
+    // that query as the secondary visible-text anchor.
+    expectedTexts.push(normalizedQueryText);
+  }
+
+  for (const expectedText of expectedTexts) {
+    const textFilter =
+      params.matchMode === "regex" ? roleNameForOptionMatch(expectedText, "regex") : expectedText;
+    const candidates = params.page.locator(PORTAL_OPTION_SELECTOR).filter({ hasText: textFilter });
+    try {
+      await candidates.first().waitFor({ state: "visible", timeout: params.timeout });
+    } catch {
       continue;
     }
-    const matchedText = (await readLocatorText(option)) ?? "";
-    if (!optionTextMatches(matchedText, params.optionText, params.matchMode)) {
-      continue;
+    const count = Math.min(await candidates.count(), 50);
+    for (let i = 0; i < count; i += 1) {
+      const option = candidates.nth(i);
+      const visible = await option.isVisible().catch(() => false);
+      if (!visible || (await isDisabledOption(option))) {
+        continue;
+      }
+      const matchedText = (await readLocatorText(option)) ?? "";
+      if (!optionTextMatches(matchedText, expectedText, params.matchMode)) {
+        continue;
+      }
+      await option.click({ timeout: params.timeout });
+      return matchedText || expectedText;
     }
-    await option.click({ timeout: params.timeout });
-    return matchedText || params.optionText;
   }
   throw new Error(`No visible option matched "${params.optionText}"`);
 }
@@ -393,23 +480,24 @@ export async function chooseOptionViaPlaywright(opts: {
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   const matchMode = resolveOptionMatchMode(opts.match);
-  const beforeText = await readLocatorText(locator);
   const query = normalizeOptionText(opts.query ?? optionText);
 
   try {
     // Searchable selects expose different focus surfaces depending on the
     // framework. Clicking the wrapper opens the portal; filling then targets
     // either the wrapper itself, its inner input, or the active portal input.
-    await locator.click({ timeout });
-    await fillEditableTarget({ page, locator, value: query, timeout });
+    const controlLocator = await openSearchableControl({ locator, timeout });
+    const beforeText = await readLocatorText(controlLocator);
+    await fillSearchableControlTarget({ page, locator: controlLocator, value: query, timeout });
     const matchedText = await clickVisibleMatchingOption({
       page,
       optionText,
+      queryText: query,
       matchMode,
       timeout,
     });
     await page.waitForTimeout(150);
-    const selectedText = await readLocatorText(locator);
+    const selectedText = await readLocatorText(controlLocator);
     const changed =
       beforeText !== undefined && selectedText !== undefined
         ? beforeText !== selectedText
