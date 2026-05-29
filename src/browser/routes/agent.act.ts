@@ -127,9 +127,111 @@ async function waitForExistingSessionCondition(params: {
   throw new Error("Timed out waiting for condition");
 }
 
+function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): string {
+  const targetExpression =
+    target === "selector" ? `document.querySelector(String(targetOrControl))` : `targetOrControl`;
+  return `(targetOrControl, rawOptionText, rawMatchMode, rawQueryText, rawTimeoutMs) => new Promise((resolve, reject) => {
+    const control = ${targetExpression};
+    if (!(control instanceof Element)) {
+      reject(new Error("chooseOption target was not found"));
+      return;
+    }
+
+    const optionText = String(rawOptionText || "").replace(/\\s+/g, " ").trim();
+    const matchMode = rawMatchMode === "contains" || rawMatchMode === "regex" ? rawMatchMode : "exact";
+    const queryText = String(rawQueryText || optionText).replace(/\\s+/g, " ").trim();
+    const timeoutMs = Math.max(500, Math.min(60000, Number(rawTimeoutMs) || 10000));
+    const optionSelector = [
+      '[role="option"]',
+      '[role="treeitem"]',
+      '.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option',
+      '.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item',
+      '.rc-select-dropdown .rc-select-item-option',
+      '.select2-results__option',
+      '[data-option-index]'
+    ].join(", ");
+    const editableSelector = 'input:not([type="hidden"]), textarea, [contenteditable="true"], [role="textbox"]';
+    const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+    const visible = (el) => {
+      if (!(el instanceof Element)) return false;
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+    };
+    const disabled = (el) => {
+      const className = String(el.className || "");
+      return el.getAttribute("aria-disabled") === "true" || el.hasAttribute("disabled") || /\\b(disabled|ant-select-item-option-disabled)\\b/i.test(className);
+    };
+    const matches = (text) => {
+      const actual = normalize(text);
+      if (!optionText) return false;
+      if (matchMode === "exact") return actual === optionText;
+      if (matchMode === "contains") return actual.toLowerCase().includes(optionText.toLowerCase());
+      try {
+        return new RegExp(rawOptionText, "i").test(actual);
+      } catch {
+        return false;
+      }
+    };
+    const setValue = (el, value) => {
+      el.focus();
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+        const proto = el instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+        descriptor && descriptor.set ? descriptor.set.call(el, value) : (el.value = value);
+      } else if (el instanceof HTMLElement) {
+        el.textContent = value;
+      }
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const clickElement = (el) => {
+      el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      el.click();
+    };
+    const beforeText = normalize(control.textContent);
+    control.scrollIntoView({ block: "center", inline: "center" });
+    clickElement(control);
+    const editable = control.querySelector(editableSelector) || document.activeElement;
+    if (editable instanceof Element && editable.matches(editableSelector)) {
+      setValue(editable, queryText);
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    const tick = () => {
+      const options = Array.from(document.querySelectorAll(optionSelector))
+        .filter((el) => visible(el) && !disabled(el));
+      const option = options.find((el) => matches(el.textContent || ""));
+      if (option) {
+        const matchedText = normalize(option.textContent);
+        clickElement(option);
+        setTimeout(() => {
+          const selectedText = normalize(control.textContent);
+          resolve({
+            optionText,
+            matchedText,
+            selectedText,
+            changed: beforeText && selectedText ? beforeText !== selectedText : undefined
+          });
+        }, 150);
+        return;
+      }
+      if (Date.now() > deadline) {
+        reject(new Error('No visible option matched "' + optionText + '"'));
+        return;
+      }
+      setTimeout(tick, 100);
+    };
+    tick();
+  })`;
+}
+
 const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
   "batch",
   "click",
+  "chooseOption",
   "drag",
   "hover",
   "press",
@@ -141,6 +243,11 @@ const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
 const MAX_BATCH_ACTIONS = 100;
 const MAX_BATCH_CLICK_DELAY_MS = 5_000;
 const MAX_BATCH_WAIT_TIME_MS = 30_000;
+
+function parseChooseOptionMatchMode(value: unknown): "exact" | "contains" | "regex" | undefined {
+  const match = toStringOrEmpty(value);
+  return match === "contains" || match === "regex" || match === "exact" ? match : undefined;
+}
 
 function normalizeBoundedNonNegativeMs(
   value: unknown,
@@ -333,6 +440,28 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
         ...(ref ? { ref } : {}),
         ...(selector ? { selector } : {}),
         values,
+        ...(targetId ? { targetId } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      };
+    }
+    case "chooseOption": {
+      const ref = toStringOrEmpty(raw.ref) || undefined;
+      const selector = toStringOrEmpty(raw.selector) || undefined;
+      const optionText = toStringOrEmpty(raw.optionText);
+      if ((!ref && !selector) || !optionText) {
+        throw new Error("chooseOption requires ref/selector and optionText");
+      }
+      const query = toStringOrEmpty(raw.query) || undefined;
+      const match = parseChooseOptionMatchMode(raw.match);
+      const targetId = toStringOrEmpty(raw.targetId) || undefined;
+      const timeoutMs = toNumber(raw.timeoutMs);
+      return {
+        kind,
+        ...(ref ? { ref } : {}),
+        ...(selector ? { selector } : {}),
+        optionText,
+        ...(query ? { query } : {}),
+        ...(match ? { match } : {}),
         ...(targetId ? { targetId } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       };
@@ -883,6 +1012,43 @@ export function registerBrowserAgentActRoutes(
               timeoutMs: timeoutMs ?? undefined,
             });
             return res.json({ ok: true, targetId: tab.targetId });
+          }
+          case "chooseOption": {
+            const ref = toStringOrEmpty(body.ref) || undefined;
+            const selector = toStringOrEmpty(body.selector) || undefined;
+            const optionText = toStringOrEmpty(body.optionText);
+            if ((!ref && !selector) || !optionText) {
+              return jsonError(res, 400, "ref/selector and optionText are required");
+            }
+            const query = toStringOrEmpty(body.query) || optionText;
+            const match = parseChooseOptionMatchMode(body.match) ?? "exact";
+            const timeoutMs = toNumber(body.timeoutMs);
+            if (isExistingSession) {
+              const result = await evaluateChromeMcpScript({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                fn: buildExistingSessionChooseOptionScript(selector ? "selector" : "ref"),
+                args: [selector ?? ref!, optionText, match, query, String(timeoutMs ?? 10_000)],
+                timeoutMs: timeoutMs ?? undefined,
+              });
+              return res.json({ ok: true, targetId: tab.targetId, url: tab.url, result });
+            }
+            const pw = await requirePwAi(res, `act:${kind}`);
+            if (!pw) {
+              return;
+            }
+            const result = await pw.chooseOptionViaPlaywright({
+              cdpUrl,
+              targetId: tab.targetId,
+              ref,
+              selector,
+              optionText,
+              query,
+              match,
+              timeoutMs: timeoutMs ?? undefined,
+            });
+            return res.json({ ok: true, targetId: tab.targetId, url: tab.url, result });
           }
           case "fill": {
             const rawFields = Array.isArray(body.fields) ? body.fields : [];

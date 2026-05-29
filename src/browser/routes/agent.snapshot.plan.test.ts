@@ -35,4 +35,20 @@ describe("resolveSnapshotPlan", () => {
 
     expect(plan.format).toBe("ai");
   });
+
+  it("normalizes labels/mode requests away from aria snapshots", () => {
+    const resolved = resolveBrowserConfig({});
+    const profile = resolveProfile(resolved, "openclaw");
+    expect(profile).toBeTruthy();
+
+    const plan = resolveSnapshotPlan({
+      profile: profile as NonNullable<typeof profile>,
+      query: { format: "aria", mode: "efficient", labels: "1" },
+      hasPlaywright: true,
+    });
+
+    expect(plan.format).toBe("ai");
+    expect(plan.mode).toBe("efficient");
+    expect(plan.labels).toBe(true);
+  });
 });

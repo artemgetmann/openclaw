@@ -303,6 +303,49 @@ describe("existing-session browser routes", () => {
     });
   });
 
+  it("chooses searchable portal options through existing-session structured action", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce({
+      optionText: "Bali/Denpasar (DPS)",
+      matchedText: "Bali/Denpasar (DPS)",
+      selectedText: "To Bali/Denpasar (DPS)",
+      changed: true,
+    } as never);
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "chooseOption",
+          ref: "combo-to",
+          optionText: "Bali/Denpasar (DPS)",
+          timeoutMs: 14_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      targetId: "7",
+      result: {
+        optionText: "Bali/Denpasar (DPS)",
+        changed: true,
+      },
+    });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("ant-select-dropdown"),
+      args: ["combo-to", "Bali/Denpasar (DPS)", "exact", "Bali/Denpasar (DPS)", "14000"],
+      timeoutMs: 14_000,
+    });
+  });
+
   it("passes timeout overrides through existing-session evaluate", async () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);

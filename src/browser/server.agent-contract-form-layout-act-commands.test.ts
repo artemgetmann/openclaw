@@ -60,6 +60,25 @@ describe("browser control server", () => {
         }),
       );
 
+      const chooseOption = await postJson<{ ok: boolean; result?: unknown }>(`${base}/act`, {
+        kind: "chooseOption",
+        ref: "combo-to",
+        optionText: "Bali/Denpasar (DPS)",
+        includeSnapshot: true,
+      });
+      expect(chooseOption.ok).toBe(true);
+      expect(pwMocks.chooseOptionViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: expect.any(String),
+          targetId: "abcd1234",
+          ref: "combo-to",
+          selector: undefined,
+          optionText: "Bali/Denpasar (DPS)",
+          query: "Bali/Denpasar (DPS)",
+          match: "exact",
+        }),
+      );
+
       const fillCases: Array<{
         input: Record<string, unknown>;
         expected: Record<string, unknown>;

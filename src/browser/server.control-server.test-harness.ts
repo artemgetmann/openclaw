@@ -99,6 +99,12 @@ const pwMocks = vi.hoisted(() => ({
   armDialogViaPlaywright: vi.fn(async () => {}),
   armFileUploadViaPlaywright: vi.fn(async () => {}),
   batchViaPlaywright: vi.fn(async () => ({ results: [] })),
+  chooseOptionViaPlaywright: vi.fn(async () => ({
+    optionText: "Bali/Denpasar (DPS)",
+    matchedText: "Bali/Denpasar (DPS)",
+    selectedText: "Bali/Denpasar (DPS)",
+    changed: true,
+  })),
   clickViaPlaywright: vi.fn(async () => {}),
   closePageViaPlaywright: vi.fn(async () => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),

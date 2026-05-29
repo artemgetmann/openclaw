@@ -31,7 +31,9 @@ const browserClientMocks = vi.hoisted(() => ({
 vi.mock("../../browser/client.js", () => browserClientMocks);
 
 const browserActionsMocks = vi.hoisted(() => ({
-  browserAct: vi.fn(async () => ({ ok: true })),
+  browserAct: vi.fn(
+    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({ ok: true }),
+  ),
   browserArmDialog: vi.fn(async () => ({ ok: true })),
   browserArmFileChooser: vi.fn(async () => ({ ok: true })),
   browserConsoleMessages: vi.fn(async () => ({
@@ -836,6 +838,18 @@ describe("browser tool act compatibility", () => {
       },
     },
     {
+      name: "chooseOption",
+      args: {
+        action: "act",
+        request: {
+          kind: "chooseOption",
+          ref: "combo-to",
+          optionText: "Bali/Denpasar (DPS)",
+          includeSnapshot: true,
+        },
+      },
+    },
+    {
       name: "press",
       args: {
         action: "act",
@@ -910,6 +924,45 @@ describe("browser tool act compatibility", () => {
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalled();
     expect(browserClientMocks.browserSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("normalizes includeSnapshot mode/labels requests to AI snapshots", async () => {
+    browserActionsMocks.browserAct.mockResolvedValueOnce({
+      ok: true,
+      targetId: "tab-after-act",
+      url: "https://example.com/next",
+    });
+    browserClientMocks.browserSnapshot.mockResolvedValueOnce({
+      ok: true,
+      format: "ai",
+      targetId: "tab-after-act",
+      url: "https://example.com/next",
+      snapshot: '- combobox "To" [ref=e2]',
+      refs: { e2: { role: "combobox", name: "To" } },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      request: {
+        kind: "chooseOption",
+        ref: "combo-to",
+        optionText: "Bali/Denpasar (DPS)",
+        includeSnapshot: true,
+        snapshotFormat: "aria",
+        labels: true,
+        mode: "efficient",
+      },
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        format: "ai",
+        labels: true,
+        mode: "efficient",
+      }),
+    );
   });
 });
 

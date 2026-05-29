@@ -20,6 +20,7 @@ export {
   armDialogViaPlaywright,
   armFileUploadViaPlaywright,
   batchViaPlaywright,
+  chooseOptionViaPlaywright,
   clickViaPlaywright,
   closePageViaPlaywright,
   cookiesClearViaPlaywright,

@@ -1,5 +1,10 @@
 import type { Locator, Page } from "playwright-core";
-import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
+import type {
+  BrowserActRequest,
+  BrowserChooseOptionMatchMode,
+  BrowserChooseOptionResult,
+  BrowserFormField,
+} from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
@@ -27,6 +32,17 @@ const MAX_WAIT_TIME_MS = 30_000;
 const MAX_BATCH_ACTIONS = 100;
 const EDITABLE_DESCENDANT_SELECTOR =
   'input:not([type="hidden"]), textarea, [contenteditable="true"], [role="textbox"]';
+const FOCUSED_EDITABLE_SELECTOR =
+  'input:focus:not([type="hidden"]), textarea:focus, [contenteditable="true"]:focus, [role="textbox"]:focus';
+const PORTAL_OPTION_SELECTOR = [
+  '[role="option"]',
+  '[role="treeitem"]',
+  ".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option",
+  ".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item",
+  ".rc-select-dropdown .rc-select-item-option",
+  ".select2-results__option",
+  "[data-option-index]",
+].join(", ");
 
 function resolveBoundedDelayMs(value: number | undefined, label: string, maxMs: number): number {
   const normalized = Math.floor(value ?? 0);
@@ -80,9 +96,7 @@ async function fillEditableTarget(params: {
     }
     try {
       await params.page
-        .locator(
-          'input:focus:not([type="hidden"]), textarea:focus, [contenteditable="true"]:focus, [role="textbox"]:focus',
-        )
+        .locator(FOCUSED_EDITABLE_SELECTOR)
         .first()
         .fill(params.value, { timeout: params.timeout });
       return;
@@ -90,6 +104,121 @@ async function fillEditableTarget(params: {
       throw directErr;
     }
   }
+}
+
+function normalizeOptionText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function resolveOptionMatchMode(
+  value?: BrowserChooseOptionMatchMode,
+): BrowserChooseOptionMatchMode {
+  return value === "contains" || value === "regex" ? value : "exact";
+}
+
+function optionTextMatches(
+  actualText: string,
+  expectedText: string,
+  matchMode: BrowserChooseOptionMatchMode,
+): boolean {
+  const actual = normalizeOptionText(actualText);
+  const expected = normalizeOptionText(expectedText);
+  if (!expected) {
+    return false;
+  }
+  if (matchMode === "exact") {
+    return actual === expected;
+  }
+  if (matchMode === "contains") {
+    return actual.toLowerCase().includes(expected.toLowerCase());
+  }
+  try {
+    return new RegExp(expectedText, "i").test(actual);
+  } catch {
+    return false;
+  }
+}
+
+function roleNameForOptionMatch(optionText: string, matchMode: BrowserChooseOptionMatchMode) {
+  if (matchMode === "regex") {
+    try {
+      return new RegExp(optionText, "i");
+    } catch {
+      return optionText;
+    }
+  }
+  return optionText;
+}
+
+async function readLocatorText(locator: Locator, timeout = 1000): Promise<string | undefined> {
+  try {
+    return normalizeOptionText(await locator.innerText({ timeout }));
+  } catch {
+    return undefined;
+  }
+}
+
+async function isDisabledOption(locator: Locator): Promise<boolean> {
+  try {
+    const disabled = await locator.evaluate((el) => {
+      const ariaDisabled = el.getAttribute("aria-disabled");
+      const disabledAttr = el.hasAttribute("disabled");
+      const className = String((el as HTMLElement).className ?? "");
+      return (
+        ariaDisabled === "true" ||
+        disabledAttr ||
+        /\b(disabled|ant-select-item-option-disabled)\b/i.test(className)
+      );
+    });
+    return Boolean(disabled);
+  } catch {
+    return false;
+  }
+}
+
+async function clickVisibleMatchingOption(params: {
+  page: Page;
+  optionText: string;
+  matchMode: BrowserChooseOptionMatchMode;
+  timeout: number;
+}): Promise<string> {
+  const roleLocator = params.page.getByRole("option", {
+    name: roleNameForOptionMatch(params.optionText, params.matchMode),
+    exact: params.matchMode === "exact",
+  });
+  try {
+    const option = roleLocator.first();
+    await option.waitFor({ state: "visible", timeout: params.timeout });
+    const matchedText = (await readLocatorText(option)) ?? params.optionText;
+    await option.click({ timeout: params.timeout });
+    return matchedText;
+  } catch {
+    // Ant Design often renders options in body-level portals with class-based
+    // nodes but no stable ids. Fall through to visible text matching in those
+    // portals instead of making the model invent CSS.
+  }
+
+  const textFilter =
+    params.matchMode === "regex"
+      ? roleNameForOptionMatch(params.optionText, "regex")
+      : params.optionText;
+  const candidates = params.page.locator(PORTAL_OPTION_SELECTOR).filter({ hasText: textFilter });
+  await candidates.first().waitFor({ state: "visible", timeout: params.timeout });
+  const count = Math.min(await candidates.count(), 50);
+  for (let i = 0; i < count; i += 1) {
+    const option = candidates.nth(i);
+    const visible = await option.isVisible().catch(() => false);
+    if (!visible || (await isDisabledOption(option))) {
+      continue;
+    }
+    const matchedText = (await readLocatorText(option)) ?? "";
+    if (!optionTextMatches(matchedText, params.optionText, params.matchMode)) {
+      continue;
+    }
+    await option.click({ timeout: params.timeout });
+    return matchedText || params.optionText;
+  }
+  throw new Error(`No visible option matched "${params.optionText}"`);
 }
 
 async function awaitEvalWithAbort<T>(
@@ -236,6 +365,61 @@ export async function selectOptionViaPlaywright(opts: {
     await locator.selectOption(opts.values, {
       timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
     });
+  } catch (err) {
+    throw toAIFriendlyError(err, label);
+  }
+}
+
+export async function chooseOptionViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  ref?: string;
+  selector?: string;
+  optionText: string;
+  query?: string;
+  match?: BrowserChooseOptionMatchMode;
+  timeoutMs?: number;
+}): Promise<BrowserChooseOptionResult> {
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
+  const optionText = normalizeOptionText(String(opts.optionText ?? ""));
+  if (!optionText) {
+    throw new Error("optionText is required");
+  }
+
+  const page = await getRestoredPageForTarget(opts);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
+  const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
+  const matchMode = resolveOptionMatchMode(opts.match);
+  const beforeText = await readLocatorText(locator);
+  const query = normalizeOptionText(opts.query ?? optionText);
+
+  try {
+    // Searchable selects expose different focus surfaces depending on the
+    // framework. Clicking the wrapper opens the portal; filling then targets
+    // either the wrapper itself, its inner input, or the active portal input.
+    await locator.click({ timeout });
+    await fillEditableTarget({ page, locator, value: query, timeout });
+    const matchedText = await clickVisibleMatchingOption({
+      page,
+      optionText,
+      matchMode,
+      timeout,
+    });
+    await page.waitForTimeout(150);
+    const selectedText = await readLocatorText(locator);
+    const changed =
+      beforeText !== undefined && selectedText !== undefined
+        ? beforeText !== selectedText
+        : undefined;
+    return {
+      optionText,
+      matchedText,
+      ...(selectedText ? { selectedText } : {}),
+      ...(changed !== undefined ? { changed } : {}),
+    };
   } catch (err) {
     throw toAIFriendlyError(err, label);
   }
@@ -859,6 +1043,18 @@ async function executeSingleAction(
         ref: action.ref,
         selector: action.selector,
         values: action.values,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "chooseOption":
+      await chooseOptionViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        ref: action.ref,
+        selector: action.selector,
+        optionText: action.optionText,
+        query: action.query,
+        match: action.match,
         timeoutMs: action.timeoutMs,
       });
       break;

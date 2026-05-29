@@ -36,15 +36,21 @@ function buildActSnapshotInput(params: {
       : typeof requestSnapshot.targetId === "string"
         ? requestSnapshot.targetId
         : undefined;
+  const wantsEfficientSnapshot = requestSnapshot.mode === "efficient";
+  const wantsLabels = requestSnapshot.labels === true;
+  const requestedFormat =
+    requestSnapshot.snapshotFormat === "aria" || requestSnapshot.snapshotFormat === "ai"
+      ? requestSnapshot.snapshotFormat
+      : undefined;
+  const snapshotFormat = wantsEfficientSnapshot || wantsLabels ? "ai" : (requestedFormat ?? "ai");
 
   return {
     action: "snapshot",
     // Fresh snapshots after mutations should be compact, structured, and ref-rich
     // by default. Callers can still override these knobs explicitly.
-    snapshotFormat:
-      requestSnapshot.snapshotFormat === "aria" || requestSnapshot.snapshotFormat === "ai"
-        ? requestSnapshot.snapshotFormat
-        : "ai",
+    // `mode=efficient` and labels are AI-snapshot features; normalizing here
+    // prevents includeSnapshot from generating format=aria&mode=efficient.
+    snapshotFormat,
     refs:
       requestSnapshot.refs === "role" || requestSnapshot.refs === "aria"
         ? requestSnapshot.refs
@@ -258,17 +264,23 @@ export async function executeSnapshotAction(params: {
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = loadConfig().browser?.snapshotDefaults;
-  const format: "ai" | "aria" | undefined =
+  const requestedFormat: "ai" | "aria" | undefined =
     input.snapshotFormat === "ai" || input.snapshotFormat === "aria"
       ? input.snapshotFormat
       : undefined;
+  const requestedLabels = typeof input.labels === "boolean" ? input.labels : undefined;
+  const requestedMode = input.mode === "efficient" ? "efficient" : undefined;
+  const format: "ai" | "aria" | undefined =
+    requestedFormat === "aria" && (requestedLabels === true || requestedMode === "efficient")
+      ? "ai"
+      : requestedFormat;
   const mode: "efficient" | undefined =
-    input.mode === "efficient"
+    requestedMode === "efficient"
       ? "efficient"
       : format !== "aria" && snapshotDefaults?.mode === "efficient"
         ? "efficient"
         : undefined;
-  const labels = typeof input.labels === "boolean" ? input.labels : undefined;
+  const labels = requestedLabels;
   const refs: "aria" | "role" | undefined =
     input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
   const hasMaxChars = Object.hasOwn(input, "maxChars");
