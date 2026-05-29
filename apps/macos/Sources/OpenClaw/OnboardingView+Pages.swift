@@ -191,15 +191,19 @@ extension OnboardingView {
 
         return VStack(alignment: .leading, spacing: 14) {
             self.featureRow(
-                title: "Use a regular group",
-                subtitle: "Open the group in Telegram, add \(botHandle), then send a normal message.",
-                systemImage: "person.2")
-            self.featureRow(
-                title: "Keep the direct message",
-                subtitle: "The private chat stays your control room. Groups are only for shared conversations.",
+                title: "DM for simple control",
+                subtitle: "Keep the direct message for one task at a time.",
                 systemImage: "bubble.left.and.bubble.right")
             self.featureRow(
-                title: "Finish setup now",
+                title: "Group for parallel tasks",
+                subtitle: "Create a Telegram group, add \(botHandle), and enable topics for separate task threads.",
+                systemImage: "person.2")
+            self.featureRow(
+                title: "Make Jarvis admin",
+                subtitle: "This lets Jarvis respond naturally in the group, instead of only when tagged or replied to.",
+                systemImage: "checkmark.shield")
+            self.featureRow(
+                title: "Finish setup if you prefer",
                 subtitle: "You can add a group later from Telegram. Nothing else is required here.",
                 systemImage: "checkmark.circle")
         }

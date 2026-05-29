@@ -39,7 +39,7 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
         case .telegram:
             return "Connect Telegram"
         case .telegramGroup:
-            return "Add Jarvis to a Group"
+            return "Optional: Add Jarvis to a Group"
         }
     }
 
@@ -56,7 +56,7 @@ enum ConsumerSetupStep: Int, CaseIterable, Identifiable {
         case .telegram:
             return "Telegram will open so you can approve Jarvis."
         case .telegramGroup:
-            return "Use the same bot in a regular Telegram group when you want Jarvis with other people."
+            return "Power users can use a group with topics to run more than one task at a time."
         }
     }
 
