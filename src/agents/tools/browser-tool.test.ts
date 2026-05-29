@@ -964,6 +964,101 @@ describe("browser tool act compatibility", () => {
       }),
     );
   });
+
+  it("splits user-live batch actions into sequential existing-session act calls", async () => {
+    setResolvedBrowserProfiles({
+      "user-live": { driver: "existing-session", attachOnly: true, color: "#2D7FF9" },
+    });
+    browserActionsMocks.browserAct
+      .mockResolvedValueOnce({ ok: true, targetId: "tab-live" })
+      .mockResolvedValueOnce({ ok: true, targetId: "tab-live" });
+    browserClientMocks.browserSnapshot.mockResolvedValueOnce({
+      ok: true,
+      format: "ai",
+      targetId: "tab-live",
+      url: "https://example.com/next",
+      snapshot: '- button "Done" [ref=e9]',
+    });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "act",
+      profile: "user-live",
+      request: {
+        kind: "batch",
+        targetId: "tab-live",
+        includeSnapshot: true,
+        actions: [
+          { kind: "click", ref: "e1" },
+          { kind: "type", ref: "e2", text: "Ada" },
+        ],
+      },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(2);
+    expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      {
+        kind: "click",
+        ref: "e1",
+        targetId: "tab-live",
+      },
+      expect.objectContaining({ profile: "user-live" }),
+    );
+    expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      {
+        kind: "type",
+        ref: "e2",
+        text: "Ada",
+        targetId: "tab-live",
+        includeSnapshot: true,
+      },
+      expect.objectContaining({ profile: "user-live" }),
+    );
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledOnce();
+    expect(result?.details).toMatchObject({
+      ok: true,
+      includeSnapshot: true,
+      act: {
+        ok: true,
+        targetId: "tab-live",
+        results: [{ ok: true }, { ok: true }],
+      },
+    });
+  });
+
+  it("continues split user-live batches when stopOnError is false", async () => {
+    setResolvedBrowserProfiles({
+      "user-live": { driver: "existing-session", attachOnly: true, color: "#2D7FF9" },
+    });
+    browserActionsMocks.browserAct
+      .mockRejectedValueOnce(new Error("first click failed"))
+      .mockResolvedValueOnce({ ok: true, targetId: "tab-live" });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "act",
+      profile: "user-live",
+      request: {
+        kind: "batch",
+        targetId: "tab-live",
+        stopOnError: false,
+        actions: [
+          { kind: "click", ref: "e1" },
+          { kind: "press", key: "Enter" },
+        ],
+      },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(2);
+    expect(result?.details).toMatchObject({
+      ok: false,
+      results: [{ ok: false, error: "first click failed" }, { ok: true }],
+    });
+  });
 });
 
 describe("browser tool snapshot labels", () => {

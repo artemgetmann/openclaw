@@ -21,6 +21,21 @@ function shouldIncludeSnapshotAfterAct(request: Parameters<typeof browserAct>[1]
   return (request as { includeSnapshot?: unknown }).includeSnapshot === true;
 }
 
+function getActKind(request: Parameters<typeof browserAct>[1]): string {
+  const kind = (request as { kind?: unknown }).kind;
+  return typeof kind === "string" ? kind : "";
+}
+
+function isExistingSessionProfile(profile: string | undefined): boolean {
+  if (!profile) {
+    return false;
+  }
+  const cfg = loadConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const browserProfile = resolveProfile(resolved, profile);
+  return !!browserProfile && getBrowserProfileCapabilities(browserProfile).usesChromeMcp;
+}
+
 function buildActSnapshotInput(params: {
   request: Parameters<typeof browserAct>[1];
   result: unknown;
@@ -205,13 +220,9 @@ function stripTargetIdFromActRequest(
 }
 
 function canRetryChromeActWithoutTargetId(request: Parameters<typeof browserAct>[1]): boolean {
-  const typedRequest = request as Partial<Record<"kind" | "action", unknown>>;
+  const typedRequest = request as Partial<Record<"action", unknown>>;
   const kind =
-    typeof typedRequest.kind === "string"
-      ? typedRequest.kind
-      : typeof typedRequest.action === "string"
-        ? typedRequest.action
-        : "";
+    getActKind(request) || (typeof typedRequest.action === "string" ? typedRequest.action : "");
   return kind === "hover" || kind === "scrollIntoView" || kind === "wait";
 }
 
@@ -455,6 +466,15 @@ export async function executeActAction(params: {
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   const requestTimeoutMs = readActTimeoutMs(request) ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS;
+  if (getActKind(request) === "batch" && isExistingSessionProfile(profile)) {
+    return await executeExistingSessionBatchAction({
+      request,
+      baseUrl,
+      profile,
+      proxyRequest,
+      timeoutMs: requestTimeoutMs,
+    });
+  }
   try {
     const result = proxyRequest
       ? await proxyRequest({
@@ -526,4 +546,124 @@ export async function executeActAction(params: {
     }
     throw err;
   }
+}
+
+async function executeSingleAct(params: {
+  request: Parameters<typeof browserAct>[1];
+  baseUrl?: string;
+  profile?: string;
+  proxyRequest: BrowserProxyRequest | null;
+  timeoutMs: number;
+}): Promise<unknown> {
+  return params.proxyRequest
+    ? await params.proxyRequest({
+        method: "POST",
+        path: "/act",
+        profile: params.profile,
+        body: params.request,
+        timeoutMs: params.timeoutMs,
+      })
+    : await browserAct(params.baseUrl, params.request, {
+        profile: params.profile,
+      });
+}
+
+function buildExistingSessionBatchStep(params: {
+  batchRequest: Parameters<typeof browserAct>[1];
+  action: unknown;
+  isLast: boolean;
+}): Parameters<typeof browserAct>[1] {
+  if (!params.action || typeof params.action !== "object") {
+    throw new Error("batch actions must be objects");
+  }
+  const batchSnapshotRequested = shouldIncludeSnapshotAfterAct(params.batchRequest);
+  const batchTargetId =
+    typeof params.batchRequest.targetId === "string" ? params.batchRequest.targetId : undefined;
+  const batchTimeoutMs = readActTimeoutMs(params.batchRequest);
+  const step = { ...(params.action as Record<string, unknown>) };
+
+  // Server-side batch uses the batch target as the default tab for every child
+  // action. The client split must preserve that, because existing-session never
+  // reaches the Playwright batch implementation that normally supplies it.
+  if (batchTargetId && typeof step.targetId !== "string") {
+    step.targetId = batchTargetId;
+  }
+  if (batchTimeoutMs !== undefined && typeof step.timeoutMs !== "number") {
+    step.timeoutMs = batchTimeoutMs;
+  }
+
+  // Avoid N expensive snapshots in live Chrome. A requested batch snapshot is
+  // meaningful only after the final mutation has settled.
+  if (batchSnapshotRequested || step.includeSnapshot === true) {
+    if (params.isLast) {
+      step.includeSnapshot = true;
+    } else {
+      delete step.includeSnapshot;
+    }
+  }
+  return step as Parameters<typeof browserAct>[1];
+}
+
+async function executeExistingSessionBatchAction(params: {
+  request: Parameters<typeof browserAct>[1];
+  baseUrl?: string;
+  profile?: string;
+  proxyRequest: BrowserProxyRequest | null;
+  timeoutMs: number;
+}): Promise<AgentToolResult<unknown>> {
+  const rawActions = (params.request as { actions?: unknown }).actions;
+  const actions = Array.isArray(rawActions) ? rawActions : [];
+  if (actions.length === 0) {
+    throw new Error("batch requires actions");
+  }
+
+  const stopOnError = (params.request as { stopOnError?: unknown }).stopOnError !== false;
+  const results: Array<{ ok: boolean; error?: string }> = [];
+  let lastResult: unknown = { ok: true };
+
+  for (const [index, action] of actions.entries()) {
+    const stepRequest = buildExistingSessionBatchStep({
+      batchRequest: params.request,
+      action,
+      isLast: index === actions.length - 1,
+    });
+    try {
+      lastResult = await executeSingleAct({
+        request: stepRequest,
+        baseUrl: params.baseUrl,
+        profile: params.profile,
+        proxyRequest: params.proxyRequest,
+        timeoutMs: readActTimeoutMs(stepRequest) ?? params.timeoutMs,
+      });
+      results.push({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      results.push({ ok: false, error: message });
+      if (stopOnError) {
+        break;
+      }
+    }
+  }
+
+  const finalTargetId =
+    lastResult &&
+    typeof lastResult === "object" &&
+    typeof (lastResult as { targetId?: unknown }).targetId === "string"
+      ? (lastResult as { targetId: string }).targetId
+      : typeof params.request.targetId === "string"
+        ? params.request.targetId
+        : undefined;
+  const result = {
+    ok: results.every((entry) => entry.ok),
+    ...(finalTargetId ? { targetId: finalTargetId } : {}),
+    results,
+  };
+
+  return await formatActResultWithOptionalSnapshot({
+    request: params.request,
+    result,
+    baseUrl: params.baseUrl,
+    profile: params.profile,
+    proxyRequest: params.proxyRequest,
+  });
 }

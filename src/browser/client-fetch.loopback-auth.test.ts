@@ -194,11 +194,27 @@ describe("fetchBrowserJson loopback auth", () => {
     });
   });
 
-  it("surfaces remote-debugging approval guidance for user-live dispatcher timeouts", async () => {
+  it("keeps generic user-live dispatcher action timeouts out of approval guidance", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("timed out"));
 
     await expectThrownBrowserFetchError(
-      () => fetchBrowserJson<{ ok: boolean }>("/tabs/open?profile=user-live"),
+      () =>
+        fetchBrowserJson<{ ok: boolean }>("/act?profile=user-live", {
+          method: "POST",
+          body: JSON.stringify({ kind: "click", ref: "e1" }),
+        }),
+      {
+        contains: ["timed out", "Do NOT retry the browser tool"],
+        omits: ["Chrome is waiting for remote-debugging approval", "click Allow if prompted"],
+      },
+    );
+  });
+
+  it("maps attach-like user-live timeouts to remote-debugging approval guidance", async () => {
+    mocks.dispatch.mockRejectedValueOnce(new Error("Network.enable timed out"));
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("/tabs?profile=user-live"),
       {
         contains: [
           "Chrome is waiting for remote-debugging approval",
@@ -214,7 +230,7 @@ describe("fetchBrowserJson loopback auth", () => {
     );
   });
 
-  it("surfaces remote-debugging approval guidance for user-live absolute loopback timeouts", async () => {
+  it("keeps generic user-live absolute loopback timeouts out of approval guidance", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
@@ -236,20 +252,15 @@ describe("fetchBrowserJson loopback auth", () => {
         }),
       {
         contains: [
-          "Chrome is waiting for remote-debugging approval",
-          "chrome://inspect/#remote-debugging",
-          "click Allow if prompted",
-        ],
-        omits: [
-          "Restart the OpenClaw gateway",
-          "Do NOT retry the browser tool",
           "Can't reach the OpenClaw browser control service",
+          "Do NOT retry the browser tool",
         ],
+        omits: ["Chrome is waiting for remote-debugging approval", "click Allow if prompted"],
       },
     );
   });
 
-  it("maps user-live absolute loopback service timeouts to remote-debugging approval guidance", async () => {
+  it("keeps generic user-live absolute loopback service timeouts out of approval guidance", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("timed out", { status: 504 })),
@@ -258,16 +269,8 @@ describe("fetchBrowserJson loopback auth", () => {
     await expectThrownBrowserFetchError(
       () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/tabs/open?profile=user-live"),
       {
-        contains: [
-          "Chrome is waiting for remote-debugging approval",
-          "chrome://inspect/#remote-debugging",
-          "click Allow if prompted",
-        ],
-        omits: [
-          "Restart the OpenClaw gateway",
-          "Do NOT retry the browser tool",
-          "Can't reach the OpenClaw browser control service",
-        ],
+        contains: ["timed out"],
+        omits: ["Chrome is waiting for remote-debugging approval", "click Allow if prompted"],
       },
     );
   });
