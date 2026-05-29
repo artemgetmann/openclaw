@@ -32,7 +32,12 @@ export function normalizeBrowserFormField(
     return null;
   }
   const type = normalizeBrowserFormFieldType(record.type);
-  const value = normalizeBrowserFormFieldValue(record.value);
+  // Agents often carry over the single-target `type` action's `text` field when
+  // building a bulk fill field. Treat it as a value alias so `fill` stays
+  // forgiving without adding a separate combobox-specific action.
+  const value = normalizeBrowserFormFieldValue(
+    Object.hasOwn(record, "value") ? record.value : record.text,
+  );
   const base = {
     ...(ref ? { ref } : {}),
     ...(selector ? { selector } : {}),

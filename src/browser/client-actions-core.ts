@@ -55,7 +55,15 @@ type BrowserActRequestBase =
       slowly?: boolean;
       timeoutMs?: number;
     }
-  | { kind: "press"; key: string; targetId?: string; delayMs?: number }
+  | {
+      kind: "press";
+      key: string;
+      ref?: string;
+      selector?: string;
+      targetId?: string;
+      delayMs?: number;
+      timeoutMs?: number;
+    }
   | {
       kind: "hover";
       ref?: string;

@@ -131,6 +131,23 @@ describe("browser control server", () => {
       key: "Enter",
     });
 
+    const targetedPress = await postJson<{ ok: boolean }>(`${base}/act`, {
+      kind: "press",
+      ref: "combo-title",
+      key: "Enter",
+      timeoutMs: 12000,
+    });
+    expect(targetedPress.ok).toBe(true);
+    expect(pwMocks.pressKeyViaPlaywright).toHaveBeenLastCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      ref: "combo-title",
+      selector: undefined,
+      key: "Enter",
+      delayMs: undefined,
+      timeoutMs: 12000,
+    });
+
     const hover = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "hover",
       ref: "2",
