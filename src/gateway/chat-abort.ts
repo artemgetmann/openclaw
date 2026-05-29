@@ -29,6 +29,18 @@ export function resolveChatRunExpiresAtMs(params: {
   return Math.min(max, Math.max(min, target));
 }
 
+export function renewChatRunExpiry(params: {
+  entry: ChatAbortControllerEntry;
+  now: number;
+  timeoutMs: number;
+}): number {
+  const nextExpiresAtMs = resolveChatRunExpiresAtMs(params);
+  // Async activity callbacks can arrive out of order. Keep expiry monotonic so
+  // a delayed callback cannot shorten a fresher lease.
+  params.entry.expiresAtMs = Math.max(params.entry.expiresAtMs, nextExpiresAtMs);
+  return params.entry.expiresAtMs;
+}
+
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;

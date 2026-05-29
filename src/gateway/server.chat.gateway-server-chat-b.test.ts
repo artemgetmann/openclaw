@@ -185,6 +185,7 @@ describe("gateway server chat", () => {
         }, FAST_WAIT_OPTS);
 
         expect(capturedOpts?.disableBlockStreaming).toBeUndefined();
+        expect(typeof capturedOpts?.onAgentActivity).toBe("function");
       } finally {
         testState.agentConfig = undefined;
       }
