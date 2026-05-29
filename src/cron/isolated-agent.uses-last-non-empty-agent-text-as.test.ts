@@ -71,6 +71,7 @@ const GMAIL_MODEL = "openrouter/meta-llama/llama-3.3-70b:free";
 type RunCronTurnOptions = {
   cfgOverrides?: Parameters<typeof makeCfg>[2];
   deps?: CliDeps;
+  delivery?: CronJob["delivery"];
   jobPayload?: CronJob["payload"];
   message?: string;
   mockTexts?: string[] | null;
@@ -102,7 +103,7 @@ async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
   const res = await runCronIsolatedAgentTurn({
     cfg: makeCfg(home, storePath, options.cfgOverrides),
     deps,
-    job: makeJob(jobPayload),
+    job: { ...makeJob(jobPayload), ...(options.delivery ? { delivery: options.delivery } : {}) },
     message:
       options.message ?? (jobPayload.kind === "agentTurn" ? jobPayload.message : DEFAULT_MESSAGE),
     sessionKey: options.sessionKey ?? DEFAULT_SESSION_KEY,
@@ -206,6 +207,26 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.status).toBe("error");
       expect(res.error).toContain("command not found");
       expect(res.summary).toContain("Exec failed");
+    });
+  });
+
+  it("does not direct-announce fatal embedded error payloads", async () => {
+    await withTempHome(async (home) => {
+      const deps = makeDeps();
+      mockEmbeddedPayloads([{ text: "LLM request timed out.", isError: true }]);
+
+      const { res } = await runCronTurn(home, {
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "123:topic:42" },
+        jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE },
+        mockTexts: null,
+      });
+
+      expect(res.status).toBe("error");
+      expect(res.error).toBe("LLM request timed out.");
+      expect(res.delivered).toBe(false);
+      expect(res.deliveryAttempted).toBe(false);
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });
 

@@ -287,6 +287,71 @@ function emitFailureAlert(
   }
 }
 
+function shouldEmitImplicitDeliveryFailureAlert(
+  state: CronServiceState,
+  params: {
+    job: CronJob;
+    consecutiveErrors: number;
+  },
+): boolean {
+  if (params.consecutiveErrors !== 1) {
+    return false;
+  }
+  if (params.job.payload.kind !== "agentTurn" || params.job.sessionTarget === "main") {
+    return false;
+  }
+  // Explicit alert config keeps its existing behavior. The implicit path is
+  // only the product-safety fallback for delivery-owned jobs that would
+  // otherwise fail quietly after the isolated run returns status:error.
+  if (params.job.failureAlert !== undefined || state.deps.cronConfig?.failureAlert) {
+    return false;
+  }
+  if (
+    params.job.delivery?.bestEffort === true ||
+    (params.job.payload.kind === "agentTurn" && params.job.payload.bestEffortDeliver === true)
+  ) {
+    return false;
+  }
+  return resolveCronDeliveryPlan(params.job).requested;
+}
+
+function emitImplicitDeliveryFailureAlert(
+  state: CronServiceState,
+  params: {
+    job: CronJob;
+  },
+) {
+  const deliveryPlan = resolveCronDeliveryPlan(params.job);
+  const safeJobName = params.job.name || params.job.id;
+  // Do not include the raw error here. It can contain provider internals,
+  // paths, or auth/account details; the run record keeps the detailed error.
+  const text = `Cron job "${safeJobName}" failed before it could complete. I'll retry on the next scheduled run.`;
+
+  if (state.deps.sendCronFailureAlert) {
+    void state.deps
+      .sendCronFailureAlert({
+        job: params.job,
+        text,
+        channel: deliveryPlan.channel ?? "last",
+        to: deliveryPlan.to,
+        mode: "announce",
+        accountId: deliveryPlan.accountId,
+      })
+      .catch((err) => {
+        state.deps.log.warn(
+          { jobId: params.job.id, err: String(err) },
+          "cron: implicit delivery failure alert failed",
+        );
+      });
+    return;
+  }
+
+  state.deps.enqueueSystemEvent(text, { agentId: params.job.agentId });
+  if (params.job.wakeMode === "now") {
+    state.deps.requestHeartbeatNow({ reason: `cron:${params.job.id}:implicit-failure-alert` });
+  }
+}
+
 /**
  * Apply the result of a job execution to the job's state.
  * Handles consecutive error tracking, exponential backoff, one-shot disable,
@@ -338,6 +403,16 @@ export function applyJobResult(
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     const alertConfig = resolveFailureAlert(state, job);
+    if (
+      !alertConfig &&
+      shouldEmitImplicitDeliveryFailureAlert(state, {
+        job,
+        consecutiveErrors: job.state.consecutiveErrors,
+      })
+    ) {
+      emitImplicitDeliveryFailureAlert(state, { job });
+      job.state.lastFailureAlertAtMs = state.deps.nowMs();
+    }
     if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
       const isBestEffort =
         job.delivery?.bestEffort === true ||

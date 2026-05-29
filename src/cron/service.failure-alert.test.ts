@@ -117,6 +117,198 @@ describe("CronService failure alerts", () => {
     await store.cleanup();
   });
 
+  it("sends a sanitized first-failure alert for delivery-requested isolated agent jobs", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "raw stack / provider key / internal path",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "Monitor Ten email replies",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run monitor" },
+      delivery: { mode: "announce", channel: "telegram", to: "-1003783709877:topic:5335" },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(sendCronFailureAlert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: job.id }),
+        channel: "telegram",
+        to: "-1003783709877:topic:5335",
+        mode: "announce",
+        text: expect.stringContaining(
+          'Cron job "Monitor Ten email replies" failed before it could complete.',
+        ),
+      }),
+    );
+    expect(sendCronFailureAlert.mock.calls[0][0].text).not.toContain(
+      "raw stack / provider key / internal path",
+    );
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("runs fallback after a raw model timeout payload and only sends sanitized alert when all attempts fail", async () => {
+    const successStore = await makeStorePath();
+    const failureStore = await makeStorePath();
+    const successAlert = vi.fn(async () => undefined);
+    const failureAlert = vi.fn(async () => undefined);
+    const rawTimeout = "LLM request timed out.";
+
+    const createFakeIsolatedRunner = (params: { fallbackSucceeds: boolean; attempts: string[] }) =>
+      vi.fn(async () => {
+        // Simulate the isolated cron agent's model fallback loop at the CronService
+        // boundary: the primary attempt returns the raw fatal timeout payload,
+        // then the fallback candidate either succeeds or exhausts the run.
+        params.attempts.push("primary");
+        params.attempts.push("fallback");
+        if (params.fallbackSucceeds) {
+          return {
+            status: "ok" as const,
+            summary: "fallback candidate completed",
+            provider: "fallback-provider",
+            model: "fallback-model",
+          };
+        }
+        return {
+          status: "error" as const,
+          error: rawTimeout,
+          provider: "fallback-provider",
+          model: "fallback-model",
+        };
+      });
+
+    const successAttempts: string[] = [];
+    const failureAttempts: string[] = [];
+    const successCron = createFailureAlertCron({
+      storePath: successStore.storePath,
+      runIsolatedAgentJob: createFakeIsolatedRunner({
+        fallbackSucceeds: true,
+        attempts: successAttempts,
+      }),
+      sendCronFailureAlert: successAlert,
+    });
+    const failureCron = createFailureAlertCron({
+      storePath: failureStore.storePath,
+      runIsolatedAgentJob: createFakeIsolatedRunner({
+        fallbackSucceeds: false,
+        attempts: failureAttempts,
+      }),
+      sendCronFailureAlert: failureAlert,
+    });
+
+    await successCron.start();
+    await failureCron.start();
+    try {
+      const successJob = await successCron.add({
+        name: "timeout fallback succeeds",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "run report" },
+        delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+      });
+      const failureJob = await failureCron.add({
+        name: "timeout fallback fails",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "run report" },
+        delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+      });
+
+      await successCron.run(successJob.id, "force");
+      expect(successAttempts).toEqual(["primary", "fallback"]);
+      expect(successAlert).not.toHaveBeenCalled();
+      expect(successCron.getJob(successJob.id)?.state.lastRunStatus).toBe("ok");
+
+      await failureCron.run(failureJob.id, "force");
+      expect(failureAttempts).toEqual(["primary", "fallback"]);
+      expect(failureAlert).toHaveBeenCalledTimes(1);
+      expect(failureAlert).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          job: expect.objectContaining({ id: failureJob.id }),
+          channel: "telegram",
+          to: "19098680",
+          mode: "announce",
+          text: expect.stringContaining(
+            'Cron job "timeout fallback fails" failed before it could complete.',
+          ),
+        }),
+      );
+      expect(failureAlert.mock.calls[0][0].text).not.toContain(rawTimeout);
+      expect(failureCron.getJob(failureJob.id)?.state.lastError).toBe(rawTimeout);
+    } finally {
+      successCron.stop();
+      failureCron.stop();
+      await successStore.cleanup();
+      await failureStore.cleanup();
+    }
+  });
+
+  it("does not send implicit first-failure alerts when explicitly disabled or delivery is off", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "provider timeout",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const disabledAlertJob = await cron.add({
+      name: "disabled implicit alert",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run monitor" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+      failureAlert: false,
+    });
+    const noDeliveryJob = await cron.add({
+      name: "no delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run monitor" },
+      delivery: { mode: "none" },
+    });
+
+    await cron.run(disabledAlertJob.id, "force");
+    await cron.run(noDeliveryJob.id, "force");
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("supports per-job failure alert override when global alerts are disabled", async () => {
     const store = await makeStorePath();
     const sendCronFailureAlert = vi.fn(async () => undefined);
