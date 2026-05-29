@@ -17,6 +17,15 @@ export type BrowserFormField = {
   value?: string | number | boolean;
 };
 
+export type BrowserChooseOptionMatchMode = "exact" | "contains" | "regex";
+
+export type BrowserChooseOptionResult = {
+  optionText: string;
+  matchedText?: string;
+  selectedText?: string;
+  changed?: boolean;
+};
+
 export type BrowserActSnapshotOptions = {
   /**
    * Agent-facing convenience flag. Tool callers use this to collapse
@@ -92,6 +101,16 @@ type BrowserActRequestBase =
       ref?: string;
       selector?: string;
       values: string[];
+      targetId?: string;
+      timeoutMs?: number;
+    }
+  | {
+      kind: "chooseOption";
+      ref?: string;
+      selector?: string;
+      optionText: string;
+      query?: string;
+      match?: BrowserChooseOptionMatchMode;
       targetId?: string;
       timeoutMs?: number;
     }

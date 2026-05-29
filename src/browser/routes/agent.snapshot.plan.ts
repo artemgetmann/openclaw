@@ -35,10 +35,12 @@ export function resolveSnapshotPlan(params: {
   const labels = toBoolean(params.query.labels) ?? undefined;
   const explicitFormat =
     params.query.format === "aria" ? "aria" : params.query.format === "ai" ? "ai" : undefined;
+  const normalizedExplicitFormat =
+    explicitFormat === "aria" && (mode === "efficient" || labels === true) ? "ai" : explicitFormat;
   const format = resolveDefaultSnapshotFormat({
     profile: params.profile,
     hasPlaywright: params.hasPlaywright,
-    explicitFormat,
+    explicitFormat: normalizedExplicitFormat,
     mode,
   });
   const limitRaw = typeof params.query.limit === "string" ? Number(params.query.limit) : undefined;

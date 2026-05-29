@@ -1,5 +1,10 @@
 import type { Locator, Page } from "playwright-core";
-import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
+import type {
+  BrowserActRequest,
+  BrowserChooseOptionMatchMode,
+  BrowserChooseOptionResult,
+  BrowserFormField,
+} from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
@@ -27,6 +32,25 @@ const MAX_WAIT_TIME_MS = 30_000;
 const MAX_BATCH_ACTIONS = 100;
 const EDITABLE_DESCENDANT_SELECTOR =
   'input:not([type="hidden"]), textarea, [contenteditable="true"], [role="textbox"]';
+const FOCUSED_EDITABLE_SELECTOR =
+  'input:focus:not([type="hidden"]), textarea:focus, [contenteditable="true"]:focus, [role="textbox"]:focus';
+const PORTAL_OPTION_SELECTOR = [
+  '[role="option"]',
+  '[role="treeitem"]',
+  ".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option",
+  ".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item",
+  ".rc-select-dropdown .rc-select-item-option",
+  ".select2-results__option",
+  "[data-option-index]",
+].join(", ");
+const SEARCHABLE_CONTROL_ANCESTOR_XPATH = [
+  "ancestor::*[",
+  "contains(concat(' ', normalize-space(@class), ' '), ' ant-select ')",
+  " or contains(concat(' ', normalize-space(@class), ' '), ' ant-select-selector ')",
+  " or contains(concat(' ', normalize-space(@class), ' '), ' ant-select-content ')",
+  " or @role='combobox'",
+  "][1]",
+].join("");
 
 function resolveBoundedDelayMs(value: number | undefined, label: string, maxMs: number): number {
   const normalized = Math.floor(value ?? 0);
@@ -80,9 +104,7 @@ async function fillEditableTarget(params: {
     }
     try {
       await params.page
-        .locator(
-          'input:focus:not([type="hidden"]), textarea:focus, [contenteditable="true"]:focus, [role="textbox"]:focus',
-        )
+        .locator(FOCUSED_EDITABLE_SELECTOR)
         .first()
         .fill(params.value, { timeout: params.timeout });
       return;
@@ -90,6 +112,200 @@ async function fillEditableTarget(params: {
       throw directErr;
     }
   }
+}
+
+async function fillSearchableControlTarget(params: {
+  page: Page;
+  locator: Locator;
+  value: string;
+  timeout: number;
+}): Promise<void> {
+  const probeTimeout = Math.min(params.timeout, 1500);
+
+  // Searchable selects usually expose a stable wrapper ref while the actual
+  // editable input is nested or portal-focused. Probe those surfaces first so a
+  // wrapper ref does not burn the full action timeout on a doomed fill().
+  try {
+    await params.locator
+      .locator(EDITABLE_DESCENDANT_SELECTOR)
+      .first()
+      .fill(params.value, { timeout: probeTimeout });
+    return;
+  } catch {
+    // The search input may be body-portal focused after opening the control.
+  }
+  try {
+    await params.page
+      .locator(FOCUSED_EDITABLE_SELECTOR)
+      .first()
+      .fill(params.value, { timeout: probeTimeout });
+    return;
+  } catch {
+    // Some accessible comboboxes are editable themselves; try that last with
+    // the caller's full budget because this path can legitimately wait.
+  }
+  await params.locator.fill(params.value, { timeout: params.timeout });
+}
+
+async function openSearchableControl(params: {
+  locator: Locator;
+  timeout: number;
+}): Promise<Locator> {
+  const probeTimeout = Math.min(params.timeout, 1500);
+
+  try {
+    await params.locator.click({ timeout: probeTimeout });
+    return params.locator;
+  } catch (directErr) {
+    // Ant Design sometimes exposes the actual search input as a zero-width or
+    // visually hidden combobox while the clickable surface is a parent select
+    // wrapper. If the model gives that input selector/ref, climb to the nearest
+    // select-like ancestor instead of forcing it to invent portal CSS.
+    const ancestor = params.locator.locator(`xpath=${SEARCHABLE_CONTROL_ANCESTOR_XPATH}`);
+    try {
+      await ancestor.click({ timeout: params.timeout });
+      return ancestor;
+    } catch {
+      throw directErr;
+    }
+  }
+}
+
+function normalizeOptionText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function resolveOptionMatchMode(
+  value?: BrowserChooseOptionMatchMode,
+): BrowserChooseOptionMatchMode {
+  return value === "contains" || value === "regex" ? value : "exact";
+}
+
+function optionTextMatches(
+  actualText: string,
+  expectedText: string,
+  matchMode: BrowserChooseOptionMatchMode,
+): boolean {
+  const actual = normalizeOptionText(actualText);
+  const expected = normalizeOptionText(expectedText);
+  if (!expected) {
+    return false;
+  }
+  if (matchMode === "exact") {
+    return actual === expected || actual.toLowerCase() === expected.toLowerCase();
+  }
+  if (matchMode === "contains") {
+    return actual.toLowerCase().includes(expected.toLowerCase());
+  }
+  try {
+    return new RegExp(expectedText, "i").test(actual);
+  } catch {
+    return false;
+  }
+}
+
+function roleNameForOptionMatch(optionText: string, matchMode: BrowserChooseOptionMatchMode) {
+  if (matchMode === "regex") {
+    try {
+      return new RegExp(optionText, "i");
+    } catch {
+      return optionText;
+    }
+  }
+  return optionText;
+}
+
+async function readLocatorText(locator: Locator, timeout = 1000): Promise<string | undefined> {
+  try {
+    return normalizeOptionText(await locator.innerText({ timeout }));
+  } catch {
+    return undefined;
+  }
+}
+
+async function isDisabledOption(locator: Locator): Promise<boolean> {
+  try {
+    const disabled = await locator.evaluate((el) => {
+      const ariaDisabled = el.getAttribute("aria-disabled");
+      const disabledAttr = el.hasAttribute("disabled");
+      const className = String((el as HTMLElement).className ?? "");
+      return (
+        ariaDisabled === "true" ||
+        disabledAttr ||
+        /\b(disabled|ant-select-item-option-disabled)\b/i.test(className)
+      );
+    });
+    return Boolean(disabled);
+  } catch {
+    return false;
+  }
+}
+
+async function clickVisibleMatchingOption(params: {
+  page: Page;
+  optionText: string;
+  queryText?: string;
+  matchMode: BrowserChooseOptionMatchMode;
+  timeout: number;
+}): Promise<string> {
+  const roleLocator = params.page.getByRole("option", {
+    name: roleNameForOptionMatch(params.optionText, params.matchMode),
+    exact: params.matchMode === "exact",
+  });
+  try {
+    const option = roleLocator.first();
+    // Role locators are ideal when the framework exposes proper semantics, but
+    // Ant Design often renders class-only portal rows. Keep this probe short
+    // and fall back to text-matching portal nodes for the rest of the budget.
+    await option.waitFor({ state: "visible", timeout: Math.min(params.timeout, 1500) });
+    const matchedText = (await readLocatorText(option)) ?? params.optionText;
+    await option.click({ timeout: params.timeout });
+    return matchedText;
+  } catch {
+    // Ant Design often renders options in body-level portals with class-based
+    // nodes but no stable ids. Fall through to visible text matching in those
+    // portals instead of making the model invent CSS.
+  }
+
+  const expectedTexts = [params.optionText];
+  const normalizedQueryText = normalizeOptionText(params.queryText ?? "");
+  if (
+    params.matchMode === "contains" &&
+    normalizedQueryText &&
+    normalizeOptionText(params.optionText).toLowerCase() !== normalizedQueryText.toLowerCase()
+  ) {
+    // Airline and Ant Design labels often expand the user's typed query into a
+    // longer display label, for example "Kuala Lumpur Intl Airport (KUL)".
+    // If the model requests contains matching and gave a separate query, allow
+    // that query as the secondary visible-text anchor.
+    expectedTexts.push(normalizedQueryText);
+  }
+
+  for (const expectedText of expectedTexts) {
+    const textFilter =
+      params.matchMode === "regex" ? roleNameForOptionMatch(expectedText, "regex") : expectedText;
+    const candidates = params.page.locator(PORTAL_OPTION_SELECTOR).filter({ hasText: textFilter });
+    try {
+      await candidates.first().waitFor({ state: "visible", timeout: params.timeout });
+    } catch {
+      continue;
+    }
+    const count = Math.min(await candidates.count(), 50);
+    for (let i = 0; i < count; i += 1) {
+      const option = candidates.nth(i);
+      const visible = await option.isVisible().catch(() => false);
+      if (!visible || (await isDisabledOption(option))) {
+        continue;
+      }
+      const matchedText = (await readLocatorText(option)) ?? "";
+      if (!optionTextMatches(matchedText, expectedText, params.matchMode)) {
+        continue;
+      }
+      await option.click({ timeout: params.timeout });
+      return matchedText || expectedText;
+    }
+  }
+  throw new Error(`No visible option matched "${params.optionText}"`);
 }
 
 async function awaitEvalWithAbort<T>(
@@ -236,6 +452,62 @@ export async function selectOptionViaPlaywright(opts: {
     await locator.selectOption(opts.values, {
       timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
     });
+  } catch (err) {
+    throw toAIFriendlyError(err, label);
+  }
+}
+
+export async function chooseOptionViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  ref?: string;
+  selector?: string;
+  optionText: string;
+  query?: string;
+  match?: BrowserChooseOptionMatchMode;
+  timeoutMs?: number;
+}): Promise<BrowserChooseOptionResult> {
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
+  const optionText = normalizeOptionText(String(opts.optionText ?? ""));
+  if (!optionText) {
+    throw new Error("optionText is required");
+  }
+
+  const page = await getRestoredPageForTarget(opts);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
+  const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
+  const matchMode = resolveOptionMatchMode(opts.match);
+  const query = normalizeOptionText(opts.query ?? optionText);
+
+  try {
+    // Searchable selects expose different focus surfaces depending on the
+    // framework. Clicking the wrapper opens the portal; filling then targets
+    // either the wrapper itself, its inner input, or the active portal input.
+    const controlLocator = await openSearchableControl({ locator, timeout });
+    const beforeText = await readLocatorText(controlLocator);
+    await fillSearchableControlTarget({ page, locator: controlLocator, value: query, timeout });
+    const matchedText = await clickVisibleMatchingOption({
+      page,
+      optionText,
+      queryText: query,
+      matchMode,
+      timeout,
+    });
+    await page.waitForTimeout(150);
+    const selectedText = await readLocatorText(controlLocator);
+    const changed =
+      beforeText !== undefined && selectedText !== undefined
+        ? beforeText !== selectedText
+        : undefined;
+    return {
+      optionText,
+      matchedText,
+      ...(selectedText ? { selectedText } : {}),
+      ...(changed !== undefined ? { changed } : {}),
+    };
   } catch (err) {
     throw toAIFriendlyError(err, label);
   }
@@ -859,6 +1131,18 @@ async function executeSingleAction(
         ref: action.ref,
         selector: action.selector,
         values: action.values,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "chooseOption":
+      await chooseOptionViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        ref: action.ref,
+        selector: action.selector,
+        optionText: action.optionText,
+        query: action.query,
+        match: action.match,
         timeoutMs: action.timeoutMs,
       });
       break;

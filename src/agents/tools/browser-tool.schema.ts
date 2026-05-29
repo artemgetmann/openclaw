@@ -10,6 +10,7 @@ const BROWSER_ACT_KINDS = [
   "scrollIntoView",
   "drag",
   "select",
+  "chooseOption",
   "fill",
   "resize",
   "wait",
@@ -41,6 +42,7 @@ const BROWSER_TARGETS = ["sandbox", "host", "node"] as const;
 const BROWSER_SNAPSHOT_FORMATS = ["aria", "ai"] as const;
 const BROWSER_SNAPSHOT_MODES = ["efficient"] as const;
 const BROWSER_SNAPSHOT_REFS = ["role", "aria"] as const;
+const BROWSER_OPTION_MATCH_MODES = ["exact", "contains", "regex"] as const;
 
 const BROWSER_IMAGE_TYPES = ["png", "jpeg"] as const;
 
@@ -55,7 +57,7 @@ const BrowserActSchema = Type.Object({
   includeSnapshot: Type.Optional(
     Type.Boolean({
       description:
-        "For mutating act requests (click/type/fill/press/select), set true to return a fresh structured aria-ref snapshot in the same tool result. Prefer this over a separate snapshot call after page-changing actions.",
+        "For mutating act requests (click/type/fill/press/select/chooseOption), set true to return a fresh structured aria-ref snapshot in the same tool result. Prefer this over a separate snapshot call after page-changing actions.",
     }),
   ),
   snapshotFormat: optionalStringEnum(BROWSER_SNAPSHOT_FORMATS),
@@ -77,7 +79,7 @@ const BrowserActSchema = Type.Object({
   key: Type.Optional(
     Type.String({
       description:
-        "For kind=press, the key to press. For searchable selects/comboboxes, fill the combobox/search input ref with visible option text, then press Enter on the same ref when available.",
+        "For kind=press, the key to press. For searchable selects/comboboxes/listboxes, prefer kind=chooseOption instead of manual fill+Enter.",
     }),
   ),
   delayMs: Type.Optional(Type.Number()),
@@ -88,14 +90,31 @@ const BrowserActSchema = Type.Object({
   values: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "For kind=select, values for native <select> controls. For custom searchable selects/comboboxes, prefer kind=fill with option text followed by kind=press key=Enter.",
+        "For kind=select, values for native <select> controls. For custom searchable selects/comboboxes/listboxes, use kind=chooseOption with optionText instead.",
     }),
   ),
+  // chooseOption
+  optionText: Type.Optional(
+    Type.String({
+      description:
+        "For kind=chooseOption, the visible option text to select from a searchable select/combobox/listbox. Exact text is preferred.",
+    }),
+  ),
+  query: Type.Optional(
+    Type.String({
+      description:
+        "Optional search text to type before choosing optionText. Defaults to optionText.",
+    }),
+  ),
+  match: optionalStringEnum(BROWSER_OPTION_MATCH_MODES, {
+    description:
+      'How to match optionText for kind=chooseOption. Defaults to "exact"; use "contains" only when the visible label has extra text, and "regex" only when exact text is impossible.',
+  }),
   // fill - use permissive array of objects
   fields: Type.Optional(
     Type.Array(Type.Object({}, { additionalProperties: true }), {
       description:
-        "For kind=fill, form fields from snapshot refs/selectors using value (text is accepted as a value alias). Searchable combobox refs may be filled with visible option text, then confirmed with kind=press key=Enter.",
+        "For kind=fill, form fields from snapshot refs/selectors using value (text is accepted as a value alias). For searchable combobox/listbox option picking, use kind=chooseOption.",
     }),
   ),
   // batch
@@ -152,7 +171,7 @@ export const BrowserToolSchema = Type.Object({
   includeSnapshot: Type.Optional(
     Type.Boolean({
       description:
-        "Legacy flattened act option. For mutating browser actions (click/type/fill/press/select), set true so the result includes a fresh structured aria-ref snapshot for the next step.",
+        "Legacy flattened act option. For mutating browser actions (click/type/fill/press/select/chooseOption), set true so the result includes a fresh structured aria-ref snapshot for the next step.",
     }),
   ),
   doubleClick: Type.Optional(Type.Boolean()),
@@ -164,7 +183,7 @@ export const BrowserToolSchema = Type.Object({
   key: Type.Optional(
     Type.String({
       description:
-        "Legacy flattened act option. For searchable selects/comboboxes, fill the combobox/search input ref with visible option text, then press Enter on the same ref when available.",
+        "Legacy flattened act option. For searchable selects/comboboxes/listboxes, prefer kind=chooseOption instead of manual fill+Enter.",
     }),
   ),
   delayMs: Type.Optional(Type.Number()),
@@ -173,13 +192,26 @@ export const BrowserToolSchema = Type.Object({
   values: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "Legacy flattened act option. Use with native <select>; for custom searchable selects/comboboxes prefer fill + press Enter.",
+        "Legacy flattened act option. Use with native <select>; for custom searchable selects/comboboxes/listboxes use kind=chooseOption with optionText.",
     }),
   ),
+  optionText: Type.Optional(
+    Type.String({
+      description:
+        "Legacy flattened act option for kind=chooseOption. Visible option text to select from a searchable select/combobox/listbox.",
+    }),
+  ),
+  query: Type.Optional(
+    Type.String({
+      description:
+        "Legacy flattened act option for kind=chooseOption. Optional search text; defaults to optionText.",
+    }),
+  ),
+  match: optionalStringEnum(BROWSER_OPTION_MATCH_MODES),
   fields: Type.Optional(
     Type.Array(Type.Object({}, { additionalProperties: true }), {
       description:
-        "Legacy flattened act option. Fill fields from snapshot refs using value (text is accepted as a value alias); searchable combobox refs may be filled with visible option text before pressing Enter.",
+        "Legacy flattened act option. Fill fields from snapshot refs using value (text is accepted as a value alias); for searchable option picking, use kind=chooseOption.",
     }),
   ),
   width: Type.Optional(Type.Number()),

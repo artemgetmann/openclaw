@@ -2,6 +2,7 @@ export const ACT_KINDS = [
   "batch",
   "click",
   "close",
+  "chooseOption",
   "drag",
   "evaluate",
   "fill",

@@ -2,13 +2,25 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockLocator = {
   click: ReturnType<typeof vi.fn>;
+  count?: ReturnType<typeof vi.fn>;
+  evaluate?: ReturnType<typeof vi.fn>;
+  filter?: ReturnType<typeof vi.fn>;
   fill: ReturnType<typeof vi.fn>;
   first?: ReturnType<typeof vi.fn>;
+  innerText?: ReturnType<typeof vi.fn>;
+  isVisible?: ReturnType<typeof vi.fn>;
   locator?: ReturnType<typeof vi.fn>;
+  nth?: ReturnType<typeof vi.fn>;
   press?: ReturnType<typeof vi.fn>;
+  waitFor?: ReturnType<typeof vi.fn>;
 };
 
-let page: { keyboard: { press: ReturnType<typeof vi.fn> }; locator: ReturnType<typeof vi.fn> };
+let page: {
+  getByRole: ReturnType<typeof vi.fn>;
+  keyboard: { press: ReturnType<typeof vi.fn> };
+  locator: ReturnType<typeof vi.fn>;
+  waitForTimeout: ReturnType<typeof vi.fn>;
+};
 let locator: MockLocator | null = null;
 
 const getPageForTargetId = vi.fn(async () => page);
@@ -32,10 +44,11 @@ vi.mock("./pw-session.js", () => ({
 
 let fillFormViaPlaywright: typeof import("./pw-tools-core.interactions.js").fillFormViaPlaywright;
 let pressKeyViaPlaywright: typeof import("./pw-tools-core.interactions.js").pressKeyViaPlaywright;
+let chooseOptionViaPlaywright: typeof import("./pw-tools-core.interactions.js").chooseOptionViaPlaywright;
 
 describe("combobox-style interactions", () => {
   beforeAll(async () => {
-    ({ fillFormViaPlaywright, pressKeyViaPlaywright } =
+    ({ chooseOptionViaPlaywright, fillFormViaPlaywright, pressKeyViaPlaywright } =
       await import("./pw-tools-core.interactions.js"));
   });
 
@@ -43,12 +56,20 @@ describe("combobox-style interactions", () => {
     vi.clearAllMocks();
     locator = null;
     page = {
+      getByRole: vi.fn(() => ({
+        first: vi.fn(() => ({
+          waitFor: vi.fn(async () => {
+            throw new Error("role option not available");
+          }),
+        })),
+      })),
       keyboard: { press: vi.fn(async () => {}) },
       locator: vi.fn(() => ({
         first: vi.fn(() => ({
           fill: vi.fn(async () => {}),
         })),
       })),
+      waitForTimeout: vi.fn(async () => {}),
     };
   });
 
@@ -110,5 +131,330 @@ describe("combobox-style interactions", () => {
 
     expect(page.keyboard.press).toHaveBeenCalledWith("Escape", { delay: 0 });
     expect(refLocator).not.toHaveBeenCalled();
+  });
+
+  it("chooses a portal option when the snapshot ref points at a combobox wrapper", async () => {
+    const searchInput = { fill: vi.fn(async () => {}) };
+    const descendant = {
+      first: vi.fn(() => searchInput),
+    };
+    locator = {
+      click: vi.fn(async () => {}),
+      fill: vi.fn(async () => {
+        throw new Error("element is not an editable element");
+      }),
+      innerText: vi
+        .fn(async () => "To")
+        .mockResolvedValueOnce("To")
+        .mockResolvedValueOnce("To Bali/Denpasar (DPS)"),
+      locator: vi.fn(() => descendant),
+    };
+
+    const staleOption = {
+      click: vi.fn(async () => {}),
+      evaluate: vi.fn(async () => false),
+      innerText: vi.fn(async () => "Kuala Lumpur (KUL)"),
+      isVisible: vi.fn(async () => true),
+    };
+    const matchingOption = {
+      click: vi.fn(async () => {}),
+      evaluate: vi.fn(async () => false),
+      innerText: vi.fn(async () => "Bali/Denpasar (DPS)"),
+      isVisible: vi.fn(async () => true),
+    };
+    const candidates = {
+      count: vi.fn(async () => 2),
+      first: vi.fn(() => ({ waitFor: vi.fn(async () => {}) })),
+      nth: vi.fn((index: number) => (index === 0 ? staleOption : matchingOption)),
+    };
+    const portalOptions = {
+      filter: vi.fn(() => candidates),
+    };
+    page.locator = vi.fn((selector: string) => {
+      if (selector.includes('[role="option"]')) {
+        return portalOptions;
+      }
+      return {
+        first: vi.fn(() => ({
+          fill: vi.fn(async () => {}),
+        })),
+      };
+    }) as never;
+
+    const result = await chooseOptionViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      ref: "combo-to",
+      optionText: "Bali/Denpasar (DPS)",
+    });
+
+    expect(refLocator).toHaveBeenCalledWith(page, "combo-to");
+    expect(locator.click).toHaveBeenCalledWith({ timeout: 1500 });
+    expect(locator.fill).not.toHaveBeenCalled();
+    expect(searchInput.fill).toHaveBeenCalledWith("Bali/Denpasar (DPS)", { timeout: 1500 });
+    expect(portalOptions.filter).toHaveBeenCalledWith({ hasText: "Bali/Denpasar (DPS)" });
+    expect(staleOption.click).not.toHaveBeenCalled();
+    expect(matchingOption.click).toHaveBeenCalledWith({ timeout: 8000 });
+    expect(result).toMatchObject({
+      optionText: "Bali/Denpasar (DPS)",
+      matchedText: "Bali/Denpasar (DPS)",
+      selectedText: "To Bali/Denpasar (DPS)",
+      changed: true,
+    });
+  });
+
+  it("supports contains matching for dynamic portal option labels", async () => {
+    locator = {
+      click: vi.fn(async () => {}),
+      fill: vi.fn(async () => {
+        throw new Error("wrapper fill failed");
+      }),
+      innerText: vi.fn(async () => "Nationality"),
+      locator: vi.fn(() => ({
+        first: vi.fn(() => ({
+          fill: vi.fn(async () => {}),
+        })),
+      })),
+    };
+    const matchingOption = {
+      click: vi.fn(async () => {}),
+      evaluate: vi.fn(async () => false),
+      innerText: vi.fn(async () => "Indonesia - ID"),
+      isVisible: vi.fn(async () => true),
+    };
+    const candidates = {
+      count: vi.fn(async () => 1),
+      first: vi.fn(() => ({ waitFor: vi.fn(async () => {}) })),
+      nth: vi.fn(() => matchingOption),
+    };
+    page.locator = vi.fn(() => ({
+      filter: vi.fn(() => candidates),
+    })) as never;
+
+    await chooseOptionViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      ref: "nationality",
+      optionText: "Indonesia",
+      match: "contains",
+    });
+
+    expect(matchingOption.click).toHaveBeenCalledWith({ timeout: 8000 });
+  });
+
+  it("falls back to query text for contains-matched airline option labels", async () => {
+    locator = {
+      click: vi.fn(async () => {}),
+      fill: vi.fn(async () => {
+        throw new Error("wrapper fill failed");
+      }),
+      innerText: vi.fn(async () => "From"),
+      locator: vi.fn(() => ({
+        first: vi.fn(() => ({
+          fill: vi.fn(async () => {}),
+        })),
+      })),
+    };
+    const matchingOption = {
+      click: vi.fn(async () => {}),
+      evaluate: vi.fn(async () => false),
+      innerText: vi.fn(async () => "Kuala Lumpur International Airport (KUL)"),
+      isVisible: vi.fn(async () => true),
+    };
+    const misses = {
+      count: vi.fn(async () => 0),
+      first: vi.fn(() => ({
+        waitFor: vi.fn(async () => {
+          throw new Error("no short label");
+        }),
+      })),
+      nth: vi.fn(),
+    };
+    const hits = {
+      count: vi.fn(async () => 1),
+      first: vi.fn(() => ({ waitFor: vi.fn(async () => {}) })),
+      nth: vi.fn(() => matchingOption),
+    };
+    const portalOptions = {
+      filter: vi.fn(({ hasText }) => (hasText === "Kuala Lumpur" ? hits : misses)),
+    };
+    page.locator = vi.fn(() => portalOptions) as never;
+
+    await chooseOptionViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      ref: "from-airport",
+      optionText: "Kuala Lumpur (KUL)",
+      query: "Kuala Lumpur",
+      match: "contains",
+    });
+
+    expect(portalOptions.filter).toHaveBeenCalledWith({ hasText: "Kuala Lumpur (KUL)" });
+    expect(portalOptions.filter).toHaveBeenCalledWith({ hasText: "Kuala Lumpur" });
+    expect(matchingOption.click).toHaveBeenCalledWith({ timeout: 8000 });
+  });
+
+  it("treats exact custom option text as case-insensitive for uppercase labels", async () => {
+    locator = {
+      click: vi.fn(async () => {}),
+      fill: vi.fn(async () => {
+        throw new Error("wrapper fill failed");
+      }),
+      innerText: vi.fn(async () => "Title"),
+      locator: vi.fn(() => ({
+        first: vi.fn(() => ({
+          fill: vi.fn(async () => {}),
+        })),
+      })),
+    };
+    const matchingOption = {
+      click: vi.fn(async () => {}),
+      evaluate: vi.fn(async () => false),
+      innerText: vi.fn(async () => "MR"),
+      isVisible: vi.fn(async () => true),
+    };
+    const candidates = {
+      count: vi.fn(async () => 1),
+      first: vi.fn(() => ({ waitFor: vi.fn(async () => {}) })),
+      nth: vi.fn(() => matchingOption),
+    };
+    page.locator = vi.fn(() => ({
+      filter: vi.fn(() => candidates),
+    })) as never;
+
+    await chooseOptionViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      ref: "title",
+      optionText: "Mr",
+      match: "exact",
+    });
+
+    expect(matchingOption.click).toHaveBeenCalledWith({ timeout: 8000 });
+  });
+
+  it("fills a focused portal search input before falling back to direct wrapper fill", async () => {
+    const descendantInput = {
+      fill: vi.fn(async () => {
+        throw new Error("no nested input");
+      }),
+    };
+    const focusedInput = {
+      fill: vi.fn(async () => {}),
+    };
+    locator = {
+      click: vi.fn(async () => {}),
+      fill: vi.fn(async () => {}),
+      innerText: vi.fn(async () => "Country Code"),
+      locator: vi.fn(() => ({
+        first: vi.fn(() => descendantInput),
+      })),
+    };
+    const matchingOption = {
+      click: vi.fn(async () => {}),
+      evaluate: vi.fn(async () => false),
+      innerText: vi.fn(async () => "+62 Indonesia"),
+      isVisible: vi.fn(async () => true),
+    };
+    const candidates = {
+      count: vi.fn(async () => 1),
+      first: vi.fn(() => ({ waitFor: vi.fn(async () => {}) })),
+      nth: vi.fn(() => matchingOption),
+    };
+    page.locator = vi.fn((selector: string) => {
+      if (selector.includes("input:focus")) {
+        return { first: vi.fn(() => focusedInput) };
+      }
+      return {
+        filter: vi.fn(() => candidates),
+      };
+    }) as never;
+
+    await chooseOptionViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      ref: "country-code",
+      optionText: "+62 Indonesia",
+    });
+
+    expect(descendantInput.fill).toHaveBeenCalledWith("+62 Indonesia", { timeout: 1500 });
+    expect(focusedInput.fill).toHaveBeenCalledWith("+62 Indonesia", { timeout: 1500 });
+    expect(locator.fill).not.toHaveBeenCalled();
+    expect(matchingOption.click).toHaveBeenCalledWith({ timeout: 8000 });
+  });
+
+  it("opens a visible searchable wrapper when the selector points at a hidden Ant input", async () => {
+    const searchInput = { fill: vi.fn(async () => {}) };
+    const editableDescendants = {
+      first: vi.fn(() => searchInput),
+    };
+    const wrapper = {
+      click: vi.fn(async () => {}),
+      fill: vi.fn(async () => {
+        throw new Error("wrapper is not editable");
+      }),
+      innerText: vi
+        .fn(async () => "From")
+        .mockResolvedValueOnce("From")
+        .mockResolvedValueOnce("Kuala Lumpur (KUL)"),
+      locator: vi.fn(() => editableDescendants),
+    };
+    const hiddenInput = {
+      click: vi.fn(async () => {
+        throw new Error("element is not visible");
+      }),
+      fill: vi.fn(async () => {
+        throw new Error("hidden input cannot be filled");
+      }),
+      innerText: vi.fn(async () => ""),
+      locator: vi.fn((selector: string) => {
+        if (selector.startsWith("xpath=")) {
+          return wrapper;
+        }
+        return editableDescendants;
+      }),
+    };
+    const matchingOption = {
+      click: vi.fn(async () => {}),
+      evaluate: vi.fn(async () => false),
+      innerText: vi.fn(async () => "Kuala Lumpur (KUL)"),
+      isVisible: vi.fn(async () => true),
+    };
+    const candidates = {
+      count: vi.fn(async () => 1),
+      first: vi.fn(() => ({ waitFor: vi.fn(async () => {}) })),
+      nth: vi.fn(() => matchingOption),
+    };
+    page.locator = vi.fn((selector: string) => {
+      if (selector === "#_r_1n_") {
+        return hiddenInput;
+      }
+      return {
+        filter: vi.fn(() => candidates),
+      };
+    }) as never;
+
+    const result = await chooseOptionViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      selector: "#_r_1n_",
+      optionText: "Kuala Lumpur (KUL)",
+      query: "Kuala Lumpur",
+    });
+
+    expect(hiddenInput.click).toHaveBeenCalledWith({ timeout: 1500 });
+    expect(hiddenInput.locator).toHaveBeenCalledWith(expect.stringContaining("xpath=ancestor::*"));
+    expect(wrapper.click).toHaveBeenCalledWith({ timeout: 8000 });
+    expect(wrapper.locator).toHaveBeenCalledWith(
+      'input:not([type="hidden"]), textarea, [contenteditable="true"], [role="textbox"]',
+    );
+    expect(searchInput.fill).toHaveBeenCalledWith("Kuala Lumpur", { timeout: 1500 });
+    expect(matchingOption.click).toHaveBeenCalledWith({ timeout: 8000 });
+    expect(result).toMatchObject({
+      optionText: "Kuala Lumpur (KUL)",
+      matchedText: "Kuala Lumpur (KUL)",
+      selectedText: "Kuala Lumpur (KUL)",
+      changed: true,
+    });
   });
 });
