@@ -32,6 +32,8 @@ export type GetReplyOptions = {
   images?: ImageContent[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
+  /** Notifies when the active agent produces real activity that should renew UI-side run leases. */
+  onAgentActivity?: () => void;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;

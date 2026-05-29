@@ -31,6 +31,7 @@ import {
   type ChatAbortControllerEntry,
   type ChatAbortOps,
   isChatStopCommandText,
+  renewChatRunExpiry,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
@@ -1340,6 +1341,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
 
       let agentRunStarted = false;
+      const renewActiveChatRunExpiry = () => {
+        const active = context.chatAbortControllers.get(clientRunId);
+        if (!active || active.controller.signal.aborted) {
+          return;
+        }
+        renewChatRunExpiry({ entry: active, now: Date.now(), timeoutMs });
+      };
       void dispatchInboundMessage({
         ctx,
         cfg,
@@ -1350,6 +1358,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           images: parsedImages.length > 0 ? parsedImages : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
+            renewActiveChatRunExpiry();
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
               client?.connect?.caps,
@@ -1367,6 +1376,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               }
             }
           },
+          onAgentActivity: renewActiveChatRunExpiry,
           onModelSelected,
         },
       })

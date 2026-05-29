@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   abortChatRunById,
   isChatStopCommandText,
+  renewChatRunExpiry,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
 } from "./chat-abort.js";
@@ -137,5 +138,35 @@ describe("abortChatRunById", () => {
         content: [{ type: "text", text: "streamed text" }],
       }),
     );
+  });
+});
+
+describe("renewChatRunExpiry", () => {
+  it("extends a chat run lease from real agent activity", () => {
+    const entry = createActiveEntry("main");
+    entry.expiresAtMs = 11_000;
+
+    const renewed = renewChatRunExpiry({
+      entry,
+      now: 20_000,
+      timeoutMs: 1_000,
+    });
+
+    expect(renewed).toBe(140_000);
+    expect(entry.expiresAtMs).toBe(140_000);
+  });
+
+  it("keeps chat run expiry monotonic for delayed activity callbacks", () => {
+    const entry = createActiveEntry("main");
+    entry.expiresAtMs = 150_000;
+
+    const renewed = renewChatRunExpiry({
+      entry,
+      now: 20_000,
+      timeoutMs: 1_000,
+    });
+
+    expect(renewed).toBe(150_000);
+    expect(entry.expiresAtMs).toBe(150_000);
   });
 });

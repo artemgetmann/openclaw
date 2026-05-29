@@ -592,6 +592,13 @@ export async function runAgentTurnWithFallback(params: {
                     : undefined,
                 onReasoningEnd: params.opts?.onReasoningEnd,
                 onAgentEvent: async (evt) => {
+                  if (
+                    evt.stream === "tool" ||
+                    evt.stream === "assistant" ||
+                    evt.stream === "compaction"
+                  ) {
+                    params.opts?.onAgentActivity?.();
+                  }
                   // Signal run start only after the embedded agent emits real activity.
                   const hasLifecyclePhase =
                     evt.stream === "lifecycle" && typeof evt.data.phase === "string";
