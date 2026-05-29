@@ -474,6 +474,8 @@ describe("chrome MCP page parsing", () => {
     expect(message).toContain(
       "Chrome closed the remote-debugging connection during the approval handshake",
     );
+    expect(message).toContain("Stop now");
+    expect(message).toContain("retry only after the user confirms approval");
     expect(message).toContain("chrome://inspect/#remote-debugging");
     expect(message).not.toContain("Restart the OpenClaw gateway");
     expect(message).not.toContain("Do NOT retry the browser tool");

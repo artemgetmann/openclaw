@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -297,7 +297,7 @@ async function defaultProbeDevToolsWsEndpoint(port: number, browserPath: string)
   // WebSocket while returning empty/404 responses for /json/version. Probe the
   // WebSocket handshake directly so user-live does not fall back to broken
   // --autoConnect after Chrome is already saying "Server running at ...".
-  const key = Buffer.from(randomUUID()).toString("base64");
+  const key = randomBytes(16).toString("base64");
   const request = [
     `GET ${browserPath} HTTP/1.1`,
     "Host: 127.0.0.1",
@@ -953,8 +953,9 @@ function buildChromeMcpConnectionClosedGuidance(
   return new BrowserProfileUnavailableError(
     `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
       "Chrome closed the remote-debugging connection during the approval handshake. " +
-      "Keep Chrome open, click Allow if prompted, or enable remote debugging at " +
-      "chrome://inspect/#remote-debugging, then retry. " +
+      "Stop now, keep Chrome open, ask the user to click Allow if prompted, or enable " +
+      "remote debugging at chrome://inspect/#remote-debugging, and retry only after " +
+      "the user confirms approval. " +
       `Details: ${detail}`,
   );
 }
