@@ -487,13 +487,29 @@ struct TelegramSetupBootstrapTests {
             let secrets = try #require(savedRoot.value()["secrets"] as? [String: Any])
             let providers = try #require(secrets["providers"] as? [String: Any])
             let accountTokenRef = try #require(backend["accountAccessToken"] as? [String: String])
+            let plugins = try #require(savedRoot.value()["plugins"] as? [String: Any])
             let accounts = try #require(telegram["accounts"] as? [String: Any])
             let defaultAccount = try #require(accounts["default"] as? [String: Any])
+            let pluginEntries = try #require(plugins["entries"] as? [String: Any])
+            let telegramPluginEntry = try #require(pluginEntries["telegram"] as? [String: Any])
+            let firecrawlPluginEntry = try #require(pluginEntries["firecrawl"] as? [String: Any])
+            let bravePluginEntry = try #require(pluginEntries["brave"] as? [String: Any])
             #expect(telegram["botToken"] as? String == "777000:test-child-token")
             #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
             #expect(telegram["enabled"] as? Bool == false)
             #expect(telegram["dmPolicy"] as? String == "allowlist")
             #expect((telegram["allowFrom"] as? [String])?.isEmpty ?? true)
+            #expect(plugins["allow"] as? [String] == [
+                "telegram",
+                "anthropic",
+                "openai",
+                "firecrawl",
+                "brave",
+            ])
+            #expect(plugins["deny"] as? [String] == ["acpx", "diffs"])
+            #expect(telegramPluginEntry["enabled"] as? Bool == true)
+            #expect(firecrawlPluginEntry["enabled"] as? Bool == true)
+            #expect(bravePluginEntry["enabled"] as? Bool == true)
             #expect(managedServices["mode"] as? String == "managed")
             #expect(managedServices["futureFlag"] as? Bool == true)
             #expect(backend["baseUrl"] as? String == "https://jarvis.example.test")

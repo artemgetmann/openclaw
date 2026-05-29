@@ -4,7 +4,13 @@ import Foundation
 extension ChannelsStore {
     private static let consumerDefaultTelegramAccountId = "default"
     private static let consumerTelegramFirstTaskText = "Wake up my friend!"
-    private static let consumerTelegramRuntimePluginAllowlist = ["telegram", "anthropic", "openai"]
+    private static let consumerTelegramRuntimePluginAllowlist = [
+        "telegram",
+        "anthropic",
+        "openai",
+        "firecrawl",
+        "brave",
+    ]
 
     func telegramRuntimeOwnershipIssue() -> String? {
         guard AppFlavor.current.isConsumer else { return nil }
@@ -352,7 +358,12 @@ extension ChannelsStore {
         self.updateConfigValue(path: [.key("plugins"), .key("allow")], value: Self.consumerTelegramRuntimePluginAllowlist)
         self.updateConfigValue(path: [.key("plugins"), .key("deny")], value: ["acpx", "diffs"])
         self.updateConfigValue(path: [.key("plugins"), .key("slots"), .key("memory")], value: "none")
+        // Fresh consumer onboarding needs web search and fetch tools ready on
+        // first launch. Keep this explicit so the managed runtime does not rely
+        // on plugin discovery defaults or future installer behavior.
         self.updateConfigValue(path: [.key("plugins"), .key("entries"), .key("telegram"), .key("enabled")], value: true)
+        self.updateConfigValue(path: [.key("plugins"), .key("entries"), .key("firecrawl"), .key("enabled")], value: true)
+        self.updateConfigValue(path: [.key("plugins"), .key("entries"), .key("brave"), .key("enabled")], value: true)
         self.updateConfigValue(path: [.key("channels"), .key("telegram"), .key("groupPolicy")], value: "allowlist")
         self.updateConfigValue(
             path: [.key("channels"), .key("telegram"), .key("groups"), .key("*"), .key("requireMention")],
@@ -650,11 +661,15 @@ extension ChannelsStore {
         let pluginSlots = plugins?["slots"] as? [String: Any]
         let pluginEntries = plugins?["entries"] as? [String: Any]
         let telegramPluginEntry = pluginEntries?["telegram"] as? [String: Any]
+        let firecrawlPluginEntry = pluginEntries?["firecrawl"] as? [String: Any]
+        let bravePluginEntry = pluginEntries?["brave"] as? [String: Any]
         guard plugins?["enabled"] as? Bool == true,
               pluginAllow == Self.consumerTelegramRuntimePluginAllowlist,
               (plugins?["deny"] as? [String]) == ["acpx", "diffs"],
               pluginSlots?["memory"] as? String == "none",
-              telegramPluginEntry?["enabled"] as? Bool == true
+              telegramPluginEntry?["enabled"] as? Bool == true,
+              firecrawlPluginEntry?["enabled"] as? Bool == true,
+              bravePluginEntry?["enabled"] as? Bool == true
         else {
             throw TelegramBootstrapPersistenceError.persistedConfigMismatch
         }
