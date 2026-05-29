@@ -229,6 +229,44 @@ describe("gateway server channels", () => {
     });
   });
 
+  test("channels.telegram.setup-replay reports disabled telegram distinctly from missing token", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
+    await writeConfigFile({
+      channels: {
+        telegram: {
+          enabled: false,
+          botToken: "123:abc",
+        },
+      },
+    });
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      replyStarted?: boolean;
+      replyCompleted?: boolean;
+      error?: string;
+    }>(ws, "channels.telegram.setup-replay", {
+      payload: {
+        updateId: 1001,
+        messageId: 42,
+        chatId: 1336356696,
+        senderId: 1336356696,
+        date: 1_700_000_000,
+        text: "Wake up my friend",
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.error?.message).toBeUndefined();
+    expect(res.payload).toMatchObject({
+      ok: false,
+      replyStarted: false,
+      replyCompleted: false,
+      error:
+        "Telegram bot token is saved, but Telegram is disabled. Reopen Jarvis or run Telegram setup again to enable it.",
+    });
+  });
+
   test("channels.logout reports no session when missing", async () => {
     setRegistry(defaultRegistry);
     const res = await rpcReq<{ cleared?: boolean; channel?: string }>(ws, "channels.logout", {

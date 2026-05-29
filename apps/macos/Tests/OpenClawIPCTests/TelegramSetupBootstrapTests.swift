@@ -412,7 +412,7 @@ struct TelegramSetupBootstrapTests {
         }
     }
 
-    @Test func `managed telegram status installs child token disabled until first sender capture`() async throws {
+    @Test func `managed telegram status installs child token as enabled usable config`() async throws {
         let savedRoot = SavedConfigRoot()
         let configPath = TestIsolation.tempConfigPath()
         let stateDir = FileManager.default.temporaryDirectory
@@ -437,6 +437,17 @@ struct TelegramSetupBootstrapTests {
                     "managedServices": [
                         "mode": "license-only",
                         "futureFlag": true,
+                    ],
+                ],
+                "secrets": [
+                    "providers": [
+                        "jarvis-keychain": [
+                            "source": "exec",
+                            "command": "/usr/bin/security",
+                        ],
+                        "other-provider": [
+                            "source": "env",
+                        ],
                     ],
                 ],
             ]
@@ -486,7 +497,6 @@ struct TelegramSetupBootstrapTests {
             let managedServices = try #require(jarvis["managedServices"] as? [String: Any])
             let secrets = try #require(savedRoot.value()["secrets"] as? [String: Any])
             let providers = try #require(secrets["providers"] as? [String: Any])
-            let accountTokenRef = try #require(backend["accountAccessToken"] as? [String: String])
             let plugins = try #require(savedRoot.value()["plugins"] as? [String: Any])
             let accounts = try #require(telegram["accounts"] as? [String: Any])
             let defaultAccount = try #require(accounts["default"] as? [String: Any])
@@ -496,7 +506,7 @@ struct TelegramSetupBootstrapTests {
             let bravePluginEntry = try #require(pluginEntries["brave"] as? [String: Any])
             #expect(telegram["botToken"] as? String == "777000:test-child-token")
             #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
-            #expect(telegram["enabled"] as? Bool == false)
+            #expect(telegram["enabled"] as? Bool == true)
             #expect(telegram["dmPolicy"] as? String == "allowlist")
             #expect((telegram["allowFrom"] as? [String])?.isEmpty ?? true)
             #expect(plugins["allow"] as? [String] == [
@@ -513,12 +523,9 @@ struct TelegramSetupBootstrapTests {
             #expect(managedServices["mode"] as? String == "managed")
             #expect(managedServices["futureFlag"] as? Bool == true)
             #expect(backend["baseUrl"] as? String == "https://jarvis.example.test")
-            #expect(accountTokenRef == [
-                "source": "exec",
-                "provider": "jarvis-keychain",
-                "id": "account-access-token",
-            ])
-            #expect(providers["jarvis-keychain"] != nil)
+            #expect(backend["accountAccessToken"] == nil)
+            #expect(providers["jarvis-keychain"] == nil)
+            #expect((providers["other-provider"] as? [String: Any])?["source"] as? String == "env")
             #expect(store.telegramSetupStatus?.contains("777000:test-child-token") == false)
 
             await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)
