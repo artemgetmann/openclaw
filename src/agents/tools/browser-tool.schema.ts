@@ -52,7 +52,12 @@ const BrowserActSchema = Type.Object({
   // Common fields
   targetId: Type.Optional(Type.String()),
   ref: Type.Optional(Type.String()),
-  includeSnapshot: Type.Optional(Type.Boolean()),
+  includeSnapshot: Type.Optional(
+    Type.Boolean({
+      description:
+        "For mutating act requests (click/type/fill/press/select), set true to return a fresh structured aria-ref snapshot in the same tool result. Prefer this over a separate snapshot call after page-changing actions.",
+    }),
+  ),
   snapshotFormat: optionalStringEnum(BROWSER_SNAPSHOT_FORMATS),
   refs: optionalStringEnum(BROWSER_SNAPSHOT_REFS),
   mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES),
@@ -129,7 +134,12 @@ export const BrowserToolSchema = Type.Object({
   promptText: Type.Optional(Type.String()),
   // Legacy flattened act params (preferred: request={...})
   kind: Type.Optional(stringEnum(BROWSER_ACT_KINDS)),
-  includeSnapshot: Type.Optional(Type.Boolean()),
+  includeSnapshot: Type.Optional(
+    Type.Boolean({
+      description:
+        "Legacy flattened act option. For mutating browser actions (click/type/fill/press/select), set true so the result includes a fresh structured aria-ref snapshot for the next step.",
+    }),
+  ),
   doubleClick: Type.Optional(Type.Boolean()),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),

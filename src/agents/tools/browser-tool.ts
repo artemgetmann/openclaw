@@ -413,7 +413,7 @@ export function createBrowserTool(opts?: {
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
-      "Use snapshot+act for UI automation. Prefer act includeSnapshot=true after mutating click/type/fill/press/select actions so the result includes a fresh structured snapshot for the next step.",
+      "Use snapshot+act for UI automation. After every mutating act in a multi-step browser flow (click/type/fill/press/select), set includeSnapshot=true unless the next step is terminal; this returns the action result plus a fresh structured aria-ref snapshot, usually faster and safer than a separate snapshot call.",
       "For forms, prefer one act kind=fill request with fields[] from snapshot refs over many separate type calls.",
       "Prefer ref from snapshot over selector. Use screenshot only when pixels are explicitly needed; structured snapshots are faster and more reliable for automation.",
       "Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
