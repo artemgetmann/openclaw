@@ -117,6 +117,98 @@ describe("CronService failure alerts", () => {
     await store.cleanup();
   });
 
+  it("sends a sanitized first-failure alert for delivery-requested isolated agent jobs", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "raw stack / provider key / internal path",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "Monitor Ten email replies",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run monitor" },
+      delivery: { mode: "announce", channel: "telegram", to: "-1003783709877:topic:5335" },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(sendCronFailureAlert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: job.id }),
+        channel: "telegram",
+        to: "-1003783709877:topic:5335",
+        mode: "announce",
+        text: expect.stringContaining(
+          'Cron job "Monitor Ten email replies" failed before it could complete.',
+        ),
+      }),
+    );
+    expect(sendCronFailureAlert.mock.calls[0][0].text).not.toContain(
+      "raw stack / provider key / internal path",
+    );
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("does not send implicit first-failure alerts when explicitly disabled or delivery is off", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "provider timeout",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const disabledAlertJob = await cron.add({
+      name: "disabled implicit alert",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run monitor" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+      failureAlert: false,
+    });
+    const noDeliveryJob = await cron.add({
+      name: "no delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run monitor" },
+      delivery: { mode: "none" },
+    });
+
+    await cron.run(disabledAlertJob.id, "force");
+    await cron.run(noDeliveryJob.id, "force");
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("supports per-job failure alert override when global alerts are disabled", async () => {
     const store = await makeStorePath();
     const sendCronFailureAlert = vi.fn(async () => undefined);

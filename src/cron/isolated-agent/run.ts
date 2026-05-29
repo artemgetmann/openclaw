@@ -12,6 +12,7 @@ import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { FailoverError, resolveFailoverStatus } from "../../agents/failover-error.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveNestedAgentLane } from "../../agents/lanes.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -25,6 +26,7 @@ import {
   resolveHooksGmailModel,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import { classifyFailoverReason, type FailoverReason } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   countActiveDescendantRuns,
@@ -97,6 +99,94 @@ export type RunCronAgentTurnResult = {
   CronRunTelemetry;
 
 type ResolvedAgentConfig = NonNullable<ReturnType<typeof resolveAgentConfig>>;
+
+type CronModelRunPayload = {
+  text?: string;
+  isError?: boolean;
+};
+
+type CronModelRunResult = {
+  payloads?: CronModelRunPayload[];
+  meta?: {
+    error?: unknown;
+  };
+};
+
+function stringifyCronRunError(err: unknown): string | undefined {
+  if (typeof err === "string") {
+    return err.trim() || undefined;
+  }
+  if (err instanceof Error) {
+    return err.message.trim() || undefined;
+  }
+  if (err == null) {
+    return undefined;
+  }
+  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+    return `${err}`.trim() || undefined;
+  }
+  if (typeof err === "symbol") {
+    return err.description?.trim() || undefined;
+  }
+  if (typeof err === "object") {
+    try {
+      return JSON.stringify(err).trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function resolveFatalCronModelErrorText(result: CronModelRunResult): string | undefined {
+  const payloads = result.payloads ?? [];
+  const runLevelError = stringifyCronRunError(result.meta?.error);
+  const lastErrorPayloadIndex = payloads.findLastIndex((payload) => payload?.isError === true);
+  const hasSuccessfulPayloadAfterLastError =
+    !runLevelError &&
+    lastErrorPayloadIndex >= 0 &&
+    payloads
+      .slice(lastErrorPayloadIndex + 1)
+      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+
+  if (lastErrorPayloadIndex >= 0 && !hasSuccessfulPayloadAfterLastError) {
+    const payloadText = stringifyCronRunError(payloads[lastErrorPayloadIndex]?.text);
+    return payloadText ?? runLevelError ?? "cron isolated run returned an error payload";
+  }
+
+  return runLevelError;
+}
+
+function resolveCronModelFailoverReason(text: string): FailoverReason | undefined {
+  return classifyFailoverReason(text) ?? undefined;
+}
+
+function buildCronModelFailoverError(params: {
+  result: CronModelRunResult;
+  provider: string;
+  model: string;
+}): FailoverError | undefined {
+  // The embedded/CLI runners sometimes encode provider failures as fatal
+  // payloads instead of thrown errors. Convert only classified model/provider
+  // failures here so the model fallback wrapper can retry, while ordinary tool
+  // errors still flow through as cron task failures.
+  const errorText = resolveFatalCronModelErrorText(params.result);
+  if (!errorText) {
+    return undefined;
+  }
+
+  const reason = resolveCronModelFailoverReason(errorText);
+  if (!reason) {
+    return undefined;
+  }
+
+  return new FailoverError(errorText, {
+    reason,
+    provider: params.provider,
+    model: params.model,
+    status: resolveFailoverStatus(reason),
+  });
+}
 
 function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentConfig) {
   const {
@@ -629,6 +719,14 @@ export async function runCronIsolatedAgentTurn(params: {
             bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
               result.meta?.systemPromptReport,
             );
+            const failoverError = buildCronModelFailoverError({
+              result,
+              provider: providerOverride,
+              model: modelOverride,
+            });
+            if (failoverError) {
+              throw failoverError;
+            }
             return result;
           }
           const result = await runEmbeddedPiAgent({
@@ -676,6 +774,14 @@ export async function runCronIsolatedAgentTurn(params: {
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );
+          const failoverError = buildCronModelFailoverError({
+            result,
+            provider: providerOverride,
+            model: modelOverride,
+          });
+          if (failoverError) {
+            throw failoverError;
+          }
           return result;
         },
       });
