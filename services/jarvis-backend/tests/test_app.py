@@ -935,6 +935,77 @@ def test_gemini_image_generate_validates_prompt_before_provider_spend(monkeypatc
     )
 
 
+def test_openai_audio_transcribe_calls_provider_and_redacts_key(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.openai.com/v1/audio/transcriptions"
+        assert request.headers["authorization"] == "Bearer test-openai-provider-placeholder"
+        assert b'name="model"\r\n\r\ngpt-4o-mini-transcribe' in request.content
+        assert b'name="language"\r\n\r\nen' in request.content
+        assert b'name="prompt"\r\n\r\nTranscribe the audio.' in request.content
+        assert b'name="file"; filename="voice.ogg"' in request.content
+        assert b"fake-audio-bytes" in request.content
+        return httpx.Response(
+            200,
+            json={
+                "text": "wake up my friend",
+                "debug": "test-openai-provider-placeholder",
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/openai.audio.transcribe",
+        json={
+            "input": {
+                "fileBase64": "ZmFrZS1hdWRpby1ieXRlcw==",
+                "fileName": "voice.ogg",
+                "mimeType": "audio/ogg",
+                "model": "gpt-4o-mini-transcribe",
+                "language": "en",
+                "prompt": "Transcribe the audio.",
+            }
+        },
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["result"]["provider"] == "openai"
+    assert body["result"]["payload"] == {
+        "text": "wake up my friend",
+        "model": "gpt-4o-mini-transcribe",
+    }
+    assert "test-openai-provider-placeholder" not in response.text
+
+
+def test_openai_audio_transcribe_requires_provider_key(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected provider request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/openai.audio.transcribe",
+        json={"input": {"fileBase64": "ZmFrZS1hdWRpby1ieXRlcw=="}},
+        headers=backend_token_headers(),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "openai provider is not configured"
+
+
 def test_managed_utility_missing_provider_key_fails_closed(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
