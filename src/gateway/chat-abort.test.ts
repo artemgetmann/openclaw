@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { isTimeoutError } from "../agents/failover-error.js";
 import {
+  buildChatTimeoutAbortReason,
   abortChatRunById,
+  createChatAbortControllerEntry,
   isChatStopCommandText,
+  renewChatAbortControllerEntry,
   renewChatRunExpiry,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
@@ -9,13 +13,14 @@ import {
 
 function createActiveEntry(sessionKey: string): ChatAbortControllerEntry {
   const now = Date.now();
-  return {
+  return createChatAbortControllerEntry({
     controller: new AbortController(),
     sessionId: "sess-1",
     sessionKey,
     startedAtMs: now,
-    expiresAtMs: now + 10_000,
-  };
+    timeoutMs: 10_000,
+    activitySource: "chat.send",
+  });
 }
 
 function createOps(params: {
@@ -138,6 +143,35 @@ describe("abortChatRunById", () => {
         content: [{ type: "text", text: "streamed text" }],
       }),
     );
+  });
+
+  it("builds a timeout reason that timeout detection recognizes", () => {
+    const reason = buildChatTimeoutAbortReason({
+      runId: "run-1",
+      sessionKey: "main",
+      startedAtMs: 1_000,
+      expiresAtMs: 2_000,
+      lastRenewedAtMs: 1_500,
+      lastActivitySource: "tool:start",
+    });
+
+    expect(reason.name).toBe("TimeoutError");
+    expect(isTimeoutError(reason)).toBe(true);
+  });
+
+  it("renews lease metadata and pushes the expiry forward", () => {
+    const entry = createActiveEntry("main");
+    const initialExpiry = entry.expiresAtMs;
+
+    renewChatAbortControllerEntry({
+      entry,
+      now: entry.startedAtMs + 30_000,
+      activitySource: "tool:start",
+    });
+
+    expect(entry.lastRenewedAtMs).toBe(entry.startedAtMs + 30_000);
+    expect(entry.lastActivitySource).toBe("tool:start");
+    expect(entry.expiresAtMs).toBeGreaterThan(initialExpiry);
   });
 });
 

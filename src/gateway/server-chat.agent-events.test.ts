@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { createChatAbortControllerEntry } from "./chat-abort.js";
 import {
   createAgentEventHandler,
   createChatRunState,
@@ -46,6 +47,10 @@ describe("agent event handler", () => {
     const nodeSendToSession = vi.fn();
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
+    const chatAbortControllers = new Map<
+      string,
+      ReturnType<typeof createChatAbortControllerEntry>
+    >();
     const toolEventRecipients = createToolEventRecipientRegistry();
 
     const handler = createAgentEventHandler({
@@ -54,6 +59,7 @@ describe("agent event handler", () => {
       nodeSendToSession,
       agentRunSeq,
       chatRunState,
+      chatAbortControllers,
       resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
@@ -66,6 +72,7 @@ describe("agent event handler", () => {
       nodeSendToSession,
       agentRunSeq,
       chatRunState,
+      chatAbortControllers,
       toolEventRecipients,
       handler,
     };
@@ -534,6 +541,43 @@ describe("agent event handler", () => {
     const flushCallOrder = broadcast.mock.invocationCallOrder[1] ?? 0;
     const toolCallOrder = broadcastToConnIds.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
     expect(flushCallOrder).toBeLessThan(toolCallOrder);
+    nowSpy.mockRestore();
+    resetAgentRunContextForTest();
+  });
+
+  it("renews the outer chat lease on tool activity", () => {
+    let now = 20_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { chatAbortControllers, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-renew",
+    });
+
+    chatRunState.registry.add("run-renew", {
+      sessionKey: "session-renew",
+      clientRunId: "client-renew",
+    });
+    const entry = createChatAbortControllerEntry({
+      controller: new AbortController(),
+      sessionId: "sess-renew",
+      sessionKey: "session-renew",
+      startedAtMs: now,
+      timeoutMs: 5_000,
+      activitySource: "chat.send",
+    });
+    chatAbortControllers.set("client-renew", entry);
+
+    now = 20_500;
+    handler({
+      runId: "run-renew",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "start", name: "browser.open", toolCallId: "tool-renew-1" },
+    });
+
+    expect(entry.lastRenewedAtMs).toBe(20_500);
+    expect(entry.lastActivitySource).toBe("tool:start");
+    expect(entry.expiresAtMs).toBeGreaterThan(entry.startedAtMs + 120_000);
     nowSpy.mockRestore();
     resetAgentRunContextForTest();
   });
