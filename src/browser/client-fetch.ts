@@ -162,6 +162,7 @@ function isRetryableChromeAttachMessage(message: string): boolean {
     (lower.includes("chrome mcp existing-session attach") &&
       lower.includes("timed out waiting for tabs to become available")) ||
     lower.includes("approve the browser attach prompt") ||
+    lower.includes("chrome closed the remote-debugging connection") ||
     lower.includes("devtoolsactiveport") ||
     (lower.includes("attach timed out") && lower.includes("chrome mcp"))
   );

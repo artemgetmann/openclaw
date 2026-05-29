@@ -829,21 +829,56 @@ async function withTimeout<T>(
   }
 }
 
+function normalizeErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isClosedChromeMcpTransportErrorMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("mcp error -32000: connection closed") ||
+    lower.includes("socket closed") ||
+    lower.includes("socket hang up") ||
+    lower.includes("econnreset") ||
+    lower.includes("connection closed")
+  );
+}
+
+function buildChromeMcpConnectionClosedGuidance(
+  profileName: string,
+  detail: string,
+): BrowserProfileUnavailableError {
+  // Chrome can close the MCP transport while its remote-debugging approval
+  // prompt is settling. That is a browser handshake problem, not a gateway
+  // outage, so the final error must give the operator an actionable retry path.
+  return new BrowserProfileUnavailableError(
+    `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
+      "Chrome closed the remote-debugging connection during the approval handshake. " +
+      "Keep Chrome open, click Allow if prompted, or enable remote debugging at " +
+      "chrome://inspect/#remote-debugging, then retry. " +
+      `Details: ${detail}`,
+  );
+}
+
 function normalizeAttachFailure(profileName: string, err: unknown): BrowserProfileUnavailableError {
+  const message = normalizeErrorMessage(err);
+  if (isClosedChromeMcpTransportErrorMessage(message)) {
+    return buildChromeMcpConnectionClosedGuidance(profileName, message);
+  }
   if (err instanceof BrowserProfileUnavailableError) {
     return err;
   }
-  const message = err instanceof Error ? err.message : String(err);
   return new BrowserProfileUnavailableError(
     `Chrome MCP existing-session attach failed for profile "${profileName}". Details: ${message}`,
   );
 }
 
 export function isRetryableChromeMcpAttachError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = normalizeErrorMessage(err);
   const lower = message.toLowerCase();
   return (
     lower.includes("mcp error -32001") ||
+    isClosedChromeMcpTransportErrorMessage(message) ||
     lower.includes("request timed out") ||
     lower.includes("chrome mcp attach timed out")
   );
