@@ -203,6 +203,50 @@ fi
 
 load_consumer_packaging_env
 
+load_consumer_backend_activation_token() {
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+  if [[ -n "${JARVIS_BACKEND_ACCESS_TOKEN:-}" || -n "${JARVIS_BACKEND_API_TOKEN:-}" ]]; then
+    return 0
+  fi
+  if ! command -v security >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local keychain_token=""
+  if keychain_token="$(/usr/bin/security find-generic-password \
+    -s "Jarvis Render Backend" \
+    -a "JARVIS_BACKEND_API_TOKEN" \
+    -w 2>/dev/null)"; then
+    keychain_token="${keychain_token#"${keychain_token%%[![:space:]]*}"}"
+    keychain_token="${keychain_token%"${keychain_token##*[![:space:]]}"}"
+    if [[ -n "$keychain_token" ]]; then
+      export JARVIS_BACKEND_API_TOKEN="$keychain_token"
+      echo "🔐 Loaded Jarvis backend activation token from macOS Keychain (presence only)"
+    fi
+  fi
+}
+
+consumer_require_backend_activation_token() {
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+  load_consumer_backend_activation_token
+  if [[ -n "${JARVIS_BACKEND_ACCESS_TOKEN:-}" || -n "${JARVIS_BACKEND_API_TOKEN:-}" ]]; then
+    return 0
+  fi
+
+  echo "ERROR: consumer packaging requires a Jarvis backend activation token." >&2
+  echo "Set JARVIS_BACKEND_API_TOKEN or JARVIS_BACKEND_ACCESS_TOKEN, or store it in macOS Keychain:" >&2
+  echo "  service: Jarvis Render Backend" >&2
+  echo "  account: JARVIS_BACKEND_API_TOKEN" >&2
+  echo "Packaging refuses to ship an activation-email build that cannot call the activation backend." >&2
+  exit 1
+}
+
+consumer_require_backend_activation_token
+
 consumer_require_bundled_speech_key() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
     return 0
