@@ -12,6 +12,7 @@ import {
   listChromeMcpTabs,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
+  setChromeMcpDevToolsWsEndpointProberForTest,
   resolveChromeMcpArgsForTest,
   setChromeMcpDefaultUserDataDirForTest,
   setChromeMcpLiveChromeLauncherForTest,
@@ -182,14 +183,14 @@ describe("chrome MCP page parsing", () => {
     }
   });
 
-  it("defaults user-live to autoConnect without probing DevToolsActivePort", async () => {
+  it("uses the live DevToolsActivePort WebSocket for user-live when Chrome exposes it", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-user-live-"));
     await fs.writeFile(path.join(tempDir, "DevToolsActivePort"), "9227\n/devtools/browser/live\n");
-    const fetchMock = vi.fn(async () => {
-      throw new Error("fetch should not be called for user-live autoConnect");
-    });
+    const fetchMock = vi.fn(async () => ({ ok: false }));
+    const wsProbe = vi.fn(async () => true);
     const launcher = vi.fn(async () => {});
     vi.stubGlobal("fetch", fetchMock);
+    setChromeMcpDevToolsWsEndpointProberForTest(wsProbe);
     setChromeMcpDefaultUserDataDirForTest(tempDir);
     setChromeMcpProcessCommandsForTest(() => []);
     setChromeMcpLiveChromeLauncherForTest(launcher);
@@ -198,14 +199,20 @@ describe("chrome MCP page parsing", () => {
       await expect(resolveChromeMcpArgsForTest("user-live")).resolves.toEqual([
         "-y",
         "chrome-devtools-mcp@latest",
-        "--autoConnect",
         "--experimentalStructuredContent",
         "--experimental-page-id-routing",
+        "--wsEndpoint",
+        "ws://127.0.0.1:9227/devtools/browser/live",
       ]);
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:9227/json/version",
+        expect.anything(),
+      );
+      expect(wsProbe).toHaveBeenCalledWith(9227, "/devtools/browser/live");
       expect(launcher).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
+      setChromeMcpDevToolsWsEndpointProberForTest(null);
       setChromeMcpLiveChromeLauncherForTest(null);
       setChromeMcpProcessCommandsForTest(null);
       setChromeMcpDefaultUserDataDirForTest(null);
@@ -387,6 +394,23 @@ describe("chrome MCP page parsing", () => {
     expect(tabs.map((tab) => tab.targetId)).toEqual(["1", "2"]);
   });
 
+  it("retries closed Chrome MCP attach transports until the caller budget succeeds", async () => {
+    let attempts = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("MCP error -32000: Connection closed");
+      }
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const tabs = await listChromeMcpTabs("user-live", { timeoutMs: 60_000 });
+
+    expect(attempts).toBe(2);
+    expect(tabs.map((tab) => tab.targetId)).toEqual(["1", "2"]);
+  });
+
   it("retries retryable availability attach timeouts until the caller budget succeeds", async () => {
     let attempts = 0;
     const factory: ChromeMcpSessionFactory = async () => {
@@ -401,6 +425,83 @@ describe("chrome MCP page parsing", () => {
     await ensureChromeMcpAvailable("chrome-live", { timeoutMs: 60_000 });
 
     expect(attempts).toBe(3);
+  });
+
+  it("retries closed Chrome MCP readiness transports after tearing down the broken session", async () => {
+    let attempts = 0;
+    const closedSessionClose = vi.fn(async () => {});
+    const factory: ChromeMcpSessionFactory = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const { session: brokenSession, callTool } = createFakeSessionBundle();
+        return {
+          ...brokenSession,
+          client: {
+            callTool,
+            listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
+            connect: vi.fn().mockResolvedValue(undefined),
+            close: closedSessionClose,
+          },
+          ready: Promise.reject(new Error("MCP error -32000: Connection closed")),
+        } as unknown as ChromeMcpSession;
+      }
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await ensureChromeMcpAvailable("user-live", { timeoutMs: 60_000 });
+
+    expect(attempts).toBe(2);
+    expect(closedSessionClose).toHaveBeenCalled();
+  });
+
+  it("explains exhausted closed Chrome MCP attach transports as approval-handshake failures", async () => {
+    let attempts = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      attempts += 1;
+      throw new Error("MCP error -32000: Connection closed");
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    let message = "";
+    try {
+      await listChromeMcpTabs("user-live", { timeoutMs: 50 });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(attempts).toBeGreaterThan(0);
+    expect(message).toContain(
+      "Chrome closed the remote-debugging connection during the approval handshake",
+    );
+    expect(message).toContain("Stop now");
+    expect(message).toContain("retry only after the user confirms approval");
+    expect(message).toContain("chrome://inspect/#remote-debugging");
+    expect(message).not.toContain("Restart the OpenClaw gateway");
+    expect(message).not.toContain("Do NOT retry the browser tool");
+  });
+
+  it("explains exhausted Chrome MCP attach timeouts as waiting for user approval", async () => {
+    let attempts = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      attempts += 1;
+      throw new Error("timed out awaiting tools/call after 120s");
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    let message = "";
+    try {
+      await listChromeMcpTabs("user-live", { timeoutMs: 50 });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(attempts).toBeGreaterThan(0);
+    expect(message).toContain("waiting for the user to approve remote debugging");
+    expect(message).toContain("Stop now");
+    expect(message).toContain("retry only after the user confirms approval");
+    expect(message).toContain("chrome://inspect/#remote-debugging");
+    expect(message).not.toContain("Restart the OpenClaw gateway");
   });
 
   it("retries retryable list_pages timeouts until the caller budget succeeds", async () => {

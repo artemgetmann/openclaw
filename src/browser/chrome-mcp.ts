@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -66,6 +67,7 @@ export const CHROME_MCP_EXISTING_SESSION_ATTACH_TIMEOUT_MS = 60_000;
 const CHROME_MCP_ATTACH_RETRY_POLL_MS = 500;
 const CHROME_MCP_LIVE_CHROME_LAUNCH_READY_WINDOW_MS = 10_000;
 const CHROME_MCP_LIVE_CHROME_LAUNCH_POLL_MS = 250;
+const CHROME_MCP_DEVTOOLS_WS_PROBE_TIMEOUT_MS = 1_500;
 const INITIAL_DEFAULT_CHROME_USER_DATA_DIR = path.join(
   os.homedir(),
   "Library/Application Support/Google/Chrome",
@@ -73,6 +75,8 @@ const INITIAL_DEFAULT_CHROME_USER_DATA_DIR = path.join(
 let defaultChromeUserDataDir = INITIAL_DEFAULT_CHROME_USER_DATA_DIR;
 let processCommandLinesReader: (() => string[]) | null = null;
 let liveChromeLauncher: ChromeMcpLiveChromeLauncher | null = null;
+let devToolsWsEndpointProber: ((port: number, browserPath: string) => Promise<boolean>) | null =
+  null;
 const profileDirectoryOverrides = new Map<string, string>();
 
 function traceChromeMcpStage(stage: string): void {
@@ -288,21 +292,91 @@ async function probeBrowserUrlFromPort(
   }
 }
 
+async function defaultProbeDevToolsWsEndpoint(port: number, browserPath: string): Promise<boolean> {
+  // Chrome's live-profile remote-debugging UI can expose only the browser
+  // WebSocket while returning empty/404 responses for /json/version. Probe the
+  // WebSocket handshake directly so user-live does not fall back to broken
+  // --autoConnect after Chrome is already saying "Server running at ...".
+  const key = randomBytes(16).toString("base64");
+  const request = [
+    `GET ${browserPath} HTTP/1.1`,
+    "Host: 127.0.0.1",
+    "Upgrade: websocket",
+    "Connection: Upgrade",
+    `Sec-WebSocket-Key: ${key}`,
+    "Sec-WebSocket-Version: 13",
+    "",
+    "",
+  ].join("\r\n");
+
+  return await new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    let settled = false;
+    const finish = (ok: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(CHROME_MCP_DEVTOOLS_WS_PROBE_TIMEOUT_MS);
+    socket.once("connect", () => {
+      socket.write(request);
+    });
+    socket.once("data", (chunk) => {
+      const statusLine = chunk.toString("latin1").split(/\r?\n/, 1)[0] ?? "";
+      finish(/\s101\s/.test(statusLine));
+    });
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+    socket.once("end", () => finish(false));
+  });
+}
+
+async function probeWsEndpointFromDevToolsActivePort(params: {
+  profileName: string;
+  activePort: ChromeDevToolsActivePort;
+  modeLabel: string;
+}): Promise<ChromeMcpAttachTarget | null> {
+  const prober = devToolsWsEndpointProber ?? defaultProbeDevToolsWsEndpoint;
+  if (!(await prober(params.activePort.port, params.activePort.browserPath))) {
+    return null;
+  }
+  const url = `ws://127.0.0.1:${params.activePort.port}${params.activePort.browserPath}`;
+  traceChromeMcpStage(
+    `chrome-mcp-attach-mode profile=${params.profileName} mode=${params.modeLabel} url=${url}`,
+  );
+  return {
+    mode: "wsEndpoint",
+    flag: "--wsEndpoint",
+    url,
+  };
+}
+
 async function waitForLaunchedLiveChromeTarget(params: {
   profileName: string;
   userDataDir: string;
 }): Promise<ChromeMcpAttachTarget | null> {
   const deadlineMs = Date.now() + CHROME_MCP_LIVE_CHROME_LAUNCH_READY_WINDOW_MS;
   while (Date.now() < deadlineMs) {
-    const port = readDevToolsActivePortPort(params.userDataDir);
-    if (port) {
+    const activePort = readDevToolsActivePort(params.userDataDir);
+    if (activePort) {
       const target = await probeBrowserUrlFromPort(
         params.profileName,
-        port,
+        activePort.port,
         "browserUrl-auto-launched-user-live",
       );
       if (target) {
         return target;
+      }
+      const wsTarget = await probeWsEndpointFromDevToolsActivePort({
+        profileName: params.profileName,
+        activePort,
+        modeLabel: "wsEndpoint-auto-launched-user-live",
+      });
+      if (wsTarget) {
+        return wsTarget;
       }
     }
     await new Promise((r) => setTimeout(r, CHROME_MCP_LIVE_CHROME_LAUNCH_POLL_MS));
@@ -385,15 +459,28 @@ function resolveExistingSessionUserDataDir(
   return profileName === "user-live" ? defaultChromeUserDataDir : null;
 }
 
-function readDevToolsActivePortPort(userDataDir: string): number | null {
+type ChromeDevToolsActivePort = {
+  port: number;
+  browserPath: string;
+};
+
+function readDevToolsActivePort(userDataDir: string): ChromeDevToolsActivePort | null {
   const devToolsActivePortPath = path.join(userDataDir, "DevToolsActivePort");
   if (!existsSync(devToolsActivePortPath)) {
     return null;
   }
   try {
     const raw = readFileSync(devToolsActivePortPath, "utf8");
-    const port = Number.parseInt(raw.split(/\r?\n/)[0]?.trim() ?? "", 10);
-    return Number.isFinite(port) && port >= 1 && port <= 65535 ? port : null;
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const port = Number.parseInt(lines[0] ?? "", 10);
+    const browserPath = lines[1] ?? "";
+    if (!Number.isFinite(port) || port < 1 || port > 65535 || !browserPath.startsWith("/")) {
+      return null;
+    }
+    return { port, browserPath };
   } catch {
     return null;
   }
@@ -431,8 +518,8 @@ async function probeBrowserUrlFromUserDataDir(
     }
     return matchedTarget;
   }
-  const port = readDevToolsActivePortPort(resolvedUserDataDir);
-  if (!port) {
+  const activePort = readDevToolsActivePort(resolvedUserDataDir);
+  if (!activePort) {
     // Only the built-in Google Chrome live lane is self-healed here. Custom
     // existing-session profiles may point at Brave/Edge/custom Chromium data,
     // so launching Google Chrome against those directories would be data-risky.
@@ -447,11 +534,19 @@ async function probeBrowserUrlFromUserDataDir(
   }
   const discoveredTarget = await probeBrowserUrlFromPort(
     profileName,
-    port,
+    activePort.port,
     "browserUrl-discovered",
   );
   if (discoveredTarget) {
     return discoveredTarget;
+  }
+  const discoveredWsTarget = await probeWsEndpointFromDevToolsActivePort({
+    profileName,
+    activePort,
+    modeLabel: "wsEndpoint-discovered",
+  });
+  if (discoveredWsTarget) {
+    return discoveredWsTarget;
   }
   // DevToolsActivePort can outlive the actual debug listener after Chrome restarts.
   // Treat a stale default user-live endpoint like the missing-file case so the
@@ -739,6 +834,10 @@ async function resolveChromeMcpArgs(profileName: string, userDataDir?: string): 
     return [...DEFAULT_CHROME_MCP_ARGS, attachTarget.flag, attachTarget.url];
   }
   if (profileName === "user-live") {
+    const discoveredTarget = await probeBrowserUrlFromUserDataDir(profileName, userDataDir);
+    if (discoveredTarget) {
+      return [...DEFAULT_CHROME_MCP_ARGS, discoveredTarget.flag, discoveredTarget.url];
+    }
     const normalizedUserDataDir = normalizeChromeMcpUserDataDir(userDataDir);
     if (normalizedUserDataDir) {
       traceChromeMcpStage(
@@ -829,23 +928,85 @@ async function withTimeout<T>(
   }
 }
 
+function normalizeErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isClosedChromeMcpTransportErrorMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("mcp error -32000: connection closed") ||
+    lower.includes("socket closed") ||
+    lower.includes("socket hang up") ||
+    lower.includes("econnreset") ||
+    lower.includes("connection closed")
+  );
+}
+
+function buildChromeMcpConnectionClosedGuidance(
+  profileName: string,
+  detail: string,
+): BrowserProfileUnavailableError {
+  // Chrome can close the MCP transport while its remote-debugging approval
+  // prompt is settling. That is a browser handshake problem, not a gateway
+  // outage, so the final error must give the operator an actionable retry path.
+  return new BrowserProfileUnavailableError(
+    `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
+      "Chrome closed the remote-debugging connection during the approval handshake. " +
+      "Stop now, keep Chrome open, ask the user to click Allow if prompted, or enable " +
+      "remote debugging at chrome://inspect/#remote-debugging, and retry only after " +
+      "the user confirms approval. " +
+      `Details: ${detail}`,
+  );
+}
+
+function isChromeMcpApprovalTimeoutMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("mcp error -32001") ||
+    lower.includes("request timed out") ||
+    lower.includes("timed out awaiting tools/call") ||
+    lower.includes("chrome mcp attach timed out") ||
+    lower.includes("network.enable timed out")
+  );
+}
+
+function buildChromeMcpApprovalTimeoutGuidance(
+  profileName: string,
+  detail: string,
+): BrowserProfileUnavailableError {
+  // A live Chrome attach can sit behind Chrome's approval prompt until the MCP
+  // tool call times out. Continuing to retry or changing code at that point
+  // creates false root causes; the operator must approve Chrome first.
+  return new BrowserProfileUnavailableError(
+    `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
+      "Chrome is likely waiting for the user to approve remote debugging. " +
+      "Stop now, keep Chrome open, ask the user to click Allow or enable " +
+      "chrome://inspect/#remote-debugging, and retry only after the user confirms approval. " +
+      `Details: ${detail}`,
+  );
+}
+
 function normalizeAttachFailure(profileName: string, err: unknown): BrowserProfileUnavailableError {
+  const message = normalizeErrorMessage(err);
+  if (isClosedChromeMcpTransportErrorMessage(message)) {
+    return buildChromeMcpConnectionClosedGuidance(profileName, message);
+  }
+  if (isChromeMcpApprovalTimeoutMessage(message)) {
+    return buildChromeMcpApprovalTimeoutGuidance(profileName, message);
+  }
   if (err instanceof BrowserProfileUnavailableError) {
     return err;
   }
-  const message = err instanceof Error ? err.message : String(err);
   return new BrowserProfileUnavailableError(
     `Chrome MCP existing-session attach failed for profile "${profileName}". Details: ${message}`,
   );
 }
 
 export function isRetryableChromeMcpAttachError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  const lower = message.toLowerCase();
+  const message = normalizeErrorMessage(err);
   return (
-    lower.includes("mcp error -32001") ||
-    lower.includes("request timed out") ||
-    lower.includes("chrome mcp attach timed out")
+    isClosedChromeMcpTransportErrorMessage(message) || isChromeMcpApprovalTimeoutMessage(message)
   );
 }
 
@@ -1088,6 +1249,12 @@ export function setChromeMcpLiveChromeLauncherForTest(
   launcher: ChromeMcpLiveChromeLauncher | null,
 ): void {
   liveChromeLauncher = launcher;
+}
+
+export function setChromeMcpDevToolsWsEndpointProberForTest(
+  prober: ((port: number, browserPath: string) => Promise<boolean>) | null,
+): void {
+  devToolsWsEndpointProber = prober;
 }
 
 export function setChromeMcpDefaultUserDataDirForTest(userDataDir: string | null): void {
@@ -1504,6 +1671,7 @@ export async function resetChromeMcpSessionsForTest(): Promise<void> {
   sessionFactory = null;
   processCommandLinesReader = null;
   liveChromeLauncher = null;
+  devToolsWsEndpointProber = null;
   defaultChromeUserDataDir = INITIAL_DEFAULT_CHROME_USER_DATA_DIR;
   profileDirectoryOverrides.clear();
   pendingSessions.clear();

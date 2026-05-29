@@ -174,6 +174,26 @@ describe("fetchBrowserJson loopback auth", () => {
     });
   });
 
+  it("preserves closed remote-debugging connection guidance without generic gateway text", async () => {
+    mocks.dispatch.mockRejectedValueOnce(
+      new Error(
+        'Chrome MCP existing-session attach failed for profile "user-live". Chrome closed the remote-debugging connection during the approval handshake. Keep Chrome open, click Allow if prompted, or enable remote debugging at chrome://inspect/#remote-debugging, then retry. Details: MCP error -32000: Connection closed',
+      ),
+    );
+
+    await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
+      contains: [
+        "Chrome closed the remote-debugging connection during the approval handshake",
+        "chrome://inspect/#remote-debugging",
+      ],
+      omits: [
+        "Restart the OpenClaw gateway",
+        "Do NOT retry the browser tool",
+        "Can't reach the OpenClaw browser control service",
+      ],
+    });
+  });
+
   it("surfaces remote-debugging approval guidance for user-live dispatcher timeouts", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("timed out"));
 
