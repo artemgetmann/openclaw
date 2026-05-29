@@ -126,11 +126,18 @@ extension ChannelsStore {
                     username,
                     forKey: Self.consumerTelegramBotUsernameDefaultsKey)
             }
+            // Managed approval gives us the child bot token before we know the
+            // real user chat id. Keep the polling provider disabled until the
+            // first-task verifier can read the first DM itself and persist that
+            // sender as an explicit allowlist entry. Enabling here in pairing
+            // mode lets the gateway consume the first DM and send setup-code
+            // instructions, which strands normal onboarding behind an internal
+            // pairing flow.
             _ = try await self.applyTelegramSetupBootstrap(
                 token: token,
-                dmPolicy: "pairing",
+                dmPolicy: "allowlist",
                 allowFrom: nil,
-                enabled: true)
+                enabled: false)
             self.primeConsumerTelegramFirstTaskBaselineIfNeeded()
             self.telegramSetupStatus = self.managedTelegramConnectedStatus(
                 botUsername: self.telegramSetupBotUsername)
