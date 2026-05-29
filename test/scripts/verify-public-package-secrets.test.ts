@@ -64,6 +64,7 @@ describe("scripts/verify-public-package-secrets.mjs", () => {
           jarvis: {
             backend: {
               baseUrl: "https://jarvis.example.invalid",
+              accessToken: "backend-bearer-value",
             },
             managedServices: {
               mode: "managed",

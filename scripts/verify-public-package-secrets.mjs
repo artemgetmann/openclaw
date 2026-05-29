@@ -53,6 +53,13 @@ const TEXT_EXTENSIONS = new Set([
 
 const MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024;
 
+function isAllowedSecretPath(pathParts) {
+  // Public Jarvis packages need a backend bearer so activation/email onboarding
+  // can call the product backend. This is not a provider key; provider API keys
+  // stay blocked by PROVIDER_ENV_VARS and the generic secret-field scanner.
+  return pathParts.join(".") === "jarvis.backend.accessToken";
+}
+
 function usage() {
   console.error("Usage: node scripts/verify-public-package-secrets.mjs <app-bundle-or-dir>");
 }
@@ -93,7 +100,11 @@ function pathLooksSecretBearing(pathParts) {
 
 function walkJson(value, pathParts, reportFinding) {
   if (typeof value === "string") {
-    if (pathLooksSecretBearing(pathParts) && !isAllowedReferenceValue(value)) {
+    if (
+      pathLooksSecretBearing(pathParts) &&
+      !isAllowedSecretPath(pathParts) &&
+      !isAllowedReferenceValue(value)
+    ) {
       reportFinding(pathParts.join("."), "raw secret-bearing JSON value");
     }
     return;

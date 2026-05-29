@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 
 const CONSUMER_OPENAI_ENV_KEY = "OPENCLAW_CONSUMER_OPENAI_API_KEY";
 const CONSUMER_GEMINI_ENV_KEY = "OPENCLAW_CONSUMER_GEMINI_API_KEY";
+const JARVIS_BACKEND_ACCESS_TOKEN_ENV_KEYS = [
+  "JARVIS_BACKEND_ACCESS_TOKEN",
+  "JARVIS_BACKEND_API_TOKEN",
+];
 const ALLOW_BUNDLED_PROVIDER_KEYS_ENV_KEY = "OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS";
 
 function readSeededEnvValue(envKey, env = process.env) {
@@ -62,6 +66,23 @@ function setNestedValue(target, pathParts, value) {
 export function buildConsumerSeededDefaults({ env = process.env, founderConfig = {} } = {}) {
   const seeded = {};
   const allowBundledProviderKeys = env[ALLOW_BUNDLED_PROVIDER_KEYS_ENV_KEY] === "1";
+  const backendAccessToken = JARVIS_BACKEND_ACCESS_TOKEN_ENV_KEYS.map((envKey) =>
+    readSeededEnvValue(envKey, env),
+  ).find(Boolean);
+
+  if (backendAccessToken) {
+    // This bearer only authorizes the Jarvis backend activation/bootstrap API.
+    // It is intentionally separate from provider API keys, which remain blocked
+    // from public bundles unless an internal/demo build opts in below.
+    setNestedValue(
+      seeded,
+      ["jarvis", "backend", "baseUrl"],
+      readSeededEnvValue("JARVIS_BACKEND_BASE_URL", env) ??
+        "https://jarvis-backend-klvq.onrender.com",
+    );
+    setNestedValue(seeded, ["jarvis", "backend", "accessToken"], backendAccessToken);
+    setNestedValue(seeded, ["jarvis", "managedServices", "mode"], "managed");
+  }
 
   // Public builds must not embed founder/provider keys. BYOK users configure
   // their own credentials after install; managed users should route through the
