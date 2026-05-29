@@ -28,11 +28,11 @@ import {
 } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
+  createChatAbortControllerEntry,
   type ChatAbortControllerEntry,
   type ChatAbortOps,
   isChatStopCommandText,
   renewChatRunExpiry,
-  resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
@@ -1250,15 +1250,19 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     try {
       const abortController = new AbortController();
-      context.chatAbortControllers.set(clientRunId, {
-        controller: abortController,
-        sessionId: entry?.sessionId ?? clientRunId,
-        sessionKey: rawSessionKey,
-        startedAtMs: now,
-        expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
-        ownerConnId: normalizeOptionalText(client?.connId),
-        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
-      });
+      context.chatAbortControllers.set(
+        clientRunId,
+        createChatAbortControllerEntry({
+          controller: abortController,
+          sessionId: entry?.sessionId ?? clientRunId,
+          sessionKey: rawSessionKey,
+          startedAtMs: now,
+          timeoutMs,
+          activitySource: "chat.send",
+          ownerConnId: normalizeOptionalText(client?.connId),
+          ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        }),
+      );
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,

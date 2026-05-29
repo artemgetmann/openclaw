@@ -5,6 +5,7 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { renewChatAbortControllerEntry, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -323,6 +324,7 @@ export type AgentEventHandlerOptions = {
   nodeSendToSession: NodeSendToSession;
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   resolveSessionKeyForRun: (runId: string) => string | undefined;
   clearAgentRunContext: (runId: string) => void;
   toolEventRecipients: ToolEventRecipientRegistry;
@@ -334,10 +336,51 @@ export function createAgentEventHandler({
   nodeSendToSession,
   agentRunSeq,
   chatRunState,
+  chatAbortControllers,
   resolveSessionKeyForRun,
   clearAgentRunContext,
   toolEventRecipients,
 }: AgentEventHandlerOptions) {
+  const renewChatLeaseIfActive = (params: {
+    runId: string;
+    activitySource?: string;
+    now: number;
+  }) => {
+    const active = chatAbortControllers.get(params.runId);
+    if (!active) {
+      return false;
+    }
+    renewChatAbortControllerEntry({
+      entry: active,
+      now: params.now,
+      activitySource: params.activitySource ?? "unknown",
+    });
+    return true;
+  };
+
+  const resolveChatLeaseActivitySource = (evt: AgentEventPayload): string | undefined => {
+    // Renew only from real agent output/progress. Gateway ticks and terminal lifecycle events
+    // must not keep an otherwise stalled chat.send request alive.
+    if (evt.stream === "assistant" && typeof evt.data?.text === "string" && evt.data.text.trim()) {
+      return "assistant";
+    }
+    if (evt.stream === "tool") {
+      const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (phase === "end" || phase === "error") {
+        return undefined;
+      }
+      return phase ? `tool:${phase}` : "tool";
+    }
+    if (evt.stream === "lifecycle") {
+      const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (phase === "end" || phase === "error") {
+        return undefined;
+      }
+      return phase ? `lifecycle:${phase}` : undefined;
+    }
+    return undefined;
+  };
+
   const emitChatDelta = (
     sessionKey: string,
     clientRunId: string,
@@ -532,6 +575,18 @@ export function createAgentEventHandler({
     const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
     const isAborted =
       chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
+    if (!isAborted) {
+      const activitySource = resolveChatLeaseActivitySource(evt);
+      if (activitySource) {
+        // chat.send uses the client run id as the outer abort-lease key. Session keys can differ
+        // between raw request aliases and canonical agent context, so the run id is the authority.
+        renewChatLeaseIfActive({
+          runId: clientRunId,
+          activitySource,
+          now: evt.ts,
+        });
+      }
+    }
     // Include sessionKey so Control UI can filter tool streams per session.
     const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
     const last = agentRunSeq.get(evt.runId) ?? 0;

@@ -1,6 +1,11 @@
 import type { HealthSummary } from "../commands/health.js";
 import { cleanOldMedia } from "../media/store.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import {
+  abortChatRunById,
+  buildChatTimeoutAbortReason,
+  formatChatTimeoutAbortLog,
+  type ChatAbortControllerEntry,
+} from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
   DEDUPE_MAX,
@@ -106,6 +111,7 @@ export function startGatewayMaintenanceTimers(params: {
       if (now <= entry.expiresAtMs) {
         continue;
       }
+      params.logHealth.error(formatChatTimeoutAbortLog({ runId, entry, now }));
       abortChatRunById(
         {
           chatAbortControllers: params.chatAbortControllers,
@@ -117,7 +123,19 @@ export function startGatewayMaintenanceTimers(params: {
           broadcast: params.broadcast,
           nodeSendToSession: params.nodeSendToSession,
         },
-        { runId, sessionKey: entry.sessionKey, stopReason: "timeout" },
+        {
+          runId,
+          sessionKey: entry.sessionKey,
+          stopReason: "timeout",
+          abortReason: buildChatTimeoutAbortReason({
+            runId,
+            sessionKey: entry.sessionKey,
+            startedAtMs: entry.startedAtMs,
+            expiresAtMs: entry.expiresAtMs,
+            lastRenewedAtMs: entry.lastRenewedAtMs ?? entry.startedAtMs,
+            lastActivitySource: entry.lastActivitySource ?? "unknown",
+          }),
+        },
       );
     }
 

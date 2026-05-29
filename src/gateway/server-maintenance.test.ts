@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isTimeoutError } from "../agents/failover-error.js";
 import type { HealthSummary } from "../commands/health.js";
-import { renewChatRunExpiry, type ChatAbortControllerEntry } from "./chat-abort.js";
+import {
+  createChatAbortControllerEntry,
+  renewChatAbortControllerEntry,
+  renewChatRunExpiry,
+  type ChatAbortControllerEntry,
+} from "./chat-abort.js";
 
-const { cleanOldMediaMock } = vi.hoisted(() => ({
-  cleanOldMediaMock: vi.fn(async () => {}),
-}));
+const cleanOldMediaMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/store.js")>();
@@ -53,6 +57,81 @@ describe("startGatewayMaintenanceTimers", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+  it("logs and aborts expired chat runs with a timeout reason", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const runId = "run-timeout";
+    const entry = createChatAbortControllerEntry({
+      controller: new AbortController(),
+      sessionId: "sess-timeout",
+      sessionKey: "main",
+      startedAtMs: -180_000,
+      timeoutMs: 5_000,
+      activitySource: "chat.send",
+    });
+    const logHealthError = vi.fn();
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+      logHealth: { error: logHealthError },
+      chatAbortControllers: new Map([[runId, entry]]),
+    });
+
+    await vi.advanceTimersByTimeAsync(60_001);
+
+    expect(logHealthError).toHaveBeenCalledTimes(1);
+    expect(logHealthError.mock.calls[0]?.[0]).toContain(`runId=${runId}`);
+    expect(logHealthError.mock.calls[0]?.[0]).toContain("sessionKey=main");
+    expect(logHealthError.mock.calls[0]?.[0]).toContain("startedAtMs=-180000");
+    expect(logHealthError.mock.calls[0]?.[0]).toContain("lastRenewedAtMs=-180000");
+    expect(logHealthError.mock.calls[0]?.[0]).toContain("lastActivitySource=chat.send");
+    expect(entry.controller.signal.aborted).toBe(true);
+    expect(isTimeoutError(entry.controller.signal.reason)).toBe(true);
+    expect(entry.controller.signal.reason).toBeInstanceOf(Error);
+    expect(entry.controller.signal.reason).toEqual(
+      expect.objectContaining({ name: "TimeoutError" }),
+    );
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("keeps a renewed lease alive past its original deadline and aborts after the renewed deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const runId = "run-renew";
+    const entry = createChatAbortControllerEntry({
+      controller: new AbortController(),
+      sessionId: "sess-renew",
+      sessionKey: "main",
+      startedAtMs: 0,
+      timeoutMs: 5_000,
+      activitySource: "chat.send",
+    });
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+      chatAbortControllers: new Map([[runId, entry]]),
+    });
+
+    vi.setSystemTime(60_000);
+    renewChatAbortControllerEntry({
+      entry,
+      now: 60_000,
+      activitySource: "tool:start",
+    });
+
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(entry.controller.signal.aborted).toBe(false);
+
+    // Maintenance runs on a coarse interval. The lease should abort on the first sweep
+    // after the renewed expiry, not merely when the original deadline has passed.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(entry.controller.signal.aborted).toBe(true);
+    expect(isTimeoutError(entry.controller.signal.reason)).toBe(true);
+
+    stopMaintenanceTimers(timers);
   });
 
   it("does not schedule recursive media cleanup unless ttl is configured", async () => {

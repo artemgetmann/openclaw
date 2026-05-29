@@ -1,11 +1,16 @@
 import { isAbortRequestText } from "../auto-reply/reply/abort.js";
 
+export type ChatAbortActivitySource = string;
+
 export type ChatAbortControllerEntry = {
   controller: AbortController;
   sessionId: string;
   sessionKey: string;
   startedAtMs: number;
   expiresAtMs: number;
+  timeoutMs?: number;
+  lastRenewedAtMs?: number;
+  lastActivitySource?: ChatAbortActivitySource;
   ownerConnId?: string;
   ownerDeviceId?: string;
 };
@@ -29,16 +34,111 @@ export function resolveChatRunExpiresAtMs(params: {
   return Math.min(max, Math.max(min, target));
 }
 
+export function createChatAbortControllerEntry(params: {
+  controller: AbortController;
+  sessionId: string;
+  sessionKey: string;
+  startedAtMs: number;
+  timeoutMs: number;
+  activitySource?: ChatAbortActivitySource;
+  ownerConnId?: string;
+  ownerDeviceId?: string;
+}): ChatAbortControllerEntry {
+  const activitySource = params.activitySource?.trim() || "chat.send";
+  const expiresAtMs = resolveChatRunExpiresAtMs({
+    now: params.startedAtMs,
+    timeoutMs: params.timeoutMs,
+  });
+  return {
+    controller: params.controller,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    startedAtMs: params.startedAtMs,
+    timeoutMs: params.timeoutMs,
+    lastRenewedAtMs: params.startedAtMs,
+    lastActivitySource: activitySource,
+    expiresAtMs,
+    ownerConnId: params.ownerConnId,
+    ownerDeviceId: params.ownerDeviceId,
+  };
+}
+
+export function renewChatAbortControllerEntry(params: {
+  entry: ChatAbortControllerEntry;
+  now: number;
+  activitySource: ChatAbortActivitySource;
+  timeoutMs?: number;
+}): ChatAbortControllerEntry {
+  const activitySource =
+    params.activitySource.trim() || params.entry.lastActivitySource || "unknown";
+  const timeoutMs =
+    params.timeoutMs ??
+    params.entry.timeoutMs ??
+    Math.max(0, params.entry.expiresAtMs - params.entry.startedAtMs);
+  const nextExpiresAtMs = resolveChatRunExpiresAtMs({
+    now: params.now,
+    timeoutMs,
+  });
+  // Async activity callbacks can arrive out of order. Keep expiry monotonic so
+  // a delayed callback cannot shorten a fresher lease.
+  if (nextExpiresAtMs >= params.entry.expiresAtMs) {
+    params.entry.lastRenewedAtMs = params.now;
+    params.entry.lastActivitySource = activitySource;
+    params.entry.expiresAtMs = nextExpiresAtMs;
+  }
+  return params.entry;
+}
+
 export function renewChatRunExpiry(params: {
   entry: ChatAbortControllerEntry;
   now: number;
   timeoutMs: number;
 }): number {
-  const nextExpiresAtMs = resolveChatRunExpiresAtMs(params);
-  // Async activity callbacks can arrive out of order. Keep expiry monotonic so
-  // a delayed callback cannot shorten a fresher lease.
-  params.entry.expiresAtMs = Math.max(params.entry.expiresAtMs, nextExpiresAtMs);
+  renewChatAbortControllerEntry({
+    entry: params.entry,
+    now: params.now,
+    timeoutMs: params.timeoutMs,
+    activitySource: params.entry.lastActivitySource ?? "agent:activity",
+  });
   return params.entry.expiresAtMs;
+}
+
+export function buildChatTimeoutAbortReason(params: {
+  runId: string;
+  sessionKey: string;
+  startedAtMs: number;
+  expiresAtMs: number;
+  lastRenewedAtMs: number;
+  lastActivitySource: ChatAbortActivitySource;
+}) {
+  const error = new Error(
+    `chat lease timed out run=${params.runId} session=${params.sessionKey} started=${params.startedAtMs} expires=${params.expiresAtMs} renewed=${params.lastRenewedAtMs} source=${params.lastActivitySource}`,
+  );
+  error.name = "TimeoutError";
+  return error;
+}
+
+export function formatChatTimeoutAbortLog(params: {
+  runId: string;
+  entry: ChatAbortControllerEntry;
+  now: number;
+}): string {
+  const ageMs = Math.max(0, params.now - params.entry.startedAtMs);
+  const overdueMs = Math.max(0, params.now - params.entry.expiresAtMs);
+  // Some older tests still construct legacy entries directly. Runtime chat.send entries carry
+  // these fields, but logging should stay useful instead of printing raw undefined values.
+  const lastRenewedAtMs = params.entry.lastRenewedAtMs ?? params.entry.startedAtMs;
+  const lastActivitySource = params.entry.lastActivitySource ?? "unknown";
+  return [
+    `chat timeout abort runId=${params.runId}`,
+    `sessionKey=${params.entry.sessionKey}`,
+    `startedAtMs=${params.entry.startedAtMs}`,
+    `expiresAtMs=${params.entry.expiresAtMs}`,
+    `lastRenewedAtMs=${lastRenewedAtMs}`,
+    `lastActivitySource=${lastActivitySource}`,
+    `ageMs=${ageMs}`,
+    `overdueMs=${overdueMs}`,
+  ].join(" ");
 }
 
 export type ChatAbortOps = {
@@ -90,9 +190,10 @@ export function abortChatRunById(
     runId: string;
     sessionKey: string;
     stopReason?: string;
+    abortReason?: unknown;
   },
 ): { aborted: boolean } {
-  const { runId, sessionKey, stopReason } = params;
+  const { runId, sessionKey, stopReason, abortReason } = params;
   const active = ops.chatAbortControllers.get(runId);
   if (!active) {
     return { aborted: false };
@@ -104,7 +205,11 @@ export function abortChatRunById(
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatAbortedRuns.set(runId, Date.now());
-  active.controller.abort();
+  if (abortReason !== undefined) {
+    active.controller.abort(abortReason);
+  } else {
+    active.controller.abort();
+  }
   ops.chatAbortControllers.delete(runId);
   ops.chatRunBuffers.delete(runId);
   ops.chatDeltaSentAt.delete(runId);
