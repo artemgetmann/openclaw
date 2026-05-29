@@ -132,6 +132,7 @@ const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
   "click",
   "drag",
   "hover",
+  "press",
   "scrollIntoView",
   "select",
   "type",
@@ -263,13 +264,19 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
       if (!key) {
         throw new Error("press requires key");
       }
+      const ref = toStringOrEmpty(raw.ref) || undefined;
+      const selector = toStringOrEmpty(raw.selector) || undefined;
       const targetId = toStringOrEmpty(raw.targetId) || undefined;
       const delayMs = toNumber(raw.delayMs);
+      const timeoutMs = toNumber(raw.timeoutMs);
       return {
         kind,
         key,
+        ...(ref ? { ref } : {}),
+        ...(selector ? { selector } : {}),
         ...(targetId ? { targetId } : {}),
         ...(delayMs !== undefined ? { delayMs } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       };
     }
     case "hover":
@@ -658,9 +665,18 @@ export function registerBrowserAgentActRoutes(
             if (!key) {
               return jsonError(res, 400, "key is required");
             }
+            const ref = toStringOrEmpty(body.ref) || undefined;
+            const selector = toStringOrEmpty(body.selector) || undefined;
             const delayMs = toNumber(body.delayMs);
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
+              if (selector || ref) {
+                return jsonError(
+                  res,
+                  501,
+                  "existing-session press does not support ref/selector targeting yet; press uses the focused element.",
+                );
+              }
               if (delayMs) {
                 return jsonError(res, 501, "existing-session press does not support delayMs.");
               }
@@ -680,8 +696,11 @@ export function registerBrowserAgentActRoutes(
             await pw.pressKeyViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              ref,
+              selector,
               key,
               delayMs: delayMs ?? undefined,
+              timeoutMs: timeoutMs ?? undefined,
             });
             return res.json({ ok: true, targetId: tab.targetId });
           }

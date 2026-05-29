@@ -1,3 +1,4 @@
+import type { Locator, Page } from "playwright-core";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
@@ -24,6 +25,8 @@ type TargetOpts = {
 const MAX_CLICK_DELAY_MS = 5_000;
 const MAX_WAIT_TIME_MS = 30_000;
 const MAX_BATCH_ACTIONS = 100;
+const EDITABLE_DESCENDANT_SELECTOR =
+  'input:not([type="hidden"]), textarea, [contenteditable="true"], [role="textbox"]';
 
 function resolveBoundedDelayMs(value: number | undefined, label: string, maxMs: number): number {
   const normalized = Math.floor(value ?? 0);
@@ -45,6 +48,48 @@ async function getRestoredPageForTarget(opts: TargetOpts) {
 
 function resolveInteractionTimeoutMs(timeoutMs?: number): number {
   return Math.max(500, Math.min(60_000, Math.floor(timeoutMs ?? 8000)));
+}
+
+async function fillEditableTarget(params: {
+  page: Page;
+  locator: Locator;
+  value: string;
+  timeout: number;
+}): Promise<void> {
+  try {
+    await params.locator.fill(params.value, { timeout: params.timeout });
+    return;
+  } catch (directErr) {
+    // Custom selects often expose a combobox wrapper ref while the editable
+    // search input lives inside it. Focus the wrapper, then fill the inner or
+    // active text control so agents can use the normal fill -> press Enter path.
+    try {
+      await params.locator.click({ timeout: params.timeout });
+    } catch {
+      // Keep the original fill error if all combobox fallbacks fail below.
+    }
+    try {
+      await params.locator
+        .locator(EDITABLE_DESCENDANT_SELECTOR)
+        .first()
+        .fill(params.value, { timeout: params.timeout });
+      return;
+    } catch {
+      // Try the currently focused editable input; some portals move the actual
+      // search box outside the wrapper after click.
+    }
+    try {
+      await params.page
+        .locator(
+          'input:focus:not([type="hidden"]), textarea:focus, [contenteditable="true"]:focus, [role="textbox"]:focus',
+        )
+        .first()
+        .fill(params.value, { timeout: params.timeout });
+      return;
+    } catch {
+      throw directErr;
+    }
+  }
 }
 
 async function awaitEvalWithAbort<T>(
@@ -199,18 +244,37 @@ export async function selectOptionViaPlaywright(opts: {
 export async function pressKeyViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  ref?: string;
+  selector?: string;
   key: string;
   delayMs?: number;
+  timeoutMs?: number;
 }): Promise<void> {
   const key = String(opts.key ?? "").trim();
   if (!key) {
     throw new Error("key is required");
   }
+  const delay = Math.max(0, Math.floor(opts.delayMs ?? 0));
+  if (opts.ref || opts.selector) {
+    const resolved = requireRefOrSelector(opts.ref, opts.selector);
+    const page = await getRestoredPageForTarget(opts);
+    const label = resolved.ref ?? resolved.selector!;
+    const locator = resolved.ref
+      ? refLocator(page, requireRef(resolved.ref))
+      : page.locator(resolved.selector!);
+    try {
+      await locator.press(key, {
+        delay,
+        timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+      });
+      return;
+    } catch (err) {
+      throw toAIFriendlyError(err, label);
+    }
+  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  await page.keyboard.press(key, {
-    delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
-  });
+  await page.keyboard.press(key, { delay });
 }
 
 export async function typeViaPlaywright(opts: {
@@ -236,7 +300,7 @@ export async function typeViaPlaywright(opts: {
       await locator.click({ timeout });
       await locator.type(text, { timeout, delay: 75 });
     } else {
-      await locator.fill(text, { timeout });
+      await fillEditableTarget({ page, locator, value: text, timeout });
     }
     if (opts.submit) {
       await locator.press("Enter", { timeout });
@@ -281,7 +345,7 @@ export async function fillFormViaPlaywright(opts: {
       continue;
     }
     try {
-      await locator.fill(value, { timeout });
+      await fillEditableTarget({ page, locator, value, timeout });
     } catch (err) {
       throw toAIFriendlyError(err, label);
     }
@@ -752,8 +816,11 @@ async function executeSingleAction(
       await pressKeyViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
+        ref: action.ref,
+        selector: action.selector,
         key: action.key,
         delayMs: action.delayMs,
+        timeoutMs: action.timeoutMs,
       });
       break;
     case "hover":

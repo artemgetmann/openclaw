@@ -76,6 +76,10 @@ describe("browser control server", () => {
           input: { ref: "8", type: "   ", value: "trimmed-default" },
           expected: { ref: "8", type: "text", value: "trimmed-default" },
         },
+        {
+          input: { selector: 'label:has-text("To") input', text: "Denpasar" },
+          expected: { selector: 'label:has-text("To") input', type: "text", value: "Denpasar" },
+        },
       ];
       for (const { input, expected } of fillCases) {
         const fill = await postJson<{ ok: boolean }>(`${base}/act`, {
@@ -174,6 +178,7 @@ describe("browser control server", () => {
           stopOnError: "false",
           actions: [
             { kind: "click", selector: "button.save", doubleClick: "true", delayMs: "25" },
+            { kind: "press", ref: "combo-title", key: "Enter", timeoutMs: "12000" },
             { kind: "wait", fn: " () => window.ready === true " },
           ],
         },
@@ -192,6 +197,12 @@ describe("browser control server", () => {
               selector: "button.save",
               doubleClick: true,
               delayMs: 25,
+            },
+            {
+              kind: "press",
+              ref: "combo-title",
+              key: "Enter",
+              timeoutMs: 12000,
             },
             {
               kind: "wait",

@@ -813,6 +813,104 @@ describe("browser tool act compatibility", () => {
       expect.objectContaining({ profile: undefined }),
     );
   });
+
+  it.each([
+    {
+      name: "click",
+      args: {
+        action: "act",
+        kind: "click",
+        ref: "btn-1",
+        includeSnapshot: true,
+      },
+    },
+    {
+      name: "fill",
+      args: {
+        action: "act",
+        request: {
+          kind: "fill",
+          fields: [{ ref: "input-1", value: "Ada" }],
+          includeSnapshot: true,
+        },
+      },
+    },
+    {
+      name: "press",
+      args: {
+        action: "act",
+        request: {
+          kind: "press",
+          key: "Enter",
+          targetId: "tab-from-request",
+          includeSnapshot: true,
+        },
+      },
+    },
+  ])(
+    "returns a fresh structured snapshot after mutating $name when requested",
+    async ({ args }) => {
+      browserActionsMocks.browserAct.mockResolvedValueOnce({
+        ok: true,
+        targetId: "tab-after-act",
+        url: "https://example.com/next",
+      });
+      browserClientMocks.browserSnapshot.mockResolvedValueOnce({
+        ok: true,
+        format: "ai",
+        targetId: "tab-after-act",
+        url: "https://example.com/next",
+        snapshot: '- button "Continue" [ref=e1]',
+        refs: { e1: { role: "button", name: "Continue" } },
+      });
+
+      const tool = createBrowserTool();
+      const result = await tool.execute?.("call-1", args);
+
+      expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({
+          format: "ai",
+          refs: "aria",
+          mode: "efficient",
+          targetId: "tab-after-act",
+          profile: undefined,
+        }),
+      );
+      expect(result?.details).toMatchObject({
+        ok: true,
+        includeSnapshot: true,
+        act: {
+          ok: true,
+          targetId: "tab-after-act",
+        },
+        snapshot: {
+          ok: true,
+          format: "ai",
+          targetId: "tab-after-act",
+        },
+      });
+      expect(result?.content?.[1]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("<<<EXTERNAL_UNTRUSTED_CONTENT"),
+      });
+      expect(toolCommonMocks.imageResultFromFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps act-only responses lightweight when includeSnapshot is omitted", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      request: {
+        kind: "fill",
+        fields: [{ ref: "input-1", value: "Ada" }],
+      },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalled();
+    expect(browserClientMocks.browserSnapshot).not.toHaveBeenCalled();
+  });
 });
 
 describe("browser tool snapshot labels", () => {

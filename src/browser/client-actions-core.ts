@@ -17,7 +17,23 @@ export type BrowserFormField = {
   value?: string | number | boolean;
 };
 
-export type BrowserActRequest =
+export type BrowserActSnapshotOptions = {
+  /**
+   * Agent-facing convenience flag. Tool callers use this to collapse
+   * mutate-then-snapshot loops into one browser call; the agent tool may service
+   * it by issuing a follow-up snapshot after the action succeeds.
+   */
+  includeSnapshot?: boolean;
+  snapshotFormat?: "ai" | "aria";
+  refs?: "role" | "aria";
+  mode?: "efficient";
+  compact?: boolean;
+  depth?: number;
+  maxChars?: number;
+  labels?: boolean;
+};
+
+type BrowserActRequestBase =
   | {
       kind: "click";
       ref?: string;
@@ -39,7 +55,15 @@ export type BrowserActRequest =
       slowly?: boolean;
       timeoutMs?: number;
     }
-  | { kind: "press"; key: string; targetId?: string; delayMs?: number }
+  | {
+      kind: "press";
+      key: string;
+      ref?: string;
+      selector?: string;
+      targetId?: string;
+      delayMs?: number;
+      timeoutMs?: number;
+    }
   | {
       kind: "hover";
       ref?: string;
@@ -98,6 +122,8 @@ export type BrowserActRequest =
       targetId?: string;
       stopOnError?: boolean;
     };
+
+export type BrowserActRequest = BrowserActRequestBase & BrowserActSnapshotOptions;
 
 export type BrowserActResponse = {
   ok: true;

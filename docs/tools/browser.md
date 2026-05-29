@@ -601,6 +601,12 @@ Notes:
   - `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
 - `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
   CSS selectors are intentionally not supported for actions.
+- Agent tool calls can pass `includeSnapshot: true` on mutating `act` requests
+  to get a fresh structured snapshot immediately after the action. Use this
+  after `click`, `type`, `fill`, `press`, or `select` when the next step depends
+  on the updated UI; use a separate `snapshot` call for read-only inspection.
+- For forms, prefer one `act` request with `kind: "fill"` and `fields[]` refs
+  from the snapshot instead of many single-field calls.
 
 ## Snapshots and refs
 
@@ -733,6 +739,8 @@ How it maps:
 
 - `browser snapshot` returns a stable UI tree (AI or ARIA).
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
+- `browser act` with `includeSnapshot: true` returns the action result plus a
+  fresh structured snapshot; this is the default best path after UI mutations.
 - `browser screenshot` captures pixels (full page or element).
 - `browser` accepts:
   - `profile` to choose a named browser profile (openclaw, chrome, or remote CDP).
