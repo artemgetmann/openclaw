@@ -412,7 +412,7 @@ struct TelegramSetupBootstrapTests {
         }
     }
 
-    @Test func `managed telegram status installs child token without exposing it in status text`() async throws {
+    @Test func `managed telegram status installs child token disabled until first sender capture`() async throws {
         let savedRoot = SavedConfigRoot()
         let configPath = TestIsolation.tempConfigPath()
         let stateDir = FileManager.default.temporaryDirectory
@@ -491,6 +491,9 @@ struct TelegramSetupBootstrapTests {
             let defaultAccount = try #require(accounts["default"] as? [String: Any])
             #expect(telegram["botToken"] as? String == "777000:test-child-token")
             #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
+            #expect(telegram["enabled"] as? Bool == false)
+            #expect(telegram["dmPolicy"] as? String == "allowlist")
+            #expect((telegram["allowFrom"] as? [String])?.isEmpty ?? true)
             #expect(managedServices["mode"] as? String == "managed")
             #expect(managedServices["futureFlag"] as? Bool == true)
             #expect(backend["baseUrl"] as? String == "https://jarvis.example.test")
