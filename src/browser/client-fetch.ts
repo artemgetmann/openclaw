@@ -164,18 +164,18 @@ function isRetryableChromeAttachMessage(message: string): boolean {
     lower.includes("approve the browser attach prompt") ||
     lower.includes("chrome closed the remote-debugging connection") ||
     lower.includes("devtoolsactiveport") ||
+    lower.includes("mcp error -32001") ||
+    lower.includes("network.enable timed out") ||
     (lower.includes("attach timed out") && lower.includes("chrome mcp"))
   );
 }
 
-function isTimeoutOrAbortLikeMessage(message: string): boolean {
+function hasChromeApprovalGuidance(message: string): boolean {
   const lower = message.toLowerCase();
   return (
-    lower.includes("timed out") ||
-    lower.includes("timeout") ||
-    lower.includes("aborted") ||
-    lower.includes("abort") ||
-    lower.includes("aborterror")
+    lower.includes("approve") ||
+    lower.includes("click allow") ||
+    lower.includes("chrome://inspect/#remote-debugging")
   );
 }
 
@@ -202,10 +202,11 @@ async function discardResponseBody(res: Response): Promise<void> {
 
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const msg = normalizeErrorMessage(err);
-  if (isUserLiveBrowserControlRequest(url) && isTimeoutOrAbortLikeMessage(msg)) {
-    // `user-live` attach failures often mean Chrome is paused on the remote-debugging
-    // approval prompt. That is actionable for the caller, so surface the approval
-    // guidance instead of the generic gateway restart/no-retry messaging.
+  if (
+    isUserLiveBrowserControlRequest(url) &&
+    isRetryableChromeAttachMessage(msg) &&
+    !hasChromeApprovalGuidance(msg)
+  ) {
     return new Error(
       USER_LIVE_REMOTE_DEBUGGING_GUIDANCE,
       err instanceof Error ? { cause: err } : undefined,
@@ -232,14 +233,21 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     msgLower.includes("aborted") ||
     msgLower.includes("abort") ||
     msgLower.includes("aborterror");
-  if (isUserLiveBrowserControlRequest(url) && looksLikeTimeout) {
-    // Absolute loopback calls bypass the in-process dispatcher path. Keep their
-    // `user-live` timeout surface aligned with dispatcher calls: the likely fix
-    // is Chrome attach approval/setup, not restarting the OpenClaw gateway.
+  if (
+    isUserLiveBrowserControlRequest(url) &&
+    isRetryableChromeAttachMessage(msg) &&
+    !hasChromeApprovalGuidance(msg)
+  ) {
+    // Absolute loopback calls bypass the in-process dispatcher path. Only
+    // attach-shaped failures should become Chrome approval guidance; generic
+    // action/site timeouts must keep their original timeout surface.
     return new Error(
       USER_LIVE_REMOTE_DEBUGGING_GUIDANCE,
       err instanceof Error ? { cause: err } : undefined,
     );
+  }
+  if (isRetryableChromeAttachMessage(msg)) {
+    return new Error(msg, err instanceof Error ? { cause: err } : undefined);
   }
   if (looksLikeTimeout) {
     return new Error(
@@ -392,7 +400,7 @@ export async function fetchBrowserJson<T>(
     return result.body as T;
   } catch (err) {
     if (err instanceof BrowserServiceError) {
-      if (isUserLiveBrowserControlRequest(url) && isTimeoutOrAbortLikeMessage(err.message)) {
+      if (isUserLiveBrowserControlRequest(url) && isRetryableChromeAttachMessage(err.message)) {
         throw new Error(USER_LIVE_REMOTE_DEBUGGING_GUIDANCE, { cause: err });
       }
       throw err;

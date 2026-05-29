@@ -411,6 +411,7 @@ export function createBrowserTool(opts?: {
       'Do not silently fall back to profile="openclaw" when the task depends on existing logins/cookies; surface the blocker instead.',
       'profile="user-live" attaches to the user\'s real Chrome session through the existing-session lane and is host-only.',
       'If profile="user-live" fails to attach, first try the official Chrome live-session recovery path: keep normal Google Chrome running, open chrome://inspect/#remote-debugging in that same browser, enable remote debugging, accept the attach prompt if Chrome shows one, then retry before escalating.',
+      'Do not send act kind="batch" for profile="user-live" or other existing-session profiles; send individual actions sequentially.',
       "If multiple Chrome profiles may exist, pin the signed-in lane with sourceProfileName or use a named custom existing-session profile instead of guessing.",
       "Custom profiles can still target Brave, Edge, Chromium, non-default Chrome profiles, or additional cloned-session flows when the default three-lane setup is insufficient.",
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
