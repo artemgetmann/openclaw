@@ -39,6 +39,12 @@ def install_mock_async_client(monkeypatch, handler) -> None:
     monkeypatch.setattr("app.main.httpx.AsyncClient", make_client)
 
 
+def backend_token_headers(token: str = "server-token") -> dict[str, str]:
+    """Build the backend bearer header used by managed-utility contract tests."""
+
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_health_reports_provider_presence_without_secret_values(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-provider-placeholder")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -675,6 +681,7 @@ def test_configured_backend_token_is_required(monkeypatch):
 
 def test_firecrawl_search_calls_provider_and_redacts_echoed_key(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
     reset_settings()
 
@@ -697,6 +704,7 @@ def test_firecrawl_search_calls_provider_and_redacts_echoed_key(monkeypatch):
     response = TestClient(app).post(
         "/v1/managed/utilities/firecrawl.search",
         json={"input": {"query": "founder mode", "limit": 3}},
+        headers=backend_token_headers(),
     )
 
     assert response.status_code == 200
@@ -711,6 +719,7 @@ def test_firecrawl_search_calls_provider_and_redacts_echoed_key(monkeypatch):
 
 def test_firecrawl_scrape_calls_provider_with_markdown_format(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
     reset_settings()
 
@@ -731,6 +740,7 @@ def test_firecrawl_scrape_calls_provider_with_markdown_format(monkeypatch):
     response = TestClient(app).post(
         "/v1/managed/utilities/firecrawl.scrape",
         json={"input": {"url": "https://example.com"}},
+        headers=backend_token_headers(),
     )
 
     assert response.status_code == 200
@@ -741,6 +751,7 @@ def test_firecrawl_scrape_calls_provider_with_markdown_format(monkeypatch):
 
 def test_google_places_search_calls_provider_and_redacts_echoed_key(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
     monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "test-places-provider-placeholder")
     reset_settings()
 
@@ -768,6 +779,7 @@ def test_google_places_search_calls_provider_and_redacts_echoed_key(monkeypatch)
     response = TestClient(app).post(
         "/v1/managed/utilities/google_places.search",
         json={"input": {"query": "coffee near KLCC", "limit": 4}},
+        headers=backend_token_headers(),
     )
 
     assert response.status_code == 200
@@ -780,6 +792,7 @@ def test_google_places_search_calls_provider_and_redacts_echoed_key(monkeypatch)
 
 def test_brave_search_calls_provider_and_redacts_echoed_key(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
     monkeypatch.setenv("BRAVE_API_KEY", "test-brave-provider-placeholder")
     reset_settings()
 
@@ -818,6 +831,7 @@ def test_brave_search_calls_provider_and_redacts_echoed_key(monkeypatch):
                 "search_lang": "en",
             }
         },
+        headers=backend_token_headers(),
     )
 
     assert response.status_code == 200
@@ -831,6 +845,7 @@ def test_brave_search_calls_provider_and_redacts_echoed_key(monkeypatch):
 
 def test_gemini_image_generate_calls_provider_and_returns_inline_image(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-provider-placeholder")
     reset_settings()
 
@@ -881,6 +896,7 @@ def test_gemini_image_generate_calls_provider_and_returns_inline_image(monkeypat
                 "aspectRatio": "16:9",
             }
         },
+        headers=backend_token_headers(),
     )
 
     assert response.status_code == 200
@@ -898,6 +914,7 @@ def test_gemini_image_generate_calls_provider_and_returns_inline_image(monkeypat
 
 def test_gemini_image_generate_validates_prompt_before_provider_spend(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-provider-placeholder")
     reset_settings()
 
@@ -909,6 +926,7 @@ def test_gemini_image_generate_validates_prompt_before_provider_spend(monkeypatc
     response = TestClient(app).post(
         "/v1/managed/utilities/gemini.image.generate",
         json={"input": {"prompt": "tiny robot assistant", "resolution": "8K"}},
+        headers=backend_token_headers(),
     )
 
     assert response.status_code == 400
@@ -919,12 +937,14 @@ def test_gemini_image_generate_validates_prompt_before_provider_spend(monkeypatc
 
 def test_managed_utility_missing_provider_key_fails_closed(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
     reset_settings()
 
     response = TestClient(app).post(
         "/v1/managed/utilities/firecrawl.search",
         json={"input": {"query": "founder mode"}},
+        headers=backend_token_headers(),
     )
 
     assert response.status_code == 503
@@ -932,13 +952,121 @@ def test_managed_utility_missing_provider_key_fails_closed(monkeypatch):
     assert response.json().get("ok") is None
 
 
+def test_managed_utility_accepts_account_token_with_active_managed_license(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-provider-placeholder")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    reset_settings()
+    client = TestClient(app)
+
+    activated = client.post(
+        "/v1/account/login",
+        json={
+            "email": "founder@example.com",
+            "deviceId": "device-managed-account",
+            "appVersion": "0.1.0",
+        },
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.firecrawl.dev/v2/search"
+        assert request.headers["authorization"] == "Bearer test-firecrawl-provider-placeholder"
+        assert json.loads(request.content) == {"query": "managed account", "limit": 2}
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": [{"title": "Jarvis", "url": "https://example.com"}],
+                "creditsUsed": 1,
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = client.post(
+        "/v1/managed/utilities/firecrawl.search",
+        json={"input": {"query": "managed account", "limit": 2}},
+        headers={"Authorization": f"Bearer {activated.json()['accountAccessToken']}"},
+    )
+
+    assert activated.status_code == 200
+    assert activated.json()["license"]["managedServicesEnabled"] is True
+    assert response.status_code == 200
+    assert response.json()["result"]["provider"] == "firecrawl"
+    assert response.json()["result"]["payload"]["data"][0]["title"] == "Jarvis"
+
+
+def test_managed_utility_rejects_invalid_token(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected provider request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).post(
+        "/v1/managed/utilities/firecrawl.search",
+        json={"input": {"query": "founder mode"}},
+        headers={"Authorization": "Bearer definitely-not-valid"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid account access token"
+
+
+def test_managed_utility_rejects_expired_account_token(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-provider-placeholder")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-provider-placeholder")
+    reset_settings()
+    client = TestClient(app)
+
+    activated = client.post(
+        "/v1/account/login",
+        json={
+            "email": "founder@example.com",
+            "deviceId": "device-expired-account",
+            "appVersion": "0.1.0",
+        },
+        headers=backend_token_headers(),
+    )
+    expired = client.post(
+        "/v1/admin/devices/device-expired-account/license",
+        json={"state": "expired"},
+        headers=backend_token_headers(),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected provider request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = client.post(
+        "/v1/managed/utilities/firecrawl.search",
+        json={"input": {"query": "founder mode"}},
+        headers={"Authorization": f"Bearer {activated.json()['accountAccessToken']}"},
+    )
+
+    assert activated.status_code == 200
+    assert expired.status_code == 200
+    assert response.status_code == 401
+    assert response.json()["detail"] == (
+        "Account access token is not linked to an active managed-services license"
+    )
+
+
 def test_unknown_managed_utility_returns_not_found(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("JARVIS_BACKEND_API_TOKEN", "server-token")
     reset_settings()
 
     response = TestClient(app).post(
         "/v1/managed/utilities/provider_status",
         json={"input": {"ignored": True}},
+        headers=backend_token_headers(),
     )
 
     assert response.status_code == 404

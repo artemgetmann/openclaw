@@ -479,11 +479,11 @@ async def telegram_managed_status(
 @app.post(
     "/v1/managed/utilities/{utility}",
     response_model=ManagedUtilityResponse,
-    dependencies=[Depends(require_api_token)],
 )
 async def managed_utility(
     utility: str,
     request: ManagedUtilityRequest,
+    authorization: str | None = Header(default=None),
     settings: Settings = Depends(get_settings),
 ) -> ManagedUtilityResponse:
     """
@@ -493,6 +493,8 @@ async def managed_utility(
     provider call, redacts configured secrets from any echoed JSON, and returns
     the stable envelope the app already expects.
     """
+
+    _require_managed_utility_access(authorization, settings)
 
     if utility == "firecrawl.search":
         return await _firecrawl_search(request.input, settings)
@@ -1332,6 +1334,9 @@ class LicenseStore(Protocol):
     def get_account_by_access_token(self, *, account_access_token: str) -> AccountRecord | None:
         """Resolve a previously issued account token without exposing secrets."""
 
+    def get_device_license_by_account_id(self, *, account_id: str) -> LicenseRecord | None:
+        """Resolve the newest device license linked to one account."""
+
     def update_license_state(
         self,
         *,
@@ -1511,6 +1516,24 @@ class SQLiteLicenseStore:
             ).fetchone()
 
         return _account_from_row(row) if row else None
+
+    def get_device_license_by_account_id(self, *, account_id: str) -> LicenseRecord | None:
+        """Return the most recent device license linked to one account."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                """
+                SELECT *
+                FROM device_licenses
+                WHERE account_id = ?
+                ORDER BY registered_at DESC
+                LIMIT 1
+                """,
+                (account_id,),
+            ).fetchone()
+
+        return _record_from_row(row) if row else None
 
     def update_license_state(
         self,
@@ -1818,6 +1841,26 @@ class PostgresLicenseStore:
                 row = cursor.fetchone()
 
         return _account_from_row(row) if row else None
+
+    def get_device_license_by_account_id(self, *, account_id: str) -> LicenseRecord | None:
+        """Return the most recent device license linked to one account."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM device_licenses
+                    WHERE account_id = %s
+                    ORDER BY registered_at DESC
+                    LIMIT 1
+                    """,
+                    (account_id,),
+                )
+                row = cursor.fetchone()
+
+        return _record_from_row(row) if row else None
 
     def update_license_state(
         self,
@@ -2157,6 +2200,75 @@ def _account_id_from_access_token(
             detail="Invalid account access token",
         )
     return account.account_id
+
+
+def _require_managed_utility_access(
+    authorization: str | None,
+    settings: Settings,
+) -> None:
+    """
+    Allow managed utilities from either the backend token or a live account token.
+
+    The local runtime can route managed calls with the user-scoped account
+    bearer token when no build-scoped backend token is configured.
+    """
+
+    if _authorization_matches_backend_token(authorization, settings):
+        return
+
+    account_access_token = _authorization_bearer_token(authorization)
+    if not account_access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid account access token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    store = get_license_store(settings)
+    account = store.get_account_by_access_token(account_access_token=account_access_token)
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid account access token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    record = store.get_device_license_by_account_id(account_id=account.account_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account access token is not linked to an active managed-services license",
+        )
+
+    license_response = _license_response(record, _utcnow(), settings)
+    if not license_response.managedServicesEnabled or license_response.state not in (
+        "trial_active",
+        "licensed",
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account access token is not linked to an active managed-services license",
+        )
+
+
+def _authorization_matches_backend_token(authorization: str | None, settings: Settings) -> bool:
+    """Accept the build-scoped backend bearer token when it is configured."""
+
+    if not settings.api_token:
+        return False
+    return authorization == f"Bearer {settings.api_token}"
+
+
+def _authorization_bearer_token(authorization: str | None) -> str | None:
+    """Extract the raw bearer token from an Authorization header."""
+
+    if not authorization:
+        return None
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        return None
+    token = authorization[len(prefix) :].strip()
+    return token or None
 
 
 def _provider_presence(settings: Settings) -> dict[str, bool]:
