@@ -276,7 +276,6 @@ struct JarvisAccountActivationKeychainStore: JarvisAccountAccessTokenStoring {
 
 enum JarvisAccountActivationConfig {
     private static let accountTokenProviderName = "jarvis-keychain"
-    private static let accountTokenRefId = "account-access-token"
 
     static func summary(root: [String: Any]) -> JarvisAccountActivationSummary? {
         guard let backend = (root["jarvis"] as? [String: Any])?["backend"] as? [String: Any],
@@ -302,10 +301,14 @@ enum JarvisAccountActivationConfig {
             "email": summary.email,
             "license": summary.licenseSummary ?? "",
         ]
-        backend["accountAccessToken"] = Self.accountAccessTokenSecretRef()
+        // The macOS shell stores the account token in Keychain and reads it
+        // directly for activation-managed flows. Do not install a runtime exec
+        // SecretInput for /usr/bin/security here: the Node gateway rejects
+        // system-owned exec resolvers by design.
+        backend.removeValue(forKey: "accountAccessToken")
         jarvis["backend"] = backend
         root["jarvis"] = jarvis
-        Self.installAccountAccessTokenSecretProvider(into: &root)
+        Self.removeAccountAccessTokenSecretProvider(from: &root)
     }
 
     static func configureManagedRuntime(into root: inout [String: Any], fallbackBaseURL: String? = nil) {
@@ -322,44 +325,33 @@ enum JarvisAccountActivationConfig {
                 .first { !$0.isEmpty }
         }
 
-        // Node resolves SecretInput refs at runtime, so config can point at
-        // Keychain without ever persisting the account token as plaintext.
-        backend["accountAccessToken"] = Self.accountAccessTokenSecretRef()
+        // Keep the user account token out of runtime config. The app-owned
+        // Keychain store is the trusted source for managed onboarding calls,
+        // while the gateway can still use build-scoped backend auth from config
+        // or environment for managed utilities.
+        backend.removeValue(forKey: "accountAccessToken")
         jarvis["backend"] = backend
         var managedServices = jarvis["managedServices"] as? [String: Any] ?? [:]
         managedServices["mode"] = "managed"
         jarvis["managedServices"] = managedServices
         root["jarvis"] = jarvis
-        Self.installAccountAccessTokenSecretProvider(into: &root)
+        Self.removeAccountAccessTokenSecretProvider(from: &root)
     }
 
-    static func accountAccessTokenSecretRef() -> [String: String] {
-        [
-            "source": "exec",
-            "provider": Self.accountTokenProviderName,
-            "id": Self.accountTokenRefId,
-        ]
-    }
-
-    private static func installAccountAccessTokenSecretProvider(into root: inout [String: Any]) {
+    private static func removeAccountAccessTokenSecretProvider(from root: inout [String: Any]) {
         var secrets = root["secrets"] as? [String: Any] ?? [:]
         var providers = secrets["providers"] as? [String: Any] ?? [:]
-        providers[Self.accountTokenProviderName] = [
-            "source": "exec",
-            "command": "/usr/bin/security",
-            "args": [
-                "find-generic-password",
-                "-s",
-                JarvisAccountActivationKeychainStore.defaultService,
-                "-a",
-                JarvisAccountActivationKeychainStore.defaultAccount,
-                "-w",
-            ],
-            "timeoutMs": 3000,
-            "jsonOnly": false,
-        ]
-        secrets["providers"] = providers
-        root["secrets"] = secrets
+        providers.removeValue(forKey: Self.accountTokenProviderName)
+        if providers.isEmpty {
+            secrets.removeValue(forKey: "providers")
+        } else {
+            secrets["providers"] = providers
+        }
+        if secrets.isEmpty {
+            root.removeValue(forKey: "secrets")
+        } else {
+            root["secrets"] = secrets
+        }
     }
 }
 

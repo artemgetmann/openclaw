@@ -205,6 +205,16 @@ export const channelsHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    if (cfg.channels?.telegram?.enabled === false) {
+      respond(true, {
+        ok: false,
+        replyStarted: false,
+        replyCompleted: false,
+        error:
+          "Telegram bot token is saved, but Telegram is disabled. Reopen Jarvis or run Telegram setup again to enable it.",
+      });
+      return;
+    }
 
     const before = getChannelActivity({ channel: "telegram", accountId: account.accountId });
     const update = buildTelegramSetupReplayUpdate(replayParams.payload);
