@@ -305,10 +305,24 @@ The repo's unit config excludes `src/browser/**`; `pnpm test -- <paths>` is the 
 ## Smoke Proof / Gaps
 
 - Raw Chrome MCP profile proof: done.
-- Batik booking smoke through `profile="signed-in-mcp"`: not run.
-- Reason: task required raw CLI proof first and no final booking/payment actions. The raw proof already answers the architecture attach question; booking-flow proof should be a separate controlled TUI/agent run with the stop protocol from `/tmp/openclaw-browser-tui-test-workflow.md`.
+- Batik booking smoke through `profile="signed-in-mcp"`: done on 2026-05-31.
+- Result: success. The agent reached the payment boundary for OD177 without using the old managed `signed-in` lane.
+- Stop boundary: stopped at Batik `/book/payment`; no Pay Now/payment/final charge action was run.
 
-Exact next smoke command shape:
+Auth/runtime note:
+
+- The first smoke attempt failed before browser interaction because the isolated copied auth store used an Anthropic env-backed profile and this shell had no `ANTHROPIC_API_KEY`.
+- A second attempt using copied OpenAI Codex profiles failed OAuth refresh.
+- The successful smoke bootstrapped only the isolated test auth store from `~/.codex/auth.json` via `bootstrapTelegramLiveCodexAuthStore`.
+- No global Codex/OpenClaw config was overwritten.
+
+Exact booking prompt used:
+
+```text
+Use OpenClaw browser profile signed-in-mcp. Do not use Peekaboo, cliclick, raw CDP, direct manual Chrome control, or payment/final purchase. Book a one-way Batik Air flight from Kuala Lumpur KUL to Bali/Denpasar DPS on June 2, 2026. Preferred flight is OD177, 16:30 to 19:40, direct. Choose Value fare / 15kg checked baggage if available. Fill passenger details if needed: ARTEM GETMAN; Male; DOB 17/08/2001; Nationality Ukraine; Email artemnaumenko1@gmail.com; Phone +971 55 285 7036. Skip unnecessary extras like insurance, meals, SMS, or paid seats unless required. Proceed only up to the payment or final confirmation boundary, then stop and ask for confirmation before any charge.
+```
+
+Successful agent command:
 
 ```bash
 env -u OPENCLAW_CONSUMER_INSTANCE_ID \
@@ -317,7 +331,85 @@ env -u OPENCLAW_CONSUMER_INSTANCE_ID \
   OPENCLAW_STATE_DIR="$PWD/.openclaw-signed-in-mcp/state" \
   OPENCLAW_CONFIG_PATH="$PWD/.openclaw-signed-in-mcp/openclaw.json" \
   OPENCLAW_GATEWAY_PORT=23937 \
-  node openclaw.mjs agent --browser-profile signed-in-mcp "<single-line Batik prompt; stop before payment>"
+  OPENCLAW_STAGE_LOG="$PWD/.openclaw-signed-in-mcp/stage-agent-batik-codex-auth.log" \
+  OPENCLAW_SKIP_CHANNELS=1 \
+  CLAWDBOT_SKIP_CHANNELS=1 \
+  node openclaw.mjs agent \
+    --session-key agent:main:signed-in-mcp-batik-smoke-20260531-codex-auth \
+    --message "$PROMPT" \
+    --timeout 900 \
+    --json
+```
+
+Agent result:
+
+```text
+runId=68544a40-e8e7-4df2-8e6d-d08982e2c5e5
+sessionId=28c39ceb-bdc9-44df-bbe2-54460e332bfe
+provider=openai-codex
+model=gpt-5.5
+durationMs=287378
+stopReason=stop
+```
+
+Agent-reported booking boundary:
+
+```text
+I’ve brought the booking to the payment boundary and stopped before any charge.
+
+Summary:
+- Batik Air OD177
+- One-way KUL -> DPS
+- Tue 2 Jun 2026
+- 16:30 -> 19:40, direct
+- Fare: Value
+- Included checked baggage: 15kg
+- Passenger: MR ARTEM GETMAN
+- Seat: not selected
+- Extras skipped, including SMS
+- Amount to be charged: RM 609.00
+
+The page is on “Pay Now”. I have not clicked it.
+```
+
+Transcript evidence:
+
+```text
+url=https://www.batikair.com.my/book/passenger-details
+Passenger Details: MR ARTEM GETMAN
+phone country code: United Arab Emirates (+971)
+url=https://www.batikair.com.my/book/add-on
+url=https://www.batikair.com.my/book/seat-selection
+url=https://www.batikair.com.my/book/payment
+Depart Flights: Tue, 02 Jun 2026
+Batik Air, MY(OD177)
+16:30 19:40
+Kuala Lumpur (KUL) -> Bali (DPS)
+Value
+Grand Total / amount boundary: RM 609.00
+```
+
+Previous failure point:
+
+- Reached phone/passenger area: yes.
+- Reached the prior phone country code failure surface: yes.
+- Got past phone country code: yes; transcript showed `United Arab Emirates (+971)`.
+- Reached payment boundary: yes.
+
+Fallback check:
+
+- No Peekaboo/cliclick process was found.
+- No direct manual Chrome control was used.
+- No payment/final purchase action was run.
+- The agent used OpenClaw `browser` tool calls routed to `profile="signed-in-mcp"`.
+- It did use `browser.act kind=evaluate` for DOM inspection/clicks through the OpenClaw browser tool. That is not Peekaboo/cliclick/manual direct Chrome control, but it is a less product-clean path than pure ARIA clicks and should be documented as MCP-backed DOM evaluation.
+
+Cleanup proof:
+
+```text
+lsof -nP -iTCP:23937 -sTCP:LISTEN -> no output
+lsof -nP -iTCP:9337 -sTCP:LISTEN -> no output
+pgrep -fl 'openclaw.mjs agent|openclaw.mjs gateway --port 23937|chrome-devtools-mcp.*9337|--user-data-dir=/tmp/openclaw-signed-in-mcp-clone|remote-debugging-port=9337|cliclick|peekaboo|Peekaboo' -> no output
 ```
 
 ## Risks
