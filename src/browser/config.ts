@@ -191,14 +191,16 @@ function ensureDefaultProfile(
 }
 
 /**
- * Ensure the built-in live browser lane exists.
+ * Ensure the built-in signed-in clone and live browser lanes exist.
  *
- * The MVP keeps exactly two built-ins:
+ * The browser product surface keeps three named lanes:
  * - `openclaw` for the isolated managed browser
+ * - `signed-in` for a cloned Google Chrome profile controlled through Chrome MCP
  * - `user-live` for attaching to the user's real live Chromium session
  *
- * Cloned signed-in browsers still exist as an advanced explicit config via
- * `cloneFromUserProfile`, but we no longer auto-create a built-in `user` lane.
+ * The `signed-in` lane still clones browser state locally, but `driver:
+ * "existing-session"` means runtime actions go through chrome-devtools-mcp
+ * instead of Playwright's managed CDP helpers.
  */
 function ensureDefaultSignedInBrowserProfiles(
   profiles: Record<string, BrowserProfileConfig>,
@@ -206,12 +208,16 @@ function ensureDefaultSignedInBrowserProfiles(
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
   if (!result[DEFAULT_SIGNED_IN_BROWSER_PROFILE_NAME]) {
-    // The signed-in lane needs its own managed CDP port because it launches a
-    // separate cloned Chrome session instead of piggybacking on openclaw.
+    // The signed-in lane owns a debug port for the cloned Chrome process.
+    // Chrome MCP receives this as --browserUrl after OpenClaw launches the
+    // clone, so agents get MCP semantics without losing cloned profile state.
     const signedInCdpPort = allocateCdpPort(getUsedPorts(result), cdpRange) ?? cdpRange.start;
     result[DEFAULT_SIGNED_IN_BROWSER_PROFILE_NAME] = {
+      driver: "existing-session",
       cdpPort: signedInCdpPort,
+      cdpUrl: `http://127.0.0.1:${signedInCdpPort}`,
       cloneFromUserProfile: true,
+      profileDirectory: "Default",
       color: DEFAULT_SIGNED_IN_BROWSER_COLOR,
     };
   }
@@ -371,25 +377,6 @@ export function resolveProfile(
   let cdpUrl = "";
   const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
 
-  if (driver === "existing-session") {
-    // existing-session uses Chrome MCP instead of raw CDP. Keep the configured
-    // profile directory alongside the user-data root so the attach layer can
-    // fail closed when multiple Chrome profiles are live under one root.
-    return {
-      name: resolvedProfileName,
-      cdpPort: 0,
-      cdpUrl: "",
-      cdpHost: "",
-      cdpIsLoopback: true,
-      userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
-      profileDirectory: profile.profileDirectory?.trim() || undefined,
-      color: profile.color,
-      driver,
-      cloneFromUserProfile: false,
-      attachOnly: true,
-    };
-  }
-
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${resolvedProfileName}.cdpUrl`);
     cdpHost = parsed.parsed.hostname;
@@ -397,7 +384,30 @@ export function resolveProfile(
     cdpUrl = parsed.normalized;
   } else if (cdpPort) {
     cdpUrl = `${resolved.cdpProtocol}://${resolved.cdpHost}:${cdpPort}`;
-  } else {
+  }
+
+  if (driver === "existing-session") {
+    // existing-session uses Chrome MCP instead of raw CDP. Keep the configured
+    // profile directory alongside the user-data root so the attach layer can
+    // fail closed when multiple Chrome profiles are live under one root.
+    return {
+      name: resolvedProfileName,
+      cdpPort,
+      cdpUrl,
+      cdpHost: cdpUrl ? cdpHost : "",
+      cdpIsLoopback: cdpUrl ? isLoopbackHost(cdpHost) : true,
+      userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
+      profileDirectory: profile.profileDirectory?.trim() || undefined,
+      color: profile.color,
+      driver,
+      cloneFromUserProfile: profile.cloneFromUserProfile === true,
+      sourceChromeDir: profile.sourceChromeDir?.trim() || undefined,
+      sourceProfileName: profile.sourceProfileName?.trim() || undefined,
+      attachOnly: true,
+    };
+  }
+
+  if (!cdpUrl) {
     throw new Error(`Profile "${resolvedProfileName}" must define cdpPort or cdpUrl.`);
   }
 
