@@ -100,26 +100,28 @@ openclaw browser create-profile --name brave-live --driver existing-session --us
 openclaw browser --browser-profile chrome-live tabs
 ```
 
-If you need an exact live Chrome target instead of best-effort auto-discovery,
-launch that Chrome profile yourself with a dedicated remote-debugging port, then
-pin the profile to that browser URL:
+If you need an exact Chrome target instead of best-effort auto-discovery, launch
+that Chrome profile or clone yourself with a dedicated remote-debugging port,
+then pin the profile to that browser URL:
 
 ```bash
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
-  --user-data-dir="$HOME/Library/Application Support/Google/Chrome" \
+  --user-data-dir="/tmp/openclaw-signed-in-mcp-clone" \
   --profile-directory="Profile 4" \
   --remote-debugging-port=9333
 
 openclaw browser create-profile \
-  --name founder-live \
+  --name signed-in-mcp \
   --driver existing-session \
   --cdp-url http://127.0.0.1:9333 \
-  --user-data-dir "$HOME/Library/Application Support/Google/Chrome" \
+  --user-data-dir "/tmp/openclaw-signed-in-mcp-clone" \
   --profile-directory "Profile 4"
 ```
 
 Use this exact-target pattern when multiple Chrome sessions are open and the
-built-in `user-live` lane might attach to the wrong one.
+built-in `user-live` lane might attach to the wrong one. Keep this as a
+separate opt-in profile; it does not replace the built-in `signed-in` managed
+clone lane.
 
 The built-in `user-live` lane is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
 

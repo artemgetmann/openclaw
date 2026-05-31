@@ -7,7 +7,9 @@ ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 source "$ROOT/scripts/lib/consumer-instance.sh"
 
 INSTANCE_ARG="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
-SOURCE_AUTH_DIR="${OPENCLAW_CONSUMER_AUTH_SOURCE_DIR:-$HOME/.openclaw/agents/main/agent}"
+APP_OWNED_AUTH_DIR="$HOME/Library/Application Support/OpenClaw/.openclaw/agents/main/agent"
+LEGACY_AUTH_DIR="$HOME/.openclaw/agents/main/agent"
+SOURCE_AUTH_DIR="${OPENCLAW_CONSUMER_AUTH_SOURCE_DIR:-$APP_OWNED_AUTH_DIR}"
 TARGET_AGENT_ID="${OPENCLAW_CONSUMER_AUTH_AGENT_ID:-main}"
 CHECK_ONLY=0
 QUIET=0
@@ -18,6 +20,9 @@ Usage: bash scripts/consumer-auth-sync.sh [--instance <id>] [--source-auth-dir <
 
 Copy the canonical auth-profiles snapshot into a consumer tester instance and
 write a non-secret fingerprint record alongside it.
+
+Default source:
+  ~/Library/Application Support/OpenClaw/.openclaw/agents/main/agent
 EOF
 }
 
@@ -77,6 +82,10 @@ fi
 
 SOURCE_AUTH_DIR="${SOURCE_AUTH_DIR%/}"
 SOURCE_AUTH_PATH="$SOURCE_AUTH_DIR/auth-profiles.json"
+if [[ -z "${OPENCLAW_CONSUMER_AUTH_SOURCE_DIR:-}" && ! -f "$SOURCE_AUTH_PATH" && -f "$LEGACY_AUTH_DIR/auth-profiles.json" ]]; then
+  SOURCE_AUTH_DIR="$LEGACY_AUTH_DIR"
+  SOURCE_AUTH_PATH="$SOURCE_AUTH_DIR/auth-profiles.json"
+fi
 TARGET_STATE_DIR="$(consumer_instance_state_dir "$INSTANCE_ID")"
 TARGET_AUTH_DIR="$TARGET_STATE_DIR/agents/$TARGET_AGENT_ID/agent"
 TARGET_AUTH_PATH="$TARGET_AUTH_DIR/auth-profiles.json"
