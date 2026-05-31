@@ -5,6 +5,7 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { isWebSocketUrl } from "./cdp.helpers.js";
 import {
+  clickAriaRefViaCdp,
   captureScreenshot,
   createTargetViaCdp,
   evaluateJavaScript,
@@ -371,6 +372,76 @@ describe("cdp", () => {
     expect(snap.nodes[1]?.name).toBe("OK");
     expect(snap.nodes[1]?.backendDOMNodeId).toBe(42);
     expect(snap.nodes[1]?.depth).toBe(1);
+  });
+
+  it("clicks an aria snapshot ref through per-tab CDP", async () => {
+    const dispatched: Array<Record<string, unknown>> = [];
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method === "Accessibility.enable" || msg.method === "DOM.enable") {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        return;
+      }
+      if (msg.method === "Accessibility.getFullAXTree") {
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: {
+              nodes: [
+                {
+                  nodeId: "1",
+                  role: { value: "RootWebArea" },
+                  name: { value: "" },
+                  childIds: ["2"],
+                },
+                {
+                  nodeId: "2",
+                  role: { value: "button" },
+                  name: { value: "OK" },
+                  backendDOMNodeId: 42,
+                  childIds: [],
+                },
+              ],
+            },
+          }),
+        );
+        return;
+      }
+      if (msg.method === "DOM.resolveNode") {
+        expect(msg.params?.backendNodeId).toBe(42);
+        socket.send(JSON.stringify({ id: msg.id, result: { object: { objectId: "obj-1" } } }));
+        return;
+      }
+      if (msg.method === "Runtime.callFunctionOn") {
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { result: { value: { x: 12, y: 34 } } },
+          }),
+        );
+        return;
+      }
+      if (msg.method === "Input.dispatchMouseEvent") {
+        dispatched.push(msg.params ?? {});
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        return;
+      }
+      if (msg.method === "Runtime.releaseObject") {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+
+    await clickAriaRefViaCdp({
+      wsUrl: `ws://127.0.0.1:${wsPort}`,
+      ref: "ax2",
+      button: "left",
+      modifiers: ["Shift"],
+    });
+
+    expect(dispatched).toEqual([
+      expect.objectContaining({ type: "mouseMoved", x: 12, y: 34, modifiers: 8 }),
+      expect.objectContaining({ type: "mousePressed", x: 12, y: 34, button: "left" }),
+      expect.objectContaining({ type: "mouseReleased", x: 12, y: 34, button: "left" }),
+    ]);
   });
 
   it("normalizes loopback websocket URLs for remote CDP hosts", () => {

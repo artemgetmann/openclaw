@@ -91,6 +91,23 @@ describe("browser control server", () => {
       modifiers: ["Shift"],
     });
 
+    pwMocks.clickViaPlaywright.mockRejectedValueOnce(
+      new Error("browserType.connectOverCDP: Timeout 15000ms exceeded"),
+    );
+    const fallbackClick = await postJson<{ ok: boolean }>(`${base}/act`, {
+      kind: "click",
+      ref: "ax158",
+      button: "left",
+    });
+    expect(fallbackClick.ok).toBe(true);
+    expect(cdpMocks.clickAriaRefViaCdp).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      ref: "ax158",
+      doubleClick: false,
+      button: "left",
+      modifiers: undefined,
+    });
+
     const clickSelector = await realFetch(`${base}/act`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -98,7 +115,7 @@ describe("browser control server", () => {
     });
     expect(clickSelector.status).toBe(200);
     expect(((await clickSelector.json()) as { ok?: boolean }).ok).toBe(true);
-    expect(pwMocks.clickViaPlaywright).toHaveBeenNthCalledWith(2, {
+    expect(pwMocks.clickViaPlaywright).toHaveBeenNthCalledWith(3, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       selector: "button.save",
