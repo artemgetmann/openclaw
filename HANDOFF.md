@@ -442,6 +442,134 @@ lsof -nP -iTCP:9337 -sTCP:LISTEN -> no output
 pgrep -fl 'openclaw.mjs agent|openclaw.mjs gateway --port 23937|chrome-devtools-mcp.*9337|--user-data-dir=/tmp/openclaw-signed-in-mcp-clone|remote-debugging-port=9337|cliclick|peekaboo|Peekaboo' -> no output
 ```
 
+## Visible TUI Smoke Rerun
+
+Date/time: 2026-05-31 17:29 Asia/Kuala_Lumpur.
+
+Purpose: rerun the controlled Batik smoke in the user's visible `claude` tmux session so the browser/tool path and final payment boundary could be inspected live.
+
+Visible tmux setup:
+
+```text
+tmux session/window: claude:5
+window name: signed-in-mcp-tui-smoke
+gateway pane: claude:5.1
+TUI pane: claude:5.2
+TUI session: agent:main:signed-in-mcp-tui-visible-medium-20260531
+thinking: medium
+verbose: on
+```
+
+TUI launch command shape:
+
+```bash
+env -u OPENCLAW_CONSUMER_INSTANCE_ID \
+  OPENCLAW_PROFILE=signed-in-mcp \
+  OPENCLAW_HOME="$PWD/.openclaw-signed-in-mcp/home" \
+  OPENCLAW_STATE_DIR="$PWD/.openclaw-signed-in-mcp/state" \
+  OPENCLAW_CONFIG_PATH="$PWD/.openclaw-signed-in-mcp/openclaw.json" \
+  OPENCLAW_GATEWAY_PORT=23937 \
+  OPENCLAW_SKIP_CHANNELS=1 \
+  CLAWDBOT_SKIP_CHANNELS=1 \
+  node openclaw.mjs tui \
+    --url ws://127.0.0.1:23937 \
+    --token "$TOKEN" \
+    --session agent:main:signed-in-mcp-tui-visible-medium-20260531 \
+    --deliver \
+    --thinking medium \
+    --timeout-ms 900000
+```
+
+The initial `--thinking medium` flag did not update the persisted TUI status by itself; the visible session was corrected in-place with:
+
+```text
+/think medium
+/verbose on
+```
+
+Because the TUI editor treated normal tmux `Enter` as text/newline in this terminal mode, the commands were submitted using tmux hex carriage return:
+
+```bash
+tmux send-keys -t 'claude:5.2' -H 0d
+```
+
+Status-line proof before sending the Batik prompt:
+
+```text
+agent main | session signed-in-mcp-tui-visible-medium-20260531 | openai-codex/gpt-5.5 | think medium | verbose on | tokens ?/200k
+```
+
+MCP attach evidence from the visible run:
+
+```text
+Browser start:
+profile: signed-in-mcp
+driver: existing-session
+transport: chrome-mcp
+running: true
+cdpReady: true
+cdpHttp: true
+pid: 26473
+```
+
+Visible run result:
+
+```text
+url=https://www.batikair.com.my/book/payment
+Depart Flights: Tue, 02 Jun 2026
+Batik Air, MY(OD177)
+16:30 19:40
+Kuala Lumpur (KUL) -> Bali (DPS)
+Value
+Passenger: MR ARTEM GETMAN
+Amount to be Charged: RM 609.00
+Pay Now button visible
+```
+
+The visible TUI final answer:
+
+```text
+I'm at the payment boundary and have stopped before any charge.
+
+Booking staged:
+- Batik Air OD177
+- One-way KUL -> DPS
+- Tue, 2 Jun 2026
+- 16:30 -> 19:40, direct / non-stop
+- Fare: Value
+- Included: 15kg checked baggage
+- Passenger: MR ARTEM GETMAN
+- Seat: none selected
+- Add-ons: none
+- SMS: unchecked / not added
+- Amount to be charged: RM 609.00
+
+The page is showing a "Pay Now" button. I have not clicked it.
+```
+
+Previous failure point evidence from visible run:
+
+```text
+url=https://www.batikair.com.my/book/passenger-details
+Country code
+AE +971
+United Arab Emirates (+971)
+url=https://www.batikair.com.my/book/add-on
+```
+
+Fallback check for visible run:
+
+- No Peekaboo/cliclick/direct manual Chrome control was used.
+- The run used OpenClaw TUI -> gateway -> OpenClaw browser tool -> `profile="signed-in-mcp"`.
+- It used `browser.act kind=evaluate` through the OpenClaw browser tool for DOM inspection/clicks, same as the CLI proof.
+- No payment/final purchase action was run.
+
+Visible-run stop/cleanup status:
+
+- The TUI run is idle at the payment boundary in `claude:5.2` for user inspection.
+- The isolated gateway and cloned Chrome are intentionally still running for the visible demo.
+- Cleanup after inspection should stop the TUI with `stop` or Escape, then stop the gateway and Chrome clone, then remove `.openclaw-signed-in-mcp/` and `/tmp/openclaw-signed-in-mcp-clone`.
+
 ## Risks
 
 - The cloned profile root in this spike was `/tmp/openclaw-signed-in-mcp-clone`, so it is proof-grade, not durable product storage.
