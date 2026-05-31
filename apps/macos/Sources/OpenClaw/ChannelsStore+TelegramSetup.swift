@@ -445,8 +445,8 @@ extension ChannelsStore {
 
     private func telegramVerificationStatus(botUsername: String?) -> String {
         botUsername.map {
-            "Token verified for @\($0). Click Verify first task to approve sender access."
-        } ?? "Token verified. Click Verify first task to approve sender access."
+            "Token verified for @\($0). Send one message to Jarvis, then click Verify Telegram."
+        } ?? "Token verified. Send one message to Jarvis, then click Verify Telegram."
     }
 
     private func managedTelegramBotClient() throws -> JarvisTelegramManagedBotClient {
@@ -495,8 +495,8 @@ extension ChannelsStore {
 
     private func managedTelegramConnectedStatus(botUsername: String?) -> String {
         botUsername.map {
-            "@\($0) is ready. Click Verify first task to approve sender access."
-        } ?? "Your Telegram bot is ready. Click Verify first task to approve sender access."
+            "@\($0) is ready. Send one message to Jarvis, then click Verify Telegram."
+        } ?? "Your Telegram bot is ready. Send one message to Jarvis, then click Verify Telegram."
     }
 
     private func approvePendingTelegramPairingForFirstTaskIfAvailable(token: String) async throws -> Bool {
@@ -534,7 +534,7 @@ extension ChannelsStore {
 
         self.telegramSetupWaitingForDM = false
         self.clearConsumerTelegramFirstTaskVerified()
-        self.telegramSetupStatus = "Telegram access is approved. Send \"\(Self.consumerTelegramFirstTaskText)\" as a new DM, then click Verify first task again."
+        self.telegramSetupStatus = Self.consumerTelegramApprovedNeedsFreshMessageStatus()
         return true
     }
 
@@ -751,7 +751,7 @@ extension ChannelsStore {
                 timeoutMs: 8_500)
         } catch {
             if Self.consumerTelegramReplayShouldRetryAfterRestart(error) {
-                self.telegramSetupStatus = "Gateway restarting... retrying your first Telegram task."
+                self.telegramSetupStatus = "Jarvis is reconnecting. Retrying your first Telegram task."
                 let recovered = await Self.recoverConsumerGatewayAfterConfigBootstrap(
                     shutdown: {
                         await GatewayConnection.shared.shutdown()
@@ -958,7 +958,11 @@ extension ChannelsStore {
         // A local websocket failure means Jarvis is not reachable, not that the
         // user made a Telegram mistake. Keep raw gateway URLs out of the UI.
         guard looksLikeLocalRuntimePlumbing else { return nil }
-        return "Telegram setup is saved, but \(AppFlavor.current.appName) could not finish the first task because the local \(AppFlavor.current.appName) runtime is not reachable. Start or open \(AppFlavor.current.appName), then try Verify first task again."
+        return "Telegram setup is saved, but \(AppFlavor.current.appName) could not finish the first task. Start or open \(AppFlavor.current.appName), then try Verify Telegram again."
+    }
+
+    static func consumerTelegramApprovedNeedsFreshMessageStatus() -> String {
+        "Telegram is approved. Send one more message to Jarvis, then Verify Telegram again."
     }
 
     static func managedTelegramSetupWasLost(_ message: String) -> Bool {

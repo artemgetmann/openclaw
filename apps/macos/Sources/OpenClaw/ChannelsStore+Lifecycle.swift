@@ -189,8 +189,8 @@ extension ChannelsStore {
                 } ?? "Telegram bot is live. First task verified."
             } else {
                 self.telegramSetupStatus = username.map {
-                    "Telegram bot is live as @\($0). Click Verify first task to approve sender access."
-                } ?? "Telegram bot is live. Click Verify first task to approve sender access."
+                    "Telegram bot is live as @\($0). Click Verify Telegram to approve access."
+                } ?? "Telegram bot is live. Click Verify Telegram to approve access."
             }
         }
     }

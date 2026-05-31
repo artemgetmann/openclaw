@@ -180,7 +180,7 @@ extension ChannelsStore {
         if normalized.contains("terminated by other getupdates request")
             || normalized.contains("already being used by another openclaw telegram poller")
         {
-            return "This bot is already active in another OpenClaw window or worktree on this Mac. Close the other runtime or use a different bot token here."
+            return "This bot is already active somewhere else on this Mac. Close the other Jarvis window or use a different bot token."
         }
         return nil
     }
@@ -200,7 +200,7 @@ extension ChannelsStore {
         }
         guard self.consumerTelegramLooksLive() else { return nil }
 
-        return "Telegram is connected, but the first real DM is still blocked behind pairing/access approval. Wait for access to be ready, then send one normal DM and click Verify first task again."
+        return "Telegram is approved. Send one more message to Jarvis, then Verify Telegram again."
     }
 
     func consumerTelegramBotUsername() -> String? {

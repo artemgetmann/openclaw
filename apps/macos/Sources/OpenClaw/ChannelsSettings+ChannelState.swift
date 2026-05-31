@@ -194,7 +194,7 @@ extension ChannelsSettings {
             }
             if self.isConsumerSimpleTelegramPath {
                 if self.store.consumerTelegramReadyForFirstTask() { return "Live" }
-                if self.store.consumerTelegramLooksLive() { return "Verify first task" }
+                if self.store.consumerTelegramLooksLive() { return "Verify Telegram" }
                 return "Setup needed"
             }
             return "Checking…"
@@ -202,7 +202,7 @@ extension ChannelsSettings {
         if self.isConsumerSimpleTelegramPath {
             if self.store.consumerTelegramConflictMessage(status.lastError) != nil { return "Busy elsewhere" }
             if self.store.consumerTelegramReadyForFirstTask() { return "Live" }
-            if self.store.consumerTelegramLooksLive() { return "Verify first task" }
+            if self.store.consumerTelegramLooksLive() { return "Verify Telegram" }
             if status.configured { return "Setup complete" }
             return "Setup needed"
         }

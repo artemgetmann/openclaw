@@ -208,11 +208,6 @@ struct ConsumerTelegramSetupCardContent: View {
                         ProgressView().controlSize(.small)
                     }
 
-                    if let senderId = self.store.telegramSetupFirstSenderId {
-                        Text("Verified sender: \(senderId)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 }
             }
 
@@ -320,7 +315,9 @@ struct ConsumerTelegramSetupCardContent: View {
     private func isFirstTaskInstruction(_ text: String) -> Bool {
         let normalized = text.lowercased()
         return normalized.contains("click verify first task")
+            || normalized.contains("click verify telegram")
             || normalized.contains("send \"wake up my friend")
+            || normalized.contains("send one message to jarvis")
             || normalized.contains("first task to approve sender access")
     }
 }
