@@ -88,6 +88,7 @@ export function createProfileAvailability({
   const isReachable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
       const readyTimeoutMs = resolveChromeMcpReadyTimeoutMs(timeoutMs);
+      await ensureClonedChromeRunning();
       traceAvailabilityStage(
         `browser-availability-reachable-check profile=${profile.name} transport=chrome-mcp timeoutMs=${readyTimeoutMs}`,
       );
@@ -139,6 +140,19 @@ export function createProfileAvailability({
     } catch {
       // ignore
     }
+  };
+
+  const ensureClonedChromeRunning = async (): Promise<void> => {
+    if (!profile.cloneFromUserProfile) {
+      return;
+    }
+    const profileState = getProfileState();
+    if (profileState.running) {
+      return;
+    }
+    const current = state();
+    const launched = await launchOpenClawChrome(current.resolved, profile);
+    attachRunning(launched);
   };
 
   const reconcileProfileRuntime = async (): Promise<void> => {
@@ -214,7 +228,12 @@ export function createProfileAvailability({
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
       const readyTimeoutMs = resolveChromeMcpReadyTimeoutMs(undefined);
-      if (profile.userDataDir && !existsSync(profile.userDataDir)) {
+      await ensureClonedChromeRunning();
+      if (
+        !profile.cloneFromUserProfile &&
+        profile.userDataDir &&
+        !existsSync(profile.userDataDir)
+      ) {
         throw new BrowserProfileUnavailableError(
           `Browser user data directory not found for profile "${profile.name}": ${profile.userDataDir}`,
         );
@@ -309,6 +328,12 @@ export function createProfileAvailability({
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
       const stopped = await closeChromeMcpSession(profile.name);
+      const profileState = getProfileState();
+      if (profileState.running) {
+        await stopOpenClawChrome(profileState.running).catch(() => {});
+        setProfileRunning(null);
+        return { stopped: true };
+      }
       return { stopped };
     }
     const profileState = getProfileState();

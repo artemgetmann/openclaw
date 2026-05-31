@@ -11,6 +11,7 @@ import { loadConfig } from "../config/config.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import { resolveGoogleChromeExecutableForPlatform } from "./chrome.executables.js";
 import type { BrowserTab } from "./client.js";
+import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
 
 type ChromeMcpStructuredPage = {
@@ -602,6 +603,11 @@ function resolveConfiguredAttachTarget(profileName: string): ChromeMcpAttachTarg
     const profileTarget = resolveAttachTarget(cfg.browser?.profiles?.[profileName]?.cdpUrl);
     if (profileTarget) {
       return profileTarget;
+    }
+    const resolvedProfile = resolveProfile(resolveBrowserConfig(cfg.browser, cfg), profileName);
+    const resolvedProfileTarget = resolveAttachTarget(resolvedProfile?.cdpUrl);
+    if (resolvedProfile?.driver === "existing-session" && resolvedProfileTarget) {
+      return resolvedProfileTarget;
     }
     return resolveAttachTarget(cfg.browser?.cdpUrl);
   } catch {

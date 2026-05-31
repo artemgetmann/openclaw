@@ -361,7 +361,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     const maxAttempts = loopbackAttach ? 2 : 3;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
-        // Local managed profiles, especially the signed-in cloned `user` lane,
+        // Local managed profiles, especially legacy cloned signed-in lanes,
         // can expose many page/extension/background targets. Playwright's CDP
         // handshake may connect the WebSocket quickly, then spend real time
         // enumerating those targets. Give loopback attaches enough uninterrupted

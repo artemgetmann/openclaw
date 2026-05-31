@@ -150,6 +150,27 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("maps the built-in signed-in clone to Chrome MCP browserUrl", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("signed-in should use its resolved browserUrl without discovery");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await expect(resolveChromeMcpArgsForTest("signed-in")).resolves.toEqual([
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--experimentalStructuredContent",
+        "--experimental-page-id-routing",
+        "--browserUrl",
+        "http://127.0.0.1:18801/",
+      ]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("prefers a discovered browserUrl over autoConnect when Chrome exposes /json/version", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-profile-"));
     await fs.writeFile(path.join(tempDir, "DevToolsActivePort"), "9222\n/devtools/browser/stale\n");
