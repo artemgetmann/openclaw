@@ -196,14 +196,14 @@ extension OnboardingView {
                 systemImage: "bubble.left.and.bubble.right")
             self.featureRow(
                 title: "Group for parallel tasks",
-                subtitle: "Create a Telegram group, add \(botHandle), and enable topics for separate task threads.",
+                subtitle: "Create a Telegram group, add \(botHandle), and enable topics in settings for separate tasks.",
                 systemImage: "person.2")
             self.featureRow(
                 title: "Make Jarvis admin",
                 subtitle: "This lets Jarvis respond naturally in the group, instead of only when tagged or replied to.",
                 systemImage: "checkmark.shield")
             self.featureRow(
-                title: "Finish setup if you prefer",
+                title: "Finish setup",
                 subtitle: "You can add a group later from Telegram. Nothing else is required here.",
                 systemImage: "checkmark.circle")
         }

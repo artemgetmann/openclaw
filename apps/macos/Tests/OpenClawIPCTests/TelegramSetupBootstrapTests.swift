@@ -162,8 +162,22 @@ struct TelegramSetupBootstrapTests {
             #expect(status?.contains("ws://127.0.0.1") == false)
             #expect(status?.contains("connection refused") == false)
             #expect(status?.contains("Telegram setup is saved") == true)
-            #expect(status?.contains("local Jarvis runtime is not reachable") == true)
-            #expect(status?.contains("try Verify first task again") == true)
+            #expect(status?.contains("try Verify Telegram again") == true)
+            #expect(status?.localizedCaseInsensitiveContains("gateway") == false)
+            #expect(status?.localizedCaseInsensitiveContains("runtime") == false)
+        }
+    }
+
+    @Test func `telegram approved recovery copy matches verify telegram button`() async throws {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let status = ChannelsStore.consumerTelegramApprovedNeedsFreshMessageStatus()
+
+            #expect(status == "Telegram is approved. Send one more message to Jarvis, then Verify Telegram again.")
+            #expect(status.contains("Verify first task") == false)
+            #expect(status.localizedCaseInsensitiveContains("gateway") == false)
+            #expect(status.localizedCaseInsensitiveContains("OpenClaw") == false)
         }
     }
 

@@ -35,9 +35,9 @@ enum TelegramSetupVerifierError: LocalizedError {
         case let .api(message):
             return message
         case .conflict:
-            return "This bot is already being used by another OpenClaw Telegram poller. Stop the other runtime, or let setup pause Telegram before trying again."
+            return "This bot is already active somewhere else. Close the other Jarvis window or use a different bot token."
         case .noDirectMessage:
-            return "No Telegram DM arrived during this check. Click Verify first task, then send the bot a fresh private message."
+            return "No Telegram DM arrived during this check. Send the bot a fresh private message, then click Verify Telegram."
         }
     }
 }
