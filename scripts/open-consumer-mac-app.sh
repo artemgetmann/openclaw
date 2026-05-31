@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
 source "$ROOT_DIR/scripts/lib/worktree-guards.sh"
 source "$ROOT_DIR/scripts/lib/gateway-launchagent-guard.sh"
+source "$ROOT_DIR/scripts/lib/macos-activation.sh"
 
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
@@ -219,12 +220,7 @@ if [[ "$REFRESH_GATEWAY" == "1" ]]; then
   refresh_gateway_service_env "$NORMALIZED_INSTANCE_ID"
 fi
 
-/usr/bin/osascript <<EOF >/dev/null 2>&1 || true
-tell application id "$actual_bundle_id"
-  reopen
-  activate
-end tell
-EOF
+openclaw_activate_macos_app "$APP_PATH" "$actual_bundle_id"
 
 echo "Opened consumer app:"
 echo "  path=$APP_PATH"

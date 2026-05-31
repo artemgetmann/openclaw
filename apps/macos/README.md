@@ -75,8 +75,16 @@ dedicated RC wrapper. Both modes preserve `/Applications/Jarvis Consumer.app`,
 
 ```bash
 bash scripts/package-jarvis-consumer-rc.sh --fast
+bash scripts/package-jarvis-consumer-rc.sh --fast --reuse-runtime
 bash scripts/package-jarvis-consumer-rc.sh --notarize
 ```
+
+`--fast` is still a full local RC package. Use `--fast --reuse-runtime` (alias:
+`--fast --shell-only-fast`) only for smoke-only app-shell iteration after one
+normal fast RC package has created the previous signed bundled runtime. That
+mode refuses to run when runtime JS, package/lockfile, Node/uv, extension,
+skill, template, device-model, or bundled dependency inputs no longer match the
+saved runtime manifest.
 
 To remove generated UI-smoke build output without deleting a currently running
 smoke app, run:
