@@ -59,7 +59,6 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 /** Minimum chars before sending first streaming message (improves push notification UX). */
 const DRAFT_MIN_INITIAL_CHARS = 12;
 const DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW = 1;
-const TOOL_PROGRESS_MAX_LINES = 6;
 
 function normalizeToolProgressLine(text?: string) {
   return text?.replace(/\s+/g, " ").trim();
@@ -86,9 +85,24 @@ function hasInternalToolTraceText(text?: string) {
   return normalized?.startsWith("🔧") === true;
 }
 
-function hasToolPayloadContent(payload: ReplyPayload) {
-  return (
-    Boolean(payload.text?.trim()) || Boolean(payload.mediaUrl) || Boolean(payload.mediaUrls?.length)
+function hasExecApprovalPayload(payload: ReplyPayload) {
+  const execApproval =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData.execApproval
+      : undefined;
+  return Boolean(execApproval && typeof execApproval === "object" && !Array.isArray(execApproval));
+}
+
+function hasUserFacingToolEnvelope(payload: ReplyPayload) {
+  return Boolean(
+    payload.mediaUrl ||
+    payload.mediaUrls?.length ||
+    payload.interactive ||
+    payload.btw ||
+    payload.isError ||
+    hasExecApprovalPayload(payload),
   );
 }
 
@@ -327,7 +341,6 @@ export const dispatchTelegramMessage = async ({
   let retainedAnswerProgressPreviewText = "";
   let retainedAnswerProgressFromExplicitBoundary = false;
   let forceNextAnswerFinalSend = false;
-  let toolProgressLines: string[] = [];
   let draftLaneEventQueue = Promise.resolve();
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
@@ -543,36 +556,11 @@ export const dispatchTelegramMessage = async ({
     answerLane.stream.update(progressText);
     return true;
   };
-  const canStreamToolProgressDraft = Boolean(answerLane.stream);
-  const renderToolProgressDraftText = () => toolProgressLines.join("\n\n");
   const renderTextWithToolProgress = (text: string) => {
-    const progressText = renderToolProgressDraftText();
-    return normalizeAdjacentProgressBoundaries(progressText ? `${progressText}\n\n${text}` : text);
+    return normalizeAdjacentProgressBoundaries(text);
   };
   const resetToolProgressDraft = () => {
-    toolProgressLines = [];
-  };
-  const pushToolProgressDraft = (line?: string) => {
-    if (!canStreamToolProgressDraft) {
-      return false;
-    }
-    const normalized = normalizeToolProgressLine(line);
-    if (!normalized) {
-      return false;
-    }
-    if (toolProgressLines.at(-1) === normalized) {
-      return true;
-    }
-    toolProgressLines = [...toolProgressLines, normalized].slice(-TOOL_PROGRESS_MAX_LINES);
-    updateAnswerProgressFromBlock(renderToolProgressDraftText());
-    return true;
-  };
-  const pushToolStartProgressDraft = (payload: { name?: string; phase?: string }) => {
-    // Raw tool lifecycle labels are product-visible trace noise and should not
-    // be streamed into Telegram chats. Keep the status reaction, but suppress
-    // the text transport entirely.
-    void payload;
-    return false;
+    // Telegram no longer renders tool-status text as product UI.
   };
 
   const disableBlockStreaming = !previewStreamingEnabled
@@ -701,13 +689,14 @@ export const dispatchTelegramMessage = async ({
     return { ...payload, replyToId: implicitQuoteReplyTargetId };
   };
   const stripInternalToolTraceText = (payload: ReplyPayload): ReplyPayload | undefined => {
-    if (!hasInternalToolTraceText(payload.text)) {
+    if (payload.isError || !hasInternalToolTraceText(payload.text)) {
       return payload;
     }
-    if (!payload.mediaUrl && !(payload.mediaUrls?.length ?? 0)) {
+    const withoutTraceText = { ...payload, text: undefined };
+    if (!hasUserFacingToolEnvelope(withoutTraceText)) {
       return undefined;
     }
-    return { ...payload, text: undefined };
+    return withoutTraceText;
   };
   const sendPayload = async (payload: ReplyPayload) => {
     const normalizedPayload =
@@ -725,23 +714,14 @@ export const dispatchTelegramMessage = async ({
     return result.delivered;
   };
   const sendToolPayload = async (payload: ReplyPayload) => {
-    const text = normalizeToolProgressLine(payload.text);
     const sanitizedPayload = stripInternalToolTraceText(payload);
     if (!sanitizedPayload) {
-      return;
-    }
-    if (
-      canStreamToolProgressDraft &&
-      !sanitizedPayload.mediaUrl &&
-      !sanitizedPayload.mediaUrls?.length &&
-      pushToolProgressDraft(text)
-    ) {
       return;
     }
     // Tool payloads already arrive fully structured, including media URLs from
     // trusted tool results. Deliver them directly so Telegram does not have to
     // infer media from assistant prose after the model paraphrases the tool.
-    if (!hasToolPayloadContent(sanitizedPayload)) {
+    if (!hasUserFacingToolEnvelope(sanitizedPayload)) {
       return;
     }
     await sendPayload(sanitizedPayload);
@@ -1070,18 +1050,9 @@ export const dispatchTelegramMessage = async ({
           : undefined,
         onToolStart: statusReactionController
           ? async (payload) => {
-              const progressPromise = enqueueDraftLaneEvent(async () => {
-                pushToolStartProgressDraft(payload);
-              });
               await statusReactionController.setTool(payload.name);
-              await progressPromise;
             }
-          : canStreamToolProgressDraft
-            ? (payload) =>
-                enqueueDraftLaneEvent(async () => {
-                  pushToolStartProgressDraft(payload);
-                })
-            : undefined,
+          : undefined,
         onCompactionStart: statusReactionController
           ? () => statusReactionController.setCompacting()
           : undefined,

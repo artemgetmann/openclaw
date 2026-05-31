@@ -790,7 +790,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("compacts oversized Telegram tool summaries in verbose DM sessions", async () => {
+  it("suppresses Telegram tool summaries even in verbose DM sessions", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -822,15 +822,7 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
-    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ text: "🔧 read: ~/workspace/SOUL.md" }),
-    );
-    const compacted = dispatcher.sendToolResult.mock.calls[1]?.[0] as ReplyPayload | undefined;
-    expect(compacted?.text).toContain("line 1:");
-    expect(compacted?.text).toContain("… truncated (20 lines,");
-    expect(compacted?.text).not.toContain("line 20:");
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
@@ -911,7 +903,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "NO_REPLY" });
   });
 
-  it("sends direct Telegram text-session tool traces when verbose is on", async () => {
+  it("suppresses direct Telegram text-session tool traces when verbose is on", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -937,9 +929,7 @@ describe("dispatchReplyFromConfig", () => {
     };
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "🔧 exec: ls" }),
-    );
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
@@ -1052,7 +1042,7 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("sends native Telegram tool traces when verbose is on", async () => {
+  it("suppresses native Telegram tool traces when verbose is on but preserves media", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -1084,22 +1074,18 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ text: "🔧 tools/sessions_send" }),
-    );
-    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
-      2,
       expect.objectContaining({
-        text: "tool output",
+        text: undefined,
         mediaUrl: "https://example.com/tts-native.opus",
       }),
     );
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("compacts oversized native Telegram tool traces when verbose is on", async () => {
+  it("suppresses oversized native Telegram tool traces when verbose is on", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -1132,15 +1118,7 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
-    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ text: "🔧 read: ~/workspace/SOUL.md" }),
-    );
-    const compacted = dispatcher.sendToolResult.mock.calls[1]?.[0] as ReplyPayload | undefined;
-    expect(compacted?.text).toContain("line 1:");
-    expect(compacted?.text).toContain("… truncated (20 lines,");
-    expect(compacted?.text).not.toContain("line 20:");
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
