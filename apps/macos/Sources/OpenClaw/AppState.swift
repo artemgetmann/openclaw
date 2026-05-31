@@ -375,7 +375,11 @@ final class AppState {
     }
 
     static func defaultLaunchAtLogin(isConsumer: Bool) -> Bool {
-        isConsumer
+        // First launch should never create a durable login item by surprise.
+        // Existing users who already opted in keep their stored preference via
+        // resolveLaunchAtLoginPreference(storedValue:), but test and consumer
+        // bundles stop inviting themselves back after every reboot.
+        false
     }
 
     static func defaultShowDockIcon(storedValue: Bool?, isConsumer: Bool) -> Bool {
@@ -386,12 +390,30 @@ final class AppState {
         storedValue: Bool?,
         isConsumer: Bool
     ) -> LaunchAtLoginPreference {
+        if self.launchAtLoginDisabledForThisProcess() {
+            return LaunchAtLoginPreference(enabled: false, needsBootstrapInstall: false)
+        }
+
         if let storedValue {
             return LaunchAtLoginPreference(enabled: storedValue, needsBootstrapInstall: false)
         }
 
         let enabled = self.defaultLaunchAtLogin(isConsumer: isConsumer)
         return LaunchAtLoginPreference(enabled: enabled, needsBootstrapInstall: enabled)
+    }
+
+    static func launchAtLoginDisabledForThisProcess(
+        arguments: [String] = CommandLine.arguments,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        if arguments.contains("--no-login-item") || arguments.contains("--no-launchd") {
+            return true
+        }
+
+        let raw = environment["OPENCLAW_DISABLE_LOGIN_ITEM"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return ["1", "true", "yes", "on"].contains(raw)
     }
 
     @MainActor

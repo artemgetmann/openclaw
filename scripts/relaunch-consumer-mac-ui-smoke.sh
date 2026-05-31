@@ -34,7 +34,8 @@ Fast native Jarvis UI smoke:
     bundled Node, node_modules packaging, and default gateway restarts
 
 Cleanup:
-  --clean removes generated UI-smoke build output and stopped debug .app wrappers.
+  --clean removes generated UI-smoke build output, stopped debug .app wrappers,
+          and stale UI-smoke app/gateway LaunchAgents.
           Running UI-smoke apps are left in place for inspection.
 EOF
 }
@@ -88,6 +89,11 @@ cleanup_ui_smoke_artifacts() {
   local app_dir="$ROOT_DIR/dist-ui-smoke"
   local app_path=""
   local binary_path=""
+  local info_plist=""
+  local bundle_id=""
+  local instance_id=""
+  local gateway_label=""
+  local quarantine_dir="$HOME/Library/LaunchAgents/openclaw-test-disabled-$(date +%Y%m%d-%H%M%S)"
   local removed_apps=0
   local skipped_apps=0
 
@@ -100,12 +106,31 @@ cleanup_ui_smoke_artifacts() {
 
   if [[ ! -d "$app_dir" ]]; then
     echo "UI-smoke debug app wrappers already clean: $app_dir"
+    cleanup_stale_ui_smoke_launchagents "$quarantine_dir"
     return
   fi
 
   shopt -s nullglob
   for app_path in "$app_dir"/*.app; do
     binary_path="$app_path/Contents/MacOS/OpenClaw"
+    info_plist="$app_path/Contents/Info.plist"
+    bundle_id=""
+    instance_id=""
+    gateway_label=""
+
+    if [[ -f "$info_plist" ]]; then
+      bundle_id="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$info_plist" 2>/dev/null || true)"
+      instance_id="$(/usr/libexec/PlistBuddy -c "Print :OpenClawConsumerInstanceID" "$info_plist" 2>/dev/null || true)"
+    fi
+
+    if [[ -n "$bundle_id" ]]; then
+      quarantine_launchagent "$bundle_id" "$quarantine_dir"
+    fi
+    if [[ -n "$instance_id" ]]; then
+      gateway_label="$(consumer_instance_gateway_launchd_label "$(consumer_instance_normalize_id "$instance_id")")"
+      quarantine_launchagent "$gateway_label" "$quarantine_dir"
+    fi
+
     if [[ -x "$binary_path" ]] && app_binary_has_matching_pids "$binary_path"; then
       echo "Keeping running UI-smoke app wrapper: $app_path"
       skipped_apps=$((skipped_apps + 1))
@@ -118,9 +143,45 @@ cleanup_ui_smoke_artifacts() {
   done
   shopt -u nullglob
 
+  cleanup_stale_ui_smoke_launchagents "$quarantine_dir"
+
   # Remove the container only when every wrapper was safely removed.
   /bin/rmdir "$app_dir" 2>/dev/null || true
   echo "UI-smoke cleanup complete: removed_app_wrappers=$removed_apps skipped_running_app_wrappers=$skipped_apps"
+}
+
+quarantine_launchagent() {
+  local label="$1"
+  local quarantine_dir="$2"
+  local plist_path="$HOME/Library/LaunchAgents/${label}.plist"
+
+  [[ -n "$label" ]] || return 0
+  case "$label" in
+    ai.openclaw.gateway|ai.openclaw.gateway-watchdog|ai.openclaw.consumer.mac)
+      echo "Preserving LaunchAgent: $label"
+      return 0
+      ;;
+  esac
+  [[ -f "$plist_path" ]] || return 0
+
+  echo "Quarantining stale UI-smoke LaunchAgent: $label"
+  /bin/launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
+  /bin/mkdir -p "$quarantine_dir"
+  /bin/mv "$plist_path" "$quarantine_dir/"
+}
+
+cleanup_stale_ui_smoke_launchagents() {
+  local quarantine_dir="$1"
+  local plist_path=""
+  local label=""
+
+  shopt -s nullglob
+  for plist_path in "$HOME"/Library/LaunchAgents/ai.openclaw.consumer.mac.debug.ui-smoke.*.plist \
+    "$HOME"/Library/LaunchAgents/ai.openclaw.consumer.*.gateway.plist; do
+    label="$(/usr/libexec/PlistBuddy -c "Print :Label" "$plist_path" 2>/dev/null || /usr/bin/basename "$plist_path" .plist)"
+    quarantine_launchagent "$label" "$quarantine_dir"
+  done
+  shopt -u nullglob
 }
 
 terminate_matching_app_binary() {
@@ -705,7 +766,7 @@ export OPENCLAW_CONSUMER_INSTANCE_ID="$NORMALIZED_INSTANCE_ID"
 consumer_instance_export_runtime_env "$NORMALIZED_INSTANCE_ID"
 export OPENCLAW_FORK_ROOT="$ROOT_DIR"
 
-APP_ARGS=(--no-launchd)
+APP_ARGS=(--no-launchd --no-login-item)
 # Runtime-backed smoke lets this script own the isolated LaunchAgent and lets
 # the app attach to it. If the GUI also manages launchd, it can tear down the
 # freshly verified gateway during relaunch and leave first-task proof racing a

@@ -116,6 +116,13 @@ struct SettingsViewSmokeTests {
         #expect(!AppState.defaultShowDockIcon(storedValue: nil, isConsumer: false))
     }
 
+    @Test func `consumer defaults do not create login item unless user opted in`() {
+        #expect(!AppState.defaultLaunchAtLogin(isConsumer: true))
+        #expect(!AppState.defaultLaunchAtLogin(isConsumer: false))
+        #expect(AppState.launchAtLoginDisabledForThisProcess(arguments: ["OpenClaw", "--no-login-item"]))
+        #expect(AppState.launchAtLoginDisabledForThisProcess(environment: ["OPENCLAW_DISABLE_LOGIN_ITEM": "true"]))
+    }
+
     @Test func `general settings exercises branches`() {
         GeneralSettings.exerciseForTesting()
     }
