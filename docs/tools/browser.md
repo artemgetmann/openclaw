@@ -121,9 +121,11 @@ Notes:
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "user-live"` only when you intentionally want the real live browser as the default lane.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
-- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
-- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do
-  not set `cdpUrl` for that driver.
+- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; only set those for
+  remote CDP or an explicit `existing-session` browser URL.
+- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP.
+  Leave `cdpUrl` unset for auto-discovery, or set it to a debuggable browser
+  URL such as `http://127.0.0.1:9333` when you need an exact Chrome clone.
 - Set `browser.profiles.<name>.userDataDir` when an existing-session profile
   should attach to a non-default Chromium user profile such as Brave or Edge.
 - `driver: "existing-session"` is the explicit live-browser attach mode.
@@ -348,6 +350,30 @@ Use `userDataDir` for Brave, Edge, Chromium, or a non-default Chrome profile:
   },
 }
 ```
+
+Use `cdpUrl` when you launch a dedicated Chrome clone yourself and want
+OpenClaw to attach through Chrome MCP's `--browserUrl` mode:
+
+```json5
+{
+  browser: {
+    profiles: {
+      "signed-in-mcp": {
+        driver: "existing-session",
+        attachOnly: true,
+        cdpUrl: "http://127.0.0.1:9333",
+        userDataDir: "/tmp/openclaw-signed-in-mcp-clone",
+        profileDirectory: "Profile 4",
+        color: "#3B82F6",
+      },
+    },
+  },
+}
+```
+
+That profile is intentionally separate from the built-in `signed-in` profile.
+Use it for cloned signed-in Chrome MCP experiments without changing the default
+managed cloned-browser lane.
 
 Then in the matching browser:
 
