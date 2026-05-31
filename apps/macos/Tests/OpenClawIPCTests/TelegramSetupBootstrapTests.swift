@@ -412,7 +412,7 @@ struct TelegramSetupBootstrapTests {
         }
     }
 
-    @Test func `managed telegram status installs child token as enabled usable config`() async throws {
+    @Test func `managed telegram status installs child token as enabled pairing config`() async throws {
         let savedRoot = SavedConfigRoot()
         let configPath = TestIsolation.tempConfigPath()
         let stateDir = FileManager.default.temporaryDirectory
@@ -453,7 +453,10 @@ struct TelegramSetupBootstrapTests {
             ]
             await ConfigStore._testSetOverrides(.init(
                 isRemoteMode: { false },
-                loadLocal: { initialRoot },
+                loadLocal: {
+                    let saved = savedRoot.value()
+                    return saved.isEmpty ? initialRoot : saved
+                },
                 saveLocal: { root in
                     savedRoot.set(root)
                 }))
@@ -511,8 +514,12 @@ struct TelegramSetupBootstrapTests {
             #expect(telegram["botToken"] as? String == "777000:test-child-token")
             #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
             #expect(telegram["enabled"] as? Bool == true)
-            #expect(telegram["dmPolicy"] as? String == "allowlist")
-            #expect((telegram["allowFrom"] as? [String])?.isEmpty ?? true)
+            #expect(telegram["dmPolicy"] as? String == "pairing")
+            // The managed child bot must be active before the first sender is
+            // known, but `allowlist` is invalid without at least one sender id.
+            // Keeping `allowFrom` absent in pairing mode proves this bootstrap
+            // cannot recreate the stale-config reload rejection from the brief.
+            #expect(telegram["allowFrom"] == nil)
             #expect(plugins["allow"] as? [String] == [
                 "telegram",
                 "anthropic",
@@ -536,6 +543,69 @@ struct TelegramSetupBootstrapTests {
             #expect(store.telegramSetupStatus?.contains("777000:test-child-token") == false)
 
             await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)
+            await ConfigStore._testClearOverrides()
+        }
+    }
+
+    @Test func `final telegram bootstrap saves allowlist after sender capture`() async throws {
+        let savedRoot = SavedConfigRoot()
+        let configPath = TestIsolation.tempConfigPath()
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-final-telegram-\(UUID().uuidString)", isDirectory: true)
+            .path
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_STATE_DIR": stateDir,
+        ]) {
+            let initialRoot: [String: Any] = [
+                "channels": [
+                    "telegram": [
+                        "dmPolicy": "pairing",
+                        "botToken": "777000:test-child-token",
+                    ],
+                ],
+                "jarvis": [
+                    "backend": [
+                        "baseUrl": "https://jarvis.example.test",
+                        "accessToken": "server-token",
+                    ],
+                ],
+            ]
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: {
+                    let saved = savedRoot.value()
+                    return saved.isEmpty ? initialRoot : saved
+                },
+                saveLocal: { root in
+                    savedRoot.set(root)
+                }))
+
+            let store = ChannelsStore(isPreview: true)
+            store.configRoot = initialRoot
+
+            _ = try await store.applyTelegramSetupBootstrap(
+                token: "777000:test-child-token",
+                dmPolicy: "allowlist",
+                allowFrom: ["123456"],
+                enabled: true)
+
+            let telegram = try #require(
+                ((savedRoot.value()["channels"] as? [String: Any])?["telegram"] as? [String: Any]))
+            let accounts = try #require(telegram["accounts"] as? [String: Any])
+            let defaultAccount = try #require(accounts["default"] as? [String: Any])
+
+            // Once the verifier has captured the sender id, final bootstrap is
+            // allowed to lock the bot down with a real allowlist. This is the
+            // schema-valid terminal state the first-task flow relies on.
+            #expect(telegram["enabled"] as? Bool == true)
+            #expect(telegram["dmPolicy"] as? String == "allowlist")
+            #expect(telegram["allowFrom"] as? [String] == ["123456"])
+            #expect(telegram["botToken"] as? String == "777000:test-child-token")
+            #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
+
             await ConfigStore._testClearOverrides()
         }
     }

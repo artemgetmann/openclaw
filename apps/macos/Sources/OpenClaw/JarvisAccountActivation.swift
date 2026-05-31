@@ -277,6 +277,22 @@ struct JarvisAccountActivationKeychainStore: JarvisAccountAccessTokenStoring {
 enum JarvisAccountActivationConfig {
     private static let accountTokenProviderName = "jarvis-keychain"
 
+    @MainActor
+    static func loadActivationRoot() async -> [String: Any] {
+        // Activation signs a hosted backend request with the build-seeded
+        // backend token. That token belongs to this app-owned config file, not
+        // to a possibly stale gateway snapshot returned over IPC.
+        OpenClawConfigFile.loadDict()
+    }
+
+    @MainActor
+    static func saveActivationRoot(_ root: [String: Any]) async throws {
+        // Keep activation writes on the same app-owned file used for reads so a
+        // stale or remote gateway cannot receive account state for the wrong
+        // isolated consumer instance.
+        OpenClawConfigFile.saveDict(root)
+    }
+
     static func summary(root: [String: Any]) -> JarvisAccountActivationSummary? {
         guard let backend = (root["jarvis"] as? [String: Any])?["backend"] as? [String: Any],
               let account = backend["account"] as? [String: Any],
@@ -403,9 +419,11 @@ final class JarvisAccountActivationModel {
         email: String = "",
         state: State = .idle,
         tokenStore: JarvisAccountAccessTokenStoring = JarvisAccountActivationKeychainStore.shared,
-        loadConfig: @escaping @MainActor @Sendable () async -> [String: Any] = { await ConfigStore.load() },
+        loadConfig: @escaping @MainActor @Sendable () async -> [String: Any] = {
+            await JarvisAccountActivationConfig.loadActivationRoot()
+        },
         saveConfig: @escaping @MainActor @Sendable ([String: Any]) async throws -> Void = { root in
-            try await ConfigStore.save(root)
+            try await JarvisAccountActivationConfig.saveActivationRoot(root)
         },
         makeClient: @escaping @MainActor @Sendable ([String: Any]) throws -> JarvisAccountActivationClient = { root in
             try JarvisAccountActivationClient(configuration: JarvisAccountActivationClient.resolveConfiguration(root: root))
