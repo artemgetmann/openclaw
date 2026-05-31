@@ -12,6 +12,10 @@ import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
+import {
+  createJarvisManagedUtilityClient,
+  unwrapManagedProviderPayload,
+} from "../consumer/managed-utilities.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -40,6 +44,7 @@ import type {
 import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
 export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+export const MANAGED_OPENAI_AUDIO_PROVIDER_ID = "jarvis-managed-openai";
 
 function sanitizeProviderHeaders(
   headers: Record<string, unknown> | undefined,
@@ -451,6 +456,61 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
   );
 }
 
+async function runManagedOpenAiAudioEntry(params: {
+  entry: MediaUnderstandingModelConfig;
+  cfg: OpenClawConfig;
+  attachmentIndex: number;
+  cache: MediaAttachmentCache;
+  config?: MediaUnderstandingConfig;
+}): Promise<MediaUnderstandingOutput> {
+  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
+    capability: "audio",
+    entry: params.entry,
+    cfg: params.cfg,
+    config: params.config,
+  });
+  const media = await params.cache.getBuffer({
+    attachmentIndex: params.attachmentIndex,
+    maxBytes,
+    timeoutMs,
+  });
+  assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
+
+  const client = createJarvisManagedUtilityClient(params.cfg);
+  if (!client) {
+    throw new Error("Jarvis managed audio transcription requires managed services");
+  }
+
+  const model = params.entry.model?.trim() || DEFAULT_AUDIO_MODELS.openai;
+  const response = await client.callManagedUtility({
+    utility: "openai.audio.transcribe",
+    input: {
+      fileBase64: media.buffer.toString("base64"),
+      fileName: media.fileName,
+      mimeType: media.mime,
+      model,
+      language:
+        params.entry.language ??
+        params.config?.language ??
+        params.cfg.tools?.media?.audio?.language,
+      prompt,
+    },
+  });
+  const payload = unwrapManagedProviderPayload(response, "openai");
+  const text = typeof payload.text === "string" ? payload.text.trim() : "";
+  if (!text) {
+    throw new Error("Jarvis managed audio transcription returned no text");
+  }
+  const returnedModel = typeof payload.model === "string" ? payload.model : model;
+  return {
+    kind: "audio.transcription",
+    attachmentIndex: params.attachmentIndex,
+    text: trimOutput(text, maxChars),
+    provider: "openai",
+    model: returnedModel,
+  };
+}
+
 export async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
@@ -474,6 +534,16 @@ export async function runProviderEntry(params: {
     cfg,
     config: params.config,
   });
+
+  if (capability === "audio" && providerId === MANAGED_OPENAI_AUDIO_PROVIDER_ID) {
+    return await runManagedOpenAiAudioEntry({
+      entry,
+      cfg,
+      attachmentIndex: params.attachmentIndex,
+      cache: params.cache,
+      config: params.config,
+    });
+  }
 
   if (capability === "image") {
     if (!params.agentDir) {

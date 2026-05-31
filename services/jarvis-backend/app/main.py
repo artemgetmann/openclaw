@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import os
+import base64
+import binascii
 import hashlib
+import os
 import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -23,11 +25,14 @@ BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 BRAVE_LLM_CONTEXT_URL = "https://api.search.brave.com/res/v1/llm/context"
 GEMINI_GENERATE_CONTENT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_IMAGE_GENERATION_MODEL = "gemini-3-pro-image-preview"
+OPENAI_AUDIO_TRANSCRIPTION_URL = "https://api.openai.com/v1/audio/transcriptions"
+OPENAI_AUDIO_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 TELEGRAM_BOT_API_BASE_URL = "https://api.telegram.org"
 MANAGED_UTILITY_TIMEOUT_SECONDS = 20.0
 TELEGRAM_MANAGED_BOT_TIMEOUT_SECONDS = 20.0
 TELEGRAM_MANAGED_SETUP_TTL_MINUTES = 15
 MAX_GEMINI_IMAGE_PROMPT_CHARS = 4000
+MAX_OPENAI_AUDIO_BASE64_CHARS = 28_000_000
 SUPPORTED_GEMINI_IMAGE_RESOLUTIONS = {"1K", "2K", "4K"}
 SUPPORTED_GEMINI_IMAGE_ASPECT_RATIOS = {
     "1:1",
@@ -53,6 +58,7 @@ class Settings(BaseModel):
     db_path: str = "data/jarvis-backend.sqlite3"
     neon_database_url: str | None = None
     openai_configured: bool = False
+    openai_api_key: str | None = Field(default=None, repr=False)
     anthropic_configured: bool = False
     firecrawl_api_key: str | None = Field(default=None, repr=False)
     google_places_api_key: str | None = Field(default=None, repr=False)
@@ -74,6 +80,7 @@ def get_settings() -> Settings:
         db_path=os.getenv("JARVIS_BACKEND_DB_PATH") or "data/jarvis-backend.sqlite3",
         neon_database_url=os.getenv("NEON_DATABASE_URL") or None,
         openai_configured=bool(os.getenv("OPENAI_API_KEY")),
+        openai_api_key=os.getenv("OPENAI_API_KEY") or None,
         anthropic_configured=bool(os.getenv("ANTHROPIC_API_KEY")),
         firecrawl_api_key=os.getenv("FIRECRAWL_API_KEY") or None,
         google_places_api_key=os.getenv("GOOGLE_PLACES_API_KEY") or None,
@@ -506,6 +513,8 @@ async def managed_utility(
         return await _brave_search(request.input, settings)
     if utility == "gemini.image.generate":
         return await _gemini_image_generate(request.input, settings)
+    if utility == "openai.audio.transcribe":
+        return await _openai_audio_transcribe(request.input, settings)
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -1107,6 +1116,122 @@ def _optional_limit(
     return raw_value
 
 
+def _required_base64_audio(input_payload: dict[str, Any], utility: str) -> bytes:
+    """Decode one bounded audio payload before opening the provider spend path."""
+
+    raw_value = _required_input_string(input_payload, "fileBase64", utility)
+    if len(raw_value) > MAX_OPENAI_AUDIO_BASE64_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"{utility} input.fileBase64 is too large",
+        )
+    try:
+        return base64.b64decode(raw_value, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{utility} input.fileBase64 must be valid base64",
+        ) from None
+
+
+def _optional_openai_audio_model(input_payload: dict[str, Any]) -> str:
+    """Keep the launch path narrow while allowing the app's default STT model."""
+
+    model = _optional_string(input_payload, "model")
+    if model and model != OPENAI_AUDIO_TRANSCRIPTION_MODEL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"openai.audio.transcribe input.model must be {OPENAI_AUDIO_TRANSCRIPTION_MODEL}",
+        )
+    return model or OPENAI_AUDIO_TRANSCRIPTION_MODEL
+
+
+def _openai_audio_filename(input_payload: dict[str, Any], mime_type: str | None) -> str:
+    """Give OpenAI a stable filename without trusting caller-supplied paths."""
+
+    raw_name = _optional_string(input_payload, "fileName")
+    if raw_name:
+        name = Path(raw_name).name.strip()
+        if name:
+            return name[:128]
+    if mime_type == "audio/ogg":
+        return "voice.ogg"
+    if mime_type == "audio/mpeg":
+        return "voice.mp3"
+    if mime_type == "audio/mp4":
+        return "voice.m4a"
+    return "voice.wav"
+
+
+async def _openai_audio_transcribe(
+    input_payload: dict[str, Any],
+    settings: Settings,
+) -> ManagedUtilityResponse:
+    """Transcribe managed-user voice notes with the backend-held OpenAI key."""
+
+    utility = "openai.audio.transcribe"
+    api_key = _require_provider_key("openai", settings.openai_api_key)
+    audio_bytes = _required_base64_audio(input_payload, utility)
+    model = _optional_openai_audio_model(input_payload)
+    mime_type = _optional_string(input_payload, "mimeType") or "application/octet-stream"
+    file_name = _openai_audio_filename(input_payload, mime_type)
+
+    files = {
+        "file": (file_name, audio_bytes, mime_type),
+    }
+    data: dict[str, str] = {"model": model}
+    language = _optional_string(input_payload, "language")
+    if language:
+        data["language"] = language
+    prompt = _optional_string(input_payload, "prompt")
+    if prompt:
+        data["prompt"] = prompt
+
+    try:
+        async with httpx.AsyncClient(timeout=MANAGED_UTILITY_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                OPENAI_AUDIO_TRANSCRIPTION_URL,
+                headers={"Authorization": f"Bearer {api_key}"},
+                data=data,
+                files=files,
+            )
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="openai request timed out",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="openai request failed",
+        ) from exc
+
+    payload = _response_json_or_text(response)
+    sanitized_payload = _sanitize_provider_payload(payload, settings, extra_secrets=[api_key])
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "provider": "openai",
+                "status": response.status_code,
+                "payload": sanitized_payload,
+            },
+        )
+    text = sanitized_payload.get("text") if isinstance(sanitized_payload, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="openai returned no transcription text",
+        )
+    return _managed_provider_response(
+        "openai",
+        {
+            "text": text.strip(),
+            "model": model,
+        },
+    )
+
+
 def _optional_count_or_limit(
     input_payload: dict[str, Any],
     *,
@@ -1254,6 +1379,7 @@ def _sanitize_provider_payload(
         value
         for value in (
             settings.api_token,
+            settings.openai_api_key,
             settings.firecrawl_api_key,
             settings.google_places_api_key,
             settings.gemini_api_key,

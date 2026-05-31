@@ -335,7 +335,27 @@ enum JarvisAccountActivationConfig {
         managedServices["mode"] = "managed"
         jarvis["managedServices"] = managedServices
         root["jarvis"] = jarvis
+        Self.configureManagedAudioTranscription(into: &root)
         Self.removeAccountAccessTokenSecretProvider(from: &root)
+    }
+
+    private static func configureManagedAudioTranscription(into root: inout [String: Any]) {
+        var tools = root["tools"] as? [String: Any] ?? [:]
+        var media = tools["media"] as? [String: Any] ?? [:]
+        var audio = media["audio"] as? [String: Any] ?? [:]
+        audio["enabled"] = true
+        if audio["models"] == nil {
+            audio["models"] = [
+                [
+                    "type": "provider",
+                    "provider": "jarvis-managed-openai",
+                    "model": "gpt-4o-mini-transcribe",
+                ],
+            ]
+        }
+        media["audio"] = audio
+        tools["media"] = media
+        root["tools"] = tools
     }
 
     private static func removeAccountAccessTokenSecretProvider(from root: inout [String: Any]) {

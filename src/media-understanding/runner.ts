@@ -37,6 +37,7 @@ import {
   AUTO_AUDIO_KEY_PROVIDERS,
   AUTO_IMAGE_KEY_PROVIDERS,
   AUTO_VIDEO_KEY_PROVIDERS,
+  DEFAULT_AUDIO_MODELS,
   DEFAULT_IMAGE_MODELS,
 } from "./defaults.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
@@ -51,6 +52,7 @@ import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
 import {
   buildModelDecision,
   formatDecisionSummary,
+  MANAGED_OPENAI_AUDIO_PROVIDER_ID,
   runCliEntry,
   runProviderEntry,
 } from "./runner.entries.js";
@@ -478,6 +480,19 @@ async function resolveAutoEntries(params: {
   const activeEntry = await resolveActiveModelEntry(params);
   if (activeEntry) {
     return [activeEntry];
+  }
+  if (
+    params.capability === "audio" &&
+    params.cfg.jarvis?.managedServices?.mode === "managed" &&
+    params.cfg.jarvis?.backend?.baseUrl
+  ) {
+    return [
+      {
+        type: "provider",
+        provider: MANAGED_OPENAI_AUDIO_PROVIDER_ID,
+        model: DEFAULT_AUDIO_MODELS.openai,
+      },
+    ];
   }
   if (params.capability === "audio") {
     const localAudio = await resolveLocalAudioEntry();
