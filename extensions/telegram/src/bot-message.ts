@@ -79,6 +79,14 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     if (!context) {
       return;
     }
+    if (context.handledDirectReplyText) {
+      await bot.api.sendMessage(
+        context.chatId,
+        context.handledDirectReplyText,
+        context.threadSpec?.id != null ? { message_thread_id: context.threadSpec.id } : undefined,
+      );
+      return;
+    }
     try {
       await dispatchTelegramMessage({
         context,
