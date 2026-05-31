@@ -24,6 +24,14 @@ No replacement of the built-in `signed-in` profile was made. The coherent produc
   - makes clear this does not replace the built-in managed `signed-in` lane
 - `HANDOFF.md`
   - this proof record
+- `scripts/consumer-auth-sync.sh`
+  - defaults consumer tester auth sync to the app-owned Jarvis source under `~/Library/Application Support/OpenClaw/.openclaw`
+  - keeps legacy `~/.openclaw` fallback only when the app-owned source is absent
+- `scripts/isolated-smoke-runtime-auth.sh`
+  - bootstraps isolated smoke auth from the app-owned main auth store
+  - prunes the copied auth store to the selected model provider
+  - pins the isolated config default model when `--config-path` is provided
+  - runs a no-op `models status --probe` before browser/product work
 
 ## Runtime / Profile Proof
 
@@ -315,6 +323,28 @@ Auth/runtime note:
 - A second attempt using copied OpenAI Codex profiles failed OAuth refresh.
 - The successful smoke bootstrapped only the isolated test auth store from `~/.codex/auth.json` via `bootstrapTelegramLiveCodexAuthStore`.
 - No global Codex/OpenClaw config was overwritten.
+- Follow-up fix: `scripts/isolated-smoke-runtime-auth.sh` now bootstraps future isolated product smokes from the app-owned Jarvis auth store by default, prints non-secret source/target fingerprints, strips raw host OpenAI env for OpenAI Codex probes, and fails before browser work if the selected model cannot complete a no-op probe.
+
+Auth bootstrap proof after follow-up fix:
+
+```bash
+bash scripts/isolated-smoke-runtime-auth.sh \
+  --state-dir /tmp/openclaw-smoke-auth-test/state \
+  --config-path /tmp/openclaw-smoke-auth-test/openclaw.json \
+  --model openai-codex/gpt-5.5
+```
+
+Result:
+
+```text
+smoke_auth_bootstrap=ok
+smoke_auth_source=/Users/user/Library/Application Support/OpenClaw/.openclaw/agents/main/agent/auth-profiles.json
+smoke_auth_target=/tmp/openclaw-smoke-auth-test/state/agents/main/agent/auth-profiles.json
+smoke_auth_provider=openai-codex
+smoke_auth_profiles=openai-codex:default
+smoke_auth_probe=ok
+smoke_auth_probe_command_exit=0
+```
 
 Exact booking prompt used:
 
@@ -422,7 +452,7 @@ pgrep -fl 'openclaw.mjs agent|openclaw.mjs gateway --port 23937|chrome-devtools-
 ## PR / Merge Status
 
 - Branch: `codex/signed-in-mcp-clone-spike-20260531`
-- Draft PR: not opened yet.
+- Draft PR: #828 (`https://github.com/artemgetmann/openclaw/pull/828`)
 - Merge: not attempted.
 
 ## Rollback Notes
