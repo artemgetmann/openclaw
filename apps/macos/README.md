@@ -67,6 +67,17 @@ DMG/zip/runtime archive/npm tarball/bundled Node, and does not restart the
 default gateway. Reserve `rebuild-relaunch` and full packaging for cases where
 the release artifact or installer path is the thing being proven.
 
+For the stable side-by-side Jarvis Consumer release-candidate app, use the
+dedicated RC wrapper. Both modes preserve `/Applications/Jarvis Consumer.app`,
+`ai.openclaw.consumer.mac.consumer-rc`, and the embedded
+`jarvis-consumer-rc` instance identity; neither mode touches
+`/Applications/Jarvis.app` or the shared `ai.openclaw.gateway` service.
+
+```bash
+bash scripts/package-jarvis-consumer-rc.sh --fast
+bash scripts/package-jarvis-consumer-rc.sh --notarize
+```
+
 To remove generated UI-smoke build output without deleting a currently running
 smoke app, run:
 
