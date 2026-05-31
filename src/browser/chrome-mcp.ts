@@ -1718,7 +1718,6 @@ export async function evaluateChromeMcpScript(params: {
       pageId: parsePageId(params.targetId),
       function: params.fn,
       ...(params.args?.length ? { args: params.args } : {}),
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );

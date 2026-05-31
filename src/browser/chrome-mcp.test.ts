@@ -707,7 +707,7 @@ describe("chrome MCP page parsing", () => {
     expect(result).toBe(123);
   });
 
-  it("forwards timeout overrides to evaluate_script", async () => {
+  it("keeps timeout overrides at the MCP request layer for evaluate_script", async () => {
     const { session, callTool } = createFakeSessionBundle();
     const factory: ChromeMcpSessionFactory = async () => session;
     setChromeMcpSessionFactoryForTest(factory);
@@ -722,10 +722,15 @@ describe("chrome MCP page parsing", () => {
     expect(callTool).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "evaluate_script",
-        arguments: expect.objectContaining({
-          function: "() => 123",
-          timeout: 18_000,
-        }),
+        arguments: expect.objectContaining({ function: "() => 123" }),
+      }),
+      undefined,
+      expect.objectContaining({ timeout: 18_000 }),
+    );
+    expect(callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "evaluate_script",
+        arguments: expect.not.objectContaining({ timeout: expect.anything() }),
       }),
       undefined,
       expect.objectContaining({ timeout: 18_000 }),
