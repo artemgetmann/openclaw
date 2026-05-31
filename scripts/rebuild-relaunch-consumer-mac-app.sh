@@ -61,6 +61,11 @@ if [[ "$REPLACE" == "1" ]]; then
   OPEN_ARGS+=(--replace)
 fi
 
+# This wrapper is an explicit rebuild/relaunch loop, so it owns the persistent
+# per-instance gateway refresh. The lower-level open helper stays read-only by
+# default to avoid stale test gateways being recreated on casual app opens.
+OPEN_ARGS+=(--refresh-gateway)
+
 # A fresh worktree may not have node_modules yet. Keep the warm-path default,
 # but automatically allow one dependency install when the checkout is obviously
 # not bootstrapped so the helper can succeed end-to-end on first run.

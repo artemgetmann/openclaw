@@ -9,12 +9,16 @@ source "$ROOT_DIR/scripts/lib/gateway-launchagent-guard.sh"
 INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 APP_PATH=""
 REPLACE=0
+REFRESH_GATEWAY="${OPENCLAW_CONSUMER_REFRESH_GATEWAY:-0}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/open-consumer-mac-app.sh [--instance <id>] [--replace] [app_path]
+Usage: scripts/open-consumer-mac-app.sh [--instance <id>] [--replace] [--refresh-gateway] [app_path]
 Set OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=1 when opening an isolated runtime
 lane that was packaged with the stable consumer debug app identity.
+
+By default this only opens the app. Use --refresh-gateway when the caller
+intentionally wants to reinstall the per-instance gateway LaunchAgent.
 EOF
 }
 
@@ -85,6 +89,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --replace)
       REPLACE=1
+      shift
+      ;;
+    --refresh-gateway)
+      REFRESH_GATEWAY=1
       shift
       ;;
     --help|-h)
@@ -204,11 +212,12 @@ else
     /usr/bin/open -n "$APP_PATH"
 fi
 
-# Consumer builds are menu bar apps (`LSUIElement=true`), so plain `open` can
-# leave the right instance running without surfacing its window. Reopen+activate
-# the exact bundle id so "open the app" actually brings the intended lane
-# forward instead of a random existing consumer variant.
-refresh_gateway_service_env "$NORMALIZED_INSTANCE_ID"
+if [[ "$REFRESH_GATEWAY" == "1" ]]; then
+  # Some rebuild/smoke flows intentionally refresh the isolated gateway after
+  # app bootstrap so shell-only env vars land in launchd. Plain "open app"
+  # should not mutate persistent gateway jobs every time.
+  refresh_gateway_service_env "$NORMALIZED_INSTANCE_ID"
+fi
 
 /usr/bin/osascript <<EOF >/dev/null 2>&1 || true
 tell application id "$actual_bundle_id"
