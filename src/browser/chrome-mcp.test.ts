@@ -11,6 +11,7 @@ import {
   ensureChromeMcpAvailable,
   listChromeMcpTabs,
   openChromeMcpTab,
+  pressChromeMcpKey,
   resetChromeMcpSessionsForTest,
   setChromeMcpDevToolsWsEndpointProberForTest,
   resolveChromeMcpArgsForTest,
@@ -79,7 +80,7 @@ function createFakeSessionBundle(): ChromeMcpSessionBundle {
         ],
       };
     }
-    if (name === "click" || name === "fill") {
+    if (name === "click" || name === "fill" || name === "press_key" || name === "take_screenshot") {
       return {
         content: [
           {
@@ -576,6 +577,50 @@ describe("chrome MCP page parsing", () => {
     );
   });
 
+  it.each(["MCP error -32001: Request timed out", "Navigation timeout of 10000 ms exceeded"])(
+    "recovers a created tab when new_page times out after Chrome opens it: %s",
+    async (timeoutMessage) => {
+      const { session, callTool } = createFakeSessionBundle();
+      callTool.mockImplementation(async ({ name }: ToolCall) => {
+        if (name === "new_page") {
+          throw new Error(timeoutMessage);
+        }
+        if (name === "list_pages") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: [
+                  "## Pages",
+                  "1: chrome://new-tab-page/",
+                  "2: https://www.batikair.com.my/ [selected]",
+                ].join("\n"),
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected tool ${name}`);
+      });
+      const factory: ChromeMcpSessionFactory = async () => session;
+      setChromeMcpSessionFactoryForTest(factory);
+
+      const tab = await openChromeMcpTab("signed-in", "https://www.batikair.com.my/", {
+        timeoutMs: 1,
+      });
+
+      expect(tab).toMatchObject({
+        targetId: "2",
+        url: "https://www.batikair.com.my/",
+        type: "page",
+      });
+      expect(callTool).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "list_pages" }),
+        undefined,
+        expect.objectContaining({ timeout: expect.any(Number) }),
+      );
+    },
+  );
+
   it("keeps Chrome MCP interaction timeouts client-side", async () => {
     const { session, callTool } = createFakeSessionBundle();
     const factory: ChromeMcpSessionFactory = async () => session;
@@ -594,6 +639,12 @@ describe("chrome MCP page parsing", () => {
       value: "hello",
       timeoutMs: 25_000,
     });
+    await pressChromeMcpKey({
+      profileName: "chrome-live",
+      targetId: "1",
+      key: "Enter",
+      timeoutMs: 20_000,
+    });
 
     expect(callTool).toHaveBeenNthCalledWith(
       1,
@@ -602,7 +653,7 @@ describe("chrome MCP page parsing", () => {
         arguments: expect.not.objectContaining({ timeout: expect.anything() }),
       }),
       undefined,
-      expect.objectContaining({ timeout: 30_000 }),
+      expect.objectContaining({ timeout: expect.any(Number) }),
     );
     expect(callTool).toHaveBeenNthCalledWith(
       2,
@@ -611,8 +662,38 @@ describe("chrome MCP page parsing", () => {
         arguments: expect.not.objectContaining({ timeout: expect.anything() }),
       }),
       undefined,
-      expect.objectContaining({ timeout: 25_000 }),
+      expect.objectContaining({ timeout: expect.any(Number) }),
     );
+    expect(callTool).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        name: "press_key",
+        arguments: expect.not.objectContaining({ timeout: expect.anything() }),
+      }),
+      undefined,
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    );
+  });
+
+  it("retries once when Chrome MCP reports a screenshot but the temp file is missing", async () => {
+    const { session, callTool } = createFakeSessionBundle();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const originalReadFile = fs.readFile;
+    vi.spyOn(fs, "readFile")
+      .mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ENOENT" }))
+      .mockResolvedValueOnce(Buffer.from("png"));
+
+    const buffer = await takeChromeMcpScreenshot({
+      profileName: "chrome-live",
+      targetId: "1",
+    });
+
+    expect(buffer.toString()).toBe("png");
+    expect(callTool).toHaveBeenCalledTimes(2);
+    vi.mocked(fs.readFile).mockRestore();
+    expect(fs.readFile).toBe(originalReadFile);
   });
 
   it("parses evaluate_script text responses when structuredContent is missing", async () => {

@@ -154,6 +154,7 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "maxChars",
   "labels",
   "doubleClick",
+  "dblClick",
   "button",
   "modifiers",
   "text",
@@ -179,12 +180,42 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "actions",
   "stopOnError",
   "timeoutMs",
+  "timeout",
 ] as const;
+
+function normalizeActRequestAliases(
+  request: Parameters<typeof browserAct>[1],
+): Parameters<typeof browserAct>[1] {
+  const normalized = { ...(request as Record<string, unknown>) };
+  if (
+    typeof normalized.timeoutMs !== "number" &&
+    typeof normalized.timeout === "number" &&
+    Number.isFinite(normalized.timeout)
+  ) {
+    normalized.timeoutMs = normalized.timeout;
+  }
+  delete normalized.timeout;
+
+  if (typeof normalized.doubleClick !== "boolean" && typeof normalized.dblClick === "boolean") {
+    normalized.doubleClick = normalized.dblClick;
+  }
+  delete normalized.dblClick;
+
+  if (Array.isArray(normalized.actions)) {
+    normalized.actions = normalized.actions.map((action) =>
+      action && typeof action === "object"
+        ? normalizeActRequestAliases(action as Parameters<typeof browserAct>[1])
+        : action,
+    );
+  }
+
+  return normalized as Parameters<typeof browserAct>[1];
+}
 
 function readActRequestParam(params: Record<string, unknown>) {
   const requestParam = params.request;
   if (requestParam && typeof requestParam === "object") {
-    return requestParam as Parameters<typeof browserAct>[1];
+    return normalizeActRequestAliases(requestParam as Parameters<typeof browserAct>[1]);
   }
 
   const kind = readStringParam(params, "kind");
@@ -199,7 +230,7 @@ function readActRequestParam(params: Record<string, unknown>) {
     }
     request[key] = params[key];
   }
-  return request as Parameters<typeof browserAct>[1];
+  return normalizeActRequestAliases(request as Parameters<typeof browserAct>[1]);
 }
 
 type BrowserProxyFile = {
