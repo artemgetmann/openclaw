@@ -397,6 +397,49 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Audio]\nTranscript:\nwhatsapp transcript");
   });
 
+  it("transcribes Telegram state-relative voice notes before the agent sees raw media", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = await createTempMediaDir();
+    const mediaDir = path.join(stateDir, "media", "inbound");
+    const fileName = "file_0---c0fd3a32-aed1-44fb-b990-71e15d468c8b.ogg";
+    const mediaPath = path.join(mediaDir, fileName);
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(mediaPath, createSafeAudioFixtureBuffer(2048));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    try {
+      const ctx: MsgContext = {
+        Body: "<media:audio>",
+        Surface: "telegram",
+        ChatType: "direct",
+        MediaPaths: [`media/inbound/${fileName}`],
+        MediaTypes: ["audio/ogg; codecs=opus"],
+      };
+      const result = await applyMediaUnderstanding({
+        ctx,
+        cfg: createGroqAudioConfig(),
+        providers: createGroqProviders("telegram voice transcript"),
+      });
+
+      expect(result.appliedAudio).toBe(true);
+      expect(ctx.Transcript).toBe("telegram voice transcript");
+      expect(ctx.BodyForAgent).toBe("[Audio]\nTranscript:\ntelegram voice transcript");
+      expect(ctx.MediaUnderstanding).toEqual([
+        expect.objectContaining({
+          attachmentIndex: 0,
+          kind: "audio.transcription",
+          text: "telegram voice transcript",
+        }),
+      ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+  });
+
   it("skips URL-only audio when remote file is too small", async () => {
     // Override the default mock to return a tiny buffer (below MIN_AUDIO_FILE_BYTES)
     mockedFetchRemoteMedia.mockResolvedValueOnce({

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const transcribeFirstAudioMock = vi.fn();
@@ -58,11 +58,48 @@ async function buildGroupVoiceContext(params: {
   });
 }
 
+async function buildDirectVoiceContext(params: {
+  messageId: number;
+  chatId: number;
+  date: number;
+  fromId: number;
+  firstName: string;
+  fileId: string;
+  mediaPath: string;
+  mediaType?: string;
+}) {
+  return buildTelegramMessageContextForTest({
+    message: {
+      message_id: params.messageId,
+      chat: { id: params.chatId, type: "private" },
+      date: params.date,
+      text: undefined,
+      from: { id: params.fromId, first_name: params.firstName },
+      voice: { file_id: params.fileId },
+    },
+    allMedia: [{ path: params.mediaPath, contentType: params.mediaType ?? "audio/ogg" }],
+    cfg: {
+      agents: { defaults: { model: DEFAULT_MODEL, workspace: DEFAULT_WORKSPACE } },
+      channels: { telegram: {} },
+      messages: { groupChat: { mentionPatterns: [DEFAULT_MENTION_PATTERN] } },
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            models: [{ type: "provider", provider: "jarvis-managed-openai" }],
+          },
+        },
+      },
+    },
+  });
+}
+
 function expectTranscriptRendered(
   ctx: Awaited<ReturnType<typeof buildGroupVoiceContext>>,
   transcript: string,
 ) {
   expect(ctx).not.toBeNull();
+  expect(ctx?.ctxPayload?.Transcript).toBe(transcript);
   expect(ctx?.ctxPayload?.BodyForAgent).toBe(transcript);
   expect(ctx?.ctxPayload?.Body).toContain(transcript);
   expect(ctx?.ctxPayload?.Body).not.toContain("<media:audio>");
@@ -73,7 +110,33 @@ function expectAudioPlaceholderRendered(ctx: Awaited<ReturnType<typeof buildGrou
   expect(ctx?.ctxPayload?.Body).toContain("<media:audio>");
 }
 
+function expectManagedVoiceUnavailableRendered(
+  ctx: Awaited<ReturnType<typeof buildDirectVoiceContext>>,
+) {
+  expect(ctx).not.toBeNull();
+  expect(ctx?.ctxPayload?.BodyForAgent).toContain(
+    "Managed voice transcription is currently unavailable",
+  );
+  expect(ctx?.ctxPayload?.BodyForAgent).not.toBe("<media:audio>");
+  expect(ctx?.ctxPayload?.Body).toContain("Managed voice transcription is currently unavailable");
+  expect(ctx?.ctxPayload?.Body).not.toContain("<media:audio>");
+  expect(ctx?.handledDirectReplyText).toBe(
+    "Managed voice transcription is currently unavailable. Please try again later.",
+  );
+  expect(ctx?.ctxPayload?.Transcript).toBeUndefined();
+  expect(ctx?.ctxPayload?.MediaPath).toBeUndefined();
+  expect(ctx?.ctxPayload?.MediaType).toBeUndefined();
+  expect(ctx?.ctxPayload?.MediaUrl).toBeUndefined();
+  expect(ctx?.ctxPayload?.MediaPaths).toBeUndefined();
+  expect(ctx?.ctxPayload?.MediaUrls).toBeUndefined();
+  expect(ctx?.ctxPayload?.MediaTypes).toBeUndefined();
+}
+
 describe("buildTelegramMessageContext audio transcript body", () => {
+  beforeEach(() => {
+    transcribeFirstAudioMock.mockReset();
+  });
+
   it("uses preflight transcript as BodyForAgent for mention-gated group voice messages", async () => {
     transcribeFirstAudioMock.mockResolvedValueOnce("hey bot please help");
 
@@ -90,6 +153,106 @@ describe("buildTelegramMessageContext audio transcript body", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expectTranscriptRendered(ctx, "hey bot please help");
+  });
+
+  it("preflights direct Telegram voice notes before agent execution", async () => {
+    transcribeFirstAudioMock.mockResolvedValueOnce("dm voice transcript");
+
+    const ctx = await buildDirectVoiceContext({
+      messageId: 5,
+      chatId: 123456,
+      date: 1700000400,
+      fromId: 46,
+      firstName: "Eve",
+      fileId: "voice-5",
+      mediaPath: "/tmp/dm-voice.ogg",
+      mediaType: "audio/ogg",
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: {
+          MediaPaths: ["/tmp/dm-voice.ogg"],
+          MediaTypes: ["audio/ogg"],
+        },
+      }),
+    );
+    expectTranscriptRendered(ctx, "dm voice transcript");
+  });
+
+  it("handles failed managed direct voice transcription without forwarding raw audio", async () => {
+    transcribeFirstAudioMock.mockResolvedValueOnce(undefined);
+
+    const ctx = await buildDirectVoiceContext({
+      messageId: 6,
+      chatId: 123457,
+      date: 1700000500,
+      fromId: 47,
+      firstName: "Finn",
+      fileId: "voice-6",
+      mediaPath: "/tmp/dm-managed-unavailable.ogg",
+      mediaType: "audio/ogg",
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expectManagedVoiceUnavailableRendered(ctx);
+  });
+
+  it("handles thrown managed direct voice transcription without forwarding raw audio", async () => {
+    transcribeFirstAudioMock.mockRejectedValueOnce(new Error("hosted transcriber unavailable"));
+
+    const ctx = await buildDirectVoiceContext({
+      messageId: 7,
+      chatId: 123458,
+      date: 1700000600,
+      fromId: 48,
+      firstName: "Gina",
+      fileId: "voice-7",
+      mediaPath: "/tmp/dm-managed-throws.ogg",
+      mediaType: "audio/ogg",
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expectManagedVoiceUnavailableRendered(ctx);
+  });
+
+  it("keeps mention-gated group voice messages skipped when managed transcription fails", async () => {
+    transcribeFirstAudioMock.mockResolvedValueOnce(undefined);
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 8,
+        chat: { id: -1001234567894, type: "supergroup", title: "Test Group 5" },
+        date: 1700000700,
+        text: undefined,
+        from: { id: 49, first_name: "Hana" },
+        voice: { file_id: "voice-8" },
+      },
+      allMedia: [{ path: "/tmp/group-managed-unavailable.ogg", contentType: "audio/ogg" }],
+      cfg: {
+        agents: { defaults: { model: DEFAULT_MODEL, workspace: DEFAULT_WORKSPACE } },
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: [DEFAULT_MENTION_PATTERN] } },
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [{ type: "provider", provider: "jarvis-managed-openai" }],
+            },
+          },
+        },
+      },
+      resolveGroupActivation: () => true,
+      resolveGroupRequireMention: () => true,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: true },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(ctx).toBeNull();
   });
 
   it("skips preflight transcription when disableAudioPreflight is true", async () => {

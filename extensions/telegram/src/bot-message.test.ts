@@ -88,6 +88,30 @@ describe("telegram bot message processor", () => {
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
   });
 
+  it("sends handled direct replies without dispatching to the agent", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    buildTelegramMessageContext.mockResolvedValue({
+      chatId: 123,
+      handledDirectReplyText:
+        "Managed voice transcription is currently unavailable. Please try again later.",
+      threadSpec: { id: 456 },
+      route: { sessionKey: "agent:main:main" },
+    });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await processSampleMessage(processMessage);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      123,
+      "Managed voice transcription is currently unavailable. Please try again later.",
+      { message_thread_id: 456 },
+    );
+    expect(dispatchTelegramMessage).not.toHaveBeenCalled();
+  });
+
   it("sends user-visible fallback when dispatch throws", async () => {
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const { processMessage, runtimeError } = createDispatchFailureHarness(

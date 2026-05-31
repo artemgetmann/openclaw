@@ -131,6 +131,8 @@ export async function buildTelegramInboundContextPayload(params: {
   route: ResolvedAgentRoute;
   rawBody: string;
   bodyText: string;
+  transcript?: string;
+  suppressCurrentMediaForAgent?: boolean;
   historyKey?: string;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
@@ -165,6 +167,8 @@ export async function buildTelegramInboundContextPayload(params: {
     route,
     rawBody,
     bodyText,
+    transcript,
+    suppressCurrentMediaForAgent,
     historyKey,
     historyLimit,
     groupHistories,
@@ -271,11 +275,15 @@ export async function buildTelegramInboundContextPayload(params: {
           timestamp: entry.timestamp,
         }))
       : undefined;
-  const currentMediaForContext = stickerCacheHit ? [] : allMedia;
+  // Failed managed direct voice transcription is already represented as a
+  // user-visible text body. Dropping current media here prevents downstream
+  // prompt assembly from falling through to raw <media:audio> handling.
+  const currentMediaForContext = stickerCacheHit || suppressCurrentMediaForAgent ? [] : allMedia;
   const contextMedia = [...currentMediaForContext, ...replyMedia];
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: bodyText,
+    Transcript: transcript,
     InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: commandBody,

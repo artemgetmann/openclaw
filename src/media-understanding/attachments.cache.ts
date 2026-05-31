@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
@@ -253,7 +254,26 @@ export class MediaAttachmentCache {
     if (!rawPath) {
       return undefined;
     }
-    return path.isAbsolute(rawPath) ? rawPath : path.resolve(rawPath);
+    if (path.isAbsolute(rawPath)) {
+      return rawPath;
+    }
+
+    // Telegram and packaged-app media notes can carry state-relative paths
+    // such as ".openclaw/media/inbound/file.ogg" or "media/inbound/file.ogg".
+    // Resolving those against process.cwd() points inside the app bundle in RC
+    // builds, which makes the allowed-root check reject the real audio before
+    // managed transcription can run.
+    const normalizedRawPath = rawPath.replaceAll("\\", "/");
+    const stateDir = resolveStateDir();
+    const stateDirName = path.basename(stateDir);
+    if (normalizedRawPath === stateDirName || normalizedRawPath.startsWith(`${stateDirName}/`)) {
+      return path.join(path.dirname(stateDir), normalizedRawPath);
+    }
+    if (normalizedRawPath === "media" || normalizedRawPath.startsWith("media/")) {
+      return path.join(stateDir, normalizedRawPath);
+    }
+
+    return path.resolve(rawPath);
   }
 
   private async ensureLocalStat(entry: AttachmentCacheEntry): Promise<number | undefined> {

@@ -47,6 +47,9 @@ import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 export type TelegramInboundBodyResult = {
   bodyText: string;
   rawBody: string;
+  transcript?: string;
+  handledDirectReplyText?: string;
+  suppressCurrentMediaForAgent?: boolean;
   historyKey?: string;
   commandAuthorized: boolean;
   effectiveWasMentioned: boolean;
@@ -55,6 +58,23 @@ export type TelegramInboundBodyResult = {
   stickerCacheHit: boolean;
   locationData?: NormalizedLocation;
 };
+
+const MANAGED_AUDIO_TRANSCRIPTION_UNAVAILABLE =
+  "Managed voice transcription is currently unavailable. Please try again later.";
+const JARVIS_MANAGED_OPENAI_AUDIO_PROVIDER = "jarvis-managed-openai";
+
+function usesManagedAudioTranscription(cfg: OpenClawConfig): boolean {
+  const audioConfig = cfg.tools?.media?.audio;
+  if (!audioConfig || audioConfig.enabled === false) {
+    return false;
+  }
+  return (audioConfig.models ?? []).some((model) => {
+    if (!model || typeof model !== "object") {
+      return false;
+    }
+    return (model as { provider?: unknown }).provider === JARVIS_MANAGED_OPENAI_AUDIO_PROVIDER;
+  });
+}
 
 async function resolveStickerVisionSupport(params: {
   cfg: OpenClawConfig;
@@ -167,20 +187,26 @@ export async function resolveTelegramInboundBody(params: {
 
   let bodyText = rawBody;
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
+  const directManagedAudioOnly =
+    !isGroup && hasAudio && !hasUserText && usesManagedAudioTranscription(cfg);
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
 
   let preflightTranscript: string | undefined;
+  let attemptedPreflightTranscription = false;
+  // Direct voice notes have no mention gate, but they still need a transcript
+  // in the context payload before the generic agent runner builds its prompt.
+  // Group messages keep the old guard: only spend transcription when mention
+  // detection can actually use the audio text.
   const needsPreflightTranscription =
-    isGroup &&
-    requireMention &&
     hasAudio &&
     !hasUserText &&
-    mentionRegexes.length > 0 &&
+    (!isGroup || !requireMention || mentionRegexes.length > 0) &&
     !disableAudioPreflight;
 
   if (needsPreflightTranscription) {
+    attemptedPreflightTranscription = true;
     try {
       const { transcribeFirstAudio } =
         await import("../../../src/media-understanding/audio-preflight.js");
@@ -203,6 +229,17 @@ export async function resolveTelegramInboundBody(params: {
 
   if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
     bodyText = preflightTranscript;
+  }
+
+  // In Jarvis managed mode, hosted STT owns direct voice notes. If the hosted
+  // backend is unavailable, treat the audio as handled and surface a concise
+  // failure instead of forwarding the raw attachment into the agent prompt,
+  // where it can improvise local Whisper and leak out of the managed product
+  // boundary.
+  const suppressCurrentMediaForAgent =
+    directManagedAudioOnly && attemptedPreflightTranscription && !preflightTranscript;
+  if (suppressCurrentMediaForAgent) {
+    bodyText = MANAGED_AUDIO_TRANSCRIPTION_UNAVAILABLE;
   }
 
   if (!bodyText && allMedia.length > 0) {
@@ -277,6 +314,11 @@ export async function resolveTelegramInboundBody(params: {
   return {
     bodyText,
     rawBody,
+    transcript: preflightTranscript,
+    handledDirectReplyText: suppressCurrentMediaForAgent
+      ? MANAGED_AUDIO_TRANSCRIPTION_UNAVAILABLE
+      : undefined,
+    suppressCurrentMediaForAgent,
     historyKey,
     commandAuthorized,
     effectiveWasMentioned,
