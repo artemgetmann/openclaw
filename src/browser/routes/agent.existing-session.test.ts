@@ -27,6 +27,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
+  pressChromeMcpKey: vi.fn(async () => {}),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
     id: "root",
@@ -45,7 +46,7 @@ vi.mock("../chrome-mcp.js", () => ({
   fillChromeMcpForm: vi.fn(async () => {}),
   hoverChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
-  pressChromeMcpKey: vi.fn(async () => {}),
+  pressChromeMcpKey: chromeMcpMocks.pressChromeMcpKey,
   resizeChromeMcpPage: vi.fn(async () => {}),
   takeChromeMcpScreenshot: chromeMcpMocks.takeChromeMcpScreenshot,
   takeChromeMcpSnapshot: chromeMcpMocks.takeChromeMcpSnapshot,
@@ -72,6 +73,7 @@ vi.mock("../screenshot.js", () => ({
 }));
 
 vi.mock("../../media/store.js", () => ({
+  MEDIA_MAX_BYTES: 5 * 1024 * 1024,
   ensureMediaDir: vi.fn(async () => {}),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
@@ -133,6 +135,7 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
+    chromeMcpMocks.pressChromeMcpKey.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript
@@ -344,6 +347,33 @@ describe("existing-session browser routes", () => {
       args: ["combo-to", "Bali/Denpasar (DPS)", "exact", "Bali/Denpasar (DPS)", "14000"],
       timeoutMs: 14_000,
     });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fn: expect.stringContaining("pressEnter(editable)"),
+      }),
+    );
+  });
+
+  it("gives actionable guidance for targeted existing-session press", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "press", ref: "combo-title", key: "Enter" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(501);
+    expect(response.body).toMatchObject({
+      error: expect.stringContaining("click or focus the element first"),
+    });
+    expect(response.body).toMatchObject({
+      error: expect.stringContaining("then call press with only key/targetId"),
+    });
+    expect(chromeMcpMocks.pressChromeMcpKey).not.toHaveBeenCalled();
   });
 
   it("passes timeout overrides through existing-session evaluate", async () => {

@@ -816,6 +816,60 @@ describe("browser tool act compatibility", () => {
     );
   });
 
+  it("normalizes timeout and dblClick aliases before sending browser actions", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      request: {
+        kind: "click",
+        ref: "btn-1",
+        timeout: 12_000,
+        dblClick: true,
+      },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      {
+        kind: "click",
+        ref: "btn-1",
+        timeoutMs: 12_000,
+        doubleClick: true,
+      },
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+
+  it("normalizes timeout and dblClick aliases inside split existing-session batches", async () => {
+    setResolvedBrowserProfiles({
+      "user-live": { driver: "existing-session", attachOnly: true, color: "#2D7FF9" },
+    });
+    browserActionsMocks.browserAct.mockResolvedValue({ ok: true, targetId: "tab-live" });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      profile: "user-live",
+      request: {
+        kind: "batch",
+        targetId: "tab-live",
+        actions: [{ kind: "click", ref: "btn-1", timeout: 12_000, dblClick: true }],
+      },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      {
+        kind: "click",
+        ref: "btn-1",
+        targetId: "tab-live",
+        timeoutMs: 12_000,
+        doubleClick: true,
+      },
+      expect.objectContaining({ profile: "user-live" }),
+    );
+  });
+
   it.each([
     {
       name: "click",

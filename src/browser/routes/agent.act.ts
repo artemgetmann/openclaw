@@ -200,6 +200,10 @@ function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): str
       el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
     };
+    const pressEnter = (el) => {
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
+    };
     const clickElement = (el) => {
       el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
       el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
@@ -212,10 +216,11 @@ function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): str
     const beforeText = normalize(controlRoot.textContent);
     controlRoot.scrollIntoView({ block: "center", inline: "center" });
     clickElement(controlRoot);
-    const editable =
+    const findEditable = () =>
       controlRoot.querySelector(editableSelector) ||
       (control.matches(editableSelector) ? control : null) ||
       document.activeElement;
+    let editable = findEditable();
     if (editable instanceof Element && editable.matches(editableSelector)) {
       setValue(editable, queryText);
     }
@@ -239,8 +244,32 @@ function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): str
         }, 150);
         return;
       }
+      if (!(editable instanceof Element) || !editable.isConnected || !editable.matches(editableSelector)) {
+        editable = findEditable();
+      }
+      if (editable instanceof Element && editable.matches(editableSelector) && document.activeElement !== editable) {
+        setValue(editable, queryText);
+      }
       if (Date.now() > deadline) {
-        reject(new Error('No visible option matched "' + optionText + '"'));
+        if (editable instanceof Element && editable.matches(editableSelector)) {
+          pressEnter(editable);
+          setTimeout(() => {
+            const selectedText = normalize(controlRoot.textContent);
+            if (selectedText && selectedText !== beforeText) {
+              resolve({
+                optionText,
+                matchedText: selectedText,
+                selectedText,
+                changed: true,
+                fallback: "enter"
+              });
+              return;
+            }
+            reject(new Error('No visible option matched "' + optionText + '"; clicked/focused the control and pressed Enter after typing the query, but the selection did not change.'));
+          }, 150);
+          return;
+        }
+        reject(new Error('No visible option matched "' + optionText + '"; click/focus the dropdown, type the query, then press Enter before deeper recovery.'));
         return;
       }
       setTimeout(tick, 100);
@@ -844,7 +873,7 @@ export function registerBrowserAgentActRoutes(
                 return jsonError(
                   res,
                   501,
-                  "existing-session press does not support ref/selector targeting yet; press uses the focused element.",
+                  "existing-session press does not support ref/selector targeting yet; click or focus the element first, then call press with only key/targetId because press uses the focused element.",
                 );
               }
               if (delayMs) {
