@@ -620,7 +620,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     ).toBe(false);
   });
 
-  it("coalesces text-only tool progress into one retained bubble before the final answer", async () => {
+  it("drops text-only tool progress before the final answer", async () => {
     const draftStream = createSequencedDraftStream(90027);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -637,20 +637,19 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(draftStream.update).toHaveBeenNthCalledWith(1, "Checking example.com.");
-    expect(draftStream.update).toHaveBeenNthCalledWith(
-      2,
+    expect(draftStream.update).not.toHaveBeenCalledWith("Checking example.com.");
+    expect(draftStream.update).not.toHaveBeenCalledWith(
       "Checking example.com.\n\nChecking the IANA reserved domains page.",
     );
-    expect(draftStream.materialize).toHaveBeenCalledTimes(1);
-    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [expect.objectContaining({ text: "Final answer" })],
-      }),
+    expect(draftStream.materialize).not.toHaveBeenCalled();
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      90027,
+      "Final answer",
+      expect.any(Object),
     );
-    expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {

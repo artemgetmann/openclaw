@@ -45,7 +45,6 @@ import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import { normalizeVerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
@@ -256,10 +255,6 @@ export async function dispatchReplyFromConfig(params: {
     ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
   );
   const isTelegramProvider = visibilityChannel === "telegram";
-  const telegramVerboseLevel = isTelegramProvider
-    ? (normalizeVerboseLevel(sessionStoreEntry.entry?.verboseLevel) ??
-      normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault))
-    : undefined;
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
@@ -570,13 +565,12 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
-    const isTelegramVerbose = telegramVerboseLevel !== undefined && telegramVerboseLevel !== "off";
     const shouldSendToolSummaries =
       !sourceReplyPolicy.suppressAutomaticSourceDelivery &&
       ctx.ChatType !== "group" &&
-      (!isTelegramProvider || isTelegramVerbose);
+      !isTelegramProvider;
     const sanitizeTelegramVisiblePayload = (payload: ReplyPayload): ReplyPayload => {
-      if (!isTelegramProvider || isTelegramVerbose || typeof payload.text !== "string") {
+      if (!isTelegramProvider || typeof payload.text !== "string") {
         return payload;
       }
       const text = stripTelegramInternalToolSummaryLines(payload.text);
@@ -639,22 +633,14 @@ export async function dispatchReplyFromConfig(params: {
       if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
         return payload;
       }
-      // Telegram user chats normally suppress internal tool/status text. Verbose
-      // mode is the explicit opt-in for those traces; media and approval payloads
-      // still need delivery because they carry user-visible effects.
-      const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-      if (!hasMedia && !isTelegramVerbose) {
-        return null;
+      if (payload.isError) {
+        return payload;
       }
-      if (isTelegramVerbose) {
-        const text =
-          typeof payload.text === "string"
-            ? compactNativeTelegramToolText(payload.text)
-            : undefined;
-        if (text === payload.text) {
-          return payload;
-        }
-        return { ...payload, text };
+      // Telegram product chats never render internal tool/status text. Media and
+      // approval payloads still need delivery because they carry user-visible effects.
+      const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+      if (!hasMedia) {
+        return null;
       }
       return { ...payload, text: undefined };
     };
