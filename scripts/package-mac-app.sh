@@ -888,29 +888,53 @@ materialize_bundled_extension_node_modules() {
 }
 
 consumer_runtime_cache_key() {
+  consumer_runtime_input_key
+}
+
+hash_consumer_runtime_path() {
+  local runtime_path="$1"
+  local absolute_path="$ROOT_DIR/$runtime_path"
+
+  if [[ ! -e "$absolute_path" ]]; then
+    printf 'MISSING %s\n' "$runtime_path"
+    return 0
+  fi
+
+  if [[ -f "$absolute_path" ]]; then
+    printf 'FILE %s\n' "$runtime_path"
+    (cd "$ROOT_DIR" && shasum -a 256 "$runtime_path")
+    return 0
+  fi
+
+  (cd "$ROOT_DIR" && find "$runtime_path" \
+    \( -name '*.app' -o -name '*.dmg' -o -name '*.zip' -o -name '*appcast*.xml' \) -prune \
+    -o -type f -print | LC_ALL=C sort | while IFS= read -r file_path; do
+      printf 'FILE %s\n' "$file_path"
+      shasum -a 256 "$file_path"
+    done)
+}
+
+consumer_runtime_input_key() {
   local node_version=""
   node_version="$(openclaw_validated_node_version "$ROOT_DIR")"
 
-  # The fast local smoke cache is only for already-built runtime payloads.
-  # Key it off the packaged runtime inputs, not unrelated source files, so we
-  # reuse safely when the staged JS/assets/templates are unchanged.
+  # Shell-only smoke reuse must ignore unrelated Swift/app-shell edits while
+  # refusing stale runtime payloads. Hash the exact runtime inputs that get
+  # copied into Contents/Resources/OpenClawRuntime, plus Node/uv/arch selection.
   (
-    cd "$ROOT_DIR"
     {
-      printf '%s\n' "$GIT_COMMIT"
       printf '%s\n' "$node_version"
       printf '%s\n' "$UV_VERSION"
       printf '%s\n' "$BUILD_ARCHS_VALUE"
-      git status --porcelain -- \
-        dist \
-        openclaw.mjs \
-        package.json \
-        pnpm-lock.yaml \
-        scripts/generate-consumer-seeded-defaults.mjs \
-        extensions \
-        skills \
-        docs/reference/templates \
-        apps/macos/Sources/OpenClaw/Resources/DeviceModels
+      hash_consumer_runtime_path "openclaw.mjs"
+      hash_consumer_runtime_path "package.json"
+      hash_consumer_runtime_path "pnpm-lock.yaml"
+      hash_consumer_runtime_path "scripts/generate-consumer-seeded-defaults.mjs"
+      hash_consumer_runtime_path "dist"
+      hash_consumer_runtime_path "extensions"
+      hash_consumer_runtime_path "skills"
+      hash_consumer_runtime_path "docs/reference/templates"
+      hash_consumer_runtime_path "apps/macos/Sources/OpenClaw/Resources/DeviceModels"
     } | shasum -a 256 | awk '{print $1}'
   )
 }
@@ -930,9 +954,11 @@ prepare_bundled_consumer_runtime() {
   local uv_arm64_root=""
   local uv_x64_root=""
   local deploy_root=""
+  local runtime_input_key=""
 
   node_version="$(openclaw_validated_node_version "$ROOT_DIR")"
   cache_key="$(consumer_runtime_cache_key)"
+  runtime_input_key="$(consumer_runtime_input_key)"
   cache_root="${BUNDLED_RUNTIME_CACHE_ROOT}/${cache_key}"
   cache_templates_dir="${cache_root}/openclaw/docs/reference/templates"
 
@@ -1040,7 +1066,7 @@ prepare_bundled_consumer_runtime() {
   cp -R "$uv_x64_root" "$BUNDLED_RUNTIME_RESOURCE_DIR/uv/darwin-x64"
 
   cat > "$manifest_path" <<EOF
-{"format":1,"bundleVersion":"${APP_BUILD}","gitCommit":"${GIT_COMMIT}","nodeVersion":"${node_version}","uvVersion":"${UV_VERSION}"}
+{"format":1,"bundleVersion":"${APP_BUILD}","gitCommit":"${GIT_COMMIT}","nodeVersion":"${node_version}","uvVersion":"${UV_VERSION}","runtimeInputKey":"${runtime_input_key}"}
 EOF
 
   if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" ]]; then
@@ -1056,6 +1082,10 @@ EOF
 }
 
 capture_reusable_bundled_consumer_runtime() {
+  local manifest_path="${BUNDLED_RUNTIME_RESOURCE_DIR}/manifest.json"
+  local previous_runtime_input_key=""
+  local current_runtime_input_key=""
+
   if [[ "$APP_VARIANT" != "consumer" ]]; then
     return 0
   fi
@@ -1066,13 +1096,37 @@ capture_reusable_bundled_consumer_runtime() {
     echo "ERROR: OPENCLAW_CONSUMER_REUSE_RUNTIME is allowed only on the fast smoke packaging path." >&2
     exit 1
   fi
+  if [[ ! -f "$ROOT_DIR/dist/index.js" ]]; then
+    echo "ERROR: dist/index.js missing; --reuse-runtime is unsafe because runtime JS is unavailable." >&2
+    echo "Rerun once without --reuse-runtime so packaging can rebuild runtime JS." >&2
+    exit 1
+  fi
   if [[ ! -d "$BUNDLED_RUNTIME_RESOURCE_DIR" ]]; then
     echo "ERROR: no previous bundled runtime to reuse: $BUNDLED_RUNTIME_RESOURCE_DIR" >&2
     echo "Rerun once without --reuse-runtime, then reuse that runtime for smoke-only app shell iterations." >&2
     exit 1
   fi
-  if [[ ! -f "$BUNDLED_RUNTIME_RESOURCE_DIR/manifest.json" ]]; then
+  if [[ ! -f "$manifest_path" ]]; then
     echo "ERROR: previous bundled runtime is missing manifest.json; rerun without --reuse-runtime." >&2
+    exit 1
+  fi
+
+  previous_runtime_input_key="$("$VALIDATED_NODE_BIN" -e 'const fs = require("fs"); try { const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(String(manifest.runtimeInputKey || "")); } catch { process.exit(2); }' "$manifest_path")" \
+    || {
+      echo "ERROR: previous bundled runtime manifest is unreadable; rerun without --reuse-runtime." >&2
+      exit 1
+    }
+  if [[ -z "$previous_runtime_input_key" ]]; then
+    echo "ERROR: previous bundled runtime manifest lacks runtimeInputKey; rerun without --reuse-runtime once." >&2
+    exit 1
+  fi
+
+  current_runtime_input_key="$(consumer_runtime_input_key)"
+  if [[ "$current_runtime_input_key" != "$previous_runtime_input_key" ]]; then
+    echo "ERROR: runtime inputs changed; refusing smoke-only --reuse-runtime." >&2
+    echo "Rerun once without --reuse-runtime to rebuild bundled runtime, then retry shell-only reuse." >&2
+    echo "  previous_runtime_input_key=$previous_runtime_input_key" >&2
+    echo "  current_runtime_input_key=$current_runtime_input_key" >&2
     exit 1
   fi
 

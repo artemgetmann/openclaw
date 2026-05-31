@@ -11,8 +11,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/release-env.sh"
 source "$ROOT_DIR/scripts/lib/consumer-instance.sh"
+source "$ROOT_DIR/scripts/lib/macos-activation.sh"
 
 MODE=""
+REUSE_RUNTIME=0
 RC_INSTANCE_ID="jarvis-consumer-rc"
 RC_APP_NAME="Jarvis Consumer"
 RC_APP_BUNDLE_NAME="${RC_APP_NAME}.app"
@@ -22,7 +24,7 @@ RC_BUILT_APP_PATH="$ROOT_DIR/dist/${RC_APP_BUNDLE_NAME}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/package-jarvis-consumer-rc.sh --fast
+Usage: scripts/package-jarvis-consumer-rc.sh --fast [--reuse-runtime|--shell-only-fast]
        scripts/package-jarvis-consumer-rc.sh --notarize
 
 Builds, signs, installs, and relaunches the stable Jarvis Consumer release
@@ -35,7 +37,13 @@ candidate app:
 
 Modes:
   --fast      Local RC loop. Skips Apple notarization, keeps the stable app
-              identity/path, and relaunches only Jarvis Consumer.app.
+              identity/path, and relaunches only Jarvis Consumer.app. This is
+              still a full package unless paired with --reuse-runtime.
+  --reuse-runtime
+  --shell-only-fast
+              Smoke-only RC loop for app-shell iteration. Reuses the previous
+              signed bundled runtime only when runtime inputs match the saved
+              manifest; refuses when runtime JS/dependency inputs changed.
   --notarize  Distribution RC loop. Uses the same identity/path, requires
               Developer ID + notary auth, notarizes/staples the app, then
               installs and relaunches Jarvis Consumer.app.
@@ -54,6 +62,7 @@ Conservative env overrides:
   SKIP_UI_BUILD=0|1
   BUILD_ARCHS="all|arm64|x86_64"
   SIGN_IDENTITY="Developer ID Application: ..."
+  OPENCLAW_MAC_APP_ACTIVATION_TIMEOUT_SECS=12
 EOF
 }
 
@@ -135,16 +144,25 @@ verify_rc_bundle() {
 package_rc_app_fast() {
   local default_skip_pnpm_install="${SKIP_PNPM_INSTALL:-1}"
   local default_skip_tsc="${SKIP_TSC:-1}"
+  local package_args=(--instance "$RC_INSTANCE_ID")
 
   # First-run lanes still need real runtime output. Fast mode skips repeated
-  # work only when the checkout already has the required artifacts.
+  # work only when the checkout already has the required artifacts. Runtime
+  # reuse is stricter: package-mac-app refuses if the saved runtime manifest no
+  # longer matches current runtime inputs.
   if [[ "${SKIP_PNPM_INSTALL+x}" != x && ! -d "$ROOT_DIR/node_modules" ]]; then
     default_skip_pnpm_install=0
     echo "node_modules missing; allowing pnpm install once for the RC package"
   fi
-  if [[ "${SKIP_TSC+x}" != x && ! -f "$ROOT_DIR/dist/index.js" ]]; then
+  if [[ "$REUSE_RUNTIME" == "1" && ! -f "$ROOT_DIR/dist/index.js" ]]; then
+    die "dist/index.js missing; --reuse-runtime is unsafe. Rerun --fast once to rebuild runtime JS."
+  fi
+  if [[ "$REUSE_RUNTIME" != "1" && "${SKIP_TSC+x}" != x && ! -f "$ROOT_DIR/dist/index.js" ]]; then
     default_skip_tsc=0
     echo "dist/index.js missing; forcing one JS build for the RC package"
+  fi
+  if [[ "$REUSE_RUNTIME" == "1" ]]; then
+    package_args+=(--reuse-runtime)
   fi
 
   APP_NAME="$RC_APP_NAME" \
@@ -161,7 +179,7 @@ package_rc_app_fast() {
   BUILD_CONFIG="${BUILD_CONFIG:-release}" \
   BUILD_ARCHS="${BUILD_ARCHS:-all}" \
   CI="${CI:-true}" \
-    "$ROOT_DIR/scripts/package-consumer-mac-app.sh" --instance "$RC_INSTANCE_ID"
+    "$ROOT_DIR/scripts/package-consumer-mac-app-fast.sh" "${package_args[@]}"
 }
 
 package_rc_app_notarized() {
@@ -221,12 +239,7 @@ relaunch_rc_app() {
     OPENCLAW_CONSUMER_INSTANCE_ID="$RC_INSTANCE_ID" \
     /usr/bin/open -n "$RC_INSTALL_PATH"
 
-  /usr/bin/osascript <<EOF >/dev/null 2>&1 || true
-tell application id "$RC_BUNDLE_ID"
-  reopen
-  activate
-end tell
-EOF
+  openclaw_activate_macos_app "$RC_INSTALL_PATH" "$RC_BUNDLE_ID"
 }
 
 print_summary() {
@@ -262,6 +275,10 @@ while [[ $# -gt 0 ]]; do
       MODE="notarize"
       shift
       ;;
+    --reuse-runtime|--shell-only-fast)
+      REUSE_RUNTIME=1
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -279,6 +296,10 @@ fi
 
 assert_rc_inputs
 
+if [[ "$REUSE_RUNTIME" == "1" && "$MODE" != "fast" ]]; then
+  die "--reuse-runtime/--shell-only-fast is only valid with --fast"
+fi
+
 case "$MODE" in
   fast)
     package_rc_app_fast
@@ -286,7 +307,11 @@ case "$MODE" in
     install_rc_app
     verify_rc_bundle "$RC_INSTALL_PATH"
     relaunch_rc_app
-    print_summary "fast"
+    if [[ "$REUSE_RUNTIME" == "1" ]]; then
+      print_summary "fast-reuse-runtime"
+    else
+      print_summary "fast"
+    fi
     ;;
   notarize)
     package_rc_app_notarized
