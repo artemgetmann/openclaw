@@ -1,3 +1,4 @@
+import { clickAriaRefViaCdp } from "../cdp.js";
 import {
   clickChromeMcpElement,
   closeChromeMcpTab,
@@ -12,6 +13,7 @@ import {
 import type { BrowserActRequest, BrowserFormField } from "../client-actions-core.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import { isPlaywrightCdpAttachTimeout } from "../pw-session.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
@@ -34,6 +36,15 @@ import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function canFallbackClickViaCdp(params: {
+  ref?: string;
+  selector?: string;
+  wsUrl?: string;
+}): boolean {
+  const ref = params.ref?.trim() ?? "";
+  return Boolean(params.wsUrl) && !params.selector && /^@?ax\d+$/.test(ref);
 }
 
 function browserEvaluateDisabledMessage(action: "wait" | "evaluate"): string {
@@ -726,7 +737,27 @@ export function registerBrowserAgentActRoutes(
             if (timeoutMs) {
               clickRequest.timeoutMs = timeoutMs;
             }
-            await pw.clickViaPlaywright(clickRequest);
+            try {
+              await pw.clickViaPlaywright(clickRequest);
+            } catch (err) {
+              if (
+                !isPlaywrightCdpAttachTimeout(err) ||
+                !canFallbackClickViaCdp({ ref, selector, wsUrl: tab.wsUrl })
+              ) {
+                throw err;
+              }
+              // Raw accessibility snapshots produce axNN refs backed by Chrome's
+              // backend DOM ids. If full-browser Playwright attach stalls but the
+              // tab WebSocket is healthy, use that narrower channel instead of
+              // forcing the agent into unrelated macOS GUI automation.
+              await clickAriaRefViaCdp({
+                wsUrl: tab.wsUrl ?? "",
+                ref: ref!,
+                doubleClick,
+                button,
+                modifiers,
+              });
+            }
             return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
           }
           case "type": {

@@ -116,4 +116,25 @@ describe("pw-session connection scoping", () => {
     expect(browserA.browserClose).toHaveBeenCalledTimes(1);
     expect(browserB.browserClose).not.toHaveBeenCalled();
   });
+
+  it("gives loopback connectOverCDP attaches a larger cloned-profile budget", async () => {
+    connectOverCdpSpy.mockRejectedValue(new Error("connect timeout"));
+    getChromeWebSocketUrlSpy.mockResolvedValue("ws://127.0.0.1:9222/devtools/browser/abc");
+
+    await expect(listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" })).rejects.toThrow(
+      "connect timeout",
+    );
+
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(
+      1,
+      "ws://127.0.0.1:9222/devtools/browser/abc",
+      expect.objectContaining({ timeout: 15000 }),
+    );
+    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(
+      2,
+      "ws://127.0.0.1:9222/devtools/browser/abc",
+      expect.objectContaining({ timeout: 30000 }),
+    );
+  });
 });

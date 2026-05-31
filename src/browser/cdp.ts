@@ -295,6 +295,127 @@ export async function snapshotAria(opts: {
   });
 }
 
+function normalizeAriaRef(ref: string): string {
+  const trimmed = ref.trim();
+  return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+}
+
+function resolveMouseButton(button: string | undefined): "left" | "right" | "middle" {
+  return button === "right" || button === "middle" ? button : "left";
+}
+
+function resolveModifierMask(modifiers: string[] | undefined): number {
+  const set = new Set((modifiers ?? []).map((value) => value.toLowerCase()));
+  return (
+    (set.has("alt") || set.has("option") ? 1 : 0) |
+    (set.has("control") || set.has("ctrl") ? 2 : 0) |
+    (set.has("meta") || set.has("command") || set.has("cmd") ? 4 : 0) |
+    (set.has("shift") ? 8 : 0)
+  );
+}
+
+export async function clickAriaRefViaCdp(opts: {
+  wsUrl: string;
+  ref: string;
+  doubleClick?: boolean;
+  button?: string;
+  modifiers?: string[];
+  limit?: number;
+}): Promise<void> {
+  const ref = normalizeAriaRef(opts.ref);
+  if (!/^ax\d+$/.test(ref)) {
+    throw new Error(`CDP click fallback only supports ax refs, got "${opts.ref}".`);
+  }
+
+  await withCdpSocket(opts.wsUrl, async (send) => {
+    await send("Accessibility.enable").catch(() => {});
+    await send("DOM.enable").catch(() => {});
+    const axTree = (await send("Accessibility.getFullAXTree")) as {
+      nodes?: RawAXNode[];
+    };
+    const nodes = formatAriaSnapshot(
+      Array.isArray(axTree?.nodes) ? axTree.nodes : [],
+      Math.max(1, Math.min(2000, Math.floor(opts.limit ?? 2000))),
+    );
+    const match = nodes.find((node) => normalizeAriaRef(node.ref) === ref);
+    if (!match?.backendDOMNodeId) {
+      throw new Error(`Could not resolve accessibility ref "${opts.ref}" to a DOM node.`);
+    }
+
+    // Playwright attach can stall on large cloned Chrome profiles. For raw AX
+    // refs we can still click the exact tab through its page WebSocket by
+    // resolving the backend DOM node, scrolling it into view, and dispatching a
+    // browser-level mouse event at the visible center.
+    const resolved = (await send("DOM.resolveNode", {
+      backendNodeId: match.backendDOMNodeId,
+    })) as { object?: { objectId?: string } };
+    const objectId = String(resolved?.object?.objectId ?? "").trim();
+    if (!objectId) {
+      throw new Error(`Could not resolve accessibility ref "${opts.ref}" to a runtime object.`);
+    }
+
+    try {
+      const rectResult = (await send("Runtime.callFunctionOn", {
+        objectId,
+        awaitPromise: true,
+        returnByValue: true,
+        functionDeclaration: `function () {
+          if (!(this instanceof Element)) {
+            throw new Error("Resolved node is not an Element");
+          }
+          this.scrollIntoView({ block: "center", inline: "center" });
+          const rect = this.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) {
+            throw new Error("Resolved element is not visible");
+          }
+          return {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2
+          };
+        }`,
+      })) as { result?: { value?: { x?: number; y?: number } } };
+      const x = Number(rectResult?.result?.value?.x);
+      const y = Number(rectResult?.result?.value?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        throw new Error(`Could not compute click point for accessibility ref "${opts.ref}".`);
+      }
+
+      const button = resolveMouseButton(opts.button);
+      const clickCount = opts.doubleClick ? 2 : 1;
+      const modifiers = resolveModifierMask(opts.modifiers);
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x,
+        y,
+        button,
+        buttons: 0,
+        clickCount: 0,
+        modifiers,
+      });
+      await send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x,
+        y,
+        button,
+        buttons: button === "left" ? 1 : button === "right" ? 2 : 4,
+        clickCount,
+        modifiers,
+      });
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x,
+        y,
+        button,
+        buttons: 0,
+        clickCount,
+        modifiers,
+      });
+    } finally {
+      void send("Runtime.releaseObject", { objectId }).catch(() => {});
+    }
+  });
+}
+
 export async function snapshotDom(opts: {
   wsUrl: string;
   limit?: number;

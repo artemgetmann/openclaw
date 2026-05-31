@@ -86,13 +86,22 @@ const cdpMocks = vi.hoisted(() => ({
   createTargetViaCdp: vi.fn<() => Promise<{ targetId: string }>>(async () => {
     throw new Error("cdp disabled");
   }),
+  clickAriaRefViaCdp: vi.fn(async () => {}),
   snapshotAria: vi.fn(async () => ({
     nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
   })),
 }));
 
-export function getCdpMocks(): { createTargetViaCdp: MockFn; snapshotAria: MockFn } {
-  return cdpMocks as unknown as { createTargetViaCdp: MockFn; snapshotAria: MockFn };
+export function getCdpMocks(): {
+  createTargetViaCdp: MockFn;
+  clickAriaRefViaCdp: MockFn;
+  snapshotAria: MockFn;
+} {
+  return cdpMocks as unknown as {
+    createTargetViaCdp: MockFn;
+    clickAriaRefViaCdp: MockFn;
+    snapshotAria: MockFn;
+  };
 }
 
 const pwMocks = vi.hoisted(() => ({
@@ -278,6 +287,7 @@ vi.mock("./chrome.js", () => ({
 }));
 
 vi.mock("./cdp.js", () => ({
+  clickAriaRefViaCdp: cdpMocks.clickAriaRefViaCdp,
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),
   snapshotAria: cdpMocks.snapshotAria,

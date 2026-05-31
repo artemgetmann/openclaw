@@ -339,6 +339,11 @@ function usesLoopbackCdpEndpoint(cdpUrl: string): boolean {
   }
 }
 
+export function isPlaywrightCdpAttachTimeout(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /connectOverCDP/i.test(message) && /Timeout\s+\d+ms exceeded/i.test(message);
+}
+
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   const cached = cachedByCdpUrl.get(normalized);
@@ -357,11 +362,11 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         // Local managed profiles, especially the signed-in cloned `user` lane,
-        // can spend several seconds replaying extension/background targets after
-        // the CDP socket is already open. A couple of longer uninterrupted
-        // attach attempts are more reliable than repeatedly resetting progress
-        // with the old 5s/7s/9s budget.
-        const timeout = loopbackAttach ? 12000 + attempt * 3000 : 5000 + attempt * 2000;
+        // can expose many page/extension/background targets. Playwright's CDP
+        // handshake may connect the WebSocket quickly, then spend real time
+        // enumerating those targets. Give loopback attaches enough uninterrupted
+        // budget before declaring the browser path dead.
+        const timeout = loopbackAttach ? 15000 + attempt * 15000 : 5000 + attempt * 2000;
         const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
         const endpoint = wsUrl ?? normalized;
         const headers = getHeadersWithAuth(endpoint);
