@@ -13,6 +13,9 @@ import {
 
 let readConfigFileSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
 let writeConfigFile: typeof import("../config/config.js").writeConfigFile;
+let createConfigIO: typeof import("../config/config.js").createConfigIO;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -90,7 +93,13 @@ let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
 
 beforeAll(async () => {
-  ({ readConfigFileSnapshot, writeConfigFile } = await import("../config/config.js"));
+  ({
+    clearRuntimeConfigSnapshot,
+    createConfigIO,
+    readConfigFileSnapshot,
+    setRuntimeConfigSnapshot,
+    writeConfigFile,
+  } = await import("../config/config.js"));
   setRegistry(defaultRegistry);
   const started = await startServerWithClient();
   server = started.server;
@@ -227,6 +236,55 @@ describe("gateway server channels", () => {
     expect(res.payload).toMatchObject({
       replyStarted: true,
     });
+  });
+
+  test("channels.telegram.setup-replay reads token saved after runtime snapshot initialization", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
+    await writeConfigFile({ channels: { telegram: {} } });
+    setRuntimeConfigSnapshot({ channels: { telegram: {} } });
+
+    try {
+      // Simulate the macOS onboarding app writing the token after gateway
+      // startup. This intentionally bypasses the exported writeConfigFile()
+      // runtime refresh behavior so the stale snapshot remains active.
+      await createConfigIO().writeConfigFile({
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+            accounts: {
+              default: {
+                botToken: "123:abc",
+              },
+            },
+          },
+        },
+      });
+
+      const res = await rpcReq<{
+        ok?: boolean;
+        replyStarted?: boolean;
+        replyCompleted?: boolean;
+        error?: string;
+      }>(ws, "channels.telegram.setup-replay", {
+        payload: {
+          updateId: 1001,
+          messageId: 42,
+          chatId: 1336356696,
+          senderId: 1336356696,
+          date: 1_700_000_000,
+          text: "Wake up my friend",
+        },
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.error?.message).toBeUndefined();
+      expect(res.payload).toMatchObject({
+        replyStarted: true,
+      });
+      expect(res.payload?.error).not.toBe("Telegram bot token is not configured.");
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   test("channels.telegram.setup-replay reports disabled telegram distinctly from missing token", async () => {

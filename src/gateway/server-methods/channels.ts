@@ -14,7 +14,7 @@ import {
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { createConfigIO, loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -192,7 +192,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const cfg = loadConfig();
+    // Telegram setup can write the token after the gateway has already captured
+    // a runtime config snapshot. Read the current config file directly here so
+    // verification sees that just-saved token without exposing it in logs.
+    const cfg = createConfigIO().loadConfig();
     const accountId = resolveDefaultTelegramAccountId(cfg);
     const account = resolveTelegramAccount({ cfg, accountId });
     const token = account.token.trim();
