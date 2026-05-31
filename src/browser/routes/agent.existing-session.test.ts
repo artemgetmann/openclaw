@@ -321,6 +321,64 @@ describe("existing-session browser routes", () => {
     });
   });
 
+  it("recovers human text refs for existing-session clicks when Chrome MCP rejects the uid", async () => {
+    chromeMcpMocks.clickChromeMcpElement.mockRejectedValueOnce(
+      new Error('Error: Element uid "Kuala Lumpur" not found on page 3'),
+    );
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "click", ref: "Kuala Lumpur", timeoutMs: 12_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      uid: "Kuala Lumpur",
+      doubleClick: false,
+      timeoutMs: 12_000,
+    });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("No visible text ref matches"),
+      timeoutMs: 12_000,
+    });
+  });
+
+  it("keeps stable existing-session click refs strict when Chrome MCP rejects the uid", async () => {
+    chromeMcpMocks.clickChromeMcpElement.mockRejectedValueOnce(
+      new Error('Error: Element uid "btn-1" not found on page 3'),
+    );
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await expect(
+      handler?.(
+        {
+          params: {},
+          query: {},
+          body: { kind: "click", ref: "btn-1", timeoutMs: 12_000 },
+        },
+        response.res,
+      ),
+    ).rejects.toThrow('Element uid "btn-1" not found');
+
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["btn-1"] }),
+    );
+  });
+
   it("chooses searchable portal options through existing-session structured action", async () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce({
@@ -404,6 +462,66 @@ describe("existing-session browser routes", () => {
     expect(script).toContain("setValue(editable, queryText)");
     expect(script).not.toContain("matchTexts");
     expect(script).not.toContain("matchTexts.push(queryText)");
+  });
+
+  it("focuses ref targets before existing-session press", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "press", ref: "combo-title", key: "Enter", timeoutMs: 10_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      uid: "combo-title",
+      timeoutMs: 10_000,
+    });
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      key: "Enter",
+      timeoutMs: 10_000,
+    });
+  });
+
+  it("focuses selector targets before existing-session press", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "press", selector: "[role='combobox']", key: "ArrowDown", timeoutMs: 10_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("el.focus"),
+      args: ["[role='combobox']"],
+      timeoutMs: 10_000,
+    });
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      key: "ArrowDown",
+      timeoutMs: 10_000,
+    });
   });
 
   it("passes timeout overrides through existing-session evaluate", async () => {

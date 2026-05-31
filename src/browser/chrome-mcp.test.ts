@@ -731,6 +731,14 @@ describe("chrome MCP page parsing", () => {
       undefined,
       expect.objectContaining({ timeout: 18_000 }),
     );
+    expect(callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "evaluate_script",
+        arguments: expect.not.objectContaining({ timeout: expect.anything() }),
+      }),
+      undefined,
+      expect.objectContaining({ timeout: 18_000 }),
+    );
   });
 
   it("reads Chrome MCP screenshots from the requested output file", async () => {
