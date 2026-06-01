@@ -417,6 +417,33 @@ describe("existing-session browser routes", () => {
     );
   });
 
+  it("keeps scrollIntoView timeout overrides at the MCP request layer", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "scrollIntoView",
+          ref: "fare-return-1",
+          timeoutMs: 14_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("scrollIntoView"),
+      args: ["fare-return-1"],
+      timeoutMs: 14_000,
+    });
+  });
+
   it("focuses ref targets before existing-session press", async () => {
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();

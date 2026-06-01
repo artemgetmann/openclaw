@@ -14,9 +14,11 @@ import {
   listChromeMcpTabs,
 } from "./chrome-mcp.js";
 import {
+  findOpenClawChromeProcessMatches,
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
+  resolveOpenClawUserDataDir,
   stopOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -132,6 +134,7 @@ export function createProfileAvailability({
       }
     });
   };
+  let pendingClonedChromeLaunch: Promise<void> | null = null;
 
   const closePlaywrightBrowserConnectionForProfile = async (cdpUrl?: string): Promise<void> => {
     try {
@@ -150,9 +153,56 @@ export function createProfileAvailability({
     if (profileState.running) {
       return;
     }
-    const current = state();
-    const launched = await launchOpenClawChrome(current.resolved, profile);
-    attachRunning(launched);
+    if (pendingClonedChromeLaunch) {
+      await pendingClonedChromeLaunch;
+      return;
+    }
+
+    pendingClonedChromeLaunch = (async () => {
+      if (getProfileState().running) {
+        return;
+      }
+      const userDataDir = resolveOpenClawUserDataDir(profile.name);
+      const matches = findOpenClawChromeProcessMatches({
+        userDataDir,
+        cdpPort: profile.cdpPort,
+        profileDirectory: "Default",
+      });
+      if (matches.length > 1) {
+        const diagnostics = matches
+          .map((match) => `pid=${match.pid} command=${match.command}`)
+          .join(" | ");
+        throw new BrowserProfileUnavailableError(
+          `Duplicate cloned Chrome processes detected for profile "${profile.name}" on port ${profile.cdpPort} and userDataDir ${userDataDir}. Refusing to launch another browser. ${diagnostics}`,
+        );
+      }
+      if (matches.length === 1) {
+        traceAvailabilityStage(
+          `browser-availability-clone-reuse-existing profile=${profile.name} pid=${matches[0]?.pid} port=${profile.cdpPort} userDataDir=${userDataDir}`,
+        );
+        if (await isChromeReachable(profile.cdpUrl, CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS)) {
+          return;
+        }
+        throw new BrowserProfileUnavailableError(
+          `Found cloned Chrome process for profile "${profile.name}" (pid ${matches[0]?.pid}) on port ${profile.cdpPort}, but its DevTools endpoint is not reachable at ${profile.cdpUrl}. Refusing to launch a duplicate.`,
+        );
+      }
+
+      traceAvailabilityStage(
+        `browser-availability-clone-launch-start profile=${profile.name} port=${profile.cdpPort} userDataDir=${userDataDir}`,
+      );
+      const current = state();
+      const launched = await launchOpenClawChrome(current.resolved, profile);
+      attachRunning(launched);
+      traceAvailabilityStage(
+        `browser-availability-clone-launch-done profile=${profile.name} pid=${launched.pid} port=${profile.cdpPort} userDataDir=${userDataDir}`,
+      );
+    })();
+    try {
+      await pendingClonedChromeLaunch;
+    } finally {
+      pendingClonedChromeLaunch = null;
+    }
   };
 
   const reconcileProfileRuntime = async (): Promise<void> => {

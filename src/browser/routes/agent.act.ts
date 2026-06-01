@@ -1114,19 +1114,13 @@ export function registerBrowserAgentActRoutes(
                   "existing-session scrollIntoView does not support selector targeting yet; use ref.",
                 );
               }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session scrollIntoView does not support timeoutMs overrides.",
-                );
-              }
               await evaluateChromeMcpScript({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
                 args: [ref!],
+                timeoutMs: timeoutMs ?? undefined,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
