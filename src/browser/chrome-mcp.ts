@@ -78,6 +78,8 @@ const CHROME_MCP_LIVE_CHROME_LAUNCH_READY_WINDOW_MS = 10_000;
 const CHROME_MCP_LIVE_CHROME_LAUNCH_POLL_MS = 250;
 const CHROME_MCP_DEVTOOLS_WS_PROBE_TIMEOUT_MS = 1_500;
 const CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS = 5_000;
+const CHROME_MCP_SCREENSHOT_FILE_WAIT_MS = 2_000;
+const CHROME_MCP_SCREENSHOT_FILE_POLL_MS = 50;
 const INITIAL_DEFAULT_CHROME_USER_DATA_DIR = path.join(
   os.homedir(),
   "Library/Application Support/Google/Chrome",
@@ -1224,6 +1226,21 @@ function isChromeMcpApprovalTimeoutMessage(message: string): boolean {
   );
 }
 
+function isChromeMcpRequestTimeoutError(err: unknown): boolean {
+  return isChromeMcpApprovalTimeoutMessage(normalizeErrorMessage(err));
+}
+
+function buildChromeMcpToolTimeoutError(
+  profileName: string,
+  toolName: string,
+  timeoutMs: number,
+  detail: string,
+): Error {
+  return new Error(
+    `Chrome MCP tool "${toolName}" timed out after ${timeoutMs}ms for profile "${profileName}". Details: ${detail}`,
+  );
+}
+
 function buildChromeMcpApprovalTimeoutGuidance(
   profileName: string,
   detail: string,
@@ -1362,6 +1379,7 @@ async function callTool(
   const sessionProfileDirectory = resolveSessionProfileDirectory(profileName, profileDirectory);
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir, sessionProfileDirectory);
   let lastError: unknown;
+  let sawReadySession = false;
 
   while (remainingTimeoutMs(deadlineMs) > 0) {
     const attemptTimeoutMs = Math.max(1, Math.min(timeoutMs, remainingTimeoutMs(deadlineMs) + 1));
@@ -1374,6 +1392,7 @@ async function callTool(
         userDataDir,
         profileDirectory: sessionProfileDirectory,
       });
+      sawReadySession = true;
       result = (await session.client.callTool(
         {
           name,
@@ -1386,16 +1405,36 @@ async function callTool(
       )) as ChromeMcpToolResult;
     } catch (err) {
       lastError = err;
-      if (session) {
-        // Transport/connection error — tear down session so attach can reconnect.
-        sessions.delete(cacheKey);
-        await session.client.close().catch(() => {});
+      if (!session) {
+        if (!isRetryableChromeMcpAttachError(err)) {
+          throw normalizeAttachFailure(profileName, err);
+        }
+        traceChromeMcpStage(
+          `chrome-mcp-attach-retry profile=${profileName} tool=${name} remainingMs=${remainingTimeoutMs(
+            deadlineMs,
+          )}`,
+        );
+        if (!(await waitBeforeChromeMcpAttachRetry(deadlineMs))) {
+          break;
+        }
+        continue;
       }
-      if (!isRetryableChromeMcpAttachError(err)) {
-        throw normalizeAttachFailure(profileName, err);
+
+      // Once getSession() has returned a ready session, failures are in the
+      // tool/action phase. A post-ready `MCP error -32001: Request timed out`
+      // can mean the page or MCP action stalled; presenting it as a Chrome
+      // approval prompt sends the operator to the wrong layer.
+      sessions.delete(cacheKey);
+      await session.client.close().catch(() => {});
+      const message = normalizeErrorMessage(err);
+      if (isChromeMcpApprovalTimeoutMessage(message)) {
+        throw buildChromeMcpToolTimeoutError(profileName, name, attemptTimeoutMs, message);
+      }
+      if (!isClosedChromeMcpTransportErrorMessage(message)) {
+        throw err;
       }
       traceChromeMcpStage(
-        `chrome-mcp-tool-retry profile=${profileName} tool=${name} remainingMs=${remainingTimeoutMs(
+        `chrome-mcp-tool-transport-retry profile=${profileName} tool=${name} remainingMs=${remainingTimeoutMs(
           deadlineMs,
         )}`,
       );
@@ -1412,17 +1451,41 @@ async function callTool(
     traceChromeMcpStage(`chrome-mcp-tool-done profile=${profileName} tool=${name}`);
     return result;
   }
-  throw normalizeAttachFailure(profileName, lastError ?? new Error("Chrome MCP attach timed out."));
+  if (!sawReadySession) {
+    throw normalizeAttachFailure(
+      profileName,
+      lastError ?? new Error("Chrome MCP attach timed out."),
+    );
+  }
+  const detail = normalizeErrorMessage(lastError ?? new Error("Chrome MCP tool call timed out."));
+  throw buildChromeMcpToolTimeoutError(profileName, name, timeoutMs, detail);
 }
 
-async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
+async function withTempFile<T>(fn: (filePath: string) => Promise<T>, extension = ""): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-mcp-"));
-  const filePath = path.join(dir, randomUUID());
+  const filePath = path.join(dir, `${randomUUID()}${extension}`);
   try {
     return await fn(filePath);
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+async function readChromeMcpOutputFile(filePath: string, timeoutMs: number): Promise<Buffer> {
+  const deadlineMs = Date.now() + timeoutMs;
+  let lastMissingFileError: unknown;
+  while (Date.now() <= deadlineMs) {
+    try {
+      return await fs.readFile(filePath);
+    } catch (err) {
+      if (!isFileNotFoundError(err)) {
+        throw err;
+      }
+      lastMissingFileError = err;
+      await new Promise((resolve) => setTimeout(resolve, CHROME_MCP_SCREENSHOT_FILE_POLL_MS));
+    }
+  }
+  throw lastMissingFileError ?? new Error("Chrome MCP output file was not written.");
 }
 
 async function findPageById(
@@ -1691,51 +1754,91 @@ export async function takeChromeMcpScreenshot(params: {
   fullPage?: boolean;
   format?: "png" | "jpeg";
 }): Promise<Buffer> {
-  return await withTempFile(async (filePath) => {
-    const format = params.format ?? "png";
-    const targetMode = params.uid ? "ref" : params.fullPage ? "fullPage" : "page";
-    await callTool(params.profileName, params.userDataDir, undefined, "take_screenshot", {
-      pageId: parsePageId(params.targetId),
-      filePath,
-      format,
-      ...(params.uid ? { uid: params.uid } : {}),
-      ...(params.fullPage ? { fullPage: true } : {}),
-    });
-    // The MCP server can report a successful screenshot call while failing to
-    // materialize the requested artifact. Check the contract boundary here so
-    // callers get a truthful browser error instead of a misleading ENOENT.
-    if (!existsSync(filePath)) {
-      let fallbackError: string | undefined;
-      if (!params.uid) {
+  const format = params.format ?? "png";
+  const targetMode = params.uid ? "ref" : params.fullPage ? "fullPage" : "page";
+  let lastMissingFileError: unknown;
+  let fallbackError: string | undefined;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await withTempFile(async (filePath) => {
+        await callTool(params.profileName, params.userDataDir, undefined, "take_screenshot", {
+          pageId: parsePageId(params.targetId),
+          filePath,
+          format,
+          ...(params.uid ? { uid: params.uid } : {}),
+          ...(params.fullPage ? { fullPage: true } : {}),
+        });
         try {
-          const fallback = await captureChromeMcpPageScreenshotFallback({
-            profileName: params.profileName,
-            userDataDir: params.userDataDir,
-            targetId: params.targetId,
-            fullPage: params.fullPage,
-            format,
-          });
-          if (fallback) {
-            return fallback;
-          }
+          // Chrome MCP can resolve the tool call before the screenshot writer has
+          // flushed the requested file. Poll the exact file briefly before
+          // classifying ENOENT as a failed screenshot.
+          return await readChromeMcpOutputFile(filePath, CHROME_MCP_SCREENSHOT_FILE_WAIT_MS);
         } catch (err) {
-          fallbackError = normalizeErrorMessage(err);
+          if (!isFileNotFoundError(err)) {
+            throw err;
+          }
+          lastMissingFileError = err;
         }
+
+        // The MCP server can report a successful screenshot call while failing to
+        // materialize the requested artifact. For page screenshots only, fall back
+        // to a direct CDP capture so callers still get bytes when the tab is
+        // otherwise healthy; element screenshots must fail truthfully.
+        if (!params.uid) {
+          try {
+            const fallback = await captureChromeMcpPageScreenshotFallback({
+              profileName: params.profileName,
+              userDataDir: params.userDataDir,
+              targetId: params.targetId,
+              fullPage: params.fullPage,
+              format,
+            });
+            if (fallback) {
+              return fallback;
+            }
+          } catch (err) {
+            fallbackError = normalizeErrorMessage(err);
+          }
+        }
+        throw lastMissingFileError ?? new Error("Chrome MCP screenshot output file was not created.");
+      }, `.${format}`);
+    } catch (err) {
+      if (!isFileNotFoundError(err)) {
+        throw err;
       }
-      throw new Error(
-        [
-          "Chrome MCP screenshot output file was not created.",
-          `profile=${params.profileName}`,
-          `targetId=${params.targetId}`,
-          `format=${format}`,
-          `target=${targetMode}`,
-          params.uid ? "fallback=not-applicable" : "fallback=direct-cdp-unavailable",
-          ...(fallbackError ? [`fallbackError=${fallbackError}`] : []),
-        ].join(" "),
+      if (attempt > 0) {
+        throw new Error(
+          [
+            "Chrome MCP screenshot output file was not created.",
+            `profile=${params.profileName}`,
+            `targetId=${params.targetId}`,
+            `format=${format}`,
+            `target=${targetMode}`,
+            params.uid ? "fallback=not-applicable" : "fallback=direct-cdp-unavailable",
+            ...(fallbackError ? [`fallbackError=${fallbackError}`] : []),
+          ].join(" "),
+          { cause: err },
+        );
+      }
+      traceChromeMcpStage(
+        `chrome-mcp-screenshot-tempfile-retry profile=${params.profileName} targetId=${params.targetId}`,
       );
     }
-    return await fs.readFile(filePath);
-  });
+  }
+
+  throw new Error(
+    [
+      "Chrome MCP screenshot output file was not created.",
+      `profile=${params.profileName}`,
+      `targetId=${params.targetId}`,
+      `format=${format}`,
+      `target=${targetMode}`,
+      params.uid ? "fallback=not-applicable" : "fallback=direct-cdp-unavailable",
+      ...(fallbackError ? [`fallbackError=${fallbackError}`] : []),
+    ].join(" "),
+    { cause: lastMissingFileError },
+  );
 }
 
 export async function clickChromeMcpElement(params: {

@@ -8,6 +8,7 @@ import {
   closeChromeMcpSession,
   evaluateChromeMcpScript,
   fillChromeMcpElement,
+  fillChromeMcpForm,
   ensureChromeMcpAvailable,
   listChromeMcpTabs,
   openChromeMcpTab,
@@ -80,7 +81,13 @@ function createFakeSessionBundle(): ChromeMcpSessionBundle {
         ],
       };
     }
-    if (name === "click" || name === "fill" || name === "press_key" || name === "take_screenshot") {
+    if (
+      name === "click" ||
+      name === "fill" ||
+      name === "fill_form" ||
+      name === "press_key" ||
+      name === "take_screenshot"
+    ) {
       return {
         content: [
           {
@@ -502,6 +509,7 @@ describe("chrome MCP page parsing", () => {
     expect(message).toContain("Stop now");
     expect(message).toContain("retry only after the user confirms approval");
     expect(message).toContain("chrome://inspect/#remote-debugging");
+    expect(message).not.toContain("Chrome MCP tool");
     expect(message).not.toContain("Restart the OpenClaw gateway");
     expect(message).not.toContain("Do NOT retry the browser tool");
   });
@@ -526,35 +534,58 @@ describe("chrome MCP page parsing", () => {
     expect(message).toContain("Stop now");
     expect(message).toContain("retry only after the user confirms approval");
     expect(message).toContain("chrome://inspect/#remote-debugging");
+    expect(message).not.toContain("Chrome MCP tool");
     expect(message).not.toContain("Restart the OpenClaw gateway");
   });
 
-  it("retries retryable list_pages timeouts until the caller budget succeeds", async () => {
+  it("reports post-ready list_pages timeouts as tool failures, not approval guidance", async () => {
     const { session, callTool } = createFakeSessionBundle();
-    callTool
-      .mockRejectedValueOnce(new Error("MCP error -32001: Request timed out"))
-      .mockResolvedValueOnce({
-        content: [
-          {
-            type: "text",
-            text: "## Pages\n9: https://example.com/ [selected]",
-          },
-        ],
-      });
+    callTool.mockRejectedValueOnce(new Error("MCP error -32001: Request timed out"));
     const factory: ChromeMcpSessionFactory = async () => session;
     setChromeMcpSessionFactoryForTest(factory);
 
-    const tabs = await listChromeMcpTabs("chrome-live", { timeoutMs: 60_000 });
+    let message = "";
+    try {
+      await listChromeMcpTabs("chrome-live", { timeoutMs: 60_000 });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
 
-    expect(callTool).toHaveBeenCalledTimes(2);
-    expect(tabs).toEqual([
-      {
-        targetId: "9",
-        title: "",
-        url: "https://example.com/",
-        type: "page",
-      },
-    ]);
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(message).toContain('Chrome MCP tool "list_pages" timed out');
+    expect(message).toContain("MCP error -32001: Request timed out");
+    expect(message).not.toContain("remote debugging");
+    expect(message).not.toContain("chrome://inspect/#remote-debugging");
+  });
+
+  it("reports post-ready evaluate_script request timeouts without approval guidance", async () => {
+    const { session, callTool } = createFakeSessionBundle();
+    callTool.mockImplementation(async ({ name }: ToolCall) => {
+      if (name === "evaluate_script") {
+        throw new Error("MCP error -32001: Request timed out");
+      }
+      throw new Error(`unexpected tool ${name}`);
+    });
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    let message = "";
+    try {
+      await evaluateChromeMcpScript({
+        profileName: "signed-in",
+        targetId: "1",
+        fn: "() => document.body.innerText",
+        timeoutMs: 30_000,
+      });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(message).toContain('Chrome MCP tool "evaluate_script" timed out after 30000ms');
+    expect(message).toContain('profile "signed-in"');
+    expect(message).not.toContain("waiting for the user to approve remote debugging");
+    expect(message).not.toContain("chrome://inspect/#remote-debugging");
   });
 
   it("forwards timeout overrides to new_page", async () => {
@@ -605,7 +636,7 @@ describe("chrome MCP page parsing", () => {
       setChromeMcpSessionFactoryForTest(factory);
 
       const tab = await openChromeMcpTab("signed-in", "https://www.batikair.com.my/", {
-        timeoutMs: 1,
+        timeoutMs: 30_000,
       });
 
       expect(tab).toMatchObject({
@@ -675,7 +706,7 @@ describe("chrome MCP page parsing", () => {
     );
   });
 
-  it("retries once when Chrome MCP reports a screenshot but the temp file is missing", async () => {
+  it("waits when Chrome MCP reports a screenshot before the temp file is readable", async () => {
     const { session, callTool } = createFakeSessionBundle();
     const factory: ChromeMcpSessionFactory = async () => session;
     setChromeMcpSessionFactoryForTest(factory);
@@ -691,7 +722,30 @@ describe("chrome MCP page parsing", () => {
     });
 
     expect(buffer.toString()).toBe("png");
-    expect(callTool).toHaveBeenCalledTimes(2);
+    expect(callTool).toHaveBeenCalledTimes(1);
+    vi.mocked(fs.readFile).mockRestore();
+    expect(fs.readFile).toBe(originalReadFile);
+  });
+
+  it("waits briefly when Chrome MCP screenshot output appears after the tool returns", async () => {
+    const { session, callTool } = createFakeSessionBundle();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const originalReadFile = fs.readFile;
+    vi.spyOn(fs, "readFile")
+      .mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ENOENT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("still missing"), { code: "ENOENT" }))
+      .mockResolvedValueOnce(Buffer.from("png"));
+
+    const buffer = await takeChromeMcpScreenshot({
+      profileName: "chrome-live",
+      targetId: "1",
+    });
+
+    expect(buffer.toString()).toBe("png");
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(fs.readFile).toHaveBeenCalledWith(expect.stringMatching(/openclaw-chrome-mcp-.+\.png$/));
     vi.mocked(fs.readFile).mockRestore();
     expect(fs.readFile).toBe(originalReadFile);
   });
@@ -828,6 +882,39 @@ describe("chrome MCP page parsing", () => {
       fullPage: undefined,
       format: "png",
     });
+  });
+
+  it("keeps timeout overrides at the MCP request layer for fill_form", async () => {
+    const { session, callTool } = createFakeSessionBundle();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await fillChromeMcpForm({
+      profileName: "chrome-live",
+      targetId: "1",
+      elements: [{ uid: "origin", value: "KUL" }],
+      timeoutMs: 18_000,
+    });
+
+    expect(callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "fill_form",
+        arguments: expect.objectContaining({
+          pageId: 1,
+          elements: [{ uid: "origin", value: "KUL" }],
+        }),
+      }),
+      undefined,
+      expect.objectContaining({ timeout: 18_000 }),
+    );
+    expect(callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "fill_form",
+        arguments: expect.not.objectContaining({ timeout: expect.anything() }),
+      }),
+      undefined,
+      expect.objectContaining({ timeout: 18_000 }),
+    );
   });
 
   it("surfaces MCP tool errors instead of JSON parse noise", async () => {

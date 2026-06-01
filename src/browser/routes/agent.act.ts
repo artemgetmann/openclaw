@@ -1330,6 +1330,7 @@ export function registerBrowserAgentActRoutes(
                 targetId: tab.targetId,
                 fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
                 args: [ref!],
+                timeoutMs: timeoutMs ?? undefined,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
