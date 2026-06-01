@@ -54,6 +54,18 @@ const BrowserActSchema = Type.Object({
   // Common fields
   targetId: Type.Optional(Type.String()),
   ref: Type.Optional(Type.String()),
+  inputRef: Type.Optional(
+    Type.String({
+      description:
+        "Compatibility alias for ref. Prefer ref from the latest snapshot, especially for existing-session Chrome MCP profiles.",
+    }),
+  ),
+  element: Type.Optional(
+    Type.String({
+      description:
+        "Compatibility alias for selector when used with act requests. Prefer ref for existing-session Chrome MCP profiles.",
+    }),
+  ),
   includeSnapshot: Type.Optional(
     Type.Boolean({
       description:
@@ -158,11 +170,21 @@ export const BrowserToolSchema = Type.Object({
   labels: Type.Optional(Type.Boolean()),
   fullPage: Type.Optional(Type.Boolean()),
   ref: Type.Optional(Type.String()),
-  element: Type.Optional(Type.String()),
+  element: Type.Optional(
+    Type.String({
+      description:
+        "Screenshot element target, or legacy flattened act compatibility alias for selector. Prefer ref for existing-session Chrome MCP profiles.",
+    }),
+  ),
   type: optionalStringEnum(BROWSER_IMAGE_TYPES),
   level: Type.Optional(Type.String()),
   paths: Type.Optional(Type.Array(Type.String())),
-  inputRef: Type.Optional(Type.String()),
+  inputRef: Type.Optional(
+    Type.String({
+      description:
+        "Upload input target, or legacy flattened act compatibility alias for ref. Prefer ref from the latest snapshot.",
+    }),
+  ),
   timeoutMs: Type.Optional(Type.Number()),
   accept: Type.Optional(Type.Boolean()),
   promptText: Type.Optional(Type.String()),

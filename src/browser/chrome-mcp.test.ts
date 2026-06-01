@@ -552,7 +552,7 @@ describe("chrome MCP page parsing", () => {
     );
   });
 
-  it("forwards timeout overrides to existing-session interaction tools", async () => {
+  it("keeps Chrome MCP interaction timeouts client-side", async () => {
     const { session, callTool } = createFakeSessionBundle();
     const factory: ChromeMcpSessionFactory = async () => session;
     setChromeMcpSessionFactoryForTest(factory);
@@ -575,7 +575,7 @@ describe("chrome MCP page parsing", () => {
       1,
       expect.objectContaining({
         name: "click",
-        arguments: expect.objectContaining({ uid: "e1", timeout: 30_000 }),
+        arguments: expect.not.objectContaining({ timeout: expect.anything() }),
       }),
       undefined,
       expect.objectContaining({ timeout: 30_000 }),
@@ -584,7 +584,7 @@ describe("chrome MCP page parsing", () => {
       2,
       expect.objectContaining({
         name: "fill",
-        arguments: expect.objectContaining({ uid: "e2", value: "hello", timeout: 25_000 }),
+        arguments: expect.not.objectContaining({ timeout: expect.anything() }),
       }),
       undefined,
       expect.objectContaining({ timeout: 25_000 }),
@@ -604,7 +604,7 @@ describe("chrome MCP page parsing", () => {
     expect(result).toBe(123);
   });
 
-  it("forwards timeout overrides to evaluate_script", async () => {
+  it("keeps evaluate_script timeout client-side", async () => {
     const { session, callTool } = createFakeSessionBundle();
     const factory: ChromeMcpSessionFactory = async () => session;
     setChromeMcpSessionFactoryForTest(factory);
@@ -621,7 +621,6 @@ describe("chrome MCP page parsing", () => {
         name: "evaluate_script",
         arguments: expect.objectContaining({
           function: "() => 123",
-          timeout: 18_000,
         }),
       }),
       undefined,

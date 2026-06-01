@@ -1452,6 +1452,9 @@ export async function clickChromeMcpElement(params: {
   doubleClick?: boolean;
   timeoutMs?: number;
 }): Promise<void> {
+  // Chrome MCP validates tool arguments strictly. Interaction timeouts belong
+  // on the MCP client call, not in the tool payload, or the host rejects the
+  // otherwise valid action before Chrome can run it.
   await callTool(
     params.profileName,
     params.userDataDir,
@@ -1461,7 +1464,6 @@ export async function clickChromeMcpElement(params: {
       pageId: parsePageId(params.targetId),
       uid: params.uid,
       ...(params.doubleClick ? { dblClick: true } : {}),
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1484,7 +1486,6 @@ export async function fillChromeMcpElement(params: {
       pageId: parsePageId(params.targetId),
       uid: params.uid,
       value: params.value,
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1505,7 +1506,6 @@ export async function fillChromeMcpForm(params: {
     {
       pageId: parsePageId(params.targetId),
       elements: params.elements,
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1526,7 +1526,6 @@ export async function hoverChromeMcpElement(params: {
     {
       pageId: parsePageId(params.targetId),
       uid: params.uid,
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1549,7 +1548,6 @@ export async function dragChromeMcpElement(params: {
       pageId: parsePageId(params.targetId),
       from_uid: params.fromUid,
       to_uid: params.toUid,
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1584,7 +1582,6 @@ export async function pressChromeMcpKey(params: {
     {
       pageId: parsePageId(params.targetId),
       key: params.key,
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1635,7 +1632,6 @@ export async function evaluateChromeMcpScript(params: {
       pageId: parsePageId(params.targetId),
       function: params.fn,
       ...(params.args?.length ? { args: params.args } : {}),
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );

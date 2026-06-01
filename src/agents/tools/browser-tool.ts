@@ -143,6 +143,8 @@ function readTargetUrlParam(params: Record<string, unknown>) {
 const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "targetId",
   "ref",
+  "inputRef",
+  "element",
   "includeSnapshot",
   "snapshotFormat",
   "refs",
@@ -412,6 +414,8 @@ export function createBrowserTool(opts?: {
       'profile="user-live" attaches to the user\'s real Chrome session through the existing-session lane and is host-only.',
       'If profile="user-live" fails to attach, first try the official Chrome live-session recovery path: keep normal Google Chrome running, open chrome://inspect/#remote-debugging in that same browser, enable remote debugging, accept the attach prompt if Chrome shows one, then retry before escalating.',
       'Do not send act kind="batch" for profile="user-live" or other existing-session profiles; send individual actions sequentially.',
+      'For existing-session profiles, use ref from the latest snapshot for element actions. Avoid slowly=true; the host bridge normalizes it to regular fill behavior. Avoid loadState="networkidle"; use loadState="load", URL/text waits, or a short timeMs wait.',
+      "If an existing-session action reports a stale Element uid or missing snapshot after retry, immediately take a fresh snapshot on the same targetId and retry with the new ref.",
       "If multiple Chrome profiles may exist, pin the signed-in lane with sourceProfileName or use a named custom existing-session profile instead of guessing.",
       "Custom profiles can still target Brave, Edge, Chromium, non-default Chrome profiles, or additional cloned-session flows when the default three-lane setup is insufficient.",
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',

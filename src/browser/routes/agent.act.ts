@@ -9,6 +9,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  takeChromeMcpSnapshot,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest, BrowserFormField } from "../client-actions-core.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
@@ -56,6 +57,164 @@ function browserEvaluateDisabledMessage(action: "wait" | "evaluate"): string {
   ].join("\n");
 }
 
+function readActRef(body: Record<string, unknown>): string | undefined {
+  const ref = toStringOrEmpty(body.ref) || toStringOrEmpty(body.inputRef);
+  return ref || undefined;
+}
+
+function readActSelector(body: Record<string, unknown>): string | undefined {
+  const selector = toStringOrEmpty(body.selector);
+  if (selector) {
+    return selector;
+  }
+  // Some tool callers still send screenshot-style `element` for act targets.
+  // Treat it as a selector fallback so valid legacy flattened calls do not die
+  // before the existing-session selector fallback gets a chance to run.
+  const element = toStringOrEmpty(body.element);
+  return element || undefined;
+}
+
+function isRetryableChromeMcpElementSnapshotError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    /Element uid ".+" not found/i.test(message) || /No snapshot found for page \d+/i.test(message)
+  );
+}
+
+function buildExistingSessionStaleRefGuidance(params: {
+  kind: ActKind;
+  profileName: string;
+  targetId: string;
+  cause: unknown;
+}): Error {
+  const causeMessage = params.cause instanceof Error ? params.cause.message : String(params.cause);
+  return new Error(
+    [
+      `existing-session ${params.kind} target is stale or the Chrome MCP snapshot cache is missing.`,
+      `Run browser action=snapshot profile="${params.profileName}" targetId="${params.targetId}", then retry with a fresh ref from that snapshot.`,
+      `Last Chrome MCP error: ${causeMessage}`,
+    ].join(" "),
+    { cause: params.cause },
+  );
+}
+
+function jsLiteral(value: string): string {
+  return JSON.stringify(value);
+}
+
+function buildExistingSessionTypeSelectorScript(selector: string, value: string): string {
+  return `() => {
+    const selector = ${jsLiteral(selector)};
+    const value = ${jsLiteral(value)};
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLElement)) {
+      throw new Error(\`No element matches selector: \${selector}\`);
+    }
+    el.scrollIntoView({ block: "center", inline: "center" });
+    el.focus();
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      el.value = value;
+    } else {
+      el.setAttribute("value", value);
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }`;
+}
+
+function buildExistingSessionFocusSelectorScript(selector: string): string {
+  return `() => {
+    const selector = ${jsLiteral(selector)};
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLElement)) {
+      throw new Error(\`No element matches selector: \${selector}\`);
+    }
+    el.scrollIntoView({ block: "center", inline: "center" });
+    el.focus();
+    return true;
+  }`;
+}
+
+function buildExistingSessionClickSelectorScript(selector: string): string {
+  return `() => {
+    const selector = ${jsLiteral(selector)};
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLElement)) {
+      throw new Error(\`No element matches selector: \${selector}\`);
+    }
+    el.scrollIntoView({ block: "center", inline: "center" });
+    el.click();
+    return true;
+  }`;
+}
+
+function buildExistingSessionFillSelectorScript(selector: string, value: string): string {
+  return `() => {
+    const selector = ${jsLiteral(selector)};
+    const value = ${jsLiteral(value)};
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLElement)) {
+      throw new Error(\`No element matches selector: \${selector}\`);
+    }
+    if (el instanceof HTMLInputElement) {
+      if (el.type === "checkbox" || el.type === "radio") {
+        el.checked = value === "true" || value === "1";
+      } else {
+        el.value = value;
+      }
+    } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+      el.value = value;
+    } else {
+      el.setAttribute("value", value);
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }`;
+}
+
+async function refreshExistingSessionSnapshot(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+}): Promise<void> {
+  await takeChromeMcpSnapshot(params);
+}
+
+async function runExistingSessionElementActionWithSnapshotRetry(params: {
+  kind: ActKind;
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  run: () => Promise<void>;
+}): Promise<void> {
+  try {
+    await params.run();
+    return;
+  } catch (err) {
+    if (!isRetryableChromeMcpElementSnapshotError(err)) {
+      throw err;
+    }
+    try {
+      await refreshExistingSessionSnapshot({
+        profileName: params.profileName,
+        userDataDir: params.userDataDir,
+        targetId: params.targetId,
+      });
+      await params.run();
+      return;
+    } catch (retryErr) {
+      throw buildExistingSessionStaleRefGuidance({
+        kind: params.kind,
+        profileName: params.profileName,
+        targetId: params.targetId,
+        cause: retryErr,
+      });
+    }
+  }
+}
+
 function buildExistingSessionWaitPredicate(params: {
   text?: string;
   textGone?: string;
@@ -75,7 +234,10 @@ function buildExistingSessionWaitPredicate(params: {
   }
   if (params.loadState === "domcontentloaded") {
     checks.push(`document.readyState === "interactive" || document.readyState === "complete"`);
-  } else if (params.loadState === "load") {
+  } else if (params.loadState === "load" || params.loadState === "networkidle") {
+    // Chrome DevTools MCP does not expose Playwright's networkidle signal for
+    // existing-session. Degrade to the strongest universally available browser
+    // readiness check instead of hard-failing a recoverable wait.
     checks.push(`document.readyState === "complete"`);
   }
   if (params.fn) {
@@ -138,20 +300,29 @@ async function waitForExistingSessionCondition(params: {
   throw new Error("Timed out waiting for condition");
 }
 
-function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): string {
+function buildExistingSessionChooseOptionScript(params: {
+  target: "ref" | "selector";
+  selector?: string;
+  optionText: string;
+  matchMode: "exact" | "contains" | "regex";
+  queryText: string;
+  timeoutMs: number;
+}): string {
   const targetExpression =
-    target === "selector" ? `document.querySelector(String(targetOrControl))` : `targetOrControl`;
-  return `(targetOrControl, rawOptionText, rawMatchMode, rawQueryText, rawTimeoutMs) => new Promise((resolve, reject) => {
+    params.target === "selector"
+      ? `document.querySelector(${jsLiteral(params.selector ?? "")})`
+      : `targetOrControl`;
+  return `(targetOrControl) => new Promise((resolve, reject) => {
     const control = ${targetExpression};
     if (!(control instanceof Element)) {
       reject(new Error("chooseOption target was not found"));
       return;
     }
 
-    const optionText = String(rawOptionText || "").replace(/\\s+/g, " ").trim();
-    const matchMode = rawMatchMode === "contains" || rawMatchMode === "regex" ? rawMatchMode : "exact";
-    const queryText = String(rawQueryText || optionText).replace(/\\s+/g, " ").trim();
-    const timeoutMs = Math.max(500, Math.min(60000, Number(rawTimeoutMs) || 10000));
+    const optionText = ${jsLiteral(params.optionText)}.replace(/\\s+/g, " ").trim();
+    const matchMode = ${jsLiteral(params.matchMode)};
+    const queryText = ${jsLiteral(params.queryText)}.replace(/\\s+/g, " ").trim();
+    const timeoutMs = ${params.timeoutMs};
     const optionSelector = [
       '[role="option"]',
       '[role="treeitem"]',
@@ -183,7 +354,7 @@ function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): str
       if (matchMode === "exact") return actual === optionText || actual.toLowerCase() === optionText.toLowerCase();
       if (matchMode === "contains") return matchTexts.some((expected) => actual.toLowerCase().includes(expected.toLowerCase()));
       try {
-        return new RegExp(rawOptionText, "i").test(actual);
+        return new RegExp(optionText, "i").test(actual);
       } catch {
         return false;
       }
@@ -643,8 +814,8 @@ export function registerBrowserAgentActRoutes(
 
         switch (kind) {
           case "click": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             if (!ref && !selector) {
               return jsonError(res, 400, "ref or selector is required");
             }
@@ -679,16 +850,7 @@ export function registerBrowserAgentActRoutes(
                   profileName,
                   userDataDir: profileCtx.profile.userDataDir,
                   targetId: tab.targetId,
-                  fn: `(selector) => {
-                    const el = document.querySelector(selector);
-                    if (!(el instanceof HTMLElement)) {
-                      throw new Error(\`No element matches selector: \${selector}\`);
-                    }
-                    el.scrollIntoView({ block: "center", inline: "center" });
-                    el.click();
-                    return true;
-                  }`,
-                  args: [selector],
+                  fn: buildExistingSessionClickSelectorScript(selector),
                   timeoutMs: timeoutMs ?? undefined,
                 });
                 return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
@@ -700,13 +862,21 @@ export function registerBrowserAgentActRoutes(
                   "existing-session click currently supports left-click only (no button overrides/modifiers).",
                 );
               }
-              await clickChromeMcpElement({
+              await runExistingSessionElementActionWithSnapshotRetry({
+                kind,
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
-                doubleClick,
-                timeoutMs: timeoutMs ?? undefined,
+                run: async () => {
+                  await clickChromeMcpElement({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    uid: ref!,
+                    doubleClick,
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                },
               });
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
             }
@@ -761,8 +931,8 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
           }
           case "type": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             if (!ref && !selector) {
               return jsonError(res, 400, "ref or selector is required");
             }
@@ -775,26 +945,43 @@ export function registerBrowserAgentActRoutes(
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
               if (selector) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session type does not support selector targeting yet; use ref.",
-                );
+                await evaluateChromeMcpScript({
+                  profileName,
+                  userDataDir: profileCtx.profile.userDataDir,
+                  targetId: tab.targetId,
+                  fn: buildExistingSessionTypeSelectorScript(selector, text),
+                  timeoutMs: timeoutMs ?? undefined,
+                });
+                if (submit) {
+                  await pressChromeMcpKey({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    key: "Enter",
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                }
+                return res.json({
+                  ok: true,
+                  targetId: tab.targetId,
+                  normalized: slowly ? { slowly: false } : undefined,
+                });
               }
-              if (slowly) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session type does not support slowly=true; use fill/press instead.",
-                );
-              }
-              await fillChromeMcpElement({
+              await runExistingSessionElementActionWithSnapshotRetry({
+                kind,
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
-                value: text,
-                timeoutMs: timeoutMs ?? undefined,
+                run: async () => {
+                  await fillChromeMcpElement({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    uid: ref!,
+                    value: text,
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                },
               });
               if (submit) {
                 await pressChromeMcpKey({
@@ -805,7 +992,11 @@ export function registerBrowserAgentActRoutes(
                   timeoutMs: timeoutMs ?? undefined,
                 });
               }
-              return res.json({ ok: true, targetId: tab.targetId });
+              return res.json({
+                ok: true,
+                targetId: tab.targetId,
+                normalized: slowly ? { slowly: false } : undefined,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -835,17 +1026,43 @@ export function registerBrowserAgentActRoutes(
             if (!key) {
               return jsonError(res, 400, "key is required");
             }
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             const delayMs = toNumber(body.delayMs);
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
-              if (selector || ref) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session press does not support ref/selector targeting yet; press uses the focused element.",
-                );
+              if (selector) {
+                await evaluateChromeMcpScript({
+                  profileName,
+                  userDataDir: profileCtx.profile.userDataDir,
+                  targetId: tab.targetId,
+                  fn: buildExistingSessionFocusSelectorScript(selector),
+                  timeoutMs: timeoutMs ?? undefined,
+                });
+              } else if (ref) {
+                await runExistingSessionElementActionWithSnapshotRetry({
+                  kind,
+                  profileName,
+                  userDataDir: profileCtx.profile.userDataDir,
+                  targetId: tab.targetId,
+                  run: async () => {
+                    await evaluateChromeMcpScript({
+                      profileName,
+                      userDataDir: profileCtx.profile.userDataDir,
+                      targetId: tab.targetId,
+                      fn: `(el) => {
+                        if (!(el instanceof HTMLElement)) {
+                          throw new Error("press target was not found");
+                        }
+                        el.scrollIntoView({ block: "center", inline: "center" });
+                        el.focus();
+                        return true;
+                      }`,
+                      args: [ref],
+                      timeoutMs: timeoutMs ?? undefined,
+                    });
+                  },
+                });
               }
               if (delayMs) {
                 return jsonError(res, 501, "existing-session press does not support delayMs.");
@@ -875,8 +1092,8 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "hover": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             if (!ref && !selector) {
               return jsonError(res, 400, "ref or selector is required");
             }
@@ -889,12 +1106,20 @@ export function registerBrowserAgentActRoutes(
                   "existing-session hover does not support selector targeting yet; use ref.",
                 );
               }
-              await hoverChromeMcpElement({
+              await runExistingSessionElementActionWithSnapshotRetry({
+                kind,
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
-                timeoutMs: timeoutMs ?? undefined,
+                run: async () => {
+                  await hoverChromeMcpElement({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    uid: ref!,
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                },
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
@@ -912,8 +1137,8 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "scrollIntoView": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             if (!ref && !selector) {
               return jsonError(res, 400, "ref or selector is required");
             }
@@ -1008,8 +1233,8 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "select": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             const values = toStringArray(body.values);
             if ((!ref && !selector) || !values?.length) {
               return jsonError(res, 400, "ref/selector and values are required");
@@ -1030,13 +1255,21 @@ export function registerBrowserAgentActRoutes(
                   "existing-session select currently supports a single value only.",
                 );
               }
-              await fillChromeMcpElement({
+              await runExistingSessionElementActionWithSnapshotRetry({
+                kind,
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
-                value: values[0] ?? "",
-                timeoutMs: timeoutMs ?? undefined,
+                run: async () => {
+                  await fillChromeMcpElement({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    uid: ref!,
+                    value: values[0] ?? "",
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                },
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
@@ -1055,8 +1288,8 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "chooseOption": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             const optionText = toStringOrEmpty(body.optionText);
             if ((!ref && !selector) || !optionText) {
               return jsonError(res, 400, "ref/selector and optionText are required");
@@ -1069,8 +1302,15 @@ export function registerBrowserAgentActRoutes(
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                fn: buildExistingSessionChooseOptionScript(selector ? "selector" : "ref"),
-                args: [selector ?? ref!, optionText, match, query, String(timeoutMs ?? 10_000)],
+                fn: buildExistingSessionChooseOptionScript({
+                  target: selector ? "selector" : "ref",
+                  selector,
+                  optionText,
+                  matchMode: match,
+                  queryText: query,
+                  timeoutMs: Math.max(500, Math.min(60000, timeoutMs ?? 10_000)),
+                }),
+                args: ref && !selector ? [ref] : undefined,
                 timeoutMs: timeoutMs ?? undefined,
               });
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url, result });
@@ -1134,28 +1374,10 @@ export function registerBrowserAgentActRoutes(
                   profileName,
                   userDataDir: profileCtx.profile.userDataDir,
                   targetId: tab.targetId,
-                  fn: `(selector, rawValue) => {
-                    const el = document.querySelector(selector);
-                    if (!(el instanceof HTMLElement)) {
-                      throw new Error(\`No element matches selector: \${selector}\`);
-                    }
-                    const value = rawValue == null ? "" : String(rawValue);
-                    if (el instanceof HTMLInputElement) {
-                      if (el.type === "checkbox" || el.type === "radio") {
-                        el.checked = value === "true" || value === "1";
-                      } else {
-                        el.value = value;
-                      }
-                    } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
-                      el.value = value;
-                    } else {
-                      el.setAttribute("value", value);
-                    }
-                    el.dispatchEvent(new Event("input", { bubbles: true }));
-                    el.dispatchEvent(new Event("change", { bubbles: true }));
-                    return true;
-                  }`,
-                  args: [field.selector, String(field.value ?? "")],
+                  fn: buildExistingSessionFillSelectorScript(
+                    field.selector,
+                    String(field.value ?? ""),
+                  ),
                   timeoutMs: timeoutMs ?? undefined,
                 });
               }
@@ -1235,13 +1457,6 @@ export function registerBrowserAgentActRoutes(
               );
             }
             if (isExistingSession) {
-              if (loadState === "networkidle") {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session wait does not support loadState=networkidle yet.",
-                );
-              }
               await waitForExistingSessionCondition({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
