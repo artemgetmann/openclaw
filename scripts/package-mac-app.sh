@@ -1368,6 +1368,15 @@ else
   echo "WARN: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE (continuing)" >&2
 fi
 
+echo "📦 Copying OpenClaw app resources"
+OPENCLAW_APP_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClaw_OpenClaw.bundle"
+if [ -d "$OPENCLAW_APP_BUNDLE" ]; then
+  rm -rf "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle"
+  cp -R "$OPENCLAW_APP_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle"
+else
+  echo "WARN: OpenClaw app resource bundle not found at $OPENCLAW_APP_BUNDLE (continuing)" >&2
+fi
+
 echo "📦 Copying Textual resources"
 TEXTUAL_BUNDLE_DIR="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
 TEXTUAL_BUNDLE=""
