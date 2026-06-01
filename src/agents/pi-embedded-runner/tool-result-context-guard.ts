@@ -181,10 +181,10 @@ function enforceToolResultContextBudgetInPlace(params: {
   });
 }
 
-export function installToolResultContextGuard(params: {
-  agent: GuardableAgent;
+export function guardToolResultContextMessages(params: {
+  messages: AgentMessage[];
   contextWindowTokens: number;
-}): () => void {
+}): AgentMessage[] {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
   const contextBudgetChars = Math.max(
     1_024,
@@ -197,6 +197,22 @@ export function installToolResultContextGuard(params: {
     ),
   );
 
+  // This is deliberately in-place. pi-agent-core owns the live context array,
+  // and preflight has to shrink the exact payload that is about to be sent.
+  enforceToolResultContextBudgetInPlace({
+    messages: params.messages,
+    contextBudgetChars,
+    maxSingleToolResultChars,
+  });
+  return params.messages;
+}
+
+export function installToolResultContextGuard(params: {
+  agent: GuardableAgent;
+  contextWindowTokens: number;
+}): () => void {
+  const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
+
   // Agent.transformContext is private in pi-coding-agent, so access it via a
   // narrow runtime view to keep callsites type-safe while preserving behavior.
   const mutableAgent = params.agent as GuardableAgentRecord;
@@ -208,11 +224,7 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const contextMessages = Array.isArray(transformed) ? transformed : messages;
-    enforceToolResultContextBudgetInPlace({
-      messages: contextMessages,
-      contextBudgetChars,
-      maxSingleToolResultChars,
-    });
+    guardToolResultContextMessages({ messages: contextMessages, contextWindowTokens });
 
     return contextMessages;
   }) as GuardableTransformContext;

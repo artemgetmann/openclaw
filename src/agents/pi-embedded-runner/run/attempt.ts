@@ -129,7 +129,10 @@ import {
 } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
-import { installToolResultContextGuard } from "../tool-result-context-guard.js";
+import {
+  guardToolResultContextMessages,
+  installToolResultContextGuard,
+} from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
@@ -2127,6 +2130,29 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+
+      {
+        const inner = activeSession.agent.streamFn;
+        const contextWindowTokens = Math.max(
+          1,
+          Math.floor(
+            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+          ),
+        );
+        activeSession.agent.streamFn = (model, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          if (!Array.isArray(ctx?.messages)) {
+            return inner(model, context, options);
+          }
+          // Visible verbosity may produce large browser/tool dumps, but the model
+          // request must stay bounded on every tool loop, not just initial prompt.
+          guardToolResultContextMessages({
+            messages: ctx.messages as AgentMessage[],
+            contextWindowTokens,
+          });
+          return inner(model, context, options);
+        };
       }
 
       try {

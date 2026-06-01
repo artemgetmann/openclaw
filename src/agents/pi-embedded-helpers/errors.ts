@@ -156,6 +156,18 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     return false;
   }
 
+  const structured = parseApiErrorInfo(errorMessage);
+  const structuredType = structured?.type?.toLowerCase();
+  const structuredMessage = structured?.message?.toLowerCase();
+  if (
+    structuredType === "context_length_exceeded" ||
+    structuredType === "context_window_exceeded" ||
+    structuredType === "model_context_window_exceeded" ||
+    structuredMessage?.includes("input exceeds the context window")
+  ) {
+    return true;
+  }
+
   const hasRequestSizeExceeds = lower.includes("request size exceeds");
   const hasContextWindow =
     lower.includes("context window") ||
@@ -168,6 +180,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("maximum context length") ||
     lower.includes("prompt is too long") ||
     lower.includes("exceeds model context window") ||
+    lower.includes("input exceeds the context window") ||
     lower.includes("model token limit") ||
     (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow:") ||

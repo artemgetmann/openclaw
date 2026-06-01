@@ -52,6 +52,10 @@ function isExistingSessionMissingUidError(err: unknown, uid: string): boolean {
   return message.includes(`Element uid "${uid}" not found`);
 }
 
+function isXPathRef(ref: string): boolean {
+  return ref.trim().startsWith("xpath=");
+}
+
 function looksLikeHumanTextRef(ref: string): boolean {
   const trimmed = ref.trim();
   if (!trimmed || trimmed.length > 80) {
@@ -61,6 +65,38 @@ function looksLikeHumanTextRef(ref: string): boolean {
     return false;
   }
   return /[A-Za-z]/.test(trimmed) && !/[.[\]#>:=]/.test(trimmed);
+}
+
+async function clickExistingSessionXPathRef(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  ref: string;
+  doubleClick?: boolean;
+  timeoutMs?: number;
+}): Promise<void> {
+  await evaluateChromeMcpScript({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    fn: `(ref, doubleClickRaw) => {
+      const xpath = String(ref || "").replace(/^xpath=/, "");
+      const doubleClick = doubleClickRaw === "true";
+      const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+      const el = result.singleNodeValue;
+      if (!(el instanceof HTMLElement)) {
+        throw new Error(\`No element matches XPath ref: \${ref}. Take a fresh snapshot and retry with a current aria ref or a CSS selector.\`);
+      }
+      el.scrollIntoView({ block: "center", inline: "center" });
+      el.click();
+      if (doubleClick) {
+        el.click();
+      }
+      return true;
+    }`,
+    args: [params.ref, params.doubleClick ? "true" : "false"],
+    timeoutMs: params.timeoutMs,
+  });
 }
 
 async function clickExistingSessionTextRef(params: {
@@ -868,15 +904,37 @@ export function registerBrowserAgentActRoutes(
                 );
               }
               try {
-                await clickChromeMcpElement({
-                  profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
-                  targetId: tab.targetId,
-                  uid: ref!,
-                  doubleClick,
-                  timeoutMs: timeoutMs ?? undefined,
-                });
+                if (isXPathRef(ref!)) {
+                  await clickExistingSessionXPathRef({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    ref: ref!,
+                    doubleClick,
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                } else {
+                  await clickChromeMcpElement({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    uid: ref!,
+                    doubleClick,
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                }
               } catch (err) {
+                if (isXPathRef(ref!) && isExistingSessionMissingUidError(err, ref!)) {
+                  await clickExistingSessionXPathRef({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    ref: ref!,
+                    doubleClick,
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                  return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+                }
                 if (
                   doubleClick ||
                   !looksLikeHumanTextRef(ref!) ||

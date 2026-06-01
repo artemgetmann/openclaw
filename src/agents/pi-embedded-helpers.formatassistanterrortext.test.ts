@@ -5,6 +5,7 @@ import {
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
+  isContextOverflowError,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -27,6 +28,14 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
     );
+    expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
+  it("returns context overflow for structured context-window errors", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Your input exceeds the context window of this model. Please adjust your input and try again."}}',
+    );
+
+    expect(isContextOverflowError(msg.errorMessage)).toBe(true);
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
   it("returns context overflow for Kimi 'model token limit' errors", () => {

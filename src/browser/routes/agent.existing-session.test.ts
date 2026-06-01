@@ -364,6 +364,35 @@ describe("existing-session browser routes", () => {
     );
   });
 
+  it("clicks XPath refs through page evaluation for existing-session profiles", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+
+    const xpath =
+      "xpath=(//td[contains(@class,'ant-picker-cell-in-view')][.//div[normalize-space()='2']])[1]";
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "click", ref: xpath, timeoutMs: 12_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.clickChromeMcpElement).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("No element matches XPath ref"),
+      args: [xpath, "false"],
+      timeoutMs: 12_000,
+    });
+  });
+
   it("chooses searchable portal options through existing-session structured action", async () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce({
@@ -409,7 +438,8 @@ describe("existing-session browser routes", () => {
       String(call[0]?.fn).includes('"Bali/Denpasar (DPS)"'),
     );
     expect(chooseOptionCall?.[0]).toEqual(expect.objectContaining({ args: ["combo-to"] }));
-    expect(chooseOptionCall?.[0]?.args).not.toContain("Bali/Denpasar (DPS)");
+    const chooseOptionArgs = (chooseOptionCall?.[0] as { args?: string[] } | undefined)?.args;
+    expect(chooseOptionArgs).not.toContain("Bali/Denpasar (DPS)");
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
       expect.objectContaining({
         fn: expect.stringContaining("pressEnter(editable)"),

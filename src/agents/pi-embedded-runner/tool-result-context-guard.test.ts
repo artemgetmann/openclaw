@@ -4,6 +4,7 @@ import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
   PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER,
+  guardToolResultContextMessages,
   installToolResultContextGuard,
 } from "./tool-result-context-guard.js";
 
@@ -105,6 +106,18 @@ function expectCompactedToolResultsWithoutContextNotice(
 }
 
 describe("installToolResultContextGuard", () => {
+  it("preflights model-call messages without relying on transformContext", () => {
+    const contextForNextCall = makeTwoToolResultOverflowContext();
+
+    const guarded = guardToolResultContextMessages({
+      messages: contextForNextCall,
+      contextWindowTokens: 1_000,
+    });
+
+    expect(guarded).toBe(contextForNextCall);
+    expectCompactedToolResultsWithoutContextNotice(contextForNextCall, 1, 2);
+  });
+
   it("compacts oldest-first when total context overflows, even if each result fits individually", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = makeTwoToolResultOverflowContext();

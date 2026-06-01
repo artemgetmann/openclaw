@@ -1545,6 +1545,41 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).toHaveBeenCalled();
   });
+
+  it("continues when split-turn prefix contains only tool output", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [
+          {
+            role: "toolResult",
+            toolCallId: "call-browser-snapshot",
+            toolName: "browser",
+            content: [{ type: "text", text: "large browser snapshot" }],
+            isError: false,
+            timestamp: Date.now(),
+          },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).toHaveBeenCalled();
+  });
 });
 
 async function expectWorkspaceSummaryEmptyForAgentsAlias(
