@@ -129,6 +129,28 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("treats pre-prompt precheck errors as context overflow and retries after compaction", async () => {
+    const precheckError = new Error("Context overflow: prompt too large for the model (precheck).");
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: precheckError }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session before provider call",
+        firstKeptEntryId: "entry-6",
+        tokensBefore: 200_470,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("source=promptError"));
+    expect(result.meta.error).toBeUndefined();
+  });
+
   it("retries after successful compaction on likely-overflow promptError variants", async () => {
     const overflowHintError = new Error("Context window exceeded: requested 12000 tokens");
 

@@ -142,6 +142,12 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import {
+  formatPrePromptPrecheckLog,
+  PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+  resolvePrePromptReserveTokens,
+  shouldPreemptivelyCompactBeforePrompt,
+} from "./preemptive-compaction.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -2668,6 +2674,45 @@ export async function runEmbeddedAttempt(
             messages: btwSnapshotMessages,
             inFlightPrompt: effectivePrompt,
           });
+
+          const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
+          const reserveTokens = resolvePrePromptReserveTokens(params.config);
+          const prePromptPrecheck = shouldPreemptivelyCompactBeforePrompt({
+            messages: activeSession.messages,
+            systemPrompt: systemPromptText,
+            prompt: effectivePrompt,
+            contextTokenBudget,
+            reserveTokens,
+          });
+          if (prePromptPrecheck.shouldCompact) {
+            log.warn(
+              formatPrePromptPrecheckLog({
+                result: prePromptPrecheck,
+                sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
+                provider: params.provider,
+                modelId: params.modelId,
+                messageCount: activeSession.messages.length,
+                contextTokenBudget,
+                sessionFile: params.sessionFile,
+              }),
+            );
+            promptErrorSource = "prompt";
+            throw new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+          } else if (log.isEnabled("debug")) {
+            log.debug(
+              formatPrePromptPrecheckLog({
+                result: prePromptPrecheck,
+                sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
+                provider: params.provider,
+                modelId: params.modelId,
+                messageCount: activeSession.messages.length,
+                contextTokenBudget,
+                sessionFile: params.sessionFile,
+              }),
+            );
+          }
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
