@@ -283,6 +283,50 @@ describe("cli credentials", () => {
     });
   });
 
+  it("uses fresher Codex auth.json credentials when Keychain is stale", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
+    process.env.CODEX_HOME = tempHome;
+    const staleKeychainExp = Math.floor(new Date("2026-01-01T00:00:00Z").getTime() / 1000);
+    const freshFileExp = Math.floor(new Date("2026-01-11T00:00:00Z").getTime() / 1000);
+    const stalePayload = Buffer.from(JSON.stringify({ exp: staleKeychainExp }), "utf8").toString(
+      "base64url",
+    );
+    const freshPayload = Buffer.from(JSON.stringify({ exp: freshFileExp }), "utf8").toString(
+      "base64url",
+    );
+
+    execSyncMock.mockImplementation(() =>
+      JSON.stringify({
+        tokens: {
+          access_token: `header.${stalePayload}.sig`,
+          refresh_token: "keychain-refresh",
+        },
+        last_refresh: "2026-01-01T00:00:00Z",
+      }),
+    );
+
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(tempHome, "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: `header.${freshPayload}.sig`,
+          refresh_token: "file-refresh",
+        },
+      }),
+      "utf8",
+    );
+
+    const creds = readCodexCliCredentials({ platform: "darwin", execSync: execSyncMock });
+
+    expect(creds).toMatchObject({
+      access: `header.${freshPayload}.sig`,
+      refresh: "file-refresh",
+      provider: "openai-codex",
+      expires: freshFileExp * 1000,
+    });
+  });
+
   it("prefers JWT exp from Codex auth.json over file mtime", async () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
     process.env.CODEX_HOME = tempHome;

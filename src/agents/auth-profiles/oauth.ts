@@ -9,6 +9,7 @@ import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
+import { readCodexCliCredentials } from "../cli-credentials.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
@@ -142,6 +143,88 @@ function adoptNewerMainOAuthCredential(params: {
     });
   }
   return null;
+}
+
+function isFreshOAuthCredential(
+  cred: OAuthCredentials & { type: "oauth"; provider: string },
+): boolean {
+  return Number.isFinite(cred.expires) && Date.now() < cred.expires;
+}
+
+function shouldAdoptCodexCliCredential(params: {
+  current: OAuthCredentials & { type: "oauth"; provider: string };
+  candidate: OAuthCredentials & { type: "oauth"; provider: string };
+}): boolean {
+  if (params.current.provider !== "openai-codex" || params.candidate.provider !== "openai-codex") {
+    return false;
+  }
+  if (!isFreshOAuthCredential(params.candidate)) {
+    return false;
+  }
+  if (!Number.isFinite(params.current.expires)) {
+    return true;
+  }
+  if (params.candidate.expires > params.current.expires) {
+    return true;
+  }
+  // Access-token expiry can tie when two stores are written in the same refresh
+  // window. For Codex, a changed refresh token at the same or later expiry still
+  // means the CLI has the live rotated token and the copied profile does not.
+  return (
+    params.candidate.expires >= params.current.expires &&
+    (params.candidate.access !== params.current.access ||
+      params.candidate.refresh !== params.current.refresh)
+  );
+}
+
+async function adoptFreshCodexCliCredential(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  agentDir?: string;
+  cred: OAuthCredentials & { type: "oauth"; provider: string; email?: string };
+}): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+  if (params.cred.provider !== "openai-codex") {
+    return null;
+  }
+
+  try {
+    const cliCred = readCodexCliCredentials();
+    if (
+      !cliCred ||
+      !shouldAdoptCodexCliCredential({
+        current: params.cred,
+        candidate: cliCred,
+      })
+    ) {
+      return null;
+    }
+
+    const adopted = {
+      ...params.cred,
+      ...cliCred,
+      type: "oauth" as const,
+      provider: "openai-codex",
+      email: params.cred.email,
+    };
+    params.store.profiles[params.profileId] = adopted;
+    saveAuthProfileStore(params.store, params.agentDir);
+    log.info("adopted fresh Codex CLI OAuth credentials", {
+      profileId: params.profileId,
+      agentDir: params.agentDir,
+      expires: new Date(adopted.expires).toISOString(),
+    });
+    return await buildOAuthProfileResult({
+      provider: adopted.provider,
+      credentials: adopted,
+      email: adopted.email,
+    });
+  } catch (err) {
+    log.debug("adoptFreshCodexCliCredential failed", {
+      profileId: params.profileId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 async function refreshOAuthTokenWithLock(params: {
@@ -402,6 +485,17 @@ export async function resolveApiKeyForProfile(
         email: refreshed.email ?? cred.email,
       });
     }
+
+    const codexCliResolved = await adoptFreshCodexCliCredential({
+      store: refreshedStore,
+      profileId,
+      agentDir: params.agentDir,
+      cred,
+    });
+    if (codexCliResolved) {
+      return codexCliResolved;
+    }
+
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
       cfg,
       store: refreshedStore,
