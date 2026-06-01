@@ -235,6 +235,63 @@ function readCodexKeychainCredentials(options?: {
   }
 }
 
+function readCodexAuthJsonCredentials(): CodexCliCredential | null {
+  const authPath = resolveCodexCliAuthPath();
+  const raw = loadJsonFile(authPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const data = raw as Record<string, unknown>;
+  const tokens = data.tokens as Record<string, unknown> | undefined;
+  if (!tokens || typeof tokens !== "object") {
+    return null;
+  }
+
+  const accessToken = tokens.access_token;
+  const refreshToken = tokens.refresh_token;
+
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return null;
+  }
+
+  // Fallback to mtime only when the token is not a parseable JWT.
+  let expires = decodeJwtExpiryMs(accessToken);
+  if (expires === null) {
+    try {
+      const stat = fs.statSync(authPath);
+      expires = stat.mtimeMs + 60 * 60 * 1000;
+    } catch {
+      expires = Date.now() + 60 * 60 * 1000;
+    }
+  }
+
+  return {
+    type: "oauth",
+    provider: "openai-codex" as OAuthProvider,
+    access: accessToken,
+    refresh: refreshToken,
+    expires,
+    accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
+  };
+}
+
+function pickFreshestCodexCredential(
+  a: CodexCliCredential | null,
+  b: CodexCliCredential | null,
+): CodexCliCredential | null {
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
+  }
+  return b.expires > a.expires ? b : a;
+}
+
 function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredential | null {
   const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
   return readPortalCliOauthCredentials(credPath, "qwen-portal");
@@ -476,51 +533,12 @@ export function readCodexCliCredentials(options?: {
     platform: options?.platform,
     execSync: options?.execSync,
   });
-  if (keychain) {
-    return keychain;
-  }
+  const authJson = readCodexAuthJsonCredentials();
 
-  const authPath = resolveCodexCliAuthPath();
-  const raw = loadJsonFile(authPath);
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-
-  const data = raw as Record<string, unknown>;
-  const tokens = data.tokens as Record<string, unknown> | undefined;
-  if (!tokens || typeof tokens !== "object") {
-    return null;
-  }
-
-  const accessToken = tokens.access_token;
-  const refreshToken = tokens.refresh_token;
-
-  if (typeof accessToken !== "string" || !accessToken) {
-    return null;
-  }
-  if (typeof refreshToken !== "string" || !refreshToken) {
-    return null;
-  }
-
-  // Fallback to mtime only when the token is not a parseable JWT.
-  let expires = decodeJwtExpiryMs(accessToken);
-  if (expires === null) {
-    try {
-      const stat = fs.statSync(authPath);
-      expires = stat.mtimeMs + 60 * 60 * 1000;
-    } catch {
-      expires = Date.now() + 60 * 60 * 1000;
-    }
-  }
-
-  return {
-    type: "oauth",
-    provider: "openai-codex" as OAuthProvider,
-    access: accessToken,
-    refresh: refreshToken,
-    expires,
-    accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
-  };
+  // Codex refresh tokens rotate. If the file and Keychain disagree, the source
+  // with the later access-token expiry is the best local proof of current CLI
+  // ownership. Prefer that over blindly trusting whichever store we read first.
+  return pickFreshestCodexCredential(keychain, authJson);
 }
 
 export function readCodexCliCredentialsCached(options?: {
