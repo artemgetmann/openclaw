@@ -152,6 +152,41 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("treats pre-prompt precheck errors as overflow and retries after compaction", async () => {
+    const precheckError = new Error("Context overflow: prompt too large for the model (precheck).");
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: precheckError }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted before provider submission",
+        firstKeptEntryId: "entry-9",
+        tokensBefore: 200_470,
+        tokensAfter: 24_000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "test-session",
+        sessionFile: "/tmp/session.json",
+        tokenBudget: 200_000,
+        compactionTarget: "budget",
+        force: true,
+        runtimeContext: expect.objectContaining({
+          trigger: "overflow",
+          authProfileId: "test-profile",
+        }),
+      }),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.error).toBeUndefined();
+    expect(result.meta.agentMeta?.compactionCount).toBe(1);
+  });
+
   it("does not reset compaction attempt budget after successful tool-result truncation", async () => {
     const overflowError = queueOverflowAttemptWithOversizedToolOutput(
       mockedRunEmbeddedAttempt,
