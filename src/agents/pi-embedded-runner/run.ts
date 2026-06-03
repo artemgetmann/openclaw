@@ -880,6 +880,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let persistedPromptTokensForPreflight = params.persistedPromptTokens;
       async function maybeMarkAuthProfileFailure(failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1012,6 +1013,9 @@ export async function runEmbeddedPiAgent(
             config: params.config,
             contextEngine,
             contextTokenBudget: ctxInfo.tokens,
+            ...(persistedPromptTokensForPreflight !== undefined
+              ? { persistedPromptTokens: persistedPromptTokensForPreflight }
+              : {}),
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             images: params.images,
@@ -1143,6 +1147,7 @@ export async function runEmbeddedPiAgent(
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
               overflowCompactionAttempts++;
+              persistedPromptTokensForPreflight = undefined;
               log.warn(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
@@ -1253,6 +1258,7 @@ export async function runEmbeddedPiAgent(
               }
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
+                persistedPromptTokensForPreflight = undefined;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
               }

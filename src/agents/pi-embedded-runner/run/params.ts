@@ -66,6 +66,8 @@ export type RunEmbeddedPiAgentParams = {
   /** Controls whether final assistant replies are source-delivered or private. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sessionFile: string;
+  /** Last known prompt pressure from persisted session metadata. */
+  persistedPromptTokens?: number;
   workspaceDir: string;
   agentDir?: string;
   config?: OpenClawConfig;

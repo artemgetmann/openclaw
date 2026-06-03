@@ -83,6 +83,38 @@ describe("preemptive compaction preflight", () => {
     expect(decision.estimatedPromptTokens).toBeLessThan(decision.promptBudgetBeforeReserve);
   });
 
+  it("asks for compaction when persisted token metadata is already over budget", () => {
+    const decision = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantMessage("short history")],
+      systemPrompt: "system",
+      prompt: "hello",
+      persistedPromptTokens: 200_470,
+      contextTokenBudget: 200_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(decision.shouldCompact).toBe(true);
+    expect(decision.estimatedPromptTokens).toBeLessThan(decision.promptBudgetBeforeReserve);
+    expect(decision.persistedPromptTokens).toBe(200_470);
+    expect(decision.effectivePromptTokens).toBe(200_470);
+    expect(decision.overflowTokens).toBe(20_470);
+  });
+
+  it("does not let low persisted token metadata inflate the estimate", () => {
+    const decision = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantMessage("short history")],
+      systemPrompt: "system",
+      prompt: "hello",
+      persistedPromptTokens: 1_000,
+      contextTokenBudget: 20_000,
+      reserveTokens: 2_000,
+    });
+
+    expect(decision.shouldCompact).toBe(false);
+    expect(decision.effectivePromptTokens).toBeGreaterThanOrEqual(decision.estimatedPromptTokens);
+    expect(decision.effectivePromptTokens).toBeLessThan(decision.promptBudgetBeforeReserve);
+  });
+
   it("uses configured reserveTokens before the reserveTokensFloor fallback", () => {
     expect(
       resolvePrePromptReserveTokens({

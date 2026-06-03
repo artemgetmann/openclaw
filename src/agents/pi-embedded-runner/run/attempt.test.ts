@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
@@ -203,7 +204,7 @@ describe("evaluateAttemptPrePromptCompactionPrecheck", () => {
           role: "assistant",
           content: [{ type: "text", text: "history ".repeat(2_000) }],
           timestamp: Date.now(),
-        },
+        } as unknown as AgentMessage,
       ],
       systemPrompt: "system ".repeat(200),
       prompt: "continue ".repeat(200),
@@ -243,6 +244,34 @@ describe("evaluateAttemptPrePromptCompactionPrecheck", () => {
     expect(result.decision.shouldCompact).toBe(false);
     expect(result.error).toBeUndefined();
     expect(result.logLine).toContain("shouldCompact=false");
+  });
+
+  it("returns a precheck error when persisted token metadata is over budget", async () => {
+    const providerPrompt = vi.fn(async () => {
+      throw new Error("provider should not be called");
+    });
+    const result = evaluateAttemptPrePromptCompactionPrecheck({
+      messages: [{ role: "user", content: "short history", timestamp: Date.now() }],
+      systemPrompt: "system",
+      prompt: "hello",
+      persistedPromptTokens: 200_470,
+      contextTokenBudget: 200_000,
+      config: { agents: { defaults: { compaction: { reserveTokensFloor: 20_000 } } } },
+      sessionKey: "agent:main:telegram:group:-1003783709877:topic:5335",
+      sessionId: "session-1",
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      sessionFile: "/tmp/session.jsonl",
+    });
+
+    expect(result.decision.shouldCompact).toBe(true);
+    expect(result.decision.persistedPromptTokens).toBe(200_470);
+    expect(result.error?.message).toBe(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+    expect(result.logLine).toContain("persistedPromptTokens=200470");
+    if (!result.error) {
+      await providerPrompt();
+    }
+    expect(providerPrompt).not.toHaveBeenCalled();
   });
 });
 
