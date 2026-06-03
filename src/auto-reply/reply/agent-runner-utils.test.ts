@@ -83,7 +83,7 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true });
+    const run = makeRun({ enforceFinalTag: true, persistedPromptTokens: 200_470 });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -101,6 +101,7 @@ describe("agent-runner-utils", () => {
 
     expect(resolved).toMatchObject({
       sessionFile: run.sessionFile,
+      persistedPromptTokens: 200_470,
       workspaceDir: run.workspaceDir,
       agentDir: run.agentDir,
       config: run.config,
