@@ -59,6 +59,8 @@ export type FollowupRun = {
     senderE164?: string;
     senderIsOwner?: boolean;
     sessionFile: string;
+    /** Last known prompt pressure from persisted session metadata. */
+    persistedPromptTokens?: number;
     workspaceDir: string;
     config: OpenClawConfig;
     skillsSnapshot?: SkillSnapshot;
