@@ -315,11 +315,11 @@ struct OnboardingView: View {
 
     var canAdvanceConsumerSetupStep: Bool {
         guard self.isConsumerSetupShellActive else { return false }
-        // Debug smoke opens one setup page directly, without walking through
-        // earlier prerequisites. In that mode the current page owns the gate so
-        // visual proof can verify the page state without changing production
-        // setup ordering.
-        if self.consumerSetupDebugStep == self.consumerSetupStep {
+        // Debug smoke can open one setup page directly, then advance through
+        // later pages without walking earlier prerequisites. In that mode each
+        // visible page owns its gate so visual proof can verify the current
+        // page state without changing production setup ordering.
+        if self.consumerSetupDebugStep != nil {
             return self.isConsumerSetupStepComplete(self.consumerSetupStep)
         }
         switch self.consumerSetupStep {

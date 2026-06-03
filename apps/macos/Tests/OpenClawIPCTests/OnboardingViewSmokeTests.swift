@@ -155,6 +155,52 @@ struct OnboardingViewSmokeTests {
         }
     }
 
+    @Test func `debug setup navigation can advance after verified telegram without prior prerequisites`() async {
+        let instanceId = "debug-nav-\(UUID().uuidString)"
+        defer {
+            ChannelsStore.shared.configDraft = [:]
+            ChannelsStore.shared.telegramSetupBotId = nil
+            UserDefaults.standard.removeObject(
+                forKey: ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(instanceId: instanceId))
+            UserDefaults.standard.removeObject(
+                forKey: ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey())
+        }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_CONSUMER_INSTANCE_ID": instanceId,
+        ]) {
+            ChannelsStore.shared.configDraft = [
+                "channels": [
+                    "telegram": [
+                        "enabled": true,
+                        "botToken": "8932460707:AAHOdovm5s6t_pVIxg9_dtMiKFPBpyNNQQA",
+                        "dmPolicy": "allowlist",
+                        "allowFrom": ["1336356696"],
+                    ],
+                ],
+            ]
+            ChannelsStore.shared.telegramSetupBotId = 8932460707
+            UserDefaults.standard.set(
+                8932460707,
+                forKey: ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(instanceId: instanceId))
+            UserDefaults.standard.set(
+                8932460707,
+                forKey: ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey())
+
+            let state = AppState(preview: true)
+            state.connectionMode = .local
+            let view = OnboardingView(
+                state: state,
+                permissionMonitor: PermissionMonitor.shared,
+                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
+                consumerSetupDebugStepEnvironment: ["OPENCLAW_CONSUMER_SETUP_DEBUG_STEP": "telegram"])
+
+            #expect(view.isConsumerSetupStepComplete(.telegram))
+            #expect(view.canAdvance)
+        }
+    }
+
     @Test func `consumer explicit remote mode still exposes connection page`() async {
         await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
             let order = OnboardingView.pageOrder(for: .remote, showOnboardingChat: false)
