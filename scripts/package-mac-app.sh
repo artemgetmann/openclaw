@@ -299,6 +299,37 @@ consumer_require_bundled_gemini_key() {
 
 consumer_require_bundled_gemini_key
 
+consumer_probe_seeded_backend_activation() {
+  local seeded_defaults_path="$1"
+  local probe_script="$ROOT_DIR/scripts/probe-consumer-release-activation.mjs"
+  local probe_nonce="${JARVIS_BACKEND_ACTIVATION_PROBE_NONCE:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+  local probe_email="${JARVIS_BACKEND_ACTIVATION_PROBE_EMAIL:-release-probe+packaging-${probe_nonce}@openclaw.ai}"
+  local probe_device_id="${JARVIS_BACKEND_ACTIVATION_PROBE_DEVICE_ID:-packaged-jarvis-${APP_INSTANCE_ID:-default}-${probe_nonce}}"
+
+  if [[ "$APP_VARIANT" != "consumer" ]]; then
+    return 0
+  fi
+
+  # The app stores this file as seed-only config, but activation is the first
+  # product gate a fresh user hits. Probe the exact bundled base URL/token before
+  # signing so bad release env fails while the bundle is still cheap to rebuild.
+  # Use a unique default identity because /v1/account/login creates activation
+  # state; operators can pin JARVIS_BACKEND_ACTIVATION_PROBE_* when debugging.
+  if [[ ! -f "$seeded_defaults_path" || ! -f "$probe_script" ]]; then
+    echo "ERROR: packaged Jarvis backend activation probe failed." >&2
+    echo "Seeded defaults: $seeded_defaults_path" >&2
+    echo "Probe script: $probe_script" >&2
+    exit 1
+  fi
+  if ! "$VALIDATED_NODE_BIN" "$probe_script" "$seeded_defaults_path" \
+    --email "$probe_email" \
+    --device-id "$probe_device_id" \
+    --app-version "$APP_VERSION"; then
+    echo "ERROR: packaged Jarvis backend activation probe failed." >&2
+    exit 1
+  fi
+}
+
 verify_required_workspace_templates() {
   local template_dir="$1"
   local context_label="$2"
@@ -1338,6 +1369,7 @@ if [[ "$APP_VARIANT" == "consumer" ]]; then
   CONSUMER_SEEDED_DEFAULTS_PATH="$APP_ROOT/Contents/Resources/consumer-seeded-defaults.json"
   "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" \
     "$CONSUMER_SEEDED_DEFAULTS_PATH"
+  consumer_probe_seeded_backend_activation "$CONSUMER_SEEDED_DEFAULTS_PATH"
   if [[ "$OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS" == "1" ]] && ! grep -q '"OPENCLAW_CONSUMER_OPENAI_API_KEY"' "$CONSUMER_SEEDED_DEFAULTS_PATH"; then
     echo "ERROR: consumer bundle is missing OPENCLAW_CONSUMER_OPENAI_API_KEY." >&2
     echo "Packaging must use the dedicated consumer speech-transcription key; generic OPENAI_API_KEY fallback is intentionally not accepted." >&2

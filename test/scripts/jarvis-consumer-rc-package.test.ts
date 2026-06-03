@@ -97,4 +97,16 @@ describe("consumer runtime reuse guard", () => {
       "OPENCLAW_CONSUMER_REUSE_RUNTIME is allowed only on the fast smoke packaging path",
     );
   });
+
+  it("probes packaged backend activation after seeded defaults generation", () => {
+    expect(packageScript).toContain("consumer_probe_seeded_backend_activation()");
+    expect(packageScript).toContain("scripts/probe-consumer-release-activation.mjs");
+    expect(packageScript).toContain("JARVIS_BACKEND_ACTIVATION_PROBE_EMAIL");
+    expect(packageScript).toContain("JARVIS_BACKEND_ACTIVATION_PROBE_DEVICE_ID");
+    expect(packageScript).toContain("--app-version");
+    expect(packageScript).toContain("packaged Jarvis backend activation probe failed.");
+    expect(packageScript).toContain(
+      'consumer_probe_seeded_backend_activation "$CONSUMER_SEEDED_DEFAULTS_PATH"',
+    );
+  });
 });

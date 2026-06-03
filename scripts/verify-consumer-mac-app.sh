@@ -262,6 +262,29 @@ assert_required_bundled_skills \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
   "bundled runtime skills"
 
+CONSUMER_SEEDED_DEFAULTS_PATH="$APP_PATH/Contents/Resources/consumer-seeded-defaults.json"
+CONSUMER_BACKEND_ACTIVATION_PROBE="$ROOT_DIR/scripts/probe-consumer-release-activation.mjs"
+CONSUMER_BACKEND_ACTIVATION_PROBE_NONCE="${JARVIS_BACKEND_ACTIVATION_PROBE_NONCE:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+if [[ ! -f "$CONSUMER_SEEDED_DEFAULTS_PATH" || ! -f "$CONSUMER_BACKEND_ACTIVATION_PROBE" ]]; then
+  echo "ERROR: packaged Jarvis backend activation probe failed." >&2
+  echo "Seeded defaults: $CONSUMER_SEEDED_DEFAULTS_PATH" >&2
+  echo "Probe script: $CONSUMER_BACKEND_ACTIVATION_PROBE" >&2
+  exit 1
+fi
+
+# Release verification must prove the exact app resource token can reach the
+# activation backend. A valid signature around a dead token only ships a prettier
+# failure screen to the first user.
+# Keep the default probe identity unique because the backend login creates
+# account/device state. Env overrides remain available for backend-side tracing.
+if ! "$OPENCLAW_NODE_BIN" "$CONSUMER_BACKEND_ACTIVATION_PROBE" "$CONSUMER_SEEDED_DEFAULTS_PATH" \
+  --email "${JARVIS_BACKEND_ACTIVATION_PROBE_EMAIL:-release-probe+verify-${CONSUMER_BACKEND_ACTIVATION_PROBE_NONCE}@openclaw.ai}" \
+  --device-id "${JARVIS_BACKEND_ACTIVATION_PROBE_DEVICE_ID:-packaged-jarvis-${EFFECTIVE_INSTANCE_ID:-default}-${CONSUMER_BACKEND_ACTIVATION_PROBE_NONCE}}" \
+  --app-version "$actual_version"; then
+  echo "ERROR: packaged Jarvis backend activation probe failed." >&2
+  exit 1
+fi
+
 sparkle_mode="disabled"
 if [[ -n "$sparkle_feed_url" ]]; then
   if [[ "$sparkle_auto_checks" == "true" ]]; then
