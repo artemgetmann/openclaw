@@ -4,6 +4,7 @@ import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
+  evaluateAttemptPrePromptCompactionPrecheck,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
@@ -16,6 +17,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
+import { PREEMPTIVE_OVERFLOW_ERROR_TEXT } from "./preemptive-compaction.js";
 
 function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenClawConfig {
   return {
@@ -189,6 +191,61 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
     ).toBe(false);
   });
 });
+
+describe("evaluateAttemptPrePromptCompactionPrecheck", () => {
+  it("returns a context-overflow-compatible error before provider submission when over budget", async () => {
+    const providerPrompt = vi.fn(async () => {
+      throw new Error("provider should not be called");
+    });
+    const result = evaluateAttemptPrePromptCompactionPrecheck({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "history ".repeat(2_000) }],
+          timestamp: Date.now(),
+        },
+      ],
+      systemPrompt: "system ".repeat(200),
+      prompt: "continue ".repeat(200),
+      contextTokenBudget: 1_000,
+      config: { agents: { defaults: { compaction: { reserveTokens: 200 } } } },
+      sessionKey: "agent:main:telegram:group:-1003783709877:topic:5335",
+      sessionId: "session-1",
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      sessionFile: "/tmp/session.jsonl",
+    });
+
+    expect(result.decision.shouldCompact).toBe(true);
+    expect(result.error?.message).toBe(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+    expect(result.logLine).toContain("[context-overflow-precheck]");
+    expect(result.logLine).toContain("provider=openai-codex/gpt-5.5");
+    if (!result.error) {
+      await providerPrompt();
+    }
+    expect(providerPrompt).not.toHaveBeenCalled();
+  });
+
+  it("does not return an error when prompt pressure fits below budget", () => {
+    const result = evaluateAttemptPrePromptCompactionPrecheck({
+      messages: [{ role: "user", content: "short history", timestamp: Date.now() }],
+      systemPrompt: "system",
+      prompt: "hello",
+      contextTokenBudget: 20_000,
+      config: { agents: { defaults: { compaction: { reserveTokensFloor: 2_000 } } } },
+      sessionKey: "agent:main",
+      sessionId: "session-1",
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      sessionFile: "/tmp/session.jsonl",
+    });
+
+    expect(result.decision.shouldCompact).toBe(false);
+    expect(result.error).toBeUndefined();
+    expect(result.logLine).toContain("shouldCompact=false");
+  });
+});
+
 describe("wrapStreamFnTrimToolCallNames", () => {
   function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
     result: () => Promise<unknown>;

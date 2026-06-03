@@ -145,6 +145,7 @@ import { detectAndLoadPromptImages } from "./images.js";
 import {
   formatPrePromptPrecheckLog,
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+  type PreemptiveCompactionDecision,
   resolvePrePromptReserveTokens,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -161,6 +162,50 @@ type PromptBuildHookRunner = {
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
+
+export type AttemptPrePromptCompactionPrecheckResult = {
+  decision: PreemptiveCompactionDecision;
+  logLine: string;
+  error?: Error;
+};
+
+export function evaluateAttemptPrePromptCompactionPrecheck(params: {
+  messages: AgentMessage[];
+  systemPrompt?: string;
+  prompt: string;
+  contextTokenBudget: number;
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  provider: string;
+  modelId: string;
+  sessionFile?: string;
+}): AttemptPrePromptCompactionPrecheckResult {
+  const reserveTokens = resolvePrePromptReserveTokens(params.config);
+  const decision = shouldPreemptivelyCompactBeforePrompt({
+    messages: params.messages,
+    systemPrompt: params.systemPrompt,
+    prompt: params.prompt,
+    contextTokenBudget: params.contextTokenBudget,
+    reserveTokens,
+  });
+  const logLine = formatPrePromptPrecheckLog({
+    result: decision,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    provider: params.provider,
+    modelId: params.modelId,
+    messageCount: params.messages.length,
+    contextTokenBudget: params.contextTokenBudget,
+    sessionFile: params.sessionFile,
+  });
+
+  return {
+    decision,
+    logLine,
+    ...(decision.shouldCompact ? { error: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT) } : {}),
+  };
+}
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
 const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
@@ -2676,42 +2721,24 @@ export async function runEmbeddedAttempt(
           });
 
           const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
-          const reserveTokens = resolvePrePromptReserveTokens(params.config);
-          const prePromptPrecheck = shouldPreemptivelyCompactBeforePrompt({
+          const prePromptPrecheck = evaluateAttemptPrePromptCompactionPrecheck({
             messages: activeSession.messages,
             systemPrompt: systemPromptText,
             prompt: effectivePrompt,
             contextTokenBudget,
-            reserveTokens,
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            provider: params.provider,
+            modelId: params.modelId,
+            sessionFile: params.sessionFile,
           });
-          if (prePromptPrecheck.shouldCompact) {
-            log.warn(
-              formatPrePromptPrecheckLog({
-                result: prePromptPrecheck,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-                provider: params.provider,
-                modelId: params.modelId,
-                messageCount: activeSession.messages.length,
-                contextTokenBudget,
-                sessionFile: params.sessionFile,
-              }),
-            );
+          if (prePromptPrecheck.decision.shouldCompact) {
+            log.warn(prePromptPrecheck.logLine);
             promptErrorSource = "prompt";
-            throw new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+            throw prePromptPrecheck.error ?? new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
           } else if (log.isEnabled("debug")) {
-            log.debug(
-              formatPrePromptPrecheckLog({
-                result: prePromptPrecheck,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-                provider: params.provider,
-                modelId: params.modelId,
-                messageCount: activeSession.messages.length,
-                contextTokenBudget,
-                sessionFile: params.sessionFile,
-              }),
-            );
+            log.debug(prePromptPrecheck.logLine);
           }
 
           // Only pass images option if there are actually images to pass
