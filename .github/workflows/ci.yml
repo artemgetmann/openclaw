@@ -824,3 +824,96 @@ jobs:
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
         run: ${{ matrix.command }}
+
+  pr-required:
+    name: "pr-required"
+    needs:
+      - docs-scope
+      - changed-scope
+      - checks
+      - check
+      - startup-memory
+      - check-docs
+      - skills-python
+      - secrets
+      - checks-windows
+      - macos
+      - android
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Verify scoped PR gates
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          node <<'NODE'
+          const needs = JSON.parse(process.env.NEEDS_JSON || "{}");
+
+          const failures = [];
+
+          const resultOf = (job) => needs[job]?.result || "missing";
+          const outputOf = (job, name) => needs[job]?.outputs?.[name] || "";
+
+          const requireSuccess = (job, reason) => {
+            const result = resultOf(job);
+            if (result !== "success") {
+              failures.push(`${job}: expected success for ${reason}, got ${result}`);
+            }
+          };
+
+          const requireSkippedOrSuccess = (job, reason) => {
+            const result = resultOf(job);
+            if (result !== "success" && result !== "skipped") {
+              failures.push(`${job}: expected success or scoped skip for ${reason}, got ${result}`);
+            }
+          };
+
+          const requireScopedSuccess = (job, shouldRun, reason) => {
+            if (shouldRun) {
+              requireSuccess(job, reason);
+              return;
+            }
+
+            requireSkippedOrSuccess(job, `${reason} not in this change scope`);
+          };
+
+          const docsOnly = outputOf("docs-scope", "docs_only") === "true";
+          const docsChanged = outputOf("docs-scope", "docs_changed") === "true";
+          const runNode = outputOf("changed-scope", "run_node") === "true";
+          const runMacos = outputOf("changed-scope", "run_macos") === "true";
+          const runAndroid = outputOf("changed-scope", "run_android") === "true";
+          const runSkillsPython = outputOf("changed-scope", "run_skills_python") === "true";
+          const runWindows = outputOf("changed-scope", "run_windows") === "true";
+
+          // These jobs establish the scope and catch security-sensitive mistakes.
+          // They are cheap enough to require on every PR.
+          requireSuccess("docs-scope", "change scope detection");
+          requireSuccess("secrets", "secret, workflow, and dependency safety");
+
+          // Non-doc PRs must classify their heavier lanes before this gate trusts
+          // any skipped Node/platform job.
+          if (docsOnly) {
+            requireSkippedOrSuccess("changed-scope", "docs-only change");
+          } else {
+            requireSuccess("changed-scope", "non-doc change scope detection");
+          }
+
+          requireScopedSuccess("check-docs", docsChanged, "docs validation");
+          requireScopedSuccess("check", !docsOnly && runNode, "types, lint, format, and strict build smoke");
+          requireScopedSuccess("checks", !docsOnly && runNode, "Node tests, extensions, channels, and protocol checks");
+          requireScopedSuccess("startup-memory", !docsOnly && runNode, "CLI startup memory regression check");
+          requireScopedSuccess("skills-python", !docsOnly && runSkillsPython, "Python skill lint and tests");
+          requireScopedSuccess("checks-windows", !docsOnly && runWindows, "Windows-relevant tests");
+          requireScopedSuccess("macos", !docsOnly && runMacos, "macOS tests and Swift checks");
+          requireScopedSuccess("android", !docsOnly && runAndroid, "Android tests and build");
+
+          if (failures.length > 0) {
+            console.error("PR required gate failed:");
+            for (const failure of failures) {
+              console.error(`- ${failure}`);
+            }
+            process.exit(1);
+          }
+
+          console.log("PR required gate passed for this change scope.");
+          NODE
