@@ -418,6 +418,14 @@ export async function runMemoryFlushIfNeeded(params: {
     projectedTokenCount > 0
       ? projectedTokenCount
       : undefined;
+  const hardReserveThreshold = Math.max(
+    0,
+    contextWindowTokens - memoryFlushSettings.reserveTokensFloor,
+  );
+  const hardReserveBreached =
+    typeof tokenCountForFlush === "number" &&
+    hardReserveThreshold > 0 &&
+    tokenCountForFlush >= hardReserveThreshold;
 
   // Diagnostic logging to understand why memory flush may not trigger.
   logVerbose(
@@ -442,6 +450,10 @@ export async function runMemoryFlushIfNeeded(params: {
         contextWindowTokens,
         reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
         softThresholdTokens: memoryFlushSettings.softThresholdTokens,
+        // A stale flush marker must not suppress recovery once the session is
+        // already inside the configured reserve; that is the exact live failure
+        // mode that let an over-budget CLI session keep replying without flush.
+        ignoreAlreadyFlushed: hardReserveBreached,
       })) ||
     (shouldForceFlushByTranscriptSize &&
       entry != null &&
