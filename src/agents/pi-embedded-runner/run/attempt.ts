@@ -173,6 +173,7 @@ export function evaluateAttemptPrePromptCompactionPrecheck(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
+  persistedPromptTokens?: number;
   contextTokenBudget: number;
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -186,6 +187,9 @@ export function evaluateAttemptPrePromptCompactionPrecheck(params: {
     messages: params.messages,
     systemPrompt: params.systemPrompt,
     prompt: params.prompt,
+    ...(params.persistedPromptTokens !== undefined
+      ? { persistedPromptTokens: params.persistedPromptTokens }
+      : {}),
     contextTokenBudget: params.contextTokenBudget,
     reserveTokens,
   });
@@ -2725,6 +2729,9 @@ export async function runEmbeddedAttempt(
             messages: activeSession.messages,
             systemPrompt: systemPromptText,
             prompt: effectivePrompt,
+            ...(params.persistedPromptTokens !== undefined
+              ? { persistedPromptTokens: params.persistedPromptTokens }
+              : {}),
             contextTokenBudget,
             config: params.config,
             sessionKey: params.sessionKey,

@@ -19,6 +19,8 @@ const SAFETY_MARGIN = 1.2;
 export type PreemptiveCompactionDecision = {
   shouldCompact: boolean;
   estimatedPromptTokens: number;
+  persistedPromptTokens?: number;
+  effectivePromptTokens: number;
   promptBudgetBeforeReserve: number;
   overflowTokens: number;
   requestedReserveTokens: number;
@@ -177,6 +179,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
+  persistedPromptTokens?: number;
   contextTokenBudget: number;
   reserveTokens: number;
 }): PreemptiveCompactionDecision {
@@ -196,11 +199,23 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     systemPrompt: params.systemPrompt,
     prompt: params.prompt,
   });
-  const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
+  const persistedPromptTokens =
+    typeof params.persistedPromptTokens === "number" &&
+    Number.isFinite(params.persistedPromptTokens) &&
+    params.persistedPromptTokens > 0
+      ? Math.floor(params.persistedPromptTokens)
+      : undefined;
+  // Session metadata can be the only surviving signal that the previous prompt
+  // already consumed the provider's whole context window. Use it as a floor for
+  // the preflight, then let overflow recovery compact and retry from transcript.
+  const effectivePromptTokens = Math.max(estimatedPromptTokens, persistedPromptTokens ?? 0);
+  const overflowTokens = Math.max(0, effectivePromptTokens - promptBudgetBeforeReserve);
 
   return {
     shouldCompact: overflowTokens > 0,
     estimatedPromptTokens,
+    ...(persistedPromptTokens !== undefined ? { persistedPromptTokens } : {}),
+    effectivePromptTokens,
     promptBudgetBeforeReserve,
     overflowTokens,
     requestedReserveTokens,
@@ -224,6 +239,8 @@ export function formatPrePromptPrecheckLog(params: {
     `provider=${params.provider}/${params.modelId} ` +
     `shouldCompact=${params.result.shouldCompact} ` +
     `estimatedPromptTokens=${params.result.estimatedPromptTokens} ` +
+    `persistedPromptTokens=${params.result.persistedPromptTokens ?? "none"} ` +
+    `effectivePromptTokens=${params.result.effectivePromptTokens} ` +
     `promptBudgetBeforeReserve=${params.result.promptBudgetBeforeReserve} ` +
     `overflowTokens=${params.result.overflowTokens} ` +
     `reserveTokens=${params.result.requestedReserveTokens} ` +
