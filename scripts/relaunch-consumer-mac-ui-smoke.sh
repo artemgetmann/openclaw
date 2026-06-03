@@ -13,7 +13,8 @@ BUILD_APP=1
 CLEAN_ONLY=0
 WITH_RUNTIME=0
 CONSUMER_STEP="${OPENCLAW_CONSUMER_SETUP_DEBUG_STEP:-}"
-BACKEND_API_TOKEN="${JARVIS_BACKEND_API_TOKEN:-${JARVIS_BACKEND_ACCESS_TOKEN:-}}"
+BACKEND_API_TOKEN="${JARVIS_BACKEND_ACCESS_TOKEN:-${JARVIS_BACKEND_API_TOKEN:-}}"
+BACKEND_BASE_URL="${JARVIS_BACKEND_BASE_URL:-https://jarvis-backend-klvq.onrender.com}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 BUILD_PATH="$ROOT_DIR/apps/macos/.build-ui-smoke"
 GATEWAY_ENTRY="$ROOT_DIR/dist/index.js"
@@ -83,6 +84,69 @@ resolve_backend_api_token() {
     -s "Jarvis Render Backend" \
     -a "JARVIS_BACKEND_API_TOKEN" \
     -w 2>/dev/null || true)"
+}
+
+seed_jarvis_backend_config() {
+  local config_path="$1"
+  local tmp_path
+
+  if [[ -z "$BACKEND_API_TOKEN" ]]; then
+    if [[ "$CONSUMER_STEP" == "accountActivation" || "$CONSUMER_STEP" == "telegram" || "$CONSUMER_STEP" == "telegramGroup" ]]; then
+      echo "ERROR: --consumer-step $CONSUMER_STEP requires Jarvis backend credentials." >&2
+      echo "Set JARVIS_BACKEND_ACCESS_TOKEN or JARVIS_BACKEND_API_TOKEN, or store the API token in Keychain account JARVIS_BACKEND_API_TOKEN for service 'Jarvis Render Backend'." >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  /bin/mkdir -p "$(/usr/bin/dirname "$config_path")"
+  tmp_path="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/openclaw-ui-smoke-backend-config.XXXXXX")"
+
+  # Match the packaged consumer seeded-defaults shape, but write it into the
+  # isolated smoke config because the debug wrapper has no Resources bundle.
+  # Preserve unrelated config and overwrite only build-owned backend auth so a
+  # stale empty/invalid activation seed cannot make the app look disabled.
+  if [[ -f "$config_path" ]]; then
+    /usr/bin/jq \
+      --arg baseUrl "$BACKEND_BASE_URL" \
+      --arg accessToken "$BACKEND_API_TOKEN" \
+      '
+      def object_or_empty: if type == "object" then . else {} end;
+      object_or_empty
+      | .jarvis = (
+          (.jarvis // {} | object_or_empty)
+          | .backend = (
+              (.backend // {} | object_or_empty)
+              | .baseUrl = $baseUrl
+              | .accessToken = $accessToken
+            )
+          | .managedServices = (
+              (.managedServices // {} | object_or_empty)
+              | .mode = "managed"
+            )
+        )
+      ' "$config_path" >"$tmp_path"
+  else
+    /usr/bin/jq \
+      --null-input \
+      --arg baseUrl "$BACKEND_BASE_URL" \
+      --arg accessToken "$BACKEND_API_TOKEN" \
+      '{
+        jarvis: {
+          backend: {
+            baseUrl: $baseUrl,
+            accessToken: $accessToken
+          },
+          managedServices: {
+            mode: "managed"
+          }
+        }
+      }' >"$tmp_path"
+  fi
+
+  /bin/chmod 600 "$tmp_path"
+  /bin/mv "$tmp_path" "$config_path"
+  echo "backend_config_seeded=true"
 }
 
 cleanup_ui_smoke_artifacts() {
@@ -729,6 +793,7 @@ fi
 
 /bin/mkdir -p "$STATE_DIR" "$LOGS_DIR"
 resolve_backend_api_token
+seed_jarvis_backend_config "$CONFIG_PATH"
 
 if [[ "$BUILD_APP" == "1" ]]; then
   ensure_cli_build_output
