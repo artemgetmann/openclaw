@@ -71,6 +71,7 @@ describe("runMemoryFlushIfNeeded", () => {
       inputTokens: 500_000,
       contextTokens: 200_000,
       compactionCount: 0,
+      memoryFlushCompactionCount: 0,
       cliSessionIds: {
         "openai-codex": "oversized-codex-session",
       },
