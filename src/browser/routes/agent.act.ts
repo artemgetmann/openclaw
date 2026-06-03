@@ -1151,13 +1151,10 @@ export function registerBrowserAgentActRoutes(
                   "existing-session scrollIntoView does not support selector targeting yet; use ref.",
                 );
               }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session scrollIntoView does not support timeoutMs overrides.",
-                );
-              }
+              // The existing-session scroll path is a direct in-page
+              // scrollIntoView call. Chrome MCP has no separate scroll wait to
+              // tune, so ignore generic timeout overrides and perform the
+              // deterministic scroll instead of hard-failing.
               await evaluateChromeMcpScript({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,

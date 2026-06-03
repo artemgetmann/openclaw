@@ -130,6 +130,16 @@ function getActPostHandler() {
   return handler;
 }
 
+function getDialogHookPostHandler() {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentActRoutes(app, {
+    state: () => ({ resolved: { evaluateEnabled: true } }),
+  } as never);
+  const handler = postHandlers.get("/hooks/dialog");
+  expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
 describe("existing-session browser routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
@@ -379,6 +389,32 @@ describe("existing-session browser routes", () => {
     });
   });
 
+  it("normalizes existing-session dialog timeoutMs instead of hard-failing", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+    const handler = getDialogHookPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { accept: true, promptText: "Ada", timeoutMs: 9_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true });
+    expect(JSON.stringify(response.body)).not.toContain(
+      "existing-session dialog handling does not support timeoutMs",
+    );
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("__openclawDialogHook"),
+    });
+  });
+
   it("fills selector-only fields for existing-session profiles via evaluate fallback", async () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue(true as never);
@@ -550,6 +586,33 @@ describe("existing-session browser routes", () => {
       targetId: "7",
       key: "Enter",
       timeoutMs: 8_000,
+    });
+  });
+
+  it("normalizes existing-session scrollIntoView timeoutMs instead of hard-failing", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "scrollIntoView", ref: "section-1", timeoutMs: 8_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(JSON.stringify(response.body)).not.toContain(
+      "existing-session scrollIntoView does not support timeoutMs overrides",
+    );
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("scrollIntoView"),
+      args: ["section-1"],
     });
   });
 });
