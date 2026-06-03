@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { clearCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -30,6 +31,7 @@ import {
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { evaluateCliHardReservePrecheck } from "./agent-runner-cli-preflight.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
@@ -339,11 +341,17 @@ export async function runReplyAgent(params: {
     failureLabel: string;
     buildLogMessage: (nextSessionId: string) => string;
     cleanupTranscripts?: boolean;
+    clearTokenUsage?: boolean;
+    clearCliProvider?: string;
+    incrementCompactionCount?: boolean;
   };
   const resetSession = async ({
     failureLabel,
     buildLogMessage,
     cleanupTranscripts,
+    clearTokenUsage,
+    clearCliProvider,
+    incrementCompactionCount,
   }: SessionResetOptions): Promise<boolean> => {
     if (!sessionKey || !activeSessionStore || !storePath) {
       return false;
@@ -354,6 +362,9 @@ export async function runReplyAgent(params: {
     }
     const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
     const nextSessionId = generateSecureUuid();
+    const nextCompactionCount = incrementCompactionCount
+      ? (prevEntry.compactionCount ?? 0) + 1
+      : undefined;
     const nextEntry: SessionEntry = {
       ...prevEntry,
       sessionId: nextSessionId,
@@ -364,10 +375,27 @@ export async function runReplyAgent(params: {
       model: undefined,
       contextTokens: undefined,
       systemPromptReport: undefined,
+      ...(incrementCompactionCount ? { compactionCount: nextCompactionCount } : {}),
+      ...(clearTokenUsage
+        ? {
+            totalTokens: undefined,
+            totalTokensFresh: false,
+            inputTokens: undefined,
+            outputTokens: undefined,
+            cacheRead: undefined,
+            cacheWrite: undefined,
+            memoryFlushCompactionCount: undefined,
+            contextPressureNoticeAt: undefined,
+            contextPressureNoticeCompactionCount: undefined,
+          }
+        : {}),
       fallbackNoticeSelectedModel: undefined,
       fallbackNoticeActiveModel: undefined,
       fallbackNoticeReason: undefined,
     };
+    if (clearCliProvider) {
+      clearCliSessionId(nextEntry, clearCliProvider);
+    }
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const nextSessionFile = resolveSessionTranscriptPath(
       nextSessionId,
@@ -424,10 +452,59 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
+  const resetCliSessionBeforeHardReservePrompt = async (prompt: string): Promise<void> => {
+    if (!isCliProvider(followupRun.run.provider, cfg)) {
+      return;
+    }
+    const persistedPromptTokens = followupRun.run.persistedPromptTokens;
+    if (
+      typeof persistedPromptTokens !== "number" ||
+      !Number.isFinite(persistedPromptTokens) ||
+      persistedPromptTokens <= 0
+    ) {
+      return;
+    }
+    const contextTokenBudget =
+      agentCfgContextTokens ??
+      activeSessionEntry?.contextTokens ??
+      lookupContextTokens(followupRun.run.model) ??
+      DEFAULT_CONTEXT_TOKENS;
+    const precheck = evaluateCliHardReservePrecheck({
+      provider: followupRun.run.provider,
+      modelId: followupRun.run.model,
+      cfg,
+      prompt,
+      persistedPromptTokens,
+      contextTokenBudget,
+      sessionKey,
+      sessionId: followupRun.run.sessionId,
+      sessionFile: followupRun.run.sessionFile,
+    });
+    if (!precheck) {
+      return;
+    }
+    // CLI backends do not enter the embedded attempt path, so they cannot use
+    // the SDK/session compaction precheck. Treat the hard-reserve breach as a
+    // local session boundary before provider submission and continue the user
+    // prompt on a fresh runtime session.
+    defaultRuntime.log(precheck.logLine);
+    const didReset = await resetSession({
+      failureLabel: "cli hard-reserve preflight",
+      buildLogMessage: (nextSessionId) =>
+        `CLI pre-prompt context precheck reset ${sessionKey} -> ${nextSessionId} before provider submission.`,
+      clearTokenUsage: true,
+      clearCliProvider: followupRun.run.provider,
+      incrementCompactionCount: true,
+    });
+    if (didReset) {
+      followupRun.run.persistedPromptTokens = undefined;
+    }
+  };
   let stopReplyRunWatchdog = () => {};
   try {
     const runStartedAt = Date.now();
     const runSingleTurn = async (prompt: string) => {
+      await resetCliSessionBeforeHardReservePrompt(prompt);
       stopReplyRunWatchdog = startReplyRunWatchdog({
         cfg,
         enabled:
