@@ -163,6 +163,71 @@ struct JarvisAccountActivationTests {
         #expect((providers["other-provider"] as? [String: Any])?["source"] as? String == "env")
     }
 
+    @Test func `activation model defaults bypass stale gateway config snapshot`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("jarvis-activation-local-config-\(UUID().uuidString)")
+        let tokenStore = MockAccountTokenStore()
+
+        await TestIsolation.withIsolatedState(env: [
+            "OPENCLAW_STATE_DIR": stateDir.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "jarvis": [
+                    "backend": [
+                        "baseUrl": "https://jarvis.example.test",
+                        "accessToken": "fresh-local-token",
+                    ],
+                ],
+            ])
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: {
+                    [
+                        "jarvis": [
+                            "backend": [
+                                "baseUrl": "https://jarvis.example.test",
+                                "accessToken": "stale-gateway-token",
+                            ],
+                        ],
+                    ]
+                }))
+
+            let model = JarvisAccountActivationModel(
+                email: "user@example.com",
+                tokenStore: tokenStore,
+                makeClient: { root in
+                    let backend = try #require(
+                        (root["jarvis"] as? [String: Any])?["backend"] as? [String: Any])
+                    #expect(backend["accessToken"] as? String == "fresh-local-token")
+                    return JarvisAccountActivationClient(
+                        configuration: .init(
+                            baseURL: try #require(URL(string: "https://jarvis.example.test")),
+                            backendAccessToken: "fresh-local-token"),
+                        transport: { request in
+                            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fresh-local-token")
+                            return try Self.httpResponse(
+                                url: #require(request.url),
+                                statusCode: 200,
+                                body: """
+                                {
+                                  "accountId": "acct_123",
+                                  "email": "user@example.com",
+                                  "accountAccessToken": "jat_secret",
+                                  "license": "beta"
+                                }
+                                """)
+                        })
+                })
+
+            await model.activate()
+
+            await ConfigStore._testClearOverrides()
+            try? FileManager().removeItem(at: stateDir)
+            #expect(model.isActivated)
+            #expect(tokenStore.loadAccountAccessToken() == "jat_secret")
+        }
+    }
+
     @Test func `managed bot configuration resolves account token from activation storage`() throws {
         let configuration = try JarvisTelegramManagedBotClient.resolveConfiguration(
             root: [

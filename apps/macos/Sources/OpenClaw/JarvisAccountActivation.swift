@@ -403,9 +403,15 @@ final class JarvisAccountActivationModel {
         email: String = "",
         state: State = .idle,
         tokenStore: JarvisAccountAccessTokenStoring = JarvisAccountActivationKeychainStore.shared,
-        loadConfig: @escaping @MainActor @Sendable () async -> [String: Any] = { await ConfigStore.load() },
+        loadConfig: @escaping @MainActor @Sendable () async -> [String: Any] = {
+            OpenClawConfigFile.loadDict()
+        },
         saveConfig: @escaping @MainActor @Sendable ([String: Any]) async throws -> Void = { root in
-            try await ConfigStore.save(root)
+            // Account activation owns app-local Jarvis credentials. Do not
+            // route through ConfigStore here: in local mode it prefers a live
+            // gateway snapshot, which can lag behind the bundled seed/config
+            // during first-run onboarding and make Retry reuse a stale token.
+            OpenClawConfigFile.saveDict(root)
         },
         makeClient: @escaping @MainActor @Sendable ([String: Any]) throws -> JarvisAccountActivationClient = { root in
             try JarvisAccountActivationClient(configuration: JarvisAccountActivationClient.resolveConfiguration(root: root))
