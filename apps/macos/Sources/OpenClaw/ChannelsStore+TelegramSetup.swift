@@ -134,12 +134,13 @@ extension ChannelsStore {
             }
             // Managed approval gives us a dedicated child bot token. Persist it
             // as an enabled polling provider immediately so the packaged
-            // runtime has an active Telegram surface after reload. Sender trust
-            // is still locked down by allowlist + an empty allowFrom until the
-            // first-task verifier captures or recovers the real user id.
+            // runtime has an active Telegram surface after reload. Keep DM
+            // access in pairing mode until the first-task verifier captures or
+            // recovers the real user id; allowlist with an empty allowFrom is
+            // schema-invalid and prevents the runtime from loading Telegram.
             _ = try await self.applyTelegramSetupBootstrap(
                 token: token,
-                dmPolicy: "allowlist",
+                dmPolicy: "pairing",
                 allowFrom: nil,
                 enabled: true)
             self.primeConsumerTelegramFirstTaskBaselineIfNeeded()

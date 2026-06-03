@@ -525,7 +525,7 @@ struct TelegramSetupBootstrapTests {
             #expect(telegram["botToken"] as? String == "777000:test-child-token")
             #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
             #expect(telegram["enabled"] as? Bool == true)
-            #expect(telegram["dmPolicy"] as? String == "allowlist")
+            #expect(telegram["dmPolicy"] as? String == "pairing")
             #expect((telegram["allowFrom"] as? [String])?.isEmpty ?? true)
             #expect(plugins["allow"] as? [String] == [
                 "telegram",
