@@ -31,7 +31,7 @@ import {
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { evaluateCliHardReservePrecheck } from "./agent-runner-cli-preflight.js";
+import { evaluateReplyHardReservePrecheck } from "./agent-runner-cli-preflight.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
@@ -306,36 +306,6 @@ export async function runReplyAgent(params: {
     maxWallClockMs: timeoutContinuationConfig.maxWallClockMs,
   });
 
-  await typingSignals.signalRunStart();
-
-  activeSessionEntry = await runMemoryFlushIfNeeded({
-    cfg,
-    followupRun,
-    promptForEstimate: followupRun.prompt,
-    sessionCtx,
-    opts: runOpts,
-    defaultModel,
-    agentCfgContextTokens,
-    resolvedVerboseLevel,
-    sessionEntry: activeSessionEntry,
-    sessionStore: activeSessionStore,
-    sessionKey,
-    storePath,
-    isHeartbeat,
-  });
-
-  const runFollowupTurn = createFollowupRunner({
-    opts: runOpts,
-    typing,
-    typingMode,
-    sessionEntry: activeSessionEntry,
-    sessionStore: activeSessionStore,
-    sessionKey,
-    storePath,
-    defaultModel,
-    agentCfgContextTokens,
-  });
-
   let responseUsageLine: string | undefined;
   type SessionResetOptions = {
     failureLabel: string;
@@ -452,10 +422,7 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
-  const resetCliSessionBeforeHardReservePrompt = async (prompt: string): Promise<void> => {
-    if (!isCliProvider(followupRun.run.provider, cfg)) {
-      return;
-    }
+  const resetSessionBeforeHardReservePrompt = async (prompt: string): Promise<void> => {
     const persistedPromptTokens = followupRun.run.persistedPromptTokens;
     if (
       typeof persistedPromptTokens !== "number" ||
@@ -469,7 +436,7 @@ export async function runReplyAgent(params: {
       activeSessionEntry?.contextTokens ??
       lookupContextTokens(followupRun.run.model) ??
       DEFAULT_CONTEXT_TOKENS;
-    const precheck = evaluateCliHardReservePrecheck({
+    const precheck = evaluateReplyHardReservePrecheck({
       provider: followupRun.run.provider,
       modelId: followupRun.run.model,
       cfg,
@@ -483,28 +450,63 @@ export async function runReplyAgent(params: {
     if (!precheck) {
       return;
     }
-    // CLI backends do not enter the embedded attempt path, so they cannot use
-    // the SDK/session compaction precheck. Treat the hard-reserve breach as a
-    // local session boundary before provider submission and continue the user
-    // prompt on a fresh runtime session.
+    // A persisted hard-reserve breach means the next prompt has already lost
+    // the configured headroom. Reset the OpenClaw session before memory flush
+    // or provider submission so no runtime path can spend another over-budget
+    // call trying to repair stale context.
     defaultRuntime.log(precheck.logLine);
+    const clearCliProvider = isCliProvider(followupRun.run.provider, cfg)
+      ? followupRun.run.provider
+      : undefined;
     const didReset = await resetSession({
-      failureLabel: "cli hard-reserve preflight",
+      failureLabel: "hard-reserve preflight",
       buildLogMessage: (nextSessionId) =>
-        `CLI pre-prompt context precheck reset ${sessionKey} -> ${nextSessionId} before provider submission.`,
+        `Pre-prompt context precheck reset ${sessionKey} -> ${nextSessionId} before provider submission.`,
       clearTokenUsage: true,
-      clearCliProvider: followupRun.run.provider,
+      ...(clearCliProvider ? { clearCliProvider } : {}),
       incrementCompactionCount: true,
     });
     if (didReset) {
       followupRun.run.persistedPromptTokens = undefined;
     }
   };
+
+  await typingSignals.signalRunStart();
+  await resetSessionBeforeHardReservePrompt(followupRun.prompt);
+
+  activeSessionEntry = await runMemoryFlushIfNeeded({
+    cfg,
+    followupRun,
+    promptForEstimate: followupRun.prompt,
+    sessionCtx,
+    opts: runOpts,
+    defaultModel,
+    agentCfgContextTokens,
+    resolvedVerboseLevel,
+    sessionEntry: activeSessionEntry,
+    sessionStore: activeSessionStore,
+    sessionKey,
+    storePath,
+    isHeartbeat,
+  });
+
+  const runFollowupTurn = createFollowupRunner({
+    opts: runOpts,
+    typing,
+    typingMode,
+    sessionEntry: activeSessionEntry,
+    sessionStore: activeSessionStore,
+    sessionKey,
+    storePath,
+    defaultModel,
+    agentCfgContextTokens,
+  });
+
   let stopReplyRunWatchdog = () => {};
   try {
     const runStartedAt = Date.now();
     const runSingleTurn = async (prompt: string) => {
-      await resetCliSessionBeforeHardReservePrompt(prompt);
+      await resetSessionBeforeHardReservePrompt(prompt);
       stopReplyRunWatchdog = startReplyRunWatchdog({
         cfg,
         enabled:

@@ -1,4 +1,3 @@
-import { isCliProvider } from "../../agents/model-selection.js";
 import {
   formatPrePromptPrecheckLog,
   resolvePrePromptReserveTokens,
@@ -7,12 +6,12 @@ import {
 } from "../../agents/pi-embedded-runner/run/preemptive-compaction.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
-export type CliHardReservePrecheckResult = {
+export type ReplyHardReservePrecheckResult = {
   decision: PreemptiveCompactionDecision;
   logLine: string;
 };
 
-export function evaluateCliHardReservePrecheck(params: {
+export function evaluateReplyHardReservePrecheck(params: {
   provider: string;
   modelId: string;
   cfg: OpenClawConfig;
@@ -22,10 +21,7 @@ export function evaluateCliHardReservePrecheck(params: {
   sessionKey?: string;
   sessionId?: string;
   sessionFile?: string;
-}): CliHardReservePrecheckResult | null {
-  if (!isCliProvider(params.provider, params.cfg)) {
-    return null;
-  }
+}): ReplyHardReservePrecheckResult | null {
   const persistedPromptTokens = params.persistedPromptTokens;
   if (
     typeof persistedPromptTokens !== "number" ||

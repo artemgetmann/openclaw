@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { evaluateCliHardReservePrecheck } from "./agent-runner-cli-preflight.js";
+import { evaluateReplyHardReservePrecheck } from "./agent-runner-cli-preflight.js";
 
-describe("evaluateCliHardReservePrecheck", () => {
-  it("requests a CLI session reset when persisted prompt tokens breach the reserve", () => {
-    const result = evaluateCliHardReservePrecheck({
-      provider: "claude-cli",
+describe("evaluateReplyHardReservePrecheck", () => {
+  it("requests a session reset when persisted prompt tokens breach the reserve", () => {
+    const result = evaluateReplyHardReservePrecheck({
+      provider: "openai-codex",
       modelId: "opus-4.5",
       cfg: { agents: { defaults: { compaction: { reserveTokensFloor: 20_000 } } } },
       prompt: "hello",
@@ -22,14 +22,14 @@ describe("evaluateCliHardReservePrecheck", () => {
     expect(result?.logLine).toContain("persistedPromptTokens=202908");
   });
 
-  it("does not trigger for non-CLI providers", () => {
+  it("does not trigger without reliable persisted prompt tokens", () => {
     expect(
-      evaluateCliHardReservePrecheck({
+      evaluateReplyHardReservePrecheck({
         provider: "openai",
         modelId: "gpt-5.5",
         cfg: {},
         prompt: "hello",
-        persistedPromptTokens: 202_908,
+        persistedPromptTokens: undefined,
         contextTokenBudget: 200_000,
       }),
     ).toBeNull();
@@ -37,7 +37,7 @@ describe("evaluateCliHardReservePrecheck", () => {
 
   it("does not trigger below the reserve-adjusted budget", () => {
     expect(
-      evaluateCliHardReservePrecheck({
+      evaluateReplyHardReservePrecheck({
         provider: "claude-cli",
         modelId: "opus-4.5",
         cfg: { agents: { defaults: { compaction: { reserveTokensFloor: 20_000 } } } },
