@@ -18,7 +18,9 @@ import {
   setChromeMcpLiveChromeLauncherForTest,
   setChromeMcpProcessCommandsForTest,
   setChromeMcpProfileDirectoryForTest,
+  setChromeMcpScreenshotFallbackForTest,
   setChromeMcpSessionFactoryForTest,
+  takeChromeMcpScreenshot,
 } from "./chrome-mcp.js";
 
 type ToolCall = {
@@ -114,6 +116,7 @@ function createFakeSession(): ChromeMcpSession {
 describe("chrome MCP page parsing", () => {
   beforeEach(async () => {
     await resetChromeMcpSessionsForTest();
+    setChromeMcpScreenshotFallbackForTest(null);
   });
 
   it("parses list_pages text responses when structuredContent is missing", async () => {
@@ -626,6 +629,95 @@ describe("chrome MCP page parsing", () => {
       undefined,
       expect.objectContaining({ timeout: 18_000 }),
     );
+  });
+
+  it("reads Chrome MCP screenshots from the requested output file", async () => {
+    const { session, callTool } = createFakeSessionBundle();
+    callTool.mockImplementation(async ({ name, arguments: args }: ToolCall) => {
+      if (name === "take_screenshot") {
+        const filePath = args?.filePath;
+        if (typeof filePath !== "string") {
+          throw new Error("missing filePath");
+        }
+        await fs.writeFile(filePath, Buffer.from("png-bytes"));
+        return { content: [{ type: "text", text: "ok" }] };
+      }
+      throw new Error(`unexpected tool ${name}`);
+    });
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const screenshot = await takeChromeMcpScreenshot({
+      profileName: "chrome-live",
+      targetId: "1",
+      format: "png",
+    });
+
+    expect(screenshot).toEqual(Buffer.from("png-bytes"));
+    expect(callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "take_screenshot",
+        arguments: expect.objectContaining({
+          filePath: expect.any(String),
+          format: "png",
+          pageId: 1,
+        }),
+      }),
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it("fails clearly when Chrome MCP does not create the screenshot output file", async () => {
+    const { session, callTool } = createFakeSessionBundle();
+    callTool.mockImplementation(async ({ name }: ToolCall) => {
+      if (name === "take_screenshot") {
+        return { content: [{ type: "text", text: "ok" }] };
+      }
+      throw new Error(`unexpected tool ${name}`);
+    });
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      takeChromeMcpScreenshot({
+        profileName: "chrome-live",
+        targetId: "1",
+        uid: "btn-1",
+        format: "jpeg",
+      }),
+    ).rejects.toThrow(
+      /Chrome MCP screenshot output file was not created.*profile=chrome-live.*targetId=1.*format=jpeg.*target=ref/,
+    );
+  });
+
+  it("falls back to direct page capture when Chrome MCP omits the output file", async () => {
+    const { session, callTool } = createFakeSessionBundle();
+    callTool.mockImplementation(async ({ name }: ToolCall) => {
+      if (name === "take_screenshot") {
+        return { content: [{ type: "text", text: "ok" }] };
+      }
+      throw new Error(`unexpected tool ${name}`);
+    });
+    const fallback = vi.fn(async () => Buffer.from("direct-cdp-png"));
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+    setChromeMcpScreenshotFallbackForTest(fallback);
+
+    const screenshot = await takeChromeMcpScreenshot({
+      profileName: "chrome-live",
+      targetId: "1",
+      format: "png",
+    });
+
+    expect(screenshot).toEqual(Buffer.from("direct-cdp-png"));
+    expect(fallback).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      userDataDir: undefined,
+      targetId: "1",
+      fullPage: undefined,
+      format: "png",
+    });
   });
 
   it("surfaces MCP tool errors instead of JSON parse noise", async () => {

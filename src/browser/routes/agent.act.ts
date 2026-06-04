@@ -344,15 +344,11 @@ function buildExistingSessionChooseOptionScript(params: {
       const className = String(el.className || "");
       return el.getAttribute("aria-disabled") === "true" || el.hasAttribute("disabled") || /\\b(disabled|ant-select-item-option-disabled)\\b/i.test(className);
     };
-    const matchTexts = [optionText];
-    if (matchMode === "contains" && queryText && queryText.toLowerCase() !== optionText.toLowerCase()) {
-      matchTexts.push(queryText);
-    }
     const matches = (text) => {
       const actual = normalize(text);
       if (!optionText) return false;
       if (matchMode === "exact") return actual === optionText || actual.toLowerCase() === optionText.toLowerCase();
-      if (matchMode === "contains") return matchTexts.some((expected) => actual.toLowerCase().includes(expected.toLowerCase()));
+      if (matchMode === "contains") return actual.toLowerCase().includes(optionText.toLowerCase());
       try {
         return new RegExp(optionText, "i").test(actual);
       } catch {
@@ -418,6 +414,59 @@ function buildExistingSessionChooseOptionScript(params: {
     };
     tick();
   })`;
+}
+
+function normalizeChooseOptionText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function matchesChooseOptionText(params: {
+  matchedText: string;
+  optionText: string;
+  matchMode: "exact" | "contains" | "regex";
+}): boolean {
+  const matchedText = normalizeChooseOptionText(params.matchedText);
+  const optionText = normalizeChooseOptionText(params.optionText);
+  if (!optionText) {
+    return false;
+  }
+  if (params.matchMode === "exact") {
+    return matchedText === optionText || matchedText.toLowerCase() === optionText.toLowerCase();
+  }
+  if (params.matchMode === "contains") {
+    return matchedText.toLowerCase().includes(optionText.toLowerCase());
+  }
+  try {
+    return new RegExp(optionText, "i").test(matchedText);
+  } catch {
+    return false;
+  }
+}
+
+function validateExistingSessionChooseOptionResult(params: {
+  result: unknown;
+  optionText: string;
+  matchMode: "exact" | "contains" | "regex";
+}): string | null {
+  if (!params.result || typeof params.result !== "object" || Array.isArray(params.result)) {
+    return "chooseOption did not return a structured result with matchedText";
+  }
+  const matchedText = (params.result as { matchedText?: unknown }).matchedText;
+  if (typeof matchedText !== "string" || !matchedText.trim()) {
+    return "chooseOption did not return matchedText, so the selected option cannot be verified";
+  }
+  if (
+    !matchesChooseOptionText({
+      matchedText,
+      optionText: params.optionText,
+      matchMode: params.matchMode,
+    })
+  ) {
+    return `chooseOption matched "${normalizeChooseOptionText(matchedText)}", but optionText was "${normalizeChooseOptionText(
+      params.optionText,
+    )}"`;
+  }
+  return null;
 }
 
 const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
@@ -1310,6 +1359,14 @@ export function registerBrowserAgentActRoutes(
                 args: ref && !selector ? [ref] : undefined,
                 timeoutMs: timeoutMs ?? undefined,
               });
+              const resultError = validateExistingSessionChooseOptionResult({
+                result,
+                optionText,
+                matchMode: match,
+              });
+              if (resultError) {
+                return jsonError(res, 400, resultError);
+              }
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url, result });
             }
             const pw = await requirePwAi(res, `act:${kind}`);

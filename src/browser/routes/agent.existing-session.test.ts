@@ -362,6 +362,48 @@ describe("existing-session browser routes", () => {
       args: ["combo-to"],
       timeoutMs: 14_000,
     });
+    const script = chromeMcpMocks.evaluateChromeMcpScript.mock.calls[0]?.[0].fn;
+    expect(script).toContain("setValue(editable, queryText)");
+    expect(script).not.toContain("matchTexts");
+    expect(script).not.toContain("matchTexts.push(queryText)");
+  });
+
+  it("rejects existing-session chooseOption when query matches the wrong visible option", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce({
+      optionText: "Kuala Lumpur (KUL)",
+      matchedText: "Bengkulu (BKS)",
+      selectedText: "Bengkulu (BKS)",
+      changed: true,
+    } as never);
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "chooseOption",
+          ref: "combo-to",
+          optionText: "Kuala Lumpur (KUL)",
+          query: "KUL",
+          match: "contains",
+          timeoutMs: 14_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({
+      error: expect.stringContaining('chooseOption matched "Bengkulu (BKS)"'),
+    });
+    expect(response.body).not.toMatchObject({ ok: true });
+    const script = chromeMcpMocks.evaluateChromeMcpScript.mock.calls[0]?.[0].fn;
+    expect(script).toContain("setValue(editable, queryText)");
+    expect(script).not.toContain("matchTexts");
+    expect(script).not.toContain("matchTexts.push(queryText)");
   });
 
   it("passes timeout overrides through existing-session evaluate", async () => {
@@ -509,7 +551,9 @@ describe("existing-session browser routes", () => {
 
   it("passes only real element refs as evaluate_script args for chooseOption", async () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
-    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce({ matchedText: "Kuala Lumpur" });
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce({
+      matchedText: "Kuala Lumpur",
+    } as never);
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();
     await handler?.(
