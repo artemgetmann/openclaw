@@ -792,6 +792,28 @@ describe("browser tool act compatibility", () => {
     );
   });
 
+  it("preserves legacy flattened target aliases for act requests", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      kind: "click",
+      inputRef: "button-1",
+      element: "button[type='submit']",
+      targetId: "tab-1",
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        kind: "click",
+        inputRef: "button-1",
+        element: "button[type='submit']",
+        targetId: "tab-1",
+      }),
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+
   it("prefers request payload when both request and flattened fields are present", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", {
