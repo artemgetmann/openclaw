@@ -164,6 +164,9 @@ are useful for speed, but they must not be the only path for `CI / pr-required`
 or `Workflow Sanity / actionlint`; if that pool stalls, merge safety becomes a
 deadlock instead of a gate.
 
+CI concurrency is scoped by commit SHA so a stale queued run cannot hold the PR's
+merge gate hostage after a new commit is pushed.
+
 ## Local Equivalents
 
 ```bash
