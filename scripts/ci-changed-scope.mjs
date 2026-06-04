@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
-/** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runCiScopeTests: boolean }} ChangedScope */
+/** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runCiScopeTests: boolean; runBrowserAgent: boolean }} ChangedScope */
 
 const DOCS_PATH_RE = /^(docs\/|.*\.mdx?$)/;
 const SKILLS_PYTHON_SCOPE_RE = /^skills\//;
@@ -10,6 +10,8 @@ const CI_SCOPE_TEST_RE =
   /^(scripts\/ci-changed-scope\.mjs|src\/scripts\/ci-changed-scope\.test\.ts)$/;
 const MACOS_PROTOCOL_GEN_RE =
   /^(apps\/macos\/Sources\/OpenClawProtocol\/|apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\/)/;
+const BROWSER_AGENT_SCOPE_RE =
+  /^(src\/browser\/|src\/agents\/tools\/browser-tool\.(ts|schema\.ts|test\.ts)$|docs\/agent-guides\/browser-agent-e2e\.md$)/;
 const MACOS_NATIVE_RE = /^(apps\/macos\/|apps\/ios\/|apps\/shared\/|Swabble\/)/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
@@ -32,8 +34,35 @@ export function detectChangedScope(changedPaths) {
       runWindows: true,
       runSkillsPython: true,
       runCiScopeTests: true,
+      runBrowserAgent: false,
     };
   }
+
+  const normalizedPaths = changedPaths.map((rawPath) => String(rawPath).trim()).filter(Boolean);
+  if (normalizedPaths.length === 0) {
+    return {
+      runNode: true,
+      runMacos: true,
+      runAndroid: true,
+      runWindows: true,
+      runSkillsPython: true,
+      runCiScopeTests: true,
+      runBrowserAgent: false,
+    };
+  }
+
+  const browserAgentCandidatePaths = normalizedPaths.filter((path) => !DOCS_PATH_RE.test(path));
+  // Browser-agent changes need focused product proof, but only when every
+  // meaningful non-doc path is either in the browser-agent surface or generated
+  // protocol output that `pnpm protocol:check` validates inside that focused job.
+  const hasBrowserAgentPath = browserAgentCandidatePaths.some((path) =>
+    BROWSER_AGENT_SCOPE_RE.test(path),
+  );
+  const runBrowserAgent =
+    hasBrowserAgentPath &&
+    browserAgentCandidatePaths.every(
+      (path) => BROWSER_AGENT_SCOPE_RE.test(path) || MACOS_PROTOCOL_GEN_RE.test(path),
+    );
 
   let runNode = false;
   let runMacos = false;
@@ -60,6 +89,13 @@ export function detectChangedScope(changedPaths) {
       continue;
     }
 
+    if (
+      runBrowserAgent &&
+      (BROWSER_AGENT_SCOPE_RE.test(path) || MACOS_PROTOCOL_GEN_RE.test(path))
+    ) {
+      continue;
+    }
+
     if (CI_SCOPE_TEST_RE.test(path)) {
       // Changes to this router need focused proof of the router itself. Running
       // unrelated product lanes here makes CI governance PRs depend on product debt.
@@ -67,11 +103,15 @@ export function detectChangedScope(changedPaths) {
       continue;
     }
 
+    if (MACOS_PROTOCOL_GEN_RE.test(path)) {
+      continue;
+    }
+
     if (SKILLS_PYTHON_SCOPE_RE.test(path)) {
       runSkillsPython = true;
     }
 
-    if (!MACOS_PROTOCOL_GEN_RE.test(path) && MACOS_NATIVE_RE.test(path)) {
+    if (MACOS_NATIVE_RE.test(path)) {
       runMacos = true;
     }
 
@@ -96,7 +136,15 @@ export function detectChangedScope(changedPaths) {
     runNode = true;
   }
 
-  return { runNode, runMacos, runAndroid, runWindows, runSkillsPython, runCiScopeTests };
+  return {
+    runNode,
+    runMacos,
+    runAndroid,
+    runWindows,
+    runSkillsPython,
+    runCiScopeTests,
+    runBrowserAgent,
+  };
 }
 
 /**
@@ -132,6 +180,7 @@ export function writeGitHubOutput(scope, outputPath = process.env.GITHUB_OUTPUT)
   appendFileSync(outputPath, `run_windows=${scope.runWindows}\n`, "utf8");
   appendFileSync(outputPath, `run_skills_python=${scope.runSkillsPython}\n`, "utf8");
   appendFileSync(outputPath, `run_ci_scope_tests=${scope.runCiScopeTests}\n`, "utf8");
+  appendFileSync(outputPath, `run_browser_agent=${scope.runBrowserAgent}\n`, "utf8");
 }
 
 function isDirectRun() {
@@ -168,6 +217,7 @@ if (isDirectRun()) {
         runWindows: true,
         runSkillsPython: true,
         runCiScopeTests: true,
+        runBrowserAgent: false,
       });
       process.exit(0);
     }
@@ -180,6 +230,7 @@ if (isDirectRun()) {
       runWindows: true,
       runSkillsPython: true,
       runCiScopeTests: true,
+      runBrowserAgent: false,
     });
   }
 }
