@@ -152,11 +152,17 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 
 ## Runners
 
-| Runner                           | Jobs                                       |
-| -------------------------------- | ------------------------------------------ |
-| `blacksmith-16vcpu-ubuntu-2404`  | Most Linux jobs, including scope detection |
-| `blacksmith-32vcpu-windows-2025` | `checks-windows`                           |
-| `macos-latest`                   | `macos`, `ios`                             |
+| Runner                          | Jobs                                             |
+| ------------------------------- | ------------------------------------------------ |
+| `ubuntu-latest`                 | CI Linux jobs and Workflow Sanity merge gates    |
+| `windows-latest`                | `checks-windows`                                 |
+| `macos-latest`                  | `macos`, `ios`                                   |
+| `blacksmith-16vcpu-ubuntu-2404` | Non-required label/install/sandbox smoke helpers |
+
+Critical PR merge gates should prefer GitHub-hosted runners. Custom runner pools
+are useful for speed, but they must not be the only path for `CI / pr-required`
+or `Workflow Sanity / actionlint`; if that pool stalls, merge safety becomes a
+deadlock instead of a gate.
 
 ## Local Equivalents
 
