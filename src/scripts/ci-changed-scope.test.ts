@@ -11,6 +11,7 @@ const { detectChangedScope, listChangedPaths } =
       runAndroid: boolean;
       runWindows: boolean;
       runSkillsPython: boolean;
+      runCiScopeTests: boolean;
     };
     listChangedPaths: (base: string, head?: string) => string[];
   };
@@ -34,6 +35,7 @@ describe("detectChangedScope", () => {
       runAndroid: true,
       runWindows: true,
       runSkillsPython: true,
+      runCiScopeTests: true,
     });
   });
 
@@ -44,6 +46,7 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
     });
   });
 
@@ -54,6 +57,7 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
+      runCiScopeTests: false,
     });
   });
 
@@ -64,6 +68,7 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
     });
     expect(detectChangedScope(["apps/shared/OpenClawKit/Sources/Foo.swift"])).toEqual({
       runNode: false,
@@ -71,6 +76,7 @@ describe("detectChangedScope", () => {
       runAndroid: true,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
     });
   });
 
@@ -82,6 +88,7 @@ describe("detectChangedScope", () => {
         runAndroid: false,
         runWindows: false,
         runSkillsPython: false,
+        runCiScopeTests: false,
       },
     );
   });
@@ -93,6 +100,7 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
     });
 
     expect(detectChangedScope(["assets/icon.png"])).toEqual({
@@ -101,6 +109,7 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
     });
   });
 
@@ -111,6 +120,7 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
     });
   });
 
@@ -121,6 +131,7 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: true,
+      runCiScopeTests: false,
     });
   });
 
@@ -131,6 +142,27 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
+    });
+  });
+
+  it("runs only focused scope tests for the CI scope detector", () => {
+    expect(detectChangedScope(["scripts/ci-changed-scope.mjs"])).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runCiScopeTests: true,
+    });
+
+    expect(detectChangedScope(["src/scripts/ci-changed-scope.test.ts"])).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runCiScopeTests: true,
     });
   });
 

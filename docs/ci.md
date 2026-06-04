@@ -61,6 +61,7 @@ relevant. Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by
 - Android changed: `CI / android (...)` blocks merge.
 - Windows-relevant files changed: `CI / checks-windows (...)` blocks merge.
 - Python skill scripts changed: `CI / skills-python` blocks merge.
+- CI scope detector changed: `CI / ci-scope-tests` blocks merge.
 - Workflow files changed: `Workflow Sanity / actionlint` and `CI / secrets`
   block merge; workflow-only edits do not fan out to product test lanes.
 - Sandbox image files changed: `Sandbox Common Smoke / sandbox-common-smoke`
@@ -126,6 +127,7 @@ state, not permission to change it.
 | `changed-scope`   | Detect which areas changed (node/macos/android/windows) | Non-doc changes                    |
 | `check`           | TypeScript types, lint, format                          | Non-docs, node changes             |
 | `check-docs`      | Markdown lint + broken link check                       | Docs changed                       |
+| `ci-scope-tests`  | Focused tests for CI scope routing                      | CI scope detector changes          |
 | `secrets`         | Detect leaked secrets                                   | Always                             |
 | `build-artifacts` | Build dist once, share with `release-check`             | Pushes to `main`, node changes     |
 | `release-check`   | Validate npm pack contents                              | Pushes to `main` after build       |
@@ -144,7 +146,7 @@ state, not permission to change it.
 Jobs are ordered so cheap checks fail before expensive ones run:
 
 1. `docs-scope` + `changed-scope` + `check` + `secrets` (parallel, cheap gates first)
-2. PRs: `checks` (Linux Node test split into 2 shards), `startup-memory`, `skills-python`, `checks-windows`, `macos`, `android`
+2. PRs: `ci-scope-tests`, `checks` (Linux Node test split into 2 shards), `startup-memory`, `skills-python`, `checks-windows`, `macos`, `android`
 3. PRs: `pr-required` validates that all jobs relevant to the detected scope passed
 4. Pushes to `main`: `build-artifacts` + `release-check` + Bun compat + `compat-node22`
 

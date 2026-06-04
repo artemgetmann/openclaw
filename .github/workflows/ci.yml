@@ -50,6 +50,7 @@ jobs:
       run_android: ${{ steps.scope.outputs.run_android }}
       run_skills_python: ${{ steps.scope.outputs.run_skills_python }}
       run_windows: ${{ steps.scope.outputs.run_windows }}
+      run_ci_scope_tests: ${{ steps.scope.outputs.run_ci_scope_tests }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -77,6 +78,25 @@ jobs:
           fi
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
+
+  ci-scope-tests:
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_ci_scope_tests == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Test CI scope detector
+        run: pnpm exec vitest run src/scripts/ci-changed-scope.test.ts
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
@@ -874,6 +894,7 @@ jobs:
       - check
       - startup-memory
       - check-docs
+      - ci-scope-tests
       - skills-python
       - secrets
       - checks-windows
@@ -924,6 +945,7 @@ jobs:
           const runAndroid = outputOf("changed-scope", "run_android") === "true";
           const runSkillsPython = outputOf("changed-scope", "run_skills_python") === "true";
           const runWindows = outputOf("changed-scope", "run_windows") === "true";
+          const runCiScopeTests = outputOf("changed-scope", "run_ci_scope_tests") === "true";
 
           // These jobs establish the scope and catch security-sensitive mistakes.
           // They are cheap enough to require on every PR.
@@ -939,6 +961,7 @@ jobs:
           }
 
           requireScopedSuccess("check-docs", docsChanged, "docs validation");
+          requireScopedSuccess("ci-scope-tests", !docsOnly && runCiScopeTests, "CI scope detector tests");
           requireScopedSuccess("check", !docsOnly && runNode, "types, lint, format, and strict build smoke");
           requireScopedSuccess("checks", !docsOnly && runNode, "Node tests, extensions, channels, and protocol checks");
           requireScopedSuccess("startup-memory", !docsOnly && runNode, "CLI startup memory regression check");
