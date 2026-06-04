@@ -154,7 +154,6 @@ async function buildToolDefinitions(params: {
           timeoutSec: agentExec?.timeoutSec ?? globalExec?.timeoutSec,
           approvalRunningNoticeMs:
             agentExec?.approvalRunningNoticeMs ?? globalExec?.approvalRunningNoticeMs,
-          cleanupMs: agentExec?.cleanupMs ?? globalExec?.cleanupMs,
           notifyOnExit: agentExec?.notifyOnExit ?? globalExec?.notifyOnExit,
           notifyOnExitEmptySuccess:
             agentExec?.notifyOnExitEmptySuccess ?? globalExec?.notifyOnExitEmptySuccess,

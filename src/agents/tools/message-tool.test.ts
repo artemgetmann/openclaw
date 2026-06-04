@@ -142,7 +142,12 @@ describe("message tool agent routing", () => {
     });
   });
 
-  it.each([
+  const sameTargetCases: Array<{
+    field: "target" | "to" | "channelId";
+    value: string;
+    currentChannelId?: string;
+    channel?: string;
+  }> = [
     { field: "target", value: "  telegram:123  " },
     { field: "to", value: "telegram:123" },
     { field: "channelId", value: "telegram:123" },
@@ -156,19 +161,11 @@ describe("message tool agent routing", () => {
       value: "telegram:123",
       channel: "telegram",
     },
-  ])(
+  ];
+
+  it.each(sameTargetCases)(
     "intercepts explicit same-target Telegram sends via $field",
-    async ({
-      field,
-      value,
-      currentChannelId,
-      channel,
-    }: {
-      field: "target" | "to" | "channelId";
-      value: string;
-      currentChannelId?: string;
-      channel?: string;
-    }) => {
+    async ({ field, value, currentChannelId, channel }) => {
       mockSendResult();
       const tool = createMessageTool({
         config: {} as never,

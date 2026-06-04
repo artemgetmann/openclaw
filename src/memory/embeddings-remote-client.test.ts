@@ -26,8 +26,10 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
       provider: "openai",
       defaultBaseUrl: "https://api.openai.com/v1",
       options: {
+        provider: "openai",
         model: "text-embedding-3-small",
         config: {},
+        fallback: "none",
       },
     });
 

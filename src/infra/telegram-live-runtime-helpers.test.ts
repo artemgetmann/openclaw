@@ -652,7 +652,12 @@ describe("telegram live runtime helpers", () => {
           "anthropic:default": { lastUsed: 2 },
         },
       },
-    });
+    }) as {
+      profiles: Record<string, unknown>;
+      order: Record<string, string[]>;
+      lastGood: Record<string, string>;
+      usageStats: Record<string, { lastUsed: number }>;
+    };
 
     expect(Object.keys(pruned.profiles)).toEqual(["openai-codex:default"]);
     expect(pruned.order).toEqual({ "openai-codex": ["openai-codex:default"] });

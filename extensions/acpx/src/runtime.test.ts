@@ -21,6 +21,7 @@ beforeAll(async () => {
       allowPluginLocalInstall: false,
       stripProviderAuthEnvVars: false,
       installCommand: "n/a",
+      installRoot: process.cwd(),
       cwd: process.cwd(),
       permissionMode: "approve-reads",
       nonInteractivePermissions: "fail",

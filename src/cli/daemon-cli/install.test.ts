@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConsumerRuntimeIdentity } from "../../consumer/runtime-identity.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import type { DaemonActionResponse } from "./response.js";
 
@@ -47,8 +49,8 @@ const service = vi.hoisted(() => ({
   uninstall: vi.fn(async () => {}),
   restart: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
-  readCommand: vi.fn(async () => null),
-  readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
+  readCommand: vi.fn(async (): Promise<GatewayServiceCommandConfig | null> => null),
+  readRuntime: vi.fn(async (): Promise<GatewayServiceRuntime> => ({ status: "stopped" })),
 }));
 
 vi.mock("../../config/config.js", () => ({

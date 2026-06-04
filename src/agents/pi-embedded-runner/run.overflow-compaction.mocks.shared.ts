@@ -198,7 +198,7 @@ export const mockedGetApiKeyForModel = vi.fn(async () => ({
   profileId: "test-profile",
   source: "test",
 }));
-export const mockedResolveAuthProfileOrder = vi.fn(() => []);
+export const mockedResolveAuthProfileOrder = vi.fn((): string[] => []);
 
 vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore: mockedEnsureAuthProfileStore,
