@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
-/** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean }} ChangedScope */
+/** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runCiScopeTests: boolean }} ChangedScope */
 
 const DOCS_PATH_RE = /^(docs\/|.*\.mdx?$)/;
 const SKILLS_PYTHON_SCOPE_RE = /^skills\//;
-const CI_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/ci\.yml$/;
+const GITHUB_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/.*\.ya?ml$/;
+const CI_SCOPE_TEST_RE =
+  /^(scripts\/ci-changed-scope\.mjs|src\/scripts\/ci-changed-scope\.test\.ts)$/;
 const MACOS_PROTOCOL_GEN_RE =
   /^(apps\/macos\/Sources\/OpenClawProtocol\/|apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\/)/;
 const MACOS_NATIVE_RE = /^(apps\/macos\/|apps\/ios\/|apps\/shared\/|Swabble\/)/;
@@ -29,6 +31,7 @@ export function detectChangedScope(changedPaths) {
       runAndroid: true,
       runWindows: true,
       runSkillsPython: true,
+      runCiScopeTests: true,
     };
   }
 
@@ -37,6 +40,7 @@ export function detectChangedScope(changedPaths) {
   let runAndroid = false;
   let runWindows = false;
   let runSkillsPython = false;
+  let runCiScopeTests = false;
   let hasNonDocs = false;
   let hasNonNativeNonDocs = false;
 
@@ -52,13 +56,18 @@ export function detectChangedScope(changedPaths) {
 
     hasNonDocs = true;
 
-    if (SKILLS_PYTHON_SCOPE_RE.test(path)) {
-      runSkillsPython = true;
+    if (GITHUB_WORKFLOW_SCOPE_RE.test(path)) {
+      continue;
     }
 
-    if (CI_WORKFLOW_SCOPE_RE.test(path)) {
-      runMacos = true;
-      runAndroid = true;
+    if (CI_SCOPE_TEST_RE.test(path)) {
+      // Changes to this router need focused proof of the router itself. Running
+      // unrelated product lanes here makes CI governance PRs depend on product debt.
+      runCiScopeTests = true;
+      continue;
+    }
+
+    if (SKILLS_PYTHON_SCOPE_RE.test(path)) {
       runSkillsPython = true;
     }
 
@@ -87,7 +96,7 @@ export function detectChangedScope(changedPaths) {
     runNode = true;
   }
 
-  return { runNode, runMacos, runAndroid, runWindows, runSkillsPython };
+  return { runNode, runMacos, runAndroid, runWindows, runSkillsPython, runCiScopeTests };
 }
 
 /**
@@ -122,6 +131,7 @@ export function writeGitHubOutput(scope, outputPath = process.env.GITHUB_OUTPUT)
   appendFileSync(outputPath, `run_android=${scope.runAndroid}\n`, "utf8");
   appendFileSync(outputPath, `run_windows=${scope.runWindows}\n`, "utf8");
   appendFileSync(outputPath, `run_skills_python=${scope.runSkillsPython}\n`, "utf8");
+  appendFileSync(outputPath, `run_ci_scope_tests=${scope.runCiScopeTests}\n`, "utf8");
 }
 
 function isDirectRun() {
@@ -157,6 +167,7 @@ if (isDirectRun()) {
         runAndroid: true,
         runWindows: true,
         runSkillsPython: true,
+        runCiScopeTests: true,
       });
       process.exit(0);
     }
@@ -168,6 +179,7 @@ if (isDirectRun()) {
       runAndroid: true,
       runWindows: true,
       runSkillsPython: true,
+      runCiScopeTests: true,
     });
   }
 }

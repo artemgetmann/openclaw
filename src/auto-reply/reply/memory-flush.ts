@@ -181,6 +181,7 @@ export function shouldRunMemoryFlush(params: {
   contextWindowTokens: number;
   reserveTokensFloor: number;
   softThresholdTokens: number;
+  ignoreAlreadyFlushed?: boolean;
 }): boolean {
   if (!params.entry) {
     return false;
@@ -207,7 +208,7 @@ export function shouldRunMemoryFlush(params: {
     return false;
   }
 
-  if (hasAlreadyFlushedForCurrentCompaction(params.entry)) {
+  if (!params.ignoreAlreadyFlushed && hasAlreadyFlushedForCurrentCompaction(params.entry)) {
     return false;
   }
 

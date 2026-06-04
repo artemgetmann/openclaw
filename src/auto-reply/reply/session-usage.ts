@@ -76,11 +76,16 @@ export async function persistSessionUsageUpdate(params: {
           // (tool-use loops, compaction retries), overstating actual context.
           // `lastCallUsage` reflects only the final API call — the true context.
           const usageForContext = params.lastCallUsage ?? (hasUsage ? params.usage : undefined);
+          // Last-call usage is the strongest current-context signal. Some CLI
+          // providers can report a stale/cumulative promptTokens value after a
+          // memory flush, so only use promptTokens when no last-call snapshot
+          // exists.
+          const promptTokensForContext = params.lastCallUsage ? undefined : params.promptTokens;
           const totalTokens = hasFreshContextSnapshot
             ? deriveSessionTotalTokens({
                 usage: usageForContext,
                 contextTokens: resolvedContextTokens,
-                promptTokens: params.promptTokens,
+                promptTokens: promptTokensForContext,
               })
             : undefined;
           const patch: Partial<SessionEntry> = {
