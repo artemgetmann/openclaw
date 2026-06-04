@@ -41,10 +41,6 @@ function createFailureAlertCron(params: {
   });
 }
 
-function createFailureAlertMock() {
-  return vi.fn<NonNullable<CronServiceParams["sendCronFailureAlert"]>>(async () => undefined);
-}
-
 describe("CronService failure alerts", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -61,7 +57,7 @@ describe("CronService failure alerts", () => {
 
   it("alerts after configured consecutive failures and honors cooldown", async () => {
     const store = await makeStorePath();
-    const sendCronFailureAlert = createFailureAlertMock();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
       error: "wrong model id",
@@ -123,7 +119,7 @@ describe("CronService failure alerts", () => {
 
   it("sends a sanitized first-failure alert for delivery-requested isolated agent jobs", async () => {
     const store = await makeStorePath();
-    const sendCronFailureAlert = createFailureAlertMock();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
       error: "raw stack / provider key / internal path",
@@ -159,9 +155,9 @@ describe("CronService failure alerts", () => {
         ),
       }),
     );
-    const firstFailureAlert = sendCronFailureAlert.mock.calls[0]?.[0];
-    expect(firstFailureAlert).toBeDefined();
-    expect(firstFailureAlert?.text).not.toContain("raw stack / provider key / internal path");
+    expect(sendCronFailureAlert.mock.calls[0][0].text).not.toContain(
+      "raw stack / provider key / internal path",
+    );
 
     await cron.run(job.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
@@ -173,8 +169,8 @@ describe("CronService failure alerts", () => {
   it("runs fallback after a raw model timeout payload and only sends sanitized alert when all attempts fail", async () => {
     const successStore = await makeStorePath();
     const failureStore = await makeStorePath();
-    const successAlert = createFailureAlertMock();
-    const failureAlert = createFailureAlertMock();
+    const successAlert = vi.fn(async () => undefined);
+    const failureAlert = vi.fn(async () => undefined);
     const rawTimeout = "LLM request timed out.";
 
     const createFakeIsolatedRunner = (params: { fallbackSucceeds: boolean; attempts: string[] }) =>
@@ -260,9 +256,7 @@ describe("CronService failure alerts", () => {
           ),
         }),
       );
-      const firstTimeoutAlert = failureAlert.mock.calls[0]?.[0];
-      expect(firstTimeoutAlert).toBeDefined();
-      expect(firstTimeoutAlert?.text).not.toContain(rawTimeout);
+      expect(failureAlert.mock.calls[0][0].text).not.toContain(rawTimeout);
       expect(failureCron.getJob(failureJob.id)?.state.lastError).toBe(rawTimeout);
     } finally {
       successCron.stop();
@@ -274,7 +268,7 @@ describe("CronService failure alerts", () => {
 
   it("does not send implicit first-failure alerts when explicitly disabled or delivery is off", async () => {
     const store = await makeStorePath();
-    const sendCronFailureAlert = createFailureAlertMock();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
       error: "provider timeout",
@@ -317,7 +311,7 @@ describe("CronService failure alerts", () => {
 
   it("supports per-job failure alert override when global alerts are disabled", async () => {
     const store = await makeStorePath();
-    const sendCronFailureAlert = createFailureAlertMock();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
       error: "timeout",
@@ -365,7 +359,7 @@ describe("CronService failure alerts", () => {
 
   it("respects per-job failureAlert=false and suppresses alerts", async () => {
     const store = await makeStorePath();
-    const sendCronFailureAlert = createFailureAlertMock();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
       error: "auth error",
@@ -404,7 +398,7 @@ describe("CronService failure alerts", () => {
 
   it("threads failure alert mode/accountId and skips best-effort jobs", async () => {
     const store = await makeStorePath();
-    const sendCronFailureAlert = createFailureAlertMock();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
       error: "temporary upstream error",

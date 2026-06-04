@@ -74,7 +74,6 @@ export async function noteMemorySearchHealth(
         ].join("\n");
       }
     } else if (
-      resolved.provider !== "none" &&
       !(hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir)))
     ) {
       if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {

@@ -120,7 +120,7 @@ function assertCanonicalSharedLaunchAgentContext(args: {
   if (
     commandUsesPackagedConsumerRuntime({
       programArguments: args.programArguments,
-      workingDirectory: normalizedCwd ?? undefined,
+      workingDirectory: normalizedCwd,
     })
   ) {
     return;

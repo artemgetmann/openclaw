@@ -325,21 +325,11 @@ describe("claude-bridge native browser e2e", () => {
             bootstrapMaxChars: 1,
             bootstrapTotalMaxChars: 1,
             sandbox: { mode: "off", sandboxed: false },
-            systemPrompt: {
-              chars: 0,
-              projectContextChars: 0,
-              nonProjectContextChars: 0,
-            },
-            injectedWorkspaceFiles: [],
-            skills: {
-              promptChars: 0,
-              entries: [],
-            },
-            tools: {
-              listChars: 0,
-              schemaChars: 0,
-              entries: [],
-            },
+            systemPrompt: "",
+            bootstrapFiles: [],
+            injectedFiles: [],
+            skillsPrompt: "",
+            tools: [],
           },
         });
 

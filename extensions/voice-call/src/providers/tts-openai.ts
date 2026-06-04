@@ -1,5 +1,5 @@
 import { resolveOpenAITtsInstructions } from "openclaw/plugin-sdk/voice-call";
-import { resolveOpenAiNonModelEnvApiKey } from "../../../../src/openai/auth-split.js";
+import { resolveOpenAiNonModelEnvApiKey } from "../../../src/openai/auth-split.js";
 import { pcmToMulaw } from "../telephony-audio.js";
 
 /**

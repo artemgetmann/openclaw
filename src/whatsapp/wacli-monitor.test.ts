@@ -44,18 +44,6 @@ function createLookupResult(): WacliReplyLookupResult {
       effectiveText: "Need this handled today",
       hasRenderableContent: true,
     },
-    recentConversation: [],
-    continuity: {
-      contextChatJid: "74333133234289@lid",
-      recentTurnCount: 0,
-      hasPriorInbound: false,
-      hasPriorOutbound: false,
-      lastOutboundReply: null,
-      previousOutboundReply: null,
-      lastOutboundNormalizedText: null,
-      previousOutboundNormalizedText: null,
-      lastOutboundIsRepeatOfPrevious: false,
-    },
     preferredMonitorChatJid: "74333133234289@lid",
   };
 }

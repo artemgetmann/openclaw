@@ -392,7 +392,6 @@ export async function createMockRuntimeFixture(params?: {
     allowPluginLocalInstall: false,
     stripProviderAuthEnvVars: false,
     installCommand: "n/a",
-    installRoot: dir,
     cwd: dir,
     permissionMode: params?.permissionMode ?? "approve-all",
     nonInteractivePermissions: "fail",

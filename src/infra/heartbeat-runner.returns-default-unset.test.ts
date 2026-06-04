@@ -1055,8 +1055,7 @@ describe("runHeartbeatOnce", () => {
       const nextHistory = store[sessionKey]?.recentHeartbeats;
       expect(Array.isArray(nextHistory)).toBe(true);
       expect(nextHistory).toHaveLength(5);
-      const typedNextHistory = nextHistory ?? [];
-      expect(typedNextHistory[0]).toMatchObject({
+      expect(nextHistory[0]).toMatchObject({
         sentAt: 10_000,
         channel: "whatsapp",
         to: "120363401234567890@g.us",
@@ -1064,7 +1063,7 @@ describe("runHeartbeatOnce", () => {
         status: "sent",
       });
       expect(
-        typedNextHistory.some((entry: { preview?: string }) => entry.preview === "Older alert 5"),
+        nextHistory.some((entry: { preview?: string }) => entry.preview === "Older alert 5"),
       ).toBe(false);
     } finally {
       replySpy.mockRestore();

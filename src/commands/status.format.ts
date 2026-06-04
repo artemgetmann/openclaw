@@ -17,7 +17,7 @@ export const formatDuration = (ms: number | null | undefined) => {
 export const formatTokensCompact = (
   sess: Pick<
     SessionStatus,
-    "totalTokens" | "contextTokens" | "percentUsed" | "remainingTokens" | "cacheRead" | "cacheWrite"
+    "totalTokens" | "contextTokens" | "percentUsed" | "cacheRead" | "cacheWrite"
   >,
 ) => {
   const used = sess.totalTokens;

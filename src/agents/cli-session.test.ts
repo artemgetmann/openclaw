@@ -8,7 +8,6 @@ describe("cli-session", () => {
       getCliSessionId(
         {
           sessionId: "s1",
-          updatedAt: 0,
           cliSessionIds: { "claude-bridge": "persisted-bridge-session" },
           claudeCliSessionId: "legacy-claude-session",
         },
@@ -20,7 +19,6 @@ describe("cli-session", () => {
   it("does not persist cli session ids for claude-bridge", () => {
     const entry = {
       sessionId: "s1",
-      updatedAt: 0,
       cliSessionIds: { "claude-cli": "kept-cli-session" },
       claudeCliSessionId: "legacy-claude-session",
     };

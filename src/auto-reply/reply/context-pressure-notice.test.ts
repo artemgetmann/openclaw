@@ -57,8 +57,6 @@ describe("context pressure notice", () => {
 
   it("stays quiet when system prompt overhead dominates a fresh session", () => {
     const entry = {
-      sessionId: "fresh-overhead",
-      updatedAt: 0,
       totalTokens: 150_000,
       totalTokensFresh: true,
       compactionCount: 0,
@@ -94,8 +92,6 @@ describe("context pressure notice", () => {
 
   it("still warns after compaction even if current system prompt overhead is large", () => {
     const entry = {
-      sessionId: "compacted-overhead",
-      updatedAt: 0,
       totalTokens: 150_000,
       totalTokensFresh: true,
       compactionCount: 1,

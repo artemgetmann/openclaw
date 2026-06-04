@@ -5,11 +5,6 @@ import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../ag
 import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import {
-  normalizeExecAsk,
-  normalizeExecHost,
-  normalizeExecSecurity,
-} from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
@@ -222,9 +217,9 @@ export async function handleToolsInvokeHttpRequest(
         sessionEntry.execAsk ||
         sessionEntry.execNode)
         ? {
-            host: normalizeExecHost(sessionEntry.execHost) ?? undefined,
-            security: normalizeExecSecurity(sessionEntry.execSecurity) ?? undefined,
-            ask: normalizeExecAsk(sessionEntry.execAsk) ?? undefined,
+            host: sessionEntry.execHost,
+            security: sessionEntry.execSecurity,
+            ask: sessionEntry.execAsk,
             node: sessionEntry.execNode,
           }
         : undefined,

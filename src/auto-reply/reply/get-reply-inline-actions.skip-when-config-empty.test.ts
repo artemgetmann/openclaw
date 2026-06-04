@@ -11,7 +11,7 @@ const { handleCommandsMock, cronExecuteMock, createCronToolMock } = vi.hoisted((
   return {
     handleCommandsMock: vi.fn(),
     cronExecuteMock,
-    createCronToolMock: vi.fn((..._args: unknown[]) => ({
+    createCronToolMock: vi.fn(() => ({
       execute: cronExecuteMock,
     })),
   };
