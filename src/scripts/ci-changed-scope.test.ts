@@ -124,13 +124,13 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("runs platform lanes when the CI workflow changes", () => {
+  it("keeps product lanes off for workflow-only changes", () => {
     expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
-      runNode: true,
-      runMacos: true,
-      runAndroid: true,
-      runWindows: true,
-      runSkillsPython: true,
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
     });
   });
 

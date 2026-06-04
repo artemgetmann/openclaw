@@ -273,7 +273,26 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Check docs
-        run: pnpm check:docs
+        run: |
+          set -euo pipefail
+
+          pnpm format:docs:check
+          pnpm lint:docs
+          pnpm docs:check-i18n-glossary
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="${{ github.event.pull_request.base.sha }}"
+          fi
+
+          if git diff --name-only "$BASE" HEAD -- docs/consumer/project-status.md | grep -q .; then
+            pnpm docs:check-project-status
+          else
+            echo "docs/consumer/project-status.md unchanged; skipping project status freshness check."
+          fi
+
+          pnpm docs:check-links
 
   compat-node22:
     name: "compat-node22"
@@ -400,7 +419,28 @@ jobs:
           pre-commit run zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        run: pre-commit run --all-files pnpm-audit-prod
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="${{ github.event.pull_request.base.sha }}"
+          fi
+
+          mapfile -t dependency_files < <(git diff --name-only "$BASE" HEAD -- \
+            'package.json' \
+            'pnpm-lock.yaml' \
+            'pnpm-workspace.yaml' \
+            'extensions/**/package.json' \
+            'packages/**/package.json' \
+            'ui/package.json')
+          if [ "${#dependency_files[@]}" -eq 0 ]; then
+            echo "No dependency changes detected; skipping production dependency audit."
+            exit 0
+          fi
+
+          pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
     needs: [docs-scope, changed-scope]

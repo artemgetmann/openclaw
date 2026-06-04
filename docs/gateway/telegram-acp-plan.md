@@ -78,7 +78,7 @@ Working interpretation:
 
 ## Phase 2: Compare With Maintainer Intent
 
-### Goal
+### Phase 2 Goal
 
 Look up how the original maintainer demoed Telegram + Codex ACP behavior:
 

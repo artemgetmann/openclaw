@@ -47,7 +47,8 @@ allows intentional skips for irrelevant docs, macOS, Android, Windows, and
 Python skill lanes.
 
 `CI / secrets` is always required. It detects committed private keys, audits
-changed workflows with `zizmor`, and audits production dependencies.
+changed workflows with `zizmor`, and audits production dependencies when
+dependency files changed.
 
 ### Conditional Blockers
 
@@ -61,8 +62,7 @@ relevant. Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by
 - Windows-relevant files changed: `CI / checks-windows (...)` blocks merge.
 - Python skill scripts changed: `CI / skills-python` blocks merge.
 - Workflow files changed: `Workflow Sanity / actionlint` and `CI / secrets`
-  block merge; changes to `.github/workflows/ci.yml` intentionally fan out to
-  Node, macOS, Android, Windows, and Python skill lanes.
+  block merge; workflow-only edits do not fan out to product test lanes.
 - Sandbox image files changed: `Sandbox Common Smoke / sandbox-common-smoke`
   blocks merge when that workflow runs.
 - Non-doc install or Docker paths changed: `Install Smoke / install-smoke`
@@ -166,6 +166,11 @@ deadlock instead of a gate.
 
 CI concurrency is scoped by commit SHA so a stale queued run cannot hold the PR's
 merge gate hostage after a new commit is pushed.
+
+`check-docs` runs formatting, markdown lint, glossary, and link checks for docs
+changes. The consumer project-status freshness check runs only when
+`docs/consumer/project-status.md` changes; stale product-tracker numbers should
+not block unrelated documentation or CI-policy PRs.
 
 ## Local Equivalents
 
