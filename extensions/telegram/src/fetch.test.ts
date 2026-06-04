@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveFetch } from "../../../src/infra/fetch.js";
-import { resolveTelegramFetch, resolveTelegramTransport } from "./fetch.js";
+import {
+  resetTelegramTransportStickyIpv4CacheForTests,
+  resolveTelegramFetch,
+  resolveTelegramTransport,
+} from "./fetch.js";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
@@ -184,6 +188,7 @@ async function expectNoStickyRetryWithSameDispatcher(params: {
 
 afterEach(() => {
   undiciFetch.mockReset();
+  resetTelegramTransportStickyIpv4CacheForTests();
   setGlobalDispatcher.mockReset();
   AgentCtor.mockClear();
   EnvHttpProxyAgentCtor.mockClear();
@@ -526,6 +531,38 @@ describe("resolveTelegramFetch", () => {
 
     expectStickyAutoSelectDispatcher(firstDispatcher);
     expect(secondDispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
+      }),
+    );
+  });
+
+  it("keeps sticky IPv4 fallback across fresh transport resolvers", async () => {
+    primeStickyFallbackRetry("ETIMEDOUT", 3);
+
+    const firstResolver = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+      },
+    });
+    await firstResolver("https://api.telegram.org/botx/sendMessage");
+
+    const secondResolver = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+      },
+    });
+    await secondResolver("https://api.telegram.org/botx/getUpdates");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(3);
+    expectPinnedIpv4ConnectDispatcher({
+      firstCall: 1,
+      pinnedCall: 2,
+    });
+    const freshResolverDispatcher = getDispatcherFromUndiciCall(3);
+    expect(freshResolverDispatcher).not.toBe(getDispatcherFromUndiciCall(2));
+    expect(freshResolverDispatcher?.options?.connect).toEqual(
       expect.objectContaining({
         family: 4,
         autoSelectFamily: false,
