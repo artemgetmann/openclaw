@@ -7,7 +7,12 @@ EXPECTED_RUNTIME="${MAIN_REPO}/dist/index.js"
 OPENCLAW_ENTRYPOINT="${MAIN_REPO}/openclaw.mjs"
 PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 CHECK_INTERVAL_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_CHECK_INTERVAL_SECONDS:-15}"
-FAIL_THRESHOLD="${OPENCLAW_GATEWAY_WATCHDOG_FAIL_THRESHOLD:-2}"
+# Browser-heavy live runs can briefly starve the gateway's HTTP probe while the
+# process is still owned by launchd and accepting work again moments later. The
+# watchdog is a last-resort repair path, not a hot-loop scheduler, so require a
+# sustained outage before reclaiming the shared runtime.
+FAIL_THRESHOLD="${OPENCLAW_GATEWAY_WATCHDOG_FAIL_THRESHOLD:-8}"
+HTTP_TIMEOUT_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_HTTP_TIMEOUT_SECONDS:-10}"
 RECOVERY_BACKOFF_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_RECOVERY_BACKOFF_SECONDS:-300}"
 RECOVER_SCRIPT="${OPENCLAW_GATEWAY_RECOVER_SCRIPT:-${MAIN_REPO}/scripts/gateway-recover-main.sh}"
 WATCHDOG_STDOUT_PATH="${OPENCLAW_GATEWAY_WATCHDOG_STDOUT_PATH:-/tmp/openclaw/gateway-watchdog.log}"
@@ -142,8 +147,11 @@ cap_watchdog_logs() {
 
 http_ready() {
   # The gateway root path is not a liveness endpoint. Probe the documented
-  # shallow health route so a healthy runtime is not misclassified as down.
-  curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1
+  # shallow health route so a healthy runtime is not misclassified as down. Keep
+  # this timeout longer than normal operator probes because the watchdog runs in
+  # the background and should not kill active browser/model work for one slow
+  # event-loop turn.
+  curl -fsS --max-time "${HTTP_TIMEOUT_SECONDS}" "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1
 }
 
 gateway_healthy() {
