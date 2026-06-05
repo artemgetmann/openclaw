@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sqlite3
 
@@ -365,6 +366,50 @@ def test_telegram_managed_status_returns_pending_when_no_matching_update(monkeyp
     assert body["suggestedBotUsername"] == "founder_jarvis_bot"
     assert body["botId"] is None
     assert body["managedChildBotToken"] is None
+
+
+def test_telegram_managed_pending_status_logs_safe_update_metadata(monkeypatch, caplog):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+    caplog.set_level(logging.INFO, logger="jarvis_backend.telegram_managed")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).endswith("/getUpdates")
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": [
+                    {
+                        "update_id": 101,
+                        "managed_bot": {
+                            "bot": {"id": 9001, "is_bot": True, "username": "other_bot"}
+                        },
+                    },
+                    {"update_id": 102, "message": {"text": "ignored"}},
+                ],
+            },
+        )
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "founder_jarvis_bot"},
+    )
+
+    response = client.get(f"/v1/telegram/managed/status/{started.json()['setupId']}")
+
+    assert response.status_code == 200
+    log_text = caplog.text
+    assert "telegram managed setup poll started" in log_text
+    assert "update_count=2" in log_text
+    assert "update_ids=[101, 102]" in log_text
+    assert "managed_bot_count=1" in log_text
+    assert "other_bot" in log_text
+    assert "test-manager-token" not in log_text
 
 
 def test_telegram_managed_pending_session_survives_memory_clear(monkeypatch):

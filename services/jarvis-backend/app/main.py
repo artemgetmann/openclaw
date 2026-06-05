@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import logging
 import os
 import secrets
 import sqlite3
@@ -46,6 +47,8 @@ SUPPORTED_GEMINI_IMAGE_ASPECT_RATIOS = {
     "16:9",
     "21:9",
 }
+
+telegram_managed_logger = logging.getLogger("jarvis_backend.telegram_managed")
 
 
 class Settings(BaseModel):
@@ -616,6 +619,13 @@ async def _refresh_telegram_managed_setup_session(
     against both manager and child secrets.
     """
 
+    previous_last_update_id = session.last_update_id
+    telegram_managed_logger.info(
+        "telegram managed setup poll started setup_id=%s suggested_bot_username=%s last_update_id=%s",
+        session.setup_id,
+        session.suggested_bot_username,
+        previous_last_update_id,
+    )
     updates = await _telegram_bot_api_call(
         method="getUpdates",
         token=settings.telegram_manager_bot_token or "",
@@ -628,10 +638,35 @@ async def _refresh_telegram_managed_setup_session(
             detail="telegram getUpdates returned an invalid result",
         )
 
+    update_summary = _telegram_managed_update_summary(updates)
+    telegram_managed_logger.info(
+        "telegram managed setup poll result setup_id=%s update_count=%d update_ids=%s managed_bot_count=%d managed_bot_usernames=%s",
+        session.setup_id,
+        len(updates),
+        update_summary["update_ids"],
+        len(update_summary["managed_bot_usernames"]),
+        update_summary["managed_bot_usernames"],
+    )
+
     managed_bot = _matching_managed_bot_update(session, updates)
     if managed_bot is None:
+        telegram_managed_logger.info(
+            "telegram managed setup still pending setup_id=%s suggested_bot_username=%s previous_last_update_id=%s last_update_id=%s ignored_managed_bot_usernames=%s",
+            session.setup_id,
+            session.suggested_bot_username,
+            previous_last_update_id,
+            session.last_update_id,
+            update_summary["managed_bot_usernames"],
+        )
         return
 
+    telegram_managed_logger.info(
+        "telegram managed setup matched bot setup_id=%s suggested_bot_username=%s bot_id=%s bot_username=%s",
+        session.setup_id,
+        session.suggested_bot_username,
+        managed_bot["id"],
+        managed_bot["username"],
+    )
     child_token_payload = await _telegram_bot_api_call(
         method="getManagedBotToken",
         token=settings.telegram_manager_bot_token or "",
@@ -670,6 +705,12 @@ async def _refresh_telegram_managed_setup_session(
     session.bot_id = _telegram_int_field(child_get_me, "id") or managed_bot["id"]
     session.bot_username = _telegram_string_field(child_get_me, "username") or managed_bot["username"]
     session.managed_child_bot_token = child_token_payload
+    telegram_managed_logger.info(
+        "telegram managed setup connected setup_id=%s bot_id=%s bot_username=%s",
+        session.setup_id,
+        session.bot_id,
+        session.bot_username,
+    )
 
 
 def _telegram_managed_get_updates_payload(session: TelegramManagedSetupSession) -> dict[str, Any]:
@@ -711,6 +752,29 @@ def _matching_managed_bot_update(
         if username.lower() == expected_username:
             return {"id": bot_id, "username": username}
     return None
+
+
+def _telegram_managed_update_summary(updates: list[Any]) -> dict[str, list[Any]]:
+    """Return non-secret metadata about Telegram managed-bot updates for logs."""
+
+    update_ids: list[int] = []
+    managed_bot_usernames: list[str] = []
+    for update in updates:
+        if not isinstance(update, dict):
+            continue
+        update_id = update.get("update_id")
+        if isinstance(update_id, int) and not isinstance(update_id, bool):
+            update_ids.append(update_id)
+        managed_bot_update = update.get("managed_bot")
+        if not isinstance(managed_bot_update, dict):
+            continue
+        bot = managed_bot_update.get("bot")
+        if not isinstance(bot, dict):
+            continue
+        username = _telegram_string_field(bot, "username")
+        if username:
+            managed_bot_usernames.append(username)
+    return {"update_ids": update_ids, "managed_bot_usernames": managed_bot_usernames}
 
 
 async def _telegram_bot_api_call(
