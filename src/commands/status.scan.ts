@@ -1,11 +1,6 @@
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
-import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
-import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
-import { withProgress } from "../cli/progress.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { readBestEffortConfig } from "../config/config.js";
-import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
-import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { readBestEffortConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.js";
+import type { GatewayConnectionDetails } from "../gateway/connection-details.js";
 import { probeGateway } from "../gateway/probe.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { MemoryProviderStatus } from "../memory/types.js";
@@ -20,7 +15,7 @@ import type {
   buildChannelsTable as buildChannelsTableFn,
   collectChannelStatusIssues as collectChannelStatusIssuesFn,
 } from "./status.scan.runtime.js";
-import { getStatusSummary } from "./status.summary.js";
+import type { StatusSummary } from "./status.types.js";
 import { getUpdateCheckResult } from "./status.update.js";
 
 type MemoryStatusSnapshot = MemoryProviderStatus & {
@@ -36,7 +31,7 @@ type MemoryPluginStatus = {
 type DeferredResult<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
 type GatewayProbeSnapshot = {
-  gatewayConnection: ReturnType<typeof buildGatewayConnectionDetails>;
+  gatewayConnection: GatewayConnectionDetails;
   remoteUrlMissing: boolean;
   gatewayMode: "local" | "remote";
   gatewayProbeAuth: {
@@ -47,15 +42,59 @@ type GatewayProbeSnapshot = {
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
 };
 
+let channelConfigPresenceModulePromise:
+  | Promise<typeof import("../channels/config-presence.js")>
+  | undefined;
+let commandSecretGatewayModulePromise:
+  | Promise<typeof import("../cli/command-secret-gateway.js")>
+  | undefined;
+let commandSecretTargetsModulePromise:
+  | Promise<typeof import("../cli/command-secret-targets.js")>
+  | undefined;
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
+let progressModulePromise: Promise<typeof import("../cli/progress.js")> | undefined;
+let gatewayConnectionDetailsModulePromise:
+  | Promise<typeof import("../gateway/connection-details.js")>
+  | undefined;
+let statusSummaryModulePromise: Promise<typeof import("./status.summary.js")> | undefined;
 let statusScanRuntimeModulePromise: Promise<typeof import("./status.scan.runtime.js")> | undefined;
 let statusScanDepsRuntimeModulePromise:
   | Promise<typeof import("./status.scan.deps.runtime.js")>
   | undefined;
 
+function loadChannelConfigPresenceModule() {
+  channelConfigPresenceModulePromise ??= import("../channels/config-presence.js");
+  return channelConfigPresenceModulePromise;
+}
+
+function loadCommandSecretGatewayModule() {
+  commandSecretGatewayModulePromise ??= import("../cli/command-secret-gateway.js");
+  return commandSecretGatewayModulePromise;
+}
+
+function loadCommandSecretTargetsModule() {
+  commandSecretTargetsModulePromise ??= import("../cli/command-secret-targets.js");
+  return commandSecretTargetsModulePromise;
+}
+
 function loadPluginRegistryModule() {
   pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
   return pluginRegistryModulePromise;
+}
+
+function loadProgressModule() {
+  progressModulePromise ??= import("../cli/progress.js");
+  return progressModulePromise;
+}
+
+function loadGatewayConnectionDetailsModule() {
+  gatewayConnectionDetailsModulePromise ??= import("../gateway/connection-details.js");
+  return gatewayConnectionDetailsModulePromise;
+}
+
+function loadStatusSummaryModule() {
+  statusSummaryModulePromise ??= import("./status.summary.js");
+  return statusSummaryModulePromise;
 }
 
 function loadStatusScanRuntimeModule() {
@@ -94,6 +133,40 @@ function shouldTraceStartupMemory(): boolean {
   return process.env.OPENCLAW_STARTUP_MEMORY_TRACE === "1";
 }
 
+function normalizeControlUiBasePath(basePath?: string): string {
+  if (!basePath) {
+    return "";
+  }
+  let normalized = basePath.trim();
+  if (!normalized) {
+    return "";
+  }
+  if (!normalized.startsWith("/")) {
+    normalized = `/${normalized}`;
+  }
+  if (normalized === "/") {
+    return "";
+  }
+  if (normalized.endsWith("/")) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized;
+}
+
+async function resolveStatusCommandSecretRefs(params: {
+  config: OpenClawConfig;
+  commandName: "status" | "status --json";
+}) {
+  const [{ resolveCommandSecretRefsViaGateway }, { getStatusCommandSecretTargetIds }] =
+    await Promise.all([loadCommandSecretGatewayModule(), loadCommandSecretTargetsModule()]);
+  return await resolveCommandSecretRefsViaGateway({
+    config: params.config,
+    commandName: params.commandName,
+    targetIds: getStatusCommandSecretTargetIds(),
+    mode: "read_only_status",
+  });
+}
+
 function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStatus {
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   if (!pluginsEnabled) {
@@ -110,6 +183,7 @@ async function resolveGatewayProbeSnapshot(params: {
   cfg: OpenClawConfig;
   opts: { timeoutMs?: number; all?: boolean };
 }): Promise<GatewayProbeSnapshot> {
+  const { buildGatewayConnectionDetails } = await loadGatewayConnectionDetailsModule();
   const gatewayConnection = buildGatewayConnectionDetails({ config: params.cfg });
   const isRemoteMode = params.cfg.gateway?.mode === "remote";
   const remoteUrlRaw =
@@ -150,6 +224,7 @@ async function resolveChannelsStatus(params: {
   if (!params.gatewayReachable) {
     return null;
   }
+  const { callGateway } = await import("../gateway/call.js");
   return await callGateway({
     config: params.cfg,
     method: "channels.status",
@@ -170,7 +245,9 @@ export type StatusScanResult = {
   tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
   update: Awaited<ReturnType<typeof getUpdateCheckResult>>;
-  gatewayConnection: ReturnType<typeof buildGatewayConnectionDetails>;
+  gatewayConnection: Awaited<
+    ReturnType<(typeof import("../gateway/connection-details.js"))["buildGatewayConnectionDetails"]>
+  >;
   remoteUrlMissing: boolean;
   gatewayMode: "local" | "remote";
   gatewayProbeAuth: {
@@ -184,7 +261,7 @@ export type StatusScanResult = {
   channelIssues: ReturnType<typeof collectChannelStatusIssuesFn>;
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
   channels: Awaited<ReturnType<typeof buildChannelsTableFn>>;
-  summary: Awaited<ReturnType<typeof getStatusSummary>>;
+  summary: StatusSummary;
   memory: MemoryStatusSnapshot | null;
   memoryPlugin: MemoryPluginStatus;
 };
@@ -222,13 +299,12 @@ async function scanStatusJsonFast(opts: {
   const loadedRaw = await readBestEffortConfig();
   traceStartupMemory("after config");
   const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
-    await resolveCommandSecretRefsViaGateway({
+    await resolveStatusCommandSecretRefs({
       config: loadedRaw,
       commandName: "status --json",
-      targetIds: getStatusCommandSecretTargetIds(),
-      mode: "read_only_status",
     });
   traceStartupMemory("after secret resolution");
+  const { hasPotentialConfiguredChannels } = await loadChannelConfigPresenceModule();
   if (hasPotentialConfiguredChannels(cfg)) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
@@ -244,7 +320,10 @@ async function scanStatusJsonFast(opts: {
       includeRegistry: opts.all === true,
     });
   const resolveAgentStatus = () => getAgentLocalStatuses(cfg);
-  const resolveSummary = () => getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
+  const resolveSummary = () =>
+    loadStatusSummaryModule().then(({ getStatusSummary }) =>
+      getStatusSummary({ config: cfg, sourceConfig: loadedRaw }),
+    );
   const resolveTailscaleDns = () =>
     tailscaleMode === "off"
       ? Promise.resolve<string | null>(null)
@@ -351,6 +430,7 @@ export async function scanStatus(
   if (opts.json) {
     return await scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all });
   }
+  const { withProgress } = await loadProgressModule();
   return await withProgress(
     {
       label: "Scanning status…",
@@ -361,11 +441,9 @@ export async function scanStatus(
       progress.setLabel("Loading config…");
       const loadedRaw = await readBestEffortConfig();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
-        await resolveCommandSecretRefsViaGateway({
+        await resolveStatusCommandSecretRefs({
           config: loadedRaw,
           commandName: "status",
-          targetIds: getStatusCommandSecretTargetIds(),
-          mode: "read_only_status",
         });
       const osSummary = resolveOsSummary();
       const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -389,7 +467,9 @@ export async function scanStatus(
       );
       const agentStatusPromise = deferResult(getAgentLocalStatuses(cfg));
       const summaryPromise = deferResult(
-        getStatusSummary({ config: cfg, sourceConfig: loadedRaw }),
+        loadStatusSummaryModule().then(({ getStatusSummary }) =>
+          getStatusSummary({ config: cfg, sourceConfig: loadedRaw }),
+        ),
       );
       progress.tick();
 

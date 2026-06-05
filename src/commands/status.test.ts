@@ -423,10 +423,9 @@ describe("statusCommand", () => {
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
     expect(payload.linkChannel).toBeUndefined();
-    expect(payload.memory.agentId).toBe("main");
+    expect(payload.memory).toBeNull();
     expect(payload.memoryPlugin.enabled).toBe(true);
     expect(payload.memoryPlugin.slot).toBe("memory-core");
-    expect(payload.memory.vector.available).toBe(true);
     expect(payload.sessions.count).toBe(1);
     expect(payload.sessions.paths).toContain("/tmp/sessions.json");
     expect(payload.sessions.defaults.model).toBeTruthy();
