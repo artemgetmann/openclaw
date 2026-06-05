@@ -148,7 +148,9 @@ JS
 }
 
 run_json() {
-  "$@" --json
+  # pnpm prints its script banner on stdout unless --silent is set. JSON proof
+  # commands need clean stdout because the next step parses the payload.
+  pnpm --silent openclaw:local "$@" --json
 }
 
 message_id_from_json() {
@@ -231,25 +233,25 @@ main() {
 
   if [[ "${DRY_RUN}" == "1" ]]; then
     log "dry-run: active_bot=${bot_username:-unknown} id=${bot_id:-unknown}"
-    log "dry-run: pnpm openclaw:local telegram-user precheck --chat ${bot_username} --json"
-    log "dry-run: pnpm openclaw:local telegram-user send --chat ${bot_username} --message ${NONCE} --json"
-    log "dry-run: pnpm openclaw:local telegram-user wait --chat ${bot_username} --contains ${NONCE} --timeout-ms ${WAIT_TIMEOUT_MS} --json"
+    log "dry-run: pnpm --silent openclaw:local telegram-user precheck --chat ${bot_username} --json"
+    log "dry-run: pnpm --silent openclaw:local telegram-user send --chat ${bot_username} --message ${NONCE} --json"
+    log "dry-run: pnpm --silent openclaw:local telegram-user wait --chat ${bot_username} --contains ${NONCE} --timeout-ms ${WAIT_TIMEOUT_MS} --json"
     log "dry-run: sleep ${WATCHDOG_SECONDS}; scan logs after ${DEPLOY_SINCE}"
     return 0
   fi
 
   local start_ms=""
   start_ms="$(node -e 'console.log(Date.now())')"
-  run_json pnpm openclaw:local telegram-user precheck --chat "${bot_username}" >/dev/null
+  run_json telegram-user precheck --chat "${bot_username}" >/dev/null
   local send_json=""
-  send_json="$(run_json pnpm openclaw:local telegram-user send --chat "${bot_username}" --message "${NONCE}")"
+  send_json="$(run_json telegram-user send --chat "${bot_username}" --message "${NONCE}")"
   local sent_id=""
   local sender_id=""
   sent_id="$(message_id_from_json "${send_json}")"
   sender_id="$(sender_id_from_json "${send_json}")"
 
   local wait_json=""
-  wait_json="$(run_json pnpm openclaw:local telegram-user wait --chat "${bot_username}" --after-id "${sent_id}" --contains "${NONCE}" --timeout-ms "${WAIT_TIMEOUT_MS}")"
+  wait_json="$(run_json telegram-user wait --chat "${bot_username}" --after-id "${sent_id}" --contains "${NONCE}" --timeout-ms "${WAIT_TIMEOUT_MS}")"
   assert_wait_contains_nonce "${wait_json}"
   local reply_id=""
   reply_id="$(message_id_from_json "${wait_json}")"
