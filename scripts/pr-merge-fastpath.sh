@@ -107,7 +107,7 @@ JS
   log "head=${head_sha}"
   log "required_checks=$(printf '%s' "${required_state}" | paste -sd ',' -)"
 
-  if [[ "${merge_state}" == "BEHIND" ]]; then
+  if [[ "${merge_state}" == "BEHIND" || "${merge_state}" == "DIRTY" ]]; then
     run_or_print gh pr update-branch "${PR_NUMBER}"
     log "result=update-branch-requested"
     return 0

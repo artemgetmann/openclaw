@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = process.cwd();
 const DEPLOY_SCRIPT = path.join(ROOT, "scripts", "deploy-shared-main-runtime.sh");
+const PR_FASTPATH_SCRIPT = path.join(ROOT, "scripts", "pr-merge-fastpath.sh");
 const PROVE_SCRIPT = path.join(ROOT, "scripts", "prove-main-telegram-runtime.sh");
 
 function runBash(command: string, options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) {
@@ -74,6 +75,15 @@ describe("scripts/deploy-shared-main-runtime.sh guards", () => {
     const repo = makeGitRepo("feature-test");
 
     expect(() => sourceDeployAndRun("require_sacred_main_checkout", repo)).toThrow(/expected main/);
+  });
+});
+
+describe("scripts/pr-merge-fastpath.sh", () => {
+  it("treats GitHub DIRTY merge state as a branch update requirement", () => {
+    const script = fs.readFileSync(PR_FASTPATH_SCRIPT, "utf8");
+
+    expect(script).toContain('"${merge_state}" == "BEHIND" || "${merge_state}" == "DIRTY"');
+    expect(script).toContain('gh pr update-branch "${PR_NUMBER}"');
   });
 });
 
