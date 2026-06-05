@@ -90,6 +90,10 @@ function traceStartupMemory(label: string): void {
   process.stderr.write(`[startup-memory-trace] ${label}: ${rssMb.toFixed(1)} MB RSS\n`);
 }
 
+function shouldTraceStartupMemory(): boolean {
+  return process.env.OPENCLAW_STARTUP_MEMORY_TRACE === "1";
+}
+
 function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStatus {
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   if (!pluginsEnabled) {
@@ -233,15 +237,15 @@ async function scanStatusJsonFast(opts: {
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const updatePromise = getUpdateCheckResult({
-    timeoutMs: updateTimeoutMs,
-    fetchGit: opts.all === true,
-    includeRegistry: opts.all === true,
-  });
-  const agentStatusPromise = getAgentLocalStatuses(cfg);
-  const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
-
-  const tailscaleDnsPromise =
+  const resolveUpdate = () =>
+    getUpdateCheckResult({
+      timeoutMs: updateTimeoutMs,
+      fetchGit: opts.all === true,
+      includeRegistry: opts.all === true,
+    });
+  const resolveAgentStatus = () => getAgentLocalStatuses(cfg);
+  const resolveSummary = () => getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
+  const resolveTailscaleDns = () =>
     tailscaleMode === "off"
       ? Promise.resolve<string | null>(null)
       : loadStatusScanDepsRuntimeModule()
@@ -251,16 +255,38 @@ async function scanStatusJsonFast(opts: {
             ),
           )
           .catch(() => null);
+  const resolveGatewaySnapshot = () => resolveGatewayProbeSnapshot({ cfg, opts });
 
-  const gatewayProbePromise = resolveGatewayProbeSnapshot({ cfg, opts });
-
-  const [tailscaleDns, update, agentStatus, gatewaySnapshot, summary] = await Promise.all([
-    tailscaleDnsPromise,
-    updatePromise,
-    agentStatusPromise,
-    gatewayProbePromise,
-    summaryPromise,
-  ]);
+  const [tailscaleDns, update, agentStatus, gatewaySnapshot, summary] = shouldTraceStartupMemory()
+    ? [
+        await resolveTailscaleDns().then((value) => {
+          traceStartupMemory("after tailscale");
+          return value;
+        }),
+        await resolveUpdate().then((value) => {
+          traceStartupMemory("after update");
+          return value;
+        }),
+        await resolveAgentStatus().then((value) => {
+          traceStartupMemory("after agent status");
+          return value;
+        }),
+        await resolveGatewaySnapshot().then((value) => {
+          traceStartupMemory("after gateway probe");
+          return value;
+        }),
+        await resolveSummary().then((value) => {
+          traceStartupMemory("after summary");
+          return value;
+        }),
+      ]
+    : await Promise.all([
+        resolveTailscaleDns(),
+        resolveUpdate(),
+        resolveAgentStatus(),
+        resolveGatewaySnapshot(),
+        resolveSummary(),
+      ]);
   traceStartupMemory("after parallel status probes");
   const tailscaleHttpsUrl =
     tailscaleMode !== "off" && tailscaleDns
