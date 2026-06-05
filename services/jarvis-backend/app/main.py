@@ -239,6 +239,30 @@ class TelegramManagedStatusResponse(BaseModel):
     managedChildBotToken: str | None = Field(default=None, repr=False)
 
 
+class TelegramManagerWebhookDiagnostic(BaseModel):
+    configured: bool
+    pendingUpdateCount: int | None = None
+
+
+class TelegramManagerUpdatesDiagnostic(BaseModel):
+    skipped: bool = False
+    reason: str | None = None
+    updateCount: int = 0
+    updateIds: list[int] = Field(default_factory=list)
+    managedBotCount: int = 0
+    managedBotUsernames: list[str] = Field(default_factory=list)
+
+
+class TelegramManagerDiagnosticResponse(BaseModel):
+    configured: Literal[True]
+    managerBotUsernameConfigured: str
+    getMeId: int | None = None
+    getMeUsername: str | None = None
+    canManageBots: bool | None = None
+    webhook: TelegramManagerWebhookDiagnostic
+    updates: TelegramManagerUpdatesDiagnostic
+
+
 class TelegramManagedSetupSession(BaseModel):
     setup_id: str
     device_id: str | None = None
@@ -486,6 +510,26 @@ async def telegram_managed_status(
     return _telegram_managed_status_response(session)
 
 
+@app.get(
+    "/v1/telegram/managed/manager/status",
+    response_model=TelegramManagerDiagnosticResponse,
+    dependencies=[Depends(require_api_token)],
+)
+async def telegram_managed_manager_status(
+    settings: Settings = Depends(get_settings),
+) -> TelegramManagerDiagnosticResponse:
+    """
+    Report safe manager-bot diagnostics for the live managed-bot handoff.
+
+    This endpoint exists for production RC proof only: it verifies the manager
+    bot identity, Bot Management capability, webhook state, and visible
+    managed_bot updates without exposing or consuming any bot token.
+    """
+
+    _require_telegram_manager_config(settings)
+    return await _telegram_manager_diagnostic_status(settings)
+
+
 @app.post(
     "/v1/managed/utilities/{utility}",
     response_model=ManagedUtilityResponse,
@@ -724,6 +768,82 @@ def _telegram_managed_get_updates_payload(session: TelegramManagedSetupSession) 
     if session.last_update_id is not None:
         payload["offset"] = session.last_update_id + 1
     return payload
+
+
+async def _telegram_manager_diagnostic_status(
+    settings: Settings,
+) -> TelegramManagerDiagnosticResponse:
+    """Fetch non-secret manager-bot health facts from Telegram for live RC triage."""
+
+    manager_get_me = await _telegram_bot_api_call(
+        method="getMe",
+        token=settings.telegram_manager_bot_token or "",
+        payload={},
+        settings=settings,
+    )
+    if not isinstance(manager_get_me, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="telegram manager getMe returned an invalid result",
+        )
+
+    webhook_info = await _telegram_bot_api_call(
+        method="getWebhookInfo",
+        token=settings.telegram_manager_bot_token or "",
+        payload={},
+        settings=settings,
+    )
+    if not isinstance(webhook_info, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="telegram manager getWebhookInfo returned an invalid result",
+        )
+
+    webhook_url = _telegram_string_field(webhook_info, "url")
+    webhook = TelegramManagerWebhookDiagnostic(
+        configured=webhook_url is not None,
+        pendingUpdateCount=_telegram_int_field(webhook_info, "pending_update_count"),
+    )
+    updates = TelegramManagerUpdatesDiagnostic(skipped=True, reason="webhook_configured")
+
+    # getUpdates cannot be used while a webhook is configured. When there is no
+    # webhook, this no-offset poll is read-only for our purposes because it does
+    # not acknowledge or advance Telegram's update cursor.
+    if webhook_url is None:
+        update_payload = await _telegram_bot_api_call(
+            method="getUpdates",
+            token=settings.telegram_manager_bot_token or "",
+            payload={
+                "limit": 20,
+                "timeout": 0,
+                "allowed_updates": ["managed_bot"],
+            },
+            settings=settings,
+        )
+        if not isinstance(update_payload, list):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="telegram manager getUpdates returned an invalid result",
+            )
+        update_summary = _telegram_managed_update_summary(update_payload)
+        updates = TelegramManagerUpdatesDiagnostic(
+            skipped=False,
+            updateCount=len(update_payload),
+            updateIds=update_summary["update_ids"],
+            managedBotCount=len(update_summary["managed_bot_usernames"]),
+            managedBotUsernames=update_summary["managed_bot_usernames"],
+        )
+
+    can_manage_bots = manager_get_me.get("can_manage_bots")
+    return TelegramManagerDiagnosticResponse(
+        configured=True,
+        managerBotUsernameConfigured=(settings.telegram_manager_bot_username or "").strip().lstrip("@"),
+        getMeId=_telegram_int_field(manager_get_me, "id"),
+        getMeUsername=_telegram_string_field(manager_get_me, "username"),
+        canManageBots=can_manage_bots if isinstance(can_manage_bots, bool) else None,
+        webhook=webhook,
+        updates=updates,
+    )
 
 
 def _matching_managed_bot_update(

@@ -647,6 +647,136 @@ def test_telegram_managed_status_sanitizes_telegram_api_error(monkeypatch):
     assert "123456:test-manager-token" not in response.text
 
 
+def test_telegram_manager_status_reports_safe_diagnostics(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "@JarvisManagerBot")
+    reset_settings()
+    requests_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(str(request.url))
+        if str(request.url).endswith("/getMe"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "id": 123456,
+                        "is_bot": True,
+                        "username": "JarvisManagerBot",
+                        "can_manage_bots": True,
+                    },
+                },
+            )
+        if str(request.url).endswith("/getWebhookInfo"):
+            return httpx.Response(
+                200,
+                json={"ok": True, "result": {"url": "", "pending_update_count": 0}},
+            )
+        if str(request.url).endswith("/getUpdates"):
+            assert json.loads(request.content) == {
+                "limit": 20,
+                "timeout": 0,
+                "allowed_updates": ["managed_bot"],
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 201,
+                            "managed_bot": {
+                                "bot": {"id": 777000, "username": "founder_jarvis_bot"}
+                            },
+                        }
+                    ],
+                },
+            )
+        raise AssertionError(f"unexpected Telegram request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).get("/v1/telegram/managed/manager/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "configured": True,
+        "managerBotUsernameConfigured": "JarvisManagerBot",
+        "getMeId": 123456,
+        "getMeUsername": "JarvisManagerBot",
+        "canManageBots": True,
+        "webhook": {"configured": False, "pendingUpdateCount": 0},
+        "updates": {
+            "skipped": False,
+            "reason": None,
+            "updateCount": 1,
+            "updateIds": [201],
+            "managedBotCount": 1,
+            "managedBotUsernames": ["founder_jarvis_bot"],
+        },
+    }
+    assert requests_seen == [
+        "https://api.telegram.org/bot123456:test-manager-token/getMe",
+        "https://api.telegram.org/bot123456:test-manager-token/getWebhookInfo",
+        "https://api.telegram.org/bot123456:test-manager-token/getUpdates",
+    ]
+    assert "123456:test-manager-token" not in response.text
+
+
+def test_telegram_manager_status_skips_updates_when_webhook_is_configured(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+    requests_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(str(request.url))
+        if str(request.url).endswith("/getMe"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {"id": 123456, "username": "JarvisManagerBot"},
+                },
+            )
+        if str(request.url).endswith("/getWebhookInfo"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "url": "https://example.invalid/telegram",
+                        "pending_update_count": 3,
+                    },
+                },
+            )
+        raise AssertionError(f"unexpected Telegram request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+
+    response = TestClient(app).get("/v1/telegram/managed/manager/status")
+
+    assert response.status_code == 200
+    assert response.json()["webhook"] == {"configured": True, "pendingUpdateCount": 3}
+    assert response.json()["updates"] == {
+        "skipped": True,
+        "reason": "webhook_configured",
+        "updateCount": 0,
+        "updateIds": [],
+        "managedBotCount": 0,
+        "managedBotUsernames": [],
+    }
+    assert requests_seen == [
+        "https://api.telegram.org/bot123456:test-manager-token/getMe",
+        "https://api.telegram.org/bot123456:test-manager-token/getWebhookInfo",
+    ]
+    assert "123456:test-manager-token" not in response.text
+    assert "https://example.invalid/telegram" not in response.text
+
+
 def test_development_uses_local_sqlite_without_neon(monkeypatch, tmp_path):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.delenv("NEON_DATABASE_URL", raising=False)
