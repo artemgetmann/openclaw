@@ -464,7 +464,7 @@ async def telegram_managed_start(
         )
 
     suggested_bot_username = _telegram_suggested_bot_username(request.suggestedBotUsername)
-    suggested_bot_name = (request.suggestedBotName or "Jarvis Assistant").strip()
+    suggested_bot_name = (request.suggestedBotName or "Jarvis").strip()
     setup_id = f"tgms_{secrets.token_urlsafe(16)}"
     expires_at = _utcnow() + timedelta(minutes=TELEGRAM_MANAGED_SETUP_TTL_MINUTES)
     approval_url = _telegram_managed_approval_url(

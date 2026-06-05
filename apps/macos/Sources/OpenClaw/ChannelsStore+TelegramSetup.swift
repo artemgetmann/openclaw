@@ -75,7 +75,7 @@ extension ChannelsStore {
                 return
             }
             let client = JarvisTelegramManagedBotClient(configuration: configuration)
-            let response = try await client.start(suggestedBotName: "\(AppFlavor.current.appName) Assistant")
+            let response = try await client.start(suggestedBotName: AppFlavor.current.appName)
             self.telegramManagedSetupId = response.setupId
             self.telegramManagedApprovalURL = response.approvalUrl
             self.telegramManagedSuggestedBotUsername = response.suggestedBotUsername

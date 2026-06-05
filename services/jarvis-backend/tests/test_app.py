@@ -321,6 +321,25 @@ def test_telegram_managed_start_returns_approval_url_without_secret_values(monke
     assert "123456:test-manager-token" not in repr(get_settings())
 
 
+def test_telegram_managed_start_defaults_display_name_to_jarvis(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "@JarvisManagerBot")
+    reset_settings()
+
+    response = TestClient(app).post(
+        "/v1/telegram/managed/start",
+        json={"deviceId": "device-telegram", "appVersion": "0.1.0"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["approvalUrl"].startswith("https://t.me/newbot/JarvisManagerBot/")
+    assert body["approvalUrl"].endswith("?name=Jarvis")
+    assert body["suggestedBotUsername"].startswith("jarvis_")
+    assert body["suggestedBotUsername"].endswith("_bot")
+
+
 def test_telegram_managed_status_returns_pending_when_no_matching_update(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")

@@ -396,7 +396,7 @@ struct TelegramSetupBootstrapTests {
                     response)
             })
 
-        let started = try await client.start(suggestedBotName: "Jarvis Assistant")
+        let started = try await client.start(suggestedBotName: "Jarvis")
         let connected = try await client.status(setupId: started.setupId)
 
         #expect(started.setupId == "tgms_test")
