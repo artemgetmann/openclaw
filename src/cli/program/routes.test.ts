@@ -158,20 +158,18 @@ describe("program routes", () => {
   it("routes status --json through the lean JSON command", async () => {
     const route = expectRoute(["status"]);
     await expect(
-      route?.run([
-        "node",
-        "openclaw",
-        "status",
-        "--json",
-        "--deep",
-        "--usage",
-        "--timeout",
-        "5000",
-      ]),
+      route?.run(["node", "openclaw", "status", "--json", "--usage", "--timeout", "5000"]),
     ).resolves.toBe(true);
     expect(statusJsonCommandMock).toHaveBeenCalledWith(
-      { deep: true, all: false, usage: true, timeoutMs: 5000 },
+      { all: false, usage: true, timeoutMs: 5000 },
       expect.any(Object),
+    );
+  });
+
+  it("leaves status --json --deep to the full status command", async () => {
+    await expectRunFalse(
+      ["status"],
+      ["node", "openclaw", "status", "--json", "--deep", "--usage", "--timeout", "5000"],
     );
   });
 

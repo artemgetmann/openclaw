@@ -54,6 +54,93 @@ describe("browser control server", () => {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
     });
+
+    const snapAiWithTimeout = (await realFetch(
+      `${base}/snapshot?format=ai&targetId=abce9999&timeoutMs=42000`,
+    ).then((r) => r.json())) as {
+      ok: boolean;
+      format?: string;
+      targetId?: string;
+    };
+    expect(snapAiWithTimeout.ok).toBe(true);
+    expect(snapAiWithTimeout.format).toBe("ai");
+    expect(snapAiWithTimeout.targetId).toBe("abce9999");
+    expect(pwMocks.snapshotAiViaPlaywright).toHaveBeenLastCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abce9999",
+      timeoutMs: 42000,
+      maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+    });
+
+    const snapRoleAriaWithTimeout = (await realFetch(
+      `${base}/snapshot?format=ai&targetId=abcd1234&refs=aria&interactive=true&timeoutMs=12000`,
+    ).then((r) => r.json())) as { ok: boolean; format?: string };
+    expect(snapRoleAriaWithTimeout.ok).toBe(true);
+    expect(snapRoleAriaWithTimeout.format).toBe("ai");
+    expect(pwMocks.snapshotRoleViaPlaywright).toHaveBeenLastCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      selector: undefined,
+      frameSelector: undefined,
+      refsMode: "aria",
+      timeoutMs: 12000,
+      options: {
+        interactive: true,
+        compact: undefined,
+        maxDepth: undefined,
+      },
+    });
+  });
+
+  it("agent contract: ai snapshot timeout failure recovers with exact-target raw aria fallback", async () => {
+    const base = await startServerAndBase();
+    pwMocks.snapshotAiViaPlaywright.mockRejectedValueOnce(
+      new Error("page._snapshotForAI: Timeout 5000ms exceeded"),
+    );
+
+    const snap = (await realFetch(
+      `${base}/snapshot?format=ai&targetId=abce9999&timeoutMs=30000&limit=7`,
+    ).then((r) => r.json())) as {
+      ok: boolean;
+      format?: string;
+      fallback?: string;
+      targetId?: string;
+      nodes?: unknown[];
+    };
+
+    expect(snap.ok).toBe(true);
+    expect(snap.format).toBe("aria");
+    expect(snap.fallback).toBe("raw-cdp-aria");
+    expect(snap.targetId).toBe("abce9999");
+    expect(Array.isArray(snap.nodes)).toBe(true);
+    expect(pwMocks.snapshotAiViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abce9999",
+      timeoutMs: 30000,
+      maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+    });
+    expect(pwMocks.forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abce9999",
+      reason: "recover snapshot after Playwright AI snapshot failure",
+    });
+    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/abce9999",
+      limit: 7,
+    });
+  });
+
+  it("agent contract: non-recoverable ai snapshot errors do not fallback to raw aria", async () => {
+    const base = await startServerAndBase();
+    pwMocks.snapshotAiViaPlaywright.mockRejectedValueOnce(new Error("unexpected parser failure"));
+
+    const res = await realFetch(`${base}/snapshot?format=ai&targetId=abce9999`);
+    const body = (await res.json()) as { error?: string };
+
+    expect(res.status).toBe(500);
+    expect(body.error).toContain("unexpected parser failure");
+    expect(pwMocks.forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
+    expect(cdpMocks.snapshotAria).not.toHaveBeenCalled();
   });
 
   it("agent contract: navigation + common act commands", async () => {

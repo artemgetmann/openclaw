@@ -1,9 +1,20 @@
-import { describe, expect, it } from "vitest";
-import {
+import { describe, expect, it, vi } from "vitest";
+import openAIPlugin from "../../../extensions/openai/index.js";
+import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
+
+const capturedOpenAI = createCapturedPluginRegistration();
+openAIPlugin.register(capturedOpenAI.api);
+
+vi.mock("../providers.js", () => ({
+  resolveOwningPluginIdsForProvider: () => ["openai"],
+  resolvePluginProviders: () => capturedOpenAI.providers,
+}));
+
+const {
   augmentModelCatalogWithProviderPlugins,
   buildProviderMissingAuthMessageWithPlugin,
   resolveProviderBuiltInModelSuppression,
-} from "../provider-runtime.js";
+} = await import("../provider-runtime.js");
 
 describe("provider catalog contract", () => {
   it("keeps codex-only missing-auth hints wired through the provider runtime", () => {

@@ -1,70 +1,49 @@
-import { callGateway } from "../gateway/call.js";
-import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
-import { scanStatus } from "./status.scan.js";
+import { scanStatusJsonFast } from "./status-json-fast.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
-let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
+let statusDaemonModulePromise: Promise<typeof import("./status.daemon.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
   return providerUsagePromise;
 }
 
-function loadSecurityAuditModule() {
-  securityAuditModulePromise ??= import("../security/audit.runtime.js");
-  return securityAuditModulePromise;
+function loadStatusDaemonModule() {
+  statusDaemonModulePromise ??= import("./status.daemon.js");
+  return statusDaemonModulePromise;
 }
+
+const SKIPPED_SECURITY_AUDIT = {
+  skipped: true,
+  reason: "status --json skips security audit unless --deep is set",
+  summary: { critical: 0, warn: 0, info: 0 },
+  findings: [],
+};
 
 export async function statusJsonCommand(
   opts: {
-    deep?: boolean;
     usage?: boolean;
     timeoutMs?: number;
     all?: boolean;
   },
   runtime: RuntimeEnv,
 ) {
-  const scan = await scanStatus({ json: true, timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
-  const securityAudit = await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
-    runSecurityAudit({
-      config: scan.cfg,
-      sourceConfig: scan.sourceConfig,
-      deep: false,
-      includeFilesystem: true,
-      includeChannelSecurity: true,
-    }),
-  );
+  const scan = await scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all });
 
   const usage = opts.usage
     ? await loadProviderUsage().then(({ loadProviderUsageSummary }) =>
         loadProviderUsageSummary({ timeoutMs: opts.timeoutMs }),
       )
     : undefined;
-  const health = opts.deep
-    ? await callGateway({
-        method: "health",
-        params: { probe: true },
-        timeoutMs: opts.timeoutMs,
-        config: scan.cfg,
-      }).catch(() => undefined)
-    : undefined;
-  const lastHeartbeat =
-    opts.deep && scan.gatewayReachable
-      ? await callGateway<HeartbeatEventPayload | null>({
-          method: "last-heartbeat",
-          params: {},
-          timeoutMs: opts.timeoutMs,
-          config: scan.cfg,
-        }).catch(() => null)
-      : null;
 
-  const [daemon, nodeDaemon] = await Promise.all([
-    getDaemonStatusSummary(),
-    getNodeDaemonStatusSummary(),
-  ]);
+  // Service status reaches platform-specific runtime helpers. Load it after the
+  // lean scan so importing `status --json` does not pay that cost up front.
+  const [daemon, nodeDaemon] = await loadStatusDaemonModule().then(
+    ({ getDaemonStatusSummary, getNodeDaemonStatusSummary }) =>
+      Promise.all([getDaemonStatusSummary(), getNodeDaemonStatusSummary()]),
+  );
   const channelInfo = resolveUpdateChannelDisplay({
     configChannel: normalizeUpdateChannel(scan.cfg.update?.channel),
     installKind: scan.update.installKind,
@@ -96,9 +75,9 @@ export async function statusJsonCommand(
         gatewayService: daemon,
         nodeService: nodeDaemon,
         agents: scan.agentStatus,
-        securityAudit,
+        securityAudit: SKIPPED_SECURITY_AUDIT,
         secretDiagnostics: scan.secretDiagnostics,
-        ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
+        ...(usage ? { usage } : {}),
       },
       null,
       2,

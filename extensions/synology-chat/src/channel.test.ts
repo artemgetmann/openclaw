@@ -6,12 +6,35 @@ vi.mock("./webhook-handler.js", () => ({
 }));
 
 vi.mock("zod", () => ({
-  z: {
-    object: vi.fn(() => ({
-      passthrough: vi.fn(() => ({ _type: "zod-schema" })),
-    })),
-  },
+  z: chainableZodNamespace(),
 }));
+
+function chainableZodSchema() {
+  const schema = new Proxy(function zodSchemaStub() {}, {
+    get: (_target, prop) => {
+      if (prop === "parse") {
+        return vi.fn((value: unknown) => value);
+      }
+      return vi.fn(() => schema);
+    },
+  });
+  return schema;
+}
+
+function chainableZodNamespace() {
+  const schema = chainableZodSchema();
+  return new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        if (prop === "registry") {
+          return vi.fn(() => ({ has: vi.fn(() => false) }));
+        }
+        return vi.fn(() => schema);
+      },
+    },
+  );
+}
 
 const { createSynologyChatPlugin } = await import("./channel.js");
 

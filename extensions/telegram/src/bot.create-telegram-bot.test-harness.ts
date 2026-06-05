@@ -82,6 +82,29 @@ vi.mock("../../../src/auto-reply/skill-commands.js", () => ({
   listSkillCommandsForAgents,
 }));
 
+const loadModelCatalog = vi.hoisted(() =>
+  vi.fn(async () => [
+    {
+      id: "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+      name: "Claude 3.5 Sonnet Bedrock",
+      provider: "bedrock",
+    },
+    { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
+    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+    { id: "shared-model", name: "Shared Anthropic", provider: "anthropic" },
+    { id: "gpt-5.4", name: "GPT 5.4", provider: "openai-codex" },
+    { id: "shared-model", name: "Shared OpenAI", provider: "openai" },
+  ]),
+);
+
+vi.mock("../../../src/agents/model-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/agents/model-catalog.js")>();
+  return {
+    ...actual,
+    loadModelCatalog,
+  };
+});
+
 const systemEventsHoisted = vi.hoisted(() => ({
   enqueueSystemEventSpy: vi.fn(),
 }));

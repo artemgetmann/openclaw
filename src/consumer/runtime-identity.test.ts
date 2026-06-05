@@ -8,6 +8,10 @@ import {
 } from "./runtime-identity.js";
 
 describe("consumer/runtime-identity", () => {
+  function consumerPath(...segments: string[]): string {
+    return path.join("/Users/tester", "Library", "Application Support", "OpenClaw", ...segments);
+  }
+
   it("normalizes instance ids to the shared shell-safe contract", () => {
     expect(normalizeConsumerRuntimeId("  Main Durable_Lane  ")).toBe("main-durable-lane");
     expect(normalizeConsumerRuntimeId("___")).toBe("");
@@ -34,11 +38,11 @@ describe("consumer/runtime-identity", () => {
     const homeDir = "/Users/tester";
     expect(resolveConsumerRuntimeIdentity({ homeDir })).toEqual({
       normalizedId: "",
-      runtimeRoot: "/Users/tester/Library/Application Support/OpenClaw",
-      stateDir: "/Users/tester/Library/Application Support/OpenClaw/.openclaw",
-      configPath: "/Users/tester/Library/Application Support/OpenClaw/.openclaw/openclaw.json",
-      workspacePath: "/Users/tester/Library/Application Support/OpenClaw/.openclaw/workspace",
-      logDir: "/Users/tester/Library/Application Support/OpenClaw/.openclaw/logs",
+      runtimeRoot: consumerPath(),
+      stateDir: consumerPath(".openclaw"),
+      configPath: consumerPath(".openclaw", "openclaw.json"),
+      workspacePath: consumerPath(".openclaw", "workspace"),
+      logDir: consumerPath(".openclaw", "logs"),
       profile: "consumer",
       launchdLabel: "ai.openclaw.consumer",
       gatewayLaunchdLabel: "ai.openclaw.gateway",
@@ -56,15 +60,11 @@ describe("consumer/runtime-identity", () => {
 
     expect(identity).toEqual({
       normalizedId: "main-durable-lane",
-      runtimeRoot: "/Users/tester/Library/Application Support/OpenClaw/instances/main-durable-lane",
-      stateDir:
-        "/Users/tester/Library/Application Support/OpenClaw/instances/main-durable-lane/.openclaw",
-      configPath:
-        "/Users/tester/Library/Application Support/OpenClaw/instances/main-durable-lane/.openclaw/openclaw.json",
-      workspacePath:
-        "/Users/tester/Library/Application Support/OpenClaw/instances/main-durable-lane/.openclaw/workspace",
-      logDir:
-        "/Users/tester/Library/Application Support/OpenClaw/instances/main-durable-lane/.openclaw/logs",
+      runtimeRoot: consumerPath("instances", "main-durable-lane"),
+      stateDir: consumerPath("instances", "main-durable-lane", ".openclaw"),
+      configPath: consumerPath("instances", "main-durable-lane", ".openclaw", "openclaw.json"),
+      workspacePath: consumerPath("instances", "main-durable-lane", ".openclaw", "workspace"),
+      logDir: consumerPath("instances", "main-durable-lane", ".openclaw", "logs"),
       profile: "consumer-main-durable-lane",
       launchdLabel: "ai.openclaw.consumer.main-durable-lane",
       gatewayLaunchdLabel: "ai.openclaw.consumer.main-durable-lane.gateway",

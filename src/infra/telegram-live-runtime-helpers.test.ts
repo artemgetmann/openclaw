@@ -654,7 +654,9 @@ describe("telegram live runtime helpers", () => {
       },
     });
 
-    expect(Object.keys(pruned.profiles)).toEqual(["openai-codex:default"]);
+    expect(Object.keys(pruned.profiles as Record<string, unknown>)).toEqual([
+      "openai-codex:default",
+    ]);
     expect(pruned.order).toEqual({ "openai-codex": ["openai-codex:default"] });
     expect(pruned.lastGood).toEqual({ "openai-codex": "openai-codex:default" });
     expect(pruned.usageStats).toEqual({ "openai-codex:default": { lastUsed: 1 } });

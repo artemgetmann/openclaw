@@ -423,10 +423,12 @@ describe("sendMessageTelegram", () => {
         options: { messageThreadId: 271, replyToMessageId: 100 } as const,
         firstCall: {
           parse_mode: "HTML",
+          allow_sending_without_reply: true,
           message_thread_id: 271,
           reply_to_message_id: 100,
         },
         secondCall: {
+          allow_sending_without_reply: true,
           message_thread_id: 271,
           reply_to_message_id: 100,
         },
@@ -866,8 +868,12 @@ describe("sendMessageTelegram", () => {
         options: {
           replyToMessageId: 999,
         },
-        expectedVideoNote: { reply_to_message_id: 999 },
+        expectedVideoNote: {
+          allow_sending_without_reply: true,
+          reply_to_message_id: 999,
+        },
         expectedMessage: {
+          allow_sending_without_reply: true,
           parse_mode: "HTML",
           reply_to_message_id: 999,
         },
@@ -1136,6 +1142,7 @@ describe("sendMessageTelegram", () => {
         replyToMessageId: 500,
         expectedMethod: "sendVoice" as const,
         expectedOptions: {
+          allow_sending_without_reply: true,
           caption: "voice note",
           parse_mode: "HTML",
           message_thread_id: 271,
@@ -1898,6 +1905,7 @@ describe("shared send behaviors", () => {
             replyToMessageId: 100,
           });
           expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
+            allow_sending_without_reply: true,
             parse_mode: "HTML",
             reply_to_message_id: 100,
           });
@@ -1921,6 +1929,7 @@ describe("shared send behaviors", () => {
             replyToMessageId: 500,
           });
           expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
+            allow_sending_without_reply: true,
             reply_to_message_id: 500,
           });
         },

@@ -63,10 +63,8 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
       }
 
       const { buffer, mimeType } = decodeDataUrl(result.qrDataUrl);
-      const qrPath = path.join(
-        os.tmpdir(),
-        `openclaw-whatsapp-qr-${Date.now()}-${randomUUID()}.png`,
-      );
+      const qrDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-whatsapp-qr-"));
+      const qrPath = path.join(qrDir, `${randomUUID()}.png`);
       await fs.writeFile(qrPath, buffer);
       return await imageResult({
         label: "whatsapp-login",

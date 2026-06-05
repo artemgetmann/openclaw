@@ -18,6 +18,7 @@ beforeAll(async () => {
   missingCommandRuntime = new AcpxRuntime(
     {
       command: "/definitely/missing/acpx",
+      installRoot: path.join(os.tmpdir(), "missing-acpx-install-root"),
       allowPluginLocalInstall: false,
       stripProviderAuthEnvVars: false,
       installCommand: "n/a",

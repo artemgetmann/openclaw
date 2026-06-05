@@ -167,9 +167,9 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("gemini");
   });
 
-  it("auto-detects firecrawl when only FIRECRAWL_API_KEY is set", () => {
+  it("leaves the built-in web_search resolver on brave when only Firecrawl is configured", () => {
     process.env.FIRECRAWL_API_KEY = "fc-test-key"; // pragma: allowlist secret
-    expect(resolveSearchProvider({})).toBe("firecrawl");
+    expect(resolveSearchProvider({})).toBe("brave");
   });
 
   it("auto-detects kimi when only KIMI_API_KEY is set", () => {

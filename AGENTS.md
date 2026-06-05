@@ -78,6 +78,5 @@
 
 ## Repo-local skills
 
-- `.agents/skills/openclaw-worktree-lane/SKILL.md`
 - `.agents/skills/telegram-live-e2e/SKILL.md`
 - `.agents/skills/parallels-discord-roundtrip/SKILL.md`

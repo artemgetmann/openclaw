@@ -222,6 +222,8 @@ describe("discord tool result dispatch", () => {
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Discord user id: u2");
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toMatch(
+      /Pairing code:\s*```[\s\S]*PAIRCODE[\s\S]*```/,
+    );
   }, 10000);
 });

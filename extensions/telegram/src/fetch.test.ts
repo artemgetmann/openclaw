@@ -195,6 +195,7 @@ afterEach(() => {
   ProxyAgentCtor.mockClear();
   setDefaultResultOrder.mockReset();
   setDefaultAutoSelectFamily.mockReset();
+  resetTelegramTransportStickyIpv4CacheForTests();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
 });

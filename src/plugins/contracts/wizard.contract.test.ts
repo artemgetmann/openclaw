@@ -5,24 +5,11 @@ import {
   buildProviderWizardOptions,
   resolveProviderPluginChoice,
 } from "../provider-wizard.js";
-import { resolvePluginProviders } from "../providers.js";
 import type { ProviderPlugin } from "../types.js";
 import { providerContractRegistry } from "./registry.js";
 
-function createBundledProviderConfig() {
-  return {
-    plugins: {
-      enabled: true,
-      allow: [...new Set(providerContractRegistry.map((entry) => entry.pluginId))],
-      slots: {
-        memory: "none",
-      },
-    },
-  };
-}
-
-function resolveProviderPluginIds() {
-  return [...new Set(providerContractRegistry.map((entry) => entry.pluginId))];
+function resolveContractProviders() {
+  return providerContractRegistry.map((entry) => entry.provider);
 }
 
 function resolveExpectedWizardChoiceValues(providers: ProviderPlugin[]) {
@@ -86,13 +73,7 @@ function resolveExpectedModelPickerValues(providers: ProviderPlugin[]) {
 
 describe("provider wizard contract", () => {
   it("exposes every registered provider setup choice through the shared wizard layer", () => {
-    const config = createBundledProviderConfig();
-    const onlyPluginIds = resolveProviderPluginIds();
-    const providers = resolvePluginProviders({
-      config,
-      env: process.env,
-      onlyPluginIds,
-    });
+    const providers = resolveContractProviders();
 
     const options = buildProviderWizardOptions(providers);
 
@@ -105,13 +86,7 @@ describe("provider wizard contract", () => {
   });
 
   it("round-trips every shared wizard choice back to its provider and auth method", () => {
-    const config = createBundledProviderConfig();
-    const onlyPluginIds = resolveProviderPluginIds();
-    const providers = resolvePluginProviders({
-      config,
-      env: process.env,
-      onlyPluginIds,
-    });
+    const providers = resolveContractProviders();
 
     for (const option of buildProviderWizardOptions(providers)) {
       const resolved = resolveProviderPluginChoice({
@@ -125,13 +100,7 @@ describe("provider wizard contract", () => {
   });
 
   it("exposes every registered model-picker entry through the shared wizard layer", () => {
-    const config = createBundledProviderConfig();
-    const onlyPluginIds = resolveProviderPluginIds();
-    const providers = resolvePluginProviders({
-      config,
-      env: process.env,
-      onlyPluginIds,
-    });
+    const providers = resolveContractProviders();
 
     const entries = buildProviderModelPickerEntries(providers);
 

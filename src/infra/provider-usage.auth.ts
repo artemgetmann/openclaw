@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   dedupeProfileIds,
   ensureAuthProfileStore,
@@ -11,6 +14,7 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { resolveRequiredHomeDir } from "./home-dir.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -166,6 +170,103 @@ async function resolveProviderUsageAuthViaPlugin(params: {
   };
 }
 
+function resolveLegacyZaiUsageToken(env: NodeJS.ProcessEnv): string | undefined {
+  try {
+    const authPath = path.join(
+      resolveRequiredHomeDir(env, os.homedir),
+      ".pi",
+      "agent",
+      "auth.json",
+    );
+    if (!fs.existsSync(authPath)) {
+      return undefined;
+    }
+    const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<
+      string,
+      { access?: string }
+    >;
+    return normalizeSecretInput(parsed["z-ai"]?.access || parsed.zai?.access);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseGoogleGeminiCliUsageToken(token: string): string {
+  try {
+    const parsed = JSON.parse(token) as { token?: unknown };
+    if (typeof parsed.token === "string" && parsed.token.trim()) {
+      return parsed.token;
+    }
+  } catch {
+    // Raw OAuth token profile payloads are still valid.
+  }
+  return token;
+}
+
+function resolveSimpleBuiltInProviderUsageAuth(params: {
+  state: UsageAuthState;
+  provider: UsageProviderId;
+}): ProviderAuth | null | undefined {
+  if (params.provider === "minimax") {
+    const token = resolveProviderApiKeyFromConfigAndStore({
+      state: params.state,
+      providerIds: ["minimax", "minimax-cn"],
+      envDirect: [params.state.env.MINIMAX_CODE_PLAN_KEY, params.state.env.MINIMAX_API_KEY],
+    });
+    return token ? { provider: "minimax", token } : null;
+  }
+
+  if (params.provider === "xiaomi") {
+    const token = resolveProviderApiKeyFromConfigAndStore({
+      state: params.state,
+      providerIds: ["xiaomi"],
+      envDirect: [params.state.env.XIAOMI_API_KEY],
+    });
+    return token ? { provider: "xiaomi", token } : null;
+  }
+
+  if (params.provider === "zai") {
+    const token =
+      resolveProviderApiKeyFromConfigAndStore({
+        state: params.state,
+        providerIds: ["zai", "z-ai"],
+        envDirect: [params.state.env.ZAI_API_KEY, params.state.env.Z_AI_API_KEY],
+      }) ?? resolveLegacyZaiUsageToken(params.state.env);
+    return token ? { provider: "zai", token } : null;
+  }
+
+  return undefined;
+}
+
+async function resolveBuiltInOAuthProviderUsageAuth(params: {
+  state: UsageAuthState;
+  provider: UsageProviderId;
+}): Promise<ProviderAuth | null | undefined> {
+  if (
+    params.provider !== "anthropic" &&
+    params.provider !== "github-copilot" &&
+    params.provider !== "google-gemini-cli" &&
+    params.provider !== "openai-codex"
+  ) {
+    return undefined;
+  }
+
+  const auth = await resolveOAuthToken({
+    state: params.state,
+    provider: params.provider,
+  });
+  if (!auth) {
+    return null;
+  }
+  if (params.provider === "google-gemini-cli") {
+    return {
+      ...auth,
+      token: parseGoogleGeminiCliUsageToken(auth.token),
+    };
+  }
+  return auth;
+}
+
 export async function resolveProviderAuths(params: {
   providers: UsageProviderId[];
   auth?: ProviderAuth[];
@@ -186,6 +287,30 @@ export async function resolveProviderAuths(params: {
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {
+    const builtInAuth = resolveSimpleBuiltInProviderUsageAuth({
+      state,
+      provider,
+    });
+    if (builtInAuth) {
+      auths.push(builtInAuth);
+      continue;
+    }
+    if (builtInAuth === null) {
+      continue;
+    }
+
+    const builtInOAuthAuth = await resolveBuiltInOAuthProviderUsageAuth({
+      state,
+      provider,
+    });
+    if (builtInOAuthAuth) {
+      auths.push(builtInOAuthAuth);
+      continue;
+    }
+    if (builtInOAuthAuth === null) {
+      continue;
+    }
+
     const pluginAuth = await resolveProviderUsageAuthViaPlugin({
       state,
       provider,
