@@ -258,6 +258,59 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Context: 55/1.0m");
   });
 
+  it("reports Codex GPT-5.5's effective context window when no session override exists", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.5",
+            compaction: { mode: "safeguard", reserveTokensFloor: 20_000 },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openai-codex/gpt-5.5",
+      },
+      sessionEntry: {
+        sessionId: "codex-gpt-55-effective-context",
+        updatedAt: 0,
+        totalTokens: 10_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai-codex/gpt-5.5");
+    expect(normalized).toContain("Context: 10k/258k");
+    expect(normalized).not.toContain("Context: 10k/200k");
+  });
+
+  it("recomputes Codex GPT-5.5's effective context window with stale session context", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai-codex/gpt-5.5",
+      },
+      sessionEntry: {
+        sessionId: "codex-gpt-55-stale-context",
+        updatedAt: 0,
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.5",
+        contextTokens: 200_000,
+        totalTokens: 55,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai-codex/gpt-5.5");
+    expect(normalized).toContain("Context: 55/258k");
+    expect(normalized).not.toContain("Context: 55/200k");
+  });
+
   it("recomputes context window from the active model after switching away from a smaller session override", () => {
     const sessionEntry = {
       sessionId: "switch-back",

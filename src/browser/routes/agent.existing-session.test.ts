@@ -23,10 +23,12 @@ const routeState = vi.hoisted(() => ({
 
 const chromeMcpMocks = vi.hoisted(() => ({
   clickChromeMcpElement: vi.fn(async () => {}),
+  fillChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
+  pressChromeMcpKey: vi.fn(async () => {}),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
     id: "root",
@@ -41,11 +43,11 @@ vi.mock("../chrome-mcp.js", () => ({
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
-  fillChromeMcpElement: vi.fn(async () => {}),
+  fillChromeMcpElement: chromeMcpMocks.fillChromeMcpElement,
   fillChromeMcpForm: vi.fn(async () => {}),
   hoverChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
-  pressChromeMcpKey: vi.fn(async () => {}),
+  pressChromeMcpKey: chromeMcpMocks.pressChromeMcpKey,
   resizeChromeMcpPage: vi.fn(async () => {}),
   takeChromeMcpScreenshot: chromeMcpMocks.takeChromeMcpScreenshot,
   takeChromeMcpSnapshot: chromeMcpMocks.takeChromeMcpSnapshot,
@@ -72,6 +74,7 @@ vi.mock("../screenshot.js", () => ({
 }));
 
 vi.mock("../../media/store.js", () => ({
+  MEDIA_MAX_BYTES: 10_000_000,
   ensureMediaDir: vi.fn(async () => {}),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
@@ -127,12 +130,24 @@ function getActPostHandler() {
   return handler;
 }
 
+function getDialogHookPostHandler() {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentActRoutes(app, {
+    state: () => ({ resolved: { evaluateEnabled: true } }),
+  } as never);
+  const handler = postHandlers.get("/hooks/dialog");
+  expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
 describe("existing-session browser routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
     chromeMcpMocks.clickChromeMcpElement.mockClear();
+    chromeMcpMocks.fillChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
+    chromeMcpMocks.pressChromeMcpKey.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript
@@ -233,7 +248,9 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.takeChromeMcpScreenshot).not.toHaveBeenCalled();
   });
 
-  it("fails closed for existing-session networkidle waits", async () => {
+  it("degrades existing-session networkidle waits to document complete", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();
     await handler?.(
@@ -245,11 +262,13 @@ describe("existing-session browser routes", () => {
       response.res,
     );
 
-    expect(response.statusCode).toBe(501);
-    expect(response.body).toMatchObject({
-      error: expect.stringContaining("loadState=networkidle"),
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining('document.readyState === "complete"'),
     });
-    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
 
   it("supports glob URL waits for existing-session profiles", async () => {
@@ -298,9 +317,70 @@ describe("existing-session browser routes", () => {
       profileName: "chrome-live",
       targetId: "7",
       fn: expect.stringContaining("document.querySelector"),
-      args: ["button[type='submit']"],
       timeoutMs: 12_000,
     });
+  });
+
+  it("recovers human text refs for existing-session clicks when Chrome MCP rejects the uid", async () => {
+    chromeMcpMocks.clickChromeMcpElement.mockRejectedValueOnce(
+      new Error('Error: Element uid "Kuala Lumpur" not found on page 3'),
+    );
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "click", ref: "Kuala Lumpur", timeoutMs: 12_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      uid: "Kuala Lumpur",
+      doubleClick: false,
+      timeoutMs: 12_000,
+    });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("No visible text ref matches"),
+      timeoutMs: 12_000,
+    });
+  });
+
+  it("refreshes stable existing-session click refs when Chrome MCP rejects the uid", async () => {
+    chromeMcpMocks.clickChromeMcpElement.mockRejectedValueOnce(
+      new Error('Error: Element uid "btn-1" not found on page 3'),
+    );
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "click", ref: "btn-1", timeoutMs: 12_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+    });
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledTimes(2);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["btn-1"] }),
+    );
   });
 
   it("chooses searchable portal options through existing-session structured action", async () => {
@@ -341,8 +421,137 @@ describe("existing-session browser routes", () => {
       profileName: "chrome-live",
       targetId: "7",
       fn: expect.stringContaining("ant-select-dropdown"),
-      args: ["combo-to", "Bali/Denpasar (DPS)", "exact", "Bali/Denpasar (DPS)", "14000"],
+      args: ["combo-to"],
       timeoutMs: 14_000,
+    });
+    const script = chromeMcpMocks.evaluateChromeMcpScript.mock.calls[0]?.[0].fn;
+    expect(script).toContain("setValue(editable, queryText)");
+    expect(script).not.toContain("matchTexts");
+    expect(script).not.toContain("matchTexts.push(queryText)");
+  });
+
+  it("rejects existing-session chooseOption when query matches the wrong visible option", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce({
+      optionText: "Kuala Lumpur (KUL)",
+      matchedText: "Bengkulu (BKS)",
+      selectedText: "Bengkulu (BKS)",
+      changed: true,
+    } as never);
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "chooseOption",
+          ref: "combo-to",
+          optionText: "Kuala Lumpur (KUL)",
+          query: "KUL",
+          match: "contains",
+          timeoutMs: 14_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({
+      error: expect.stringContaining('chooseOption matched "Bengkulu (BKS)"'),
+    });
+    expect(response.body).not.toMatchObject({ ok: true });
+    const script = chromeMcpMocks.evaluateChromeMcpScript.mock.calls[0]?.[0].fn;
+    expect(script).toContain("setValue(editable, queryText)");
+    expect(script).not.toContain("matchTexts");
+    expect(script).not.toContain("matchTexts.push(queryText)");
+  });
+
+  it("keeps scrollIntoView timeout overrides at the MCP request layer", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "scrollIntoView",
+          ref: "fare-return-1",
+          timeoutMs: 14_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("scrollIntoView"),
+      args: ["fare-return-1"],
+      timeoutMs: 14_000,
+    });
+  });
+
+  it("focuses ref targets before existing-session press", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "press", ref: "combo-title", key: "Enter", timeoutMs: 10_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      uid: "combo-title",
+      timeoutMs: 10_000,
+    });
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      key: "Enter",
+      timeoutMs: 10_000,
+    });
+  });
+
+  it("focuses selector targets before existing-session press", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "press", selector: "[role='combobox']", key: "ArrowDown", timeoutMs: 10_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("el.focus"),
+      args: ["[role='combobox']"],
+      timeoutMs: 10_000,
+    });
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      key: "ArrowDown",
+      timeoutMs: 10_000,
     });
   });
 
@@ -371,6 +580,32 @@ describe("existing-session browser routes", () => {
     });
   });
 
+  it("normalizes existing-session dialog timeoutMs instead of hard-failing", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+    const handler = getDialogHookPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { accept: true, promptText: "Ada", timeoutMs: 9_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true });
+    expect(JSON.stringify(response.body)).not.toContain(
+      "existing-session dialog handling does not support timeoutMs",
+    );
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("__openclawDialogHook"),
+    });
+  });
+
   it("fills selector-only fields for existing-session profiles via evaluate fallback", async () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue(true as never);
@@ -395,8 +630,188 @@ describe("existing-session browser routes", () => {
       profileName: "chrome-live",
       targetId: "7",
       fn: expect.stringContaining("document.querySelector"),
-      args: ["input[name='arrival']", "DXB"],
       timeoutMs: 11_000,
     });
+  });
+
+  it("normalizes existing-session type slowly=true to normal fill behavior", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "type",
+          ref: "input-1",
+          text: "Ada",
+          slowly: true,
+          timeoutMs: 11_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      targetId: "7",
+      normalized: { slowly: false },
+    });
+    expect(chromeMcpMocks.fillChromeMcpElement).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      uid: "input-1",
+      value: "Ada",
+      timeoutMs: 11_000,
+    });
+  });
+
+  it("types into selector-only existing-session targets through evaluate fallback", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "type",
+          selector: "input[name='firstName']",
+          text: "Ada",
+          submit: true,
+          timeoutMs: 12_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("document.querySelector"),
+      timeoutMs: 12_000,
+    });
+  });
+
+  it("passes only real element refs as evaluate_script args for chooseOption", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce({
+      matchedText: "Kuala Lumpur",
+    } as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "chooseOption",
+          ref: "airport-from",
+          optionText: "Kuala Lumpur",
+          timeoutMs: 30_000,
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("Kuala Lumpur"),
+      args: ["airport-from"],
+      timeoutMs: 30_000,
+    });
+  });
+
+  it("refreshes snapshot once and retries stale existing-session element refs", async () => {
+    chromeMcpMocks.clickChromeMcpElement
+      .mockRejectedValueOnce(new Error('Element uid "btn-1" not found'))
+      .mockResolvedValueOnce(undefined);
+    chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "click", ref: "btn-1" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+    });
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledTimes(2);
+  });
+
+  it("focuses selector targets before existing-session press", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "press", selector: "input[name='from']", key: "Enter", timeoutMs: 8_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileName: "chrome-live",
+        targetId: "7",
+        fn: expect.stringContaining("document.querySelector"),
+        args: ["input[name='from']"],
+        timeoutMs: 8_000,
+      }),
+    );
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      key: "Enter",
+      timeoutMs: 8_000,
+    });
+  });
+
+  it("normalizes existing-session scrollIntoView timeoutMs instead of hard-failing", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "scrollIntoView", ref: "section-1", timeoutMs: 8_000 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(JSON.stringify(response.body)).not.toContain(
+      "existing-session scrollIntoView does not support timeoutMs overrides",
+    );
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileName: "chrome-live",
+        targetId: "7",
+        fn: expect.stringContaining("scrollIntoView"),
+        args: ["section-1"],
+        timeoutMs: 8_000,
+      }),
+    );
   });
 });

@@ -11,6 +11,8 @@ const { detectChangedScope, listChangedPaths } =
       runAndroid: boolean;
       runWindows: boolean;
       runSkillsPython: boolean;
+      runCiScopeTests: boolean;
+      runBrowserAgent: boolean;
     };
     listChangedPaths: (base: string, head?: string) => string[];
   };
@@ -34,6 +36,8 @@ describe("detectChangedScope", () => {
       runAndroid: true,
       runWindows: true,
       runSkillsPython: true,
+      runCiScopeTests: true,
+      runBrowserAgent: false,
     });
   });
 
@@ -44,6 +48,8 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
     });
   });
 
@@ -54,6 +60,8 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
     });
   });
 
@@ -64,6 +72,8 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
     });
     expect(detectChangedScope(["apps/shared/OpenClawKit/Sources/Foo.swift"])).toEqual({
       runNode: false,
@@ -71,10 +81,12 @@ describe("detectChangedScope", () => {
       runAndroid: true,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
     });
   });
 
-  it("does not force macOS for generated protocol model-only changes", () => {
+  it("does not force native lanes for generated protocol model-only changes", () => {
     expect(detectChangedScope(["apps/macos/Sources/OpenClawProtocol/GatewayModels.swift"])).toEqual(
       {
         runNode: false,
@@ -82,8 +94,21 @@ describe("detectChangedScope", () => {
         runAndroid: false,
         runWindows: false,
         runSkillsPython: false,
+        runCiScopeTests: false,
+        runBrowserAgent: false,
       },
     );
+    expect(
+      detectChangedScope(["apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"]),
+    ).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
+    });
   });
 
   it("enables node lane for non-native non-doc files by fallback", () => {
@@ -93,6 +118,8 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
     });
 
     expect(detectChangedScope(["assets/icon.png"])).toEqual({
@@ -101,6 +128,8 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
     });
   });
 
@@ -111,6 +140,8 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
     });
   });
 
@@ -121,16 +152,93 @@ describe("detectChangedScope", () => {
       runAndroid: false,
       runWindows: false,
       runSkillsPython: true,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
     });
   });
 
-  it("runs platform lanes when the CI workflow changes", () => {
+  it("keeps product lanes off for workflow-only changes", () => {
     expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
+    });
+  });
+
+  it("runs only focused scope tests for the CI scope detector", () => {
+    expect(detectChangedScope(["scripts/ci-changed-scope.mjs"])).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runCiScopeTests: true,
+      runBrowserAgent: false,
+    });
+
+    expect(detectChangedScope(["src/scripts/ci-changed-scope.test.ts"])).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runCiScopeTests: true,
+      runBrowserAgent: false,
+    });
+  });
+
+  it("runs the focused browser-agent lane for browser-agent-only changes", () => {
+    expect(
+      detectChangedScope([
+        "src/browser/chrome-mcp.ts",
+        "src/browser/routes/agent.act.ts",
+        "src/browser/routes/agent.existing-session.test.ts",
+        "src/browser/chrome-mcp.test.ts",
+        "src/agents/tools/browser-tool.ts",
+        "src/agents/tools/browser-tool.schema.ts",
+        "src/agents/tools/browser-tool.test.ts",
+        "docs/agent-guides/browser-agent-e2e.md",
+        "apps/macos/Sources/OpenClawProtocol/GatewayModels.swift",
+        "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+      ]),
+    ).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: true,
+    });
+  });
+
+  it("falls back to broad Node and Windows CI when browser-agent changes include unrelated runtime files", () => {
+    expect(
+      detectChangedScope(["src/browser/chrome-mcp.ts", "src/plugins/runtime/index.ts"]),
+    ).toEqual({
       runNode: true,
-      runMacos: true,
-      runAndroid: true,
+      runMacos: false,
+      runAndroid: false,
       runWindows: true,
-      runSkillsPython: true,
+      runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
+    });
+
+    expect(
+      detectChangedScope(["src/browser/chrome-mcp.ts", "extensions/browser/package.json"]),
+    ).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runCiScopeTests: false,
+      runBrowserAgent: false,
     });
   });
 

@@ -797,6 +797,13 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         lastStopAt: runtime?.lastStopAt ?? null,
         lastError: runtime?.lastError ?? duplicateTokenReason,
         mode: runtime?.mode ?? (account.config.webhookUrl ? "webhook" : "polling"),
+        connected: runtime?.connected,
+        pollingInFlight: runtime?.pollingInFlight,
+        lastPollStartedAt: runtime?.lastPollStartedAt ?? null,
+        lastPollCompletedAt: runtime?.lastPollCompletedAt ?? null,
+        lastPollOutcome: runtime?.lastPollOutcome ?? null,
+        lastTransportActivityAt: runtime?.lastTransportActivityAt ?? null,
+        transportActivity: runtime?.transportActivity,
         probe,
         audit,
         allowUnmentionedGroups,
@@ -870,6 +877,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         webhookHost: account.config.webhookHost,
         webhookPort: account.config.webhookPort,
         webhookCertPath: account.config.webhookCertPath,
+        setStatus: (next) => ctx.setStatus({ accountId: account.accountId, ...next }),
       });
     },
     logoutAccount: async ({ accountId, cfg }) => {

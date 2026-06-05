@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -72,6 +72,11 @@ export type RunningChrome = {
   cdpPort: number;
   startedAt: number;
   proc: ChildProcessWithoutNullStreams;
+};
+
+export type OpenClawChromeProcessMatch = {
+  pid: number;
+  command: string;
 };
 
 function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
@@ -176,6 +181,79 @@ function seedClonedChromeProfile(profile: ResolvedBrowserProfile, userDataDir: s
 
 function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
+}
+
+function normalizeUserDataDirForProcessMatch(userDataDir: string) {
+  return path.resolve(userDataDir);
+}
+
+function extractCommandFlagValue(commandLine: string, flagName: string): string | null {
+  const prefix = `--${flagName}=`;
+  const start = commandLine.indexOf(prefix);
+  if (start < 0) {
+    return null;
+  }
+  const raw = commandLine.slice(start + prefix.length);
+  if (!raw) {
+    return null;
+  }
+  const quote = raw[0];
+  if (quote === '"' || quote === "'") {
+    const end = raw.indexOf(quote, 1);
+    return end > 1 ? raw.slice(1, end) : null;
+  }
+  const nextFlag = raw.indexOf(" --");
+  return (nextFlag >= 0 ? raw.slice(0, nextFlag) : raw).trim() || null;
+}
+
+function readOpenClawChromeProcessCommands(): OpenClawChromeProcessMatch[] {
+  if (process.platform !== "darwin") {
+    return [];
+  }
+  const ps = spawnSync("ps", ["-axo", "pid=,command="], {
+    encoding: "utf8",
+    timeout: 1_000,
+  });
+  if (ps.error || ps.status !== 0) {
+    return [];
+  }
+  return ps.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const match = /^(\d+)\s+(.+)$/.exec(line);
+      if (!match) {
+        return [];
+      }
+      return [{ pid: Number.parseInt(match[1] ?? "", 10), command: match[2] ?? "" }];
+    })
+    .filter((entry) => Number.isFinite(entry.pid));
+}
+
+export function findOpenClawChromeProcessMatches(params: {
+  userDataDir: string;
+  cdpPort: number;
+  profileDirectory?: string;
+}): OpenClawChromeProcessMatch[] {
+  const expectedUserDataDir = normalizeUserDataDirForProcessMatch(params.userDataDir);
+  const expectedPort = String(params.cdpPort);
+  return readOpenClawChromeProcessCommands().filter(({ command }) => {
+    // Match only Chrome parent processes for the exact worktree-owned clone
+    // path and port. Helper processes inherit flags but are not launch owners.
+    if (command.includes(" --type=") || command.includes(" Helper")) {
+      return false;
+    }
+    const userDataDir = extractCommandFlagValue(command, "user-data-dir");
+    if (!userDataDir || normalizeUserDataDirForProcessMatch(userDataDir) !== expectedUserDataDir) {
+      return false;
+    }
+    if (extractCommandFlagValue(command, "remote-debugging-port") !== expectedPort) {
+      return false;
+    }
+    const profileDirectory = extractCommandFlagValue(command, "profile-directory");
+    return !params.profileDirectory || profileDirectory === params.profileDirectory;
+  });
 }
 
 export function buildOpenClawChromeLaunchArgs(params: {

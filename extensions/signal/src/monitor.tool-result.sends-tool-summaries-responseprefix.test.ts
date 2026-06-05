@@ -336,7 +336,9 @@ describe("monitorSignalProvider tool results", () => {
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Signal number: +15550001111");
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toMatch(
+      /Pairing code:\s*```[\s\S]*PAIRCODE[\s\S]*```/,
+    );
   });
 
   it("ignores reaction-only messages", async () => {

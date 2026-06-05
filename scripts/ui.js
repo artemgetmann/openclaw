@@ -45,15 +45,28 @@ function which(cmd) {
   return null;
 }
 
-function prependPathEntry(entry, currentPath = process.env.PATH ?? "") {
+function pathApiForPlatform(platform = process.platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
+function pathDelimiterForPlatform(platform = process.platform) {
+  return platform === "win32" ? ";" : ":";
+}
+
+function prependPathEntry(
+  entry,
+  currentPath = process.env.PATH ?? "",
+  platform = process.platform,
+) {
   if (!entry) {
     return currentPath;
   }
-  const segments = currentPath.split(path.delimiter).filter(Boolean);
+  const delimiter = pathDelimiterForPlatform(platform);
+  const segments = currentPath.split(delimiter).filter(Boolean);
   if (segments.includes(entry)) {
     return currentPath || entry;
   }
-  return currentPath ? `${entry}${path.delimiter}${currentPath}` : entry;
+  return currentPath ? `${entry}${delimiter}${currentPath}` : entry;
 }
 
 function collectNodeToolchainCandidates({
@@ -97,13 +110,14 @@ export function resolveCorepackBinary({
   realpathSync = fs.realpathSync,
 } = {}) {
   const corepackName = platform === "win32" ? "corepack.cmd" : "corepack";
+  const platformPath = pathApiForPlatform(platform);
 
   for (const candidateNode of collectNodeToolchainCandidates({
     nodeExecPath,
     envNodeBin,
     realpathSync,
   })) {
-    const candidate = path.join(path.dirname(candidateNode), corepackName);
+    const candidate = platformPath.join(platformPath.dirname(candidateNode), corepackName);
     try {
       if (existsSync(candidate)) {
         return {
@@ -143,7 +157,7 @@ export function resolveRunner({
     realpathSync,
   });
   if (toolchain) {
-    const nodeDir = path.dirname(toolchain.nodeExecPath);
+    const nodeDir = pathApiForPlatform(platform).dirname(toolchain.nodeExecPath);
     // Corepack itself is a node script (`#!/usr/bin/env node`), so launchd
     // recovery needs the exact Node/Corepack pair that lived together on disk
     // instead of trusting `node` to be on PATH or mixing two installs.
@@ -151,7 +165,7 @@ export function resolveRunner({
       cmd: toolchain.nodeExecPath,
       argvPrefix: [toolchain.corepackPath, "pnpm"],
       envPatch: {
-        PATH: prependPathEntry(nodeDir),
+        PATH: prependPathEntry(nodeDir, process.env.PATH ?? "", platform),
       },
       kind: "corepack-pnpm",
     };

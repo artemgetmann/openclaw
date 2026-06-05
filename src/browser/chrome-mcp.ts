@@ -7,10 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { WebSocket, type RawData } from "ws";
 import { loadConfig } from "../config/config.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import { resolveGoogleChromeExecutableForPlatform } from "./chrome.executables.js";
 import type { BrowserTab } from "./client.js";
+import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
 
 type ChromeMcpStructuredPage = {
@@ -41,6 +43,13 @@ type ChromeMcpLiveChromeLauncher = (params: {
   userDataDir: string;
   profileDirectory?: string;
 }) => Promise<void>;
+type ChromeMcpScreenshotFallback = (params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  fullPage?: boolean;
+  format: "png" | "jpeg";
+}) => Promise<Buffer | null>;
 type ChromeMcpCallOptions = {
   timeoutMs?: number;
   userDataDir?: string;
@@ -68,6 +77,9 @@ const CHROME_MCP_ATTACH_RETRY_POLL_MS = 500;
 const CHROME_MCP_LIVE_CHROME_LAUNCH_READY_WINDOW_MS = 10_000;
 const CHROME_MCP_LIVE_CHROME_LAUNCH_POLL_MS = 250;
 const CHROME_MCP_DEVTOOLS_WS_PROBE_TIMEOUT_MS = 1_500;
+const CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS = 5_000;
+const CHROME_MCP_SCREENSHOT_FILE_WAIT_MS = 2_000;
+const CHROME_MCP_SCREENSHOT_FILE_POLL_MS = 50;
 const INITIAL_DEFAULT_CHROME_USER_DATA_DIR = path.join(
   os.homedir(),
   "Library/Application Support/Google/Chrome",
@@ -77,6 +89,7 @@ let processCommandLinesReader: (() => string[]) | null = null;
 let liveChromeLauncher: ChromeMcpLiveChromeLauncher | null = null;
 let devToolsWsEndpointProber: ((port: number, browserPath: string) => Promise<boolean>) | null =
   null;
+let screenshotFallbackForTest: ChromeMcpScreenshotFallback | null = null;
 const profileDirectoryOverrides = new Map<string, string>();
 
 function traceChromeMcpStage(stage: string): void {
@@ -96,6 +109,15 @@ function resolveTimeoutMs(timeoutMs: number | undefined): number {
     return DEFAULT_CHROME_MCP_REQUEST_TIMEOUT_MS;
   }
   return Math.max(1, Math.floor(timeoutMs));
+}
+
+function isFileNotFoundError(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 function parseAttachUrl(value: string | undefined): string | null {
@@ -603,10 +625,252 @@ function resolveConfiguredAttachTarget(profileName: string): ChromeMcpAttachTarg
     if (profileTarget) {
       return profileTarget;
     }
+    const resolvedProfile = resolveProfile(resolveBrowserConfig(cfg.browser, cfg), profileName);
+    const resolvedProfileTarget = resolveAttachTarget(resolvedProfile?.cdpUrl);
+    if (resolvedProfile?.driver === "existing-session" && resolvedProfileTarget) {
+      return resolvedProfileTarget;
+    }
     return resolveAttachTarget(cfg.browser?.cdpUrl);
   } catch {
     return null;
   }
+}
+
+function toBrowserHttpUrl(target: ChromeMcpAttachTarget): string | null {
+  try {
+    const url = new URL(target.url);
+    url.protocol = url.protocol === "wss:" || url.protocol === "https:" ? "https:" : "http:";
+    url.pathname = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+async function resolveChromeMcpBrowserHttpUrl(
+  profileName: string,
+  userDataDir?: string,
+): Promise<string | null> {
+  const configured = resolveConfiguredAttachTarget(profileName);
+  if (configured) {
+    return toBrowserHttpUrl(configured);
+  }
+  const discovered = await probeBrowserUrlFromUserDataDir(profileName, userDataDir);
+  return discovered ? toBrowserHttpUrl(discovered) : null;
+}
+
+type ChromeCdpTarget = {
+  type?: string;
+  url?: string;
+  webSocketDebuggerUrl?: string;
+};
+
+async function fetchChromeCdpTargets(browserHttpUrl: string): Promise<ChromeCdpTarget[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${browserHttpUrl}/json/list`, {
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`/json/list returned ${response.status}`);
+    }
+    const targets = (await response.json()) as unknown;
+    return Array.isArray(targets) ? (targets as ChromeCdpTarget[]) : [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveChromeMcpPageWebSocketUrl(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+}): Promise<string | null> {
+  const pageId = parsePageId(params.targetId);
+  const page = await findPageById(params.profileName, pageId, params.userDataDir, undefined);
+  const browserHttpUrl = await resolveChromeMcpBrowserHttpUrl(
+    params.profileName,
+    params.userDataDir,
+  );
+  if (!browserHttpUrl) {
+    return null;
+  }
+  const targets = (await fetchChromeCdpTargets(browserHttpUrl)).filter(
+    (target) =>
+      target.type === "page" &&
+      typeof target.webSocketDebuggerUrl === "string" &&
+      target.webSocketDebuggerUrl.trim(),
+  );
+  const byUrl = page.url ? targets.find((target) => target.url === page.url) : undefined;
+  const byIndex = targets[pageId - 1];
+  return (byUrl ?? byIndex)?.webSocketDebuggerUrl ?? null;
+}
+
+type CdpResponse = {
+  id?: number;
+  result?: unknown;
+  error?: { message?: string };
+};
+
+function decodeChromeDevToolsRawMessage(data: RawData): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}
+
+async function captureChromeScreenshotViaWebSocket(params: {
+  wsUrl: string;
+  fullPage?: boolean;
+  format: "png" | "jpeg";
+}): Promise<Buffer> {
+  const ws = new WebSocket(params.wsUrl, {
+    handshakeTimeout: CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS,
+  });
+  let nextId = 0;
+  const pending = new Map<
+    number,
+    {
+      resolve: (value: unknown) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+
+  const failAll = (err: Error): void => {
+    for (const [id, entry] of pending.entries()) {
+      clearTimeout(entry.timer);
+      pending.delete(id);
+      entry.reject(err);
+    }
+  };
+
+  ws.on("message", (data: RawData) => {
+    let message: CdpResponse;
+    try {
+      message = JSON.parse(decodeChromeDevToolsRawMessage(data)) as CdpResponse;
+    } catch {
+      return;
+    }
+    if (typeof message.id !== "number") {
+      return;
+    }
+    const entry = pending.get(message.id);
+    if (!entry) {
+      return;
+    }
+    clearTimeout(entry.timer);
+    pending.delete(message.id);
+    if (message.error) {
+      entry.reject(new Error(message.error.message ?? "Chrome DevTools command failed"));
+      return;
+    }
+    entry.resolve(message.result);
+  });
+
+  ws.on("error", (err) => failAll(err instanceof Error ? err : new Error(String(err))));
+  ws.on("close", () => failAll(new Error("Chrome DevTools WebSocket closed")));
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Chrome DevTools WebSocket open timed out")),
+      CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS,
+    );
+    ws.once("open", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.once("error", (err) => {
+      clearTimeout(timer);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+  });
+
+  const send = async (
+    method: string,
+    commandParams?: Record<string, unknown>,
+  ): Promise<unknown> => {
+    const id = ++nextId;
+    return await new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`${method} timed out`));
+      }, CHROME_MCP_SCREENSHOT_CDP_TIMEOUT_MS);
+      pending.set(id, { resolve, reject, timer });
+      ws.send(JSON.stringify({ id, method, params: commandParams ?? {} }), (err) => {
+        if (!err) {
+          return;
+        }
+        clearTimeout(timer);
+        pending.delete(id);
+        reject(err);
+      });
+    });
+  };
+
+  try {
+    await send("Page.enable");
+    let clip: Record<string, number> | undefined;
+    if (params.fullPage) {
+      const metrics = asRecord(await send("Page.getLayoutMetrics"));
+      const contentSize = asRecord(metrics?.contentSize);
+      const width = Number(contentSize?.width);
+      const height = Number(contentSize?.height);
+      if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+        clip = {
+          x: 0,
+          y: 0,
+          width: Math.ceil(width),
+          height: Math.ceil(height),
+          scale: 1,
+        };
+      }
+    }
+    const result = asRecord(
+      await send("Page.captureScreenshot", {
+        format: params.format,
+        fromSurface: true,
+        ...(clip ? { captureBeyondViewport: true, clip } : {}),
+      }),
+    );
+    const data = typeof result?.data === "string" ? result.data : "";
+    if (!data) {
+      throw new Error("Chrome DevTools did not return screenshot data");
+    }
+    return Buffer.from(data, "base64");
+  } finally {
+    ws.close();
+  }
+}
+
+async function captureChromeMcpPageScreenshotFallback(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  fullPage?: boolean;
+  format: "png" | "jpeg";
+}): Promise<Buffer | null> {
+  if (screenshotFallbackForTest) {
+    return await screenshotFallbackForTest(params);
+  }
+  const wsUrl = await resolveChromeMcpPageWebSocketUrl(params);
+  if (!wsUrl) {
+    return null;
+  }
+  return await captureChromeScreenshotViaWebSocket({
+    wsUrl,
+    fullPage: params.fullPage,
+    format: params.format,
+  });
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -971,6 +1235,24 @@ function isChromeMcpApprovalTimeoutMessage(message: string): boolean {
   );
 }
 
+function isChromeMcpRequestTimeoutError(err: unknown): boolean {
+  const message = normalizeErrorMessage(err);
+  return (
+    isChromeMcpApprovalTimeoutMessage(message) || /navigation timeout .* exceeded/i.test(message)
+  );
+}
+
+function buildChromeMcpToolTimeoutError(
+  profileName: string,
+  toolName: string,
+  timeoutMs: number,
+  detail: string,
+): Error {
+  return new Error(
+    `Chrome MCP tool "${toolName}" timed out after ${timeoutMs}ms for profile "${profileName}". Details: ${detail}`,
+  );
+}
+
 function buildChromeMcpApprovalTimeoutGuidance(
   profileName: string,
   detail: string,
@@ -1109,6 +1391,7 @@ async function callTool(
   const sessionProfileDirectory = resolveSessionProfileDirectory(profileName, profileDirectory);
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir, sessionProfileDirectory);
   let lastError: unknown;
+  let sawReadySession = false;
 
   while (remainingTimeoutMs(deadlineMs) > 0) {
     const attemptTimeoutMs = Math.max(1, Math.min(timeoutMs, remainingTimeoutMs(deadlineMs) + 1));
@@ -1121,6 +1404,7 @@ async function callTool(
         userDataDir,
         profileDirectory: sessionProfileDirectory,
       });
+      sawReadySession = true;
       result = (await session.client.callTool(
         {
           name,
@@ -1133,16 +1417,36 @@ async function callTool(
       )) as ChromeMcpToolResult;
     } catch (err) {
       lastError = err;
-      if (session) {
-        // Transport/connection error — tear down session so attach can reconnect.
-        sessions.delete(cacheKey);
-        await session.client.close().catch(() => {});
+      if (!session) {
+        if (!isRetryableChromeMcpAttachError(err)) {
+          throw normalizeAttachFailure(profileName, err);
+        }
+        traceChromeMcpStage(
+          `chrome-mcp-attach-retry profile=${profileName} tool=${name} remainingMs=${remainingTimeoutMs(
+            deadlineMs,
+          )}`,
+        );
+        if (!(await waitBeforeChromeMcpAttachRetry(deadlineMs))) {
+          break;
+        }
+        continue;
       }
-      if (!isRetryableChromeMcpAttachError(err)) {
-        throw normalizeAttachFailure(profileName, err);
+
+      // Once getSession() has returned a ready session, failures are in the
+      // tool/action phase. A post-ready `MCP error -32001: Request timed out`
+      // can mean the page or MCP action stalled; presenting it as a Chrome
+      // approval prompt sends the operator to the wrong layer.
+      sessions.delete(cacheKey);
+      await session.client.close().catch(() => {});
+      const message = normalizeErrorMessage(err);
+      if (isChromeMcpApprovalTimeoutMessage(message)) {
+        throw buildChromeMcpToolTimeoutError(profileName, name, attemptTimeoutMs, message);
+      }
+      if (!isClosedChromeMcpTransportErrorMessage(message)) {
+        throw err;
       }
       traceChromeMcpStage(
-        `chrome-mcp-tool-retry profile=${profileName} tool=${name} remainingMs=${remainingTimeoutMs(
+        `chrome-mcp-tool-transport-retry profile=${profileName} tool=${name} remainingMs=${remainingTimeoutMs(
           deadlineMs,
         )}`,
       );
@@ -1159,17 +1463,41 @@ async function callTool(
     traceChromeMcpStage(`chrome-mcp-tool-done profile=${profileName} tool=${name}`);
     return result;
   }
-  throw normalizeAttachFailure(profileName, lastError ?? new Error("Chrome MCP attach timed out."));
+  if (!sawReadySession) {
+    throw normalizeAttachFailure(
+      profileName,
+      lastError ?? new Error("Chrome MCP attach timed out."),
+    );
+  }
+  const detail = normalizeErrorMessage(lastError ?? new Error("Chrome MCP tool call timed out."));
+  throw buildChromeMcpToolTimeoutError(profileName, name, timeoutMs, detail);
 }
 
-async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
+async function withTempFile<T>(fn: (filePath: string) => Promise<T>, extension = ""): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-mcp-"));
-  const filePath = path.join(dir, randomUUID());
+  const filePath = path.join(dir, `${randomUUID()}${extension}`);
   try {
     return await fn(filePath);
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+async function readChromeMcpOutputFile(filePath: string, timeoutMs: number): Promise<Buffer> {
+  const deadlineMs = Date.now() + timeoutMs;
+  let lastMissingFileError: unknown;
+  while (Date.now() <= deadlineMs) {
+    try {
+      return await fs.readFile(filePath);
+    } catch (err) {
+      if (!isFileNotFoundError(err)) {
+        throw err;
+      }
+      lastMissingFileError = err;
+      await new Promise((resolve) => setTimeout(resolve, CHROME_MCP_SCREENSHOT_FILE_POLL_MS));
+    }
+  }
+  throw lastMissingFileError ?? new Error("Chrome MCP output file was not written.");
 }
 
 async function findPageById(
@@ -1257,6 +1585,12 @@ export function setChromeMcpDevToolsWsEndpointProberForTest(
   devToolsWsEndpointProber = prober;
 }
 
+export function setChromeMcpScreenshotFallbackForTest(
+  fallback: ChromeMcpScreenshotFallback | null,
+): void {
+  screenshotFallbackForTest = fallback;
+}
+
 export function setChromeMcpDefaultUserDataDirForTest(userDataDir: string | null): void {
   defaultChromeUserDataDir = userDataDir?.trim() || INITIAL_DEFAULT_CHROME_USER_DATA_DIR;
 }
@@ -1308,6 +1642,33 @@ export async function listChromeMcpTabs(
   return toBrowserTabs(await listChromeMcpPages(profileName, userDataDirOrOptions, options));
 }
 
+function normalizeUrlForRecovery(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function findRecentlyOpenedPageByUrl(
+  pages: ChromeMcpStructuredPage[],
+  requestedUrl: string,
+): ChromeMcpStructuredPage | undefined {
+  const expected = normalizeUrlForRecovery(requestedUrl);
+  if (!expected) {
+    return undefined;
+  }
+  for (const page of pages.slice().toReversed()) {
+    const actual = page.url ? normalizeUrlForRecovery(page.url) : null;
+    if (actual === expected || actual?.startsWith(`${expected}/`)) {
+      return page;
+    }
+  }
+  return undefined;
+}
+
 export async function openChromeMcpTab(
   profileName: string,
   url: string,
@@ -1315,19 +1676,44 @@ export async function openChromeMcpTab(
   options: ChromeMcpCallOptions = {},
 ): Promise<BrowserTab> {
   const resolved = resolveUserDataDirAndOptions(userDataDirOrOptions, options);
-  const result = await callTool(
-    profileName,
-    resolved.userDataDir,
-    resolved.profileDirectory,
-    "new_page",
-    {
-      url,
-      ...(typeof resolved.options.timeoutMs === "number"
-        ? { timeout: resolved.options.timeoutMs }
-        : {}),
-    },
-    resolved.options,
-  );
+  let result: ChromeMcpToolResult;
+  try {
+    result = await callTool(
+      profileName,
+      resolved.userDataDir,
+      resolved.profileDirectory,
+      "new_page",
+      {
+        url,
+        ...(typeof resolved.options.timeoutMs === "number"
+          ? { timeout: resolved.options.timeoutMs }
+          : {}),
+      },
+      resolved.options,
+    );
+  } catch (err) {
+    if (!isChromeMcpRequestTimeoutError(err)) {
+      throw err;
+    }
+    const fallbackPages = await listChromeMcpPages(profileName, resolved.userDataDir, {
+      ...resolved.options,
+      profileDirectory: resolved.profileDirectory,
+      timeoutMs: Math.max(5_000, Math.min(30_000, resolved.options.timeoutMs ?? 30_000)),
+    });
+    const fallback = findRecentlyOpenedPageByUrl(fallbackPages, url);
+    if (!fallback) {
+      throw err;
+    }
+    traceChromeMcpStage(
+      `chrome-mcp-new-page-timeout-recovered profile=${profileName} pageId=${fallback.id}`,
+    );
+    return {
+      targetId: String(fallback.id),
+      title: "",
+      url: fallback.url ?? url,
+      type: "page",
+    };
+  }
   const pages = extractStructuredPages(result);
   const chosen = pages.find((page) => page.selected) ?? pages.at(-1);
   if (!chosen) {
@@ -1432,16 +1818,93 @@ export async function takeChromeMcpScreenshot(params: {
   fullPage?: boolean;
   format?: "png" | "jpeg";
 }): Promise<Buffer> {
-  return await withTempFile(async (filePath) => {
-    await callTool(params.profileName, params.userDataDir, undefined, "take_screenshot", {
-      pageId: parsePageId(params.targetId),
-      filePath,
-      format: params.format ?? "png",
-      ...(params.uid ? { uid: params.uid } : {}),
-      ...(params.fullPage ? { fullPage: true } : {}),
-    });
-    return await fs.readFile(filePath);
-  });
+  const format = params.format ?? "png";
+  const targetMode = params.uid ? "ref" : params.fullPage ? "fullPage" : "page";
+  let lastMissingFileError: unknown;
+  let fallbackError: string | undefined;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await withTempFile(async (filePath) => {
+        await callTool(params.profileName, params.userDataDir, undefined, "take_screenshot", {
+          pageId: parsePageId(params.targetId),
+          filePath,
+          format,
+          ...(params.uid ? { uid: params.uid } : {}),
+          ...(params.fullPage ? { fullPage: true } : {}),
+        });
+        try {
+          // Chrome MCP can resolve the tool call before the screenshot writer has
+          // flushed the requested file. Poll the exact file briefly before
+          // classifying ENOENT as a failed screenshot.
+          return await readChromeMcpOutputFile(filePath, CHROME_MCP_SCREENSHOT_FILE_WAIT_MS);
+        } catch (err) {
+          if (!isFileNotFoundError(err)) {
+            throw err;
+          }
+          lastMissingFileError = err;
+        }
+
+        // The MCP server can report a successful screenshot call while failing to
+        // materialize the requested artifact. For page screenshots only, fall back
+        // to a direct CDP capture so callers still get bytes when the tab is
+        // otherwise healthy; element screenshots must fail truthfully.
+        if (!params.uid) {
+          try {
+            const fallback = await captureChromeMcpPageScreenshotFallback({
+              profileName: params.profileName,
+              userDataDir: params.userDataDir,
+              targetId: params.targetId,
+              fullPage: params.fullPage,
+              format,
+            });
+            if (fallback) {
+              return fallback;
+            }
+          } catch (err) {
+            fallbackError = normalizeErrorMessage(err);
+          }
+        }
+        throw (
+          lastMissingFileError ?? new Error("Chrome MCP screenshot output file was not created.")
+        );
+      }, `.${format}`);
+    } catch (err) {
+      if (!isFileNotFoundError(err)) {
+        throw err;
+      }
+      if (attempt > 0) {
+        throw new Error(
+          [
+            "Chrome MCP screenshot output file was not created.",
+            `profile=${params.profileName}`,
+            `targetId=${params.targetId}`,
+            `format=${format}`,
+            `target=${targetMode}`,
+            params.uid ? "fallback=not-applicable" : "fallback=direct-cdp-unavailable",
+            ...(fallbackError ? [`fallbackError=${fallbackError}`] : []),
+          ].join(" "),
+          { cause: err },
+        );
+      }
+      traceChromeMcpStage(
+        `chrome-mcp-screenshot-tempfile-retry profile=${params.profileName} targetId=${params.targetId}`,
+      );
+    }
+  }
+
+  throw new Error(
+    [
+      "Chrome MCP screenshot output file was not created.",
+      `profile=${params.profileName}`,
+      `targetId=${params.targetId}`,
+      `format=${format}`,
+      `target=${targetMode}`,
+      params.uid ? "fallback=not-applicable" : "fallback=direct-cdp-unavailable",
+      ...(fallbackError ? [`fallbackError=${fallbackError}`] : []),
+    ].join(" "),
+    { cause: lastMissingFileError },
+  );
 }
 
 export async function clickChromeMcpElement(params: {
@@ -1452,6 +1915,9 @@ export async function clickChromeMcpElement(params: {
   doubleClick?: boolean;
   timeoutMs?: number;
 }): Promise<void> {
+  // Chrome MCP validates tool arguments strictly. Interaction timeouts belong
+  // on the MCP client call, not in the tool payload, or the host rejects the
+  // otherwise valid action before Chrome can run it.
   await callTool(
     params.profileName,
     params.userDataDir,
@@ -1461,7 +1927,6 @@ export async function clickChromeMcpElement(params: {
       pageId: parsePageId(params.targetId),
       uid: params.uid,
       ...(params.doubleClick ? { dblClick: true } : {}),
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1484,7 +1949,6 @@ export async function fillChromeMcpElement(params: {
       pageId: parsePageId(params.targetId),
       uid: params.uid,
       value: params.value,
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1505,7 +1969,6 @@ export async function fillChromeMcpForm(params: {
     {
       pageId: parsePageId(params.targetId),
       elements: params.elements,
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1526,7 +1989,6 @@ export async function hoverChromeMcpElement(params: {
     {
       pageId: parsePageId(params.targetId),
       uid: params.uid,
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1549,7 +2011,6 @@ export async function dragChromeMcpElement(params: {
       pageId: parsePageId(params.targetId),
       from_uid: params.fromUid,
       to_uid: params.toUid,
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1584,7 +2045,6 @@ export async function pressChromeMcpKey(params: {
     {
       pageId: parsePageId(params.targetId),
       key: params.key,
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );
@@ -1635,7 +2095,6 @@ export async function evaluateChromeMcpScript(params: {
       pageId: parsePageId(params.targetId),
       function: params.fn,
       ...(params.args?.length ? { args: params.args } : {}),
-      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
     },
     typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined,
   );

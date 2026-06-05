@@ -143,6 +143,8 @@ function readTargetUrlParam(params: Record<string, unknown>) {
 const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "targetId",
   "ref",
+  "inputRef",
+  "element",
   "includeSnapshot",
   "snapshotFormat",
   "refs",
@@ -152,6 +154,7 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "maxChars",
   "labels",
   "doubleClick",
+  "dblClick",
   "button",
   "modifiers",
   "text",
@@ -177,12 +180,42 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "actions",
   "stopOnError",
   "timeoutMs",
+  "timeout",
 ] as const;
+
+function normalizeActRequestAliases(
+  request: Parameters<typeof browserAct>[1],
+): Parameters<typeof browserAct>[1] {
+  const normalized = { ...(request as Record<string, unknown>) };
+  if (
+    typeof normalized.timeoutMs !== "number" &&
+    typeof normalized.timeout === "number" &&
+    Number.isFinite(normalized.timeout)
+  ) {
+    normalized.timeoutMs = normalized.timeout;
+  }
+  delete normalized.timeout;
+
+  if (typeof normalized.doubleClick !== "boolean" && typeof normalized.dblClick === "boolean") {
+    normalized.doubleClick = normalized.dblClick;
+  }
+  delete normalized.dblClick;
+
+  if (Array.isArray(normalized.actions)) {
+    normalized.actions = normalized.actions.map((action) =>
+      action && typeof action === "object"
+        ? normalizeActRequestAliases(action as Parameters<typeof browserAct>[1])
+        : action,
+    );
+  }
+
+  return normalized as Parameters<typeof browserAct>[1];
+}
 
 function readActRequestParam(params: Record<string, unknown>) {
   const requestParam = params.request;
   if (requestParam && typeof requestParam === "object") {
-    return requestParam as Parameters<typeof browserAct>[1];
+    return normalizeActRequestAliases(requestParam as Parameters<typeof browserAct>[1]);
   }
 
   const kind = readStringParam(params, "kind");
@@ -197,7 +230,7 @@ function readActRequestParam(params: Record<string, unknown>) {
     }
     request[key] = params[key];
   }
-  return request as Parameters<typeof browserAct>[1];
+  return normalizeActRequestAliases(request as Parameters<typeof browserAct>[1]);
 }
 
 type BrowserProxyFile = {
@@ -404,23 +437,28 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Browser choice: prefer profile="signed-in" for signed-in sites, anti-bot-sensitive flows, and tasks that benefit from a cloned real Chrome profile.',
+      'Browser choice: default serious web work to profile="signed-in"; it launches a cloned signed-in Chrome profile and controls it through Chrome DevTools MCP.',
       'Prefer profile="openclaw" for public browsing, clean isolated runs, and fallback when the signed-in lane is unavailable or behaving worse on a specific site.',
       'Use profile="user-live" only when the task explicitly depends on the user\'s real live browser session, existing tabs, logged-in state, or installed extensions.',
       'Legacy profile="user" aliases to profile="signed-in" unless the operator configured a custom profile literally named "user".',
       'Do not silently fall back to profile="openclaw" when the task depends on existing logins/cookies; surface the blocker instead.',
-      'profile="user-live" attaches to the user\'s real Chrome session through the existing-session lane and is host-only.',
+      'profile="user-live" attaches to the user\'s real Chrome session through Chrome DevTools MCP and is host-only.',
       'If profile="user-live" fails to attach, first try the official Chrome live-session recovery path: keep normal Google Chrome running, open chrome://inspect/#remote-debugging in that same browser, enable remote debugging, accept the attach prompt if Chrome shows one, then retry before escalating.',
-      'Do not send act kind="batch" for profile="user-live" or other existing-session profiles; send individual actions sequentially.',
+      'Do not send act kind="batch" or unsupported MCP launch args for profile="signed-in", profile="user-live", or other existing-session profiles; send individual actions sequentially.',
+      'For existing-session profiles, use ref from the latest snapshot for element actions. Avoid slowly=true; the host bridge normalizes it to regular fill behavior. Avoid loadState="networkidle"; use loadState="load", URL/text waits, or a short timeMs wait. Do not assume dialog or scrollIntoView timeoutMs changes behavior; harmless timeout fields are normalized when present.',
+      "If an existing-session action reports a stale Element uid or missing snapshot after retry, immediately take a fresh snapshot on the same targetId and retry with the new ref.",
       "If multiple Chrome profiles may exist, pin the signed-in lane with sourceProfileName or use a named custom existing-session profile instead of guessing.",
-      "Custom profiles can still target Brave, Edge, Chromium, non-default Chrome profiles, or additional cloned-session flows when the default three-lane setup is insufficient.",
+      "Custom profiles can still target Brave, Edge, Chromium, non-default Chrome profiles, or legacy/fallback flows when the default lanes are insufficient.",
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. After every mutating act in a multi-step browser flow (click/type/fill/press/select/chooseOption), set includeSnapshot=true unless the next step is terminal; this returns the action result plus a fresh structured aria-ref snapshot, usually faster and safer than a separate snapshot call.",
       "For forms, prefer one act kind=fill request with fields[] from snapshot refs over many separate type calls; each field should use value, though text is accepted as a value alias.",
-      'For Ant Design/searchable select/combobox/listbox controls, use act kind="chooseOption" with the wrapper/input ref or selector plus optionText. It opens the control, fills the inner search input, waits for portal/listbox options, clicks the matching text, and can return includeSnapshot=true.',
+      'For Ant Design/searchable select/combobox/listbox controls, use act kind="chooseOption" with the wrapper/input ref or selector plus optionText. optionText is the semantic target to verify; query only filters the search input. It opens the control, fills the inner search input, waits for portal/listbox options, clicks the matching optionText, and can return includeSnapshot=true.',
+      'For searchable dropdowns, first use query to filter, then match optionText against the actual visible option label; if the user wording fails, use the fresh snapshot/options and retry with the visible label or a stable unique visible substring like "DPS", not a guessed human shorthand like "Denpasar".',
       'Use act kind="select" only for native <select> controls. Do not hand-roll dynamic CSS/evaluate for custom listboxes unless chooseOption and normal refs have already failed.',
+      'Use act kind="evaluate" only for inspection or recovery after normal browser actions fail; it is not the default automation path.',
+      "Never click payment, Pay Now, final booking, final purchase, or any charge-confirming control without explicit user confirmation.",
       "Do not use exec/curl for browser checkout navigation unless the user explicitly asks; browser pages must be controlled through browser actions.",
       "Prefer ref from snapshot over selector. Use screenshot only when pixels are explicitly needed; structured snapshots are faster and more reliable for automation.",
       "Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",

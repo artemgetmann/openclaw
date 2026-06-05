@@ -762,8 +762,8 @@ async function commandReopen(flags: Map<string, string | boolean>) {
 async function commandStop(flags: Map<string, string | boolean>) {
   const sessionId = requireFlag(flags, "--session");
   const status = await readStatus(sessionId);
-  const killedChild = tryKill(status.pid);
-  const killedWorker = tryKill(status.workerPid);
+  const killedChild = tryKill(status.pid ?? undefined);
+  const killedWorker = tryKill(status.workerPid ?? undefined);
   const next = await writeStatus(sessionDirFor(sessionId), {
     phase: "stopped",
     message:

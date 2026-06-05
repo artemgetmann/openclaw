@@ -25,7 +25,7 @@ But it does **not** have real tool parity with Codex/GPT.
 
 Current hard evidence:
 
-- In [`src/agents/cli-runner.ts`](../../../src/agents/cli-runner.ts), the Claude bridge prompt injects:
+- In `src/agents/cli-runner.ts`, the Claude bridge prompt injects:
   - `Tools are disabled in this session. Do not call tools.`
 - That same bridge path builds the prompt stack with `tools: []`.
 - Live Telegram evidence showed Claude bridge claiming it could not run shell commands.

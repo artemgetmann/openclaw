@@ -117,14 +117,26 @@ describe("gateway tool", () => {
             pid: process.pid,
             signal: "SIGUSR1",
             delayMs: 0,
+            restartMode: "in-process-sigusr1",
+            verified: false,
           });
 
           const sentinelPath = path.join(stateDir, "restart-sentinel.json");
           const raw = await fs.readFile(sentinelPath, "utf-8");
           const parsed = JSON.parse(raw) as {
-            payload?: { kind?: string; doctorHint?: string | null };
+            payload?: {
+              kind?: string;
+              status?: string;
+              doctorHint?: string | null;
+              stats?: { verified?: boolean; phase?: string };
+            };
           };
           expect(parsed.payload?.kind).toBe("restart");
+          expect(parsed.payload?.status).toBe("requested");
+          expect(parsed.payload?.stats).toMatchObject({
+            phase: "requested",
+            verified: false,
+          });
           expect(parsed.payload?.doctorHint).toBe(
             "Run: openclaw --profile isolated doctor --non-interactive",
           );

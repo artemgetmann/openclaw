@@ -109,7 +109,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
+    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(2);
     expect(ensureConfiguredAcpBindingSessionMock).not.toHaveBeenCalled();
   });
 
@@ -130,7 +130,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
+    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(2);
     expect(ensureConfiguredAcpBindingSessionMock).toHaveBeenCalledTimes(1);
   });
 });

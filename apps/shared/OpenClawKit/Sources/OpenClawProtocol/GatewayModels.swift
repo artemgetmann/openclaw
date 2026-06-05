@@ -2390,7 +2390,149 @@ public struct ModelChoice: Codable, Sendable {
     }
 }
 
-public struct ModelsListParams: Codable, Sendable {}
+public struct ModelsAuthListParams: Codable, Sendable {}
+
+public struct ModelsAuthListResult: Codable, Sendable {
+    public let options: [ModelsAuthOption]
+    public let activeoptionid: String?
+
+    public init(
+        options: [ModelsAuthOption],
+        activeoptionid: String?)
+    {
+        self.options = options
+        self.activeoptionid = activeoptionid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case options
+        case activeoptionid = "activeOptionId"
+    }
+}
+
+public struct ModelsAuthOption: Codable, Sendable {
+    public let id: String
+    public let providerid: String
+    public let providerlabel: String
+    public let title: String
+    public let detail: String
+    public let inputkind: AnyCodable
+    public let submitlabel: String
+    public let inputlabel: String?
+    public let inputhelp: String?
+    public let inputplaceholder: String?
+    public let methodkind: String
+
+    public init(
+        id: String,
+        providerid: String,
+        providerlabel: String,
+        title: String,
+        detail: String,
+        inputkind: AnyCodable,
+        submitlabel: String,
+        inputlabel: String?,
+        inputhelp: String?,
+        inputplaceholder: String?,
+        methodkind: String)
+    {
+        self.id = id
+        self.providerid = providerid
+        self.providerlabel = providerlabel
+        self.title = title
+        self.detail = detail
+        self.inputkind = inputkind
+        self.submitlabel = submitlabel
+        self.inputlabel = inputlabel
+        self.inputhelp = inputhelp
+        self.inputplaceholder = inputplaceholder
+        self.methodkind = methodkind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case providerid = "providerId"
+        case providerlabel = "providerLabel"
+        case title
+        case detail
+        case inputkind = "inputKind"
+        case submitlabel = "submitLabel"
+        case inputlabel = "inputLabel"
+        case inputhelp = "inputHelp"
+        case inputplaceholder = "inputPlaceholder"
+        case methodkind = "methodKind"
+    }
+}
+
+public struct ModelsAuthApplyParams: Codable, Sendable {
+    public let optionid: String
+    public let secret: String?
+
+    public init(
+        optionid: String,
+        secret: String?)
+    {
+        self.optionid = optionid
+        self.secret = secret
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case optionid = "optionId"
+        case secret
+    }
+}
+
+public struct ModelsAuthApplyResult: Codable, Sendable {
+    public let optionid: String
+    public let providerid: String
+    public let methodid: String
+    public let defaultmodel: String?
+    public let notes: [String]
+    public let profileids: [String]
+    public let readiness: ModelsReadinessResult
+
+    public init(
+        optionid: String,
+        providerid: String,
+        methodid: String,
+        defaultmodel: String?,
+        notes: [String],
+        profileids: [String],
+        readiness: ModelsReadinessResult)
+    {
+        self.optionid = optionid
+        self.providerid = providerid
+        self.methodid = methodid
+        self.defaultmodel = defaultmodel
+        self.notes = notes
+        self.profileids = profileids
+        self.readiness = readiness
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case optionid = "optionId"
+        case providerid = "providerId"
+        case methodid = "methodId"
+        case defaultmodel = "defaultModel"
+        case notes
+        case profileids = "profileIds"
+        case readiness
+    }
+}
+
+public struct ModelsListParams: Codable, Sendable {
+    public let all: Bool?
+
+    public init(
+        all: Bool?)
+    {
+        self.all = all
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case all
+    }
+}
 
 public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
@@ -2403,6 +2545,172 @@ public struct ModelsListResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case models
+    }
+}
+
+public struct ModelsSetParams: Codable, Sendable {
+    public let model: String
+
+    public init(
+        model: String)
+    {
+        self.model = model
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case model
+    }
+}
+
+public struct ModelsSetResult: Codable, Sendable {
+    public let ok: Bool
+    public let model: String
+
+    public init(
+        ok: Bool,
+        model: String)
+    {
+        self.ok = ok
+        self.model = model
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case model
+    }
+}
+
+public struct ModelsReadinessParams: Codable, Sendable {}
+
+public struct ModelsReadinessProbe: Codable, Sendable {
+    public let provider: String
+    public let model: String?
+    public let profileid: String?
+    public let label: String
+    public let source: AnyCodable
+    public let mode: String?
+    public let status: AnyCodable
+    public let reasoncode: String?
+    public let error: String?
+    public let latencyms: Int?
+
+    public init(
+        provider: String,
+        model: String?,
+        profileid: String?,
+        label: String,
+        source: AnyCodable,
+        mode: String?,
+        status: AnyCodable,
+        reasoncode: String?,
+        error: String?,
+        latencyms: Int?)
+    {
+        self.provider = provider
+        self.model = model
+        self.profileid = profileid
+        self.label = label
+        self.source = source
+        self.mode = mode
+        self.status = status
+        self.reasoncode = reasoncode
+        self.error = error
+        self.latencyms = latencyms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case model
+        case profileid = "profileId"
+        case label
+        case source
+        case mode
+        case status
+        case reasoncode = "reasonCode"
+        case error
+        case latencyms = "latencyMs"
+    }
+}
+
+public struct ModelsReadinessResult: Codable, Sendable {
+    public let status: AnyCodable
+    public let mode: AnyCodable
+    public let defaultmodel: String
+    public let configpath: String
+    public let statedir: String
+    public let agentdir: String
+    public let authmode: AnyCodable
+    public let sharedprofileid: String?
+    public let reasoncodes: [AnyCodable]
+    public let summary: String
+    public let actions: [String]
+    public let byokavailable: Bool
+    public let voicestatus: AnyCodable
+    public let voicesummary: String
+    public let voiceactions: [String]
+    public let lastprobeat: Int?
+    public let probelatencyms: Int?
+    public let probe: [String: AnyCodable]?
+
+    public init(
+        status: AnyCodable,
+        mode: AnyCodable,
+        defaultmodel: String,
+        configpath: String,
+        statedir: String,
+        agentdir: String,
+        authmode: AnyCodable,
+        sharedprofileid: String?,
+        reasoncodes: [AnyCodable],
+        summary: String,
+        actions: [String],
+        byokavailable: Bool,
+        voicestatus: AnyCodable,
+        voicesummary: String,
+        voiceactions: [String],
+        lastprobeat: Int?,
+        probelatencyms: Int?,
+        probe: [String: AnyCodable]?)
+    {
+        self.status = status
+        self.mode = mode
+        self.defaultmodel = defaultmodel
+        self.configpath = configpath
+        self.statedir = statedir
+        self.agentdir = agentdir
+        self.authmode = authmode
+        self.sharedprofileid = sharedprofileid
+        self.reasoncodes = reasoncodes
+        self.summary = summary
+        self.actions = actions
+        self.byokavailable = byokavailable
+        self.voicestatus = voicestatus
+        self.voicesummary = voicesummary
+        self.voiceactions = voiceactions
+        self.lastprobeat = lastprobeat
+        self.probelatencyms = probelatencyms
+        self.probe = probe
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case mode
+        case defaultmodel = "defaultModel"
+        case configpath = "configPath"
+        case statedir = "stateDir"
+        case agentdir = "agentDir"
+        case authmode = "authMode"
+        case sharedprofileid = "sharedProfileId"
+        case reasoncodes = "reasonCodes"
+        case summary
+        case actions
+        case byokavailable = "byokAvailable"
+        case voicestatus = "voiceStatus"
+        case voicesummary = "voiceSummary"
+        case voiceactions = "voiceActions"
+        case lastprobeat = "lastProbeAt"
+        case probelatencyms = "probeLatencyMs"
+        case probe
     }
 }
 

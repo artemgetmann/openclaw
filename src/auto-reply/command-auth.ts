@@ -1,8 +1,9 @@
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
-import { normalizeAnyChannelId } from "../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { normalizeE164 } from "../utils.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
@@ -29,9 +30,13 @@ function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): Chann
     return undefined;
   }
   const direct =
+    normalizeChannelId(explicitMessageChannel ?? undefined) ??
     normalizeAnyChannelId(explicitMessageChannel ?? undefined) ??
+    normalizeChannelId(ctx.Provider) ??
     normalizeAnyChannelId(ctx.Provider) ??
+    normalizeChannelId(ctx.Surface) ??
     normalizeAnyChannelId(ctx.Surface) ??
+    normalizeChannelId(ctx.OriginatingChannel) ??
     normalizeAnyChannelId(ctx.OriginatingChannel);
   if (direct) {
     return direct;
@@ -45,7 +50,9 @@ function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): Chann
       return undefined;
     }
     const normalized =
+      normalizeChannelId(normalizedCandidateChannel ?? undefined) ??
       normalizeAnyChannelId(normalizedCandidateChannel ?? undefined) ??
+      normalizeChannelId(candidate) ??
       normalizeAnyChannelId(candidate);
     if (normalized) {
       return normalized;
@@ -72,30 +79,62 @@ function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): Chann
   return undefined;
 }
 
+function stripDiscordAllowFromEntry(entry: string): string {
+  return entry
+    .trim()
+    .replace(/^<@!?/, "")
+    .replace(/>$/, "")
+    .replace(/^(?:discord:|user:|pk:)/i, "");
+}
+
+function formatFallbackAllowFromList(params: {
+  providerId?: ChannelId;
+  allowFrom: Array<string | number>;
+}): string[] | null {
+  if (params.providerId === "whatsapp") {
+    return params.allowFrom
+      .map((entry) => normalizeE164(String(entry)))
+      .filter((entry) => entry.trim().length > 0);
+  }
+  if (params.providerId === "discord") {
+    return normalizeStringEntries(params.allowFrom)
+      .map(stripDiscordAllowFromEntry)
+      .filter((entry) => entry.trim().length > 0);
+  }
+  return null;
+}
+
 function formatAllowFromList(params: {
   plugin?: ChannelPlugin;
+  providerId?: ChannelId;
   cfg: OpenClawConfig;
   accountId?: string | null;
   allowFrom: Array<string | number>;
 }): string[] {
-  const { plugin, cfg, accountId, allowFrom } = params;
+  const { plugin, providerId, cfg, accountId, allowFrom } = params;
   if (!allowFrom || allowFrom.length === 0) {
     return [];
   }
   if (plugin?.config?.formatAllowFrom) {
     return plugin.config.formatAllowFrom({ cfg, accountId, allowFrom });
   }
+  const fallback = formatFallbackAllowFromList({ providerId, allowFrom });
+  if (fallback) {
+    return fallback;
+  }
   return normalizeStringEntries(allowFrom);
 }
 
 function normalizeAllowFromEntry(params: {
   plugin?: ChannelPlugin;
+  providerId?: ChannelId;
   cfg: OpenClawConfig;
   accountId?: string | null;
   value: string;
 }): string[] {
   const normalized = formatAllowFromList({
     plugin: params.plugin,
+    providerId: params.providerId,
     cfg: params.cfg,
     accountId: params.accountId,
     allowFrom: [params.value],
@@ -139,6 +178,7 @@ function resolveOwnerAllowFromList(params: {
   }
   return formatAllowFromList({
     plugin: params.plugin,
+    providerId: params.providerId,
     cfg: params.cfg,
     accountId: params.accountId,
     allowFrom: filtered,
@@ -172,12 +212,14 @@ function resolveCommandsAllowFromList(params: {
     return null; // No applicable list found
   }
 
-  return formatAllowFromList({
+  const formatted = formatAllowFromList({
     plugin,
+    providerId,
     cfg,
     accountId,
     allowFrom: rawList,
   });
+  return formatted;
 }
 
 function isConversationLikeIdentity(value: string): boolean {
@@ -244,7 +286,13 @@ function resolveSenderCandidates(params: {
 
   const normalized: string[] = [];
   for (const sender of candidates) {
-    const entries = normalizeAllowFromEntry({ plugin, cfg, accountId, value: sender });
+    const entries = normalizeAllowFromEntry({
+      plugin,
+      providerId: params.providerId,
+      cfg,
+      accountId,
+      value: sender,
+    });
     for (const entry of entries) {
       if (!normalized.includes(entry)) {
         normalized.push(entry);
@@ -278,6 +326,7 @@ export function resolveCommandAuthorization(params: {
     : [];
   const allowFromList = formatAllowFromList({
     plugin,
+    providerId,
     cfg,
     accountId: ctx.AccountId,
     allowFrom: Array.isArray(allowFromRaw) ? allowFromRaw : [],
@@ -303,6 +352,7 @@ export function resolveCommandAuthorization(params: {
   if (!allowAll && ownerCandidatesForCommands.length === 0 && to) {
     const normalizedTo = normalizeAllowFromEntry({
       plugin,
+      providerId,
       cfg,
       accountId: ctx.AccountId,
       value: to,

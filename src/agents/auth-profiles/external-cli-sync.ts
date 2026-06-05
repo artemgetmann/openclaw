@@ -60,10 +60,14 @@ function syncExternalCliCredentialsForProvider(
   provider: string,
   readCredentials: () => OAuthCredential | null,
   now: number,
+  options?: { alwaysCheck?: boolean },
 ): boolean {
   const existing = store.profiles[profileId];
   const shouldSync =
-    !existing || existing.provider !== provider || !isExternalProfileFresh(existing, now);
+    options?.alwaysCheck === true ||
+    !existing ||
+    existing.provider !== provider ||
+    !isExternalProfileFresh(existing, now);
   const creds = shouldSync ? readCredentials() : null;
   if (!creds) {
     return false;
@@ -74,7 +78,10 @@ function syncExternalCliCredentialsForProvider(
     !existingOAuth ||
     existingOAuth.provider !== provider ||
     existingOAuth.expires <= now ||
-    creds.expires > existingOAuth.expires;
+    creds.expires > existingOAuth.expires ||
+    (provider === "openai-codex" &&
+      creds.expires >= existingOAuth.expires &&
+      !shallowEqualOAuthCredentials(existingOAuth, creds));
 
   if (shouldUpdate && !shallowEqualOAuthCredentials(existingOAuth, creds)) {
     store.profiles[profileId] = creds;
@@ -145,6 +152,7 @@ export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
       "openai-codex",
       () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
       now,
+      { alwaysCheck: true },
     )
   ) {
     mutated = true;

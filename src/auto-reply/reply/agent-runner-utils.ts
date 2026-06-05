@@ -178,6 +178,7 @@ export function buildEmbeddedRunBaseParams(params: {
 }) {
   return {
     sessionFile: params.run.sessionFile,
+    persistedPromptTokens: params.run.persistedPromptTokens,
     workspaceDir: params.run.workspaceDir,
     agentDir: params.run.agentDir,
     config: params.run.config,

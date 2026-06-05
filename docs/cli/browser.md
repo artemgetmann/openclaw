@@ -37,7 +37,8 @@ openclaw browser --browser-profile openclaw snapshot
 Profiles are named browser routing configs. In practice:
 
 - `openclaw`: launches or attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
-- `user-live`: attaches to your real live Chrome session.
+- `signed-in`: launches a cloned signed-in Chrome profile and controls it through Chrome DevTools MCP.
+- `user-live`: attaches to your real live Chrome session through Chrome DevTools MCP.
 - custom CDP profiles: point at a local or remote CDP endpoint.
 
 ```bash
@@ -56,6 +57,7 @@ openclaw browser --browser-profile work tabs
 Built-in live/session lanes:
 
 - `openclaw`: isolated managed browser
+- `signed-in`: cloned signed-in Chrome through Chrome MCP
 - `user-live`: the user's actual live Chrome session
 
 ## Tabs
@@ -89,11 +91,16 @@ openclaw browser click <ref>
 openclaw browser type <ref> "hello"
 ```
 
-## OpenClaw vs live Chrome attach
+## Signed-in clone vs live Chrome attach
 
-Use the built-in `user-live` profile for the default live-session lane, or create your own `existing-session` profile when you need an exact browser target:
+Use the built-in `signed-in` profile for normal signed-in web work. It launches
+a cloned Chrome profile and controls it through Chrome MCP `--browserUrl`.
+Use `user-live` only when the exact current Chrome tabs/session matter, or
+create your own `existing-session` profile when you need another exact browser
+target:
 
 ```bash
+openclaw browser --browser-profile signed-in status
 openclaw browser --browser-profile user-live tabs
 openclaw browser create-profile --name chrome-live --driver existing-session
 openclaw browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
@@ -106,22 +113,21 @@ then pin the profile to that browser URL:
 
 ```bash
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
-  --user-data-dir="/tmp/openclaw-signed-in-mcp-clone" \
+  --user-data-dir="/tmp/openclaw-batik-test-clone" \
   --profile-directory="Profile 4" \
   --remote-debugging-port=9333
 
 openclaw browser create-profile \
-  --name signed-in-mcp \
+  --name batik-test \
   --driver existing-session \
   --cdp-url http://127.0.0.1:9333 \
-  --user-data-dir "/tmp/openclaw-signed-in-mcp-clone" \
+  --user-data-dir "/tmp/openclaw-batik-test-clone" \
   --profile-directory "Profile 4"
 ```
 
 Use this exact-target pattern when multiple Chrome sessions are open and the
-built-in `user-live` lane might attach to the wrong one. Keep this as a
-separate opt-in profile; it does not replace the built-in `signed-in` managed
-clone lane.
+built-in `user-live` lane might attach to the wrong one. Keep custom clones as
+explicit test lanes; normal product-facing work should use built-in `signed-in`.
 
 The built-in `user-live` lane is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
 

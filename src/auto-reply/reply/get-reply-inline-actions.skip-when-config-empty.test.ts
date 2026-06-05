@@ -18,13 +18,13 @@ const { handleCommandsMock, cronExecuteMock, createCronToolMock } = vi.hoisted((
 });
 
 vi.mock("./commands.js", () => ({
-  handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
+  handleCommands: (...args: Parameters<typeof handleCommandsMock>) => handleCommandsMock(...args),
   buildStatusReply: vi.fn(),
   buildCommandContext: vi.fn(),
 }));
 
 vi.mock("../../agents/tools/cron-tool.js", () => ({
-  createCronTool: (...args: unknown[]) => createCronToolMock(...args),
+  createCronTool: (...args: Parameters<typeof createCronToolMock>) => createCronToolMock(...args),
 }));
 
 // Import after mocks.

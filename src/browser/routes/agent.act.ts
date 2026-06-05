@@ -9,6 +9,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  takeChromeMcpSnapshot,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest, BrowserFormField } from "../client-actions-core.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
@@ -47,6 +48,83 @@ function canFallbackClickViaCdp(params: {
   return Boolean(params.wsUrl) && !params.selector && /^@?ax\d+$/.test(ref);
 }
 
+function isExistingSessionMissingUidError(err: unknown, uid: string): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes(`Element uid "${uid}" not found`);
+}
+
+function looksLikeHumanTextRef(ref: string): boolean {
+  const trimmed = ref.trim();
+  if (!trimmed || trimmed.length > 80) {
+    return false;
+  }
+  if (/^@?ax\d+$/i.test(trimmed) || /^[a-z][a-z0-9]*-\d+$/i.test(trimmed)) {
+    return false;
+  }
+  return /[A-Za-z]/.test(trimmed) && !/[.[\]#>:=]/.test(trimmed);
+}
+
+async function clickExistingSessionTextRef(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  text: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  await evaluateChromeMcpScript({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    fn: `() => {
+      const wanted = ${JSON.stringify(params.text)}.replace(/\\s+/g, " ").trim();
+
+      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const visible = (el) => {
+        if (!(el instanceof Element)) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+      };
+      const clickableFor = (el) =>
+        el.closest('button, a, [role="button"], [role="option"], [role="menuitem"], [role="tab"], .ant-select-item-option, .ant-select-item, [data-option-index]') || el;
+      const candidates = Array.from(document.querySelectorAll("body *"))
+        .filter(visible)
+        .map((el) => {
+          const text = normalize(el.textContent);
+          const aria = normalize(el.getAttribute("aria-label"));
+          const value = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? normalize(el.value) : "";
+          return { el, text, aria, value };
+        })
+        .filter(({ text, aria, value }) => text === wanted || aria === wanted || value === wanted);
+
+      if (candidates.length === 0) {
+        throw new Error(\`No visible text ref matches: \${wanted}\`);
+      }
+
+      const ranked = candidates
+        .map(({ el }) => clickableFor(el))
+        .filter((el, index, all) => all.indexOf(el) === index)
+        .sort((a, b) => {
+          const aRole = String(a.getAttribute("role") || "").toLowerCase();
+          const bRole = String(b.getAttribute("role") || "").toLowerCase();
+          const aScore = aRole === "option" || aRole === "button" || a.tagName === "BUTTON" ? 0 : 1;
+          const bScore = bRole === "option" || bRole === "button" || b.tagName === "BUTTON" ? 0 : 1;
+          if (aScore !== bScore) return aScore - bScore;
+          return a.getBoundingClientRect().height - b.getBoundingClientRect().height;
+        });
+
+      const target = ranked[0];
+      if (!(target instanceof HTMLElement)) {
+        throw new Error(\`Visible text ref is not clickable: \${wanted}\`);
+      }
+      target.scrollIntoView({ block: "center", inline: "center" });
+      target.click();
+      return true;
+    }`,
+    timeoutMs: params.timeoutMs,
+  });
+}
+
 function browserEvaluateDisabledMessage(action: "wait" | "evaluate"): string {
   return [
     action === "wait"
@@ -54,6 +132,151 @@ function browserEvaluateDisabledMessage(action: "wait" | "evaluate"): string {
       : "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
     "Docs: /gateway/configuration#browser-openclaw-managed-browser",
   ].join("\n");
+}
+
+function readActRef(body: Record<string, unknown>): string | undefined {
+  const ref = toStringOrEmpty(body.ref) || toStringOrEmpty(body.inputRef);
+  return ref || undefined;
+}
+
+function readActSelector(body: Record<string, unknown>): string | undefined {
+  const selector = toStringOrEmpty(body.selector);
+  if (selector) {
+    return selector;
+  }
+  // Some tool callers still send screenshot-style `element` for act targets.
+  // Treat it as a selector fallback so valid legacy flattened calls do not die
+  // before the existing-session selector fallback gets a chance to run.
+  const element = toStringOrEmpty(body.element);
+  return element || undefined;
+}
+
+function isRetryableChromeMcpElementSnapshotError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    /Element uid ".+" not found/i.test(message) || /No snapshot found for page \d+/i.test(message)
+  );
+}
+
+function buildExistingSessionStaleRefGuidance(params: {
+  kind: ActKind;
+  profileName: string;
+  targetId: string;
+  cause: unknown;
+}): Error {
+  const causeMessage = params.cause instanceof Error ? params.cause.message : String(params.cause);
+  return new Error(
+    [
+      `existing-session ${params.kind} target is stale or the Chrome MCP snapshot cache is missing.`,
+      `Run browser action=snapshot profile="${params.profileName}" targetId="${params.targetId}", then retry with a fresh ref from that snapshot.`,
+      `Last Chrome MCP error: ${causeMessage}`,
+    ].join(" "),
+    { cause: params.cause },
+  );
+}
+
+function jsLiteral(value: string): string {
+  return JSON.stringify(value);
+}
+
+function buildExistingSessionTypeSelectorScript(selector: string, value: string): string {
+  return `() => {
+    const selector = ${jsLiteral(selector)};
+    const value = ${jsLiteral(value)};
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLElement)) {
+      throw new Error(\`No element matches selector: \${selector}\`);
+    }
+    el.scrollIntoView({ block: "center", inline: "center" });
+    el.focus();
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      el.value = value;
+    } else {
+      el.setAttribute("value", value);
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }`;
+}
+
+function buildExistingSessionClickSelectorScript(selector: string): string {
+  return `() => {
+    const selector = ${jsLiteral(selector)};
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLElement)) {
+      throw new Error(\`No element matches selector: \${selector}\`);
+    }
+    el.scrollIntoView({ block: "center", inline: "center" });
+    el.click();
+    return true;
+  }`;
+}
+
+function buildExistingSessionFillSelectorScript(selector: string, value: string): string {
+  return `() => {
+    const selector = ${jsLiteral(selector)};
+    const value = ${jsLiteral(value)};
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLElement)) {
+      throw new Error(\`No element matches selector: \${selector}\`);
+    }
+    if (el instanceof HTMLInputElement) {
+      if (el.type === "checkbox" || el.type === "radio") {
+        el.checked = value === "true" || value === "1";
+      } else {
+        el.value = value;
+      }
+    } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+      el.value = value;
+    } else {
+      el.setAttribute("value", value);
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }`;
+}
+
+async function refreshExistingSessionSnapshot(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+}): Promise<void> {
+  await takeChromeMcpSnapshot(params);
+}
+
+async function runExistingSessionElementActionWithSnapshotRetry(params: {
+  kind: ActKind;
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  run: () => Promise<void>;
+}): Promise<void> {
+  try {
+    await params.run();
+    return;
+  } catch (err) {
+    if (!isRetryableChromeMcpElementSnapshotError(err)) {
+      throw err;
+    }
+    try {
+      await refreshExistingSessionSnapshot({
+        profileName: params.profileName,
+        userDataDir: params.userDataDir,
+        targetId: params.targetId,
+      });
+      await params.run();
+      return;
+    } catch (retryErr) {
+      throw buildExistingSessionStaleRefGuidance({
+        kind: params.kind,
+        profileName: params.profileName,
+        targetId: params.targetId,
+        cause: retryErr,
+      });
+    }
+  }
 }
 
 function buildExistingSessionWaitPredicate(params: {
@@ -75,7 +298,10 @@ function buildExistingSessionWaitPredicate(params: {
   }
   if (params.loadState === "domcontentloaded") {
     checks.push(`document.readyState === "interactive" || document.readyState === "complete"`);
-  } else if (params.loadState === "load") {
+  } else if (params.loadState === "load" || params.loadState === "networkidle") {
+    // Chrome DevTools MCP does not expose Playwright's networkidle signal for
+    // existing-session. Degrade to the strongest universally available browser
+    // readiness check instead of hard-failing a recoverable wait.
     checks.push(`document.readyState === "complete"`);
   }
   if (params.fn) {
@@ -85,6 +311,67 @@ function buildExistingSessionWaitPredicate(params: {
     return null;
   }
   return checks.length === 1 ? checks[0] : checks.map((check) => `(${check})`).join(" && ");
+}
+
+async function focusExistingSessionPressTarget(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  ref?: string;
+  selector?: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  if (params.ref) {
+    // Chrome MCP only exposes key presses against the focused page, not a
+    // target uid. A ref click is the smallest reliable way to put focus where
+    // the model intended before sending the key.
+    await clickChromeMcpElement({
+      profileName: params.profileName,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+      uid: params.ref,
+      timeoutMs: params.timeoutMs,
+    });
+    return;
+  }
+
+  if (!params.selector) {
+    return;
+  }
+
+  await evaluateChromeMcpScript({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    fn: `(selector) => {
+      const el = document.querySelector(selector);
+      if (!(el instanceof HTMLElement)) {
+        throw new Error(\`No element matches selector: \${selector}\`);
+      }
+
+      el.scrollIntoView({ block: "center", inline: "center" });
+      el.focus({ preventScroll: true });
+
+      const role = String(el.getAttribute("role") || "").toLowerCase();
+      const className = String(el.className || "");
+      const needsPointerFocus =
+        document.activeElement !== el &&
+        (role === "combobox" ||
+          role === "listbox" ||
+          role === "textbox" ||
+          /\\b(ant-select|rc-select|select2)\\b/i.test(className));
+
+      // Custom combobox wrappers often ignore HTMLElement.focus(); one click
+      // opens/focuses them so the following press_key lands on the intended UI.
+      if (needsPointerFocus) {
+        el.click();
+      }
+
+      return true;
+    }`,
+    args: [params.selector],
+    timeoutMs: params.timeoutMs,
+  });
 }
 
 async function waitForExistingSessionCondition(params: {
@@ -138,20 +425,29 @@ async function waitForExistingSessionCondition(params: {
   throw new Error("Timed out waiting for condition");
 }
 
-function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): string {
+function buildExistingSessionChooseOptionScript(params: {
+  target: "ref" | "selector";
+  selector?: string;
+  optionText: string;
+  matchMode: "exact" | "contains" | "regex";
+  queryText: string;
+  timeoutMs: number;
+}): string {
   const targetExpression =
-    target === "selector" ? `document.querySelector(String(targetOrControl))` : `targetOrControl`;
-  return `(targetOrControl, rawOptionText, rawMatchMode, rawQueryText, rawTimeoutMs) => new Promise((resolve, reject) => {
+    params.target === "selector"
+      ? `document.querySelector(${jsLiteral(params.selector ?? "")})`
+      : `targetOrControl`;
+  return `(targetOrControl) => new Promise((resolve, reject) => {
     const control = ${targetExpression};
     if (!(control instanceof Element)) {
       reject(new Error("chooseOption target was not found"));
       return;
     }
 
-    const optionText = String(rawOptionText || "").replace(/\\s+/g, " ").trim();
-    const matchMode = rawMatchMode === "contains" || rawMatchMode === "regex" ? rawMatchMode : "exact";
-    const queryText = String(rawQueryText || optionText).replace(/\\s+/g, " ").trim();
-    const timeoutMs = Math.max(500, Math.min(60000, Number(rawTimeoutMs) || 10000));
+    const optionText = ${jsLiteral(params.optionText)}.replace(/\\s+/g, " ").trim();
+    const matchMode = ${jsLiteral(params.matchMode)};
+    const queryText = ${jsLiteral(params.queryText)}.replace(/\\s+/g, " ").trim();
+    const timeoutMs = ${params.timeoutMs};
     const optionSelector = [
       '[role="option"]',
       '[role="treeitem"]',
@@ -173,17 +469,13 @@ function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): str
       const className = String(el.className || "");
       return el.getAttribute("aria-disabled") === "true" || el.hasAttribute("disabled") || /\\b(disabled|ant-select-item-option-disabled)\\b/i.test(className);
     };
-    const matchTexts = [optionText];
-    if (matchMode === "contains" && queryText && queryText.toLowerCase() !== optionText.toLowerCase()) {
-      matchTexts.push(queryText);
-    }
     const matches = (text) => {
       const actual = normalize(text);
       if (!optionText) return false;
       if (matchMode === "exact") return actual === optionText || actual.toLowerCase() === optionText.toLowerCase();
-      if (matchMode === "contains") return matchTexts.some((expected) => actual.toLowerCase().includes(expected.toLowerCase()));
+      if (matchMode === "contains") return actual.toLowerCase().includes(optionText.toLowerCase());
       try {
-        return new RegExp(rawOptionText, "i").test(actual);
+        return new RegExp(optionText, "i").test(actual);
       } catch {
         return false;
       }
@@ -247,6 +539,59 @@ function buildExistingSessionChooseOptionScript(target: "ref" | "selector"): str
     };
     tick();
   })`;
+}
+
+function normalizeChooseOptionText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function matchesChooseOptionText(params: {
+  matchedText: string;
+  optionText: string;
+  matchMode: "exact" | "contains" | "regex";
+}): boolean {
+  const matchedText = normalizeChooseOptionText(params.matchedText);
+  const optionText = normalizeChooseOptionText(params.optionText);
+  if (!optionText) {
+    return false;
+  }
+  if (params.matchMode === "exact") {
+    return matchedText === optionText || matchedText.toLowerCase() === optionText.toLowerCase();
+  }
+  if (params.matchMode === "contains") {
+    return matchedText.toLowerCase().includes(optionText.toLowerCase());
+  }
+  try {
+    return new RegExp(optionText, "i").test(matchedText);
+  } catch {
+    return false;
+  }
+}
+
+function validateExistingSessionChooseOptionResult(params: {
+  result: unknown;
+  optionText: string;
+  matchMode: "exact" | "contains" | "regex";
+}): string | null {
+  if (!params.result || typeof params.result !== "object" || Array.isArray(params.result)) {
+    return "chooseOption did not return a structured result with matchedText";
+  }
+  const matchedText = (params.result as { matchedText?: unknown }).matchedText;
+  if (typeof matchedText !== "string" || !matchedText.trim()) {
+    return "chooseOption did not return matchedText, so the selected option cannot be verified";
+  }
+  if (
+    !matchesChooseOptionText({
+      matchedText,
+      optionText: params.optionText,
+      matchMode: params.matchMode,
+    })
+  ) {
+    return `chooseOption matched "${normalizeChooseOptionText(matchedText)}", but optionText was "${normalizeChooseOptionText(
+      params.optionText,
+    )}"`;
+  }
+  return null;
 }
 
 const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
@@ -643,8 +988,8 @@ export function registerBrowserAgentActRoutes(
 
         switch (kind) {
           case "click": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             if (!ref && !selector) {
               return jsonError(res, 400, "ref or selector is required");
             }
@@ -679,16 +1024,7 @@ export function registerBrowserAgentActRoutes(
                   profileName,
                   userDataDir: profileCtx.profile.userDataDir,
                   targetId: tab.targetId,
-                  fn: `(selector) => {
-                    const el = document.querySelector(selector);
-                    if (!(el instanceof HTMLElement)) {
-                      throw new Error(\`No element matches selector: \${selector}\`);
-                    }
-                    el.scrollIntoView({ block: "center", inline: "center" });
-                    el.click();
-                    return true;
-                  }`,
-                  args: [selector],
+                  fn: buildExistingSessionClickSelectorScript(selector),
                   timeoutMs: timeoutMs ?? undefined,
                 });
                 return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
@@ -700,13 +1036,41 @@ export function registerBrowserAgentActRoutes(
                   "existing-session click currently supports left-click only (no button overrides/modifiers).",
                 );
               }
-              await clickChromeMcpElement({
+              await runExistingSessionElementActionWithSnapshotRetry({
+                kind,
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
-                doubleClick,
-                timeoutMs: timeoutMs ?? undefined,
+                run: async () => {
+                  try {
+                    await clickChromeMcpElement({
+                      profileName,
+                      userDataDir: profileCtx.profile.userDataDir,
+                      targetId: tab.targetId,
+                      uid: ref!,
+                      doubleClick,
+                      timeoutMs: timeoutMs ?? undefined,
+                    });
+                  } catch (err) {
+                    if (
+                      doubleClick ||
+                      !looksLikeHumanTextRef(ref!) ||
+                      !isExistingSessionMissingUidError(err, ref!)
+                    ) {
+                      throw err;
+                    }
+                    // Models sometimes put visible option text in ref when Chrome MCP
+                    // wanted a uid. Keep the recovery exact and text-only so real uid
+                    // failures still surface instead of clicking a random fuzzy match.
+                    await clickExistingSessionTextRef({
+                      profileName,
+                      userDataDir: profileCtx.profile.userDataDir,
+                      targetId: tab.targetId,
+                      text: ref!,
+                      timeoutMs: timeoutMs ?? undefined,
+                    });
+                  }
+                },
               });
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
             }
@@ -761,8 +1125,8 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
           }
           case "type": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             if (!ref && !selector) {
               return jsonError(res, 400, "ref or selector is required");
             }
@@ -775,26 +1139,43 @@ export function registerBrowserAgentActRoutes(
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
               if (selector) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session type does not support selector targeting yet; use ref.",
-                );
+                await evaluateChromeMcpScript({
+                  profileName,
+                  userDataDir: profileCtx.profile.userDataDir,
+                  targetId: tab.targetId,
+                  fn: buildExistingSessionTypeSelectorScript(selector, text),
+                  timeoutMs: timeoutMs ?? undefined,
+                });
+                if (submit) {
+                  await pressChromeMcpKey({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    key: "Enter",
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                }
+                return res.json({
+                  ok: true,
+                  targetId: tab.targetId,
+                  normalized: slowly ? { slowly: false } : undefined,
+                });
               }
-              if (slowly) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session type does not support slowly=true; use fill/press instead.",
-                );
-              }
-              await fillChromeMcpElement({
+              await runExistingSessionElementActionWithSnapshotRetry({
+                kind,
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
-                value: text,
-                timeoutMs: timeoutMs ?? undefined,
+                run: async () => {
+                  await fillChromeMcpElement({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    uid: ref!,
+                    value: text,
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                },
               });
               if (submit) {
                 await pressChromeMcpKey({
@@ -805,7 +1186,11 @@ export function registerBrowserAgentActRoutes(
                   timeoutMs: timeoutMs ?? undefined,
                 });
               }
-              return res.json({ ok: true, targetId: tab.targetId });
+              return res.json({
+                ok: true,
+                targetId: tab.targetId,
+                normalized: slowly ? { slowly: false } : undefined,
+              });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
             if (!pw) {
@@ -835,21 +1220,22 @@ export function registerBrowserAgentActRoutes(
             if (!key) {
               return jsonError(res, 400, "key is required");
             }
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             const delayMs = toNumber(body.delayMs);
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
-              if (selector || ref) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session press does not support ref/selector targeting yet; press uses the focused element.",
-                );
-              }
               if (delayMs) {
                 return jsonError(res, 501, "existing-session press does not support delayMs.");
               }
+              await focusExistingSessionPressTarget({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                ref,
+                selector,
+                timeoutMs: timeoutMs ?? undefined,
+              });
               await pressChromeMcpKey({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
@@ -875,8 +1261,8 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "hover": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             if (!ref && !selector) {
               return jsonError(res, 400, "ref or selector is required");
             }
@@ -889,12 +1275,20 @@ export function registerBrowserAgentActRoutes(
                   "existing-session hover does not support selector targeting yet; use ref.",
                 );
               }
-              await hoverChromeMcpElement({
+              await runExistingSessionElementActionWithSnapshotRetry({
+                kind,
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
-                timeoutMs: timeoutMs ?? undefined,
+                run: async () => {
+                  await hoverChromeMcpElement({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    uid: ref!,
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                },
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
@@ -912,8 +1306,8 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "scrollIntoView": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             if (!ref && !selector) {
               return jsonError(res, 400, "ref or selector is required");
             }
@@ -926,19 +1320,17 @@ export function registerBrowserAgentActRoutes(
                   "existing-session scrollIntoView does not support selector targeting yet; use ref.",
                 );
               }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session scrollIntoView does not support timeoutMs overrides.",
-                );
-              }
+              // The existing-session scroll path is a direct in-page
+              // scrollIntoView call. Chrome MCP has no separate scroll wait to
+              // tune, so ignore generic timeout overrides and perform the
+              // deterministic scroll instead of hard-failing.
               await evaluateChromeMcpScript({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
                 args: [ref!],
+                timeoutMs: timeoutMs ?? undefined,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
@@ -1008,8 +1400,8 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "select": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             const values = toStringArray(body.values);
             if ((!ref && !selector) || !values?.length) {
               return jsonError(res, 400, "ref/selector and values are required");
@@ -1030,13 +1422,21 @@ export function registerBrowserAgentActRoutes(
                   "existing-session select currently supports a single value only.",
                 );
               }
-              await fillChromeMcpElement({
+              await runExistingSessionElementActionWithSnapshotRetry({
+                kind,
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
-                value: values[0] ?? "",
-                timeoutMs: timeoutMs ?? undefined,
+                run: async () => {
+                  await fillChromeMcpElement({
+                    profileName,
+                    userDataDir: profileCtx.profile.userDataDir,
+                    targetId: tab.targetId,
+                    uid: ref!,
+                    value: values[0] ?? "",
+                    timeoutMs: timeoutMs ?? undefined,
+                  });
+                },
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
@@ -1055,8 +1455,8 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "chooseOption": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
+            const ref = readActRef(body);
+            const selector = readActSelector(body);
             const optionText = toStringOrEmpty(body.optionText);
             if ((!ref && !selector) || !optionText) {
               return jsonError(res, 400, "ref/selector and optionText are required");
@@ -1069,10 +1469,25 @@ export function registerBrowserAgentActRoutes(
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                fn: buildExistingSessionChooseOptionScript(selector ? "selector" : "ref"),
-                args: [selector ?? ref!, optionText, match, query, String(timeoutMs ?? 10_000)],
+                fn: buildExistingSessionChooseOptionScript({
+                  target: selector ? "selector" : "ref",
+                  selector,
+                  optionText,
+                  matchMode: match,
+                  queryText: query,
+                  timeoutMs: Math.max(500, Math.min(60000, timeoutMs ?? 10_000)),
+                }),
+                args: ref && !selector ? [ref] : undefined,
                 timeoutMs: timeoutMs ?? undefined,
               });
+              const resultError = validateExistingSessionChooseOptionResult({
+                result,
+                optionText,
+                matchMode: match,
+              });
+              if (resultError) {
+                return jsonError(res, 400, resultError);
+              }
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url, result });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
@@ -1134,28 +1549,10 @@ export function registerBrowserAgentActRoutes(
                   profileName,
                   userDataDir: profileCtx.profile.userDataDir,
                   targetId: tab.targetId,
-                  fn: `(selector, rawValue) => {
-                    const el = document.querySelector(selector);
-                    if (!(el instanceof HTMLElement)) {
-                      throw new Error(\`No element matches selector: \${selector}\`);
-                    }
-                    const value = rawValue == null ? "" : String(rawValue);
-                    if (el instanceof HTMLInputElement) {
-                      if (el.type === "checkbox" || el.type === "radio") {
-                        el.checked = value === "true" || value === "1";
-                      } else {
-                        el.value = value;
-                      }
-                    } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
-                      el.value = value;
-                    } else {
-                      el.setAttribute("value", value);
-                    }
-                    el.dispatchEvent(new Event("input", { bubbles: true }));
-                    el.dispatchEvent(new Event("change", { bubbles: true }));
-                    return true;
-                  }`,
-                  args: [field.selector, String(field.value ?? "")],
+                  fn: buildExistingSessionFillSelectorScript(
+                    field.selector,
+                    String(field.value ?? ""),
+                  ),
                   timeoutMs: timeoutMs ?? undefined,
                 });
               }
@@ -1235,13 +1632,6 @@ export function registerBrowserAgentActRoutes(
               );
             }
             if (isExistingSession) {
-              if (loadState === "networkidle") {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session wait does not support loadState=networkidle yet.",
-                );
-              }
               await waitForExistingSessionCondition({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,

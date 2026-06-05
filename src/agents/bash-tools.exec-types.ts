@@ -15,6 +15,7 @@ export type ExecToolDefaults = {
   backgroundMs?: number;
   timeoutSec?: number;
   approvalRunningNoticeMs?: number;
+  cleanupMs?: number;
   sandbox?: BashSandboxConfig;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;

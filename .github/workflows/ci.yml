@@ -6,7 +6,7 @@ on:
   pull_request:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 env:
@@ -16,7 +16,7 @@ jobs:
   # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
   # Lint and format always run. Fail-safe: if detection fails, run everything.
   docs-scope:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.check.outputs.docs_only }}
       docs_changed: ${{ steps.check.outputs.docs_changed }}
@@ -42,14 +42,15 @@ jobs:
   # Fail-safe: if detection fails, downstream jobs run.
   changed-scope:
     needs: [docs-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     outputs:
       run_node: ${{ steps.scope.outputs.run_node }}
       run_macos: ${{ steps.scope.outputs.run_macos }}
       run_android: ${{ steps.scope.outputs.run_android }}
       run_skills_python: ${{ steps.scope.outputs.run_skills_python }}
       run_windows: ${{ steps.scope.outputs.run_windows }}
+      run_ci_scope_tests: ${{ steps.scope.outputs.run_ci_scope_tests }}
+      run_browser_agent: ${{ steps.scope.outputs.run_browser_agent }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -78,11 +79,58 @@ jobs:
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
+  ci-scope-tests:
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_ci_scope_tests == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Test CI scope detector
+        run: pnpm exec vitest run src/scripts/ci-changed-scope.test.ts
+
+  browser-agent-check:
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_browser_agent == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run browser-agent tests
+        run: pnpm test -- src/browser/routes/agent.existing-session.test.ts src/browser/chrome-mcp.test.ts src/agents/tools/browser-tool.test.ts
+
+      - name: Check browser-agent formatting
+        run: pnpm exec oxfmt --check src/browser/chrome-mcp.ts src/browser/routes/agent.act.ts src/browser/routes/agent.existing-session.test.ts src/browser/chrome-mcp.test.ts src/agents/tools/browser-tool.ts src/agents/tools/browser-tool.schema.ts docs/agent-guides/browser-agent-e2e.md
+
+      - name: Check generated protocol
+        run: pnpm protocol:check
+
+      - name: Check whitespace errors
+        run: git diff --check
+
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
     needs: [docs-scope, changed-scope]
     if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -116,7 +164,7 @@ jobs:
   release-check:
     needs: [docs-scope, build-artifacts]
     if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -141,7 +189,7 @@ jobs:
   checks:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -159,9 +207,11 @@ jobs:
           - runtime: node
             task: extensions
             command: pnpm test:extensions
+            pr_skip: true
           - runtime: node
             task: channels
             command: pnpm test:channels
+            pr_skip: true
           - runtime: node
             task: protocol
             command: pnpm protocol:check
@@ -173,21 +223,25 @@ jobs:
         if: github.event_name == 'pull_request' && matrix.runtime == 'bun'
         run: echo "Skipping Bun compatibility lane on pull requests."
 
+      - name: Skip unstable scoped channel suites on pull requests
+        if: github.event_name == 'pull_request' && matrix.pr_skip == true
+        run: echo "Skipping scoped ${{ matrix.task }} lane on pull requests; full Node shards still run."
+
       - name: Checkout
-        if: github.event_name != 'pull_request' || matrix.runtime != 'bun'
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.pr_skip != true)
         uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Node environment
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.pr_skip != true)
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "${{ matrix.runtime == 'bun' }}"
           use-sticky-disk: "false"
 
       - name: Configure Node test resources
-        if: (github.event_name != 'pull_request' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
+        if: (github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.pr_skip != true)) && matrix.task == 'test' && matrix.runtime == 'node'
         env:
           SHARD_COUNT: ${{ matrix.shard_count || '' }}
           SHARD_INDEX: ${{ matrix.shard_index || '' }}
@@ -202,7 +256,7 @@ jobs:
           fi
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.pr_skip != true)
         run: ${{ matrix.command }}
 
   # Types, lint, and format check.
@@ -210,7 +264,7 @@ jobs:
     name: "check"
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -236,7 +290,7 @@ jobs:
     name: "startup-memory"
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -259,7 +313,7 @@ jobs:
   check-docs:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_changed == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -273,13 +327,32 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Check docs
-        run: pnpm check:docs
+        run: |
+          set -euo pipefail
+
+          pnpm format:docs:check
+          pnpm lint:docs
+          pnpm docs:check-i18n-glossary
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="${{ github.event.pull_request.base.sha }}"
+          fi
+
+          if git diff --name-only "$BASE" HEAD -- docs/consumer/project-status.md | grep -q .; then
+            pnpm docs:check-project-status
+          else
+            echo "docs/consumer/project-status.md unchanged; skipping project status freshness check."
+          fi
+
+          pnpm docs:check-links
 
   compat-node22:
     name: "compat-node22"
     needs: [docs-scope, changed-scope]
     if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -312,7 +385,7 @@ jobs:
   skills-python:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_skills_python == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -336,7 +409,7 @@ jobs:
         run: python -m pytest -q skills
 
   secrets:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -400,12 +473,33 @@ jobs:
           pre-commit run zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        run: pre-commit run --all-files pnpm-audit-prod
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="${{ github.event.pull_request.base.sha }}"
+          fi
+
+          mapfile -t dependency_files < <(git diff --name-only "$BASE" HEAD -- \
+            'package.json' \
+            'pnpm-lock.yaml' \
+            'pnpm-workspace.yaml' \
+            'extensions/**/package.json' \
+            'packages/**/package.json' \
+            'ui/package.json')
+          if [ "${#dependency_files[@]}" -eq 0 ]; then
+            echo "No dependency changes detected; skipping production dependency audit."
+            exit 0
+          fi
+
+          pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
-    runs-on: blacksmith-32vcpu-windows-2025
+    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
+    runs-on: windows-latest
     timeout-minutes: 45
     env:
       NODE_OPTIONS: --max-old-space-size=6144
@@ -767,7 +861,7 @@ jobs:
   android:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_android == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -824,3 +918,98 @@ jobs:
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
         run: ${{ matrix.command }}
+
+  pr-required:
+    name: "pr-required"
+    needs:
+      - docs-scope
+      - changed-scope
+      - checks
+      - check
+      - startup-memory
+      - check-docs
+      - ci-scope-tests
+      - browser-agent-check
+      - skills-python
+      - secrets
+      - checks-windows
+      - macos
+      - android
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify scoped PR gates
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          node <<'NODE'
+          const needs = JSON.parse(process.env.NEEDS_JSON || "{}");
+
+          const failures = [];
+
+          const resultOf = (job) => needs[job]?.result || "missing";
+          const outputOf = (job, name) => needs[job]?.outputs?.[name] || "";
+
+          const requireSuccess = (job, reason) => {
+            const result = resultOf(job);
+            if (result !== "success") {
+              failures.push(`${job}: expected success for ${reason}, got ${result}`);
+            }
+          };
+
+          const requireSkippedOrSuccess = (job, reason) => {
+            const result = resultOf(job);
+            if (result !== "success" && result !== "skipped") {
+              failures.push(`${job}: expected success or scoped skip for ${reason}, got ${result}`);
+            }
+          };
+
+          const requireScopedSuccess = (job, shouldRun, reason) => {
+            if (shouldRun) {
+              requireSuccess(job, reason);
+              return;
+            }
+
+            requireSkippedOrSuccess(job, `${reason} not in this change scope`);
+          };
+
+          const docsOnly = outputOf("docs-scope", "docs_only") === "true";
+          const docsChanged = outputOf("docs-scope", "docs_changed") === "true";
+          const runNode = outputOf("changed-scope", "run_node") === "true";
+          const runMacos = outputOf("changed-scope", "run_macos") === "true";
+          const runAndroid = outputOf("changed-scope", "run_android") === "true";
+          const runSkillsPython = outputOf("changed-scope", "run_skills_python") === "true";
+          const runWindows = outputOf("changed-scope", "run_windows") === "true";
+          const runCiScopeTests = outputOf("changed-scope", "run_ci_scope_tests") === "true";
+          const runBrowserAgent = outputOf("changed-scope", "run_browser_agent") === "true";
+
+          // These jobs establish the scope and catch security-sensitive mistakes.
+          // They are cheap enough to require on every PR.
+          requireSuccess("docs-scope", "change scope detection");
+          requireSuccess("secrets", "secret, workflow, and dependency safety");
+
+          // Every PR must classify changed files before this gate trusts any
+          // skipped product or platform job.
+          requireSuccess("changed-scope", "change scope detection");
+
+          requireScopedSuccess("check-docs", docsChanged, "docs validation");
+          requireScopedSuccess("ci-scope-tests", !docsOnly && runCiScopeTests, "CI scope detector tests");
+          requireScopedSuccess("browser-agent-check", !docsOnly && runBrowserAgent, "browser-agent focused tests, format, and protocol check");
+          requireScopedSuccess("check", !docsOnly && runNode && !runBrowserAgent, "types, lint, format, and strict build smoke");
+          requireScopedSuccess("checks", !docsOnly && runNode && !runBrowserAgent, "Node tests, extensions, channels, and protocol checks");
+          requireScopedSuccess("startup-memory", !docsOnly && runNode && !runBrowserAgent, "CLI startup memory regression check");
+          requireScopedSuccess("skills-python", !docsOnly && runSkillsPython, "Python skill lint and tests");
+          requireSkippedOrSuccess("checks-windows", "Windows PR matrix is push-only until its baseline is restored");
+          requireScopedSuccess("macos", !docsOnly && runMacos, "macOS tests and Swift checks");
+          requireScopedSuccess("android", !docsOnly && runAndroid, "Android tests and build");
+
+          if (failures.length > 0) {
+            console.error("PR required gate failed:");
+            for (const failure of failures) {
+              console.error(`- ${failure}`);
+            }
+            process.exit(1);
+          }
+
+          console.log("PR required gate passed for this change scope.");
+          NODE

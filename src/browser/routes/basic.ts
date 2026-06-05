@@ -84,6 +84,9 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
 
       if (capabilities.usesChromeMcp) {
         try {
+          if (profileCtx.profile.cloneFromUserProfile) {
+            await profileCtx.ensureBrowserAvailable();
+          }
           const tabs = await profileCtx.listTabs();
           tabCount = tabs.filter((t) => t.type === "page").length;
           // Existing-session lanes are only meaningfully "running" when the
