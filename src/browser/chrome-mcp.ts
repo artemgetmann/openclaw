@@ -111,6 +111,15 @@ function resolveTimeoutMs(timeoutMs: number | undefined): number {
   return Math.max(1, Math.floor(timeoutMs));
 }
 
+function isFileNotFoundError(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ENOENT"
+  );
+}
+
 function parseAttachUrl(value: string | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -1227,7 +1236,10 @@ function isChromeMcpApprovalTimeoutMessage(message: string): boolean {
 }
 
 function isChromeMcpRequestTimeoutError(err: unknown): boolean {
-  return isChromeMcpApprovalTimeoutMessage(normalizeErrorMessage(err));
+  const message = normalizeErrorMessage(err);
+  return (
+    isChromeMcpApprovalTimeoutMessage(message) || /navigation timeout .* exceeded/i.test(message)
+  );
 }
 
 function buildChromeMcpToolTimeoutError(
@@ -1630,6 +1642,33 @@ export async function listChromeMcpTabs(
   return toBrowserTabs(await listChromeMcpPages(profileName, userDataDirOrOptions, options));
 }
 
+function normalizeUrlForRecovery(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function findRecentlyOpenedPageByUrl(
+  pages: ChromeMcpStructuredPage[],
+  requestedUrl: string,
+): ChromeMcpStructuredPage | undefined {
+  const expected = normalizeUrlForRecovery(requestedUrl);
+  if (!expected) {
+    return undefined;
+  }
+  for (const page of pages.slice().toReversed()) {
+    const actual = page.url ? normalizeUrlForRecovery(page.url) : null;
+    if (actual === expected || actual?.startsWith(`${expected}/`)) {
+      return page;
+    }
+  }
+  return undefined;
+}
+
 export async function openChromeMcpTab(
   profileName: string,
   url: string,
@@ -1637,19 +1676,44 @@ export async function openChromeMcpTab(
   options: ChromeMcpCallOptions = {},
 ): Promise<BrowserTab> {
   const resolved = resolveUserDataDirAndOptions(userDataDirOrOptions, options);
-  const result = await callTool(
-    profileName,
-    resolved.userDataDir,
-    resolved.profileDirectory,
-    "new_page",
-    {
-      url,
-      ...(typeof resolved.options.timeoutMs === "number"
-        ? { timeout: resolved.options.timeoutMs }
-        : {}),
-    },
-    resolved.options,
-  );
+  let result: ChromeMcpToolResult;
+  try {
+    result = await callTool(
+      profileName,
+      resolved.userDataDir,
+      resolved.profileDirectory,
+      "new_page",
+      {
+        url,
+        ...(typeof resolved.options.timeoutMs === "number"
+          ? { timeout: resolved.options.timeoutMs }
+          : {}),
+      },
+      resolved.options,
+    );
+  } catch (err) {
+    if (!isChromeMcpRequestTimeoutError(err)) {
+      throw err;
+    }
+    const fallbackPages = await listChromeMcpPages(profileName, resolved.userDataDir, {
+      ...resolved.options,
+      profileDirectory: resolved.profileDirectory,
+      timeoutMs: Math.max(5_000, Math.min(30_000, resolved.options.timeoutMs ?? 30_000)),
+    });
+    const fallback = findRecentlyOpenedPageByUrl(fallbackPages, url);
+    if (!fallback) {
+      throw err;
+    }
+    traceChromeMcpStage(
+      `chrome-mcp-new-page-timeout-recovered profile=${profileName} pageId=${fallback.id}`,
+    );
+    return {
+      targetId: String(fallback.id),
+      title: "",
+      url: fallback.url ?? url,
+      type: "page",
+    };
+  }
   const pages = extractStructuredPages(result);
   const chosen = pages.find((page) => page.selected) ?? pages.at(-1);
   if (!chosen) {
@@ -1801,7 +1865,9 @@ export async function takeChromeMcpScreenshot(params: {
             fallbackError = normalizeErrorMessage(err);
           }
         }
-        throw lastMissingFileError ?? new Error("Chrome MCP screenshot output file was not created.");
+        throw (
+          lastMissingFileError ?? new Error("Chrome MCP screenshot output file was not created.")
+        );
       }, `.${format}`);
     } catch (err) {
       if (!isFileNotFoundError(err)) {

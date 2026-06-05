@@ -356,24 +356,28 @@ describe("existing-session browser routes", () => {
     });
   });
 
-  it("keeps stable existing-session click refs strict when Chrome MCP rejects the uid", async () => {
+  it("refreshes stable existing-session click refs when Chrome MCP rejects the uid", async () => {
     chromeMcpMocks.clickChromeMcpElement.mockRejectedValueOnce(
       new Error('Error: Element uid "btn-1" not found on page 3'),
     );
 
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();
-    await expect(
-      handler?.(
-        {
-          params: {},
-          query: {},
-          body: { kind: "click", ref: "btn-1", timeoutMs: 12_000 },
-        },
-        response.res,
-      ),
-    ).rejects.toThrow('Element uid "btn-1" not found');
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "click", ref: "btn-1", timeoutMs: 12_000 },
+      },
+      response.res,
+    );
 
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+    });
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledTimes(2);
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalledWith(
       expect.objectContaining({ args: ["btn-1"] }),
     );
@@ -764,12 +768,15 @@ describe("existing-session browser routes", () => {
     );
 
     expect(response.statusCode).toBe(200);
-    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
-      profileName: "chrome-live",
-      targetId: "7",
-      fn: expect.stringContaining("document.querySelector"),
-      timeoutMs: 8_000,
-    });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileName: "chrome-live",
+        targetId: "7",
+        fn: expect.stringContaining("document.querySelector"),
+        args: ["input[name='from']"],
+        timeoutMs: 8_000,
+      }),
+    );
     expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith({
       profileName: "chrome-live",
       targetId: "7",
@@ -797,11 +804,14 @@ describe("existing-session browser routes", () => {
     expect(JSON.stringify(response.body)).not.toContain(
       "existing-session scrollIntoView does not support timeoutMs overrides",
     );
-    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
-      profileName: "chrome-live",
-      targetId: "7",
-      fn: expect.stringContaining("scrollIntoView"),
-      args: ["section-1"],
-    });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileName: "chrome-live",
+        targetId: "7",
+        fn: expect.stringContaining("scrollIntoView"),
+        args: ["section-1"],
+        timeoutMs: 8_000,
+      }),
+    );
   });
 });

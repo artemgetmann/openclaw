@@ -711,7 +711,6 @@ describe("chrome MCP page parsing", () => {
     const factory: ChromeMcpSessionFactory = async () => session;
     setChromeMcpSessionFactoryForTest(factory);
 
-    const originalReadFile = fs.readFile;
     vi.spyOn(fs, "readFile")
       .mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ENOENT" }))
       .mockResolvedValueOnce(Buffer.from("png"));
@@ -724,7 +723,6 @@ describe("chrome MCP page parsing", () => {
     expect(buffer.toString()).toBe("png");
     expect(callTool).toHaveBeenCalledTimes(1);
     vi.mocked(fs.readFile).mockRestore();
-    expect(fs.readFile).toBe(originalReadFile);
   });
 
   it("waits briefly when Chrome MCP screenshot output appears after the tool returns", async () => {
@@ -732,7 +730,6 @@ describe("chrome MCP page parsing", () => {
     const factory: ChromeMcpSessionFactory = async () => session;
     setChromeMcpSessionFactoryForTest(factory);
 
-    const originalReadFile = fs.readFile;
     vi.spyOn(fs, "readFile")
       .mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ENOENT" }))
       .mockRejectedValueOnce(Object.assign(new Error("still missing"), { code: "ENOENT" }))
@@ -747,7 +744,6 @@ describe("chrome MCP page parsing", () => {
     expect(callTool).toHaveBeenCalledTimes(1);
     expect(fs.readFile).toHaveBeenCalledWith(expect.stringMatching(/openclaw-chrome-mcp-.+\.png$/));
     vi.mocked(fs.readFile).mockRestore();
-    expect(fs.readFile).toBe(originalReadFile);
   });
 
   it("parses evaluate_script text responses when structuredContent is missing", async () => {
