@@ -330,7 +330,7 @@ describe("claude-bridge native browser e2e", () => {
             injectedFiles: [],
             skillsPrompt: "",
             tools: [],
-          },
+          } as unknown as Parameters<typeof runClaudeBridgeAgent>[0]["systemPromptReport"],
         });
 
         const assistantText = result.payloads?.[0]?.text ?? "";

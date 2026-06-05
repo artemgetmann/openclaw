@@ -85,98 +85,104 @@ describe("telegram shared-token protection", () => {
     ).toBe(false);
   });
 
-  it("reads protected Telegram bot tokens from the canonical shared config", () => {
-    const home = makeTempDir();
-    const canonicalMainRepo = path.join(home, "Programming_Projects", "openclaw");
-    fs.mkdirSync(path.join(canonicalMainRepo, "dist"), { recursive: true });
-    fs.writeFileSync(path.join(canonicalMainRepo, "dist", "index.js"), "", "utf8");
-    fs.writeFileSync(path.join(canonicalMainRepo, "package.json"), "{}\n", "utf8");
-    const canonicalMainRepoReal = fs.realpathSync.native(canonicalMainRepo);
-    const fakeBin = path.join(home, "bin");
-    fs.mkdirSync(fakeBin, { recursive: true });
-    writeFile(
-      path.join(fakeBin, "launchctl"),
-      `#!/bin/sh\nprintf 'pid = 123\\nprogram = "${canonicalMainRepoReal}/dist/index.js"\\n'\n`,
-    );
-    writeFile(
-      path.join(fakeBin, "ps"),
-      `#!/bin/sh\nprintf 'node ${canonicalMainRepoReal}/dist/index.js gateway run\\n'\n`,
-    );
-    fs.chmodSync(path.join(fakeBin, "launchctl"), 0o755);
-    fs.chmodSync(path.join(fakeBin, "ps"), 0o755);
-    writeFile(
-      path.join(home, ".openclaw", "openclaw.json"),
-      JSON.stringify({
-        channels: {
-          telegram: {
-            botToken: "main-token",
-            accounts: {
-              finance: { botToken: "finance-token" },
-              coder: { botToken: "coder-token" },
+  it.skipIf(process.platform === "win32")(
+    "reads protected Telegram bot tokens from the canonical shared config",
+    () => {
+      const home = makeTempDir();
+      const canonicalMainRepo = path.join(home, "Programming_Projects", "openclaw");
+      fs.mkdirSync(path.join(canonicalMainRepo, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(canonicalMainRepo, "dist", "index.js"), "", "utf8");
+      fs.writeFileSync(path.join(canonicalMainRepo, "package.json"), "{}\n", "utf8");
+      const canonicalMainRepoReal = fs.realpathSync.native(canonicalMainRepo);
+      const fakeBin = path.join(home, "bin");
+      fs.mkdirSync(fakeBin, { recursive: true });
+      writeFile(
+        path.join(fakeBin, "launchctl"),
+        `#!/bin/sh\nprintf 'pid = 123\\nprogram = "${canonicalMainRepoReal}/dist/index.js"\\n'\n`,
+      );
+      writeFile(
+        path.join(fakeBin, "ps"),
+        `#!/bin/sh\nprintf 'node ${canonicalMainRepoReal}/dist/index.js gateway run\\n'\n`,
+      );
+      fs.chmodSync(path.join(fakeBin, "launchctl"), 0o755);
+      fs.chmodSync(path.join(fakeBin, "ps"), 0o755);
+      writeFile(
+        path.join(home, ".openclaw", "openclaw.json"),
+        JSON.stringify({
+          channels: {
+            telegram: {
+              botToken: "main-token",
+              accounts: {
+                finance: { botToken: "finance-token" },
+                coder: { botToken: "coder-token" },
+              },
             },
           },
-        },
-      }),
-    );
+        }),
+      );
 
-    expect(
-      isCanonicalSharedGatewayActive({
-        HOME: home,
-        OPENCLAW_MAIN_REPO: canonicalMainRepo,
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-      }),
-    ).toBe(true);
-    expect(
-      collectProtectedCanonicalTelegramBotTokens({
-        HOME: home,
-        OPENCLAW_MAIN_REPO: canonicalMainRepo,
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-      }),
-    ).toEqual(["main-token", "finance-token", "coder-token"]);
-  });
+      expect(
+        isCanonicalSharedGatewayActive({
+          HOME: home,
+          OPENCLAW_MAIN_REPO: canonicalMainRepo,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        }),
+      ).toBe(true);
+      expect(
+        collectProtectedCanonicalTelegramBotTokens({
+          HOME: home,
+          OPENCLAW_MAIN_REPO: canonicalMainRepo,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        }),
+      ).toEqual(["main-token", "finance-token", "coder-token"]);
+    },
+  );
 
-  it("ignores disabled canonical account tokens even while shared runtime is active", () => {
-    const home = makeTempDir();
-    const canonicalMainRepo = path.join(home, "Programming_Projects", "openclaw");
-    fs.mkdirSync(path.join(canonicalMainRepo, "dist"), { recursive: true });
-    fs.writeFileSync(path.join(canonicalMainRepo, "dist", "index.js"), "", "utf8");
-    fs.writeFileSync(path.join(canonicalMainRepo, "package.json"), "{}\n", "utf8");
-    const canonicalMainRepoReal = fs.realpathSync.native(canonicalMainRepo);
-    const fakeBin = path.join(home, "bin");
-    fs.mkdirSync(fakeBin, { recursive: true });
-    writeFile(
-      path.join(fakeBin, "launchctl"),
-      `#!/bin/sh\nprintf 'pid = 123\\nprogram = "${canonicalMainRepoReal}/dist/index.js"\\n'\n`,
-    );
-    writeFile(
-      path.join(fakeBin, "ps"),
-      `#!/bin/sh\nprintf 'node ${canonicalMainRepoReal}/dist/index.js gateway run\\n'\n`,
-    );
-    fs.chmodSync(path.join(fakeBin, "launchctl"), 0o755);
-    fs.chmodSync(path.join(fakeBin, "ps"), 0o755);
-    writeFile(
-      path.join(home, ".openclaw", "openclaw.json"),
-      JSON.stringify({
-        channels: {
-          telegram: {
-            botToken: "main-token",
-            accounts: {
-              exec: { botToken: "exec-token", enabled: false },
-              finance: { botToken: "finance-token", enabled: true },
+  it.skipIf(process.platform === "win32")(
+    "ignores disabled canonical account tokens even while shared runtime is active",
+    () => {
+      const home = makeTempDir();
+      const canonicalMainRepo = path.join(home, "Programming_Projects", "openclaw");
+      fs.mkdirSync(path.join(canonicalMainRepo, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(canonicalMainRepo, "dist", "index.js"), "", "utf8");
+      fs.writeFileSync(path.join(canonicalMainRepo, "package.json"), "{}\n", "utf8");
+      const canonicalMainRepoReal = fs.realpathSync.native(canonicalMainRepo);
+      const fakeBin = path.join(home, "bin");
+      fs.mkdirSync(fakeBin, { recursive: true });
+      writeFile(
+        path.join(fakeBin, "launchctl"),
+        `#!/bin/sh\nprintf 'pid = 123\\nprogram = "${canonicalMainRepoReal}/dist/index.js"\\n'\n`,
+      );
+      writeFile(
+        path.join(fakeBin, "ps"),
+        `#!/bin/sh\nprintf 'node ${canonicalMainRepoReal}/dist/index.js gateway run\\n'\n`,
+      );
+      fs.chmodSync(path.join(fakeBin, "launchctl"), 0o755);
+      fs.chmodSync(path.join(fakeBin, "ps"), 0o755);
+      writeFile(
+        path.join(home, ".openclaw", "openclaw.json"),
+        JSON.stringify({
+          channels: {
+            telegram: {
+              botToken: "main-token",
+              accounts: {
+                exec: { botToken: "exec-token", enabled: false },
+                finance: { botToken: "finance-token", enabled: true },
+              },
             },
           },
-        },
-      }),
-    );
+        }),
+      );
 
-    expect(
-      collectProtectedCanonicalTelegramBotTokens({
-        HOME: home,
-        OPENCLAW_MAIN_REPO: canonicalMainRepo,
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-      }),
-    ).toEqual(["main-token", "finance-token"]);
-  });
+      expect(
+        collectProtectedCanonicalTelegramBotTokens({
+          HOME: home,
+          OPENCLAW_MAIN_REPO: canonicalMainRepo,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        }),
+      ).toEqual(["main-token", "finance-token"]);
+    },
+  );
 
   it("allows the canonical shared config to use protected tokens", () => {
     const home = makeTempDir();
@@ -248,129 +254,135 @@ describe("telegram shared-token protection", () => {
     ).toBeNull();
   });
 
-  it("blocks noncanonical runtimes from using canonical shared tokens while shared runtime is active", () => {
-    const home = makeTempDir();
-    const canonicalConfigPath = path.join(home, ".openclaw", "openclaw.json");
-    const canonicalMainRepo = path.join(home, "Programming_Projects", "openclaw");
-    fs.mkdirSync(path.join(canonicalMainRepo, "dist"), { recursive: true });
-    fs.writeFileSync(path.join(canonicalMainRepo, "dist", "index.js"), "", "utf8");
-    fs.writeFileSync(path.join(canonicalMainRepo, "package.json"), "{}\n", "utf8");
-    const canonicalMainRepoReal = fs.realpathSync.native(canonicalMainRepo);
-    const fakeBin = path.join(home, "bin");
-    fs.mkdirSync(fakeBin, { recursive: true });
-    writeFile(
-      path.join(fakeBin, "launchctl"),
-      `#!/bin/sh\nprintf 'pid = 123\\nprogram = "${canonicalMainRepoReal}/dist/index.js"\\n'\n`,
-    );
-    writeFile(
-      path.join(fakeBin, "ps"),
-      `#!/bin/sh\nprintf 'node ${canonicalMainRepoReal}/dist/index.js gateway run\\n'\n`,
-    );
-    fs.chmodSync(path.join(fakeBin, "launchctl"), 0o755);
-    fs.chmodSync(path.join(fakeBin, "ps"), 0o755);
-    writeFile(
-      canonicalConfigPath,
-      JSON.stringify({
-        channels: {
-          telegram: {
-            botToken: "main-token",
-            accounts: {
-              finance: { botToken: "finance-token" },
+  it.skipIf(process.platform === "win32")(
+    "blocks noncanonical runtimes from using canonical shared tokens while shared runtime is active",
+    () => {
+      const home = makeTempDir();
+      const canonicalConfigPath = path.join(home, ".openclaw", "openclaw.json");
+      const canonicalMainRepo = path.join(home, "Programming_Projects", "openclaw");
+      fs.mkdirSync(path.join(canonicalMainRepo, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(canonicalMainRepo, "dist", "index.js"), "", "utf8");
+      fs.writeFileSync(path.join(canonicalMainRepo, "package.json"), "{}\n", "utf8");
+      const canonicalMainRepoReal = fs.realpathSync.native(canonicalMainRepo);
+      const fakeBin = path.join(home, "bin");
+      fs.mkdirSync(fakeBin, { recursive: true });
+      writeFile(
+        path.join(fakeBin, "launchctl"),
+        `#!/bin/sh\nprintf 'pid = 123\\nprogram = "${canonicalMainRepoReal}/dist/index.js"\\n'\n`,
+      );
+      writeFile(
+        path.join(fakeBin, "ps"),
+        `#!/bin/sh\nprintf 'node ${canonicalMainRepoReal}/dist/index.js gateway run\\n'\n`,
+      );
+      fs.chmodSync(path.join(fakeBin, "launchctl"), 0o755);
+      fs.chmodSync(path.join(fakeBin, "ps"), 0o755);
+      writeFile(
+        canonicalConfigPath,
+        JSON.stringify({
+          channels: {
+            telegram: {
+              botToken: "main-token",
+              accounts: {
+                finance: { botToken: "finance-token" },
+              },
+            },
+          },
+        }),
+      );
+
+      const conflict = detectProtectedTelegramTokenConflict({
+        config: {
+          channels: {
+            telegram: {
+              botToken: "main-token",
+              accounts: {
+                tester: { botToken: "tester-token" },
+                finance: { botToken: "finance-token" },
+              },
             },
           },
         },
-      }),
-    );
+        configPath: path.join(
+          home,
+          ".openclaw",
+          "telegram-live-worktrees",
+          "tg-live-1",
+          "openclaw.telegram-live.json",
+        ),
+        env: {
+          HOME: home,
+          OPENCLAW_MAIN_REPO: canonicalMainRepo,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        },
+      });
 
-    const conflict = detectProtectedTelegramTokenConflict({
-      config: {
-        channels: {
-          telegram: {
-            botToken: "main-token",
-            accounts: {
-              tester: { botToken: "tester-token" },
-              finance: { botToken: "finance-token" },
+      expect(conflict).toEqual({
+        tokens: ["main-token", "finance-token"],
+        protectedBy: fs.realpathSync.native(canonicalConfigPath),
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "allows noncanonical runtimes to borrow disabled canonical account tokens while shared runtime is active",
+    () => {
+      const home = makeTempDir();
+      const canonicalConfigPath = path.join(home, ".openclaw", "openclaw.json");
+      const canonicalMainRepo = path.join(home, "Programming_Projects", "openclaw");
+      fs.mkdirSync(path.join(canonicalMainRepo, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(canonicalMainRepo, "dist", "index.js"), "", "utf8");
+      fs.writeFileSync(path.join(canonicalMainRepo, "package.json"), "{}\n", "utf8");
+      const canonicalMainRepoReal = fs.realpathSync.native(canonicalMainRepo);
+      const fakeBin = path.join(home, "bin");
+      fs.mkdirSync(fakeBin, { recursive: true });
+      writeFile(
+        path.join(fakeBin, "launchctl"),
+        `#!/bin/sh\nprintf 'pid = 123\\nprogram = "${canonicalMainRepoReal}/dist/index.js"\\n'\n`,
+      );
+      writeFile(
+        path.join(fakeBin, "ps"),
+        `#!/bin/sh\nprintf 'node ${canonicalMainRepoReal}/dist/index.js gateway run\\n'\n`,
+      );
+      fs.chmodSync(path.join(fakeBin, "launchctl"), 0o755);
+      fs.chmodSync(path.join(fakeBin, "ps"), 0o755);
+      writeFile(
+        canonicalConfigPath,
+        JSON.stringify({
+          channels: {
+            telegram: {
+              botToken: "main-token",
+              accounts: {
+                exec: { botToken: "exec-token", enabled: false },
+                finance: { botToken: "finance-token", enabled: true },
+              },
+            },
+          },
+        }),
+      );
+
+      const conflict = detectProtectedTelegramTokenConflict({
+        config: {
+          channels: {
+            telegram: {
+              botToken: "exec-token",
             },
           },
         },
-      },
-      configPath: path.join(
-        home,
-        ".openclaw",
-        "telegram-live-worktrees",
-        "tg-live-1",
-        "openclaw.telegram-live.json",
-      ),
-      env: {
-        HOME: home,
-        OPENCLAW_MAIN_REPO: canonicalMainRepo,
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-      },
-    });
-
-    expect(conflict).toEqual({
-      tokens: ["main-token", "finance-token"],
-      protectedBy: fs.realpathSync.native(canonicalConfigPath),
-    });
-  });
-
-  it("allows noncanonical runtimes to borrow disabled canonical account tokens while shared runtime is active", () => {
-    const home = makeTempDir();
-    const canonicalConfigPath = path.join(home, ".openclaw", "openclaw.json");
-    const canonicalMainRepo = path.join(home, "Programming_Projects", "openclaw");
-    fs.mkdirSync(path.join(canonicalMainRepo, "dist"), { recursive: true });
-    fs.writeFileSync(path.join(canonicalMainRepo, "dist", "index.js"), "", "utf8");
-    fs.writeFileSync(path.join(canonicalMainRepo, "package.json"), "{}\n", "utf8");
-    const canonicalMainRepoReal = fs.realpathSync.native(canonicalMainRepo);
-    const fakeBin = path.join(home, "bin");
-    fs.mkdirSync(fakeBin, { recursive: true });
-    writeFile(
-      path.join(fakeBin, "launchctl"),
-      `#!/bin/sh\nprintf 'pid = 123\\nprogram = "${canonicalMainRepoReal}/dist/index.js"\\n'\n`,
-    );
-    writeFile(
-      path.join(fakeBin, "ps"),
-      `#!/bin/sh\nprintf 'node ${canonicalMainRepoReal}/dist/index.js gateway run\\n'\n`,
-    );
-    fs.chmodSync(path.join(fakeBin, "launchctl"), 0o755);
-    fs.chmodSync(path.join(fakeBin, "ps"), 0o755);
-    writeFile(
-      canonicalConfigPath,
-      JSON.stringify({
-        channels: {
-          telegram: {
-            botToken: "main-token",
-            accounts: {
-              exec: { botToken: "exec-token", enabled: false },
-              finance: { botToken: "finance-token", enabled: true },
-            },
-          },
+        configPath: path.join(
+          home,
+          ".openclaw",
+          "telegram-live-worktrees",
+          "tg-live-1",
+          "openclaw.telegram-live.json",
+        ),
+        env: {
+          HOME: home,
+          OPENCLAW_MAIN_REPO: canonicalMainRepo,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
         },
-      }),
-    );
+      });
 
-    const conflict = detectProtectedTelegramTokenConflict({
-      config: {
-        channels: {
-          telegram: {
-            botToken: "exec-token",
-          },
-        },
-      },
-      configPath: path.join(
-        home,
-        ".openclaw",
-        "telegram-live-worktrees",
-        "tg-live-1",
-        "openclaw.telegram-live.json",
-      ),
-      env: {
-        HOME: home,
-        OPENCLAW_MAIN_REPO: canonicalMainRepo,
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-      },
-    });
-
-    expect(conflict).toBeNull();
-  });
+      expect(conflict).toBeNull();
+    },
+  );
 });

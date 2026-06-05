@@ -370,6 +370,7 @@ describe("bundle plugins", () => {
       workspaceDir,
       config: {
         plugins: {
+          allow: ["sample-bundle"],
           entries: {
             "sample-bundle": {
               enabled: true,
@@ -401,6 +402,7 @@ describe("bundle plugins", () => {
       workspaceDir,
       config: {
         plugins: {
+          allow: ["claude-skills"],
           entries: {
             "claude-skills": {
               enabled: true,
@@ -447,6 +449,7 @@ describe("bundle plugins", () => {
       workspaceDir,
       config: {
         plugins: {
+          allow: ["cursor-skills"],
           entries: {
             "cursor-skills": {
               enabled: true,

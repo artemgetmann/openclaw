@@ -242,6 +242,7 @@ describe("browser server-context listKnownProfileNames", () => {
 
     expect(listKnownProfileNames(state).toSorted()).toEqual([
       "openclaw",
+      "signed-in",
       "stale-removed",
       "user-live",
     ]);

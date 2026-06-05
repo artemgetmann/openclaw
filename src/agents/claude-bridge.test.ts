@@ -171,7 +171,7 @@ describe("runClaudeBridgeAgent", () => {
           injectedFiles: [],
           skillsPrompt: "",
           tools: [],
-        } as SystemPromptReport,
+        } as unknown as SystemPromptReport,
       });
 
       await vi.waitFor(() => {
@@ -227,7 +227,7 @@ describe("runClaudeBridgeAgent", () => {
         injectedFiles: [],
         skillsPrompt: "",
         tools: [],
-      } as SystemPromptReport,
+      } as unknown as SystemPromptReport,
     });
 
     await vi.waitFor(() => {
@@ -265,7 +265,7 @@ describe("runClaudeBridgeAgent", () => {
         injectedFiles: [],
         skillsPrompt: "",
         tools: [],
-      } as SystemPromptReport,
+      } as unknown as SystemPromptReport,
     });
 
     await vi.waitFor(() => {
@@ -310,7 +310,7 @@ describe("runClaudeBridgeAgent", () => {
         injectedFiles: [],
         skillsPrompt: "",
         tools: [],
-      } as SystemPromptReport,
+      } as unknown as SystemPromptReport,
       onAssistantMessageStart,
       onPartialReply,
       onBlockReply,
@@ -370,7 +370,7 @@ describe("runClaudeBridgeAgent", () => {
         injectedFiles: [],
         skillsPrompt: "",
         tools: [],
-      } as SystemPromptReport,
+      } as unknown as SystemPromptReport,
       onAssistantMessageStart,
       onPartialReply,
       onBlockReply,
@@ -423,7 +423,7 @@ describe("runClaudeBridgeAgent", () => {
         injectedFiles: [],
         skillsPrompt: "",
         tools: [],
-      } as SystemPromptReport,
+      } as unknown as SystemPromptReport,
     });
 
     await vi.waitFor(() => {

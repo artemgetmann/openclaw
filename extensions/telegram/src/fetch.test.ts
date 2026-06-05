@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveFetch } from "../../../src/infra/fetch.js";
-import { resolveTelegramFetch, resolveTelegramTransport } from "./fetch.js";
+import {
+  resetTelegramTransportStickyIpv4CacheForTests,
+  resolveTelegramFetch,
+  resolveTelegramTransport,
+} from "./fetch.js";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
@@ -190,6 +194,7 @@ afterEach(() => {
   ProxyAgentCtor.mockClear();
   setDefaultResultOrder.mockReset();
   setDefaultAutoSelectFamily.mockReset();
+  resetTelegramTransportStickyIpv4CacheForTests();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
 });

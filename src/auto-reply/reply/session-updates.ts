@@ -4,7 +4,6 @@ import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
-import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
   resolveTimezone,
   formatUtcTimestamp,
@@ -12,6 +11,15 @@ import {
 } from "../../infra/format-time/format-datetime.ts";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
+
+let channelSummaryModulePromise:
+  | Promise<typeof import("../../infra/channel-summary.js")>
+  | undefined;
+
+function loadChannelSummaryModule() {
+  channelSummaryModulePromise ??= import("../../infra/channel-summary.js");
+  return channelSummaryModulePromise;
+}
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */
 export async function drainFormattedSystemEvents(params: {
@@ -98,6 +106,10 @@ export async function drainFormattedSystemEvents(params: {
       .filter((v): v is string => Boolean(v)),
   );
   if (params.isMainSession && params.isNewSession) {
+    // Channel summary loads every channel plugin. Keep it out of the hot import
+    // path so lightweight commands like `status --json` stay within startup
+    // memory budgets unless a first-turn system event actually needs it.
+    const { buildChannelSummary } = await loadChannelSummaryModule();
     const summary = await buildChannelSummary(params.cfg);
     if (summary.length > 0) {
       systemLines.unshift(...summary);

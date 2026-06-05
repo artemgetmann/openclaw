@@ -1,9 +1,42 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
 import { clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } from "./runtime.js";
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
+
+const webSearchProviderIds = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+
+vi.mock("../plugins/web-search-providers.js", () => ({
+  resolvePluginWebSearchProviders: () =>
+    webSearchProviderIds.map((id, index) => ({
+      id,
+      envVars:
+        id === "brave" ? ["BRAVE_API_KEY"] : [`${id.toUpperCase().replaceAll("-", "_")}_API_KEY`],
+      autoDetectOrder: index,
+      getCredentialValue: (search: Record<string, unknown>) => {
+        if (id === "brave") {
+          return search.apiKey;
+        }
+        const providerConfig = search[id];
+        return typeof providerConfig === "object" && providerConfig !== null
+          ? (providerConfig as Record<string, unknown>).apiKey
+          : undefined;
+      },
+      setCredentialValue: (search: Record<string, unknown>, value: string) => {
+        if (id === "brave") {
+          search.apiKey = value;
+          return;
+        }
+        const providerConfig =
+          typeof search[id] === "object" && search[id] !== null
+            ? (search[id] as Record<string, unknown>)
+            : {};
+        providerConfig.apiKey = value;
+        search[id] = providerConfig;
+      },
+    })),
+}));
 
 type SecretRegistryEntry = ReturnType<typeof listSecretTargetRegistryEntries>[number];
 
@@ -90,6 +123,9 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   }
   if (entry.id === "tools.web.search.gemini.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
+  }
+  if (entry.id === "tools.web.search.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "brave");
   }
   if (entry.id === "tools.web.search.grok.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "grok");

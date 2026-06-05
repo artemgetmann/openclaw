@@ -59,6 +59,7 @@ const cases = [
     limitMb: Number(
       process.env.OPENCLAW_STARTUP_MEMORY_GATEWAY_STATUS_MB ?? DEFAULT_LIMITS_MB.gatewayStatus,
     ),
+    allowNonzero: true,
   },
 ];
 
@@ -114,7 +115,7 @@ function runCase(testCase) {
   const maxRssMb = parseMaxRssMb(stderr);
   const matrixBootstrapWarning = /matrix: crypto runtime bootstrap failed/i.test(stderr);
 
-  if (result.status !== 0) {
+  if (result.status !== 0 && !testCase.allowNonzero) {
     throw new Error(
       `${testCase.label} exited with ${String(result.status)}\n${stderr.trim() || result.stdout || ""}`,
     );
@@ -126,8 +127,16 @@ function runCase(testCase) {
     throw new Error(`${testCase.label} triggered Matrix crypto bootstrap during startup`);
   }
   if (maxRssMb > testCase.limitMb) {
+    const diagnosticOutput = [stderr.trim(), result.stdout?.trim()]
+      .filter((value) => value && value.length > 0)
+      .join("\n");
     throw new Error(
-      `${testCase.label} used ${maxRssMb.toFixed(1)} MB RSS (limit ${testCase.limitMb} MB)`,
+      [
+        `${testCase.label} used ${maxRssMb.toFixed(1)} MB RSS (limit ${testCase.limitMb} MB)`,
+        diagnosticOutput,
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
   }
 

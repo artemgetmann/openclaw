@@ -522,7 +522,7 @@ export async function gatherDaemonStatus(
           missing: true,
           label: GATEWAY_LAUNCH_AGENT_LABEL,
           reason:
-            runtime?.missingUnit === true
+            runtime && "missingUnit" in runtime && runtime.missingUnit === true
               ? "canonical shared gateway LaunchAgent is missing or not registered"
               : "canonical shared gateway LaunchAgent is not loaded",
           recoveryCommand: "bash scripts/gateway-recover-main.sh",
