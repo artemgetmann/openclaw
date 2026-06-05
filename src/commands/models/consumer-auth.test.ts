@@ -208,7 +208,7 @@ describe("consumer auth Claude CLI setup detection", () => {
 });
 
 describe("consumer auth ChatGPT OAuth setup", () => {
-  it("opens ChatGPT OAuth in Chrome by bundle id on macOS", async () => {
+  it("opens ChatGPT OAuth in the default browser on macOS", async () => {
     const runCommand = vi.fn(async () => ({
       stdout: "",
       stderr: "",
@@ -226,16 +226,47 @@ describe("consumer auth ChatGPT OAuth setup", () => {
     });
 
     expect(opened).toBe(true);
-    expect(runCommand).toHaveBeenCalledWith(
+    expect(runCommand).toHaveBeenCalledWith(["/usr/bin/open", "https://chatgpt.com/oauth"], {
+      timeoutMs: 5_000,
+    });
+    expect(fallbackOpenUrl).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Chrome when default browser open fails on macOS", async () => {
+    const runCommand = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("default browser unavailable"))
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      });
+    const fallbackOpenUrl = vi.fn(async () => true);
+
+    const opened = await openConsumerOAuthUrl("https://chatgpt.com/oauth", {
+      platform: "darwin",
+      runCommand,
+      openUrlImpl: fallbackOpenUrl,
+    });
+
+    expect(opened).toBe(true);
+    expect(runCommand).toHaveBeenNthCalledWith(1, ["/usr/bin/open", "https://chatgpt.com/oauth"], {
+      timeoutMs: 5_000,
+    });
+    expect(runCommand).toHaveBeenNthCalledWith(
+      2,
       ["/usr/bin/open", "-b", "com.google.Chrome", "https://chatgpt.com/oauth"],
       { timeoutMs: 5_000 },
     );
     expect(fallbackOpenUrl).not.toHaveBeenCalled();
   });
 
-  it("falls back to the shared opener when Chrome bundle open fails", async () => {
+  it("falls back to the shared opener when macOS browser open attempts fail", async () => {
     const runCommand = vi.fn(async () => {
-      throw new Error("Chrome bundle unavailable");
+      throw new Error("browser open unavailable");
     });
     const fallbackOpenUrl = vi.fn(async () => true);
 

@@ -139,16 +139,26 @@ export async function openConsumerOAuthUrl(
 
   if (platform === "darwin") {
     try {
-      // Consumer onboarding just asked the user to pick Chrome. Opening by
-      // bundle id avoids LaunchAgent/default-browser ambiguity and sends the
-      // ChatGPT OAuth URL to the browser family that the product will use.
+      // OAuth is an account sign-in, not a browser-control task. Respect the
+      // user's default browser first so a Safari-default Mac does not get sent
+      // through Chrome just because Jarvis later uses Chrome for automation.
+      await runCommand(["/usr/bin/open", url], {
+        timeoutMs: 5_000,
+      });
+      return true;
+    } catch {
+      // Fall through to the explicit Chrome fallback below. On some LaunchAgent
+      // paths default-browser opening can fail even when Chrome is installed.
+    }
+
+    try {
       await runCommand(["/usr/bin/open", "-b", "com.google.Chrome", url], {
         timeoutMs: 5_000,
       });
       return true;
     } catch {
-      // Keep uncommon Chrome/default-browser setups working instead of making a
-      // failed bundle lookup a hard auth failure.
+      // Keep uncommon browser setups working instead of making a failed bundle
+      // lookup a hard auth failure.
     }
   }
 
