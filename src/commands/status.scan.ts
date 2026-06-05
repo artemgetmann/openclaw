@@ -224,8 +224,8 @@ async function scanStatusJsonFast(opts: {
   const updateTimeoutMs = opts.all ? 6500 : 2500;
   const updatePromise = getUpdateCheckResult({
     timeoutMs: updateTimeoutMs,
-    fetchGit: true,
-    includeRegistry: true,
+    fetchGit: opts.all === true,
+    includeRegistry: opts.all === true,
   });
   const agentStatusPromise = getAgentLocalStatuses(cfg);
   const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
