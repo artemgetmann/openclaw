@@ -40,4 +40,25 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).not.toContain("sleep 1");
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });
+
+  it("passes an optional delay before launchd handoff work", () => {
+    const env = {
+      HOME: "/Users/test",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+    };
+    spawnMock.mockReturnValue({ pid: 4243, unref: unrefMock });
+
+    const result = scheduleDetachedLaunchdRestartHandoff({
+      env,
+      mode: "kickstart",
+      delayMs: 2500,
+    });
+
+    expect(result).toEqual({ ok: true, pid: 4243 });
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(args[6]).toBe("0");
+    expect(args[7]).toBe("2500");
+    expect(args[1]).toContain('delay_ms="$5"');
+    expect(args[1]).toContain('sleep "${delay_seconds}.$(printf');
+  });
 });

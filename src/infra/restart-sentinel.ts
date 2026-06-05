@@ -24,12 +24,14 @@ export type RestartSentinelStats = {
   after?: Record<string, unknown> | null;
   steps?: RestartSentinelStep[];
   reason?: string | null;
+  phase?: "requested" | "verified";
+  verified?: boolean;
   durationMs?: number | null;
 };
 
 export type RestartSentinelPayload = {
   kind: "config-apply" | "config-patch" | "update" | "restart";
-  status: "ok" | "error" | "skipped";
+  status: "requested" | "ok" | "error" | "skipped";
   ts: number;
   sessionKey?: string;
   /** Delivery context captured at restart time to ensure channel routing survives restart. */
