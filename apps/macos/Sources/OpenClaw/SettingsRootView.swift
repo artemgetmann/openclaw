@@ -210,9 +210,16 @@ private final class SettingsWindowBridgeView: NSView {
         window.collectionBehavior.insert(.moveToActiveSpace)
         window.collectionBehavior.insert(.fullScreenAuxiliary)
         window.isReleasedWhenClosed = false
+        // SwiftUI can reattach the bridge for an already-visible window; do
+        // not turn that lifecycle churn into another foreground steal.
+        guard Self.shouldPromoteWindow(isVisible: window.isVisible) else { return }
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    static func shouldPromoteWindow(isVisible: Bool) -> Bool {
+        !isVisible
     }
 }
 

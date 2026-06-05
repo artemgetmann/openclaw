@@ -21,6 +21,17 @@ final class SettingsWindowOpener {
     }
 
     func open(tab: SettingsTab? = nil) {
+        // A visible Settings window may be open while Jarvis is backgrounded.
+        // Re-activating on every status/menu-bar path steals focus repeatedly,
+        // so only run the AppKit reveal loop when this call has to surface a
+        // newly created or hidden window.
+        let shouldRevealWindow = Self.shouldRevealContentWindow(
+            hasVisibleContentWindow: Self.hasVisibleContentWindow())
+        if !shouldRevealWindow {
+            self.selectTab(tab)
+            return
+        }
+
         DockIconManager.shared.temporarilyShowDock()
         NSApp.activate(ignoringOtherApps: true)
         if let openSettingsAction {
@@ -77,6 +88,10 @@ final class SettingsWindowOpener {
 
     static func hasVisibleContentWindow() -> Bool {
         self.contentWindows().contains { $0.isVisible }
+    }
+
+    static func shouldRevealContentWindow(hasVisibleContentWindow: Bool) -> Bool {
+        !hasVisibleContentWindow
     }
 
     static func isContentWindowCandidate(_ window: NSWindow) -> Bool {

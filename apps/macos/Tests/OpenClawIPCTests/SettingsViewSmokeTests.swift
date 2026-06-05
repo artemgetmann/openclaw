@@ -219,6 +219,11 @@ struct SettingsViewSmokeTests {
             hasContentViewController: false))
     }
 
+    @Test func `settings window opener only reveals when no visible content window exists`() {
+        #expect(SettingsWindowOpener.shouldRevealContentWindow(hasVisibleContentWindow: false))
+        #expect(!SettingsWindowOpener.shouldRevealContentWindow(hasVisibleContentWindow: true))
+    }
+
     @Test func `consumer app delegate schedules launch surface only when useful`() {
         #expect(AppDelegate.shouldScheduleInitialVisibleSurface(
             isConsumer: true,
