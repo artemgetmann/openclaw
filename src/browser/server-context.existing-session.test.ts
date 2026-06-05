@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -24,7 +25,26 @@ vi.mock("./chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
 }));
 
+vi.mock("./chrome.js", () => ({
+  findOpenClawChromeProcessMatches: vi.fn(() => []),
+  isChromeCdpReady: vi.fn(async () => true),
+  isChromeReachable: vi.fn(async () => true),
+  launchOpenClawChrome: vi.fn(async () => ({
+    pid: 2468,
+    exe: { kind: "chrome", path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
+    userDataDir: "/tmp/openclaw/browser/signed-in/user-data",
+    cdpPort: 18802,
+    startedAt: Date.now(),
+    proc: new EventEmitter(),
+  })),
+  stopOpenClawChrome: vi.fn(async () => {}),
+  resolveOpenClawUserDataDir: vi.fn(
+    (profileName = "chrome-live") => `/tmp/openclaw/browser/${profileName}/user-data`,
+  ),
+}));
+
 import * as chromeMcp from "./chrome-mcp.js";
+import * as chrome from "./chrome.js";
 
 function makeState(): BrowserServerState {
   return {
@@ -188,5 +208,11 @@ describe("browser server-context existing-session profile", () => {
       "/tmp/openclaw/browser/signed-in/user-data",
       expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
+    expect(chrome.launchOpenClawChrome).toHaveBeenCalledTimes(1);
+    expect(chrome.findOpenClawChromeProcessMatches).toHaveBeenCalledWith({
+      userDataDir: "/tmp/openclaw/browser/signed-in/user-data",
+      cdpPort: 18802,
+      profileDirectory: "Default",
+    });
   });
 });
