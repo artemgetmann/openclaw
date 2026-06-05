@@ -48,7 +48,7 @@ SUPPORTED_GEMINI_IMAGE_ASPECT_RATIOS = {
     "21:9",
 }
 
-telegram_managed_logger = logging.getLogger("jarvis_backend.telegram_managed")
+telegram_managed_logger = logging.getLogger("uvicorn.error")
 
 
 class Settings(BaseModel):

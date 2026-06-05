@@ -373,7 +373,7 @@ def test_telegram_managed_pending_status_logs_safe_update_metadata(monkeypatch, 
     monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
     monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
     reset_settings()
-    caplog.set_level(logging.INFO, logger="jarvis_backend.telegram_managed")
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert str(request.url).endswith("/getUpdates")
