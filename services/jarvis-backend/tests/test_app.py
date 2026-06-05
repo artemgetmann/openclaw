@@ -334,7 +334,7 @@ def test_telegram_managed_status_returns_pending_when_no_matching_update(monkeyp
         assert json.loads(request.content) == {
             "limit": 20,
             "timeout": 0,
-            "allowed_updates": ["managed_bot"],
+            "allowed_updates": ["managed_bot", "message"],
         }
         return httpx.Response(
             200,
@@ -441,6 +441,51 @@ def test_telegram_managed_pending_session_survives_memory_clear(monkeypatch):
     assert requests_seen == ["https://api.telegram.org/bot123456:test-manager-token/getUpdates"]
 
 
+def test_telegram_managed_request_keyboard_sends_official_request_button(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+    sent_payloads: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.telegram.org/bot123456:test-manager-token/sendMessage"
+        sent_payload = json.loads(request.content)
+        sent_payloads.append(sent_payload)
+        button = sent_payload["reply_markup"]["keyboard"][0][0]
+        assert sent_payload["chat_id"] == 1336356696
+        assert button["text"] == "Create Jarvis bot"
+        assert button["request_managed_bot"]["suggested_name"] == "Jarvis Founder Bot"
+        assert button["request_managed_bot"]["suggested_username"] == "founder_jarvis_bot"
+        assert isinstance(button["request_managed_bot"]["request_id"], int)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={
+            "suggestedBotName": "Jarvis Founder Bot",
+            "suggestedBotUsername": "founder_jarvis_bot",
+        },
+    )
+
+    response = client.post(
+        "/v1/telegram/managed/request-keyboard",
+        json={"setupId": started.json()["setupId"], "chatId": 1336356696},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "setupId": started.json()["setupId"],
+        "chatId": 1336356696,
+        "messageId": 42,
+    }
+    assert len(sent_payloads) == 1
+    assert "123456:test-manager-token" not in response.text
+
+
 def test_telegram_managed_status_connects_child_bot_and_returns_token(monkeypatch):
     monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
     monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
@@ -454,7 +499,7 @@ def test_telegram_managed_status_connects_child_bot_and_returns_token(monkeypatc
             assert json.loads(request.content) == {
                 "limit": 20,
                 "timeout": 0,
-                "allowed_updates": ["managed_bot"],
+                "allowed_updates": ["managed_bot", "message"],
             }
             return httpx.Response(
                 200,
@@ -518,6 +563,64 @@ def test_telegram_managed_status_connects_child_bot_and_returns_token(monkeypatc
     assert second_status.status_code == 200
     assert second_status.json()["managedChildBotToken"] == "777000:test-child-token"
     assert len([url for url in requests_seen if url.endswith("/getUpdates")]) == 1
+
+
+def test_telegram_managed_status_connects_from_keyboard_service_message(monkeypatch):
+    monkeypatch.setenv("JARVIS_BACKEND_ENV", "development")
+    monkeypatch.setenv("TELEGRAM_MANAGER_BOT_TOKEN", "123456:test-manager-token")
+    monkeypatch.setenv("MANAGER_BOT_USERNAME", "JarvisManagerBot")
+    reset_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).endswith("/getUpdates"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 202,
+                            "message": {
+                                "managed_bot_created": {
+                                    "bot": {
+                                        "id": 777000,
+                                        "is_bot": True,
+                                        "username": "founder_jarvis_bot",
+                                    }
+                                }
+                            },
+                        }
+                    ],
+                },
+            )
+        if str(request.url).endswith("/getManagedBotToken"):
+            return httpx.Response(200, json={"ok": True, "result": "777000:test-child-token"})
+        if str(request.url).endswith("/getMe"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {"id": 777000, "is_bot": True, "username": "founder_jarvis_bot"},
+                },
+            )
+        if str(request.url).endswith("/setManagedBotAccessSettings"):
+            return httpx.Response(200, json={"ok": True, "result": True})
+        raise AssertionError(f"unexpected Telegram request: {request.url}")
+
+    install_mock_async_client(monkeypatch, handler)
+    client = TestClient(app)
+    started = client.post(
+        "/v1/telegram/managed/start",
+        json={"suggestedBotUsername": "founder_jarvis_bot"},
+    )
+
+    response = client.get(f"/v1/telegram/managed/status/{started.json()['setupId']}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "connected"
+    assert response.json()["botId"] == 777000
+    assert response.json()["botUsername"] == "founder_jarvis_bot"
+    assert response.json()["managedChildBotToken"] == "777000:test-child-token"
 
 
 def test_telegram_managed_connected_session_survives_memory_clear(monkeypatch):
@@ -678,7 +781,7 @@ def test_telegram_manager_status_reports_safe_diagnostics(monkeypatch):
             assert json.loads(request.content) == {
                 "limit": 20,
                 "timeout": 0,
-                "allowed_updates": ["managed_bot"],
+                "allowed_updates": ["managed_bot", "message"],
             }
             return httpx.Response(
                 200,

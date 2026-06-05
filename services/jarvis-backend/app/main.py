@@ -229,6 +229,18 @@ class TelegramManagedStartResponse(BaseModel):
     status: Literal["pending"]
 
 
+class TelegramManagedKeyboardRequest(BaseModel):
+    setupId: str = Field(min_length=8, max_length=128)
+    chatId: int
+
+
+class TelegramManagedKeyboardResponse(BaseModel):
+    ok: Literal[True]
+    setupId: str
+    chatId: int
+    messageId: int | None = None
+
+
 class TelegramManagedStatusResponse(BaseModel):
     setupId: str
     expiresAt: datetime
@@ -510,6 +522,46 @@ async def telegram_managed_status(
     return _telegram_managed_status_response(session)
 
 
+@app.post(
+    "/v1/telegram/managed/request-keyboard",
+    response_model=TelegramManagedKeyboardResponse,
+    dependencies=[Depends(require_api_token)],
+)
+async def telegram_managed_request_keyboard(
+    request: TelegramManagedKeyboardRequest,
+    settings: Settings = Depends(get_settings),
+) -> TelegramManagedKeyboardResponse:
+    """
+    Send Telegram's request_managed_bot keyboard as a fallback to newbot links.
+
+    The link flow can fail inside Telegram clients before the manager bot
+    receives an update. This protected operator-only endpoint reuses the same
+    pending setup and asks the manager bot to send an official reply-keyboard
+    button in the user's private chat.
+    """
+
+    _require_telegram_manager_config(settings)
+    store = get_license_store(settings)
+    session = _telegram_managed_setup_session(store, request.setupId)
+    if session.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Telegram setup is already connected",
+        )
+    message_payload = await _send_telegram_managed_request_keyboard(
+        session=session,
+        chat_id=request.chatId,
+        settings=settings,
+    )
+    message_id = _telegram_int_field(message_payload, "message_id") if isinstance(message_payload, dict) else None
+    return TelegramManagedKeyboardResponse(
+        ok=True,
+        setupId=session.setup_id,
+        chatId=request.chatId,
+        messageId=message_id,
+    )
+
+
 @app.get(
     "/v1/telegram/managed/manager/status",
     response_model=TelegramManagerDiagnosticResponse,
@@ -763,11 +815,61 @@ def _telegram_managed_get_updates_payload(session: TelegramManagedSetupSession) 
     payload: dict[str, Any] = {
         "limit": 20,
         "timeout": 0,
-        "allowed_updates": ["managed_bot"],
+        "allowed_updates": ["managed_bot", "message"],
     }
     if session.last_update_id is not None:
         payload["offset"] = session.last_update_id + 1
     return payload
+
+
+async def _send_telegram_managed_request_keyboard(
+    *,
+    session: TelegramManagedSetupSession,
+    chat_id: int,
+    settings: Settings,
+) -> dict[str, Any]:
+    """Send the official private-chat managed-bot request button for a setup."""
+
+    request_id = _telegram_managed_request_id(session.setup_id)
+    result = await _telegram_bot_api_call(
+        method="sendMessage",
+        token=settings.telegram_manager_bot_token or "",
+        payload={
+            "chat_id": chat_id,
+            "text": "Create your Jarvis bot",
+            "reply_markup": {
+                "keyboard": [
+                    [
+                        {
+                            "text": "Create Jarvis bot",
+                            "request_managed_bot": {
+                                "request_id": request_id,
+                                "suggested_name": session.suggested_bot_name,
+                                "suggested_username": session.suggested_bot_username,
+                            },
+                        }
+                    ]
+                ],
+                "resize_keyboard": True,
+                "one_time_keyboard": True,
+            },
+        },
+        settings=settings,
+    )
+    if not isinstance(result, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="telegram sendMessage returned an invalid result",
+        )
+    return result
+
+
+def _telegram_managed_request_id(setup_id: str) -> int:
+    """Derive a stable signed 32-bit request id from a setup id."""
+
+    digest = hashlib.sha256(setup_id.encode("utf-8")).digest()
+    request_id = int.from_bytes(digest[:4], byteorder="big") & 0x7FFFFFFF
+    return request_id or 1
 
 
 async def _telegram_manager_diagnostic_status(
@@ -816,7 +918,7 @@ async def _telegram_manager_diagnostic_status(
             payload={
                 "limit": 20,
                 "timeout": 0,
-                "allowed_updates": ["managed_bot"],
+                "allowed_updates": ["managed_bot", "message"],
             },
             settings=settings,
         )
@@ -859,8 +961,8 @@ def _matching_managed_bot_update(
         update_id = update.get("update_id")
         if isinstance(update_id, int) and not isinstance(update_id, bool):
             session.last_update_id = update_id
-        managed_bot_update = update.get("managed_bot")
-        if not isinstance(managed_bot_update, dict):
+        managed_bot_update = _telegram_managed_bot_payload_from_update(update)
+        if managed_bot_update is None:
             continue
         bot = managed_bot_update.get("bot")
         if not isinstance(bot, dict):
@@ -874,6 +976,19 @@ def _matching_managed_bot_update(
     return None
 
 
+def _telegram_managed_bot_payload_from_update(update: dict[str, Any]) -> dict[str, Any] | None:
+    """Read both managed-bot update shapes Telegram can emit after creation."""
+
+    managed_bot_update = update.get("managed_bot")
+    if isinstance(managed_bot_update, dict):
+        return managed_bot_update
+    message = update.get("message")
+    if not isinstance(message, dict):
+        return None
+    managed_bot_created = message.get("managed_bot_created")
+    return managed_bot_created if isinstance(managed_bot_created, dict) else None
+
+
 def _telegram_managed_update_summary(updates: list[Any]) -> dict[str, list[Any]]:
     """Return non-secret metadata about Telegram managed-bot updates for logs."""
 
@@ -885,8 +1000,8 @@ def _telegram_managed_update_summary(updates: list[Any]) -> dict[str, list[Any]]
         update_id = update.get("update_id")
         if isinstance(update_id, int) and not isinstance(update_id, bool):
             update_ids.append(update_id)
-        managed_bot_update = update.get("managed_bot")
-        if not isinstance(managed_bot_update, dict):
+        managed_bot_update = _telegram_managed_bot_payload_from_update(update)
+        if managed_bot_update is None:
             continue
         bot = managed_bot_update.get("bot")
         if not isinstance(bot, dict):
