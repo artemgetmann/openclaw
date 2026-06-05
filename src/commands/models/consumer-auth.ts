@@ -26,6 +26,7 @@ import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveProviderPluginChoice } from "../../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type {
   WizardConfirmParams,
@@ -119,6 +120,40 @@ type ClaudeCliCredentialReader = (options?: {
 }) => ClaudeCliCredential | null;
 
 type ClaudeCommandDetector = (command?: string) => boolean;
+
+type ConsumerOAuthUrlOpener = (url: string) => Promise<boolean | void>;
+
+type ConsumerOAuthOpenDeps = {
+  platform?: NodeJS.Platform;
+  openUrlImpl?: ConsumerOAuthUrlOpener;
+  runCommand?: typeof runCommandWithTimeout;
+};
+
+export async function openConsumerOAuthUrl(
+  url: string,
+  deps: ConsumerOAuthOpenDeps = {},
+): Promise<boolean> {
+  const platform = deps.platform ?? process.platform;
+  const runCommand = deps.runCommand ?? runCommandWithTimeout;
+  const openUrlImpl = deps.openUrlImpl ?? openUrl;
+
+  if (platform === "darwin") {
+    try {
+      // Consumer onboarding just asked the user to pick Chrome. Opening by
+      // bundle id avoids LaunchAgent/default-browser ambiguity and sends the
+      // ChatGPT OAuth URL to the browser family that the product will use.
+      await runCommand(["/usr/bin/open", "-b", "com.google.Chrome", url], {
+        timeoutMs: 5_000,
+      });
+      return true;
+    } catch {
+      // Keep uncommon Chrome/default-browser setups working instead of making a
+      // failed bundle lookup a hard auth failure.
+    }
+  }
+
+  return Boolean(await openUrlImpl(url));
+}
 
 const CONSUMER_AUTH_CHOICES: readonly ConsumerAuthChoiceDefinition[] = [
   {
@@ -775,7 +810,7 @@ export async function applyConsumerAuth(
         allowSecretRefPrompt: false,
         isRemote: false,
         openUrl: async (url) => {
-          await (params.openUrl ?? openUrl)(url);
+          await openConsumerOAuthUrl(url, { openUrlImpl: params.openUrl });
         },
         oauth: {
           createVpsAwareHandlers: createVpsAwareOAuthHandlers,

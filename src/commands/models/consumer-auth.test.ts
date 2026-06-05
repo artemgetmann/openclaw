@@ -43,7 +43,8 @@ vi.mock("./shared.js", async (importOriginal) => {
   };
 });
 
-const { applyConsumerAuth, listConsumerAuthOptions } = await import("./consumer-auth.js");
+const { applyConsumerAuth, listConsumerAuthOptions, openConsumerOAuthUrl } =
+  await import("./consumer-auth.js");
 
 const baseConfig: OpenClawConfig = {
   agents: {
@@ -207,6 +208,47 @@ describe("consumer auth Claude CLI setup detection", () => {
 });
 
 describe("consumer auth ChatGPT OAuth setup", () => {
+  it("opens ChatGPT OAuth in Chrome by bundle id on macOS", async () => {
+    const runCommand = vi.fn(async () => ({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+    }));
+    const fallbackOpenUrl = vi.fn(async () => true);
+
+    const opened = await openConsumerOAuthUrl("https://chatgpt.com/oauth", {
+      platform: "darwin",
+      runCommand,
+      openUrlImpl: fallbackOpenUrl,
+    });
+
+    expect(opened).toBe(true);
+    expect(runCommand).toHaveBeenCalledWith(
+      ["/usr/bin/open", "-b", "com.google.Chrome", "https://chatgpt.com/oauth"],
+      { timeoutMs: 5_000 },
+    );
+    expect(fallbackOpenUrl).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the shared opener when Chrome bundle open fails", async () => {
+    const runCommand = vi.fn(async () => {
+      throw new Error("Chrome bundle unavailable");
+    });
+    const fallbackOpenUrl = vi.fn(async () => true);
+
+    const opened = await openConsumerOAuthUrl("https://chatgpt.com/oauth", {
+      platform: "darwin",
+      runCommand,
+      openUrlImpl: fallbackOpenUrl,
+    });
+
+    expect(opened).toBe(true);
+    expect(fallbackOpenUrl).toHaveBeenCalledWith("https://chatgpt.com/oauth");
+  });
+
   it("surfaces a zero-profile openai-codex OAuth result without retrying provider auth", async () => {
     const runOpenAiCodexOAuth = vi.fn(async () => ({
       profiles: [],
