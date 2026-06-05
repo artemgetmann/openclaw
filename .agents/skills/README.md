@@ -18,10 +18,7 @@ Keep the detailed procedures in the docs. Use skills to force the right docs and
 
 ## Repo-local skills
 
-- `openclaw-worktree-lane`
-  - Use when the user wants an actual new worktree/lane created in this repo.
-  - Wraps the repo's branch policy, `.worktrees/` rules, and `scripts/new-worktree.sh`.
-  - If tmux handoff is also needed, combine with the global `tmux-worktree-handoff` skill.
+- Worktree policy is not a repo-local skill. Read `docs/agent-guides/workflow.md` before creating, moving, or cleaning up worktrees. Read `docs/agent-guides/runtime-ops.md` too when runtime ownership matters.
 
 - `telegram-live-e2e`
   - Use only when the user wants live Telegram verification or Telegram runtime debugging in this repo.
