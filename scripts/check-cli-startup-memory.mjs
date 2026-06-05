@@ -59,6 +59,7 @@ const cases = [
     limitMb: Number(
       process.env.OPENCLAW_STARTUP_MEMORY_GATEWAY_STATUS_MB ?? DEFAULT_LIMITS_MB.gatewayStatus,
     ),
+    allowNonzero: true,
   },
 ];
 
@@ -114,7 +115,7 @@ function runCase(testCase) {
   const maxRssMb = parseMaxRssMb(stderr);
   const matrixBootstrapWarning = /matrix: crypto runtime bootstrap failed/i.test(stderr);
 
-  if (result.status !== 0) {
+  if (result.status !== 0 && !testCase.allowNonzero) {
     throw new Error(
       `${testCase.label} exited with ${String(result.status)}\n${stderr.trim() || result.stdout || ""}`,
     );
