@@ -185,7 +185,6 @@ describe("browser server-context existing-session profile", () => {
     state.resolved.profiles["signed-in"] = {
       cdpPort: 18802,
       cdpUrl: "http://127.0.0.1:18802",
-      cdpIsLoopback: true,
       color: "#0066CC",
       driver: "existing-session",
       attachOnly: true,
@@ -232,7 +231,6 @@ describe("browser server-context existing-session profile", () => {
     state.resolved.profiles["signed-in"] = {
       cdpPort: 18802,
       cdpUrl: "http://127.0.0.1:18802",
-      cdpIsLoopback: true,
       color: "#0066CC",
       driver: "existing-session",
       attachOnly: true,
