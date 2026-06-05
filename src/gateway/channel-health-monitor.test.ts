@@ -557,6 +557,76 @@ describe("channel-health-monitor", () => {
       await expectNoRestart(manager);
     });
 
+    it("does not restart quiet healthy Telegram polling accounts with old chat events", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - STALE_THRESHOLD - 60_000,
+            lastEventAt: now - STALE_THRESHOLD - 30_000,
+            transportActivity: {
+              mode: "polling",
+              active: false,
+              inFlight: 0,
+              lastCompletedAt: now - 5_000,
+              lastOutcome: "completed",
+              lastError: null,
+            },
+          },
+        },
+      });
+      await expectNoRestart(manager);
+    });
+
+    it("restarts unhealthy Telegram polling accounts reported by the watchdog", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - 300_000,
+            lastError: "Telegram polling unhealthy: repeated polling stalls",
+            transportActivity: {
+              mode: "polling",
+              watchdog: {
+                escalation: "Telegram polling unhealthy: repeated polling stalls",
+              },
+            },
+          },
+        },
+      });
+      await expectRestartedChannel(manager, "telegram");
+    });
+
+    it("restarts polling Telegram accounts that report unhealthy transport state", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            mode: "polling",
+            lastStartAt: now - STALE_THRESHOLD - 60_000,
+            lastEventAt: null,
+            lastPollOutcome: "unhealthy",
+            lastError: "Telegram polling unhealthy: repeated polling stalls",
+          },
+        },
+      });
+      await expectRestartedChannel(manager, "telegram");
+    });
+
     it("respects custom staleEventThresholdMs", async () => {
       const customThreshold = 10 * 60_000;
       const now = Date.now();

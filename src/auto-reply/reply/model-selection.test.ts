@@ -298,6 +298,28 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
 });
 
 describe("resolveContextTokens", () => {
+  it("uses Codex GPT-5.5's effective context window when no agent override exists", () => {
+    expect(
+      resolveContextTokens({
+        cfg: {} as OpenClawConfig,
+        agentCfg: undefined,
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      }),
+    ).toBe(258_400);
+  });
+
+  it("lets agent contextTokens override Codex GPT-5.5's effective default", () => {
+    expect(
+      resolveContextTokens({
+        cfg: {} as OpenClawConfig,
+        agentCfg: { contextTokens: 300_000 },
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      }),
+    ).toBe(300_000);
+  });
+
   it("uses provider-aware context lookup for Claude CLI 1M variants", () => {
     expect(
       resolveContextTokens({

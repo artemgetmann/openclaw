@@ -81,6 +81,12 @@ const BrowserActSchema = Type.Object({
   labels: Type.Optional(Type.Boolean()),
   // click
   doubleClick: Type.Optional(Type.Boolean()),
+  dblClick: Type.Optional(
+    Type.Boolean({
+      description:
+        "Alias accepted for doubleClick; OpenClaw normalizes it before calling browser backends.",
+    }),
+  ),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),
   // type
@@ -142,6 +148,12 @@ const BrowserActSchema = Type.Object({
   loadState: Type.Optional(Type.String()),
   textGone: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),
+  timeout: Type.Optional(
+    Type.Number({
+      description:
+        "Alias accepted for timeoutMs; OpenClaw normalizes it before calling browser backends.",
+    }),
+  ),
   // evaluate
   fn: Type.Optional(Type.String()),
 });
@@ -197,6 +209,11 @@ export const BrowserToolSchema = Type.Object({
     }),
   ),
   doubleClick: Type.Optional(Type.Boolean()),
+  dblClick: Type.Optional(
+    Type.Boolean({
+      description: "Legacy flattened alias for doubleClick.",
+    }),
+  ),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),
   text: Type.Optional(Type.String()),
@@ -242,6 +259,11 @@ export const BrowserToolSchema = Type.Object({
   textGone: Type.Optional(Type.String()),
   loadState: Type.Optional(Type.String()),
   fn: Type.Optional(Type.String()),
+  timeout: Type.Optional(
+    Type.Number({
+      description: "Legacy flattened alias for timeoutMs.",
+    }),
+  ),
   actions: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
   stopOnError: Type.Optional(Type.Boolean()),
   request: Type.Optional(BrowserActSchema),

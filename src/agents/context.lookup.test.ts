@@ -15,7 +15,7 @@ function mockContextDeps(params: {
   vi.doMock("./agent-paths.js", () => ({
     resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
   }));
-  vi.doMock("./pi-model-discovery.js", () => ({
+  vi.doMock("./pi-model-discovery-runtime.js", () => ({
     discoverAuthStorage: vi.fn(() => ({})),
     discoverModels: vi.fn(() => ({
       getAll: () => params.discoveredModels ?? [],
@@ -152,7 +152,7 @@ describe("lookupContextTokens", () => {
     mockContextModuleDeps(loadConfigMock);
 
     const argvSnapshot = process.argv;
-    process.argv = ["node", "openclaw", "config", "validate"];
+    process.argv = ["node", "openclaw", "models", "status"];
     try {
       const { lookupContextTokens } = await import("./context.js");
       expect(lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();

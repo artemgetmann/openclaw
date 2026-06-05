@@ -10,7 +10,7 @@ title: "Browser Login"
 
 ## Manual login (recommended)
 
-When a site requires login, use the **managed signed-in browser lane** first if it is available.
+When a site requires login, use the **signed-in browser lane** first if it is available.
 
 If the task depends on existing cookies or logged-in sessions, prefer the
 **signed-in** browser profile over the isolated `openclaw` browser. Reach for
@@ -26,7 +26,7 @@ Back to the main browser docs: [Browser](/tools/browser).
 
 OpenClaw can use three browser lanes:
 
-- `signed-in`: a green-tinted managed Chrome clone seeded from your real Chrome profile state
+- `signed-in`: a green-tinted Chrome clone seeded from your real Chrome profile state and controlled through Chrome DevTools MCP
 - `openclaw`: a dedicated Chrome profile (orange-tinted UI) isolated from your daily browser
 - `user-live`: your actual live Chrome session with your real tabs/extensions/login state
 
@@ -36,7 +36,7 @@ For agent browser tool calls:
 - Prefer `profile="openclaw"` for public browsing, clean isolated runs, or anything that does not require your real browser state.
 - Use `profile="user-live"` only when the task truly depends on your actual signed-in browser session, existing tabs, or installed extensions.
 - If `profile="user-live"` is required for the task and is unavailable, stop and report the blocker instead of silently switching to `openclaw`.
-- If you have multiple Chrome profiles, create or use an explicit `existing-session` profile instead of guessing.
+- If you have multiple Chrome profiles, configure `signed-in.sourceProfileName` or create an explicit `existing-session` profile instead of guessing.
 
 Two easy ways to access it:
 
@@ -53,7 +53,7 @@ of having the agent guess. The default managed profile remains `openclaw`.
 
 ## X/Twitter: recommended flow
 
-- **Read/search/threads:** prefer the managed **signed-in** lane first.
+- **Read/search/threads:** prefer the **signed-in** lane first.
 - **Post updates:** prefer **signed-in** first, escalate to **user-live** only when the site depends on your active live session or extensions.
 
 ## Sandboxing + host browser access
