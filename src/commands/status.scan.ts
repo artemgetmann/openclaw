@@ -268,8 +268,12 @@ async function scanStatusJsonFast(opts: {
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
-  const memoryPromise = resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
-  const memory = await memoryPromise;
+  // Keep plain `status --json` in the startup memory budget. Probing the memory
+  // manager can load vector/embedding dependencies; callers that need the full
+  // provider snapshot can request the expanded JSON scan with `--all`.
+  const memory = opts.all
+    ? await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin })
+    : null;
 
   return {
     cfg,
