@@ -82,6 +82,7 @@ describe("runCapability auto audio entries", () => {
           models: {
             providers: {
               openai: {
+                baseUrl: "https://api.openai.com/v1",
                 models: [],
               },
             },

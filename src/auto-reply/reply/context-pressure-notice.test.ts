@@ -9,6 +9,8 @@ import {
 describe("context pressure notice", () => {
   it("warns once the session reaches three quarters of the resolved window", () => {
     const entry = {
+      sessionId: "context-pressure-1",
+      updatedAt: Date.now(),
       totalTokens: 75_000,
       totalTokensFresh: true,
       compactionCount: 2,
@@ -25,6 +27,8 @@ describe("context pressure notice", () => {
 
   it("stays quiet below the threshold and after the notice is marked for the current compaction", () => {
     const entry = {
+      sessionId: "context-pressure-2",
+      updatedAt: Date.now(),
       totalTokens: 74_999,
       totalTokensFresh: true,
       compactionCount: 2,
@@ -57,6 +61,8 @@ describe("context pressure notice", () => {
 
   it("stays quiet when system prompt overhead dominates a fresh session", () => {
     const entry = {
+      sessionId: "context-pressure-3",
+      updatedAt: Date.now(),
       totalTokens: 150_000,
       totalTokensFresh: true,
       compactionCount: 0,
@@ -92,6 +98,8 @@ describe("context pressure notice", () => {
 
   it("still warns after compaction even if current system prompt overhead is large", () => {
     const entry = {
+      sessionId: "context-pressure-4",
+      updatedAt: Date.now(),
       totalTokens: 150_000,
       totalTokensFresh: true,
       compactionCount: 1,

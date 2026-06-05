@@ -73,6 +73,8 @@ export async function noteMemorySearchHealth(
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
         ].join("\n");
       }
+    } else if (resolved.provider === "none") {
+      providerNoteMessage = null;
     } else if (
       !(hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir)))
     ) {
