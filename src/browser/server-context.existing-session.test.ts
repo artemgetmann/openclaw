@@ -159,4 +159,34 @@ describe("browser server-context existing-session profile", () => {
       expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
   });
+
+  it("uses Chrome MCP for cloned existing-session availability checks", async () => {
+    fs.mkdirSync("/tmp/openclaw/browser/signed-in/user-data", { recursive: true });
+    const state = makeState();
+    state.resolved.profiles["signed-in"] = {
+      cdpPort: 18802,
+      cdpUrl: "http://127.0.0.1:18802",
+      color: "#0066CC",
+      driver: "existing-session",
+      attachOnly: true,
+      cloneFromUserProfile: true,
+      userDataDir: "/tmp/openclaw/browser/signed-in/user-data",
+      profileDirectory: "Default",
+    };
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("signed-in");
+
+    await live.ensureBrowserAvailable();
+
+    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
+      "signed-in",
+      "/tmp/openclaw/browser/signed-in/user-data",
+      expect.objectContaining({ timeoutMs: 60_000 }),
+    );
+    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith(
+      "signed-in",
+      "/tmp/openclaw/browser/signed-in/user-data",
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+    );
+  });
 });
