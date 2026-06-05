@@ -1940,8 +1940,12 @@ merge_watch_snapshot() {
 
   local failed_required
   local pending_required
+  local has_pr_required
+  local ci_pending_rollup
   failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket == "fail" or (.state | IN("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"))) ] | length')
   pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket == "pending" or (.state | IN("PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "EXPECTED")))] | length')
+  has_pr_required=$(printf '%s\n' "$checks_json" | jq -r '[.[] | select(.workflow == "CI" and .name == "pr-required")] | length > 0')
+  ci_pending_rollup=$(printf '%s\n' "$pr_json" | jq '[.statusCheckRollup[]? | select(.__typename == "CheckRun" and .workflowName == "CI" and .status != "COMPLETED")] | length')
 
   if [ "$failed_required" -gt 0 ]; then
     echo "blocker: required checks failing"
@@ -1953,13 +1957,18 @@ merge_watch_snapshot() {
     return 10
   fi
 
+  if [ "$has_pr_required" != "true" ] && [ "$ci_pending_rollup" -gt 0 ]; then
+    echo "blocker: CI aggregate gate pending or not scheduled yet"
+    return 10
+  fi
+
   case "$merge_state" in
     BEHIND|DIRTY)
       echo "blocker: branch is behind or stale under strict up-to-date checks"
       return 1
       ;;
     BLOCKED)
-      echo "blocker: GitHub reports merge blocked after required checks passed"
+      echo "blocker: GitHub reports merge blocked after visible required checks passed"
       return 1
       ;;
   esac
