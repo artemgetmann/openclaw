@@ -87,6 +87,13 @@ function sourceProveAndRun(functionCall: string, env: NodeJS.ProcessEnv) {
 }
 
 describe("scripts/prove-main-telegram-runtime.sh parsing", () => {
+  it("runs telegram-user JSON commands through silent pnpm", () => {
+    const script = fs.readFileSync(PROVE_SCRIPT, "utf8");
+
+    expect(script).toContain('pnpm --silent openclaw:local "$@" --json');
+    expect(script).toContain("pnpm --silent openclaw:local telegram-user wait");
+  });
+
   it("chooses the recent active [default] bot from logs", () => {
     const temp = makeTempDir("telegram-proof");
     const logPath = path.join(temp, "gateway.log");
