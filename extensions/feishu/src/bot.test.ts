@@ -776,7 +776,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockSendMessageFeishu).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "chat:oc-dm",
-        text: expect.stringContaining("Pairing code: ABCDEFGH"),
+        text: expect.stringMatching(/Pairing code:\s*```[\s\S]*ABCDEFGH[\s\S]*```/),
         accountId: "default",
       }),
     );
