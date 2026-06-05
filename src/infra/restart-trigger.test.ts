@@ -45,8 +45,10 @@ vi.mock("../daemon/launchd-restart-handoff.js", () => ({
 }));
 
 import {
+  __testing,
   isCanonicalSharedMainLaunchdRuntime,
   isSafeLocalRestartScriptAvailable,
+  requestGatewayToolRestart,
   triggerOpenClawRestart,
 } from "./restart.js";
 
@@ -78,6 +80,7 @@ afterEach(() => {
   relaunchGatewayScheduledTaskMock.mockReset();
   resolveOpenClawPackageRootSyncMock.mockReset();
   resolveOpenClawPackageRootSyncMock.mockReturnValue(null);
+  __testing.resetSigusr1State();
   if (originalPlatformDescriptor) {
     Object.defineProperty(process, "platform", originalPlatformDescriptor);
   }
@@ -350,5 +353,33 @@ describe("triggerOpenClawRestart local script mode", () => {
     } finally {
       await fs.rm(scriptDir, { recursive: true, force: true });
     }
+  });
+
+  it("routes live-tool canonical shared main restarts through external launchd handoff", () => {
+    setPlatform("darwin");
+    delete process.env.VITEST;
+    delete process.env.NODE_ENV;
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+
+    const result = requestGatewayToolRestart({
+      delayMs: 25,
+      reason: "live chat restart",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      method: "launchd-handoff",
+      restartMode: "external-supervised",
+      delayMs: 25,
+      reason: "live chat restart",
+      verified: false,
+    });
+    expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
+      env: process.env,
+      mode: "kickstart",
+      delayMs: 25,
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 });

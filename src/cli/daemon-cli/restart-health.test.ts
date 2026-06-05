@@ -131,6 +131,26 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.staleGatewayPids).toEqual([9000]);
   });
 
+  it("treats running launchd runtime with no listener as unhealthy", async () => {
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "running", pid: 8000 },
+      portUsage: {
+        port: 18789,
+        status: "free",
+        listeners: [],
+        hints: [],
+      },
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.staleGatewayPids).toEqual([]);
+
+    const { renderRestartDiagnostics } = await import("./restart-health.js");
+    expect(renderRestartDiagnostics(snapshot)).toContain(
+      "Gateway service is running but port 18789 is not listening; treating restart as unhealthy.",
+    );
+  });
+
   it("treats unknown listeners as stale on Windows when enabled", async () => {
     const snapshot = await inspectUnknownListenerFallback({
       runtime: { status: "stopped" },

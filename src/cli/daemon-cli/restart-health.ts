@@ -289,6 +289,11 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   if (runtimeSummary) {
     lines.push(`Service runtime: ${runtimeSummary}`);
   }
+  if (snapshot.runtime.status === "running" && snapshot.portUsage.status !== "busy") {
+    lines.push(
+      `Gateway service is running but port ${snapshot.portUsage.port} is not listening; treating restart as unhealthy.`,
+    );
+  }
 
   lines.push(...renderPortUsageDiagnostics(snapshot));
 

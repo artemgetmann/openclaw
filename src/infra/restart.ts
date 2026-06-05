@@ -573,6 +573,74 @@ export type ScheduledRestart = {
   cooldownMsApplied: number;
 };
 
+export type GatewayToolRestartRequest =
+  | (ScheduledRestart & {
+      restartMode: "in-process-sigusr1";
+      verified: false;
+    })
+  | {
+      ok: boolean;
+      method: "launchd-handoff";
+      restartMode: "external-supervised";
+      pid?: number;
+      delayMs: number;
+      reason?: string;
+      detail?: string;
+      verified: false;
+    };
+
+function normalizeRestartDelayMs(delayMsRaw: number | undefined): number {
+  return Math.min(Math.max(delayMsRaw ?? 2000, 0), 60_000);
+}
+
+function normalizeRestartReason(reasonRaw: string | undefined): string | undefined {
+  return typeof reasonRaw === "string" && reasonRaw.trim()
+    ? reasonRaw.trim().slice(0, 200)
+    : undefined;
+}
+
+/**
+ * Select the live-chat restart path.
+ *
+ * The canonical shared main LaunchAgent must be restarted by an external
+ * supervisor handoff. A naked in-process SIGUSR1 can strand launchd in a
+ * running-but-not-listening state, which is exactly the failure this guard
+ * prevents. Non-canonical tester/worktree runtimes keep the existing SIGUSR1
+ * path so lane-local behavior remains unchanged.
+ */
+export function requestGatewayToolRestart(opts?: {
+  delayMs?: number;
+  reason?: string;
+}): GatewayToolRestartRequest {
+  const delayMs = normalizeRestartDelayMs(opts?.delayMs);
+  const reason = normalizeRestartReason(opts?.reason);
+  if (process.platform === "darwin" && isCanonicalSharedMainLaunchdRuntime()) {
+    const handoff = scheduleDetachedLaunchdRestartHandoff({
+      env: process.env,
+      mode: "kickstart",
+      delayMs,
+    });
+    return {
+      ok: handoff.ok,
+      method: "launchd-handoff",
+      restartMode: "external-supervised",
+      pid: handoff.pid,
+      delayMs,
+      reason,
+      detail: handoff.ok
+        ? "scheduled detached launchd restart handoff; verification pending"
+        : handoff.detail,
+      verified: false,
+    };
+  }
+
+  return {
+    ...scheduleGatewaySigusr1Restart({ delayMs, reason }),
+    restartMode: "in-process-sigusr1",
+    verified: false,
+  };
+}
+
 export function scheduleGatewaySigusr1Restart(opts?: {
   delayMs?: number;
   reason?: string;
