@@ -129,8 +129,16 @@ function runCase(testCase) {
     throw new Error(`${testCase.label} triggered Matrix crypto bootstrap during startup`);
   }
   if (maxRssMb > testCase.limitMb) {
+    const diagnosticOutput = [stderr.trim(), result.stdout?.trim()]
+      .filter((value) => value && value.length > 0)
+      .join("\n");
     throw new Error(
-      `${testCase.label} used ${maxRssMb.toFixed(1)} MB RSS (limit ${testCase.limitMb} MB)`,
+      [
+        `${testCase.label} used ${maxRssMb.toFixed(1)} MB RSS (limit ${testCase.limitMb} MB)`,
+        diagnosticOutput,
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
   }
 
