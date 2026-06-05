@@ -30,6 +30,12 @@ extension OnboardingView {
         .frame(width: self.pageWidth, height: Self.windowHeight)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
+            if AppFlavor.current.isConsumer, self.state.connectionMode == .unconfigured {
+                // Consumer onboarding is local-first. Set that synchronously so
+                // fast users cannot reach the model setup page while gateway
+                // endpoint resolution still thinks setup is "unconfigured".
+                self.selectLocalGateway()
+            }
             self.currentPage = 0
             self.updateMonitoring(for: 0)
         }
@@ -70,8 +76,8 @@ extension OnboardingView {
             self.refreshBootstrapStatus()
             self.preferredGatewayID = GatewayDiscoveryPreferences.preferredStableID()
             if AppFlavor.current.isConsumer, self.state.connectionMode == .unconfigured {
-                // Keep the default consumer path local-first even before the
-                // user presses the first button so the reduced page order stays stable.
+                // Keep local-first as a backstop if tests or previews bypass
+                // onAppear.
                 self.selectLocalGateway()
             }
             await self.accountActivation.loadStoredActivation()
