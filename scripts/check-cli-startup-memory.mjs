@@ -56,6 +56,11 @@ const cases = [
     id: "gatewayStatus",
     label: "gateway status",
     args: ["openclaw.mjs", "gateway", "status"],
+    // CI runners do not run an OpenClaw gateway service. Keep measuring CLI
+    // startup RSS, but accept only the expected "no service/RPC" unhealthy
+    // result so crashes still fail the guard.
+    allowedNonZeroPattern:
+      /systemd user services unavailable|canonical shared gateway .* missing|rpc probe: failed/i,
     limitMb: Number(
       process.env.OPENCLAW_STARTUP_MEMORY_GATEWAY_STATUS_MB ?? DEFAULT_LIMITS_MB.gatewayStatus,
     ),
@@ -114,16 +119,23 @@ function runCaseOnce(testCase) {
   const maxRssMb = parseMaxRssMb(stderr);
   const matrixBootstrapWarning = /matrix: crypto runtime bootstrap failed/i.test(stderr);
 
-  if (result.status !== 0) {
-    throw new Error(
-      `${testCase.label} exited with ${String(result.status)}\n${stderr.trim() || result.stdout || ""}`,
-    );
-  }
   if (maxRssMb == null) {
     throw new Error(`${testCase.label} did not report max RSS\n${stderr.trim()}`);
   }
   if (matrixBootstrapWarning) {
     throw new Error(`${testCase.label} triggered Matrix crypto bootstrap during startup`);
+  }
+  if (result.status !== 0) {
+    const combinedOutput = `${stderr}\n${result.stdout ?? ""}`;
+    if (
+      testCase.allowedNonZeroPattern instanceof RegExp &&
+      testCase.allowedNonZeroPattern.test(combinedOutput)
+    ) {
+      return maxRssMb;
+    }
+    throw new Error(
+      `${testCase.label} exited with ${String(result.status)}\n${stderr.trim() || result.stdout || ""}`,
+    );
   }
   return maxRssMb;
 }
