@@ -24,10 +24,15 @@
   - Do not run raw `pnpm build`, raw `node dist/index.js ...`, or any shell-default Node command from `/Users/user/Programming_Projects/openclaw`.
   - The shell may be on Node 25 while the shared runtime is pinned to Node `22.22.1`.
   - Use the guarded entrypoints instead:
+    - `bash scripts/deploy-shared-main-runtime.sh` after merged runtime code needs to be deployed from clean sacred `main`
     - `bash scripts/build-shared-runtime.sh`
     - `openclaw gateway restart`
     - `bash scripts/gateway-recover-main.sh`
     - `bash scripts/restart-mac.sh`
+- Main runtime deploy/proof:
+  - Use `bash scripts/deploy-shared-main-runtime.sh` from `/Users/user/Programming_Projects/openclaw` on clean `main` after PRs merge. It fast-forwards, stops only `ai.openclaw.gateway`, rebuilds via `scripts/build-shared-runtime.sh`, reinstalls/kickstarts the canonical LaunchAgent, and prints compact commit/PID/Node/RPC/listener proof.
+  - Use `bash scripts/gateway-recover-main.sh` for unhealthy runtime recovery. It can no-op when the gateway is already healthy; do not use it as the deploy-after-merge command.
+  - Use `bash scripts/prove-main-telegram-runtime.sh` for live Telegram proof. It resolves the active `[default]` Telegram bot from current gateway logs/config, not old `.artifacts/telegram-smoke/*` files, sends a nonce, waits for the exact nonce reply, then checks the watchdog window for polling stalls.
 - Restart:
   - `pkill -9 -f openclaw-gateway || true`
   - `nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
