@@ -9,10 +9,24 @@ export type ChannelHealthSnapshot = {
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
+  lastTransportActivityAt?: number | null;
   lastEventAt?: number | null;
+  transportActivity?: {
+    mode?: string;
+    active?: boolean;
+    inFlight?: number;
+    lastStartedAt?: number | null;
+    lastCompletedAt?: number | null;
+    lastOutcome?: string | null;
+    lastError?: string | null;
+    watchdog?: {
+      escalation?: string | null;
+    };
+  };
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
+  lastPollOutcome?: string | null;
 };
 
 export type ChannelHealthEvaluationReason =
@@ -105,6 +119,13 @@ export function evaluateChannelHealth(
   }
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
+  }
+  if (
+    policy.channelId === "telegram" &&
+    snapshot.mode === "polling" &&
+    (snapshot.lastPollOutcome === "unhealthy" || snapshot.transportActivity?.watchdog?.escalation)
+  ) {
+    return { healthy: false, reason: "stuck" };
   }
   // Skip stale-socket check for Telegram (long-polling mode) and any channel
   // explicitly operating in webhook mode. In these cases, there is no persistent

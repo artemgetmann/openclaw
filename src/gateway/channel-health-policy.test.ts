@@ -156,6 +156,32 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
+  it("flags Telegram polling watchdog escalation without using stale-event checks", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        mode: "polling",
+        lastEventAt: null,
+        transportActivity: {
+          mode: "polling",
+          watchdog: {
+            escalation: "Telegram polling unhealthy: repeated polling stalls",
+          },
+        },
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
   it("skips stale-socket detection for channels in webhook mode", () => {
     const evaluation = evaluateDiscordHealth({
       running: true,
