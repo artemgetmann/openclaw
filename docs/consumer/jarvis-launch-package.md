@@ -473,8 +473,16 @@ Advanced/developer controls should be available intentionally, not scattered
 through consumer setup. Candidate shape:
 
 - `/settings` shows the normal settings menu and an "Advanced settings" toggle.
-- `/advanced` or `/enable advanced` can expose developer/provider/BYO-bot/custom
-  command settings for power users.
+- `/help` stays consumer-simple: `/new`, `/status`, `/model`, `/think`, `/tts`,
+  `/btw`, `/steer`, and `/advanced`.
+- Telegram's normal slash menu should publish only `/help`, `/status`, `/new`,
+  `/model`, `/think`, `/tts`, `/btw`, `/steer`, and `/advanced` when the compact
+  Jarvis command surface is enabled.
+- `/advanced` exposes the full generated command catalog for power users:
+  founder/developer commands, plugins, skills, config/debug, approvals, export
+  and session tools.
+- `/commands` remains callable as a hidden compatibility alias for `/advanced`,
+  but should not be promoted in `/help` or Telegram's normal slash menu.
 - Managed Bots stays the consumer path; BYO BotFather token, custom commands,
   verbose developer detail, and internal tool/skill IDs stay in the advanced
   path.
@@ -486,6 +494,16 @@ through consumer setup. Candidate shape:
   output redacted. The normal path is now replacing the manual BotFather setup
   step with this manager-bot approval flow while keeping BYO BotFather tokens in
   the advanced path.
+- Jarvis Consumer RC Telegram proof should treat Telegram Desktop Start,
+  BotFather managed bot creation, command-menu screenshots, and follow-up DM
+  steps as human handoff when the user is actively using the Mac. The agent may
+  open Telegram and capture cropped proof only after the user says ready; a
+  full Telegram window capture can expose private chats and does not prove the
+  app is foreground or actionable.
+- Clean onboarding should be Start -> Jarvis reports the bot is connected ->
+  send `Wake up my friend` -> `Verify Telegram` -> `Next` enabled. Asking for
+  another DM on that path is a launch blocker/product bug, not expected test
+  friction.
 - Claude Code should become a consumer-facing model lane, not founder-only, but
   not for the immediate next 4-5 tester package. Gate broader exposure on more
   founder use of the Claude CLI backend. Before website, Stripe, Reddit/GitHub,

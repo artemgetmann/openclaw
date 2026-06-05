@@ -499,6 +499,7 @@ extension GatewayLaunchAgentManager {
         }
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         env["OPENCLAW_PROFILE"] = identity.profile ?? "default"
+        env["OPENCLAW_APP_VARIANT"] = "consumer"
         env["OPENCLAW_HOME"] = identity.runtimeRootURL.path
         env["OPENCLAW_STATE_DIR"] = identity.stateDirURL.path
         env["OPENCLAW_CONFIG_PATH"] = identity.configURL.path
@@ -509,6 +510,7 @@ extension GatewayLaunchAgentManager {
         env["OPENCLAW_GATEWAY_BIND"] = identity.gatewayBind
         env["OPENCLAW_LOG_DIR"] = identity.logsDirURL.path
         env["OPENCLAW_CONSUMER_MINIMAL_STARTUP"] = "1"
+        env["OPENCLAW_JARVIS_MINIMAL_COMMAND_SURFACE"] = "1"
         // Packaged consumer runs through Bun on macOS; default to sips unless
         // the caller intentionally asks for the sharp backend.
         env["OPENCLAW_IMAGE_BACKEND"] =

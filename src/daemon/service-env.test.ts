@@ -396,6 +396,9 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_BIND).toBe(identity.gatewayBind);
     expect(env.OPENCLAW_LOG_DIR).toBe(identity.logDir);
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe(identity.gatewayLaunchdLabel);
+    expect(env.OPENCLAW_APP_VARIANT).toBe("consumer");
+    expect(env.OPENCLAW_CONSUMER_MINIMAL_STARTUP).toBe("1");
+    expect(env.OPENCLAW_JARVIS_MINIMAL_COMMAND_SURFACE).toBe("1");
     expect(env.OPENCLAW_CANONICAL_SHARED_GATEWAY_CONFIG_PATH).toBeUndefined();
   });
 

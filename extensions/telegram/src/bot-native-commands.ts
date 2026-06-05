@@ -87,6 +87,39 @@ import { seedTelegramThreadSessionOnTopicCreate } from "./thread-session-seeding
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const execFileAsync = promisify(execFile);
+const JARVIS_MINIMAL_MENU_COMMAND_ORDER = [
+  "help",
+  "status",
+  "new",
+  "model",
+  "think",
+  "tts",
+  "btw",
+  "steer",
+  "advanced",
+];
+const JARVIS_MINIMAL_MENU_COMMANDS = new Set(JARVIS_MINIMAL_MENU_COMMAND_ORDER);
+
+function isJarvisMinimalCommandSurfaceEnabled(): boolean {
+  return (
+    process.env.OPENCLAW_JARVIS_MINIMAL_COMMAND_SURFACE === "1" ||
+    process.env.OPENCLAW_CONSUMER_MINIMAL_STARTUP === "1"
+  );
+}
+
+function filterJarvisMinimalMenuCommands(
+  commands: Array<{ command: string; description: string }>,
+): Array<{ command: string; description: string }> {
+  const order = new Map(
+    JARVIS_MINIMAL_MENU_COMMAND_ORDER.map((command, index) => [command, index] as const),
+  );
+
+  // Preserve the curated Jarvis order instead of leaking registry order, which is optimized
+  // for power users and puts developer commands near the top of Telegram's picker.
+  return commands
+    .filter((entry) => JARVIS_MINIMAL_MENU_COMMANDS.has(entry.command))
+    .sort((left, right) => (order.get(left.command) ?? 999) - (order.get(right.command) ?? 999));
+}
 
 async function resolveCurrentBranchName(): Promise<string> {
   const candidateCwds = [
@@ -492,9 +525,15 @@ export const registerTelegramNativeCommands = ({
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
   ];
+  // Compact Jarvis surfaces should not expose the founder/developer command catalog in
+  // Telegram's slash-command picker. Keep every handler registered below so hidden commands
+  // remain callable by explicit text, but only publish the curated menu to Telegram.
+  const menuCommands = isJarvisMinimalCommandSurfaceEnabled()
+    ? filterJarvisMinimalMenuCommands(allCommandsFull)
+    : allCommandsFull;
   const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
     buildCappedTelegramMenuCommands({
-      allCommands: allCommandsFull,
+      allCommands: menuCommands,
     });
   if (overflowCount > 0) {
     runtime.log?.(

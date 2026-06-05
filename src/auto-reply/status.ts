@@ -12,7 +12,6 @@ import type { SkillCommandSpec } from "../agents/skills.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { formatContextPressureSuffix } from "../commands/status.summary.js";
-import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveMainSessionKey,
@@ -743,33 +742,14 @@ function groupCommandsByCategory(
   return grouped;
 }
 
-export function buildHelpMessage(cfg?: OpenClawConfig): string {
+export function buildHelpMessage(_cfg?: OpenClawConfig): string {
   const lines = ["ℹ️ Help", ""];
 
-  lines.push("Session");
-  lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
-  lines.push("");
-
-  const optionParts = ["/think <level>", "/model <id>", "/fast on|off", "/verbose on|off"];
-  if (isCommandFlagEnabled(cfg, "config")) {
-    optionParts.push("/config");
-  }
-  if (isCommandFlagEnabled(cfg, "debug")) {
-    optionParts.push("/debug");
-  }
-  lines.push("Options");
-  lines.push(`  ${optionParts.join("  |  ")}`);
-  lines.push("");
-
-  lines.push("Status");
-  lines.push("  /status  |  /whoami  |  /context");
-  lines.push("");
-
-  lines.push("Skills");
-  lines.push("  /skill <name> [input]");
-
-  lines.push("");
-  lines.push("More: /commands for full list");
+  lines.push("start fresh: /new");
+  lines.push("check Jarvis: /status");
+  lines.push("adjust replies: /model, /think, /tts");
+  lines.push("guide the work: /btw, /steer");
+  lines.push("more: /advanced");
 
   return lines.join("\n");
 }

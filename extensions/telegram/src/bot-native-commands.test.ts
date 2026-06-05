@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { STATE_DIR } from "../../../src/config/paths.js";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "../../../src/config/telegram-custom-commands.js";
@@ -62,6 +62,10 @@ describe("registerTelegramNativeCommands", () => {
     pluginCommandMocks.executePluginCommand.mockResolvedValue({ text: "ok" });
     deliveryMocks.deliverReplies.mockClear();
     deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   const buildParams = (cfg: OpenClawConfig, accountId = "default") =>
@@ -192,6 +196,53 @@ describe("registerTelegramNativeCommands", () => {
     const registeredHandlers = command.mock.calls.map(([name]) => name);
     expect(registeredHandlers).toContain("export_session");
     expect(registeredHandlers).not.toContain("export-session");
+  });
+
+  it("publishes only the minimal Jarvis command menu while preserving hidden handlers", async () => {
+    vi.stubEnv("OPENCLAW_JARVIS_MINIMAL_COMMAND_SURFACE", "1");
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const command = vi.fn();
+
+    registerTelegramNativeCommands({
+      ...buildParams({}),
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command,
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+    });
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+
+    expect(registeredCommands.map((entry) => entry.command)).toEqual([
+      "help",
+      "status",
+      "new",
+      "model",
+      "think",
+      "tts",
+      "btw",
+      "steer",
+      "advanced",
+    ]);
+    expect(registeredCommands.some((entry) => entry.command === "approve")).toBe(false);
+    expect(registeredCommands.some((entry) => entry.command === "context")).toBe(false);
+    expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(false);
+    expect(registeredCommands.some((entry) => entry.command === "commands")).toBe(false);
+    expect(registeredCommands.some((entry) => entry.command === "config")).toBe(false);
+    expect(registeredCommands.some((entry) => entry.command === "debug")).toBe(false);
+    expect(registeredCommands.some((entry) => entry.command === "bash")).toBe(false);
+    expect(registeredCommands.some((entry) => entry.command === "subagents")).toBe(false);
+
+    // The visible Telegram picker is consumer-safe, but explicit advanced commands still
+    // resolve through existing authorization and recovery paths when a user knows them.
+    const registeredHandlers = command.mock.calls.map(([name]) => name);
+    expect(registeredHandlers).toContain("approve");
+    expect(registeredHandlers).toContain("context");
+    expect(registeredHandlers).toContain("export_session");
+    expect(registeredHandlers).toContain("advanced");
   });
 
   it("registers only Telegram-safe command names across native, custom, and plugin sources", async () => {

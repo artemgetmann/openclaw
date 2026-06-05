@@ -937,12 +937,18 @@ hash_consumer_runtime_path() {
     return 0
   fi
 
-  (cd "$ROOT_DIR" && find "$runtime_path" \
-    \( -name '*.app' -o -name '*.dmg' -o -name '*.zip' -o -name '*appcast*.xml' \) -prune \
-    -o -type f -print | LC_ALL=C sort | while IFS= read -r file_path; do
-      printf 'FILE %s\n' "$file_path"
-      shasum -a 256 "$file_path"
-    done)
+  # Hash runtime trees in deterministic batches. The previous implementation
+  # spawned `shasum` once per file; on a generated `dist/` tree that can look
+  # like a packaging hang because this function often runs inside command
+  # substitution before user-visible package output is flushed.
+  (
+    cd "$ROOT_DIR"
+    find "$runtime_path" \
+      \( -name '*.app' -o -name '*.dmg' -o -name '*.zip' -o -name '*appcast*.xml' \) -prune \
+      -o -type f -print0 \
+      | LC_ALL=C sort -z \
+      | xargs -0 shasum -a 256
+  )
 }
 
 consumer_runtime_input_key() {
@@ -1039,7 +1045,13 @@ prepare_bundled_consumer_runtime() {
   deploy_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-deploy.XXXXXX")"
   trap 'rm -rf "$deploy_root"' RETURN
   echo "📦 Staging bundled consumer runtime node_modules"
-  openclaw_run_repo_pnpm "$ROOT_DIR" --filter . deploy --legacy --prod "$deploy_root"
+  # Consumer app packaging needs a reproducible production dependency tree, not arbitrary
+  # dependency lifecycle execution. Git-hosted packages can run prepare scripts that depend on
+  # dev-only tools (for example Vite) and fail during --prod deploy, so mirror plugin install
+  # safety here by disabling lifecycle scripts for the staging install.
+  npm_config_ignore_scripts=true \
+  pnpm_config_ignore_scripts=true \
+    openclaw_run_repo_pnpm "$ROOT_DIR" --filter . deploy --legacy --prod "$deploy_root"
   rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules"
   mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw"
   rsync -a "$deploy_root/node_modules/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/node_modules/"

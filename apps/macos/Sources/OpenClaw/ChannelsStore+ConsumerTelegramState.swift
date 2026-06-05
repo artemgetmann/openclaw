@@ -104,9 +104,12 @@ extension ChannelsStore {
         {
             let inboundAdvanced = latestInboundAt > baselineInboundAt
             let outboundAdvanced = latestOutboundAt > baselineOutboundAt
-            if inboundAdvanced || outboundAdvanced {
-                return true
+            if inboundAdvanced, outboundAdvanced {
+                return self.consumerTelegramHasRecentPairedActivity(
+                    inboundAt: latestInboundAt,
+                    outboundAt: latestOutboundAt)
             }
+            return false
         } else if self.telegramSetupBaselineOutboundAt == nil,
                   let baselineInboundAt = self.telegramSetupBaselineInboundAt,
                   let latestActivityAt = self.consumerTelegramLatestActivityAt(),
@@ -128,6 +131,34 @@ extension ChannelsStore {
         // If the live poller already handled the first DM/reply, trust observed
         // Telegram activity instead of forcing the user to send a duplicate setup
         // message just to satisfy local UI state.
+        self.markConsumerTelegramFirstTaskVerified()
+        self.telegramSetupWaitingForDM = false
+        self.telegramSetupPhase = .idle
+        if self.telegramSetupFirstSenderId == nil {
+            self.telegramSetupFirstSenderId = self.consumerTelegramConfigFallback().lockedSenderId
+        }
+        self.telegramSetupStatus = self.consumerTelegramBotUsername().map {
+            "Telegram bot is live as @\($0). First task verified."
+        } ?? "Telegram bot is live. First task verified."
+        return true
+    }
+
+    @discardableResult
+    func completeConsumerTelegramFirstTaskVerificationFromRecentActivityIfPossible() -> Bool {
+        guard let latestInboundAt = self.consumerTelegramLatestInboundAt(),
+              let latestOutboundAt = self.consumerTelegramLatestOutboundAt(),
+              self.consumerTelegramHasRecentPairedActivity(
+                  inboundAt: latestInboundAt,
+                  outboundAt: latestOutboundAt)
+        else {
+            return false
+        }
+
+        // The live setup verifier primes a baseline before polling status, but
+        // Telegram/gateway timing can make the successful DM/reply appear as
+        // the baseline itself. When the current snapshot already contains a
+        // recent inbound user DM followed by a bot reply, accept that product
+        // proof instead of asking for a redundant second message.
         self.markConsumerTelegramFirstTaskVerified()
         self.telegramSetupWaitingForDM = false
         self.telegramSetupPhase = .idle

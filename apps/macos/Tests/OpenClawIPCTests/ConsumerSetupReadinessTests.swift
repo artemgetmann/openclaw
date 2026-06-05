@@ -353,6 +353,44 @@ struct ConsumerSetupReadinessTests {
         #expect(model.selectedOptionId == "openai-api-key")
     }
 
+    @Test func `consumer model loads auth options while readiness probe is still pending`() async {
+        let pendingProbe = ReadinessContinuationBox()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                try await withCheckedThrowingContinuation { continuation in
+                    pendingProbe.continuation = continuation
+                }
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(
+                    options: [subscriptionOptionPayload(), authOptionPayload()],
+                    activeOptionId: nil)
+            },
+            listModels: {
+                curatedModelsPayload()
+            })
+
+        let refreshTask = Task {
+            await model.refresh()
+        }
+        while pendingProbe.continuation == nil || !model.authOptionsLoaded {
+            await Task.yield()
+        }
+
+        // Onboarding must not wait for the provider readiness probe before it
+        // renders recovery choices. A slow readiness endpoint should still let
+        // the user pick ChatGPT sign-in or paste an API key.
+        #expect(model.phase == .checking)
+        #expect(model.authOptionsLoaded)
+        #expect(model.selectedOptionId == "openai-codex-oauth")
+        #expect(model.chatGPTSubscriptionOption?.id == "openai-codex-oauth")
+
+        pendingProbe.continuation?.resume(returning: blockedReadinessPayload())
+        await refreshTask.value
+
+        #expect(model.phase == .failed("Jarvis-managed AI is configured, but the shared auth is no longer usable."))
+    }
+
     @Test func `consumer model prefers chatgpt login over saved key when both are available`() async {
         let model = ConsumerModelSetupModel(
             probeReadiness: {
@@ -641,11 +679,98 @@ struct ConsumerSetupReadinessTests {
         #expect(probeCalls.value == 5)
         #expect(model.phase == .checking)
         #expect(model.statusLine == "Reconnecting Jarvis after sign-in…")
-        #expect(model.failureKind == nil)
+        #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.isWaitingForChatGPTSignIn)
         #expect(model.canOpenChatGPTSignInAgain)
         #expect(model.chatGPTSignInURL?.absoluteString == "https://auth.openai.com/oauth/authorize?client_id=test")
         #expect(!model.isComplete)
+    }
+
+    @Test func `consumer model background recovery completes when packaged auth restart outlasts quick probes`() async {
+        let probeCalls = SendableCounter()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                if probeCalls.value == 1 {
+                    return blockedReadinessPayload()
+                }
+                if probeCalls.value <= 3 {
+                    throw gatewayUnreachableError()
+                }
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [subscriptionOptionPayload()], activeOptionId: nil)
+            },
+            applyAuth: { optionId, _ in
+                #expect(optionId == "openai-codex-oauth")
+                return ConsumerModelsAuthApplyPayload(
+                    optionId: optionId,
+                    providerId: "openai-codex",
+                    methodId: "oauth",
+                    defaultModel: "openai-codex/gpt-5.5",
+                    notes: ["Open: https://auth.openai.com/oauth/authorize?client_id=test"],
+                    profileIds: ["openai-codex:default"],
+                    readiness: readyReadinessPayload())
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            gatewayRecoveryProbeDelaysMs: [0],
+            gatewayRecoverySleep: { _ in },
+            postAuthReconnectProbeDelaysMs: [0, 0])
+
+        await model.refresh()
+        await model.submitSelectedAuth()
+        for _ in 0..<100 where !model.isComplete {
+            await Task.yield()
+        }
+
+        #expect(probeCalls.value == 4)
+        #expect(model.isComplete)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(!model.isWaitingForChatGPTSignIn)
+        #expect(model.failureKind == nil)
+    }
+
+    @Test func `consumer model recovers when chatgpt auth apply times out after callback persists oauth`() async {
+        let probeCalls = SendableCounter()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                if probeCalls.value == 1 {
+                    return blockedReadinessPayload()
+                }
+                return readyReadinessPayload()
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [subscriptionOptionPayload()], activeOptionId: nil)
+            },
+            applyAuth: { optionId, _ in
+                #expect(optionId == "openai-codex-oauth")
+                throw NSError(
+                    domain: "gateway",
+                    code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "models.auth.apply timed out waiting for ChatGPT callback",
+                    ])
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            postAuthReconnectProbeDelaysMs: [0])
+
+        await model.refresh()
+        await model.submitSelectedAuth()
+
+        #expect(probeCalls.value == 2)
+        #expect(model.isComplete)
+        #expect(model.phase == .ready("openai-codex/gpt-5.5"))
+        #expect(model.statusLine == "AI ready on openai-codex/gpt-5.5.")
+        #expect(model.authError == nil)
+        #expect(!model.isWaitingForChatGPTSignIn)
+        #expect(model.selectedOptionId == "openai-codex-oauth")
     }
 
     @Test func `consumer model apply auth re-probes after restart churn and routes reused token to reauth`() async {

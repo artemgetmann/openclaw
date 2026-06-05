@@ -93,6 +93,10 @@ export function resolveGatewayRuntimeIdentityEnv(
     OPENCLAW_GATEWAY_BIND: identity.gatewayBind,
     OPENCLAW_LOG_DIR: identity.logDir,
     OPENCLAW_LAUNCHD_LABEL: identity.gatewayLaunchdLabel,
+    OPENCLAW_APP_VARIANT: env.OPENCLAW_APP_VARIANT?.trim() || "consumer",
+    OPENCLAW_CONSUMER_MINIMAL_STARTUP: env.OPENCLAW_CONSUMER_MINIMAL_STARTUP?.trim() || "1",
+    OPENCLAW_JARVIS_MINIMAL_COMMAND_SURFACE:
+      env.OPENCLAW_JARVIS_MINIMAL_COMMAND_SURFACE?.trim() || "1",
   };
 }
 
@@ -320,6 +324,12 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
+    // These are safe product-mode markers, not secrets. Preserve them in supervised
+    // gateway services so packaged Jarvis can keep consumer-only startup and Telegram
+    // command surfaces after launchd detaches the process from the GUI app environment.
+    OPENCLAW_APP_VARIANT: env.OPENCLAW_APP_VARIANT,
+    OPENCLAW_CONSUMER_MINIMAL_STARTUP: env.OPENCLAW_CONSUMER_MINIMAL_STARTUP,
+    OPENCLAW_JARVIS_MINIMAL_COMMAND_SURFACE: env.OPENCLAW_JARVIS_MINIMAL_COMMAND_SURFACE,
     OPENCLAW_CONSUMER_INSTANCE_ID: env.OPENCLAW_CONSUMER_INSTANCE_ID,
     OPENCLAW_HOME: env.OPENCLAW_HOME,
     OPENCLAW_LOG_DIR: env.OPENCLAW_LOG_DIR,

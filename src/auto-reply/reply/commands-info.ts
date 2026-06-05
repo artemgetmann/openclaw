@@ -33,12 +33,13 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
   if (!allowTextCommands) {
     return null;
   }
-  if (params.command.commandBodyNormalized !== "/commands") {
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== "/advanced" && normalized !== "/commands") {
     return null;
   }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
-      `Ignoring /commands from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+      `Ignoring ${normalized} from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
   }

@@ -1,6 +1,6 @@
 # Telegram Managed Onboarding Tracker
 
-Status: local proof updated 2026-05-25.
+Status: RC proof updated 2026-06-05.
 
 Purpose: keep the remaining Telegram Managed Bots onboarding proof work small
 and explicit after the visual copy/layout slice landed.
@@ -29,6 +29,16 @@ and explicit after the visual copy/layout slice landed.
   Jarvis asks "Who am I? What am I?" instead of behaving like the consumer
   Jarvis persona. Telegram transport is proven, but the seeded workspace/persona
   still needs a product pass before tester packaging.
+- 2026-06-05 RC evidence: the managed-bot approval path is externally blocked
+  in Telegram before Jarvis receives a manager-bot update. Both the existing
+  manager `@jarvis_manager_260518_bot` and a fresh manager
+  `@jarvis_manager_0605_bot` had Bot Management Mode enabled and reported
+  `can_manage_bots=true`. The approval URL and the manager keyboard fallback
+  both opened Telegram's prefilled Create Bot modal, but clicking Create spun
+  indefinitely and the backend status stayed `pending`; diagnostics showed no
+  webhook and no pending manager updates. Treat this as a Telegram/BotFather
+  transaction blocker, not an app polling failure. RC proof may use the advanced
+  BotFather-token fallback while managed creation remains blocked.
 
 ## Next Gates
 

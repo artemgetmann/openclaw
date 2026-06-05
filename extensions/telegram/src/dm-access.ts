@@ -20,6 +20,40 @@ type TelegramSenderIdentity = {
   lastName?: string;
 };
 
+function stringMetaValue(value: unknown): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const text = String(value).trim();
+  return text ? text : undefined;
+}
+
+function limitedTelegramTextMeta(value: unknown): string | undefined {
+  const text = stringMetaValue(value);
+  if (!text) {
+    return undefined;
+  }
+  return text.length > 2_000 ? text.slice(0, 2_000) : text;
+}
+
+function pairingRequestMessageMeta(
+  msg: Message,
+  chatId: number,
+): Record<string, string | undefined> {
+  // Jarvis Consumer onboarding approves the pending sender from the Mac app.
+  // Preserve enough of the blocked DM so the app can replay that first task
+  // after approval instead of forcing the user to send a duplicate message.
+  return {
+    chatId: String(chatId),
+    chatUsername: stringMetaValue(msg.chat.username),
+    messageId: stringMetaValue(msg.message_id),
+    messageThreadId: stringMetaValue(msg.message_thread_id),
+    text: limitedTelegramTextMeta("text" in msg ? msg.text : undefined),
+    caption: limitedTelegramTextMeta("caption" in msg ? msg.caption : undefined),
+    date: stringMetaValue(msg.date),
+  };
+}
+
 function resolveTelegramSenderIdentity(msg: Message, chatId: number): TelegramSenderIdentity {
   const from = msg.from;
   const userId = from?.id != null ? String(from.id) : null;
@@ -79,6 +113,7 @@ export async function enforceTelegramDmAccess(params: {
           username: sender.username || undefined,
           firstName: sender.firstName,
           lastName: sender.lastName,
+          ...pairingRequestMessageMeta(msg, chatId),
         },
         upsertPairingRequest: async ({ id, meta }) =>
           await upsertChannelPairingRequest({

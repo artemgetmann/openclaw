@@ -3,7 +3,20 @@ import Foundation
 
 extension ChannelsStore {
     private static let consumerDefaultTelegramAccountId = "default"
-    private static let consumerTelegramFirstTaskText = "Wake up my friend!"
+    private static let consumerTelegramFirstTaskText = "Wake up my friend"
+    private static let consumerTelegramSetupReplayTimeoutMs = 30_000.0
+    static var managedTelegramSetupIdDefaultsKey: String {
+        "\(RuntimeIdentity.current.defaultsPrefix).telegram.managed.setupId"
+    }
+    static var managedTelegramApprovalURLDefaultsKey: String {
+        "\(RuntimeIdentity.current.defaultsPrefix).telegram.managed.approvalURL"
+    }
+    static var managedTelegramSuggestedBotUsernameDefaultsKey: String {
+        "\(RuntimeIdentity.current.defaultsPrefix).telegram.managed.suggestedBotUsername"
+    }
+    static var managedTelegramExpiresAtDefaultsKey: String {
+        "\(RuntimeIdentity.current.defaultsPrefix).telegram.managed.expiresAt"
+    }
     private static let consumerTelegramRuntimePluginAllowlist = [
         "telegram",
         "anthropic",
@@ -28,10 +41,7 @@ extension ChannelsStore {
         self.telegramSetupBaselineOutboundAt = nil
         self.telegramSetupWaitingForDM = false
         self.telegramSetupPhase = .idle
-        self.telegramManagedSetupId = nil
-        self.telegramManagedApprovalURL = nil
-        self.telegramManagedSuggestedBotUsername = nil
-        self.telegramManagedExpiresAt = nil
+        self.clearManagedTelegramSetupState()
     }
 
     func openTelegramSetupGuide() {
@@ -60,6 +70,11 @@ extension ChannelsStore {
 
     func startManagedTelegramSetup() async {
         guard !self.telegramBusy, self.telegramSetupPhase == .idle else { return }
+        self.restoreManagedTelegramSetupStateIfAvailable()
+        if self.reopenActiveManagedTelegramSetupIfAvailable() {
+            return
+        }
+
         self.telegramBusy = true
         self.telegramSetupPhase = .startingManagedBot
         defer {
@@ -80,6 +95,7 @@ extension ChannelsStore {
             self.telegramManagedApprovalURL = response.approvalUrl
             self.telegramManagedSuggestedBotUsername = response.suggestedBotUsername
             self.telegramManagedExpiresAt = response.expiresAt
+            self.persistManagedTelegramSetupState()
             self.telegramSetupStatus = self.managedTelegramApprovalStatus(
                 suggestedUsername: response.suggestedBotUsername)
             self.openTelegramURL(response.approvalUrl)
@@ -112,6 +128,7 @@ extension ChannelsStore {
             self.telegramManagedSuggestedBotUsername = response.suggestedBotUsername
             self.telegramManagedExpiresAt = response.expiresAt
             guard response.status == "connected" else {
+                self.persistManagedTelegramSetupState()
                 self.telegramSetupStatus = self.managedTelegramPendingStatus(
                     suggestedUsername: response.suggestedBotUsername)
                 return
@@ -143,11 +160,12 @@ extension ChannelsStore {
                 dmPolicy: "pairing",
                 allowFrom: nil,
                 enabled: true)
+            self.clearPersistedManagedTelegramSetupState()
             self.primeConsumerTelegramFirstTaskBaselineIfNeeded()
             self.telegramSetupStatus = self.managedTelegramConnectedStatus(
                 botUsername: self.telegramSetupBotUsername)
         } catch {
-            self.telegramSetupStatus = error.localizedDescription
+            self.handleManagedTelegramSetupStatusError(error)
         }
     }
 
@@ -325,13 +343,35 @@ extension ChannelsStore {
     }
 
     func verifyConsumerTelegramFirstTask() async {
-        if self.consumerTelegramLooksLive(),
-           await self.consumerTelegramConfirmFirstTaskCompletionWithGrace()
-        {
+        if self.consumerTelegramLooksLive() {
+            await self.verifyLiveConsumerTelegramFirstTask()
             return
         }
 
         await self.captureTelegramFirstDirectMessage()
+    }
+
+    private func verifyLiveConsumerTelegramFirstTask() async {
+        self.telegramSetupWaitingForDM = true
+        self.telegramSetupStatus = "Waiting for Jarvis to finish your first Telegram task..."
+        self.telegramSetupPhase = .startingFirstReply
+        self.primeConsumerTelegramFirstTaskBaselineIfNeeded()
+
+        let verified = await self.consumerTelegramConfirmFirstTaskCompletionWithGrace(
+            attempts: 45,
+            delayNanoseconds: 1_000_000_000)
+
+        self.telegramSetupWaitingForDM = false
+        if verified {
+            return
+        }
+        if self.completeConsumerTelegramFirstTaskVerificationFromRecentActivityIfPossible() {
+            return
+        }
+
+        self.clearConsumerTelegramFirstTaskVerified()
+        self.telegramSetupPhase = .idle
+        self.telegramSetupStatus = Self.consumerTelegramApprovedNeedsFreshMessageStatus()
     }
 
     func applyTelegramSetupBootstrap(
@@ -395,7 +435,127 @@ extension ChannelsStore {
         try AgentWorkspace.bootstrapConsumerJarvisPresetIfSafe(workspaceURL: workspaceURL)
     }
 
+    func restoreManagedTelegramSetupStateIfAvailable(
+        defaults: UserDefaults = .standard,
+        now: Date = Date()
+    ) {
+        guard AppFlavor.current.isConsumer else { return }
+        guard let setupId = Self.nonEmptyDefaultsString(
+            defaults,
+            forKey: Self.managedTelegramSetupIdDefaultsKey),
+            let approvalURL = Self.nonEmptyDefaultsString(
+                defaults,
+                forKey: Self.managedTelegramApprovalURLDefaultsKey),
+            let suggestedUsername = Self.nonEmptyDefaultsString(
+                defaults,
+                forKey: Self.managedTelegramSuggestedBotUsernameDefaultsKey)
+        else {
+            self.clearPersistedManagedTelegramSetupState(defaults: defaults)
+            return
+        }
+
+        guard let expiresAt = Self.managedTelegramExpiresAt(from: defaults),
+              !Self.managedTelegramSetupIsExpired(expiresAt, now: now)
+        else {
+            self.clearManagedTelegramSetupState(defaults: defaults)
+            return
+        }
+
+        // The backend lease is the source of truth while Telegram approval is
+        // pending. Restoring the visible card after a relaunch prevents Jarvis
+        // from minting a second child bot just because SwiftUI rebuilt state.
+        self.telegramManagedSetupId = setupId
+        self.telegramManagedApprovalURL = approvalURL
+        self.telegramManagedSuggestedBotUsername = suggestedUsername
+        self.telegramManagedExpiresAt = expiresAt
+        if self.telegramSetupStatus == nil {
+            self.telegramSetupStatus = self.managedTelegramApprovalStatus(
+                suggestedUsername: suggestedUsername)
+        }
+    }
+
+    private func reopenActiveManagedTelegramSetupIfAvailable(now: Date = Date()) -> Bool {
+        guard self.hasActiveManagedTelegramSetup(now: now),
+              let suggestedUsername = self.telegramManagedSuggestedBotUsername
+        else { return false }
+
+        self.telegramSetupStatus = self.managedTelegramPendingStatus(
+            suggestedUsername: suggestedUsername)
+        self.openTelegramManagedApproval()
+        return true
+    }
+
+    private func hasActiveManagedTelegramSetup(now: Date = Date()) -> Bool {
+        guard self.telegramManagedSetupId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+              self.telegramManagedApprovalURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+              self.telegramManagedSuggestedBotUsername?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+              let expiresAt = self.telegramManagedExpiresAt
+        else { return false }
+        return !Self.managedTelegramSetupIsExpired(expiresAt, now: now)
+    }
+
+    private func persistManagedTelegramSetupState(defaults: UserDefaults = .standard) {
+        guard AppFlavor.current.isConsumer else { return }
+        guard self.hasActiveManagedTelegramSetup(),
+              let setupId = self.telegramManagedSetupId,
+              let approvalURL = self.telegramManagedApprovalURL,
+              let suggestedUsername = self.telegramManagedSuggestedBotUsername
+        else {
+            self.clearPersistedManagedTelegramSetupState(defaults: defaults)
+            return
+        }
+
+        defaults.set(setupId, forKey: Self.managedTelegramSetupIdDefaultsKey)
+        defaults.set(approvalURL, forKey: Self.managedTelegramApprovalURLDefaultsKey)
+        defaults.set(suggestedUsername, forKey: Self.managedTelegramSuggestedBotUsernameDefaultsKey)
+        if let expiresAt = self.telegramManagedExpiresAt {
+            defaults.set(expiresAt.timeIntervalSince1970, forKey: Self.managedTelegramExpiresAtDefaultsKey)
+        } else {
+            defaults.removeObject(forKey: Self.managedTelegramExpiresAtDefaultsKey)
+        }
+    }
+
+    private func clearManagedTelegramSetupState(defaults: UserDefaults = .standard) {
+        self.telegramManagedSetupId = nil
+        self.telegramManagedApprovalURL = nil
+        self.telegramManagedSuggestedBotUsername = nil
+        self.telegramManagedExpiresAt = nil
+        self.clearPersistedManagedTelegramSetupState(defaults: defaults)
+    }
+
+    private func clearPersistedManagedTelegramSetupState(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: Self.managedTelegramSetupIdDefaultsKey)
+        defaults.removeObject(forKey: Self.managedTelegramApprovalURLDefaultsKey)
+        defaults.removeObject(forKey: Self.managedTelegramSuggestedBotUsernameDefaultsKey)
+        defaults.removeObject(forKey: Self.managedTelegramExpiresAtDefaultsKey)
+    }
+
+    private static func managedTelegramSetupIsExpired(_ expiresAt: Date?, now: Date = Date()) -> Bool {
+        guard let expiresAt else { return false }
+        return expiresAt <= now
+    }
+
+    private static func managedTelegramExpiresAt(from defaults: UserDefaults) -> Date? {
+        guard let stored = defaults.object(forKey: Self.managedTelegramExpiresAtDefaultsKey) else {
+            return nil
+        }
+        if let timestamp = stored as? Double {
+            return Date(timeIntervalSince1970: timestamp)
+        }
+        if let timestamp = stored as? Int {
+            return Date(timeIntervalSince1970: Double(timestamp))
+        }
+        return nil
+    }
+
+    private static func nonEmptyDefaultsString(_ defaults: UserDefaults, forKey key: String) -> String? {
+        let trimmed = defaults.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private func openTelegramURL(_ raw: String) {
+        guard !self.isPreview else { return }
         guard let url = URL(string: raw) else { return }
         NSWorkspace.shared.open(url)
     }
@@ -506,7 +666,7 @@ extension ChannelsStore {
         self.telegramSetupFirstSenderId = pending.id
         self.telegramSetupStatus = "Approving Telegram access for your first DM..."
 
-        _ = try await self.applyTelegramSetupBootstrap(
+        let persisted = try await self.applyTelegramSetupBootstrap(
             token: token,
             dmPolicy: "allowlist",
             allowFrom: [pending.id],
@@ -514,6 +674,30 @@ extension ChannelsStore {
 
         if await self.completePendingTelegramPairingFromExistingObservedActivityAfterBootstrap() {
             return true
+        }
+
+        if let dm = Self.consumerTelegramDirectMessage(from: pending) {
+            self.telegramSetupStatus = "Running your first Telegram task..."
+            self.telegramSetupPhase = .startingFirstReply
+            let replayResult = await self.startFirstTelegramReply(dm: dm)
+            let replayDecision = Self.consumerTelegramReplayDecision(
+                replyStarted: replayResult.replyStarted,
+                replyCompleted: replayResult.replyCompleted,
+                error: replayResult.error)
+            let activityConfirmed = replayDecision.shouldWaitForActivityConfirmation
+                ? await self.waitForConsumerTelegramFirstTaskActivityRefreshes()
+                : false
+
+            if replayDecision.shouldTrustReplayCompletion || activityConfirmed {
+                self.markConsumerTelegramFirstTaskVerified()
+                self.telegramSetupWaitingForDM = false
+                self.telegramSetupStatus = self.telegramCaptureStatus(
+                    dm: dm,
+                    persistedRoot: persisted,
+                    replayResult: replayResult,
+                    activityConfirmed: activityConfirmed)
+                return true
+            }
         }
 
         // Only start a new baseline after giving already-observed Telegram
@@ -537,6 +721,74 @@ extension ChannelsStore {
         self.clearConsumerTelegramFirstTaskVerified()
         self.telegramSetupStatus = Self.consumerTelegramApprovedNeedsFreshMessageStatus()
         return true
+    }
+
+    private static func consumerTelegramDirectMessage(
+        from pending: ConsumerTelegramPendingPairingRequest
+    ) -> TelegramSetupDirectMessage? {
+        // The first managed-bot DM can arrive while Telegram is still in
+        // pairing mode. The runtime stores the blocked message in pairing
+        // metadata so Verify can approve the sender and replay that same task.
+        let meta = pending.meta ?? [:]
+        let text = meta["text"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let caption = meta["caption"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text?.isEmpty == false || caption?.isEmpty == false else { return nil }
+        let senderId = Int(pending.id) ?? 0
+        guard senderId > 0 else { return nil }
+
+        return TelegramSetupDirectMessage(
+            updateId: Self.consumerTelegramReplayUpdateId(from: pending),
+            messageId: Int(meta["messageId"] ?? "") ?? 0,
+            chatId: Int64(meta["chatId"] ?? "") ?? Int64(senderId),
+            chatUsername: meta["chatUsername"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+            senderId: senderId,
+            senderUsername: meta["username"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+            senderFirstName: meta["firstName"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+            text: text,
+            caption: caption,
+            date: Self.consumerTelegramPendingMessageDate(pending),
+            messageThreadId: Int(meta["messageThreadId"] ?? ""))
+    }
+
+    private static func consumerTelegramReplayUpdateId(
+        from pending: ConsumerTelegramPendingPairingRequest
+    ) -> Int {
+        let meta = pending.meta ?? [:]
+        if let raw = meta["updateId"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let value = Int(raw),
+           value > 0
+        {
+            return value
+        }
+
+        // Pairing metadata comes from Telegram's Message payload, which does
+        // not include update_id. Build a deterministic positive synthetic id
+        // from stable message identity so setup replay does not collide with
+        // the bot middleware's recent-update dedupe key.
+        let components = [
+            meta["chatId"] ?? pending.id,
+            meta["messageId"] ?? "0",
+            pending.id,
+            meta["date"] ?? pending.lastSeenAt,
+        ].joined(separator: ":")
+        let hash = components.unicodeScalars.reduce(0) { partial, scalar in
+            ((partial &* 31) &+ Int(scalar.value)) & 0x3fffffff
+        }
+        return max(1, hash)
+    }
+
+    private static func consumerTelegramPendingMessageDate(
+        _ pending: ConsumerTelegramPendingPairingRequest
+    ) -> Int {
+        if let raw = pending.meta?["date"],
+           let value = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        {
+            return value
+        }
+        let date = Self.consumerTelegramPairingDate(pending.lastSeenAt)
+            ?? Self.consumerTelegramPairingDate(pending.createdAt)
+            ?? Date()
+        return Int(date.timeIntervalSince1970)
     }
 
     private func completePendingTelegramPairingFromExistingObservedActivityAfterBootstrap(
@@ -564,9 +816,7 @@ extension ChannelsStore {
         // Clear transient state so Verify first task cannot run against a stale
         // token from a previous attempt.
         if Self.managedTelegramSetupWasLost(message) {
-            self.telegramManagedSetupId = nil
-            self.telegramManagedApprovalURL = nil
-            self.telegramManagedExpiresAt = nil
+            self.clearManagedTelegramSetupState()
             self.telegramSetupToken = ""
             self.telegramSetupBotId = nil
             self.telegramSetupBotUsername = nil
@@ -585,7 +835,7 @@ extension ChannelsStore {
     ) -> String {
         _ = persistedRoot
         let replayCompleted = activityConfirmed
-            || ((replayResult.replyCompleted ?? replayResult.replyStarted) && replayResult.error == nil)
+            || (replayResult.replyCompleted == true && replayResult.error == nil)
         if replayCompleted {
             return dm.senderUsername.map {
                 "Connected to @\($0). \(AppFlavor.current.appName) finished the first Telegram task on this Mac."
@@ -749,7 +999,7 @@ extension ChannelsStore {
             return try await GatewayConnection.shared.requestDecoded(
                 method: .channelsTelegramSetupReplay,
                 params: params,
-                timeoutMs: 8_500)
+                timeoutMs: Self.consumerTelegramSetupReplayTimeoutMs + 5_000)
         } catch {
             if Self.consumerTelegramReplayShouldRetryAfterRestart(error) {
                 self.telegramSetupStatus = "Jarvis is reconnecting. Retrying your first Telegram task."
@@ -773,7 +1023,7 @@ extension ChannelsStore {
                         return try await GatewayConnection.shared.requestDecoded(
                             method: .channelsTelegramSetupReplay,
                             params: params,
-                            timeoutMs: 8_500)
+                            timeoutMs: Self.consumerTelegramSetupReplayTimeoutMs + 5_000)
                     } catch {
                         return TelegramSetupReplayResult(
                             ok: false,
@@ -881,7 +1131,7 @@ extension ChannelsStore {
         }
         return [
             "payload": AnyCodable(object.mapValues(\.value)),
-            "timeoutMs": AnyCodable(8_000),
+            "timeoutMs": AnyCodable(Self.consumerTelegramSetupReplayTimeoutMs),
         ]
     }
 }
@@ -903,7 +1153,7 @@ extension ChannelsStore {
         replyCompleted: Bool?,
         error: String?
     ) -> ConsumerTelegramReplayDecision {
-        let completed = replyCompleted ?? replyStarted
+        let completed = replyCompleted == true
         if error == nil {
             return ConsumerTelegramReplayDecision(
                 shouldReenableTelegram: true,
@@ -974,6 +1224,9 @@ extension ChannelsStore {
         return normalized.contains("telegram setup not found")
             || normalized.contains("managed setup not found")
             || normalized.contains("setup not found")
+            || normalized.contains("telegram setup expired")
+            || normalized.contains("managed setup expired")
+            || normalized.contains("setup expired")
     }
 
     static func latestPendingTelegramPairingRequest(
@@ -1121,6 +1374,19 @@ extension ChannelsStore {
         stateDirURL: URL
     ) -> ConsumerTelegramPendingPairingRequest? {
         self.latestPendingTelegramPairingRequest(now: now, stateDirURL: stateDirURL)
+    }
+
+    static func _testLatestPendingTelegramPairingDirectMessage(
+        now: Date,
+        stateDirURL: URL
+    ) -> TelegramSetupDirectMessage? {
+        guard let pending = self.latestPendingTelegramPairingRequest(
+            now: now,
+            stateDirURL: stateDirURL)
+        else {
+            return nil
+        }
+        return self.consumerTelegramDirectMessage(from: pending)
     }
 
     func _testCompletePendingTelegramPairingFromExistingObservedActivityAfterBootstrap(

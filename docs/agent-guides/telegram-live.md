@@ -77,6 +77,39 @@ and more reliable default.
 - Full repo-local details:
   - `scripts/telegram-e2e/README.md`
 
+## Jarvis Consumer RC onboarding
+
+- Keep RC app testing isolated. Do not touch `/Applications/Jarvis.app` or the
+  shared `ai.openclaw.gateway` while proving `Jarvis Consumer.app`.
+- Hard rule: when the user is actively using the Mac, Telegram Desktop Start,
+  BotFather managed bot creation, and one-more-message/follow-up DM steps are
+  human handoff steps. Ask the human to do the live Telegram action, then wait
+  until they say ready before opening Telegram or collecting proof.
+- Do not fight Spaces/frontmost state with coordinate clicks, Computer Use,
+  Peekaboo, or `cliclick`. Telegram custom controls are often not exposed as
+  accessibility elements, and a window capture does not prove Telegram is
+  foreground or actionable. If the visible next step is a purple Telegram
+  `Start` button and automation fails, stop and ask the user to click it.
+- Do not send the first task before Jarvis reports the managed bot is connected
+  and asks for the first DM. Messages sent while the runtime is still in
+  pairing mode can produce an approval response instead of a real assistant
+  reply, which is not sufficient proof.
+- For command-menu proof, prefer this flow: the user opens the bot DM, types
+  `/`, says ready, and the agent captures only the command menu area.
+- Screenshots can expose private chats. Crop to the relevant command, menu, or
+  setup area and avoid sharing full Telegram window captures.
+- Exact first DM text: `Wake up my friend`.
+- Expected clean product flow: user clicks `Start` -> Jarvis reports bot
+  connected -> send `Wake up my friend` -> click `Verify Telegram` -> `Next`
+  enabled. If Jarvis asks for another DM after that clean ordering, treat it as
+  a launch blocker/product bug, not normal testing friction.
+- Proof to collect:
+  - Jarvis Consumer reached the managed-bot-created state with the bot username visible.
+  - The first DM `Wake up my friend` was sent to that bot.
+  - The bot replied in Telegram.
+  - Jarvis Consumer advanced to `Telegram verified` or the equivalent enabled
+    finish state after `Verify Telegram`.
+
 ## Known failure pattern
 
 - A live Telegram test can fail even when code is correct if the wrong runtime process owns the gateway. Prove runtime ownership before debugging behavior.

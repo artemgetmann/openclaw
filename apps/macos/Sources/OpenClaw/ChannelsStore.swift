@@ -316,5 +316,6 @@ final class ChannelsStore {
 
     init(isPreview: Bool = ProcessInfo.processInfo.isPreview) {
         self.isPreview = isPreview
+        self.restoreManagedTelegramSetupStateIfAvailable()
     }
 }

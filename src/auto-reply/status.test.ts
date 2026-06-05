@@ -25,6 +25,7 @@ vi.mock("../plugins/commands.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("buildStatusMessage", () => {
@@ -772,7 +773,7 @@ describe("buildCommandsMessage", () => {
     } as unknown as OpenClawConfig);
     expect(text).toContain("ℹ️ Slash commands");
     expect(text).toContain("Status");
-    expect(text).toContain("/commands - List all slash commands.");
+    expect(text).toContain("/advanced (/commands) - Show the full advanced command catalog.");
     expect(text).toContain("/skill - Run a skill by name.");
     expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
     expect(text).toContain("/compact - Compact the session context.");
@@ -798,18 +799,27 @@ describe("buildCommandsMessage", () => {
 });
 
 describe("buildHelpMessage", () => {
-  it("hides config/debug when disabled", () => {
+  it("shows the compact Jarvis help surface", () => {
     const text = buildHelpMessage({
       commands: { config: false, debug: false },
     } as unknown as OpenClawConfig);
-    expect(text).toContain("Skills");
-    expect(text).toContain("/skill <name> [input]");
+    expect(text).toContain("start fresh: /new");
+    expect(text).toContain("check Jarvis: /status");
+    expect(text).toContain("adjust replies: /model, /think, /tts");
+    expect(text).toContain("guide the work: /btw, /steer");
+    expect(text).toContain("more: /advanced");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
+    expect(text).not.toContain("/commands");
   });
 
-  it("includes /fast in help output", () => {
-    expect(buildHelpMessage()).toContain("/fast on|off");
+  it("does not promote founder/dev commands", () => {
+    const text = buildHelpMessage();
+    expect(text).not.toContain("/approve");
+    expect(text).not.toContain("/context");
+    expect(text).not.toContain("/export_session");
+    expect(text).not.toContain("/bash");
+    expect(text).not.toContain("/subagents");
   });
 });
 
@@ -840,5 +850,55 @@ describe("buildCommandsMessagePaginated", () => {
     );
     expect(result.text).toContain("Plugins");
     expect(result.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
+  });
+
+  it("keeps the full advanced catalog available in compact Jarvis Telegram mode", () => {
+    vi.stubEnv("OPENCLAW_JARVIS_MINIMAL_COMMAND_SURFACE", "1");
+    listPluginCommands.mockReturnValue([
+      { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
+    ]);
+
+    const result = buildCommandsMessagePaginated(
+      {
+        commands: { config: false, debug: false },
+      } as unknown as OpenClawConfig,
+      [
+        {
+          name: "demo_skill",
+          skillName: "demo-skill",
+          description: "Demo skill",
+        },
+      ],
+      { surface: "telegram", page: 1 },
+    );
+
+    const allPages = Array.from(
+      { length: result.totalPages },
+      (_, index) =>
+        buildCommandsMessagePaginated(
+          {
+            commands: { config: false, debug: false },
+          } as unknown as OpenClawConfig,
+          [
+            {
+              name: "demo_skill",
+              skillName: "demo-skill",
+              description: "Demo skill",
+            },
+          ],
+          { surface: "telegram", page: index + 1 },
+        ).text,
+    ).join("\n");
+
+    expect(allPages).toContain("/new - Start a new session.");
+    expect(allPages).toContain("/status - Show current status.");
+    expect(allPages).toContain("/model - Show or set the model.");
+    expect(allPages).toContain("/advanced (/commands) - Show the full advanced command catalog.");
+    expect(allPages).toContain("/approve - Approve or deny exec requests.");
+    expect(allPages).toContain("/context - Explain how context is built and used.");
+    expect(allPages).toContain("/export-session (/export)");
+    expect(allPages).toContain("/skill - Run a skill by name.");
+    expect(allPages).toContain("/demo_skill - Demo skill");
+    expect(allPages).toContain("Plugins");
   });
 });

@@ -26,6 +26,25 @@ function formatPairingApproveCommand(
   return formatCliCommand(`openclaw pairing approve ${channel} ${code}`, env);
 }
 
+function isJarvisConsumerTelegramPairing(
+  channel: PairingChannel,
+  env: Record<string, string | undefined>,
+): boolean {
+  if (channel !== "telegram") {
+    return false;
+  }
+  const appVariant = env.OPENCLAW_APP_VARIANT?.trim().toLowerCase();
+  if (appVariant === "consumer") {
+    return true;
+  }
+  const profile = env.OPENCLAW_PROFILE?.trim().toLowerCase() ?? "";
+  if (profile.includes("jarvis-consumer")) {
+    return true;
+  }
+  const instanceId = env.OPENCLAW_CONSUMER_INSTANCE_ID?.trim();
+  return Boolean(instanceId);
+}
+
 export function buildPairingReply(params: {
   channel: PairingChannel;
   idLine: string;
@@ -33,6 +52,16 @@ export function buildPairingReply(params: {
   env?: Record<string, string | undefined>;
 }): string {
   const { channel, idLine, code, env } = params;
+  if (isJarvisConsumerTelegramPairing(channel, env ?? process.env)) {
+    return [
+      "Jarvis needs one more approval step.",
+      "",
+      idLine,
+      "",
+      "Return to Jarvis and click Verify Telegram. Jarvis will approve this chat and finish your first Telegram check.",
+    ].join("\n");
+  }
+
   const approveCommand = formatPairingApproveCommand(channel, code, env);
   return [
     "OpenClaw: access not configured.",

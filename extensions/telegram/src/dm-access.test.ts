@@ -121,6 +121,17 @@ describe("enforceTelegramDmAccess", () => {
     const sentText = String(firstCall?.[1] ?? "");
     expect(sentText).toContain("Pairing code:");
     expect(firstCall?.[2]).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
+    expect(issuePairingChallengeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          chatId: "42",
+          messageId: "1",
+          text: "hello",
+          date: "1",
+          username: "tester",
+        }),
+      }),
+    );
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({
         chatId: "42",

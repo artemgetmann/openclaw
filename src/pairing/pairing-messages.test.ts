@@ -6,7 +6,13 @@ describe("buildPairingReply", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_PROFILE",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_APP_VARIANT",
+      "OPENCLAW_CONSUMER_INSTANCE_ID",
+    ]);
     process.env.OPENCLAW_PROFILE = "isolated";
   });
 
@@ -81,5 +87,25 @@ describe("buildPairingReply", () => {
     expect(text).not.toContain(
       "consumer-main-durable-lane-20260405 pairing approve telegram QRS678",
     );
+  });
+
+  it("uses consumer-safe copy for Jarvis consumer Telegram pairing", () => {
+    process.env.OPENCLAW_APP_VARIANT = "consumer";
+    process.env.OPENCLAW_PROFILE = "consumer-jarvis-consumer-rc";
+
+    const text = buildPairingReply({
+      channel: "telegram",
+      idLine: "Your Telegram user id: 42",
+      code: "QRS678",
+    });
+
+    expect(text).toContain("Jarvis needs one more approval step.");
+    expect(text).toContain("Return to Jarvis and click Verify Telegram.");
+    expect(text).toContain("Your Telegram user id: 42");
+    expect(text).not.toContain("OpenClaw");
+    expect(text).not.toContain("access not configured");
+    expect(text).not.toContain("Pairing code");
+    expect(text).not.toContain("openclaw pairing approve telegram");
+    expect(text).not.toContain("```");
   });
 });

@@ -4,6 +4,18 @@ import Testing
 
 private typealias SnapshotAnyCodable = OpenClaw.AnyCodable
 
+private actor ManagedTelegramRequestCounter {
+    private var startCalls = 0
+
+    func recordStart() {
+        self.startCalls += 1
+    }
+
+    func value() -> Int {
+        self.startCalls
+    }
+}
+
 private func makeConsumerTelegramSnapshot(
     running: Bool,
     inboundAt: Double?,
@@ -106,6 +118,17 @@ struct TelegramSetupBootstrapTests {
         #expect(!decision.shouldTrustReplayCompletion)
     }
 
+    @Test func `telegram replay does not trust started-only result without confirmed reply`() {
+        let decision = ChannelsStore.consumerTelegramReplayDecision(
+            replyStarted: true,
+            replyCompleted: nil,
+            error: nil)
+
+        #expect(decision.shouldReenableTelegram)
+        #expect(decision.shouldWaitForActivityConfirmation)
+        #expect(!decision.shouldTrustReplayCompletion)
+    }
+
     @Test func `telegram replay hard failure keeps telegram disabled until retry`() {
         let decision = ChannelsStore.consumerTelegramReplayDecision(
             replyStarted: false,
@@ -181,7 +204,7 @@ struct TelegramSetupBootstrapTests {
         }
     }
 
-    @Test func `healthy telegram refresh promotes timed out setup once outbound activity proves completion`() async throws {
+    @Test func `healthy telegram refresh promotes timed out setup once paired activity proves completion`() async throws {
         await TestIsolation.withEnvValues([
             "OPENCLAW_APP_VARIANT": "consumer",
         ]) {
@@ -196,7 +219,7 @@ struct TelegramSetupBootstrapTests {
 
             let snapshot = makeConsumerTelegramSnapshot(
                 running: true,
-                inboundAt: 1_700_000_000,
+                inboundAt: 1_700_000_030,
                 outboundAt: 1_700_000_060,
                 botId: 8_582_422_927,
                 username: "jarvis_consumer_smoke_2_bot")
@@ -287,6 +310,71 @@ struct TelegramSetupBootstrapTests {
         }
     }
 
+    @Test func `live telegram activity requires inbound and outbound to advance past setup baseline`() async throws {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.clearConsumerTelegramFirstTaskVerified()
+            store.telegramSetupBotId = 8_582_422_927
+            store.telegramSetupBotUsername = "jarvis_consumer_smoke_2_bot"
+            store.telegramSetupBaselineInboundAt = 1_700_000_000
+            store.telegramSetupBaselineOutboundAt = 1_700_000_010
+            store.telegramSetupStatus = "Waiting for Jarvis to finish your first Telegram task..."
+
+            store.snapshot = makeConsumerTelegramSnapshot(
+                running: true,
+                inboundAt: 1_700_000_020,
+                outboundAt: 1_700_000_010,
+                snapshotTs: 1_700_000_030,
+                botId: 8_582_422_927,
+                username: "jarvis_consumer_smoke_2_bot")
+
+            #expect(!store.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible())
+            #expect(!store.consumerTelegramFirstTaskVerified)
+
+            store.snapshot = makeConsumerTelegramSnapshot(
+                running: true,
+                inboundAt: 1_700_000_000,
+                outboundAt: 1_700_000_020,
+                snapshotTs: 1_700_000_030,
+                botId: 8_582_422_927,
+                username: "jarvis_consumer_smoke_2_bot")
+
+            #expect(!store.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible())
+            #expect(!store.consumerTelegramFirstTaskVerified)
+        }
+    }
+
+    @Test func `live telegram verification accepts recent paired activity even when baseline caught the same reply`() async throws {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let store = ChannelsStore(isPreview: true)
+            store.clearConsumerTelegramFirstTaskVerified()
+            store.telegramSetupBotId = 8_582_422_927
+            store.telegramSetupBotUsername = "jarvis_consumer_smoke_2_bot"
+            store.telegramSetupBaselineInboundAt = 1_700_000_060
+            store.telegramSetupBaselineOutboundAt = 1_700_000_090
+            store.telegramSetupWaitingForDM = true
+            store.telegramSetupStatus = "Waiting for Jarvis to finish your first Telegram task..."
+
+            store.snapshot = makeConsumerTelegramSnapshot(
+                running: true,
+                inboundAt: 1_700_000_060,
+                outboundAt: 1_700_000_090,
+                snapshotTs: 1_700_000_120,
+                botId: 8_582_422_927,
+                username: "jarvis_consumer_smoke_2_bot")
+
+            #expect(!store.completeConsumerTelegramFirstTaskVerificationFromActivityIfPossible())
+            #expect(store.completeConsumerTelegramFirstTaskVerificationFromRecentActivityIfPossible())
+            #expect(store.consumerTelegramFirstTaskVerified)
+            #expect(!store.telegramSetupWaitingForDM)
+            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. First task verified.")
+        }
+    }
+
     @Test func `pending pairing bootstrap completes from already observed live activity`() async throws {
         await TestIsolation.withEnvValues([
             "OPENCLAW_APP_VARIANT": "consumer",
@@ -348,6 +436,43 @@ struct TelegramSetupBootstrapTests {
         #expect(payload["messageId"] as? Int == 202)
         #expect(payload["updateId"] as? Int == 101)
         #expect(payload["chatId"] as? Int == 303)
+    }
+
+    @Test func `pending pairing replay synthesizes positive update id when Telegram metadata omits it`() throws {
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-telegram-synthetic-replay-\(UUID().uuidString)", isDirectory: true)
+        let credentialsDir = stateDir.appendingPathComponent("credentials", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: credentialsDir,
+            withIntermediateDirectories: true)
+        let pairingPath = credentialsDir.appendingPathComponent("telegram-pairing.json")
+        let body = """
+        {
+          "version": 1,
+          "requests": [
+            {
+              "id": "1336356696",
+              "code": "ABC123",
+              "createdAt": "2026-06-04T12:21:53Z",
+              "lastSeenAt": "2026-06-04T12:21:53Z",
+              "meta": {
+                "chatId": "1336356696",
+                "messageId": "2",
+                "text": "Wake up my friend",
+                "date": "1780575713"
+              }
+            }
+          ]
+        }
+        """
+        try body.write(to: pairingPath, atomically: true, encoding: .utf8)
+
+        let dm = try #require(ChannelsStore._testLatestPendingTelegramPairingDirectMessage(
+            now: ISO8601DateFormatter().date(from: "2026-06-04T12:22:00Z")!,
+            stateDirURL: stateDir))
+
+        #expect(dm.updateId > 0)
+        #expect(dm.updateId != -1)
     }
 
     @Test func `managed telegram client decodes start and connected status responses`() async throws {
@@ -426,6 +551,165 @@ struct TelegramSetupBootstrapTests {
         }
     }
 
+    @Test func `managed telegram setup lease restores after app relaunch`() async throws {
+        let instanceId = "managed-lease-\(UUID().uuidString)"
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: instanceId,
+        ]) {
+            let keys = [
+                ChannelsStore.managedTelegramSetupIdDefaultsKey,
+                ChannelsStore.managedTelegramApprovalURLDefaultsKey,
+                ChannelsStore.managedTelegramSuggestedBotUsernameDefaultsKey,
+                ChannelsStore.managedTelegramExpiresAtDefaultsKey,
+            ]
+            let defaults = UserDefaults.standard
+            keys.forEach { defaults.removeObject(forKey: $0) }
+            defer { keys.forEach { defaults.removeObject(forKey: $0) } }
+
+            let expiresAt = Date(timeIntervalSinceNow: 30 * 60)
+            defaults.set("tgms_restore", forKey: ChannelsStore.managedTelegramSetupIdDefaultsKey)
+            defaults.set(
+                "https://t.me/JarvisManagerBot?start=restore",
+                forKey: ChannelsStore.managedTelegramApprovalURLDefaultsKey)
+            defaults.set(
+                "jarvis_restore_bot",
+                forKey: ChannelsStore.managedTelegramSuggestedBotUsernameDefaultsKey)
+            defaults.set(
+                expiresAt.timeIntervalSince1970,
+                forKey: ChannelsStore.managedTelegramExpiresAtDefaultsKey)
+
+            let restored = ChannelsStore(isPreview: true)
+
+            #expect(restored.telegramManagedSetupId == "tgms_restore")
+            #expect(restored.telegramManagedApprovalURL == "https://t.me/JarvisManagerBot?start=restore")
+            #expect(restored.telegramManagedSuggestedBotUsername == "jarvis_restore_bot")
+            #expect(restored.telegramManagedExpiresAt != nil)
+            #expect(restored.telegramSetupStatus?.contains("@jarvis_restore_bot") == true)
+        }
+    }
+
+    @Test func `managed telegram start reuses active restored lease instead of creating another bot`() async throws {
+        let instanceId = "managed-reuse-\(UUID().uuidString)"
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: instanceId,
+        ]) {
+            let keys = [
+                ChannelsStore.managedTelegramSetupIdDefaultsKey,
+                ChannelsStore.managedTelegramApprovalURLDefaultsKey,
+                ChannelsStore.managedTelegramSuggestedBotUsernameDefaultsKey,
+                ChannelsStore.managedTelegramExpiresAtDefaultsKey,
+            ]
+            let defaults = UserDefaults.standard
+            keys.forEach { defaults.removeObject(forKey: $0) }
+            defer { keys.forEach { defaults.removeObject(forKey: $0) } }
+
+            defaults.set("tgms_reuse", forKey: ChannelsStore.managedTelegramSetupIdDefaultsKey)
+            defaults.set(
+                "https://t.me/JarvisManagerBot?start=reuse",
+                forKey: ChannelsStore.managedTelegramApprovalURLDefaultsKey)
+            defaults.set(
+                "jarvis_reuse_bot",
+                forKey: ChannelsStore.managedTelegramSuggestedBotUsernameDefaultsKey)
+            defaults.set(
+                Date(timeIntervalSinceNow: 30 * 60).timeIntervalSince1970,
+                forKey: ChannelsStore.managedTelegramExpiresAtDefaultsKey)
+
+            let startCounter = ManagedTelegramRequestCounter()
+            await JarvisTelegramManagedBotClient._testSetTransportOverride { request in
+                if request.url?.path == "/v1/telegram/managed/start" {
+                    await startCounter.recordStart()
+                }
+                throw URLError(.badServerResponse)
+            }
+
+            let store = ChannelsStore(isPreview: true)
+            await store.startManagedTelegramSetup()
+
+            #expect(await startCounter.value() == 0)
+            #expect(store.telegramManagedSetupId == "tgms_reuse")
+            #expect(store.telegramManagedSuggestedBotUsername == "jarvis_reuse_bot")
+            #expect(store.telegramSetupStatus?.contains("@jarvis_reuse_bot") == true)
+
+            await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)
+        }
+    }
+
+    @Test func `expired managed telegram setup lease is cleared on relaunch`() async throws {
+        let instanceId = "managed-expired-\(UUID().uuidString)"
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: instanceId,
+        ]) {
+            let keys = [
+                ChannelsStore.managedTelegramSetupIdDefaultsKey,
+                ChannelsStore.managedTelegramApprovalURLDefaultsKey,
+                ChannelsStore.managedTelegramSuggestedBotUsernameDefaultsKey,
+                ChannelsStore.managedTelegramExpiresAtDefaultsKey,
+            ]
+            let defaults = UserDefaults.standard
+            keys.forEach { defaults.removeObject(forKey: $0) }
+            defer { keys.forEach { defaults.removeObject(forKey: $0) } }
+
+            defaults.set("tgms_expired", forKey: ChannelsStore.managedTelegramSetupIdDefaultsKey)
+            defaults.set(
+                "https://t.me/JarvisManagerBot?start=expired",
+                forKey: ChannelsStore.managedTelegramApprovalURLDefaultsKey)
+            defaults.set(
+                "jarvis_expired_bot",
+                forKey: ChannelsStore.managedTelegramSuggestedBotUsernameDefaultsKey)
+            defaults.set(
+                Date(timeIntervalSinceNow: -60).timeIntervalSince1970,
+                forKey: ChannelsStore.managedTelegramExpiresAtDefaultsKey)
+
+            let restored = ChannelsStore(isPreview: true)
+
+            #expect(restored.telegramManagedSetupId == nil)
+            #expect(restored.telegramManagedApprovalURL == nil)
+            #expect(restored.telegramManagedSuggestedBotUsername == nil)
+            #expect(defaults.object(forKey: ChannelsStore.managedTelegramSetupIdDefaultsKey) == nil)
+            #expect(defaults.object(forKey: ChannelsStore.managedTelegramApprovalURLDefaultsKey) == nil)
+            #expect(defaults.object(forKey: ChannelsStore.managedTelegramSuggestedBotUsernameDefaultsKey) == nil)
+            #expect(defaults.object(forKey: ChannelsStore.managedTelegramExpiresAtDefaultsKey) == nil)
+        }
+    }
+
+    @Test func `managed telegram setup lease without expiry is cleared on relaunch`() async throws {
+        let instanceId = "managed-missing-expiry-\(UUID().uuidString)"
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: instanceId,
+        ]) {
+            let keys = [
+                ChannelsStore.managedTelegramSetupIdDefaultsKey,
+                ChannelsStore.managedTelegramApprovalURLDefaultsKey,
+                ChannelsStore.managedTelegramSuggestedBotUsernameDefaultsKey,
+                ChannelsStore.managedTelegramExpiresAtDefaultsKey,
+            ]
+            let defaults = UserDefaults.standard
+            keys.forEach { defaults.removeObject(forKey: $0) }
+            defer { keys.forEach { defaults.removeObject(forKey: $0) } }
+
+            defaults.set("tgms_no_expiry", forKey: ChannelsStore.managedTelegramSetupIdDefaultsKey)
+            defaults.set(
+                "https://t.me/JarvisManagerBot?start=no-expiry",
+                forKey: ChannelsStore.managedTelegramApprovalURLDefaultsKey)
+            defaults.set(
+                "jarvis_no_expiry_bot",
+                forKey: ChannelsStore.managedTelegramSuggestedBotUsernameDefaultsKey)
+
+            let restored = ChannelsStore(isPreview: true)
+
+            #expect(restored.telegramManagedSetupId == nil)
+            #expect(restored.telegramManagedApprovalURL == nil)
+            #expect(restored.telegramManagedSuggestedBotUsername == nil)
+            #expect(defaults.object(forKey: ChannelsStore.managedTelegramSetupIdDefaultsKey) == nil)
+            #expect(defaults.object(forKey: ChannelsStore.managedTelegramApprovalURLDefaultsKey) == nil)
+            #expect(defaults.object(forKey: ChannelsStore.managedTelegramSuggestedBotUsernameDefaultsKey) == nil)
+        }
+    }
+
     @Test func `managed telegram status installs child token as enabled usable config`() async throws {
         let savedRoot = SavedConfigRoot()
         let configPath = TestIsolation.tempConfigPath()
@@ -498,59 +782,65 @@ struct TelegramSetupBootstrapTests {
                     response)
             }
 
-            let store = ChannelsStore(isPreview: true)
-            store.configRoot = initialRoot
-            store.telegramManagedSetupId = "tgms_test"
+            do {
+                let store = ChannelsStore(isPreview: true)
+                store.configRoot = initialRoot
+                store.telegramManagedSetupId = "tgms_test"
 
-            await store.checkManagedTelegramSetupStatus()
+                await store.checkManagedTelegramSetupStatus()
 
-            let telegram = try #require(
-                ((savedRoot.value()["channels"] as? [String: Any])?["telegram"] as? [String: Any]))
-            let jarvis = try #require(savedRoot.value()["jarvis"] as? [String: Any])
-            let backend = try #require(jarvis["backend"] as? [String: Any])
-            let managedServices = try #require(jarvis["managedServices"] as? [String: Any])
-            let tools = try #require(savedRoot.value()["tools"] as? [String: Any])
-            let media = try #require(tools["media"] as? [String: Any])
-            let audio = try #require(media["audio"] as? [String: Any])
-            let audioModels = try #require(audio["models"] as? [[String: Any]])
-            let secrets = try #require(savedRoot.value()["secrets"] as? [String: Any])
-            let providers = try #require(secrets["providers"] as? [String: Any])
-            let plugins = try #require(savedRoot.value()["plugins"] as? [String: Any])
-            let accounts = try #require(telegram["accounts"] as? [String: Any])
-            let defaultAccount = try #require(accounts["default"] as? [String: Any])
-            let pluginEntries = try #require(plugins["entries"] as? [String: Any])
-            let telegramPluginEntry = try #require(pluginEntries["telegram"] as? [String: Any])
-            let firecrawlPluginEntry = try #require(pluginEntries["firecrawl"] as? [String: Any])
-            let bravePluginEntry = try #require(pluginEntries["brave"] as? [String: Any])
-            #expect(telegram["botToken"] as? String == "777000:test-child-token")
-            #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
-            #expect(telegram["enabled"] as? Bool == true)
-            #expect(telegram["dmPolicy"] as? String == "pairing")
-            #expect((telegram["allowFrom"] as? [String])?.isEmpty ?? true)
-            #expect(plugins["allow"] as? [String] == [
-                "telegram",
-                "anthropic",
-                "openai",
-                "firecrawl",
-                "brave",
-            ])
-            #expect(plugins["deny"] as? [String] == ["acpx", "diffs"])
-            #expect(telegramPluginEntry["enabled"] as? Bool == true)
-            #expect(firecrawlPluginEntry["enabled"] as? Bool == true)
-            #expect(bravePluginEntry["enabled"] as? Bool == true)
-            #expect(managedServices["mode"] as? String == "managed")
-            #expect(managedServices["futureFlag"] as? Bool == true)
-            #expect(audio["enabled"] as? Bool == true)
-            #expect(audioModels.first?["provider"] as? String == "jarvis-managed-openai")
-            #expect(audioModels.first?["model"] as? String == "gpt-4o-mini-transcribe")
-            #expect(backend["baseUrl"] as? String == "https://jarvis.example.test")
-            #expect(backend["accountAccessToken"] == nil)
-            #expect(providers["jarvis-keychain"] == nil)
-            #expect((providers["other-provider"] as? [String: Any])?["source"] as? String == "env")
-            #expect(store.telegramSetupStatus?.contains("777000:test-child-token") == false)
+                let telegram = try #require(
+                    ((savedRoot.value()["channels"] as? [String: Any])?["telegram"] as? [String: Any]))
+                let jarvis = try #require(savedRoot.value()["jarvis"] as? [String: Any])
+                let backend = try #require(jarvis["backend"] as? [String: Any])
+                let managedServices = try #require(jarvis["managedServices"] as? [String: Any])
+                let tools = try #require(savedRoot.value()["tools"] as? [String: Any])
+                let media = try #require(tools["media"] as? [String: Any])
+                let audio = try #require(media["audio"] as? [String: Any])
+                let audioModels = try #require(audio["models"] as? [[String: Any]])
+                let secrets = try #require(savedRoot.value()["secrets"] as? [String: Any])
+                let providers = try #require(secrets["providers"] as? [String: Any])
+                let plugins = try #require(savedRoot.value()["plugins"] as? [String: Any])
+                let accounts = try #require(telegram["accounts"] as? [String: Any])
+                let defaultAccount = try #require(accounts["default"] as? [String: Any])
+                let pluginEntries = try #require(plugins["entries"] as? [String: Any])
+                let telegramPluginEntry = try #require(pluginEntries["telegram"] as? [String: Any])
+                let firecrawlPluginEntry = try #require(pluginEntries["firecrawl"] as? [String: Any])
+                let bravePluginEntry = try #require(pluginEntries["brave"] as? [String: Any])
+                #expect(telegram["botToken"] as? String == "777000:test-child-token")
+                #expect(defaultAccount["botToken"] as? String == "777000:test-child-token")
+                #expect(telegram["enabled"] as? Bool == true)
+                #expect(telegram["dmPolicy"] as? String == "pairing")
+                #expect((telegram["allowFrom"] as? [String])?.isEmpty ?? true)
+                #expect(plugins["allow"] as? [String] == [
+                    "telegram",
+                    "anthropic",
+                    "openai",
+                    "firecrawl",
+                    "brave",
+                ])
+                #expect(plugins["deny"] as? [String] == ["acpx", "diffs"])
+                #expect(telegramPluginEntry["enabled"] as? Bool == true)
+                #expect(firecrawlPluginEntry["enabled"] as? Bool == true)
+                #expect(bravePluginEntry["enabled"] as? Bool == true)
+                #expect(managedServices["mode"] as? String == "managed")
+                #expect(managedServices["futureFlag"] as? Bool == true)
+                #expect(audio["enabled"] as? Bool == true)
+                #expect(audioModels.first?["provider"] as? String == "jarvis-managed-openai")
+                #expect(audioModels.first?["model"] as? String == "gpt-4o-mini-transcribe")
+                #expect(backend["baseUrl"] as? String == "https://jarvis.example.test")
+                #expect(backend["accountAccessToken"] == nil)
+                #expect(providers["jarvis-keychain"] == nil)
+                #expect((providers["other-provider"] as? [String: Any])?["source"] as? String == "env")
+                #expect(store.telegramSetupStatus?.contains("777000:test-child-token") == false)
 
-            await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)
-            await ConfigStore._testClearOverrides()
+                await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)
+                await ConfigStore._testClearOverrides()
+            } catch {
+                await JarvisTelegramManagedBotClient._testSetTransportOverride(nil)
+                await ConfigStore._testClearOverrides()
+                throw error
+            }
         }
     }
 
@@ -568,6 +858,31 @@ struct TelegramSetupBootstrapTests {
 
             #expect(store.telegramManagedSetupId == nil)
             #expect(store.telegramManagedApprovalURL == nil)
+            #expect(store.telegramManagedSuggestedBotUsername == nil)
+            #expect(store.telegramSetupToken.isEmpty)
+            #expect(store.telegramSetupBotId == nil)
+            #expect(store.telegramSetupBotUsername == nil)
+            #expect(store.telegramSetupStatus?.contains("Create a new Telegram bot") == true)
+        }
+    }
+
+    @Test func `managed telegram setup expired clears stale approval card state`() async throws {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let store = ChannelsStore(isPreview: true)
+            store.telegramManagedSetupId = "tgms_expired"
+            store.telegramManagedApprovalURL = "https://t.me/jarvis_managed_bot?start=tgms_expired"
+            store.telegramManagedSuggestedBotUsername = "jarvis_expired_bot"
+            store.telegramManagedExpiresAt = Date(timeIntervalSinceNow: -60)
+            store.telegramSetupToken = "777000:stale-child-token"
+            store.telegramSetupBotId = 777000
+            store.telegramSetupBotUsername = "jarvis_expired_bot"
+
+            store._testHandleManagedTelegramSetupStatusErrorMessage("Telegram setup expired")
+
+            #expect(store.telegramManagedSetupId == nil)
+            #expect(store.telegramManagedApprovalURL == nil)
+            #expect(store.telegramManagedSuggestedBotUsername == nil)
+            #expect(store.telegramManagedExpiresAt == nil)
             #expect(store.telegramSetupToken.isEmpty)
             #expect(store.telegramSetupBotId == nil)
             #expect(store.telegramSetupBotUsername == nil)
@@ -649,6 +964,50 @@ struct TelegramSetupBootstrapTests {
 
         #expect(pending?.id == "1336356696")
         #expect(pending?.meta?["username"] == "artemgetmann")
+    }
+
+    @Test func `consumer setup can replay message metadata from pending telegram pairing`() throws {
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-telegram-replay-pairing-\(UUID().uuidString)", isDirectory: true)
+        let credentialsDir = stateDir.appendingPathComponent("credentials", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+        try FileManager.default.createDirectory(at: credentialsDir, withIntermediateDirectories: true)
+        let pairingPath = credentialsDir.appendingPathComponent("telegram-pairing.json")
+        let body = """
+        {
+          "version": 1,
+          "requests": [
+            {
+              "id": "1336356696",
+              "code": "WDTNXX2W",
+              "createdAt": "2026-05-19T14:06:42.652Z",
+              "lastSeenAt": "2026-05-19T14:06:44.652Z",
+              "meta": {
+                "accountId": "default",
+                "username": "artemgetmann",
+                "firstName": "Artem",
+                "chatId": "1336356696",
+                "messageId": "77",
+                "text": "Wake up my friend",
+                "date": "1780000000"
+              }
+            }
+          ]
+        }
+        """
+        try body.write(to: pairingPath, atomically: true, encoding: .utf8)
+
+        let dm = ChannelsStore._testLatestPendingTelegramPairingDirectMessage(
+            now: try #require(ISO8601DateFormatter().date(from: "2026-05-19T14:07:00Z")),
+            stateDirURL: stateDir)
+
+        #expect(dm?.senderId == 1_336_356_696)
+        #expect(dm?.senderUsername == "artemgetmann")
+        #expect(dm?.senderFirstName == "Artem")
+        #expect(dm?.chatId == 1_336_356_696)
+        #expect(dm?.messageId == 77)
+        #expect(dm?.text == "Wake up my friend")
+        #expect(dm?.date == 1_780_000_000)
     }
 }
 

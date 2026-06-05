@@ -318,6 +318,36 @@ describe("handleCommands gating", () => {
   });
 });
 
+describe("/advanced command", () => {
+  it("returns the full generated command catalog", async () => {
+    const cfg = {
+      commands: { text: true, config: true, debug: true, bash: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const result = await handleCommands(buildParams("/advanced", cfg));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ℹ️ Slash commands");
+    expect(result.reply?.text).toContain("/approve - Approve or deny exec requests.");
+    expect(result.reply?.text).toContain("/config - Show or set config values.");
+    expect(result.reply?.text).toContain("/debug - Set runtime debug overrides.");
+    expect(result.reply?.text).toContain("/bash");
+    expect(result.reply?.text).toContain("/subagents");
+  });
+
+  it("keeps /commands callable as a compatibility alias", async () => {
+    const cfg = {
+      commands: { text: true, config: true, debug: true, bash: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const advanced = await handleCommands(buildParams("/advanced", cfg));
+    const commands = await handleCommands(buildParams("/commands", cfg));
+
+    expect(commands.shouldContinue).toBe(false);
+    expect(commands.reply?.text).toBe(advanced.reply?.text);
+  });
+});
+
 describe("/approve command", () => {
   beforeEach(() => {
     vi.clearAllMocks();

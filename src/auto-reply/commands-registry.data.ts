@@ -138,10 +138,10 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
-      key: "commands",
-      nativeName: "commands",
-      description: "List all slash commands.",
-      textAlias: "/commands",
+      key: "advanced",
+      nativeName: "advanced",
+      description: "Show the full advanced command catalog.",
+      textAliases: ["/advanced", "/commands"],
       category: "status",
     }),
     defineChatCommand({

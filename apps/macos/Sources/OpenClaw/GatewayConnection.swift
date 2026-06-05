@@ -183,7 +183,11 @@ actor GatewayConnection {
                 throw error
             }
             if error is GatewayConnectAuthError {
-                throw error
+                return try await self.retryRequestAfterAuthConfigurationRefresh(
+                    method: method,
+                    params: params,
+                    timeoutMs: timeoutMs,
+                    originalError: error)
             }
 
             // Auto-recover in local mode by spawning/attaching a gateway and retrying a few times.
@@ -428,6 +432,48 @@ actor GatewayConnection {
 
     private func handle(push: GatewayPush) {
         self.broadcast(push)
+    }
+
+    private func retryRequestAfterAuthConfigurationRefresh(
+        method: String,
+        params: [String: AnyCodable]?,
+        timeoutMs: Double?,
+        originalError: Error
+    ) async throws -> Data {
+        var lastError = originalError
+
+        // Local consumer first-launch can race gateway startup: the app opens a
+        // socket before the gateway has generated and persisted
+        // gateway.auth.token. Re-read config for a short window and only retry
+        // when the effective endpoint auth changes; a real bad token still
+        // surfaces as the original auth failure.
+        for delayMs in [150, 400, 900, 1_600, 3_000] {
+            try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+            let cfg = try await self.configProvider()
+            guard cfg.url != self.configuredURL
+                || cfg.token != self.configuredToken
+                || cfg.password != self.configuredPassword
+            else {
+                continue
+            }
+
+            await self.configure(url: cfg.url, token: cfg.token, password: cfg.password)
+            guard let client else {
+                throw NSError(domain: "Gateway", code: 0, userInfo: [NSLocalizedDescriptionKey: "gateway not configured"])
+            }
+
+            do {
+                return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+            } catch {
+                lastError = error
+                if error is GatewayConnectAuthError {
+                    continue
+                }
+                throw error
+            }
+        }
+
+        throw lastError
     }
 
     private static func defaultConfigProvider() async throws -> Config {

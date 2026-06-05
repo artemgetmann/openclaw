@@ -90,6 +90,7 @@ enum ConsumerRuntime {
         // Keep the app, launch agents, and any child CLI processes pointed at the
         // consumer-owned runtime before any config/state loaders spin up.
         self.setEnv("OPENCLAW_PROFILE", value: identity.profile ?? "default")
+        self.setEnv("OPENCLAW_APP_VARIANT", value: "consumer")
         self.setEnv("OPENCLAW_HOME", value: identity.runtimeRootURL.path)
         self.setEnv("OPENCLAW_STATE_DIR", value: identity.stateDirURL.path)
         self.setEnv("OPENCLAW_CONFIG_PATH", value: identity.configURL.path)
@@ -109,6 +110,7 @@ enum ConsumerRuntime {
         // Keep the consumer lane focused on core Telegram startup.
         // This avoids founder-oriented sidecar phases from blocking first boot.
         self.setEnv("OPENCLAW_CONSUMER_MINIMAL_STARTUP", value: "1")
+        self.setEnv("OPENCLAW_JARVIS_MINIMAL_COMMAND_SURFACE", value: "1")
         _ = DeviceIdentityStore.migrateLegacyAppSupportIdentityIfNeeded()
         // Packaged first-run must repair the app-owned helper/runtime before we
         // derive OPENCLAW_FORK_ROOT or any PATH-sensitive gateway/setup checks.

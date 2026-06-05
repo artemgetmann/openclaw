@@ -60,7 +60,8 @@ export function shouldAllowSilentLocalPairing(params: {
   const isTrustedMacAppRoleUpgrade =
     params.reason === "role-upgrade" &&
     params.clientId === GATEWAY_CLIENT_IDS.MACOS_APP &&
-    params.clientMode === GATEWAY_CLIENT_MODES.UI &&
+    (params.clientMode === GATEWAY_CLIENT_MODES.UI ||
+      params.clientMode === GATEWAY_CLIENT_MODES.NODE) &&
     (params.authMethod === "token" || params.authMethod === "password");
 
   return (

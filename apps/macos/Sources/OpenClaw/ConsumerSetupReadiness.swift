@@ -583,6 +583,13 @@ final class ConsumerModelSetupModel {
             return
         }
 
+        // Load the user's sign-in choices before the heavier readiness probe.
+        // A fresh consumer runtime can answer `models.auth.list` while the
+        // model probe is still waiting on provider/auth startup. Keeping this
+        // first prevents onboarding from turning into a dead spinner with every
+        // recovery option disabled.
+        await self.loadAuthOptionsIfNeeded(suppressError: true)
+
         do {
             let payload = try await self.probeReadinessWithTimeout()
             self.applyReadiness(payload)
@@ -680,8 +687,15 @@ final class ConsumerModelSetupModel {
                 defaultStatusLine: "Reconnecting \(AppFlavor.current.appName) after sign-in…")
         } catch {
             if isChatGPTOAuth {
-                self.authError = "Could not finish sign-in. Try again."
-                self.isWaitingForChatGPTSignIn = false
+                if await self.recoverChatGPTOAuthApplyTimeoutIfPossible(
+                    error,
+                    optionId: option.id)
+                {
+                    self.authError = nil
+                } else {
+                    self.authError = "Could not finish sign-in. Try again."
+                    self.isWaitingForChatGPTSignIn = false
+                }
             } else {
                 self.authError = error.localizedDescription
             }
@@ -773,12 +787,35 @@ final class ConsumerModelSetupModel {
             }
         }
 
-        // If the gateway is still bouncing after the planned auth restart, do
-        // not convert that expected reconnect window into a hard failure. Keep
-        // the card in a reconnecting/checking state so the UI stays aligned
-        // with the runtime transition instead of flashing a false transport
-        // error that clears a moment later.
+        // If the gateway is still bouncing after the short auth-restart probe
+        // window, keep the card in reconnecting state and hand off to the
+        // slower background recovery loop. Packaged RC restarts can take longer
+        // than the optimistic socket-rebind window while launchd reseeds the
+        // bundled runtime.
         self.enterGatewayReconnectState(defaultStatusLine)
+        self.failureKind = .gatewayUnreachable
+        self.scheduleGatewayRecoveryProbeIfNeeded()
+    }
+
+    private func recoverChatGPTOAuthApplyTimeoutIfPossible(
+        _ error: Error,
+        optionId: String) async -> Bool
+    {
+        guard Self.consumerAccessFailureKind(for: error) == .gatewayUnreachable else {
+            return false
+        }
+
+        // ChatGPT OAuth crosses a browser callback, config write, and gateway
+        // restart. The gateway can finish that work just after Swift's request
+        // timeout fires; treating the timeout as a hard sign-in failure leaves
+        // onboarding stuck even though the OAuth profile is already persisted.
+        self.activeAuthOptionId = optionId
+        self.draftSecret = ""
+        self.isWaitingForChatGPTSignIn = true
+        await self.refreshAfterAuthApply(
+            optimisticReadiness: Self.optimisticChatGPTReadinessAfterApplyTimeout(),
+            defaultStatusLine: "Reconnecting \(AppFlavor.current.appName) after sign-in…")
+        return true
     }
 
     private func probeReadinessWithTimeout() async throws -> ConsumerModelsReadinessPayload {
@@ -1134,6 +1171,14 @@ final class ConsumerModelSetupModel {
         "\(AppFlavor.current.appName) is still starting. Wait a moment, then try again."
     }
 
+    private static func optimisticChatGPTReadinessAfterApplyTimeout() -> ConsumerModelsReadinessPayload {
+        ConsumerModelsReadinessPayload(
+            status: "ready",
+            defaultModel: "openai-codex/gpt-5.5",
+            summary: "\(AppFlavor.current.appName)-managed AI may be ready after ChatGPT sign-in.",
+            reasonCodes: [])
+    }
+
     private static func signInURL(from notes: [String]) -> URL? {
         for note in notes {
             for rawToken in note.split(whereSeparator: { $0.isWhitespace }) {
@@ -1216,7 +1261,7 @@ final class ConsumerModelSetupModel {
         return try await self.requestDecoded(
             method: "models.auth.apply",
             params: params,
-            timeoutMs: 120_000)
+            timeoutMs: 660_000)
     }
 
     private static func gatewayModelsLoader() async throws -> ConsumerModelsModelListPayload {

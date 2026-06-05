@@ -40,6 +40,34 @@ struct GatewayConnectionTests {
             })
     }
 
+    private func makeSessionThatPublishesTokenAfterAuthFailure(
+        config: ConfigSource
+    ) -> GatewayTestWebSocketSession {
+        GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    },
+                    receiveHook: { task, receiveIndex in
+                        if receiveIndex == 0 {
+                            return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                        }
+                        let id = task.snapshotConnectRequestID() ?? "connect"
+                        if config.snapshotToken() == nil {
+                            config.setToken("generated-token")
+                            return .data(GatewayWebSocketTestSupport.connectAuthFailureData(
+                                id: id,
+                                detailCode: GatewayConnectAuthDetailCode.authTokenMissing.rawValue,
+                                message: "gateway token missing"))
+                        }
+                        return .data(GatewayWebSocketTestSupport.connectOkData(id: id))
+                    })
+            })
+    }
+
     private final class ConfigSource: @unchecked Sendable {
         private let token = OSAllocatedUnfairLock<String?>(initialState: nil)
 
@@ -79,6 +107,21 @@ struct GatewayConnectionTests {
         _ = try await conn.request(method: "status", params: nil)
         #expect(session.snapshotMakeCount() == 2)
         #expect(session.snapshotCancelCount() == 1)
+    }
+
+    @Test func `request refreshes config and retries when gateway generates auth token`() async throws {
+        let cfg = ConfigSource(token: nil)
+        let session = self.makeSessionThatPublishesTokenAfterAuthFailure(config: cfg)
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let conn = GatewayConnection(
+            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        _ = try await conn.request(method: "status", params: nil)
+
+        #expect(cfg.snapshotToken() == "generated-token")
+        #expect(session.snapshotMakeCount() == 2)
+        #expect(session.snapshotCancelCount() == 2)
     }
 
     @Test func `concurrent requests still use single web socket`() async throws {
