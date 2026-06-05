@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayServiceCommand } from "../../daemon/service-audit.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv } from "../../test-utils/env.js";
 
@@ -16,7 +17,7 @@ const serviceMock = vi.hoisted(() => ({
   stop: vi.fn(async () => {}),
   restart: vi.fn(async () => {}),
   isLoaded: vi.fn(async () => false),
-  readCommand: vi.fn(async () => null),
+  readCommand: vi.fn<() => Promise<GatewayServiceCommand>>(async () => null),
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
 

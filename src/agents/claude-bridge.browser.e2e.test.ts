@@ -14,6 +14,40 @@ const E2E_TIMEOUT_MS = 60_000;
 const require = createRequire(import.meta.url);
 const SDK_CLIENT_INDEX_PATH = require.resolve("@modelcontextprotocol/sdk/client/index.js");
 const SDK_CLIENT_STDIO_PATH = require.resolve("@modelcontextprotocol/sdk/client/stdio.js");
+type SystemPromptReport = Parameters<typeof runClaudeBridgeAgent>[0]["systemPromptReport"];
+
+function createSystemPromptReport(params: {
+  sessionId: string;
+  model: string;
+  workspaceDir: string;
+}): SystemPromptReport {
+  return {
+    source: "run",
+    generatedAt: Date.now(),
+    sessionId: params.sessionId,
+    provider: "claude-bridge",
+    model: params.model,
+    workspaceDir: params.workspaceDir,
+    bootstrapMaxChars: 1,
+    bootstrapTotalMaxChars: 1,
+    sandbox: { mode: "off", sandboxed: false },
+    systemPrompt: {
+      chars: 0,
+      projectContextChars: 0,
+      nonProjectContextChars: 0,
+    },
+    injectedWorkspaceFiles: [],
+    skills: {
+      promptChars: 0,
+      entries: [],
+    },
+    tools: {
+      listChars: 0,
+      schemaChars: 0,
+      entries: [],
+    },
+  };
+}
 
 async function writeExecutable(filePath: string, content: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -315,22 +349,11 @@ describe("claude-bridge native browser e2e", () => {
           model: "test-native-browser",
           timeoutMs: 45_000,
           systemPrompt: "",
-          systemPromptReport: {
-            source: "run",
-            generatedAt: Date.now(),
+          systemPromptReport: createSystemPromptReport({
             sessionId,
-            provider: "claude-bridge",
             model: "test-native-browser",
             workspaceDir,
-            bootstrapMaxChars: 1,
-            bootstrapTotalMaxChars: 1,
-            sandbox: { mode: "off", sandboxed: false },
-            systemPrompt: "",
-            bootstrapFiles: [],
-            injectedFiles: [],
-            skillsPrompt: "",
-            tools: [],
-          },
+          }),
         });
 
         const assistantText = result.payloads?.[0]?.text ?? "";

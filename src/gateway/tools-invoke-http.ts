@@ -5,6 +5,11 @@ import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../ag
 import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import {
+  normalizeExecAsk,
+  normalizeExecHost,
+  normalizeExecSecurity,
+} from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
@@ -208,21 +213,20 @@ export async function handleToolsInvokeHttpRequest(
   const agentDir = resolveAgentDir(cfg, agentId);
   // HTTP invoke should expose the same coding-tool catalog the live agent uses.
   // Using the reduced OpenClaw-only catalog drops exec/read/write before policy runs.
+  const execHost = normalizeExecHost(sessionEntry?.execHost);
+  const execSecurity = normalizeExecSecurity(sessionEntry?.execSecurity);
+  const execAsk = normalizeExecAsk(sessionEntry?.execAsk);
+  const hasExecDefaults = Boolean(execHost || execSecurity || execAsk || sessionEntry?.execNode);
   const allTools = createOpenClawCodingTools({
     sessionKey: canonicalSessionKey,
-    exec:
-      sessionEntry &&
-      (sessionEntry.execHost ||
-        sessionEntry.execSecurity ||
-        sessionEntry.execAsk ||
-        sessionEntry.execNode)
-        ? {
-            host: sessionEntry.execHost,
-            security: sessionEntry.execSecurity,
-            ask: sessionEntry.execAsk,
-            node: sessionEntry.execNode,
-          }
-        : undefined,
+    exec: hasExecDefaults
+      ? {
+          host: execHost ?? undefined,
+          security: execSecurity ?? undefined,
+          ask: execAsk ?? undefined,
+          node: sessionEntry?.execNode,
+        }
+      : undefined,
     agentDir,
     messageProvider: messageChannel ?? undefined,
     agentAccountId: accountId,

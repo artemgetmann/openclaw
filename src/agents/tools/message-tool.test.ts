@@ -142,21 +142,23 @@ describe("message tool agent routing", () => {
     });
   });
 
-  it.each([
-    { field: "target", value: "  telegram:123  " },
-    { field: "to", value: "telegram:123" },
-    { field: "channelId", value: "telegram:123" },
+  const sameTargetTelegramCases = [
+    { field: "target" as const, value: "  telegram:123  " },
+    { field: "to" as const, value: "telegram:123" },
+    { field: "channelId" as const, value: "telegram:123" },
     {
-      field: "target",
+      field: "target" as const,
       value: "-100123",
       currentChannelId: "telegram:group:-100123",
     },
     {
-      field: "target",
+      field: "target" as const,
       value: "telegram:123",
       channel: "telegram",
     },
-  ])(
+  ];
+
+  it.each(sameTargetTelegramCases)(
     "intercepts explicit same-target Telegram sends via $field",
     async ({
       field,

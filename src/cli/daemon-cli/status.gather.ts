@@ -392,7 +392,9 @@ export async function gatherDaemonStatus(
     : (cliEnv as NodeJS.ProcessEnv);
   const [loaded, runtime] = await Promise.all([
     service.isLoaded({ env: serviceEnv }).catch(() => false),
-    service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
+    service
+      .readRuntime(serviceEnv)
+      .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
   ]);
   const configAudit = await auditGatewayServiceConfig({
     env: cliEnv as NodeJS.ProcessEnv,

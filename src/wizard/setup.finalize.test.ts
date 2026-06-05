@@ -55,6 +55,13 @@ vi.mock("../commands/gateway-install-token.js", () => ({
   resolveGatewayInstallToken,
 }));
 
+vi.mock("../commands/onboard-search.js", () => ({
+  SEARCH_PROVIDER_OPTIONS: [],
+  hasExistingKey: vi.fn(() => false),
+  hasKeyInEnv: vi.fn(() => false),
+  resolveExistingKey: vi.fn(() => undefined),
+}));
+
 vi.mock("../commands/daemon-runtime.js", () => ({
   DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
   GATEWAY_DAEMON_RUNTIME_OPTIONS: [{ value: "node", label: "Node" }],

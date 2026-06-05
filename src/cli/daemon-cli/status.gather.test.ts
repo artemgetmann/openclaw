@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConsumerRuntimeIdentity } from "../../consumer/runtime-identity.js";
+import type { ExtraGatewayService } from "../../daemon/inspect.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
@@ -16,7 +18,9 @@ const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   required: true,
   fingerprintSha256: "sha256:11:22:33:44",
 }));
-const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
+const findExtraGatewayServices = vi.fn<
+  (env?: unknown, opts?: unknown) => Promise<ExtraGatewayService[]>
+>(async (_env?: unknown, _opts?: unknown) => []);
 const inspectPortUsage = vi.fn(
   async (port: number): Promise<PortUsage> => ({
     port,
@@ -28,7 +32,9 @@ const inspectPortUsage = vi.fn(
 const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null);
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
-const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
+const serviceReadRuntime = vi.fn<(env?: NodeJS.ProcessEnv) => Promise<GatewayServiceRuntime>>(
+  async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }),
+);
 const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
   async (_opts?: unknown) => ({
     runtime: { status: "running", pid: 1234 },
@@ -345,6 +351,7 @@ describe("gatherDaemonStatus", () => {
     });
     findExtraGatewayServices.mockResolvedValueOnce([
       {
+        platform: "darwin",
         label: "ai.openclaw.consumer.foo.gateway",
         detail: "plist: /Users/test/Library/LaunchAgents/ai.openclaw.consumer.foo.gateway.plist",
         scope: "user",

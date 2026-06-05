@@ -27,7 +27,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "firecrawl", "gemini", "grok", "kimi", "perplexity"] as const;
 type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
@@ -330,6 +330,10 @@ type BraveConfig = {
   mode?: string;
 };
 
+type FirecrawlSearchConfig = {
+  apiKey?: unknown;
+};
+
 type PerplexityConfig = {
   apiKey?: string;
   baseUrl?: string;
@@ -588,6 +592,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "firecrawl") {
+    return {
+      error: "missing_firecrawl_api_key",
+      message:
+        "web_search (firecrawl) needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure tools.web.search.firecrawl.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/firecrawl",
+    };
+  }
   if (provider === "gemini") {
     return {
       error: "missing_gemini_api_key",
@@ -632,6 +644,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "brave") {
     return "brave";
   }
+  if (raw === "firecrawl") {
+    return "firecrawl";
+  }
   if (raw === "gemini") {
     return "gemini";
   }
@@ -653,6 +668,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "brave" from available API keys',
       );
       return "brave";
+    }
+    // Firecrawl
+    const firecrawlConfig = resolveFirecrawlSearchConfig(search);
+    if (resolveFirecrawlSearchApiKey(firecrawlConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "firecrawl" from available API keys',
+      );
+      return "firecrawl";
     }
     // Gemini
     const geminiConfig = resolveGeminiConfig(search);
@@ -705,6 +728,30 @@ function resolveBraveConfig(search?: WebSearchConfig): BraveConfig {
 
 function resolveBraveMode(brave: BraveConfig): "web" | "llm-context" {
   return brave.mode === "llm-context" ? "llm-context" : "web";
+}
+
+function resolveFirecrawlSearchConfig(search?: WebSearchConfig): FirecrawlSearchConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const firecrawl = "firecrawl" in search ? search.firecrawl : undefined;
+  if (!firecrawl || typeof firecrawl !== "object") {
+    return {};
+  }
+  return firecrawl as FirecrawlSearchConfig;
+}
+
+function resolveFirecrawlSearchApiKey(firecrawl?: FirecrawlSearchConfig): string | undefined {
+  const fromConfigRaw =
+    firecrawl && "apiKey" in firecrawl
+      ? normalizeResolvedSecretInputString({
+          value: firecrawl.apiKey,
+          path: "tools.web.search.firecrawl.apiKey",
+        })
+      : undefined;
+  const fromConfig = normalizeApiKey(fromConfigRaw);
+  const fromEnv = normalizeApiKey(process.env.FIRECRAWL_API_KEY);
+  return fromConfig || fromEnv || undefined;
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
@@ -2041,6 +2088,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const firecrawlConfig = resolveFirecrawlSearchConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
 
@@ -2049,15 +2097,17 @@ export function createWebSearchTool(options?: {
       ? perplexitySchemaTransportHint === "chat_completions"
         ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
         : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path."
-      : provider === "grok"
-        ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : provider === "kimi"
-          ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
-          : provider === "gemini"
-            ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+      : provider === "firecrawl"
+        ? "Search the web using Firecrawl. Returns structured web results with snippets."
+        : provider === "grok"
+          ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
+          : provider === "kimi"
+            ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
+            : provider === "gemini"
+              ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -2077,15 +2127,17 @@ export function createWebSearchTool(options?: {
       const apiKey =
         provider === "perplexity"
           ? perplexityRuntime?.apiKey
-          : provider === "grok"
-            ? resolveGrokApiKey(grokConfig)
-            : provider === "kimi"
-              ? resolveKimiApiKey(kimiConfig)
-              : provider === "gemini"
-                ? resolveGeminiApiKey(geminiConfig)
-                : managedBraveClient
-                  ? "jarvis-managed"
-                  : resolveSearchApiKey(search);
+          : provider === "firecrawl"
+            ? resolveFirecrawlSearchApiKey(firecrawlConfig)
+            : provider === "grok"
+              ? resolveGrokApiKey(grokConfig)
+              : provider === "kimi"
+                ? resolveKimiApiKey(kimiConfig)
+                : provider === "gemini"
+                  ? resolveGeminiApiKey(geminiConfig)
+                  : managedBraveClient
+                    ? "jarvis-managed"
+                    : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));

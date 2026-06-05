@@ -1,9 +1,51 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
 import { clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } from "./runtime.js";
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
+
+vi.mock("../plugins/web-search-providers.js", () => {
+  const getScopedCredentialValue = (provider: string) => (search?: Record<string, unknown>) => {
+    const scoped = search?.[provider];
+    return scoped && typeof scoped === "object" && !Array.isArray(scoped)
+      ? (scoped as { apiKey?: unknown }).apiKey
+      : undefined;
+  };
+  const setScopedCredentialValue =
+    (provider: string) => (search: Record<string, unknown>, value: unknown) => {
+      const scoped = search[provider];
+      if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
+        search[provider] = { apiKey: value };
+        return;
+      }
+      (scoped as { apiKey?: unknown }).apiKey = value;
+    };
+  const providers = [
+    {
+      id: "brave",
+      envVars: ["BRAVE_API_KEY"],
+      getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
+      setCredentialValue: (search: Record<string, unknown>, value: unknown) => {
+        search.apiKey = value;
+      },
+    },
+    ...["firecrawl", "gemini", "grok", "kimi", "perplexity"].map((id) => ({
+      id,
+      envVars:
+        id === "kimi"
+          ? ["KIMI_API_KEY", "MOONSHOT_API_KEY"]
+          : id === "grok"
+            ? ["XAI_API_KEY"]
+            : [`${id.toUpperCase()}_API_KEY`],
+      getCredentialValue: getScopedCredentialValue(id),
+      setCredentialValue: setScopedCredentialValue(id),
+    })),
+  ];
+  return {
+    resolvePluginWebSearchProviders: () => providers,
+  };
+});
 
 type SecretRegistryEntry = ReturnType<typeof listSecretTargetRegistryEntries>[number];
 

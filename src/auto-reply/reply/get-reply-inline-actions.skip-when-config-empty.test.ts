@@ -9,9 +9,9 @@ import type { TypingController } from "./typing.js";
 const { handleCommandsMock, cronExecuteMock, createCronToolMock } = vi.hoisted(() => {
   const cronExecuteMock = vi.fn();
   return {
-    handleCommandsMock: vi.fn(),
+    handleCommandsMock: vi.fn<(...args: unknown[]) => unknown>(),
     cronExecuteMock,
-    createCronToolMock: vi.fn(() => ({
+    createCronToolMock: vi.fn<(...args: unknown[]) => { execute: typeof cronExecuteMock }>(() => ({
       execute: cronExecuteMock,
     })),
   };

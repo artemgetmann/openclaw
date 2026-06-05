@@ -64,8 +64,11 @@ export async function resolveLocalGatewayReachabilityAuth(params: {
 
   // Password auth can be plaintext or SecretRef-backed. Resolve it once here so
   // callers do not hand-roll the same config/env lookup logic in multiple flows.
+  // Setup can carry the password in finalized config after wizard state has been
+  // normalized, so fall back to gateway.auth.password when state is empty.
+  const passwordInput = params.state.gatewayPassword ?? params.config.gateway?.auth?.password;
   const { ref } = resolveSecretInputRef({
-    value: params.state.gatewayPassword,
+    value: passwordInput,
     defaults: params.config.secrets?.defaults,
   });
   if (ref) {
@@ -78,7 +81,7 @@ export async function resolveLocalGatewayReachabilityAuth(params: {
   }
 
   return {
-    password: normalizeSecretInputString(params.state.gatewayPassword) ?? "",
+    password: normalizeSecretInputString(passwordInput) ?? "",
   };
 }
 

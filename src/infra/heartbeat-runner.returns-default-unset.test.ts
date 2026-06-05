@@ -1054,6 +1054,9 @@ describe("runHeartbeatOnce", () => {
       >;
       const nextHistory = store[sessionKey]?.recentHeartbeats;
       expect(Array.isArray(nextHistory)).toBe(true);
+      if (!nextHistory) {
+        throw new Error("expected heartbeat history to be written");
+      }
       expect(nextHistory).toHaveLength(5);
       expect(nextHistory[0]).toMatchObject({
         sentAt: 10_000,

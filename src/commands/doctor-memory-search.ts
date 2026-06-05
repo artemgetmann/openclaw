@@ -74,6 +74,8 @@ export async function noteMemorySearchHealth(
         ].join("\n");
       }
     } else if (
+      // provider: "none" intentionally disables embeddings; it has no API key to validate.
+      resolved.provider !== "none" &&
       !(hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir)))
     ) {
       if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {

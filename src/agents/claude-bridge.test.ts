@@ -6,6 +6,40 @@ type SystemPromptReport = Parameters<typeof runClaudeBridgeAgent>[0]["systemProm
 
 const spawnMock = vi.fn();
 
+function createSystemPromptReport(params: {
+  sessionId: string;
+  provider?: string;
+  model?: string;
+  workspaceDir?: string;
+}): SystemPromptReport {
+  return {
+    source: "run",
+    generatedAt: Date.now(),
+    sessionId: params.sessionId,
+    provider: params.provider ?? "claude-bridge",
+    model: params.model ?? "sonnet",
+    workspaceDir: params.workspaceDir ?? "/tmp",
+    bootstrapMaxChars: 1,
+    bootstrapTotalMaxChars: 1,
+    sandbox: { mode: "off", sandboxed: false },
+    systemPrompt: {
+      chars: 0,
+      projectContextChars: 0,
+      nonProjectContextChars: 0,
+    },
+    injectedWorkspaceFiles: [],
+    skills: {
+      promptChars: 0,
+      entries: [],
+    },
+    tools: {
+      listChars: 0,
+      schemaChars: 0,
+      entries: [],
+    },
+  };
+}
+
 vi.mock("../infra/shell-env.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/shell-env.js")>();
   return {
@@ -156,22 +190,7 @@ describe("runClaudeBridgeAgent", () => {
         provider: "claude-bridge",
         model: "sonnet",
         timeoutMs: 5_000,
-        systemPromptReport: {
-          source: "run",
-          generatedAt: Date.now(),
-          sessionId: "session-path",
-          provider: "claude-bridge",
-          model: "sonnet",
-          workspaceDir: "/tmp",
-          bootstrapMaxChars: 1,
-          bootstrapTotalMaxChars: 1,
-          sandbox: { mode: "off", sandboxed: false },
-          systemPrompt: "",
-          bootstrapFiles: [],
-          injectedFiles: [],
-          skillsPrompt: "",
-          tools: [],
-        } as SystemPromptReport,
+        systemPromptReport: createSystemPromptReport({ sessionId: "session-path" }),
       });
 
       await vi.waitFor(() => {
@@ -212,22 +231,7 @@ describe("runClaudeBridgeAgent", () => {
       provider: "claude-bridge",
       model: "sonnet",
       timeoutMs: 5_000,
-      systemPromptReport: {
-        source: "run",
-        generatedAt: Date.now(),
-        sessionId: "session-1",
-        provider: "claude-bridge",
-        model: "sonnet",
-        workspaceDir: "/tmp",
-        bootstrapMaxChars: 1,
-        bootstrapTotalMaxChars: 1,
-        sandbox: { mode: "off", sandboxed: false },
-        systemPrompt: "",
-        bootstrapFiles: [],
-        injectedFiles: [],
-        skillsPrompt: "",
-        tools: [],
-      } as SystemPromptReport,
+      systemPromptReport: createSystemPromptReport({ sessionId: "session-1" }),
     });
 
     await vi.waitFor(() => {
@@ -250,22 +254,7 @@ describe("runClaudeBridgeAgent", () => {
       provider: "claude-bridge",
       model: "sonnet",
       timeoutMs: 5_000,
-      systemPromptReport: {
-        source: "run",
-        generatedAt: Date.now(),
-        sessionId: "session-1",
-        provider: "claude-bridge",
-        model: "sonnet",
-        workspaceDir: "/tmp",
-        bootstrapMaxChars: 1,
-        bootstrapTotalMaxChars: 1,
-        sandbox: { mode: "off", sandboxed: false },
-        systemPrompt: "",
-        bootstrapFiles: [],
-        injectedFiles: [],
-        skillsPrompt: "",
-        tools: [],
-      } as SystemPromptReport,
+      systemPromptReport: createSystemPromptReport({ sessionId: "session-1" }),
     });
 
     await vi.waitFor(() => {
@@ -295,22 +284,7 @@ describe("runClaudeBridgeAgent", () => {
       provider: "claude-bridge",
       model: "sonnet",
       timeoutMs: 5_000,
-      systemPromptReport: {
-        source: "run",
-        generatedAt: Date.now(),
-        sessionId: "session-2",
-        provider: "claude-bridge",
-        model: "sonnet",
-        workspaceDir: "/tmp",
-        bootstrapMaxChars: 1,
-        bootstrapTotalMaxChars: 1,
-        sandbox: { mode: "off", sandboxed: false },
-        systemPrompt: "",
-        bootstrapFiles: [],
-        injectedFiles: [],
-        skillsPrompt: "",
-        tools: [],
-      } as SystemPromptReport,
+      systemPromptReport: createSystemPromptReport({ sessionId: "session-2" }),
       onAssistantMessageStart,
       onPartialReply,
       onBlockReply,
@@ -355,22 +329,7 @@ describe("runClaudeBridgeAgent", () => {
       provider: "claude-bridge",
       model: "sonnet",
       timeoutMs: 5_000,
-      systemPromptReport: {
-        source: "run",
-        generatedAt: Date.now(),
-        sessionId: "session-3",
-        provider: "claude-bridge",
-        model: "sonnet",
-        workspaceDir: "/tmp",
-        bootstrapMaxChars: 1,
-        bootstrapTotalMaxChars: 1,
-        sandbox: { mode: "off", sandboxed: false },
-        systemPrompt: "",
-        bootstrapFiles: [],
-        injectedFiles: [],
-        skillsPrompt: "",
-        tools: [],
-      } as SystemPromptReport,
+      systemPromptReport: createSystemPromptReport({ sessionId: "session-3" }),
       onAssistantMessageStart,
       onPartialReply,
       onBlockReply,
@@ -408,22 +367,7 @@ describe("runClaudeBridgeAgent", () => {
       provider: "claude-bridge",
       model: "sonnet",
       timeoutMs: 5_000,
-      systemPromptReport: {
-        source: "run",
-        generatedAt: Date.now(),
-        sessionId: "session-tool-gap",
-        provider: "claude-bridge",
-        model: "sonnet",
-        workspaceDir: "/tmp",
-        bootstrapMaxChars: 1,
-        bootstrapTotalMaxChars: 1,
-        sandbox: { mode: "off", sandboxed: false },
-        systemPrompt: "",
-        bootstrapFiles: [],
-        injectedFiles: [],
-        skillsPrompt: "",
-        tools: [],
-      } as SystemPromptReport,
+      systemPromptReport: createSystemPromptReport({ sessionId: "session-tool-gap" }),
     });
 
     await vi.waitFor(() => {

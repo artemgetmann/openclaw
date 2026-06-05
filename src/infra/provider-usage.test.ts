@@ -1,10 +1,51 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderUsageSnapshotWithPlugin: vi.fn(
+    async (params: {
+      provider: string;
+      context: { token: string; timeoutMs: number; fetchFn: typeof fetch };
+    }) => {
+      if (params.provider === "anthropic") {
+        const { fetchClaudeUsage } = await import("./provider-usage.fetch.claude.js");
+        return await fetchClaudeUsage(
+          params.context.token,
+          params.context.timeoutMs,
+          params.context.fetchFn,
+        );
+      }
+      if (params.provider === "minimax") {
+        const { fetchMinimaxUsage } = await import("./provider-usage.fetch.minimax.js");
+        return await fetchMinimaxUsage(
+          params.context.token,
+          params.context.timeoutMs,
+          params.context.fetchFn,
+        );
+      }
+      if (params.provider === "zai") {
+        const { fetchZaiUsage } = await import("./provider-usage.fetch.zai.js");
+        return await fetchZaiUsage(
+          params.context.token,
+          params.context.timeoutMs,
+          params.context.fetchFn,
+        );
+      }
+      return null;
+    },
+  ),
+  resolveProviderUsageAuthWithPlugin: vi.fn(
+    async (params: {
+      provider: string;
+      context: { resolveOAuthToken: () => Promise<{ token: string; accountId?: string } | null> };
+    }) => (params.provider === "anthropic" ? await params.context.resolveOAuthToken() : null),
+  ),
+}));
 import {
   formatUsageReportLines,
   formatUsageSummaryLine,

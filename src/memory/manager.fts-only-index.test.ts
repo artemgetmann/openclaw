@@ -54,7 +54,7 @@ describe("memory manager FTS-only indexing", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
   }
 
   it("indexes MEMORY.md for keyword search when no embedding provider is available", async () => {
