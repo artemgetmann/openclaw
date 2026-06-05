@@ -15,7 +15,7 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { requestGatewayToolRestart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
@@ -167,7 +167,7 @@ export function createGatewayTool(opts?: {
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
         const payload: RestartSentinelPayload = {
           kind: "restart",
-          status: "ok",
+          status: "requested",
           ts: Date.now(),
           sessionKey,
           deliveryContext,
@@ -177,6 +177,8 @@ export function createGatewayTool(opts?: {
           stats: {
             mode: "gateway.restart",
             reason,
+            phase: "requested",
+            verified: false,
           },
         };
         try {
@@ -187,7 +189,7 @@ export function createGatewayTool(opts?: {
         log.info(
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
-        const scheduled = scheduleGatewaySigusr1Restart({
+        const scheduled = requestGatewayToolRestart({
           delayMs,
           reason,
         });
