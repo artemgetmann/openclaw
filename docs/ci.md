@@ -21,12 +21,26 @@ This boundary matters: an agent saying "CI is queued" or "CI is pending" is not
 proof. A PR is merge-ready only when the relevant checks have completed
 successfully and the PR is no longer a draft.
 
+Fast path for normal PRs:
+
+```bash
+scripts/pr-merge watch-auto <PR>
+```
+
+That command enables GitHub squash auto-merge when the PR is open and not a
+draft, then watches only merge-relevant blockers. It does not require local
+review/prep artifacts and it does not perform runtime shipping. If it reports
+queued non-required jobs from `statusCheckRollup`, treat them as noise unless
+GitHub also marks a required check as failing, pending, or stale.
+
 ### Merge Candidates
 
 - Draft PRs are not merge candidates.
 - Queued or pending CI is not proof.
 - Failed required or relevant conditional checks block merge.
 - Skipped irrelevant jobs do not block merge.
+- Queued non-required jobs, including helper `Labeler / label` or
+  `Install Smoke / install-smoke` runs, do not block merge by themselves.
 - Slow release or full-matrix jobs are not normal PR blockers unless they were
   triggered by relevant changes or a maintainer explicitly requested them.
 
@@ -92,6 +106,8 @@ Agents should not:
 - Merge draft PRs.
 - Ship unmerged feature-worktree code into the shared runtime as a workaround
   for waiting on CI.
+- Restart, replace, or otherwise mutate the shared Jarvis runtime while merely
+  waiting on PR CI.
 
 ## Proof Levels
 
