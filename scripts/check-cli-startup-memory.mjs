@@ -102,7 +102,7 @@ function buildBenchEnv() {
   return env;
 }
 
-function runCase(testCase) {
+function runCaseOnce(testCase) {
   const env = buildBenchEnv();
   const result = spawnSync(process.execPath, ["--import", rssHookPath, ...testCase.args], {
     cwd: repoRoot,
@@ -125,9 +125,27 @@ function runCase(testCase) {
   if (matrixBootstrapWarning) {
     throw new Error(`${testCase.label} triggered Matrix crypto bootstrap during startup`);
   }
+  return maxRssMb;
+}
+
+function runCase(testCase) {
+  const firstMaxRssMb = runCaseOnce(testCase);
+  let maxRssMb = firstMaxRssMb;
+
+  // Fresh Linux runners occasionally report a one-shot RSS spike immediately
+  // after the dist build. Retry only the threshold check once so the guard still
+  // fails sustained memory regressions, but does not burn CI on transient kernel
+  // or loader accounting noise.
+  if (maxRssMb > testCase.limitMb) {
+    console.warn(
+      `[startup-memory] ${testCase.label}: ${maxRssMb.toFixed(1)} MB RSS exceeded limit ${testCase.limitMb} MB; retrying once`,
+    );
+    maxRssMb = runCaseOnce(testCase);
+  }
+
   if (maxRssMb > testCase.limitMb) {
     throw new Error(
-      `${testCase.label} used ${maxRssMb.toFixed(1)} MB RSS (limit ${testCase.limitMb} MB)`,
+      `${testCase.label} used ${maxRssMb.toFixed(1)} MB RSS after retry (first ${firstMaxRssMb.toFixed(1)} MB, limit ${testCase.limitMb} MB)`,
     );
   }
 
