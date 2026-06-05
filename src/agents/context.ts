@@ -21,6 +21,7 @@ type AgentModelEntry = { params?: Record<string, unknown> };
 
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
+export const OPENAI_CODEX_GPT_5_5_EFFECTIVE_CONTEXT_TOKENS = 258_400;
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -205,8 +206,12 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   if (!modelId) {
     return undefined;
   }
-  // Best-effort: kick off loading, but don't block.
-  void ensureContextWindowCacheLoaded();
+  // Best-effort: kick off loading, but don't block. Startup-sensitive commands
+  // such as `status --json` intentionally avoid model discovery; they can still
+  // read any cache entries that were already populated by config warmup.
+  if (!shouldSkipEagerContextWindowWarmup()) {
+    void ensureContextWindowCacheLoaded();
+  }
   return MODEL_CACHE.get(modelId);
 }
 
@@ -333,6 +338,23 @@ function isClaudeCode1MModel(provider: string, model: string): boolean {
   return normalizedModel.endsWith("[1m]");
 }
 
+function resolveEffectiveContextTokensForModel(
+  provider: string,
+  model: string,
+): number | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedModel = model.trim().toLowerCase();
+
+  // ChatGPT-backed Codex reports a larger catalog/native window than the
+  // prompt budget the Codex CLI actually exposes. Jarvis preflight needs the
+  // effective usable window so it compacts before sending an oversized prompt.
+  if (normalizedProvider === "openai-codex" && normalizedModel === "gpt-5.5") {
+    return OPENAI_CODEX_GPT_5_5_EFFECTIVE_CONTEXT_TOKENS;
+  }
+
+  return undefined;
+}
+
 export function resolveContextTokensForModel(params: {
   cfg?: OpenClawConfig;
   provider?: string;
@@ -355,6 +377,10 @@ export function resolveContextTokensForModel(params: {
     }
     if (isClaudeCode1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
+    }
+    const effectiveContextTokens = resolveEffectiveContextTokensForModel(ref.provider, ref.model);
+    if (effectiveContextTokens !== undefined) {
+      return effectiveContextTokens;
     }
     // Only do the config direct scan when the caller explicitly passed a
     // provider. When provider is inferred from a slash in the model string
