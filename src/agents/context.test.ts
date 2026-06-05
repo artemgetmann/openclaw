@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
+  OPENAI_CODEX_GPT_5_5_EFFECTIVE_CONTEXT_TOKENS,
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
   resolveContextTokensForModel,
@@ -130,6 +131,56 @@ describe("createSessionManagerRuntimeRegistry", () => {
 });
 
 describe("resolveContextTokensForModel", () => {
+  it("uses Codex GPT-5.5's effective CLI context window before generic fallback", () => {
+    const result = resolveContextTokensForModel({
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(OPENAI_CODEX_GPT_5_5_EFFECTIVE_CONTEXT_TOKENS);
+  });
+
+  it("lets explicit context token overrides beat the Codex GPT-5.5 effective default", () => {
+    const result = resolveContextTokensForModel({
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      contextTokensOverride: 123_456,
+      fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(123_456);
+  });
+
+  it("uses Codex GPT-5.5's effective window before provider contextWindow metadata", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            "openai-codex": {
+              models: [{ id: "gpt-5.5", contextWindow: 400_000 }],
+            },
+          },
+        },
+      },
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(OPENAI_CODEX_GPT_5_5_EFFECTIVE_CONTEXT_TOKENS);
+  });
+
+  it("keeps unknown Codex models on the generic fallback when metadata is unavailable", () => {
+    const result = resolveContextTokensForModel({
+      provider: "openai-codex",
+      model: "gpt-unknown",
+      fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(200_000);
+  });
+
   it("returns 1M context when anthropic context1m is enabled for opus/sonnet", () => {
     const result = resolveContextTokensForModel({
       cfg: {

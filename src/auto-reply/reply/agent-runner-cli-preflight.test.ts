@@ -22,6 +22,24 @@ describe("evaluateReplyHardReservePrecheck", () => {
     expect(result?.logLine).toContain("persistedPromptTokens=202908");
   });
 
+  it("uses the Codex GPT-5.5 effective context budget before the reserve", () => {
+    const result = evaluateReplyHardReservePrecheck({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      cfg: { agents: { defaults: { compaction: { reserveTokensFloor: 20_000 } } } },
+      prompt: "hello",
+      persistedPromptTokens: 240_000,
+      contextTokenBudget: 258_400,
+      sessionKey: "main",
+      sessionId: "session",
+    });
+
+    expect(result?.decision.shouldCompact).toBe(true);
+    expect(result?.decision.promptBudgetBeforeReserve).toBe(238_400);
+    expect(result?.decision.overflowTokens).toBe(1_600);
+    expect(result?.logLine).toContain("contextTokenBudget=258400");
+  });
+
   it("does not trigger without reliable persisted prompt tokens", () => {
     expect(
       evaluateReplyHardReservePrecheck({
