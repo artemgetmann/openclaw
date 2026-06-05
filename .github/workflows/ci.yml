@@ -294,6 +294,11 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          # The CLI startup budget tracks the validated local/runtime Node line.
+          # Node 24 remains covered by the main CI matrix; measuring RSS there is
+          # too noisy to distinguish product regressions from runner variance.
+          node-version: "22.x"
+          cache-key-suffix: "node22"
           install-bun: "false"
           use-sticky-disk: "false"
 
