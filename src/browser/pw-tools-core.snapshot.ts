@@ -22,6 +22,10 @@ import {
 } from "./pw-session.js";
 import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
+function resolveSnapshotTimeoutMs(timeoutMs: number | undefined): number {
+  return Math.max(500, Math.min(60_000, Math.floor(timeoutMs ?? 5000)));
+}
+
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -68,7 +72,7 @@ export async function snapshotAiViaPlaywright(opts: {
   }
 
   const result = await maybe._snapshotForAI({
-    timeout: Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 5000))),
+    timeout: resolveSnapshotTimeoutMs(opts.timeoutMs),
     track: "response",
   });
   let snapshot = String(result?.full ?? "");
@@ -100,6 +104,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   selector?: string;
   frameSelector?: string;
   refsMode?: "role" | "aria";
+  timeoutMs?: number;
   options?: RoleSnapshotOptions;
 }): Promise<{
   snapshot: string;
@@ -121,7 +126,7 @@ export async function snapshotRoleViaPlaywright(opts: {
       throw new Error("refs=aria requires Playwright _snapshotForAI support.");
     }
     const result = await maybe._snapshotForAI({
-      timeout: 5000,
+      timeout: resolveSnapshotTimeoutMs(opts.timeoutMs),
       track: "response",
     });
     const built = buildRoleSnapshotFromAiSnapshot(String(result?.full ?? ""), opts.options);

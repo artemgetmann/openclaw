@@ -56,13 +56,15 @@ function createBrowser(pages: unknown[]) {
 
 let chromiumMock: typeof import("playwright-core").chromium;
 let snapshotAiViaPlaywright: typeof import("./pw-tools-core.snapshot.js").snapshotAiViaPlaywright;
+let snapshotRoleViaPlaywright: typeof import("./pw-tools-core.snapshot.js").snapshotRoleViaPlaywright;
 let clickViaPlaywright: typeof import("./pw-tools-core.interactions.js").clickViaPlaywright;
 let closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
 
 beforeAll(async () => {
   const pw = await import("playwright-core");
   chromiumMock = pw.chromium;
-  ({ snapshotAiViaPlaywright } = await import("./pw-tools-core.snapshot.js"));
+  ({ snapshotAiViaPlaywright, snapshotRoleViaPlaywright } =
+    await import("./pw-tools-core.snapshot.js"));
   ({ clickViaPlaywright } = await import("./pw-tools-core.interactions.js"));
   ({ closePlaywrightBrowserConnection } = await import("./pw-session.js"));
 });
@@ -133,6 +135,47 @@ describe("pw-ai", () => {
     expect(res.truncated).toBe(true);
     expect(res.snapshot.startsWith("AAAAAAAAAA")).toBe(true);
     expect(res.snapshot).toContain("TRUNCATED");
+  });
+
+  it("passes caller timeout to Playwright ai snapshot", async () => {
+    const p1 = createPage({ targetId: "T1", snapshotFull: "ONE" });
+    const browser = createBrowser([p1.page]);
+
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
+
+    await snapshotAiViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 30_000,
+    });
+
+    expect(
+      (p1.page as { _snapshotForAI: ReturnType<typeof vi.fn> })._snapshotForAI,
+    ).toHaveBeenCalledWith({
+      timeout: 30_000,
+      track: "response",
+    });
+  });
+
+  it("passes caller timeout to refs=aria role snapshot", async () => {
+    const p1 = createPage({ targetId: "T1", snapshotFull: '- button "OK" [ref=e1]' });
+    const browser = createBrowser([p1.page]);
+
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
+
+    await snapshotRoleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      refsMode: "aria",
+      timeoutMs: 42_000,
+    });
+
+    expect(
+      (p1.page as { _snapshotForAI: ReturnType<typeof vi.fn> })._snapshotForAI,
+    ).toHaveBeenCalledWith({
+      timeout: 42_000,
+      track: "response",
+    });
   });
 
   it("clicks a ref using aria-ref locator", async () => {

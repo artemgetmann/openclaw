@@ -17,6 +17,7 @@ import {
 } from "../navigation-guard.js";
 import { withBrowserNavigationPolicy } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import type { PwAiModule } from "../pw-ai-module.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -41,6 +42,36 @@ import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
+
+function isRecoverablePlaywrightSnapshotError(err: unknown): boolean {
+  const msg = String(err instanceof Error ? err.message : err).toLowerCase();
+  return (
+    msg.includes("timeout") ||
+    msg.includes("timed out") ||
+    msg.includes("target page, context or browser has been closed") ||
+    msg.includes("target closed") ||
+    msg.includes("browser has been closed") ||
+    msg.includes("frame has been detached") ||
+    msg.includes("execution context was destroyed") ||
+    msg.includes("session closed") ||
+    msg.includes("connection closed")
+  );
+}
+
+async function recoverPlaywrightSnapshotTarget(params: {
+  pw: PwAiModule;
+  cdpUrl: string;
+  targetId: string;
+  reason: string;
+}): Promise<void> {
+  await params.pw
+    .forceDisconnectPlaywrightForTarget({
+      cdpUrl: params.cdpUrl,
+      targetId: params.targetId,
+      reason: params.reason,
+    })
+    .catch(() => {});
+}
 
 async function clearChromeMcpOverlay(params: {
   profileName: string;
@@ -507,6 +538,7 @@ export function registerBrowserAgentSnapshotRoutes(
           selector: plan.selectorValue,
           frameSelector: plan.frameSelectorValue,
           refsMode: plan.refsMode,
+          timeoutMs: plan.timeoutMs,
           options: {
             interactive: plan.interactive ?? undefined,
             compact: plan.compact ?? undefined,
@@ -514,23 +546,61 @@ export function registerBrowserAgentSnapshotRoutes(
           },
         };
 
-        const snap = plan.wantsRoleSnapshot
-          ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
-          : await pw
-              .snapshotAiViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
-                ...(typeof plan.resolvedMaxChars === "number"
-                  ? { maxChars: plan.resolvedMaxChars }
-                  : {}),
-              })
-              .catch(async (err) => {
-                // Public-API fallback when Playwright's private _snapshotForAI is missing.
-                if (String(err).toLowerCase().includes("_snapshotforai")) {
-                  return await pw.snapshotRoleViaPlaywright(roleSnapshotArgs);
-                }
-                throw err;
-              });
+        const snap = await (async () => {
+          try {
+            return plan.wantsRoleSnapshot
+              ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
+              : await pw
+                  .snapshotAiViaPlaywright({
+                    cdpUrl: profileCtx.profile.cdpUrl,
+                    targetId: tab.targetId,
+                    ...(typeof plan.timeoutMs === "number" ? { timeoutMs: plan.timeoutMs } : {}),
+                    ...(typeof plan.resolvedMaxChars === "number"
+                      ? { maxChars: plan.resolvedMaxChars }
+                      : {}),
+                  })
+                  .catch(async (err) => {
+                    // Public-API fallback when Playwright's private _snapshotForAI is missing.
+                    if (
+                      String(err).toLowerCase().includes("_snapshotforai") &&
+                      !isRecoverablePlaywrightSnapshotError(err)
+                    ) {
+                      return await pw.snapshotRoleViaPlaywright(roleSnapshotArgs);
+                    }
+                    throw err;
+                  });
+          } catch (err) {
+            if (!isRecoverablePlaywrightSnapshotError(err)) {
+              throw err;
+            }
+
+            // Heavy pages can wedge Playwright's private snapshot path. Drop only this
+            // target's Playwright connection, then use the raw per-tab CDP websocket
+            // when this is a local managed profile. Remote and Chrome-MCP profiles do
+            // not have a safe raw aria fallback for the exact current tab.
+            await recoverPlaywrightSnapshotTarget({
+              pw,
+              cdpUrl: profileCtx.profile.cdpUrl,
+              targetId: tab.targetId,
+              reason: "recover snapshot after Playwright AI snapshot failure",
+            });
+            const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+            if (capabilities.mode === "local-managed" && tab.wsUrl) {
+              return await snapshotAria({ wsUrl: tab.wsUrl, limit: plan.limit });
+            }
+            throw err;
+          }
+        })();
+        if ("nodes" in snap) {
+          return res.json({
+            ok: true,
+            format: "aria",
+            fallback: "raw-cdp-aria",
+            targetId: tab.targetId,
+            url: tab.url,
+            ...snap,
+          });
+        }
         if (plan.labels) {
           const labeled = await pw.screenshotWithLabelsViaPlaywright({
             cdpUrl: profileCtx.profile.cdpUrl,
