@@ -1,8 +1,8 @@
 # Jarvis Launch Package
 
-Status: v1 launch package draft
+Status: Jarvis Consumer RC launch package tracker
 Owner: Artem
-Last updated: 2026-05-14
+Last updated: 2026-06-05
 
 Purpose: launch-facing package, pricing, copy, and artifact truth.
 
@@ -75,8 +75,9 @@ require direct BYOK until the backend exposes managed utilities for those shapes
 
 ## Release package status
 
-Current package truth:
+Current RC truth as of 2026-06-05:
 
+- Current RC app commit is `d9981f111d`.
 - Jarvis visible branding is in place for the app name, release artifacts, and
   app icon.
 - Bundle ID/runtime/update identity remain `ai.openclaw.consumer.mac` and
@@ -86,128 +87,46 @@ Current package truth:
   `~/Library/Application Support/OpenClaw/release.env` and should be inherited
   by all worktrees/chats.
 - API token and Neon URL are stored outside Git in macOS Keychain.
-- Final trusted-tester package from 2026-05-14 was built from commit
-  `ab9c3c1ca1` at
-  `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-package-recut-20260514/dist/Jarvis.dmg`
-  and copied to `/Users/user/Programming_Projects/openclaw/Jarvis.dmg`.
-  `Jarvis.dmg` is Gatekeeper-accepted as Notarized Developer ID.
-- Public release assets for `v2026.3.15` now include `Jarvis.dmg`,
-  `Jarvis.zip`, and `jarvis-appcast.xml`; the Jarvis appcast URL returns 200
-  and points Sparkle at the uploaded `Jarvis.zip`.
-- `/Applications/Jarvis.app` on Artem's machine has been installed from the
-  final trusted-tester DMG and now reports `OpenClawGitCommit=ab9c3c1ca1`,
-  `CFBundleDisplayName=Jarvis`, and `CFBundleIdentifier=ai.openclaw.consumer.mac`.
-  The installed app passes `scripts/verify-consumer-mac-app.sh --release`,
-  Gatekeeper accepts it as Notarized Developer ID, and stapler validation
-  succeeds.
-- Prior installed app smoke on the older Jarvis build passed: visible app name
-  and icon were Jarvis, bundle ID intentionally remained
-  `ai.openclaw.consumer.mac`, runtime takeover was green, `/healthz` returned
-  `{"ok":true,"status":"live"}`, and Channels showed Telegram live/verified as
-  `@Jarvis_cl4w_bot`.
-- Computer Use GUI smoke on the installed app verified the Settings sidebar
-  exposes only General, Channels, Browser, AI access, Permissions, and About by
-  default. The Permissions primary list contains only Screen Recording,
-  Accessibility, Automation (AppleScript), and Location. Notifications,
-  Microphone, Camera, and Speech Recognition are under "More permissions
-  (optional)".
-- About -> Check for Updates no longer returns Update Error; the installed app
-  reaches Sparkle and reports "You're up to date! Jarvis 2026.3.14 is currently
-  the newest version available." This proves feed retrieval, not a newer-version
-  update installation.
-- Clean trusted-tester smoke passed: the DMG hash matched
-  `784ee3b1c77f8612a4bf3525b8f8ca8b2e9f63863e0f94732f2f6d309c48ac89`, the
-  installed app reports commit `ab9c3c1ca1`, targeted Settings tests passed, and
-  the isolated fresh-user packaged smoke passed from the final root
-  `Jarvis.dmg` with isolated state, isolated gateway health, onboarding
-  observed, and real user config unchanged. A true separate macOS account smoke
-  was deliberately skipped as unnecessary for the 3 trusted waiting testers.
-- Post-launch app-bundle mutation has a code fix in the packaging/runtime
-  branch. Root cause was packaged Jarvis treating bundled app resources as the
-  gateway project root while the `acpx` plugin could lazily run `npm install`
-  under `dist/extensions/acpx`. The fix treats `OpenClawRuntime` resources as
-  seed-only, prefers the seeded Application Support runtime for packaged
-  gateway identity, and routes managed `acpx` dependencies to
-  `$OPENCLAW_STATE_DIR/cache/extensions/acpx` outside `/Applications/Jarvis.app`.
-  Validation on 2026-05-16: targeted `acpx` Vitest coverage passed, macOS
-  `ConsumerBundledRuntimeTests` plus `GatewayLaunchAgentManagerTests` passed per
-  suite, and an isolated generated-runtime proof installed `acpx@0.3.0` under
-  `$OPENCLAW_STATE_DIR/cache/extensions/acpx` while leaving
-  `dist/extensions/acpx/node_modules` absent. Copied-app proof also passed from
-  a temp signed Jarvis app: `acpx` installed under isolated state/cache, the app
-  bundle still had no `dist/extensions/acpx/node_modules`, and
-  `codesign --verify --deep --strict` passed after the runtime path was
-  exercised.
-- The 2026-05-14 `Jarvis.dmg` remains a trusted-ring artifact only. The next
-  4-5 waiting testers should receive a recut from current `main` after P0
-  onboarding fixes. Do not send wider/public until the `ai.jarvis.mac` identity
-  migration and remaining wider beta gates are complete.
-- Full newer-version Sparkle update-cycle testing is deferred for speed. Current
-  proof covers appcast/feed reachability and no Update Error; a real
-  download/verify/install/relaunch/preserve-state cycle should be tested before
-  relying on an update to recover trusted users or before broader distribution.
-- Recommended release path for the next lane: App Store Connect API key auth
-  plus async notarization submit/poll/staple receipts. Set
-  `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
-  machine release env; leave `NOTARYTOOL_PROFILE` unset unless deliberately
-  using the fallback path.
-- Dry-run release preflight truth from 2026-05-16: ASC API-key lane was ready
-  on Artem's machine, the fallback `NOTARYTOOL_PROFILE` was present and usable,
-  and the preflight stayed read-only. It did not submit notarization, staple,
+- The fast RC package path produces a Developer ID signed app, but the
+  `--fast` artifact is unnotarized. Gatekeeper rejection is expected for that
+  local RC artifact and is not a product regression.
+- The final tester/release artifact still requires a notarized DMG and ZIP:
+  submit with App Store Connect API-key notarization, staple the result, verify
+  Gatekeeper acceptance, and publish only the notarized assets.
+- Sparkle feed reachability from the May package was useful proof, but it is
+  not enough for the current release. Final release still requires a real
+  N-to-N+1 Sparkle proof: download, signature verification, install, relaunch,
+  and state preservation.
+- Fallback BotFather-token Telegram proof passed for the RC using
+  `@jarvis_4918_bot`. This proves the fallback RC onboarding path and packaged
+  Telegram runtime path.
+- Managed Telegram creation remains launch-critical unless Artem explicitly
+  waives it. The current blocker is outside the app callback path: Telegram's
+  BotFather Create Bot transaction hangs before the Jarvis backend receives a
+  callback/update. Keep `docs/consumer/telegram-managed-onboarding-tracker.md`
+  as the source of truth for managed-bot investigation evidence.
+- The RC policy is therefore: fallback BotFather token is the proof path for
+  this RC; managed bot creation remains the intended default launch path and a
+  release blocker unless explicitly waived.
+- The 2026-05-14 notarized `Jarvis.dmg` from commit `ab9c3c1ca1` is historical
+  trusted-ring proof only. It is not the current RC artifact and should not be
+  presented as the current release package.
+- Recommended release path remains App Store Connect API key auth plus async
+  notarization submit/poll/staple receipts. Set `NOTARYTOOL_KEY`,
+  `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the machine release env;
+  leave `NOTARYTOOL_PROFILE` unset unless deliberately using the fallback path.
+- Read-only preflight on 2026-05-16 ended with `Final: ASC API key lane ready.`
+  That proved credential readiness only; it did not submit notarization, staple,
   package, upload, or mutate release assets.
-- Keychain-profile notarization remains a fallback for emergency/manual
-  recovery only. It should not be the default release path because Apple ID
-  app-specific password and 2FA recovery made the previous package lane too
-  brittle.
-- Artem must create or provide the actual App Store Connect API key if it is
-  not already present on the machine. Do not block the release docs on fake
-  placeholders or commit key material.
-- Follow-up preflight on 2026-05-16 confirmed Sparkle `generate_appcast` is
-  already available from the repo SwiftPM build. Local Spotlight search found
-  no existing `AuthKey_*.p8`, so the missing piece was Apple API-key setup, not
-  Sparkle tooling.
-- Current ASC blocker captured by the conductor on 2026-05-16:
-  `/access/integrations/api` is reachable after login, but it does not show API
-  keys. It shows "Permission is required to access the App Store Connect API.
-  You can request access on behalf of your organization." with a Request Access
-  button.
-- Follow-up ASC state on 2026-05-16: Artem approved and submitted the App Store
-  Connect API access request. Apple immediately showed "Your request to access
-  the App Store Connect API was approved", `Active (0)`, and `Generate API Key`.
-  Screenshot proof:
-  `/tmp/openclaw/asc-api-access-approved-generate-key.png`.
-- Final ASC credential state on 2026-05-16: Artem approved key generation. The
-  `Jarvis Notary` team key was created with Developer access, its one-time
-  `.p8` was downloaded, moved out of iCloud Downloads, stored at
-  `~/Library/Application Support/OpenClaw/release-keys/`, and locked to mode
-  `600`. The machine release env now has `NOTARYTOOL_KEY`,
-  `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER`. Read-only preflight ended with
-  `Final: ASC API key lane ready.`
 - `ai.jarvis.mac` bundle ID/runtime/update identity migration is a required
   launch gate before Reddit/GitHub, public-ish beta, or a wider beta.
 - Do not send to Reddit/GitHub/public-ish beta until the `ai.jarvis.mac`
   bundle/runtime/update migration is complete.
-- Local cleanup on Artem's machine was completed after approval on 2026-05-16:
-  the old `/Applications/OpenClaw.app`, stale GUI smoke app processes, and stale
-  `gui-verify` / `consolidation-gui-smoke` / `macos-ui-cleanup` LaunchAgents
-  were removed. `/Applications/Jarvis.app`, the default gateway, watchdog, mail
-  monitor, and the separate Chrome Telegram-live profile were kept.
-- The duplicate connected-bot Settings copy/buttons issue has been addressed
-  in source. Current-main GUI proof was captured on 2026-05-16 with the
-  isolated `channels-proof` native UI-smoke app: Settings -> Channels rendered
-  one Telegram detail pane, one `Connected bot` section, one verified card, and
-  one `Open your bot` action. Screenshot:
-  `/tmp/openclaw/full-after-ready-channel-click.png`. This proves the merged
-  UI state, but the existing trusted-tester `Jarvis.dmg` was built before PR
-  #719, so exact release-DMG proof still requires a recut if we want to ship
-  that polish in a public artifact.
-- Packaging-smoke iteration speed note from 2026-05-16: the full fast package
-  loop was slow because it still staged the full bundled runtime, redeployed the
-  large production `node_modules` tree, recopied Node/uv payloads, and signed
-  runtime binaries on every shell-only app smoke. Local smoke lanes can now run
+- Packaging-smoke iteration can use
   `bash scripts/package-consumer-mac-app-fast.sh --instance <id> --reuse-runtime`
-  after one normal fast package, but shipping/default package behavior remains
-  unchanged.
+  after one normal fast package when only the app shell changed. Do not use
+  `--reuse-runtime` after runtime JS, extension, skill, template, package, Node,
+  uv, or bundled dependency changes.
 
 ## v1 commercial decision
 
@@ -442,13 +361,13 @@ Say this directly:
 - post-launch app-bundle mutation is also a wider-beta blocker: Jarvis must not
   write extension `node_modules` or other runtime dependencies inside
   `/Applications/Jarvis.app` after signing
-- final 2026-05-14 trusted-tester `Jarvis.dmg` from commit `ab9c3c1ca1` is
-  notarized, Gatekeeper-accepted, copied to the sacred repo root, uploaded with
-  its Jarvis ZIP/appcast assets, installed over Artem's current app, and smoke
-  tested. It remains a trusted-ring artifact only; the next 4-5 waiting testers
-  should receive a current-main recut after P0 onboarding fixes. Wider
-  distribution still waits on `ai.jarvis.mac` migration, post-launch bundle
-  immutability, and the remaining beta gates.
+- current RC app commit is `d9981f111d`; fallback BotFather-token proof passed
+  with `@jarvis_4918_bot`, but managed Telegram creation is still blocked
+  inside Telegram/BotFather before the backend callback.
+- `--fast` RC packages are Developer ID signed but unnotarized, so Gatekeeper
+  rejection is expected. Do not present a fast RC artifact as the final release.
+- final release still needs notarized DMG/ZIP assets and a real Sparkle N-to-N+1
+  update proof before it can be treated as release-ready.
 
 ### Roadmap
 
@@ -456,12 +375,24 @@ Use `docs/research/jarvis-consumer-launch-plan.md` for the live task tracker,
 owners, proof, and P0/P1/P2 status. This package doc keeps only launch-facing
 truth:
 
-| State                                                            | Launch-facing item                                                                                                                                                                                           |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Completed for trusted testers                                    | Jarvis visible branding, notarized trusted-tester DMG, public Jarvis ZIP/appcast assets, account/trial backend, managed utility backend, page-based onboarding shell, Managed Bots-first Telegram path.      |
-| Needed before the next 4-5 waiting testers receive a new package | A recut from current `main` after the P0 onboarding fixes, plus package verification that source polish and secret-safety gates are actually in the shipped artifact.                                        |
-| Needed before Reddit / broad public beta                         | `ai.jarvis.mac` bundle/runtime/update identity migration, full Sparkle update-cycle proof, broader onboarding polish, Claude Code consumer exposure, Telegram model-picker cleanup, and public-copy cleanup. |
-| Deferred until evidence of friction                              | Maintenance polish that does not block current testers.                                                                                                                                                      |
+- Completed for current RC proof: Jarvis visible branding, account/trial
+  backend, managed utility backend, page-based onboarding shell, and fallback
+  BotFather-token Telegram proof with `@jarvis_4918_bot` from RC commit
+  `d9981f111d`.
+- Launch-critical unless explicitly waived: Managed Telegram creation. Current
+  blocker is Telegram/BotFather hanging inside Create Bot before Jarvis
+  receives the backend callback; keep the managed tracker as the detailed
+  source of truth.
+- Needed before waiting testers receive a package: notarized DMG/ZIP from the
+  current RC line, Gatekeeper/stapler verification, package secret audit, and
+  proof that the shipped app matches the current RC code and expected
+  onboarding path.
+- Needed before Reddit / broad public beta: `ai.jarvis.mac` bundle/runtime/
+  update identity migration, full Sparkle N-to-N+1 update proof, broader
+  onboarding polish, Claude Code consumer exposure, Telegram model-picker
+  cleanup, and copy pass.
+- Deferred until evidence of friction: maintenance polish that does not block
+  current testers.
 
 ### Telegram command/settings strategy
 
@@ -486,14 +417,12 @@ through consumer setup. Candidate shape:
 - Managed Bots stays the consumer path; BYO BotFather token, custom commands,
   verbose developer detail, and internal tool/skill IDs stay in the advanced
   path.
-- Telegram Managed Bots is viable. The 2026-05-18 live spike proved Jarvis can
-  run a manager bot, let the user approve creation of a personal managed Jarvis
-  bot, fetch the managed token server-side, verify the child bot, and restrict
-  access. The follow-up live smoke proved Render health with
-  `telegram_managed_bots=true` and a connected start/status session with token
-  output redacted. The normal path is now replacing the manual BotFather setup
-  step with this manager-bot approval flow while keeping BYO BotFather tokens in
-  the advanced path.
+- Telegram Managed Bots is the intended consumer path, but it is not currently
+  release-proven for the RC. The 2026-05-18 spike proved the backend design can
+  create and verify managed child bots, while the 2026-06-05 RC proof is blocked
+  by Telegram/BotFather hanging inside the Create Bot transaction before Jarvis
+  receives a backend callback. Fallback BotFather token setup is the RC proof
+  path; managed creation remains launch-critical unless explicitly waived.
 - Jarvis Consumer RC Telegram proof should treat Telegram Desktop Start,
   BotFather managed bot creation, command-menu screenshots, and follow-up DM
   steps as human handoff when the user is actively using the Mac. The agent may
