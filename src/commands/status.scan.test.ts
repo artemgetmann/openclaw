@@ -22,10 +22,6 @@ vi.mock("../config/config.js", () => ({
   readBestEffortConfig: mocks.readBestEffortConfig,
 }));
 
-vi.mock("../config/io.js", () => ({
-  readBestEffortConfig: mocks.readBestEffortConfig,
-}));
-
 vi.mock("../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
@@ -61,11 +57,8 @@ vi.mock("./status.scan.deps.runtime.js", () => ({
 }));
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway: mocks.callGateway,
-}));
-
-vi.mock("../gateway/connection-details.js", () => ({
   buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("../gateway/probe.js", () => ({

@@ -1,18 +1,13 @@
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { scanStatusJsonFast } from "./status-json-fast.js";
+import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
+import { scanStatus } from "./status.scan.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
-let statusDaemonModulePromise: Promise<typeof import("./status.daemon.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
   return providerUsagePromise;
-}
-
-function loadStatusDaemonModule() {
-  statusDaemonModulePromise ??= import("./status.daemon.js");
-  return statusDaemonModulePromise;
 }
 
 const SKIPPED_SECURITY_AUDIT = {
@@ -30,7 +25,7 @@ export async function statusJsonCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const scan = await scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all });
+  const scan = await scanStatus({ json: true, timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
 
   const usage = opts.usage
     ? await loadProviderUsage().then(({ loadProviderUsageSummary }) =>
@@ -38,12 +33,10 @@ export async function statusJsonCommand(
       )
     : undefined;
 
-  // Service status reaches platform-specific runtime helpers. Load it after the
-  // lean scan so importing `status --json` does not pay that cost up front.
-  const [daemon, nodeDaemon] = await loadStatusDaemonModule().then(
-    ({ getDaemonStatusSummary, getNodeDaemonStatusSummary }) =>
-      Promise.all([getDaemonStatusSummary(), getNodeDaemonStatusSummary()]),
-  );
+  const [daemon, nodeDaemon] = await Promise.all([
+    getDaemonStatusSummary(),
+    getNodeDaemonStatusSummary(),
+  ]);
   const channelInfo = resolveUpdateChannelDisplay({
     configChannel: normalizeUpdateChannel(scan.cfg.update?.channel),
     installKind: scan.update.installKind,
