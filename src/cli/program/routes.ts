@@ -49,9 +49,7 @@ const routeStatus: RouteSpec = {
     }
     if (json) {
       if (deep) {
-        const { statusJsonDeepCommand } = await import("../../commands/status-json-deep.js");
-        await statusJsonDeepCommand({ all, usage, timeoutMs }, defaultRuntime);
-        return true;
+        return false;
       }
       const { statusJsonCommand } = await import("../../commands/status-json.js");
       await statusJsonCommand({ all, usage, timeoutMs }, defaultRuntime);

@@ -1,5 +1,3 @@
-import { callGateway } from "../gateway/call.js";
-import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
@@ -12,9 +10,6 @@ function loadProviderUsage() {
   return providerUsagePromise;
 }
 
-type StatusJsonScan = Awaited<ReturnType<typeof scanStatus>>;
-type StatusJsonSecurityAudit = unknown;
-
 const SKIPPED_SECURITY_AUDIT = {
   skipped: true,
   reason: "status --json skips security audit unless --deep is set",
@@ -22,41 +17,21 @@ const SKIPPED_SECURITY_AUDIT = {
   findings: [],
 };
 
-export async function writeStatusJsonCommand(
+export async function statusJsonCommand(
   opts: {
-    deep?: boolean;
     usage?: boolean;
     timeoutMs?: number;
     all?: boolean;
   },
   runtime: RuntimeEnv,
-  resolveSecurityAudit: (scan: StatusJsonScan) => Promise<StatusJsonSecurityAudit>,
 ) {
   const scan = await scanStatus({ json: true, timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
-  const securityAudit = await resolveSecurityAudit(scan);
 
   const usage = opts.usage
     ? await loadProviderUsage().then(({ loadProviderUsageSummary }) =>
         loadProviderUsageSummary({ timeoutMs: opts.timeoutMs }),
       )
     : undefined;
-  const health = opts.deep
-    ? await callGateway({
-        method: "health",
-        params: { probe: true },
-        timeoutMs: opts.timeoutMs,
-        config: scan.cfg,
-      }).catch(() => undefined)
-    : undefined;
-  const lastHeartbeat =
-    opts.deep && scan.gatewayReachable
-      ? await callGateway<HeartbeatEventPayload | null>({
-          method: "last-heartbeat",
-          params: {},
-          timeoutMs: opts.timeoutMs,
-          config: scan.cfg,
-        }).catch(() => null)
-      : null;
 
   const [daemon, nodeDaemon] = await Promise.all([
     getDaemonStatusSummary(),
@@ -93,28 +68,12 @@ export async function writeStatusJsonCommand(
         gatewayService: daemon,
         nodeService: nodeDaemon,
         agents: scan.agentStatus,
-        securityAudit,
+        securityAudit: SKIPPED_SECURITY_AUDIT,
         secretDiagnostics: scan.secretDiagnostics,
-        ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
+        ...(usage ? { usage } : {}),
       },
       null,
       2,
     ),
-  );
-}
-
-export async function statusJsonCommand(
-  opts: {
-    deep?: boolean;
-    usage?: boolean;
-    timeoutMs?: number;
-    all?: boolean;
-  },
-  runtime: RuntimeEnv,
-) {
-  await writeStatusJsonCommand(
-    { ...opts, deep: false },
-    runtime,
-    async () => SKIPPED_SECURITY_AUDIT,
   );
 }
