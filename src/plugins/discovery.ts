@@ -903,6 +903,19 @@ function discoverFromPath(params: {
   }
 }
 
+function directRootMatchesScopedPlugin(rootDir: string, pluginId: string): boolean {
+  const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+  if (!fs.existsSync(manifestPath)) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { id?: unknown };
+    return typeof parsed.id === "string" && parsed.id.trim() === pluginId;
+  } catch {
+    return false;
+  }
+}
+
 function discoverScopedPluginCandidates(params: {
   onlyPluginIds: string[];
   roots: Array<{
@@ -928,6 +941,24 @@ function discoverScopedPluginCandidates(params: {
     for (const root of params.roots) {
       if (!root.dir) {
         continue;
+      }
+      if (directRootMatchesScopedPlugin(root.dir, pluginId)) {
+        const beforeCount = params.candidates.length;
+        discoverFromPath({
+          rawPath: root.dir,
+          origin: root.origin,
+          ownershipUid: params.ownershipUid,
+          repairBundledPermissions: params.repairBundledPermissions,
+          workspaceDir: root.workspaceDir,
+          env: params.env,
+          candidates: params.candidates,
+          diagnostics: params.diagnostics,
+          seen: params.seen,
+          manifestCache: params.manifestCache,
+        });
+        if (params.candidates.length > beforeCount) {
+          unresolved.delete(pluginId);
+        }
       }
       const candidateDir = path.join(root.dir, pluginId);
       if (!fs.existsSync(candidateDir)) {

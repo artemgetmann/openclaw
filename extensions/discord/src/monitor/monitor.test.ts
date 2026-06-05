@@ -171,7 +171,9 @@ describe("agent components", () => {
 
     expect(defer).toHaveBeenCalledWith({ ephemeral: true });
     expect(reply).toHaveBeenCalledTimes(1);
-    expect(reply.mock.calls[0]?.[0]?.content).toContain("Pairing code: PAIRCODE");
+    expect(reply.mock.calls[0]?.[0]?.content).toMatch(
+      /Pairing code:\s*```[\s\S]*PAIRCODE[\s\S]*```/,
+    );
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 

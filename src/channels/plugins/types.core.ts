@@ -121,6 +121,27 @@ export type ChannelAccountSnapshot = {
     | null;
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
+  transportActivity?: {
+    mode?: string;
+    active?: boolean;
+    inFlight?: number;
+    startedCount?: number;
+    completedCount?: number;
+    lastStartedAt?: number | null;
+    lastCompletedAt?: number | null;
+    lastOutcome?: string | null;
+    lastError?: string | null;
+    lastDurationMs?: number | null;
+    transportGeneration?: number;
+    restartAttempts?: number;
+    stallCount?: number;
+    stopTimeoutCount?: number;
+    watchdog?: {
+      lastStallAt?: number | null;
+      lastStopTimeoutAt?: number | null;
+      escalation?: string | null;
+    };
+  };
   lastError?: string | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
@@ -130,6 +151,11 @@ export type ChannelAccountSnapshot = {
   activeRuns?: number;
   lastRunActivityAt?: number | null;
   mode?: string;
+  lastTransportActivityAt?: number | null;
+  pollingInFlight?: boolean;
+  lastPollStartedAt?: number | null;
+  lastPollCompletedAt?: number | null;
+  lastPollOutcome?: string | null;
   dmPolicy?: string;
   allowFrom?: string[];
   tokenSource?: string;

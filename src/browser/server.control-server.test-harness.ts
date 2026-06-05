@@ -141,6 +141,11 @@ const pwMocks = vi.hoisted(() => ({
   selectOptionViaPlaywright: vi.fn(async () => {}),
   setInputFilesViaPlaywright: vi.fn(async () => {}),
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+  snapshotRoleViaPlaywright: vi.fn(async () => ({
+    snapshot: "role ok",
+    refs: {},
+    stats: { lines: 1, chars: 7, refs: 0, interactive: 0 },
+  })),
   traceStopViaPlaywright: vi.fn(async () => {}),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),
@@ -152,6 +157,7 @@ const pwMocks = vi.hoisted(() => ({
     path: "/tmp/report.pdf",
   })),
   waitForViaPlaywright: vi.fn(async () => {}),
+  forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
 }));
 
 export function getPwMocks(): Record<string, MockFn> {

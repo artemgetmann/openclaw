@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { clearCliSessionId } from "../../agents/cli-session.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -283,7 +284,11 @@ export async function runMemoryFlushIfNeeded(params: {
   })();
 
   const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
-  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  // CLI providers can hide the same oversized context behind persisted resume ids.
+  // Let the shared pre-compaction memory flush run before CLI turns; when that
+  // flush completes a real compaction, drop the CLI resume id so the next CLI
+  // call starts from compacted OpenClaw context instead of the old hidden session.
+  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat;
   let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
@@ -413,6 +418,14 @@ export async function runMemoryFlushIfNeeded(params: {
     projectedTokenCount > 0
       ? projectedTokenCount
       : undefined;
+  const hardReserveThreshold = Math.max(
+    0,
+    contextWindowTokens - memoryFlushSettings.reserveTokensFloor,
+  );
+  const hardReserveBreached =
+    typeof tokenCountForFlush === "number" &&
+    hardReserveThreshold > 0 &&
+    tokenCountForFlush >= hardReserveThreshold;
 
   // Diagnostic logging to understand why memory flush may not trigger.
   logVerbose(
@@ -431,13 +444,16 @@ export async function runMemoryFlushIfNeeded(params: {
     (memoryFlushSettings &&
       memoryFlushWritable &&
       !params.isHeartbeat &&
-      !isCli &&
       shouldRunMemoryFlush({
         entry,
         tokenCount: tokenCountForFlush,
         contextWindowTokens,
         reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
         softThresholdTokens: memoryFlushSettings.softThresholdTokens,
+        // A stale flush marker must not suppress recovery once the session is
+        // already inside the configured reserve; that is the exact live failure
+        // mode that let an over-budget CLI session keep replying without flush.
+        ignoreAlreadyFlushed: hardReserveBreached,
       })) ||
     (shouldForceFlushByTranscriptSize &&
       entry != null &&
@@ -525,6 +541,9 @@ export async function runMemoryFlushIfNeeded(params: {
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
       0;
     if (memoryCompactionCompleted) {
+      if (isCli && activeSessionEntry) {
+        clearCliSessionId(activeSessionEntry, params.followupRun.run.provider);
+      }
       const nextCount = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
@@ -540,10 +559,15 @@ export async function runMemoryFlushIfNeeded(params: {
         const updatedEntry = await updateSessionStoreEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
-          update: async () => ({
-            memoryFlushAt: Date.now(),
-            memoryFlushCompactionCount,
-          }),
+          update: async (entry) => {
+            if (isCli) {
+              clearCliSessionId(entry, params.followupRun.run.provider);
+            }
+            return {
+              memoryFlushAt: Date.now(),
+              memoryFlushCompactionCount,
+            };
+          },
         });
         if (updatedEntry) {
           activeSessionEntry = updatedEntry;

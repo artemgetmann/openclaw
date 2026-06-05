@@ -163,8 +163,8 @@ describe("port collision prevention", () => {
     const fixedUsedPorts = getUsedPorts(resolved.profiles);
     const fixedAllocatedPort = allocateCdpPort(fixedUsedPorts);
 
-    // Resolved: first NEW profile gets 18801, avoiding collision
-    expect(fixedAllocatedPort).toBe(CDP_PORT_RANGE_START + 1);
+    // Resolved config reserves both built-in managed profiles before user-created profiles.
+    expect(fixedAllocatedPort).toBe(CDP_PORT_RANGE_START + 2);
   });
 });
 

@@ -131,7 +131,7 @@ Verify:
 
 ## 4. WhatsApp E2E
 
-### Required Test Surface
+### Gmail Required Test Surface
 
 This requires a real reachable WhatsApp test chat.
 
@@ -143,7 +143,7 @@ That can be:
 
 Without real source access, this is not full E2E.
 
-### Actual Validation Flow
+### Gmail Actual Validation Flow
 
 1. Create the monitor from CLI targeting the WhatsApp chat.
 2. Confirm the monitor record and durable `monitorSessionKey`.
@@ -159,7 +159,7 @@ Without real source access, this is not full E2E.
    - CLI origin session received the monitor result
    - checkpoint advanced
 
-### Pass Condition
+### Gmail Pass Condition
 
 Pass only if:
 
@@ -168,7 +168,7 @@ Pass only if:
 - it does not keep replaying the same stale `8pm` negotiation line after `7:30` and `7:45`
 - the same inbound item is not reprocessed forever
 
-### Evidence To Save
+### Gmail Evidence To Save
 
 - monitor record before/after wakes
 - cron/wake logs showing the same `monitorSessionKey`

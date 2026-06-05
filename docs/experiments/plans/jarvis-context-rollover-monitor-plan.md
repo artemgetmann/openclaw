@@ -233,7 +233,7 @@ Local checkpoint skill:
 - Store checkpoints locally in the active OpenClaw workspace under
   `checkpoints/YYYY-MM-DD/<timestamp>-<slug>.md`.
 - "Resume from checkpoint" or "resume from the latest checkpoint" reads the
-  newest local checkpoint; "resume from checkpoint <id>" reads the named one.
+  newest local checkpoint; "resume from checkpoint ID" reads the named one.
 - MindMirror can remain useful for Artem's personal workflow, but consumer
   Jarvis should not require remote memory infrastructure for this handoff.
 
@@ -347,7 +347,7 @@ job. Allow explicit advanced override for separate monitors.
 - Heavy-chat nudge appears once and tells the user to make a checkpoint before
   starting a new chat. Covered by PR #697 focused tests.
 - "Resume from checkpoint" works from the latest local checkpoint, while
-  "resume from checkpoint <id>" works for a specific saved handoff. PR #697
+  "resume from checkpoint ID" works for a specific saved handoff. PR #697
   adds the local skill contract and a no-provider prompt-injection regression;
   live isolated resume proof should use a valid Codex-auth tester runtime, not
   direct provider API keys.

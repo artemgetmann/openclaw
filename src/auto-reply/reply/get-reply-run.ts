@@ -530,6 +530,13 @@ export async function runPreparedReply(
       senderE164: sessionCtx.SenderE164?.trim() || undefined,
       senderIsOwner: command.senderIsOwner,
       sessionFile,
+      // totalTokens/inputTokens are the last provider-reported prompt pressure.
+      // They can remain over budget even when the active transcript pointer has
+      // moved; use them to force one overflow-recovery compaction before prompt.
+      persistedPromptTokens: Math.max(
+        sessionEntry?.totalTokens ?? 0,
+        sessionEntry?.inputTokens ?? 0,
+      ),
       workspaceDir,
       config: cfg,
       skillsSnapshot,

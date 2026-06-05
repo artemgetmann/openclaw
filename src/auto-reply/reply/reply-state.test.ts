@@ -336,6 +336,23 @@ describe("shouldRunMemoryFlush", () => {
     ).toBe(false);
   });
 
+  it("can ignore prior flush markers when hard reserve is already breached", () => {
+    expect(
+      shouldRunMemoryFlush({
+        entry: {
+          totalTokens: 200_470,
+          totalTokensFresh: true,
+          compactionCount: 0,
+          memoryFlushCompactionCount: 0,
+        },
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+        ignoreAlreadyFlushed: true,
+      }),
+    ).toBe(true);
+  });
+
   it("runs when above threshold and not flushed", () => {
     expect(
       shouldRunMemoryFlush({

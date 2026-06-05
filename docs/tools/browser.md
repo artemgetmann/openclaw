@@ -45,16 +45,16 @@ Gateway.
 
 ## Profiles: `signed-in` vs `openclaw` vs `user-live`
 
-- `signed-in`: managed cloned Chrome lane for signed-in/hostile real-world browsing.
+- `signed-in`: cloned signed-in Chrome lane controlled through Chrome DevTools MCP.
 - `openclaw`: managed, isolated browser (no extension required).
 - `user-live`: host-local live-session lane for your real Chrome tabs, extensions, and login state.
 
 For agent browser tool calls:
 
-- Prefer `profile="signed-in"` for signed-in sites, anti-bot-sensitive flows, and tasks that benefit from your real Chrome cookies/session state in a managed clone.
+- Default serious web work to `profile="signed-in"` for signed-in sites, anti-bot-sensitive flows, and tasks that benefit from cloned real Chrome cookies/session state.
 - Prefer `profile="openclaw"` for public browsing, clean isolated runs, and fallback when the signed-in lane is unavailable or worse on a specific site.
 - Use `profile="user-live"` only when the task explicitly depends on your real signed-in browser session, existing tabs, or installed extensions.
-- If the task clearly depends on existing login state and `profile="user-live"` is unavailable, stop and surface the blocker instead of silently switching to a clean isolated browser.
+- If the task clearly depends on existing login state and `profile="signed-in"` or `profile="user-live"` is unavailable, stop and surface the blocker instead of silently switching to a clean isolated browser.
 - If multiple Chrome profiles may exist, use a named `existing-session` profile pinned by `userDataDir`, `profileDirectory`, or `cdpUrl` instead of guessing.
 - `profile` is the explicit override when you want a specific browser mode.
 
@@ -85,7 +85,14 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
-      "signed-in": { cdpPort: 18801, cloneFromUserProfile: true, color: "#1F9D55" },
+      "signed-in": {
+        driver: "existing-session",
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        cloneFromUserProfile: true,
+        profileDirectory: "Default",
+        color: "#1F9D55",
+      },
       work: { cdpPort: 18802, color: "#0066CC" },
       "user-live": {
         driver: "existing-session",
@@ -128,8 +135,8 @@ Notes:
   URL such as `http://127.0.0.1:9333` when you need an exact Chrome clone.
 - Set `browser.profiles.<name>.userDataDir` when an existing-session profile
   should attach to a non-default Chromium user profile such as Brave or Edge.
-- `driver: "existing-session"` is the explicit live-browser attach mode.
-- `signed-in` is the built-in cloned-profile lane.
+- `driver: "existing-session"` is the Chrome MCP attach mode.
+- `signed-in` is the built-in cloned-profile lane and OpenClaw launches the clone before attaching Chrome MCP.
 - Legacy `profile="user"` resolves to `signed-in` unless you explicitly configure a custom profile literally named `user`.
 
 ## Use Brave (or another Chromium-based browser)
@@ -299,9 +306,9 @@ OpenClaw supports multiple named profiles (routing configs). Profiles can be:
 Defaults:
 
 - The `openclaw` profile is auto-created if missing.
-- The `user-live` profile is built-in for the user's actual live Chrome session.
-- Existing-session profiles are opt-in beyond `user-live`; create them with `--driver existing-session`.
-- Cloned signed-in browsers remain available only as explicit custom profiles via `cloneFromUserProfile`.
+- The `signed-in` profile is built-in for cloned signed-in Chrome through Chrome MCP.
+- The `user-live` profile is built-in for the user's actual live Chrome session through Chrome MCP.
+- Additional existing-session profiles are opt-in; create them with `--driver existing-session`.
 - Local CDP ports allocate from **18800–18899** by default.
 - Deleting a profile moves its local data directory to Trash.
 
@@ -318,8 +325,9 @@ Official background and setup references:
 - [Chrome for Developers: Use Chrome DevTools MCP with your browser session](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session)
 - [Chrome DevTools MCP README](https://github.com/ChromeDevTools/chrome-devtools-mcp)
 
-Built-in profile:
+Built-in profiles:
 
+- `signed-in` for cloned signed-in Chrome through `--browserUrl`
 - `user-live`
 
 Optional: create your own custom existing-session profile if you want a
@@ -327,6 +335,9 @@ different name, color, or browser data directory.
 
 Default behavior:
 
+- The built-in `signed-in` profile launches a cloned Chrome profile, exposes a
+  local debug URL, and attaches through Chrome MCP `--browserUrl`. Use this as
+  the default lane for serious signed-in web work.
 - The built-in `user-live` profile uses Chrome MCP auto-connect as the explicit
   live browser lane. Use this when the user means the real open Chrome window,
   tabs, extensions, or signed-in session.
@@ -351,18 +362,18 @@ Use `userDataDir` for Brave, Edge, Chromium, or a non-default Chrome profile:
 }
 ```
 
-Use `cdpUrl` when you launch a dedicated Chrome clone yourself and want
-OpenClaw to attach through Chrome MCP's `--browserUrl` mode:
+Use `cdpUrl` when you launch an additional dedicated Chrome clone yourself and
+want OpenClaw to attach through Chrome MCP's `--browserUrl` mode:
 
 ```json5
 {
   browser: {
     profiles: {
-      "signed-in-mcp": {
+      "batik-test": {
         driver: "existing-session",
         attachOnly: true,
         cdpUrl: "http://127.0.0.1:9333",
-        userDataDir: "/tmp/openclaw-signed-in-mcp-clone",
+        userDataDir: "/tmp/openclaw-batik-test-clone",
         profileDirectory: "Profile 4",
         color: "#3B82F6",
       },
@@ -371,9 +382,9 @@ OpenClaw to attach through Chrome MCP's `--browserUrl` mode:
 }
 ```
 
-That profile is intentionally separate from the built-in `signed-in` profile.
-Use it for cloned signed-in Chrome MCP experiments without changing the default
-managed cloned-browser lane.
+Keep custom clones separate from the built-in `signed-in` profile unless you
+need an explicit test lane. Normal agent work should use built-in `signed-in`,
+not a third product-facing browser lane.
 
 Then in the matching browser:
 
@@ -415,11 +426,12 @@ What to check if attach does not work:
 
 Agent use:
 
-- Use `profile="openclaw"` by default.
-- Use `profile="user-live"` when you need the user’s real logged-in browser state or existing tabs/extensions.
+- Use `profile="signed-in"` by default for serious signed-in web work.
+- Use `profile="openclaw"` for clean public browsing and fallback.
+- Use `profile="user-live"` only when you need the user’s exact live tabs/extensions/session.
 - If you use a custom existing-session profile, pass that explicit profile name.
-- Only choose this mode when the user is at the computer to approve the attach
-  prompt.
+- Only choose `user-live` when the user is at the computer to approve the attach
+  prompt if Chrome asks.
 - the Gateway or node host can spawn `npx chrome-devtools-mcp@latest --autoConnect`
 
 Notes:

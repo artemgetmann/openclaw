@@ -120,7 +120,7 @@ export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164:
     text: expect.stringContaining(`Your WhatsApp phone number: ${senderE164}`),
   });
   expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
-    text: expect.stringContaining("Pairing code: PAIRCODE"),
+    text: expect.stringMatching(/Pairing code:\s*```[\s\S]*PAIRCODE[\s\S]*```/),
   });
 }
 

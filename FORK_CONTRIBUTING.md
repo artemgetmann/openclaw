@@ -74,6 +74,11 @@ Do not blindly paste the full upstream PR template into fork PRs unless the targ
 
 Fork PRs should include exact proof, not vague confidence language.
 
+For CI and merge eligibility, use `docs/ci.md` as the source of truth. In
+short: GitHub owns waiting and auto-merge; agents own diagnosis, review-bot
+handling, failed-CI fixes, and runtime shipping only after merge when explicitly
+requested.
+
 Good proof:
 
 - exact runtime ownership lines

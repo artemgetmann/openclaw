@@ -12,7 +12,9 @@ import { overflowBaseRunParams as baseParams } from "./run.overflow-compaction.s
 describe("runEmbeddedPiAgent auth profile selection failures", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedResolveAuthProfileOrder.mockReturnValue(["openai-codex:notblockedamazon"]);
+    mockedResolveAuthProfileOrder.mockReturnValue(["openai-codex:notblockedamazon"] as ReturnType<
+      typeof mockedResolveAuthProfileOrder
+    >);
     mockedGetApiKeyForModel.mockRejectedValue(new Error("refresh_token_reused"));
     vi.mocked(classifyFailoverReason).mockReturnValue("auth_permanent");
   });

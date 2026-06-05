@@ -156,41 +156,34 @@ describe("message tool agent routing", () => {
       value: "telegram:123",
       channel: "telegram",
     },
-  ])(
-    "intercepts explicit same-target Telegram sends via $field",
-    async ({
-      field,
-      value,
-      currentChannelId,
-      channel,
-    }: {
+  ])("intercepts explicit same-target Telegram sends via $field", async (scenario) => {
+    const { field, value, currentChannelId, channel } = scenario as {
       field: "target" | "to" | "channelId";
       value: string;
       currentChannelId?: string;
       channel?: string;
-    }) => {
-      mockSendResult();
-      const tool = createMessageTool({
-        config: {} as never,
-        currentChannelProvider: "telegram",
-        currentChannelId: currentChannelId ?? "telegram:123",
-      });
+    };
+    mockSendResult();
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+      currentChannelId: currentChannelId ?? "telegram:123",
+    });
 
-      const result = await tool.execute("1", {
-        action: "send",
-        message: "Checking example.com.",
-        [field]: value,
-        ...(channel ? { channel } : {}),
-      });
+    const result = await tool.execute("1", {
+      action: "send",
+      message: "Checking example.com.",
+      [field]: value,
+      ...(channel ? { channel } : {}),
+    });
 
-      expect(mocks.runMessageAction).not.toHaveBeenCalled();
-      expect(result.details).toMatchObject({
-        ok: true,
-        __openclawSourcePreview: true,
-        message: "Checking example.com.",
-      });
-    },
-  );
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      ok: true,
+      __openclawSourcePreview: true,
+      message: "Checking example.com.",
+    });
+  });
 
   it("intercepts same Telegram group across legacy and bare forms", async () => {
     mockSendResult();

@@ -1702,6 +1702,31 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].outputTokens).toBe(10_000);
   });
 
+  it("prefers lastCallUsage over stale promptTokens for totalTokens", async () => {
+    const storePath = await createStorePath("openclaw-usage-cli-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "s1", updatedAt: Date.now(), totalTokens: 201_875 },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 1_180, output: 6, total: 202_908 },
+      lastCallUsage: { input: 1_180, output: 6, total: 1_186 },
+      promptTokens: 202_908,
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(1_180);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].inputTokens).toBe(1_180);
+    expect(stored[sessionKey].outputTokens).toBe(6);
+  });
+
   it("uses lastCallUsage cache counters when available", async () => {
     const storePath = await createStorePath("openclaw-usage-cache-");
     const sessionKey = "main";

@@ -54,6 +54,18 @@ const BrowserActSchema = Type.Object({
   // Common fields
   targetId: Type.Optional(Type.String()),
   ref: Type.Optional(Type.String()),
+  inputRef: Type.Optional(
+    Type.String({
+      description:
+        "Compatibility alias for ref. Prefer ref from the latest snapshot, especially for existing-session Chrome MCP profiles.",
+    }),
+  ),
+  element: Type.Optional(
+    Type.String({
+      description:
+        "Compatibility alias for selector when used with act requests. Prefer ref for existing-session Chrome MCP profiles.",
+    }),
+  ),
   includeSnapshot: Type.Optional(
     Type.Boolean({
       description:
@@ -69,6 +81,12 @@ const BrowserActSchema = Type.Object({
   labels: Type.Optional(Type.Boolean()),
   // click
   doubleClick: Type.Optional(Type.Boolean()),
+  dblClick: Type.Optional(
+    Type.Boolean({
+      description:
+        "Alias accepted for doubleClick; OpenClaw normalizes it before calling browser backends.",
+    }),
+  ),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),
   // type
@@ -97,13 +115,13 @@ const BrowserActSchema = Type.Object({
   optionText: Type.Optional(
     Type.String({
       description:
-        "For kind=chooseOption, the visible option text to select from a searchable select/combobox/listbox. Exact text is preferred.",
+        "For kind=chooseOption, the semantic visible option text or stable unique visible substring to select from a searchable select/combobox/listbox. Exact visible text is preferred; this is the only text used to verify the matched option.",
     }),
   ),
   query: Type.Optional(
     Type.String({
       description:
-        "Optional search text to type before choosing optionText. Defaults to optionText.",
+        "Optional filter/search text to type into the control before choosing optionText. Defaults to optionText; it is not accepted as a matched option by itself.",
     }),
   ),
   match: optionalStringEnum(BROWSER_OPTION_MATCH_MODES, {
@@ -130,6 +148,12 @@ const BrowserActSchema = Type.Object({
   loadState: Type.Optional(Type.String()),
   textGone: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),
+  timeout: Type.Optional(
+    Type.Number({
+      description:
+        "Alias accepted for timeoutMs; OpenClaw normalizes it before calling browser backends.",
+    }),
+  ),
   // evaluate
   fn: Type.Optional(Type.String()),
 });
@@ -158,11 +182,21 @@ export const BrowserToolSchema = Type.Object({
   labels: Type.Optional(Type.Boolean()),
   fullPage: Type.Optional(Type.Boolean()),
   ref: Type.Optional(Type.String()),
-  element: Type.Optional(Type.String()),
+  element: Type.Optional(
+    Type.String({
+      description:
+        "Screenshot element target, or legacy flattened act compatibility alias for selector. Prefer ref for existing-session Chrome MCP profiles.",
+    }),
+  ),
   type: optionalStringEnum(BROWSER_IMAGE_TYPES),
   level: Type.Optional(Type.String()),
   paths: Type.Optional(Type.Array(Type.String())),
-  inputRef: Type.Optional(Type.String()),
+  inputRef: Type.Optional(
+    Type.String({
+      description:
+        "Upload input target, or legacy flattened act compatibility alias for ref. Prefer ref from the latest snapshot.",
+    }),
+  ),
   timeoutMs: Type.Optional(Type.Number()),
   accept: Type.Optional(Type.Boolean()),
   promptText: Type.Optional(Type.String()),
@@ -175,6 +209,11 @@ export const BrowserToolSchema = Type.Object({
     }),
   ),
   doubleClick: Type.Optional(Type.Boolean()),
+  dblClick: Type.Optional(
+    Type.Boolean({
+      description: "Legacy flattened alias for doubleClick.",
+    }),
+  ),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),
   text: Type.Optional(Type.String()),
@@ -198,13 +237,13 @@ export const BrowserToolSchema = Type.Object({
   optionText: Type.Optional(
     Type.String({
       description:
-        "Legacy flattened act option for kind=chooseOption. Visible option text to select from a searchable select/combobox/listbox.",
+        "Legacy flattened act option for kind=chooseOption. Semantic visible option text or stable unique visible substring to select from a searchable select/combobox/listbox; this is the verification target.",
     }),
   ),
   query: Type.Optional(
     Type.String({
       description:
-        "Legacy flattened act option for kind=chooseOption. Optional search text; defaults to optionText.",
+        "Legacy flattened act option for kind=chooseOption. Optional filter/search text; defaults to optionText and is not a match target.",
     }),
   ),
   match: optionalStringEnum(BROWSER_OPTION_MATCH_MODES),
@@ -220,6 +259,11 @@ export const BrowserToolSchema = Type.Object({
   textGone: Type.Optional(Type.String()),
   loadState: Type.Optional(Type.String()),
   fn: Type.Optional(Type.String()),
+  timeout: Type.Optional(
+    Type.Number({
+      description: "Legacy flattened alias for timeoutMs.",
+    }),
+  ),
   actions: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
   stopOnError: Type.Optional(Type.Boolean()),
   request: Type.Optional(BrowserActSchema),

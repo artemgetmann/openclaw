@@ -126,13 +126,9 @@ export function registerBrowserAgentActHookRoutes(
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          if (timeoutMs) {
-            return jsonError(
-              res,
-              501,
-              "existing-session dialog handling does not support timeoutMs.",
-            );
-          }
+          // Chrome MCP dialog hooks install synchronous window overrides. There
+          // is no timing wait to tune here, so tolerate harmless timeout fields
+          // from generic callers instead of failing an otherwise valid hook.
           await evaluateChromeMcpScript({
             profileName: profileCtx.profile.name,
             userDataDir: profileCtx.profile.userDataDir,

@@ -1,4 +1,5 @@
 import type { RunOptions } from "@grammyjs/runner";
+import type { ChannelAccountSnapshot } from "../../../src/channels/plugins/types.js";
 import { resolveAgentMaxConcurrent } from "../../../src/config/agent-limits.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { loadConfig } from "../../../src/config/config.js";
@@ -36,6 +37,7 @@ export type MonitorTelegramOpts = {
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
   webhookCertPath?: string;
+  setStatus?: (next: Partial<ChannelAccountSnapshot>) => void;
 };
 
 export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
@@ -141,8 +143,13 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       throw err;
     }
 
-    const proxyFetch =
-      opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
+    const proxyUrl = account.config.proxy?.trim();
+    const proxyFetchFactory = opts.proxyFetch
+      ? () => opts.proxyFetch
+      : proxyUrl
+        ? () => makeProxyFetch(proxyUrl)
+        : undefined;
+    const proxyFetch = proxyFetchFactory?.();
 
     execApprovalsHandler = new TelegramExecApprovalHandler({
       token,
@@ -214,6 +221,38 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       return;
     }
 
+    opts.setStatus?.({
+      accountId: account.accountId,
+      mode: "polling",
+      connected: false,
+      lastError: null,
+      pollingInFlight: false,
+      lastPollStartedAt: null,
+      lastPollCompletedAt: null,
+      lastPollOutcome: null,
+      lastTransportActivityAt: null,
+      transportActivity: {
+        mode: "polling",
+        active: false,
+        inFlight: 0,
+        startedCount: 0,
+        completedCount: 0,
+        lastStartedAt: null,
+        lastCompletedAt: null,
+        lastOutcome: null,
+        lastError: null,
+        lastDurationMs: null,
+        restartAttempts: 0,
+        stallCount: 0,
+        stopTimeoutCount: 0,
+        watchdog: {
+          lastStallAt: null,
+          lastStopTimeoutAt: null,
+          escalation: null,
+        },
+      },
+    });
+
     pollingSession = new TelegramPollingSession({
       token,
       config: cfg,
@@ -225,6 +264,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       getLastUpdateId: () => lastUpdateId,
       persistUpdateId,
       log,
+      proxyFetchFactory,
+      setStatus: opts.setStatus,
     });
     await pollingSession.runUntilAbort();
   } finally {

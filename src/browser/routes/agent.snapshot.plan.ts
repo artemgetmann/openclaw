@@ -14,6 +14,7 @@ import { toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 export type BrowserSnapshotPlan = {
   format: "ai" | "aria";
   mode?: "efficient";
+  timeoutMs?: number;
   labels?: boolean;
   limit?: number;
   resolvedMaxChars?: number;
@@ -63,6 +64,11 @@ export function resolveSnapshotPlan(params: {
   const interactiveRaw = toBoolean(params.query.interactive);
   const compactRaw = toBoolean(params.query.compact);
   const depthRaw = toNumber(params.query.depth);
+  const timeoutRaw = toNumber(params.query.timeoutMs);
+  const timeoutMs =
+    typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw)
+      ? Math.max(500, Math.min(60_000, Math.floor(timeoutRaw)))
+      : undefined;
   const refsModeRaw = toStringOrEmpty(params.query.refs).trim();
   const refsMode: "aria" | "role" | undefined =
     refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
@@ -76,6 +82,7 @@ export function resolveSnapshotPlan(params: {
   return {
     format,
     mode,
+    timeoutMs,
     labels,
     limit,
     resolvedMaxChars,

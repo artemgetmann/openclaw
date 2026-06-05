@@ -670,8 +670,9 @@ describe("createTelegramBot", () => {
     editMessageTextSpy.mockClear();
 
     const storePath = `/tmp/openclaw-telegram-model-dm-topic-${process.pid}-${Date.now()}.json`;
-    const baseSessionKey = "agent:main:telegram:default:direct:12345";
+    const baseSessionKey = "agent:main:main";
     const threadSessionKey = `${baseSessionKey}:thread:12345:99`;
+    const legacyThreadSessionKey = "agent:main:telegram:default:direct:12345:thread:12345:99";
 
     await rm(storePath, { force: true });
     try {
@@ -702,7 +703,7 @@ describe("createTelegramBot", () => {
       // Telegram can drop DM-topic thread fields on callback payloads, so the
       // handler must recover the original thread session from the sent-message cache.
       recordSentMessage(12345, 77, {
-        sessionKey: threadSessionKey,
+        sessionKey: legacyThreadSessionKey,
         messageThreadId: 99,
       });
 
@@ -750,7 +751,7 @@ describe("createTelegramBot", () => {
     editMessageTextSpy.mockClear();
 
     const storePath = `/tmp/openclaw-telegram-model-dm-topic-reset-${process.pid}-${Date.now()}.json`;
-    const baseSessionKey = "agent:main:telegram:default:direct:12345";
+    const baseSessionKey = "agent:main:main";
     const threadSessionKey = `${baseSessionKey}:thread:12345:99`;
 
     await rm(storePath, { force: true });

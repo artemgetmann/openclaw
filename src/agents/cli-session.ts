@@ -50,3 +50,15 @@ export function setCliSessionId(entry: SessionEntry, provider: string, sessionId
     entry.claudeCliSessionId = trimmed;
   }
 }
+
+export function clearCliSessionId(entry: SessionEntry, provider: string): void {
+  const normalized = normalizeProviderId(provider);
+  if (entry.cliSessionIds?.[normalized] !== undefined) {
+    const next = { ...entry.cliSessionIds };
+    delete next[normalized];
+    entry.cliSessionIds = Object.keys(next).length > 0 ? next : undefined;
+  }
+  if (normalized === "claude-cli") {
+    entry.claudeCliSessionId = undefined;
+  }
+}

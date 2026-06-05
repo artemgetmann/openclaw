@@ -62,6 +62,13 @@ export function isCurrentProcessLaunchdServiceLabel(
 }
 
 function buildLaunchdRestartScript(mode: LaunchdRestartHandoffMode): string {
+  const waitForDelay = `delay_ms="$5"
+if [ -n "$delay_ms" ] && [ "$delay_ms" -gt 0 ] 2>/dev/null; then
+  delay_seconds=$((delay_ms / 1000))
+  delay_millis=$((delay_ms % 1000))
+  sleep "\${delay_seconds}.$(printf '%03d' "$delay_millis")"
+fi
+`;
   const waitForCallerPid = `wait_pid="$4"
 if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
   while kill -0 "$wait_pid" >/dev/null 2>&1; do
@@ -74,6 +81,7 @@ fi
     return `service_target="$1"
 domain="$2"
 plist_path="$3"
+${waitForDelay}
 ${waitForCallerPid}
 if ! launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
   launchctl enable "$service_target" >/dev/null 2>&1
@@ -87,6 +95,7 @@ fi
   return `service_target="$1"
 domain="$2"
 plist_path="$3"
+${waitForDelay}
 ${waitForCallerPid}
 if ! launchctl start "$service_target" >/dev/null 2>&1; then
   launchctl enable "$service_target" >/dev/null 2>&1
@@ -102,9 +111,14 @@ fi
 export function scheduleDetachedLaunchdRestartHandoff(params: {
   env?: Record<string, string | undefined>;
   mode: LaunchdRestartHandoffMode;
+  delayMs?: number;
   waitForPid?: number;
 }): LaunchdRestartHandoffResult {
   const target = resolveLaunchdRestartTarget(params.env);
+  const delayMs =
+    typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
+      ? Math.max(0, Math.floor(params.delayMs))
+      : 0;
   const waitForPid =
     typeof params.waitForPid === "number" && Number.isFinite(params.waitForPid)
       ? Math.floor(params.waitForPid)
@@ -120,6 +134,7 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         target.domain,
         target.plistPath,
         String(waitForPid),
+        String(delayMs),
       ],
       {
         detached: true,

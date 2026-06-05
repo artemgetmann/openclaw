@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelAccountSnapshot } from "../../../src/channels/plugins/types.js";
 import { monitorTelegramProvider } from "./monitor.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
 
@@ -73,7 +74,7 @@ const { createdBotStops } = vi.hoisted(() => ({
 }));
 
 const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
-  computeBackoff: vi.fn(() => 0),
+  computeBackoff: vi.fn((_policy: unknown, _attempt: number) => 0),
   sleepWithAbort: vi.fn(async () => undefined),
 }));
 const { readTelegramUpdateOffsetSpy } = vi.hoisted(() => ({
@@ -82,12 +83,24 @@ const { readTelegramUpdateOffsetSpy } = vi.hoisted(() => ({
 const { startTelegramWebhookSpy } = vi.hoisted(() => ({
   startTelegramWebhookSpy: vi.fn(async () => ({ server: { close: vi.fn() }, stop: vi.fn() })),
 }));
+const { makeProxyFetchSpy } = vi.hoisted(() => ({
+  makeProxyFetchSpy: vi.fn((proxyUrl: string) => {
+    const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
+    return proxyFetch;
+  }),
+}));
 
 type RunnerStub = {
   task: () => Promise<void>;
   stop: ReturnType<typeof vi.fn<() => void | Promise<void>>>;
   isRunning: () => boolean;
 };
+type TelegramApiTransformer = (
+  prev: (method: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>,
+  method: string,
+  payload: unknown,
+  signal?: AbortSignal,
+) => Promise<unknown>;
 
 const makeRunnerStub = (overrides: Partial<RunnerStub> = {}): RunnerStub => ({
   task: overrides.task ?? (() => Promise.resolve()),
@@ -185,6 +198,36 @@ function mockRunOnceWithStalledPollingRunner(): {
   return { stop };
 }
 
+function mockRunOnceWithUnstoppablePollingRunner(): {
+  stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
+} {
+  const stop = vi.fn<() => Promise<void>>(async () => {
+    await new Promise<void>(() => {});
+  });
+  runSpy.mockImplementationOnce(() =>
+    makeRunnerStub({
+      task: () => new Promise<void>(() => {}),
+      stop,
+      isRunning: () => true,
+    }),
+  );
+  return { stop };
+}
+
+function captureTelegramStatus() {
+  const statuses: Array<Partial<ChannelAccountSnapshot>> = [];
+  return {
+    statuses,
+    setStatus: (next: Partial<ChannelAccountSnapshot>) => {
+      statuses.push(next);
+    },
+  };
+}
+
+function latestTransportStatus(statuses: Array<Partial<ChannelAccountSnapshot>>) {
+  return [...statuses].reverse().find((status) => status.transportActivity);
+}
+
 function expectRecoverableRetryState(expectedRunCalls: number) {
   expect(computeBackoff).toHaveBeenCalled();
   expect(sleepWithAbort).toHaveBeenCalled();
@@ -261,6 +304,10 @@ vi.mock("./webhook.js", () => ({
   startTelegramWebhook: startTelegramWebhookSpy,
 }));
 
+vi.mock("./proxy.js", () => ({
+  makeProxyFetch: makeProxyFetchSpy,
+}));
+
 vi.mock("./update-offset-store.js", () => ({
   readTelegramUpdateOffset: readTelegramUpdateOffsetSpy,
   writeTelegramUpdateOffset: vi.fn(async () => undefined),
@@ -291,6 +338,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     createTelegramBotCalls.length = 0;
     computeBackoff.mockClear();
     sleepWithAbort.mockClear();
+    makeProxyFetchSpy.mockClear();
     startTelegramWebhookSpy.mockClear();
     registerUnhandledRejectionHandlerMock.mockClear();
     resetUnhandledRejection();
@@ -596,6 +644,156 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(computeBackoff).toHaveBeenCalled();
     expect(runSpy).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+
+  it("publishes getUpdates liveness into channel runtime status", async () => {
+    const { statuses, setStatus } = captureTelegramStatus();
+    const useCallCount = api.config.use.mock.calls.length;
+
+    await monitorWithAutoAbort({ setStatus });
+    await vi.waitFor(() => expect(api.config.use.mock.calls.length).toBeGreaterThan(useCallCount));
+
+    const transformer = api.config.use.mock.calls[useCallCount]?.[0] as TelegramApiTransformer;
+    await transformer(
+      vi.fn(async () => []),
+      "getUpdates",
+      {},
+      new AbortController().signal,
+    );
+
+    const completed = statuses.find((status) => status.lastPollOutcome === "completed");
+    expect(completed).toMatchObject({
+      mode: "polling",
+      connected: true,
+      lastError: null,
+      pollingInFlight: false,
+      lastPollOutcome: "completed",
+      transportActivity: expect.objectContaining({
+        mode: "polling",
+        active: false,
+        inFlight: 0,
+        startedCount: 1,
+        completedCount: 1,
+        lastOutcome: "completed",
+        lastError: null,
+        transportGeneration: 1,
+      }),
+    });
+  });
+
+  it("exits the account task after repeated polling stalls", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { statuses, setStatus } = captureTelegramStatus();
+      mockRunOnceWithStalledPollingRunner();
+      mockRunOnceWithStalledPollingRunner();
+
+      const monitor = monitorTelegramProvider({ token: "tok", setStatus });
+      await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      await expect(monitor).rejects.toThrow("Telegram polling unhealthy: repeated polling stalls");
+      expect(latestTransportStatus(statuses)?.transportActivity).toEqual(
+        expect.objectContaining({
+          lastOutcome: "unhealthy",
+          stallCount: 2,
+          watchdog: expect.objectContaining({
+            escalation: "Telegram polling unhealthy: repeated polling stalls",
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses slower restart backoff after repeated stop timeouts", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const abort = new AbortController();
+      mockRunOnceWithUnstoppablePollingRunner();
+      mockRunOnceAndAbort(abort);
+
+      const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+      await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(160_000);
+      await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(2));
+      await monitor;
+
+      expect(
+        computeBackoff.mock.calls.some(
+          ([policy, attempt]) =>
+            typeof policy === "object" &&
+            policy !== null &&
+            (policy as { maxMs?: number }).maxMs === 5 * 60_000 &&
+            attempt === 1,
+        ),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes polling liveness around getUpdates", async () => {
+    const statuses: Array<Partial<ChannelAccountSnapshot>> = [];
+    await monitorWithAutoAbort({
+      setStatus: (next: Partial<ChannelAccountSnapshot>) => statuses.push(next),
+    });
+
+    const middleware = api.config.use.mock.calls.at(-1)?.[0] as
+      | ((
+          prev: (method: string, payload: unknown, signal: unknown) => Promise<unknown>,
+          method: string,
+          payload: unknown,
+          signal: unknown,
+        ) => Promise<unknown>)
+      | undefined;
+    expect(middleware).toBeTypeOf("function");
+
+    await middleware?.(async () => [], "getUpdates", {}, undefined);
+
+    expect(statuses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          mode: "polling",
+          connected: true,
+          pollingInFlight: true,
+          lastPollOutcome: "in-flight",
+        }),
+        expect.objectContaining({
+          mode: "polling",
+          connected: true,
+          pollingInFlight: false,
+          lastPollOutcome: "completed",
+        }),
+      ]),
+    );
+  });
+
+  it("rebuilds Telegram proxy transport after a polling stall", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      loadConfig.mockReturnValue({
+        agents: { defaults: { maxConcurrent: 2 } },
+        channels: { telegram: { proxy: "socks5://127.0.0.1:1080" } },
+      });
+      const abort = new AbortController();
+      mockRunOnceWithStalledPollingRunner();
+      mockRunOnceAndAbort(abort);
+
+      const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+      await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+      vi.advanceTimersByTime(120_000);
+      await monitor;
+
+      expect(runSpy).toHaveBeenCalledTimes(2);
+      expect(makeProxyFetchSpy).toHaveBeenCalledWith("socks5://127.0.0.1:1080");
+      expect(createTelegramBotCalls[0]?.proxyFetch).not.toBe(createTelegramBotCalls[1]?.proxyFetch);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not issue a pre-run getUpdates confirmation when a persisted offset exists", async () => {

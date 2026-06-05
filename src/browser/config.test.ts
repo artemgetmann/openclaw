@@ -24,9 +24,12 @@ describe("browser config", () => {
     expect(openclaw?.cdpPort).toBe(18800);
     expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:18800");
     const signedIn = resolveProfile(resolved, "signed-in");
-    expect(signedIn?.driver).toBe("openclaw");
+    expect(signedIn?.driver).toBe("existing-session");
     expect(signedIn?.cloneFromUserProfile).toBe(true);
     expect(signedIn?.cdpPort).toBe(18801);
+    expect(signedIn?.cdpUrl).toBe("http://127.0.0.1:18801");
+    expect(signedIn?.profileDirectory).toBe("Default");
+    expect(signedIn?.attachOnly).toBe(true);
     expect(signedIn?.color).toBe("#1F9D55");
     expect(resolveProfile(resolved, "user")?.name).toBe("signed-in");
     const userLive = resolveProfile(resolved, "user-live");
@@ -421,7 +424,10 @@ describe("browser config", () => {
     it("auto-creates the built-in signed-in lane and aliases legacy user to it", () => {
       const resolved = resolveBrowserConfig({});
 
-      expect(resolveProfile(resolved, "signed-in")?.cloneFromUserProfile).toBe(true);
+      const signedIn = resolveProfile(resolved, "signed-in");
+      expect(signedIn?.driver).toBe("existing-session");
+      expect(signedIn?.cloneFromUserProfile).toBe(true);
+      expect(signedIn?.cdpUrl).toBe("http://127.0.0.1:18801");
       expect(resolveProfile(resolved, "user")?.name).toBe("signed-in");
     });
 
