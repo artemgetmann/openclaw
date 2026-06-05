@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = process.cwd();
 const DEPLOY_SCRIPT = path.join(ROOT, "scripts", "deploy-shared-main-runtime.sh");
+const PR_FASTPATH_SCRIPT = path.join(ROOT, "scripts", "pr-merge-fastpath.sh");
 const PROVE_SCRIPT = path.join(ROOT, "scripts", "prove-main-telegram-runtime.sh");
 
 function runBash(command: string, options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) {
@@ -77,6 +78,15 @@ describe("scripts/deploy-shared-main-runtime.sh guards", () => {
   });
 });
 
+describe("scripts/pr-merge-fastpath.sh", () => {
+  it("treats GitHub DIRTY merge state as a branch update requirement", () => {
+    const script = fs.readFileSync(PR_FASTPATH_SCRIPT, "utf8");
+
+    expect(script).toContain('"${merge_state}" == "BEHIND" || "${merge_state}" == "DIRTY"');
+    expect(script).toContain('gh pr update-branch "${PR_NUMBER}"');
+  });
+});
+
 function sourceProveAndRun(functionCall: string, env: NodeJS.ProcessEnv) {
   return runBash(`source "${PROVE_SCRIPT}"; ${functionCall}`, {
     env: {
@@ -87,6 +97,13 @@ function sourceProveAndRun(functionCall: string, env: NodeJS.ProcessEnv) {
 }
 
 describe("scripts/prove-main-telegram-runtime.sh parsing", () => {
+  it("runs telegram-user JSON commands through silent pnpm", () => {
+    const script = fs.readFileSync(PROVE_SCRIPT, "utf8");
+
+    expect(script).toContain('pnpm --silent openclaw:local "$@" --json');
+    expect(script).toContain("pnpm --silent openclaw:local telegram-user wait");
+  });
+
   it("chooses the recent active [default] bot from logs", () => {
     const temp = makeTempDir("telegram-proof");
     const logPath = path.join(temp, "gateway.log");
