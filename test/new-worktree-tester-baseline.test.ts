@@ -29,6 +29,7 @@ const initRemoteClone = (prefix: string) => {
   run(seedDir, "git", ["commit", "-m", "seed"]);
   run(seedDir, "git", ["remote", "add", "origin", remoteDir]);
   run(seedDir, "git", ["push", "-u", "origin", "main"]);
+  run(root, "git", ["--git-dir", remoteDir, "symbolic-ref", "HEAD", "refs/heads/main"]);
   run(root, "git", ["clone", remoteDir, cloneDir]);
   run(cloneDir, "git", ["config", "user.name", "Test User"]);
   run(cloneDir, "git", ["config", "user.email", "test@example.com"]);
