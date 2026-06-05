@@ -100,6 +100,23 @@ describe("preemptive compaction preflight", () => {
     expect(decision.overflowTokens).toBe(20_470);
   });
 
+  it("uses the Codex GPT-5.5 effective budget with the existing 20k reserve threshold", () => {
+    const decision = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantMessage("short history")],
+      systemPrompt: "system",
+      prompt: "hello",
+      persistedPromptTokens: 238_401,
+      contextTokenBudget: 258_400,
+      reserveTokens: 20_000,
+    });
+
+    expect(decision.promptBudgetBeforeReserve).toBe(238_400);
+    expect(decision.effectiveReserveTokens).toBe(20_000);
+    expect(decision.shouldCompact).toBe(true);
+    expect(decision.effectivePromptTokens).toBe(238_401);
+    expect(decision.overflowTokens).toBe(1);
+  });
+
   it("does not let low persisted token metadata inflate the estimate", () => {
     const decision = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantMessage("short history")],
