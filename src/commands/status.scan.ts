@@ -82,6 +82,14 @@ function unwrapDeferredResult<T>(result: DeferredResult<T>): T {
   return result.value;
 }
 
+function traceStartupMemory(label: string): void {
+  if (process.env.OPENCLAW_STARTUP_MEMORY_TRACE !== "1") {
+    return;
+  }
+  const rssMb = process.memoryUsage().rss / 1024 / 1024;
+  process.stderr.write(`[startup-memory-trace] ${label}: ${rssMb.toFixed(1)} MB RSS\n`);
+}
+
 function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStatus {
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   if (!pluginsEnabled) {
@@ -208,6 +216,7 @@ async function scanStatusJsonFast(opts: {
   all?: boolean;
 }): Promise<StatusScanResult> {
   const loadedRaw = await readBestEffortConfig();
+  traceStartupMemory("after config");
   const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
     await resolveCommandSecretRefsViaGateway({
       config: loadedRaw,
@@ -215,9 +224,11 @@ async function scanStatusJsonFast(opts: {
       targetIds: getStatusCommandSecretTargetIds(),
       mode: "read_only_status",
     });
+  traceStartupMemory("after secret resolution");
   if (hasPotentialConfiguredChannels(cfg)) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    traceStartupMemory("after plugin registry");
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -250,6 +261,7 @@ async function scanStatusJsonFast(opts: {
     gatewayProbePromise,
     summaryPromise,
   ]);
+  traceStartupMemory("after parallel status probes");
   const tailscaleHttpsUrl =
     tailscaleMode !== "off" && tailscaleDns
       ? `https://${tailscaleDns}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`
@@ -274,6 +286,7 @@ async function scanStatusJsonFast(opts: {
   const memory = opts.all
     ? await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin })
     : null;
+  traceStartupMemory("after memory status");
 
   return {
     cfg,

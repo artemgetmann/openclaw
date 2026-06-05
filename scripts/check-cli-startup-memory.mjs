@@ -104,6 +104,9 @@ function buildBenchEnv() {
 
 function runCase(testCase) {
   const env = buildBenchEnv();
+  if (testCase.id === "statusJson") {
+    env.OPENCLAW_STARTUP_MEMORY_TRACE = "1";
+  }
   const result = spawnSync(process.execPath, ["--import", rssHookPath, ...testCase.args], {
     cwd: repoRoot,
     env,
