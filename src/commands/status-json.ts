@@ -6,21 +6,23 @@ import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.dae
 import { scanStatus } from "./status.scan.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
-let deepSecurityAuditModulePromise:
-  | Promise<typeof import("./status-json-deep-audit.js")>
-  | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
   return providerUsagePromise;
 }
 
-function loadDeepSecurityAuditModule() {
-  deepSecurityAuditModulePromise ??= import("./status-json-deep-audit.js");
-  return deepSecurityAuditModulePromise;
-}
+type StatusJsonScan = Awaited<ReturnType<typeof scanStatus>>;
+type StatusJsonSecurityAudit = unknown;
 
-export async function statusJsonCommand(
+const SKIPPED_SECURITY_AUDIT = {
+  skipped: true,
+  reason: "status --json skips security audit unless --deep is set",
+  summary: { critical: 0, warn: 0, info: 0 },
+  findings: [],
+};
+
+export async function writeStatusJsonCommand(
   opts: {
     deep?: boolean;
     usage?: boolean;
@@ -28,21 +30,10 @@ export async function statusJsonCommand(
     all?: boolean;
   },
   runtime: RuntimeEnv,
+  resolveSecurityAudit: (scan: StatusJsonScan) => Promise<StatusJsonSecurityAudit>,
 ) {
   const scan = await scanStatus({ json: true, timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
-  const securityAudit = opts.deep
-    ? await loadDeepSecurityAuditModule().then(({ runStatusJsonDeepSecurityAudit }) =>
-        runStatusJsonDeepSecurityAudit({
-          config: scan.cfg,
-          sourceConfig: scan.sourceConfig,
-        }),
-      )
-    : {
-        skipped: true,
-        reason: "status --json skips security audit unless --deep is set",
-        summary: { critical: 0, warn: 0, info: 0 },
-        findings: [],
-      };
+  const securityAudit = await resolveSecurityAudit(scan);
 
   const usage = opts.usage
     ? await loadProviderUsage().then(({ loadProviderUsageSummary }) =>
@@ -109,5 +100,21 @@ export async function statusJsonCommand(
       null,
       2,
     ),
+  );
+}
+
+export async function statusJsonCommand(
+  opts: {
+    deep?: boolean;
+    usage?: boolean;
+    timeoutMs?: number;
+    all?: boolean;
+  },
+  runtime: RuntimeEnv,
+) {
+  await writeStatusJsonCommand(
+    { ...opts, deep: false },
+    runtime,
+    async () => SKIPPED_SECURITY_AUDIT,
   );
 }

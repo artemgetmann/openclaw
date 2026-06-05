@@ -7,6 +7,7 @@ const modelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runDaemonStatusMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const statusJsonDeepCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../config-cli.js", () => ({
   runConfigGet: runConfigGetMock,
@@ -24,6 +25,10 @@ vi.mock("../daemon-cli/status.js", () => ({
 
 vi.mock("../../commands/status-json.js", () => ({
   statusJsonCommand: statusJsonCommandMock,
+}));
+
+vi.mock("../../commands/status-json-deep.js", () => ({
+  statusJsonDeepCommand: statusJsonDeepCommandMock,
 }));
 
 describe("program routes", () => {
@@ -158,6 +163,17 @@ describe("program routes", () => {
   it("routes status --json through the lean JSON command", async () => {
     const route = expectRoute(["status"]);
     await expect(
+      route?.run(["node", "openclaw", "status", "--json", "--usage", "--timeout", "5000"]),
+    ).resolves.toBe(true);
+    expect(statusJsonCommandMock).toHaveBeenCalledWith(
+      { all: false, usage: true, timeoutMs: 5000 },
+      expect.any(Object),
+    );
+  });
+
+  it("routes status --json --deep through the deep JSON command", async () => {
+    const route = expectRoute(["status"]);
+    await expect(
       route?.run([
         "node",
         "openclaw",
@@ -169,8 +185,8 @@ describe("program routes", () => {
         "5000",
       ]),
     ).resolves.toBe(true);
-    expect(statusJsonCommandMock).toHaveBeenCalledWith(
-      { deep: true, all: false, usage: true, timeoutMs: 5000 },
+    expect(statusJsonDeepCommandMock).toHaveBeenCalledWith(
+      { all: false, usage: true, timeoutMs: 5000 },
       expect.any(Object),
     );
   });
