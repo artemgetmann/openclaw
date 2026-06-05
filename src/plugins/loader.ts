@@ -24,7 +24,7 @@ import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { clearPluginInteractiveHandlers } from "./interactive.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import { isPathInside, safeStatSync } from "./path-safety.js";
+import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import { setActivePluginRegistry } from "./runtime.js";
@@ -668,7 +668,10 @@ function resolveCandidateDuplicateRank(params: {
   provenance: PluginProvenanceIndex;
   env: NodeJS.ProcessEnv;
 }): number {
-  const manifestRecord = params.manifestByRoot.get(params.candidate.rootDir);
+  const manifestRecord = getManifestRecordForCandidate({
+    manifestByRoot: params.manifestByRoot,
+    rootDir: params.candidate.rootDir,
+  });
   const pluginId = manifestRecord?.id;
   const isExplicitInstall =
     params.candidate.origin === "global" &&
@@ -696,31 +699,84 @@ function resolveCandidateDuplicateRank(params: {
   return 4;
 }
 
-function compareDuplicateCandidateOrder(params: {
-  left: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
-  right: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
+function orderPluginCandidates(params: {
+  candidates: ReturnType<typeof discoverOpenClawPlugins>["candidates"];
   manifestByRoot: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
   provenance: PluginProvenanceIndex;
   env: NodeJS.ProcessEnv;
-}): number {
-  const leftPluginId = params.manifestByRoot.get(params.left.rootDir)?.id;
-  const rightPluginId = params.manifestByRoot.get(params.right.rootDir)?.id;
-  if (!leftPluginId || leftPluginId !== rightPluginId) {
-    return 0;
-  }
-  return (
-    resolveCandidateDuplicateRank({
-      candidate: params.left,
+}): ReturnType<typeof discoverOpenClawPlugins>["candidates"] {
+  const firstIndexByPluginId = new Map<string, number>();
+  const decorated = params.candidates.map((candidate, index) => {
+    const pluginId = getManifestRecordForCandidate({
       manifestByRoot: params.manifestByRoot,
-      provenance: params.provenance,
-      env: params.env,
-    }) -
-    resolveCandidateDuplicateRank({
-      candidate: params.right,
-      manifestByRoot: params.manifestByRoot,
-      provenance: params.provenance,
-      env: params.env,
+      rootDir: candidate.rootDir,
+    })?.id;
+    if (pluginId && !firstIndexByPluginId.has(pluginId)) {
+      firstIndexByPluginId.set(pluginId, index);
+    }
+    return {
+      candidate,
+      index,
+      pluginId,
+      rank: resolveCandidateDuplicateRank({
+        candidate,
+        manifestByRoot: params.manifestByRoot,
+        provenance: params.provenance,
+        env: params.env,
+      }),
+    };
+  });
+
+  return decorated
+    .toSorted((left, right) => {
+      const leftGroupIndex =
+        left.pluginId !== undefined
+          ? (firstIndexByPluginId.get(left.pluginId) ?? left.index)
+          : left.index;
+      const rightGroupIndex =
+        right.pluginId !== undefined
+          ? (firstIndexByPluginId.get(right.pluginId) ?? right.index)
+          : right.index;
+      if (leftGroupIndex !== rightGroupIndex) {
+        return leftGroupIndex - rightGroupIndex;
+      }
+      if (left.rank !== right.rank) {
+        return left.rank - right.rank;
+      }
+      return left.index - right.index;
     })
+    .map((entry) => entry.candidate);
+}
+
+function buildManifestByRoot(
+  records: ReturnType<typeof loadPluginManifestRegistry>["plugins"],
+): Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]> {
+  const byRoot = new Map<
+    string,
+    ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]
+  >();
+  for (const record of records) {
+    for (const candidate of [
+      record.rootDir,
+      path.resolve(record.rootDir),
+      safeRealpathSync(record.rootDir),
+    ]) {
+      if (candidate) {
+        byRoot.set(candidate, record);
+      }
+    }
+  }
+  return byRoot;
+}
+
+function getManifestRecordForCandidate(params: {
+  manifestByRoot: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
+  rootDir: string;
+}): ReturnType<typeof loadPluginManifestRegistry>["plugins"][number] | undefined {
+  return (
+    params.manifestByRoot.get(params.rootDir) ??
+    params.manifestByRoot.get(path.resolve(params.rootDir)) ??
+    params.manifestByRoot.get(safeRealpathSync(params.rootDir) ?? "")
   );
 }
 
@@ -989,18 +1045,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   });
   tracePluginLoaderDuration("plugin-loader-provenance", provenanceStartedAtMs);
 
-  const manifestByRoot = new Map(
-    manifestRegistry.plugins.map((record) => [record.rootDir, record]),
-  );
+  const manifestByRoot = buildManifestByRoot(manifestRegistry.plugins);
   const orderingStartedAtMs = nowMs();
-  const orderedCandidates = [...discovery.candidates].toSorted((left, right) => {
-    return compareDuplicateCandidateOrder({
-      left,
-      right,
-      manifestByRoot,
-      provenance,
-      env,
-    });
+  const orderedCandidates = orderPluginCandidates({
+    candidates: discovery.candidates,
+    manifestByRoot,
+    provenance,
+    env,
   });
   tracePluginLoaderDuration(
     "plugin-loader-order-candidates",
@@ -1014,7 +1065,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   let memorySlotMatched = false;
 
   for (const candidate of orderedCandidates) {
-    const manifestRecord = manifestByRoot.get(candidate.rootDir);
+    const manifestRecord = getManifestRecordForCandidate({
+      manifestByRoot,
+      rootDir: candidate.rootDir,
+    });
     if (!manifestRecord) {
       continue;
     }
