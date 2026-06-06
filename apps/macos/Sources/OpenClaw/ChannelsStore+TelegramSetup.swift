@@ -23,6 +23,8 @@ extension ChannelsStore {
         "firecrawl",
         "brave",
     ]
+    static let consumerTelegramFirstTaskInstruction =
+        "Tap Start in Telegram, send \"Wake up, my friend\", then click Verify Telegram."
 
     func telegramRuntimeOwnershipIssue() -> String? {
         guard AppFlavor.current.isConsumer else { return nil }
@@ -342,12 +344,16 @@ extension ChannelsStore {
     }
 
     func verifyConsumerTelegramFirstTask() async {
-        if self.consumerTelegramLooksLive() {
-            await self.verifyLiveConsumerTelegramFirstTask()
-            return
-        }
+        let route = Self.consumerTelegramFirstTaskVerificationRoute(
+            hasPendingPairing: Self.latestPendingTelegramPairingRequest() != nil,
+            looksLive: self.consumerTelegramLooksLive())
 
-        await self.captureTelegramFirstDirectMessage()
+        switch route {
+        case .pendingPairing, .directMessageCapture:
+            await self.captureTelegramFirstDirectMessage()
+        case .liveActivity:
+            await self.verifyLiveConsumerTelegramFirstTask()
+        }
     }
 
     private func verifyLiveConsumerTelegramFirstTask() async {
@@ -422,7 +428,7 @@ extension ChannelsStore {
             dmPolicy: dmPolicy,
             allowFrom: allowFrom,
             enabled: enabled)
-        await self.reconnectConsumerGatewayAfterConfigBootstrap()
+        await self.reconnectConsumerGatewayAfterConfigBootstrap(restartGateway: enabled)
         Task { await self.refresh(probe: true) }
         return persisted
     }
@@ -605,8 +611,8 @@ extension ChannelsStore {
 
     private func telegramVerificationStatus(botUsername: String?) -> String {
         botUsername.map {
-            "Token verified for @\($0). Tap Start in Telegram, then click Verify Telegram."
-        } ?? "Token verified. Tap Start in Telegram, then click Verify Telegram."
+            "Token verified for @\($0). \(Self.consumerTelegramFirstTaskInstruction)"
+        } ?? "Token verified. \(Self.consumerTelegramFirstTaskInstruction)"
     }
 
     private func managedTelegramBotClient() throws -> JarvisTelegramManagedBotClient {
@@ -655,8 +661,8 @@ extension ChannelsStore {
 
     private func managedTelegramConnectedStatus(botUsername: String?) -> String {
         botUsername.map {
-            "@\($0) is ready. Tap Start in Telegram, then click Verify Telegram."
-        } ?? "Your Telegram bot is ready. Tap Start in Telegram, then click Verify Telegram."
+            "@\($0) is ready. \(Self.consumerTelegramFirstTaskInstruction)"
+        } ?? "Your Telegram bot is ready. \(Self.consumerTelegramFirstTaskInstruction)"
     }
 
     private func approvePendingTelegramPairingForFirstTaskIfAvailable(token: String) async throws -> Bool {
@@ -1002,12 +1008,26 @@ extension ChannelsStore {
         }
     }
 
-    private func reconnectConsumerGatewayAfterConfigBootstrap() async {
+    private func reconnectConsumerGatewayAfterConfigBootstrap(restartGateway: Bool = false) async {
         guard AppFlavor.current.isConsumer else { return }
         guard !self.isPreview else { return }
         guard AppStateStore.shared.connectionMode == .local else { return }
 
+        let gatewayRestart: (@Sendable () async -> Void)? = restartGateway
+            ? { @Sendable in
+                // The gateway can reconnect to the old process after config
+                // writes, but newly enabled Telegram/plugin config is only
+                // loaded during gateway startup. Keep this restart scoped to
+                // the consumer instance so the shared gateway is untouched.
+                await GatewayConnection.shared.shutdown()
+                await ControlChannel.shared.disconnect()
+                await GatewayProcessManager.shared.restartManagedGateway()
+                try? await ControlChannel.shared.configure(mode: .local)
+            }
+            : nil
+
         _ = await Self.recoverConsumerGatewayAfterConfigBootstrap(
+            restartGateway: gatewayRestart,
             shutdown: {
                 await GatewayConnection.shared.shutdown()
             },
@@ -1027,6 +1047,7 @@ extension ChannelsStore {
     private static func recoverConsumerGatewayAfterConfigBootstrap(
         retryDelayNanoseconds: UInt64 = 350_000_000,
         maxAttempts: Int = 5,
+        restartGateway: (@Sendable () async -> Void)? = nil,
         shutdown: @escaping @Sendable () async -> Void,
         refreshEndpoint: @escaping @Sendable () async -> Void,
         refreshConnection: @escaping @Sendable () async throws -> Void,
@@ -1035,6 +1056,8 @@ extension ChannelsStore {
             try? await Task.sleep(nanoseconds: delay)
         }
     ) async -> Bool {
+        await restartGateway?()
+
         for attempt in 0..<maxAttempts {
             await shutdown()
             await refreshEndpoint()
@@ -1108,6 +1131,12 @@ enum ConsumerTelegramFirstTaskReplayAction: Equatable {
     case trustObservedLiveCompletion
 }
 
+enum ConsumerTelegramFirstTaskVerificationRoute: Equatable {
+    case pendingPairing
+    case liveActivity
+    case directMessageCapture
+}
+
 extension ChannelsStore {
     static func consumerTelegramReplayDecision(
         replyStarted: Bool,
@@ -1139,6 +1168,23 @@ extension ChannelsStore {
         activityAlreadyConfirmed: Bool
     ) -> ConsumerTelegramFirstTaskReplayAction {
         activityAlreadyConfirmed ? .trustObservedLiveCompletion : .replayCapturedMessage
+    }
+
+    static func consumerTelegramFirstTaskVerificationRoute(
+        hasPendingPairing: Bool,
+        looksLive: Bool
+    ) -> ConsumerTelegramFirstTaskVerificationRoute {
+        // Pairing mode can have a healthy Telegram provider before normal
+        // inbound/outbound activity exists. In that state the first DM is stored
+        // in telegram-pairing.json, so approve it before falling back to the
+        // generic live-activity wait.
+        if hasPendingPairing {
+            return .pendingPairing
+        }
+        if looksLive {
+            return .liveActivity
+        }
+        return .directMessageCapture
     }
 
     static func consumerTelegramNeedsBootstrapBeforeReplay(
@@ -1280,6 +1326,7 @@ extension ChannelsStore {
     static func _testRecoverConsumerGatewayAfterConfigBootstrap(
         retryDelayNanoseconds: UInt64 = 350_000_000,
         maxAttempts: Int = 5,
+        restartGateway: (@Sendable () async -> Void)? = nil,
         shutdown: @escaping @Sendable () async -> Void,
         refreshEndpoint: @escaping @Sendable () async -> Void,
         refreshConnection: @escaping @Sendable () async throws -> Void,
@@ -1289,6 +1336,7 @@ extension ChannelsStore {
         await Self.recoverConsumerGatewayAfterConfigBootstrap(
             retryDelayNanoseconds: retryDelayNanoseconds,
             maxAttempts: maxAttempts,
+            restartGateway: restartGateway,
             shutdown: shutdown,
             refreshEndpoint: refreshEndpoint,
             refreshConnection: refreshConnection,

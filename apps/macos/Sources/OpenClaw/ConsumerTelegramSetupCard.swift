@@ -180,7 +180,7 @@ struct ConsumerTelegramSetupCardContent: View {
             }
 
             if self.readyForFirstTaskVerification {
-                Text("Bot connected. Tap Start in Telegram, then click Verify Telegram.")
+                Text("Bot connected. \(ChannelsStore.consumerTelegramFirstTaskInstruction)")
                     .font(.callout)
 
                 HStack(spacing: 10) {

@@ -16,6 +16,18 @@ private actor ManagedTelegramRequestCounter {
     }
 }
 
+private actor TelegramBootstrapEventRecorder {
+    private var events: [String] = []
+
+    func record(_ event: String) {
+        self.events.append(event)
+    }
+
+    func value() -> [String] {
+        self.events
+    }
+}
+
 private func makeConsumerTelegramSnapshot(
     running: Bool,
     inboundAt: Double?,
@@ -146,6 +158,21 @@ struct TelegramSetupBootstrapTests {
                 activityAlreadyConfirmed: true) == .trustObservedLiveCompletion)
     }
 
+    @Test func `verify telegram prefers pending pairing before live activity wait`() {
+        #expect(
+            ChannelsStore.consumerTelegramFirstTaskVerificationRoute(
+                hasPendingPairing: true,
+                looksLive: true) == .pendingPairing)
+        #expect(
+            ChannelsStore.consumerTelegramFirstTaskVerificationRoute(
+                hasPendingPairing: false,
+                looksLive: true) == .liveActivity)
+        #expect(
+            ChannelsStore.consumerTelegramFirstTaskVerificationRoute(
+                hasPendingPairing: false,
+                looksLive: false) == .directMessageCapture)
+    }
+
     @Test func `telegram setup skips redundant bootstrap write when polling provider was already paused`() {
         #expect(
             !ChannelsStore.consumerTelegramNeedsBootstrapBeforeReplay(
@@ -172,6 +199,31 @@ struct TelegramSetupBootstrapTests {
         #expect(ChannelsStore.consumerTelegramReplayShouldRetryAfterRestart(socketError))
         #expect(ChannelsStore.consumerTelegramReplayShouldRetryAfterRestart(droppedError))
         #expect(!ChannelsStore.consumerTelegramReplayShouldRetryAfterRestart(unrelatedError))
+    }
+
+    @Test func `enabled telegram bootstrap recovery restarts gateway before reconnect probe`() async {
+        let events = TelegramBootstrapEventRecorder()
+
+        let recovered = await ChannelsStore._testRecoverConsumerGatewayAfterConfigBootstrap(
+            maxAttempts: 1,
+            restartGateway: {
+                await events.record("restart")
+            },
+            shutdown: {
+                await events.record("shutdown")
+            },
+            refreshEndpoint: {
+                await events.record("endpoint")
+            },
+            refreshConnection: {
+                await events.record("connect")
+            },
+            probe: {
+                await events.record("probe")
+            })
+
+        #expect(recovered)
+        #expect(await events.value() == ["restart", "shutdown", "endpoint", "connect", "probe"])
     }
 
     @Test func `telegram replay status hides local gateway plumbing`() async throws {
@@ -202,6 +254,17 @@ struct TelegramSetupBootstrapTests {
             #expect(status.localizedCaseInsensitiveContains("gateway") == false)
             #expect(status.localizedCaseInsensitiveContains("OpenClaw") == false)
         }
+    }
+
+    @Test func `consumer telegram first task instruction asks for the required dm before verify`() {
+        let instruction = ChannelsStore.consumerTelegramFirstTaskInstruction
+
+        #expect(instruction == "Tap Start in Telegram, send \"Wake up, my friend\", then click Verify Telegram.")
+        #expect(instruction.contains("Tap Start"))
+        #expect(instruction.contains("Wake up, my friend"))
+        #expect(instruction.contains("Verify Telegram"))
+        #expect(instruction != "Tap Start in Telegram, then click Verify Telegram.")
+        #expect(instruction.contains("Tap Start in Telegram, then click Verify Telegram.") == false)
     }
 
     @Test func `healthy telegram refresh promotes timed out setup once paired activity proves completion`() async throws {
