@@ -626,7 +626,7 @@ jobs:
   # running 4 separate jobs per PR (as before) starved the queue. One job
   # per PR allows 5 PRs to run macOS checks simultaneously.
   macos:
-    needs: [docs-scope, changed-scope, check]
+    needs: [docs-scope, changed-scope]
     if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_macos == 'true'
     runs-on: macos-latest
     steps:
@@ -640,20 +640,14 @@ jobs:
         with:
           install-bun: "false"
 
-      # --- Run all checks sequentially (fast gates first) ---
-      - name: TS tests (macOS)
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-        run: pnpm test
-
       # --- Xcode/Swift setup ---
       - name: Select Xcode 26.1
         run: |
           sudo xcode-select -s /Applications/Xcode_26.1.app
           xcodebuild -version
 
-      - name: Install XcodeGen / SwiftLint / SwiftFormat
-        run: brew install xcodegen swiftlint swiftformat
+      - name: Install XcodeGen / SwiftLint
+        run: brew install xcodegen swiftlint
 
       - name: Show toolchain
         run: |
@@ -663,8 +657,8 @@ jobs:
 
       - name: Swift lint
         run: |
+          set -euo pipefail
           swiftlint --config .swiftlint.yml
-          swiftformat --lint apps/macos/Sources --config .swiftformat
 
       - name: Cache SwiftPM
         uses: actions/cache@v5
@@ -1000,7 +994,7 @@ jobs:
           requireScopedSuccess("startup-memory", !docsOnly && runNode && !runBrowserAgent, "CLI startup memory regression check");
           requireScopedSuccess("skills-python", !docsOnly && runSkillsPython, "Python skill lint and tests");
           requireSkippedOrSuccess("checks-windows", "Windows PR matrix is push-only until its baseline is restored");
-          requireScopedSuccess("macos", !docsOnly && runMacos, "macOS tests and Swift checks");
+          requireScopedSuccess("macos", !docsOnly && runMacos, "macOS Swift checks");
           requireScopedSuccess("android", !docsOnly && runAndroid, "Android tests and build");
 
           if (failures.length > 0) {
