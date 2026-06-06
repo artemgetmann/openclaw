@@ -93,6 +93,35 @@ Agents should not:
 - Ship unmerged feature-worktree code into the shared runtime as a workaround
   for waiting on CI.
 
+## Proof Levels
+
+Use the smallest proof level that actually lowers risk:
+
+- `L1`: targeted local tests only. Use for docs, tests, UI-only adjustments, or
+  narrow code paths where shared runtime state is irrelevant.
+- `L2`: PR CI green plus merge. Use for normal code-only reliability fixes.
+- `L3`: shared-main deploy plus live Telegram end-to-end proof. Use for shared
+  runtime, LaunchAgent, bot restart, or transport paths where local tests and CI
+  do not prove the installed main bot is healthy.
+
+Emergency hotfixes should reach `L2` first, then run `L3` immediately after the
+merge when the changed path affects the live shared runtime. Do not spend live
+Telegram proof on changes where it does not buy signal.
+
+Closeout reports should use this compact shape:
+
+```text
+PR:
+Commit:
+Changed files:
+Local validation:
+CI:
+Deploy:
+Live proof:
+Known gaps:
+Rollback:
+```
+
 ### Recommended GitHub Settings
 
 Prefer GitHub auto-merge first. Do not enable merge queue until real PR
