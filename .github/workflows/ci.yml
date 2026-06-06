@@ -472,7 +472,8 @@ jobs:
 
           pre-commit run zizmor --files "${workflow_files[@]}"
 
-      - name: Audit production dependencies
+      - name: Detect production dependency audit scope
+        id: dependency-audit-scope
         run: |
           set -euo pipefail
 
@@ -482,18 +483,11 @@ jobs:
             BASE="${{ github.event.pull_request.base.sha }}"
           fi
 
-          mapfile -t dependency_files < <(git diff --name-only "$BASE" HEAD -- \
-            'package.json' \
-            'pnpm-lock.yaml' \
-            'pnpm-workspace.yaml' \
-            'extensions/**/package.json' \
-            'packages/**/package.json' \
-            'ui/package.json')
-          if [ "${#dependency_files[@]}" -eq 0 ]; then
-            echo "No dependency changes detected; skipping production dependency audit."
-            exit 0
-          fi
+          node scripts/ci-dependency-audit-scope.mjs --base "$BASE" --head HEAD
 
+      - name: Audit production dependencies
+        if: steps.dependency-audit-scope.outputs.run_dependency_audit == 'true'
+        run: |
           pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
