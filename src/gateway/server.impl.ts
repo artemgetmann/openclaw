@@ -23,7 +23,11 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
+import {
+  requestGatewayToolRestart,
+  setGatewaySigusr1RestartPolicy,
+  setPreRestartDeferralCheck,
+} from "../infra/restart.js";
 import {
   clearSkillsRemoteState,
   primeRemoteSkillsCache,
@@ -734,6 +738,10 @@ export async function startGatewayServer(
     : startChannelHealthMonitor({
         channelManager,
         checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
+        requestGatewayRestart: (reason) =>
+          requestGatewayToolRestart({
+            reason,
+          }),
         ...(staleEventThresholdMinutes != null && {
           staleEventThresholdMs: staleEventThresholdMinutes * 60_000,
         }),
@@ -983,6 +991,10 @@ export async function startGatewayServer(
             startChannelHealthMonitor({
               channelManager,
               checkIntervalMs: opts.checkIntervalMs,
+              requestGatewayRestart: (reason) =>
+                requestGatewayToolRestart({
+                  reason,
+                }),
               ...(opts.staleEventThresholdMs != null && {
                 staleEventThresholdMs: opts.staleEventThresholdMs,
               }),
