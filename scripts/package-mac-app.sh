@@ -816,25 +816,30 @@ ensure_consumer_uv_runtime() {
 resolve_matrix_crypto_package_root() {
   local package_root=""
 
-  # pnpm can hoist the Matrix package, so resolve the installed package path
-  # instead of assuming a flat repo-local node_modules layout.
+  # pnpm may keep workspace extension dependencies linked under the extension
+  # package instead of the repo root. Resolve from Matrix first, then fall back
+  # to root for older or hoisted installs.
   package_root="$(
     "$VALIDATED_NODE_BIN" -e '
       const path = require("node:path");
       const { createRequire } = require("node:module");
-      const req = createRequire(process.argv[1]);
-      try {
-        const downloadLib = req.resolve("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
-        process.stdout.write(path.dirname(downloadLib));
-      } catch (err) {
-        process.stderr.write(
-          `Failed to resolve @matrix-org/matrix-sdk-crypto-nodejs package root: ${
-            err instanceof Error ? err.message : String(err)
-          }\n`,
-        );
-        process.exit(1);
+      const anchors = process.argv.slice(1);
+      const errors = [];
+      for (const anchor of anchors) {
+        try {
+          const req = createRequire(anchor);
+          const downloadLib = req.resolve("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
+          process.stdout.write(path.dirname(downloadLib));
+          process.exit(0);
+        } catch (err) {
+          errors.push(`${anchor}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
-    ' "$ROOT_DIR/package.json"
+      process.stderr.write(
+        `Failed to resolve @matrix-org/matrix-sdk-crypto-nodejs package root:\n${errors.join("\n")}\n`,
+      );
+      process.exit(1);
+    ' "$ROOT_DIR/extensions/matrix/package.json" "$ROOT_DIR/package.json"
   )"
 
   printf '%s\n' "$package_root"
