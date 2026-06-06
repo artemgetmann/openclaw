@@ -109,6 +109,32 @@ Agents should not:
 - Restart, replace, or otherwise mutate the shared Jarvis runtime while merely
   waiting on PR CI.
 
+### Agent PR Fast Path
+
+For normal OpenClaw PR CI and merge automation, prefer the repo helpers over
+manual `gh pr checks` parsing:
+
+- `bash scripts/pr-merge-fastpath.sh <PR>` for compact required-check proof,
+  safe `BEHIND` or `DIRTY` branch update, and squash auto-merge without
+  `--admin`.
+- `scripts/pr-required-status.sh --pr <PR> --wait` when present for quiet
+  `pr-required` waiting without noisy optional rollups.
+- `scripts/pr-merge verify <PR>` when a full prepared-artifact merge gate is
+  needed.
+- `scripts/pr-merge run <PR>` for verify plus direct merge when the required
+  prepared artifacts already exist.
+
+The normal required gates are `CI / pr-required` and
+`Workflow Sanity / actionlint`. Treat `Labeler` and `Install Smoke` as
+non-blocking helper workflows unless the current GitHub ruleset marks them
+required.
+
+Treat GitHub `BEHIND` and `DIRTY` merge states as branch-update-needed. If
+`gh pr update-branch` or the fast-path helper reports conflicts after a
+reused branch was squash-merged earlier, stop fighting the branch shape: create
+a clean branch from current `main`, cherry-pick only the intended commits, open
+a replacement PR, and close the conflicted PR with a short explanation.
+
 ## Proof Levels
 
 Use the smallest proof level that actually lowers risk:
