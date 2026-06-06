@@ -17,6 +17,7 @@ usage() {
 Usage:
   scripts/pr-merge <PR>          # verify only (backward compatible)
   scripts/pr-merge verify <PR>   # verify only
+  scripts/pr-merge copilot-check <PR> # request Copilot review and prove it appeared
   scripts/pr-merge watch <PR>    # lightweight blocker watch
   scripts/pr-merge watch-auto <PR> # enable auto-merge, then lightweight watch
   scripts/pr-merge run <PR>      # verify + merge + post-merge checks + cleanup
@@ -37,6 +38,9 @@ if [ "$#" -ge 2 ]; then
         exit 2
       fi
       exec "$base" merge-verify "$pr"
+      ;;
+    copilot-check)
+      exec "$base" copilot-check "$pr" "${@:3}"
       ;;
     watch)
       exec "$base" merge-watch "$pr" "${@:3}"
