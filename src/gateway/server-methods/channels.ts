@@ -208,17 +208,11 @@ export const channelsHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    if (cfg.channels?.telegram?.enabled === false) {
-      respond(true, {
-        ok: false,
-        replyStarted: false,
-        replyCompleted: false,
-        error:
-          "Telegram bot token is saved, but Telegram is disabled. Reopen Jarvis or run Telegram setup again to enable it.",
-      });
-      return;
-    }
-
+    // Setup intentionally pauses the polling provider before reading the first
+    // DM with Telegram getUpdates. Replay still needs to run through the real
+    // bot middleware, so do not treat channels.telegram.enabled=false as a
+    // hard stop here. The normal channel remains disabled until the app saves
+    // the final allowlist config after replay completes.
     const before = getChannelActivity({ channel: "telegram", accountId: account.accountId });
     const update = buildTelegramSetupReplayUpdate(replayParams.payload);
     try {
@@ -228,6 +222,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
         config: cfg,
         runtime: defaultRuntime,
       });
+      // Standalone replay bots are not started through the normal polling or
+      // webhook bootstrap path, so initialize grammY before handleUpdate.
+      await bot.init();
       await withTimeout(
         bot.handleUpdate(update as Parameters<typeof bot.handleUpdate>[0]),
         replayParams.timeoutMs,
