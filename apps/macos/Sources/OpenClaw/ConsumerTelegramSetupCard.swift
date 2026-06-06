@@ -105,8 +105,8 @@ struct ConsumerTelegramSetupCardContent: View {
             self.callout(
                 title: "Telegram verified",
                 body: self.store.consumerTelegramBotUsername().map {
-                    "Connected as @\($0). \(AppFlavor.current.appName) answered your first Telegram DM."
-                } ?? "Telegram is connected and \(AppFlavor.current.appName) answered your first Telegram DM.")
+                    "Connected as @\($0). This chat is approved for \(AppFlavor.current.appName)."
+                } ?? "Telegram is connected and this chat is approved for \(AppFlavor.current.appName).")
 
             if let username = self.store.consumerTelegramBotUsername() {
                 Button("Open your bot") {
@@ -180,7 +180,7 @@ struct ConsumerTelegramSetupCardContent: View {
             }
 
             if self.readyForFirstTaskVerification {
-                Text("Bot connected. Send \"Wake up my friend\" to Jarvis in Telegram, then click Verify Telegram.")
+                Text("Bot connected. Tap Start in Telegram, then click Verify Telegram.")
                     .font(.callout)
 
                 HStack(spacing: 10) {

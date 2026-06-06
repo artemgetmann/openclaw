@@ -54,11 +54,11 @@ export function buildPairingReply(params: {
   const { channel, idLine, code, env } = params;
   if (isJarvisConsumerTelegramPairing(channel, env ?? process.env)) {
     return [
-      "Jarvis needs one more approval step.",
+      "Jarvis is ready to approve this chat.",
       "",
       idLine,
       "",
-      "Return to Jarvis and click Verify Telegram. Jarvis will approve this chat and finish your first Telegram check.",
+      "Return to Jarvis and click Verify Telegram.",
     ].join("\n");
   }
 

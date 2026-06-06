@@ -185,8 +185,8 @@ extension ChannelsStore {
             let username = status.probe?.bot?.username ?? self.telegramSetupBotUsername
             if self.consumerTelegramFirstTaskVerified {
                 self.telegramSetupStatus = username.map {
-                    "Telegram bot is live as @\($0). First task verified."
-                } ?? "Telegram bot is live. First task verified."
+                    "Telegram bot is live as @\($0). Chat approved."
+                } ?? "Telegram bot is live. Chat approved."
             } else {
                 self.telegramSetupStatus = username.map {
                     "Telegram bot is live as @\($0). Click Verify Telegram to approve access."

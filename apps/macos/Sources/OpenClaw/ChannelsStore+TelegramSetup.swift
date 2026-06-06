@@ -3,7 +3,6 @@ import Foundation
 
 extension ChannelsStore {
     private static let consumerDefaultTelegramAccountId = "default"
-    private static let consumerTelegramFirstTaskText = "Wake up my friend"
     private static let consumerTelegramSetupReplayTimeoutMs = 30_000.0
     static var managedTelegramSetupIdDefaultsKey: String {
         "\(RuntimeIdentity.current.defaultsPrefix).telegram.managed.setupId"
@@ -606,8 +605,8 @@ extension ChannelsStore {
 
     private func telegramVerificationStatus(botUsername: String?) -> String {
         botUsername.map {
-            "Token verified for @\($0). Send one message to Jarvis, then click Verify Telegram."
-        } ?? "Token verified. Send one message to Jarvis, then click Verify Telegram."
+            "Token verified for @\($0). Tap Start in Telegram, then click Verify Telegram."
+        } ?? "Token verified. Tap Start in Telegram, then click Verify Telegram."
     }
 
     private func managedTelegramBotClient() throws -> JarvisTelegramManagedBotClient {
@@ -656,70 +655,32 @@ extension ChannelsStore {
 
     private func managedTelegramConnectedStatus(botUsername: String?) -> String {
         botUsername.map {
-            "@\($0) is ready. Send one message to Jarvis, then click Verify Telegram."
-        } ?? "Your Telegram bot is ready. Send one message to Jarvis, then click Verify Telegram."
+            "@\($0) is ready. Tap Start in Telegram, then click Verify Telegram."
+        } ?? "Your Telegram bot is ready. Tap Start in Telegram, then click Verify Telegram."
     }
 
     private func approvePendingTelegramPairingForFirstTaskIfAvailable(token: String) async throws -> Bool {
         guard let pending = Self.latestPendingTelegramPairingRequest() else { return false }
 
         self.telegramSetupFirstSenderId = pending.id
-        self.telegramSetupStatus = "Approving Telegram access for your first DM..."
+        self.telegramSetupStatus = "Approving Telegram chat..."
 
-        let persisted = try await self.applyTelegramSetupBootstrap(
+        _ = try await self.applyTelegramSetupBootstrap(
             token: token,
             dmPolicy: "allowlist",
             allowFrom: [pending.id],
             enabled: true)
 
-        if await self.completePendingTelegramPairingFromExistingObservedActivityAfterBootstrap() {
-            return true
-        }
-
-        if let dm = Self.consumerTelegramDirectMessage(from: pending) {
-            self.telegramSetupStatus = "Running your first Telegram task..."
-            self.telegramSetupPhase = .startingFirstReply
-            let replayResult = await self.startFirstTelegramReply(dm: dm)
-            let replayDecision = Self.consumerTelegramReplayDecision(
-                replyStarted: replayResult.replyStarted,
-                replyCompleted: replayResult.replyCompleted,
-                error: replayResult.error)
-            let activityConfirmed = replayDecision.shouldWaitForActivityConfirmation
-                ? await self.waitForConsumerTelegramFirstTaskActivityRefreshes()
-                : false
-
-            if replayDecision.shouldTrustReplayCompletion || activityConfirmed {
-                self.markConsumerTelegramFirstTaskVerified()
-                self.telegramSetupWaitingForDM = false
-                self.telegramSetupStatus = self.telegramCaptureStatus(
-                    dm: dm,
-                    persistedRoot: persisted,
-                    replayResult: replayResult,
-                    activityConfirmed: activityConfirmed)
-                return true
-            }
-        }
-
-        // Only start a new baseline after giving already-observed Telegram
-        // activity one chance to complete setup. A stale /start pairing request
-        // can coexist with a real DM/reply that happened before Verify was
-        // clicked; treating that reply as the baseline forces the user to send a
-        // duplicate message for no product reason.
-        self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestInboundAt()
-        self.telegramSetupBaselineOutboundAt = self.consumerTelegramLatestOutboundAt()
-        self.telegramSetupWaitingForDM = true
-        self.telegramSetupStatus = "Access approved. Now send \"\(Self.consumerTelegramFirstTaskText)\" to the bot in Telegram."
-        if await self.waitForConsumerTelegramFirstTaskActivityRefreshes(
-            attempts: 45,
-            delayNanoseconds: 1_000_000_000)
-        {
-            self.telegramSetupWaitingForDM = false
-            return true
-        }
-
+        // A pending pairing request means the Telegram bot already received a
+        // private /start or first DM and replied with the approval instruction.
+        // Once Jarvis saves that sender in allowFrom, the setup proof is done:
+        // asking for a second DM only proves the UI state machine, not Telegram.
+        self.markConsumerTelegramFirstTaskVerified()
         self.telegramSetupWaitingForDM = false
-        self.clearConsumerTelegramFirstTaskVerified()
-        self.telegramSetupStatus = Self.consumerTelegramApprovedNeedsFreshMessageStatus()
+        self.telegramSetupPhase = .idle
+        self.telegramSetupStatus = self.consumerTelegramBotUsername().map {
+            "Telegram bot is live as @\($0). Chat approved."
+        } ?? "Telegram bot is live. Chat approved."
         return true
     }
 
@@ -1213,7 +1174,7 @@ extension ChannelsStore {
     }
 
     static func consumerTelegramApprovedNeedsFreshMessageStatus() -> String {
-        "Telegram is approved. Send one more message to Jarvis, then Verify Telegram again."
+        "Telegram is approved. Jarvis is still starting; wait a moment, then click Verify Telegram again."
     }
 
     static func managedTelegramSetupWasLost(_ message: String) -> Bool {

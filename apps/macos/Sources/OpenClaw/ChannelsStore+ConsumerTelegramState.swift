@@ -138,8 +138,8 @@ extension ChannelsStore {
             self.telegramSetupFirstSenderId = self.consumerTelegramConfigFallback().lockedSenderId
         }
         self.telegramSetupStatus = self.consumerTelegramBotUsername().map {
-            "Telegram bot is live as @\($0). First task verified."
-        } ?? "Telegram bot is live. First task verified."
+            "Telegram bot is live as @\($0). Chat approved."
+        } ?? "Telegram bot is live. Chat approved."
         return true
     }
 
@@ -166,8 +166,8 @@ extension ChannelsStore {
             self.telegramSetupFirstSenderId = self.consumerTelegramConfigFallback().lockedSenderId
         }
         self.telegramSetupStatus = self.consumerTelegramBotUsername().map {
-            "Telegram bot is live as @\($0). First task verified."
-        } ?? "Telegram bot is live. First task verified."
+            "Telegram bot is live as @\($0). Chat approved."
+        } ?? "Telegram bot is live. Chat approved."
         return true
     }
 
@@ -197,8 +197,8 @@ extension ChannelsStore {
             self.telegramSetupFirstSenderId = fallback.lockedSenderId ?? account?.allowFrom?.first
         }
         self.telegramSetupStatus = self.consumerTelegramBotUsername().map {
-            "Telegram bot is live as @\($0). First task verified from existing setup."
-        } ?? "Telegram bot is live. First task verified from existing setup."
+            "Telegram bot is live as @\($0). Chat approved from existing setup."
+        } ?? "Telegram bot is live. Chat approved from existing setup."
         return true
     }
 
@@ -231,7 +231,7 @@ extension ChannelsStore {
         }
         guard self.consumerTelegramLooksLive() else { return nil }
 
-        return "Telegram is approved. Send one more message to Jarvis, then Verify Telegram again."
+        return "Telegram is approved. Jarvis is still starting; wait a moment, then click Verify Telegram again."
     }
 
     func consumerTelegramBotUsername() -> String? {

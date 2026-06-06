@@ -197,7 +197,7 @@ struct TelegramSetupBootstrapTests {
         ]) {
             let status = ChannelsStore.consumerTelegramApprovedNeedsFreshMessageStatus()
 
-            #expect(status == "Telegram is approved. Send one more message to Jarvis, then Verify Telegram again.")
+            #expect(status == "Telegram is approved. Jarvis is still starting; wait a moment, then click Verify Telegram again.")
             #expect(status.contains("Verify first task") == false)
             #expect(status.localizedCaseInsensitiveContains("gateway") == false)
             #expect(status.localizedCaseInsensitiveContains("OpenClaw") == false)
@@ -228,7 +228,7 @@ struct TelegramSetupBootstrapTests {
             store._testReconcileTelegramSetupProgress(with: snapshot)
 
             #expect(store.consumerTelegramFirstTaskVerified)
-            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. First task verified.")
+            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. Chat approved.")
         }
     }
 
@@ -254,7 +254,7 @@ struct TelegramSetupBootstrapTests {
             store._testReconcileTelegramSetupProgress(with: snapshot)
 
             #expect(store.consumerTelegramFirstTaskVerified)
-            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. First task verified.")
+            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. Chat approved.")
         }
     }
 
@@ -371,7 +371,7 @@ struct TelegramSetupBootstrapTests {
             #expect(store.completeConsumerTelegramFirstTaskVerificationFromRecentActivityIfPossible())
             #expect(store.consumerTelegramFirstTaskVerified)
             #expect(!store.telegramSetupWaitingForDM)
-            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. First task verified.")
+            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. Chat approved.")
         }
     }
 
@@ -412,7 +412,7 @@ struct TelegramSetupBootstrapTests {
             #expect(completed)
             #expect(store.consumerTelegramFirstTaskVerified)
             #expect(!store.telegramSetupWaitingForDM)
-            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. First task verified.")
+            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_consumer_smoke_2_bot. Chat approved.")
         }
     }
 

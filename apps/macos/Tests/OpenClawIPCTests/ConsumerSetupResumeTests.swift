@@ -139,7 +139,7 @@ struct ConsumerSetupResumeTests {
 
             #expect(decision == .complete)
             #expect(channels.consumerTelegramFirstTaskVerified)
-            #expect(channels.telegramSetupStatus == "Telegram bot is live as @openclawbot. First task verified from existing setup.")
+            #expect(channels.telegramSetupStatus == "Telegram bot is live as @openclawbot. Chat approved from existing setup.")
         }
     }
 

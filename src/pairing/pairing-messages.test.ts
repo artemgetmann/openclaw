@@ -99,8 +99,9 @@ describe("buildPairingReply", () => {
       code: "QRS678",
     });
 
-    expect(text).toContain("Jarvis needs one more approval step.");
+    expect(text).toContain("Jarvis is ready to approve this chat.");
     expect(text).toContain("Return to Jarvis and click Verify Telegram.");
+    expect(text).not.toContain("finish your first Telegram check");
     expect(text).toContain("Your Telegram user id: 42");
     expect(text).not.toContain("OpenClaw");
     expect(text).not.toContain("access not configured");
