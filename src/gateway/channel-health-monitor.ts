@@ -15,6 +15,7 @@ const DEFAULT_CHECK_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_MONITOR_STARTUP_GRACE_MS = 60_000;
 const DEFAULT_COOLDOWN_CYCLES = 2;
 const DEFAULT_MAX_RESTARTS_PER_HOUR = 10;
+const DEFAULT_RESTART_STOP_TIMEOUT_MS = 45_000;
 const ONE_HOUR_MS = 60 * 60_000;
 
 /**
@@ -41,6 +42,8 @@ export type ChannelHealthMonitorDeps = {
   timing?: Partial<ChannelHealthTimingPolicy>;
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
+  restartStopTimeoutMs?: number;
+  requestGatewayRestart?: (reason: string) => void;
   abortSignal?: AbortSignal;
 };
 
@@ -79,6 +82,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     checkIntervalMs = DEFAULT_CHECK_INTERVAL_MS,
     cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
     maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
+    restartStopTimeoutMs = DEFAULT_RESTART_STOP_TIMEOUT_MS,
+    requestGatewayRestart,
     abortSignal,
   } = deps;
   const timing = resolveTimingPolicy(deps);
@@ -88,6 +93,10 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   const startedAt = Date.now();
   let stopped = false;
   let checkInFlight = false;
+  // A stop timeout means the old channel task may still be alive. From that
+  // point on, the only safe recovery is a process restart; starting any channel
+  // in the same process risks duplicate long-pollers for shared credentials.
+  let gatewayRestartRequested = false;
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
@@ -96,8 +105,41 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     record.restartsThisHour = record.restartsThisHour.filter((r) => now - r.at < ONE_HOUR_MS);
   }
 
+  async function stopChannelWithTimeout(
+    channelId: ChannelId,
+    accountId: string,
+  ): Promise<"stopped" | "timed-out"> {
+    const stopPromise = channelManager
+      .stopChannel(channelId, accountId)
+      .then(() => "stopped" as const);
+    void stopPromise.catch(() => {
+      // The caller awaits the same promise while it is racing the timeout. If
+      // the timeout wins first, keep a rejection from becoming unhandled while
+      // the process is on its way to a full gateway restart.
+    });
+
+    if (restartStopTimeoutMs <= 0) {
+      return await stopPromise;
+    }
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        stopPromise,
+        new Promise<"timed-out">((resolve) => {
+          timeout = setTimeout(() => resolve("timed-out"), restartStopTimeoutMs);
+          timeout.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
   async function runCheck() {
-    if (stopped || checkInFlight) {
+    if (stopped || checkInFlight || gatewayRestartRequested) {
       return;
     }
     checkInFlight = true;
@@ -159,7 +201,16 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           try {
             if (status.running) {
-              await channelManager.stopChannel(channelId as ChannelId, accountId);
+              const stopResult = await stopChannelWithTimeout(channelId as ChannelId, accountId);
+              if (stopResult === "timed-out") {
+                const restartReason = `${channelId}:${accountId} health-monitor stop timed out`;
+                log.error?.(
+                  `[${channelId}:${accountId}] health-monitor: stop timed out after ${Math.round(restartStopTimeoutMs / 1000)}s; requesting gateway restart`,
+                );
+                gatewayRestartRequested = true;
+                requestGatewayRestart?.(restartReason);
+                return;
+              }
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
