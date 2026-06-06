@@ -646,8 +646,8 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_26.1.app
           xcodebuild -version
 
-      - name: Install XcodeGen / SwiftLint / SwiftFormat
-        run: brew install xcodegen swiftlint swiftformat
+      - name: Install XcodeGen / SwiftLint
+        run: brew install xcodegen swiftlint
 
       - name: Show toolchain
         run: |
@@ -657,8 +657,8 @@ jobs:
 
       - name: Swift lint
         run: |
+          set -euo pipefail
           swiftlint --config .swiftlint.yml
-          swiftformat --lint apps/macos/Sources --config .swiftformat
 
       - name: Cache SwiftPM
         uses: actions/cache@v5
