@@ -227,7 +227,12 @@ BUNDLE_ID="$(plist_value "$INFO_PLIST" "CFBundleIdentifier")"
 VARIANT="$(plist_value "$INFO_PLIST" "OpenClawAppVariant")"
 COMMIT="$(plist_value "$INFO_PLIST" "OpenClawGitCommit")"
 
-if [[ "$DISPLAY_NAME" != "Jarvis" || "$VARIANT" != "consumer" ]]; then
+# RC packages use the explicit "Jarvis Consumer" display name so they can live
+# beside the stable/debug app. Treat both names as valid consumer app bundles.
+if {
+  [[ "$DISPLAY_NAME" != "Jarvis" && "$DISPLAY_NAME" != "Jarvis Consumer" ]] ||
+    [[ "$VARIANT" != "consumer" ]]
+}; then
   echo "ERROR: refusing to smoke unexpected app bundle" >&2
   echo "display_name=$DISPLAY_NAME" >&2
   echo "variant=$VARIANT" >&2
