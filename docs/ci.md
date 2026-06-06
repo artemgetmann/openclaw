@@ -24,10 +24,17 @@ successfully and the PR is no longer a draft.
 Fast path for normal PRs:
 
 ```bash
+scripts/pr-merge copilot-check <PR>
 scripts/pr-merge watch-auto <PR>
 ```
 
-That command enables GitHub squash auto-merge when the PR is open and not a
+`copilot-check` explicitly requests GitHub Copilot review with
+`gh pr edit <PR> --add-reviewer @copilot`, then polls for a Copilot-authored
+review, comment, or review-thread comment. A zero exit from the request command
+is not proof; if no Copilot artifact appears before the timeout, the command
+fails loudly and points at Copilot plan/account/repository settings.
+
+`watch-auto` enables GitHub squash auto-merge when the PR is open and not a
 draft, then watches only merge-relevant blockers. It does not require local
 review/prep artifacts and it does not perform runtime shipping. If it reports
 queued non-required jobs from `statusCheckRollup`, treat them as noise unless
@@ -92,6 +99,9 @@ Agents should:
 
 - Diagnose failed or missing relevant checks.
 - Handle actionable review-bot comments.
+- Request Copilot review with `scripts/pr-merge copilot-check <PR>` when
+  advisory Copilot proof is expected, and report absence as unproven rather
+  than silently trusting repository rulesets.
 - Push narrowly scoped fixes for failed CI.
 - Report exact check names and statuses, not vibes.
 - Ship runtime changes only after merge and only when explicitly requested.
@@ -102,6 +112,8 @@ Agents should not:
   checks, auto-merge, merge queue, or repository settings without explicit user
   approval.
 - Make GitHub Copilot review a required merge approver.
+- Treat `gh pr edit <PR> --add-reviewer @copilot` exiting 0 as proof that a
+  Copilot review actually appeared.
 - Treat queued, pending, skipped, or cancelled checks as passed.
 - Merge draft PRs.
 - Ship unmerged feature-worktree code into the shared runtime as a workaround

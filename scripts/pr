@@ -34,6 +34,7 @@ Usage:
   scripts/pr prepare-push <PR>
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
+  scripts/pr copilot-check <PR> [--timeout <seconds>] [--interval <seconds>]
   scripts/pr merge-verify <PR>
   scripts/pr merge-watch <PR> [--interval <seconds>] [--once] [--enable-auto-merge]
   scripts/pr merge-run <PR>
@@ -1771,6 +1772,308 @@ merge_watch_require_positive_integer() {
   fi
 }
 
+copilot_check_usage() {
+  cat <<USAGE
+Usage:
+  scripts/pr copilot-check <PR> [--timeout <seconds>] [--interval <seconds>]
+USAGE
+}
+
+copilot_check_pr_graphql_json() {
+  local pr="$1"
+  local repo_nwo
+  local owner
+  local repo
+  local query
+  local err_file
+
+  repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+  owner="${repo_nwo%%/*}"
+  repo="${repo_nwo#*/}"
+  err_file=$(mktemp)
+
+  # GitHub treats @copilot as a special reviewer request. A successful request
+  # can still leave normal reviewRequests empty, so proof must look for actual
+  # Copilot-authored review/comment/thread artifacts.
+  query='
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 50) {
+        nodes {
+          isResolved
+          comments(first: 50) {
+            nodes {
+              author { login }
+              body
+              url
+              createdAt
+            }
+          }
+        }
+      }
+      timelineItems(first: 100, itemTypes: [PULL_REQUEST_REVIEW, ISSUE_COMMENT, REVIEW_REQUESTED_EVENT]) {
+        nodes {
+          __typename
+          ... on PullRequestReview {
+            author { login }
+            state
+            body
+            url
+            createdAt
+          }
+          ... on IssueComment {
+            author { login }
+            body
+            url
+            createdAt
+          }
+          ... on ReviewRequestedEvent {
+            actor { login }
+            createdAt
+            requestedReviewer {
+              __typename
+              ... on User { login }
+              ... on Bot { login }
+              ... on Mannequin { login }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+'
+
+  if gh api graphql -f query="$query" -F owner="$owner" -F repo="$repo" -F number="$pr" 2>"$err_file"; then
+    rm -f "$err_file"
+    return 0
+  fi
+
+  {
+    echo "Unable to read PR #$pr Copilot GraphQL state."
+    print_relevant_log_excerpt "$err_file"
+  } >&2
+  rm -f "$err_file"
+  return 2
+}
+
+copilot_check_evidence_json() {
+  local pr="$1"
+  local pr_json
+  local graph_json
+  local err_file
+
+  err_file=$(mktemp)
+  if ! pr_json=$(gh pr view "$pr" --json reviews,comments,reviewRequests 2>"$err_file"); then
+    {
+      echo "Unable to read PR #$pr review state."
+      print_relevant_log_excerpt "$err_file"
+    } >&2
+    rm -f "$err_file"
+    return 2
+  fi
+  rm -f "$err_file"
+
+  graph_json=$(copilot_check_pr_graphql_json "$pr") || return $?
+
+  jq -n --argjson pr "$pr_json" --argjson graph "$graph_json" '
+    def copilot_author:
+      (.author.login? // "" | test("copilot"; "i"));
+
+    [
+      $pr.reviews[]?
+      | select(copilot_author)
+      | {
+          kind: "review",
+          source: "gh pr view reviews",
+          author: (.author.login // ""),
+          state: (.state // ""),
+          url: (.url // ""),
+          createdAt: (.submittedAt // .createdAt // "")
+        }
+    ] + [
+      $pr.comments[]?
+      | select(copilot_author)
+      | {
+          kind: "comment",
+          source: "gh pr view comments",
+          author: (.author.login // ""),
+          state: "",
+          url: (.url // ""),
+          createdAt: (.createdAt // "")
+        }
+    ] + [
+      $graph.data.repository.pullRequest.reviewThreads.nodes[]? as $thread
+      | $thread.comments.nodes[]?
+      | select(copilot_author)
+      | {
+          kind: "review-thread-comment",
+          source: "GraphQL reviewThreads",
+          author: (.author.login // ""),
+          state: (if ($thread.isResolved // false) then "resolved" else "unresolved" end),
+          url: (.url // ""),
+          createdAt: (.createdAt // "")
+        }
+    ] + [
+      $graph.data.repository.pullRequest.timelineItems.nodes[]?
+      | select((.__typename == "PullRequestReview" or .__typename == "IssueComment") and copilot_author)
+      | {
+          kind: (if .__typename == "PullRequestReview" then "timeline-review" else "timeline-comment" end),
+          source: "GraphQL timelineItems",
+          author: (.author.login // ""),
+          state: (.state // ""),
+          url: (.url // ""),
+          createdAt: (.createdAt // "")
+        }
+    ]
+    | unique_by([.kind, .source, .author, .url, .createdAt])
+  '
+}
+
+copilot_check_request_traces_json() {
+  local pr="$1"
+  local pr_json
+  local graph_json
+
+  pr_json=$(gh pr view "$pr" --json reviewRequests)
+  graph_json=$(copilot_check_pr_graphql_json "$pr") || return $?
+
+  jq -n --argjson pr "$pr_json" --argjson graph "$graph_json" '
+    [
+      $pr.reviewRequests[]?
+      | select((.login? // .name? // "" | test("copilot"; "i")))
+      | {
+          kind: "review-request",
+          source: "gh pr view reviewRequests",
+          reviewer: (.login? // .name? // ""),
+          actor: "",
+          createdAt: ""
+        }
+    ] + [
+      $graph.data.repository.pullRequest.timelineItems.nodes[]?
+      | select(.__typename == "ReviewRequestedEvent")
+      | select((.requestedReviewer.login? // "" | test("copilot"; "i")))
+      | {
+          kind: "review-request-event",
+          source: "GraphQL timelineItems",
+          reviewer: (.requestedReviewer.login // ""),
+          actor: (.actor.login // ""),
+          createdAt: (.createdAt // "")
+        }
+    ]
+    | unique_by([.kind, .source, .reviewer, .actor, .createdAt])
+  '
+}
+
+copilot_check_print_evidence() {
+  local evidence_json="$1"
+  printf '%s\n' "$evidence_json" | jq -r '.[] | "  - \(.kind) via \(.source): author=\(.author) state=\(.state) createdAt=\(.createdAt) url=\(.url)"'
+}
+
+copilot_check() {
+  local pr="$1"
+  shift || true
+
+  local timeout=180
+  local interval=15
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --timeout)
+        if [ "$#" -lt 2 ]; then
+          copilot_check_usage
+          exit 2
+        fi
+        timeout="$2"
+        merge_watch_require_positive_integer "$timeout" "--timeout"
+        shift 2
+        ;;
+      --interval)
+        if [ "$#" -lt 2 ]; then
+          copilot_check_usage
+          exit 2
+        fi
+        interval="$2"
+        merge_watch_require_positive_integer "$interval" "--interval"
+        shift 2
+        ;;
+      *)
+        copilot_check_usage
+        exit 2
+        ;;
+    esac
+  done
+
+  merge_watch_require_positive_integer "$timeout" "--timeout"
+  merge_watch_require_positive_integer "$interval" "--interval"
+
+  if ! gh auth status >/dev/null 2>&1; then
+    echo "GitHub CLI auth is not available."
+    return 2
+  fi
+
+  echo "requesting GitHub Copilot review for PR #$pr"
+  local request_output_file
+  request_output_file=$(mktemp)
+  if gh pr edit "$pr" --add-reviewer @copilot >"$request_output_file" 2>&1; then
+    echo "Copilot reviewer request command exited 0."
+    if [ -s "$request_output_file" ]; then
+      sed 's/^/  /' "$request_output_file"
+    fi
+    rm -f "$request_output_file"
+  else
+    echo "Failed to request GitHub Copilot review for PR #$pr."
+    print_relevant_log_excerpt "$request_output_file"
+    rm -f "$request_output_file"
+    return 1
+  fi
+
+  local start
+  local deadline
+  local now
+  start=$(date +%s)
+  deadline=$((start + timeout))
+
+  while true; do
+    echo "copilot-check poll: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+    local evidence_json
+    evidence_json=$(copilot_check_evidence_json "$pr") || return $?
+    if [ "$(printf '%s\n' "$evidence_json" | jq 'length')" -gt 0 ]; then
+      echo "Copilot review/comment/thread observed:"
+      copilot_check_print_evidence "$evidence_json"
+      echo "copilot-check passed for PR #$pr"
+      return 0
+    fi
+
+    now=$(date +%s)
+    if [ "$now" -ge "$deadline" ]; then
+      break
+    fi
+
+    local sleep_for="$interval"
+    if [ $((now + sleep_for)) -gt "$deadline" ]; then
+      sleep_for=$((deadline - now))
+    fi
+    [ "$sleep_for" -gt 0 ] || break
+    echo "No Copilot review observed yet; polling again in ${sleep_for}s"
+    sleep "$sleep_for"
+  done
+
+  echo "No Copilot review/comment/thread observed after ${timeout}s."
+  local request_traces_json
+  request_traces_json=$(copilot_check_request_traces_json "$pr" || true)
+  if [ -n "$request_traces_json" ] && [ "$(printf '%s\n' "$request_traces_json" | jq 'length')" -gt 0 ]; then
+    echo "Copilot request traces found, but request traces are not review proof:"
+    printf '%s\n' "$request_traces_json" | jq -r '.[] | "  - \(.kind) via \(.source): reviewer=\(.reviewer) actor=\(.actor) createdAt=\(.createdAt)"'
+  else
+    echo "No Copilot request trace is visible through gh reviewRequests or GraphQL timelineItems."
+  fi
+  echo "Next step: check GitHub Copilot plan, account access, and repository Copilot code review settings; do not claim Copilot proof for this PR."
+  return 1
+}
+
 merge_watch_required_checks_json() {
   local pr="$1"
   local err_file
@@ -2258,7 +2561,7 @@ main() {
     exit 2
   fi
 
-  if [ "$cmd" = "merge-watch" ]; then
+  if [ "$cmd" = "merge-watch" ] || [ "$cmd" = "copilot-check" ]; then
     require_merge_watch_cmds
   else
     require_cmds
@@ -2306,6 +2609,9 @@ main() {
       ;;
     prepare-run)
       prepare_run "$pr"
+      ;;
+    copilot-check)
+      copilot_check "$pr" "$@"
       ;;
     merge-verify)
       merge_verify "$pr"
