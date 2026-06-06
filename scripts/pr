@@ -9,7 +9,10 @@ script_parent_dir="$(dirname "$script_self")"
 if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"
   canonical_self="$canonical_repo_root/scripts/$(basename "${BASH_SOURCE[0]}")"
-  if [ "$script_self" != "$canonical_self" ] && [ -x "$canonical_self" ]; then
+  # Linked worktrees normally delegate to the canonical helper so old lanes do
+  # not drift. When this file itself is under active development, keep the
+  # worktree copy in control so the new command can be validated before merge.
+  if [ "$script_self" != "$canonical_self" ] && [ -x "$canonical_self" ] && cmp -s "$script_self" "$canonical_self"; then
     exec "$canonical_self" "$@"
   fi
 fi
@@ -32,6 +35,7 @@ Usage:
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
   scripts/pr merge-verify <PR>
+  scripts/pr merge-watch <PR> [--interval <seconds>] [--once] [--enable-auto-merge]
   scripts/pr merge-run <PR>
 USAGE
 }
@@ -48,6 +52,21 @@ require_cmds() {
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "Missing required command(s): ${missing[*]}"
     exit 1
+  fi
+}
+
+require_merge_watch_cmds() {
+  local missing=()
+  local cmd
+  for cmd in gh jq; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      missing+=("$cmd")
+    fi
+  done
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "Missing required command(s): ${missing[*]}"
+    exit 2
   fi
 }
 
@@ -1735,6 +1754,292 @@ merge_verify() {
   echo "merge-verify passed for PR #$pr"
 }
 
+merge_watch_usage() {
+  cat <<USAGE
+Usage:
+  scripts/pr merge-watch <PR> [--interval <seconds>] [--once] [--enable-auto-merge]
+USAGE
+}
+
+merge_watch_require_positive_integer() {
+  local value="$1"
+  local label="$2"
+
+  if ! printf '%s\n' "$value" | jq -R -e 'test("^[1-9][0-9]*$")' >/dev/null 2>&1; then
+    echo "$label must be a positive integer: $value"
+    exit 2
+  fi
+}
+
+merge_watch_required_checks_json() {
+  local pr="$1"
+  local err_file
+  err_file=$(mktemp)
+
+  if gh pr checks "$pr" --required --json name,bucket,state,workflow 2>"$err_file"; then
+    rm -f "$err_file"
+    return 0
+  fi
+
+  echo "Unable to read required PR checks for #$pr."
+  print_relevant_log_excerpt "$err_file"
+  rm -f "$err_file"
+  return 2
+}
+
+merge_watch_pr_json() {
+  local pr="$1"
+  local err_file
+  err_file=$(mktemp)
+
+  if gh pr view "$pr" --json state,isDraft,mergeStateStatus,autoMergeRequest,statusCheckRollup,headRefOid,baseRefOid,url 2>"$err_file"; then
+    rm -f "$err_file"
+    return 0
+  fi
+
+  echo "Unable to read PR #$pr."
+  print_relevant_log_excerpt "$err_file"
+  rm -f "$err_file"
+  return 2
+}
+
+merge_watch_print_required_checks() {
+  local checks_json="$1"
+  local count
+  count=$(printf '%s\n' "$checks_json" | jq 'length')
+
+  if [ "$count" -eq 0 ]; then
+    echo "required checks: none reported by GitHub"
+    return 0
+  fi
+
+  echo "required checks:"
+  printf '%s\n' "$checks_json" | jq -r '.[] | "  - \(.workflow // "unknown") / \(.name): \(.bucket) (\(.state))"'
+}
+
+merge_watch_print_non_required_noise() {
+  local pr_json="$1"
+  local checks_json="$2"
+  local noise_json
+
+  # Compare workflow/name pairs because GitHub exposes required checks through
+  # `gh pr checks` and all checks through `statusCheckRollup` with slightly
+  # different field names. Everything left here is advisory noise for merge.
+  noise_json=$(jq -n --argjson pr "$pr_json" --argjson required "$checks_json" '
+    ($required | map((.workflow // "") + "\t" + (.name // ""))) as $requiredKeys
+    | [
+        $pr.statusCheckRollup[]?
+        | select(.__typename == "CheckRun")
+        | . as $check
+        | (($check.workflowName // "") + "\t" + ($check.name // "")) as $key
+        | select($requiredKeys | index($key) | not)
+        | select(($check.status // "") != "COMPLETED" or (($check.conclusion // "") | IN("SUCCESS", "SKIPPED") | not))
+        | {
+            workflow: ($check.workflowName // "unknown"),
+            name: ($check.name // "unknown"),
+            status: ($check.status // "unknown"),
+            conclusion: ($check.conclusion // "")
+          }
+      ]
+  ')
+
+  if [ "$(printf '%s\n' "$noise_json" | jq 'length')" -eq 0 ]; then
+    echo "non-required noise: none"
+    return 0
+  fi
+
+  echo "non-required noise:"
+  printf '%s\n' "$noise_json" | jq -r '.[] | "  - \(.workflow) / \(.name): \(.status)\(if .conclusion == "" then "" else " (\(.conclusion))" end)"'
+}
+
+merge_watch_enable_auto_merge_if_needed() {
+  local pr="$1"
+  local pr_json="$2"
+  local auto_merge_enabled
+  auto_merge_enabled=$(printf '%s\n' "$pr_json" | jq -r '.autoMergeRequest != null')
+
+  if [ "$auto_merge_enabled" = "true" ]; then
+    return 0
+  fi
+
+  echo "auto-merge=disabled; enabling squash auto-merge"
+  if gh pr merge "$pr" --squash --delete-branch --auto; then
+    return 0
+  fi
+
+  echo "Failed to enable auto-merge for PR #$pr."
+  return 1
+}
+
+merge_watch_snapshot() {
+  local pr="$1"
+  local enable_auto_merge="$2"
+  local pr_json
+
+  if ! gh auth status >/dev/null 2>&1; then
+    echo "GitHub CLI auth is not available."
+    return 2
+  fi
+
+  pr_json=$(merge_watch_pr_json "$pr") || return $?
+
+  local state
+  local is_draft
+  local merge_state
+  local auto_merge_enabled
+  local head_sha
+  local base_sha
+  local url
+  state=$(printf '%s\n' "$pr_json" | jq -r .state)
+  is_draft=$(printf '%s\n' "$pr_json" | jq -r .isDraft)
+  merge_state=$(printf '%s\n' "$pr_json" | jq -r .mergeStateStatus)
+  auto_merge_enabled=$(printf '%s\n' "$pr_json" | jq -r '.autoMergeRequest != null')
+  head_sha=$(printf '%s\n' "$pr_json" | jq -r '.headRefOid[0:12]')
+  base_sha=$(printf '%s\n' "$pr_json" | jq -r '.baseRefOid[0:12]')
+  url=$(printf '%s\n' "$pr_json" | jq -r .url)
+
+  echo "PR #$pr: $url"
+  echo "state=$state draft=$is_draft mergeStateStatus=$merge_state head=$head_sha base=$base_sha"
+
+  if [ "$state" = "MERGED" ]; then
+    echo "merged: yes"
+    return 0
+  fi
+
+  if [ "$state" != "OPEN" ]; then
+    echo "blocker: PR state is $state"
+    return 1
+  fi
+
+  if [ "$is_draft" = "true" ]; then
+    echo "blocker: draft PR"
+    return 1
+  fi
+
+  if [ "$enable_auto_merge" = "true" ] && [ "$auto_merge_enabled" != "true" ]; then
+    merge_watch_enable_auto_merge_if_needed "$pr" "$pr_json" || return $?
+    pr_json=$(merge_watch_pr_json "$pr") || return $?
+    auto_merge_enabled=$(printf '%s\n' "$pr_json" | jq -r '.autoMergeRequest != null')
+    state=$(printf '%s\n' "$pr_json" | jq -r .state)
+    if [ "$state" = "MERGED" ]; then
+      echo "merged: yes"
+      return 0
+    fi
+  fi
+
+  if [ "$auto_merge_enabled" = "true" ]; then
+    echo "auto-merge=enabled"
+  else
+    echo "auto-merge=disabled"
+  fi
+
+  local checks_json
+  checks_json=$(merge_watch_required_checks_json "$pr") || return $?
+  merge_watch_print_required_checks "$checks_json"
+  merge_watch_print_non_required_noise "$pr_json" "$checks_json"
+
+  local failed_required
+  local pending_required
+  local has_pr_required
+  local ci_pending_rollup
+  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket == "fail" or (.state | IN("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"))) ] | length')
+  pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket == "pending" or (.state | IN("PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "EXPECTED")))] | length')
+  has_pr_required=$(printf '%s\n' "$checks_json" | jq -r '[.[] | select(.workflow == "CI" and .name == "pr-required")] | length > 0')
+  ci_pending_rollup=$(printf '%s\n' "$pr_json" | jq '[.statusCheckRollup[]? | select(.__typename == "CheckRun" and .workflowName == "CI" and .status != "COMPLETED")] | length')
+
+  if [ "$failed_required" -gt 0 ]; then
+    echo "blocker: required checks failing"
+    return 1
+  fi
+
+  if [ "$pending_required" -gt 0 ]; then
+    echo "blocker: required checks pending"
+    return 10
+  fi
+
+  if [ "$has_pr_required" != "true" ] && [ "$ci_pending_rollup" -gt 0 ]; then
+    echo "blocker: CI aggregate gate pending or not scheduled yet"
+    return 10
+  fi
+
+  case "$merge_state" in
+    BEHIND|DIRTY)
+      echo "blocker: branch is behind or stale under strict up-to-date checks"
+      return 1
+      ;;
+    BLOCKED)
+      echo "blocker: GitHub reports merge blocked after visible required checks passed"
+      return 1
+      ;;
+  esac
+
+  echo "merge blocker: none"
+  return 0
+}
+
+merge_watch() {
+  local pr="$1"
+  shift || true
+
+  local interval=30
+  local once=false
+  local enable_auto_merge=false
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --interval)
+        if [ "$#" -lt 2 ]; then
+          merge_watch_usage
+          exit 2
+        fi
+        interval="$2"
+        merge_watch_require_positive_integer "$interval" "--interval"
+        shift 2
+        ;;
+      --once)
+        once=true
+        shift
+        ;;
+      --enable-auto-merge)
+        enable_auto_merge=true
+        shift
+        ;;
+      *)
+        merge_watch_usage
+        exit 2
+        ;;
+    esac
+  done
+
+  merge_watch_require_positive_integer "$interval" "--interval"
+
+  while true; do
+    echo "merge-watch snapshot: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    local status=0
+    merge_watch_snapshot "$pr" "$enable_auto_merge" || status=$?
+
+    if [ "$once" = "true" ]; then
+      if [ "$status" -eq 10 ]; then
+        exit 1
+      fi
+      exit "$status"
+    fi
+
+    case "$status" in
+      0)
+        exit 0
+        ;;
+      10)
+        echo "required checks are still moving; polling again in ${interval}s"
+        sleep "$interval"
+        ;;
+      *)
+        exit "$status"
+        ;;
+    esac
+  done
+}
+
 merge_run() {
   local pr="$1"
   enter_worktree "$pr" false
@@ -1943,8 +2248,6 @@ main() {
     exit 2
   fi
 
-  require_cmds
-
   local cmd="${1-}"
   shift || true
   local pr="${1-}"
@@ -1953,6 +2256,12 @@ main() {
   if [ -z "$cmd" ] || [ -z "$pr" ]; then
     usage
     exit 2
+  fi
+
+  if [ "$cmd" = "merge-watch" ]; then
+    require_merge_watch_cmds
+  else
+    require_cmds
   fi
 
   case "$cmd" in
@@ -2000,6 +2309,9 @@ main() {
       ;;
     merge-verify)
       merge_verify "$pr"
+      ;;
+    merge-watch)
+      merge_watch "$pr" "$@"
       ;;
     merge-run)
       merge_run "$pr"
