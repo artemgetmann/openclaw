@@ -4,17 +4,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { packageJsonHasAuditRelevantChange, shouldRunAuditForChangedPaths } =
-  (await import("../../scripts/ci-dependency-audit-scope.mjs")) as unknown as {
-    packageJsonHasAuditRelevantChange: (
-      beforePackage: Record<string, unknown>,
-      afterPackage: Record<string, unknown>,
-    ) => boolean;
-    shouldRunAuditForChangedPaths: (
-      changedPaths: string[],
-      refs?: { base?: string; head?: string },
-    ) => { shouldRun: boolean; reason: string };
-  };
+const moduleUrl = new URL("../../scripts/ci-dependency-audit-scope.mjs", import.meta.url).href;
+const { packageJsonHasAuditRelevantChange, shouldRunAuditForChangedPaths } = (await import(
+  moduleUrl
+)) as unknown as {
+  packageJsonHasAuditRelevantChange: (
+    beforePackage: Record<string, unknown>,
+    afterPackage: Record<string, unknown>,
+  ) => boolean;
+  shouldRunAuditForChangedPaths: (
+    changedPaths: string[],
+    refs?: { base?: string; head?: string },
+  ) => { shouldRun: boolean; reason: string };
+};
 
 const tempRoots: string[] = [];
 
