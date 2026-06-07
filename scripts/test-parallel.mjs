@@ -105,11 +105,15 @@ const hostMemoryGiB = Math.floor(os.totalmem() / 1024 ** 3);
 const highMemLocalHost = !isCI && hostMemoryGiB >= 96;
 const lowMemLocalHost = !isCI && hostMemoryGiB < 64;
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
-// vmForks is a big win for transform/import heavy suites. Node 24 is stable again
-// for the default unit-fast lane after moving the known flaky files to fork-only
-// isolation, but Node 25+ still falls back to process forks until re-validated.
+// vmForks is a big win for transform/import heavy suites. Node 24 is stable for
+// Linux CI, but macOS runners still leak/hoist partial module mocks across
+// unrelated suites under vmForks (notably undici and pi-ai OAuth mocks). Keep
+// macOS CI on process forks until that Vitest/runtime boundary is re-validated.
+// Node 25+ also falls back to process forks until re-validated.
 // Keep it opt-out via OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
-const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor <= 24 : true;
+const supportsVmForks = Number.isFinite(nodeMajor)
+  ? nodeMajor <= 24 && !(isCI && isMacOS)
+  : !(isCI && isMacOS);
 const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
   (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks && !lowMemLocalHost);

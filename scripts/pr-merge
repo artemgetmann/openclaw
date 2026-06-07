@@ -5,7 +5,9 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 base="$script_dir/pr"
 if common_git_dir=$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_base="$(dirname "$common_git_dir")/scripts/pr"
-  if [ -x "$canonical_base" ]; then
+  # Use the canonical helper only when this worktree's helper is identical.
+  # During helper development the local copy must stay in control for proof.
+  if [ -x "$canonical_base" ] && cmp -s "$script_dir/pr" "$canonical_base"; then
     base="$canonical_base"
   fi
 fi
@@ -15,6 +17,9 @@ usage() {
 Usage:
   scripts/pr-merge <PR>          # verify only (backward compatible)
   scripts/pr-merge verify <PR>   # verify only
+  scripts/pr-merge copilot-check <PR> # request Copilot review and prove it appeared
+  scripts/pr-merge watch <PR>    # lightweight blocker watch
+  scripts/pr-merge watch-auto <PR> # enable auto-merge, then lightweight watch
   scripts/pr-merge run <PR>      # verify + merge + post-merge checks + cleanup
 USAGE
 }
@@ -23,14 +28,31 @@ if [ "$#" -eq 1 ]; then
   exec "$base" merge-verify "$1"
 fi
 
-if [ "$#" -eq 2 ]; then
+if [ "$#" -ge 2 ]; then
   mode="$1"
   pr="$2"
   case "$mode" in
     verify)
+      if [ "$#" -ne 2 ]; then
+        usage
+        exit 2
+      fi
       exec "$base" merge-verify "$pr"
       ;;
+    copilot-check)
+      exec "$base" copilot-check "$pr" "${@:3}"
+      ;;
+    watch)
+      exec "$base" merge-watch "$pr" "${@:3}"
+      ;;
+    watch-auto)
+      exec "$base" merge-watch "$pr" --enable-auto-merge "${@:3}"
+      ;;
     run)
+      if [ "$#" -ne 2 ]; then
+        usage
+        exit 2
+      fi
       exec "$base" merge-run "$pr"
       ;;
     *)

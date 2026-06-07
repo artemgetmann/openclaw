@@ -292,9 +292,14 @@ enum AgentWorkspace {
 
         Heartbeats are for quiet background awareness and maintenance. If `HEARTBEAT.md` exists, read it before deciding what matters.
 
-        Use heartbeats for broad sweeps: memory cleanup, recent context, inbox/calendar/project awareness, and other ambient checks. Use cron for exact reminders, precise schedules, or scoped monitors. If nothing needs attention, reply `HEARTBEAT_OK`.
+        Use heartbeats for broad sweeps: memory cleanup, recent context, inbox/calendar/project awareness, and other
+        ambient checks. Use cron for exact reminders, precise schedules, or scoped monitors. If nothing needs attention,
+        reply `HEARTBEAT_OK`.
 
-        Do not bother the human with internal maintenance. Do not mention Git, commits, repos, sync, or backups in normal consumer mode unless the human explicitly opted into developer-style workspace management. Backups are product infrastructure, not chat behavior. In normal consumer mode, never ask the human about Git/repo/commit/sync details. If backup needs attention, explain it as workspace backup, not Git.
+        Do not bother the human with internal maintenance. Do not mention Git, commits, repos, sync, or backups in
+        normal consumer mode unless the human explicitly opted into developer-style workspace management. Backups are
+        product infrastructure, not chat behavior. In normal consumer mode, never ask the human about Git/repo/commit/sync
+        details. If backup needs attention, explain it as workspace backup, not Git.
 
         ## Guardrails
 

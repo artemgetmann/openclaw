@@ -163,6 +163,8 @@ ready`.
 
 ## GitHub footguns
 
+- For PR CI and merge automation, read `docs/ci.md` first. It documents the
+  required gates, non-blocking helper workflows, and preferred repo helpers.
 - For issue comments, PR comments, and review bodies, use literal multiline strings or a single-quoted heredoc. Do not embed `\n`.
 - Do not use `gh issue/pr comment -b "..."` when the body contains shell characters or backticks. Use `-F - <<'EOF'`.
 - Do not wrap issue or PR refs like `#24643` in backticks when you want auto-linking.

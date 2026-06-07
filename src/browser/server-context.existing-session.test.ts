@@ -215,4 +215,27 @@ describe("browser server-context existing-session profile", () => {
       profileDirectory: "Default",
     });
   });
+
+  it("fails loudly instead of launching over duplicate cloned Chrome parents", async () => {
+    const state = makeState();
+    state.resolved.profiles["signed-in"] = {
+      cdpPort: 18802,
+      cdpUrl: "http://127.0.0.1:18802",
+      color: "#0066CC",
+      driver: "existing-session",
+      attachOnly: true,
+      cloneFromUserProfile: true,
+      userDataDir: "/tmp/openclaw/browser/signed-in/user-data",
+      profileDirectory: "Default",
+    };
+    vi.mocked(chrome.findOpenClawChromeProcessMatches).mockReturnValueOnce([
+      { pid: 111, command: "Google Chrome --remote-debugging-port=18802" },
+      { pid: 222, command: "Google Chrome --remote-debugging-port=18802" },
+    ]);
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("signed-in");
+
+    await expect(live.ensureBrowserAvailable()).rejects.toThrow(/Duplicate cloned Chrome/);
+    expect(chrome.launchOpenClawChrome).not.toHaveBeenCalled();
+  });
 });

@@ -89,6 +89,18 @@ describe("scripts/gateway-recover-main.sh", () => {
 });
 
 describe("scripts/gateway-watchdog.sh", () => {
+  it("requires sustained health failure before reclaiming the gateway", () => {
+    const script = fs.readFileSync(WATCHDOG_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('FAIL_THRESHOLD="${OPENCLAW_GATEWAY_WATCHDOG_FAIL_THRESHOLD:-8}"');
+    expect(script).toContain(
+      'HTTP_TIMEOUT_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_HTTP_TIMEOUT_SECONDS:-10}"',
+    );
+    expect(script).toContain('curl -fsS --max-time "${HTTP_TIMEOUT_SECONDS}"');
+    expect(script).not.toContain('FAIL_THRESHOLD="${OPENCLAW_GATEWAY_WATCHDOG_FAIL_THRESHOLD:-2}"');
+    expect(script).not.toContain("curl -fsS --max-time 3");
+  });
+
   it("uses shallow recovery and disables watchdog self-management", () => {
     const script = fs.readFileSync(WATCHDOG_SCRIPT_PATH, "utf8");
 
