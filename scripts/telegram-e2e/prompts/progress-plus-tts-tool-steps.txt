@@ -1,0 +1,9 @@
+Create /tmp/openclaw-progress-proof-20260607-n.txt using three separate tool steps, not one combined shell command.
+
+Before each tool step, send one brief progress update, then run a command that waits 4 seconds and appends exactly one note:
+
+1. first note says example.com is reserved for examples
+2. second note says IANA documents reserved example domains
+3. third note says MDN HTML docs explain HTML basics
+
+After the third step, read the file back, delete it, verify it is gone, and send one short final answer summarizing the three notes and confirming the file was removed.

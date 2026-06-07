@@ -67,6 +67,16 @@ pnpm openclaw:local telegram scenario progress-plus-tts --json
   a final answer after cleanup.
 - `progress-plus-tts`: proves progress updates plus final TTS output behavior.
 
+For progress-plus-TTS proof, prefer the deterministic tool-step prompt:
+
+```bash
+pnpm openclaw:local telegram scenario progress-plus-tts --json \
+  --message "$(cat scripts/telegram-e2e/prompts/progress-plus-tts-tool-steps.txt)"
+```
+
+This prompt asks for three separate tool turns with pre-tool progress updates,
+which is stronger proof than a natural-language request to "show progress".
+
 When the lane is done, release the runtime and tester-bot claim:
 
 ```bash
