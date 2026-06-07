@@ -50,6 +50,38 @@ struct ConsumerBundledRuntimeTests {
         #expect(ready == .ready)
     }
 
+    @Test func `startup seeding does not recursively audit vendored node modules`() throws {
+        let resourceRoot = try makeTempDirForTests()
+        let installPrefix = try makeTempDirForTests().appendingPathComponent(".openclaw", isDirectory: true)
+        let fm = FileManager.default
+
+        try fm.createDirectory(
+            at: resourceRoot.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true),
+            withIntermediateDirectories: true)
+        let bundledRoot = resourceRoot.appendingPathComponent(ConsumerBundledRuntime.resourceDirectoryName, isDirectory: true)
+        try self.writeBundledWorkspaceTemplates(into: bundledRoot)
+        let manifest = ConsumerBundledRuntime.Manifest(
+            format: 1,
+            bundleVersion: "123",
+            gitCommit: "abc123",
+            nodeVersion: "22.22.1",
+            uvVersion: "0.9.21")
+        try BundledRuntimeFixtureHelper.writeMinimalBundledRuntime(
+            into: bundledRoot,
+            manifest: manifest,
+            fileManager: fm)
+
+        let nativeAddonURL = bundledRoot
+            .appendingPathComponent("openclaw/node_modules/.pnpm/example-darwin-addon", isDirectory: true)
+            .appendingPathComponent("binding.node")
+        try fm.createDirectory(at: nativeAddonURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("unsigned fixture".utf8).write(to: nativeAddonURL)
+
+        let seeded = try ConsumerBundledRuntime.seedIfNeeded(from: bundledRoot, into: installPrefix, fileManager: fm)
+        #expect(seeded == .seeded)
+        #expect(fm.fileExists(atPath: installPrefix.appendingPathComponent("lib/openclaw-bundled/node_modules/.pnpm/example-darwin-addon/binding.node").path))
+    }
+
     @Test @MainActor func `bootstrap seeds bundled runtime when product bundle resources are available`() async throws {
         let instanceID = "consumer-bundled-runtime-hardening"
         let homeURL = try makeTempDirForTests()

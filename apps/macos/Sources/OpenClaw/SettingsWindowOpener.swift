@@ -32,8 +32,7 @@ final class SettingsWindowOpener {
             return
         }
 
-        DockIconManager.shared.temporarilyShowDock()
-        NSApp.activate(ignoringOtherApps: true)
+        DockIconManager.shared.bringAppForward()
         if let openSettingsAction {
             openSettingsAction()
             self.selectTab(tab)
@@ -73,11 +72,11 @@ final class SettingsWindowOpener {
 
     @MainActor
     private static func focusVisibleContentWindow() {
-        DockIconManager.shared.temporarilyShowDock()
-        NSApp.activate(ignoringOtherApps: true)
+        DockIconManager.shared.bringAppForward()
         guard let window = self.contentWindows().first else { return }
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
+        DockIconManager.shared.bringAppForward()
     }
 
     private static func contentWindows() -> [NSWindow] {

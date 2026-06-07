@@ -54,6 +54,20 @@ describe("Jarvis Consumer RC packaging wrapper", () => {
   });
 });
 
+describe("Jarvis Consumer Gate2 packaging wrapper", () => {
+  const script = fs.readFileSync(
+    path.join(root, "scripts", "package-jarvis-consumer-gate2.sh"),
+    "utf8",
+  );
+
+  it("requires foreground app identity for Gate2 onboarding proof", () => {
+    expect(script).toContain('GATE2_BUNDLE_ID="ai.openclaw.consumer.mac.gate2"');
+    expect(script).toContain("LSUIElement=false");
+    expect(script).toContain("foreground onboarding");
+    expect(script).toContain("lsui_element=$lsui_element");
+  });
+});
+
 describe("macOS activation helper", () => {
   const helper = fs.readFileSync(path.join(root, "scripts", "lib", "macos-activation.sh"), "utf8");
   const openScript = fs.readFileSync(

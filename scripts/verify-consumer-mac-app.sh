@@ -228,6 +228,7 @@ actual_icon_file="$(plist_print CFBundleIconFile)"
 actual_variant="$(plist_print OpenClawAppVariant)"
 actual_instance_id="$(/usr/libexec/PlistBuddy -c "Print :OpenClawConsumerInstanceID" "$INFO_PLIST" 2>/dev/null || true)"
 actual_url_scheme="$(/usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes:0:CFBundleURLSchemes:0" "$INFO_PLIST" 2>/dev/null || true)"
+actual_lsui_element="$(/usr/libexec/PlistBuddy -c "Print :LSUIElement" "$INFO_PLIST" 2>/dev/null || true)"
 actual_version="$(plist_print CFBundleShortVersionString)"
 actual_build="$(plist_print CFBundleVersion)"
 actual_commit="$(/usr/libexec/PlistBuddy -c "Print :OpenClawGitCommit" "$INFO_PLIST" 2>/dev/null || echo "unknown")"
@@ -264,6 +265,12 @@ fi
 
 if [[ "$actual_variant" != "$EXPECTED_VARIANT" ]]; then
   echo "ERROR: expected consumer variant '$EXPECTED_VARIANT', got '$actual_variant'" >&2
+  exit 1
+fi
+
+if [[ "$actual_lsui_element" != "false" ]]; then
+  echo "ERROR: consumer app must be packaged as a foreground app for first-run onboarding." >&2
+  echo "Expected LSUIElement=false, got '${actual_lsui_element:-<missing>}'." >&2
   exit 1
 fi
 
@@ -448,6 +455,7 @@ echo "  display_name=$actual_name"
 echo "  bundle_id=$actual_bundle_id"
 echo "  icon_file=$actual_icon_file"
 echo "  variant=$actual_variant"
+echo "  lsui_element=$actual_lsui_element"
 echo "  instance_id=${EFFECTIVE_INSTANCE_ID:-default}"
 echo "  url_scheme=$actual_url_scheme"
 echo "  version=$actual_version"

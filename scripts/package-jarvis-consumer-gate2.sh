@@ -134,6 +134,7 @@ verify_info_plist() {
   local bundle_id
   local instance_id
   local commit
+  local lsui_element
 
   [[ -f "$info" ]] || die "Info.plist missing: $info"
 
@@ -141,6 +142,7 @@ verify_info_plist() {
   bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")"
   instance_id="$(/usr/libexec/PlistBuddy -c 'Print :OpenClawConsumerInstanceID' "$info")"
   commit="$(/usr/libexec/PlistBuddy -c 'Print :OpenClawGitCommit' "$info" 2>/dev/null || true)"
+  lsui_element="$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$info" 2>/dev/null || true)"
 
   [[ "$display_name" == "$GATE2_APP_NAME" ]] \
     || die "expected display name '$GATE2_APP_NAME', got '$display_name'"
@@ -148,6 +150,8 @@ verify_info_plist() {
     || die "expected bundle id '$GATE2_BUNDLE_ID', got '$bundle_id'"
   [[ "$instance_id" == "$GATE2_INSTANCE_ID" ]] \
     || die "expected instance id '$GATE2_INSTANCE_ID', got '$instance_id'"
+  [[ "$lsui_element" == "false" ]] \
+    || die "expected LSUIElement=false for Gate2 foreground onboarding, got '${lsui_element:-<missing>}'"
   [[ -n "$commit" ]] \
     || die "embedded commit missing"
 
@@ -155,6 +159,7 @@ verify_info_plist() {
   echo "  display_name=$display_name"
   echo "  bundle_id=$bundle_id"
   echo "  instance_id=$instance_id"
+  echo "  lsui_element=$lsui_element"
   echo "  embedded_commit=$commit"
 }
 

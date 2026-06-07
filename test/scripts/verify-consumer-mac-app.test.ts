@@ -34,4 +34,10 @@ describe("scripts/verify-consumer-mac-app.sh", () => {
     expect(script).toContain("OpenClaw_OpenClaw.bundle/Jarvis.icns");
     expect(script).toContain("bundled onboarding icon missing");
   });
+
+  it("rejects consumer packages that keep LSUIElement agent identity", () => {
+    expect(script).toContain("actual_lsui_element");
+    expect(script).toContain("Expected LSUIElement=false");
+    expect(script).toContain("lsui_element=$actual_lsui_element");
+  });
 });

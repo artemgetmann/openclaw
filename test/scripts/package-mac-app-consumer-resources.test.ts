@@ -12,4 +12,10 @@ describe("scripts/package-mac-app.sh consumer resources", () => {
     expect(script).toContain("OpenClaw_OpenClaw.bundle/Jarvis.icns");
     expect(script).toContain("shipping without it crashes the packaged app");
   });
+
+  it("packages consumer builds as foreground apps for first-run onboarding", () => {
+    expect(script).toContain('[[ "$APP_VARIANT" == "consumer" ]]');
+    expect(script).toContain("Set :LSUIElement false");
+    expect(script).toContain("Stage Manager keep onboarding in the side strip");
+  });
 });

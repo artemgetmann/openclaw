@@ -1324,6 +1324,12 @@ APP_ICON_BASENAME="$(resolve_app_icon_basename)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${APP_BUILD}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :OpenClawAppVariant ${APP_VARIANT}" "$APP_ROOT/Contents/Info.plist" || true
+if [[ "$APP_VARIANT" == "consumer" ]]; then
+  # Consumer first-run is a window-led onboarding flow. Packaging it as an
+  # LSUIElement agent app lets Stage Manager keep onboarding in the side strip
+  # even after the app promotes itself at runtime.
+  /usr/libexec/PlistBuddy -c "Set :LSUIElement false" "$APP_ROOT/Contents/Info.plist" || true
+fi
 /usr/libexec/PlistBuddy -c "Delete :OpenClawConsumerInstanceID" "$APP_ROOT/Contents/Info.plist" >/dev/null 2>&1 || true
 if [[ "$APP_VARIANT" == "consumer" && -n "$APP_INSTANCE_ID" ]]; then
   /usr/libexec/PlistBuddy -c "Add :OpenClawConsumerInstanceID string ${APP_INSTANCE_ID}" "$APP_ROOT/Contents/Info.plist" || true

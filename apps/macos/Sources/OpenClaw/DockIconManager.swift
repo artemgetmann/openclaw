@@ -47,14 +47,26 @@ final class DockIconManager: NSObject, @unchecked Sendable {
         }
     }
 
+    @MainActor
     func temporarilyShowDock() {
-        Task { @MainActor in
-            guard NSApp != nil else {
-                self.logger.warning("NSApp not ready, cannot show Dock icon")
-                return
-            }
-            NSApp.setActivationPolicy(.regular)
+        guard NSApp != nil else {
+            self.logger.warning("NSApp not ready, cannot show Dock icon")
+            return
         }
+        NSApp.setActivationPolicy(.regular)
+    }
+
+    @MainActor
+    func bringAppForward() {
+        // LSUIElement/menu-bar launches can create windows without making the app
+        // the active Stage Manager set. Promote the app and all of its windows in
+        // one place before callers order first-run or settings surfaces.
+        self.temporarilyShowDock()
+        NSApp.unhide(nil)
+        _ = NSRunningApplication.current.activate(options: [
+            .activateAllWindows,
+        ])
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func setupObservers() {
