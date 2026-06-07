@@ -590,20 +590,38 @@ struct GatewayLaunchAgentManagerTests {
         ]])
     }
 
-    @Test func `restart or start installs only when no launch agent exists`() async {
+    @Test func `restart or start installs isolated Gate2 lane when no launch agent exists`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager().removeItem(at: home) }
+
         var calls: [[String]] = []
         GatewayLaunchAgentManager._setTestingHooks(
             launchAgentWriteDisabled: { false },
-            readDaemonLoaded: { false },
+            readDaemonLoaded: { nil },
             runDaemonCommand: { args, _, _ in
                 calls.append(args)
                 return nil
             })
         defer { GatewayLaunchAgentManager._clearTestingHooks() }
 
-        let error = await GatewayLaunchAgentManager.restartOrStart(
-            bundlePath: "/Applications/OpenClaw.app",
-            port: 18789)
+        let error = await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_APP_VARIANT": "consumer",
+                ConsumerInstance.envKey: "jarvis-consumer-gate2",
+                "OPENCLAW_TEST": "1",
+                "OPENCLAW_TEST_HOME": home.path,
+                "OPENCLAW_FORK_ROOT": nil,
+            ],
+            defaults: ["openclaw.gatewayProjectRootPath": nil])
+        {
+            let identity = RuntimeIdentity.current
+            #expect(identity.gatewayPort == 25229)
+            #expect(identity.gatewayLaunchdLabel == "ai.openclaw.consumer.jarvis-consumer-gate2.gateway")
+
+            return await GatewayLaunchAgentManager.restartOrStart(
+                bundlePath: "/Users/jarvistest/Desktop/Jarvis Consumer Gate2.app",
+                port: identity.gatewayPort)
+        }
 
         #expect(error == nil)
         #expect(calls == [[
@@ -611,7 +629,7 @@ struct GatewayLaunchAgentManagerTests {
             "--force",
             "--allow-shared-service-takeover",
             "--port",
-            "18789",
+            "25229",
             "--runtime",
             "node",
         ]])

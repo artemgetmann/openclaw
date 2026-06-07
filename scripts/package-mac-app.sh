@@ -359,6 +359,30 @@ verify_required_workspace_templates() {
   fi
 }
 
+verify_bundled_consumer_runtime_cli_payload() {
+  local runtime_root="$1"
+  local context_label="$2"
+  local missing=()
+
+  # The native app can still launch without these files, but the first gateway
+  # command dies before launchd can install/start. Fail packaging at the source.
+  [[ -f "$runtime_root/openclaw.mjs" ]] || missing+=("openclaw.mjs")
+  [[ -f "$runtime_root/package.json" ]] || missing+=("package.json")
+  if [[ ! -f "$runtime_root/dist/index.js" && ! -f "$runtime_root/dist/index.mjs" ]]; then
+    missing+=("dist/index.(m)js")
+  fi
+  if [[ ! -f "$runtime_root/dist/entry.js" && ! -f "$runtime_root/dist/entry.mjs" ]]; then
+    missing+=("dist/entry.(m)js")
+  fi
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "ERROR: ${context_label} is missing required CLI runtime payload." >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    echo "Expected runtime root: $runtime_root" >&2
+    return 1
+  fi
+}
+
 write_transitional_memory_template_if_missing() {
   local template_dir="$1"
 
@@ -1005,7 +1029,8 @@ prepare_bundled_consumer_runtime() {
   cache_templates_dir="${cache_root}/openclaw/docs/reference/templates"
 
   if [[ -n "$REUSABLE_RUNTIME_STAGE_DIR" ]]; then
-    if verify_required_workspace_templates "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/docs/reference/templates" "reused bundled consumer runtime workspace templates"; then
+    if verify_required_workspace_templates "$REUSABLE_RUNTIME_STAGE_DIR/openclaw/docs/reference/templates" "reused bundled consumer runtime workspace templates" &&
+      verify_bundled_consumer_runtime_cli_payload "$REUSABLE_RUNTIME_STAGE_DIR/openclaw" "reused bundled consumer runtime"; then
       echo "📦 Reusing previous bundled consumer runtime (smoke-only)"
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
       mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
@@ -1018,7 +1043,8 @@ prepare_bundled_consumer_runtime() {
   fi
 
   if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" && -d "$cache_root" && -f "$cache_root/manifest.json" ]]; then
-    if verify_required_workspace_templates "$cache_templates_dir" "cached bundled consumer runtime workspace templates"; then
+    if verify_required_workspace_templates "$cache_templates_dir" "cached bundled consumer runtime workspace templates" &&
+      verify_bundled_consumer_runtime_cli_payload "$cache_root/openclaw" "cached bundled consumer runtime"; then
       echo "📦 Reusing cached bundled consumer runtime"
       rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR"
       mkdir -p "$(dirname "$BUNDLED_RUNTIME_RESOURCE_DIR")"
@@ -1038,6 +1064,7 @@ prepare_bundled_consumer_runtime() {
 
   cp "$ROOT_DIR/openclaw.mjs" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/openclaw.mjs"
   cp "$ROOT_DIR/package.json" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/package.json"
+  verify_bundled_consumer_runtime_cli_payload "$ROOT_DIR" "source runtime build output"
   rm -rf "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist"
   mkdir -p "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist"
   rsync -a \
@@ -1116,6 +1143,7 @@ prepare_bundled_consumer_runtime() {
   cat > "$manifest_path" <<EOF
 {"format":1,"bundleVersion":"${APP_BUILD}","gitCommit":"${GIT_COMMIT}","nodeVersion":"${node_version}","uvVersion":"${UV_VERSION}","runtimeInputKey":"${runtime_input_key}"}
 EOF
+  verify_bundled_consumer_runtime_cli_payload "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw" "staged bundled consumer runtime"
 
   if [[ "$OPENCLAW_CONSUMER_FAST_PACKAGING" == "1" ]]; then
     local cache_stage_root=""

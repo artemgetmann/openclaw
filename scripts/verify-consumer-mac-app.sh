@@ -128,6 +128,30 @@ assert_required_templates() {
   done
 }
 
+assert_bundled_runtime_cli_payload() {
+  local runtime_root="$1"
+  local missing=()
+
+  # Identity/signing checks are not enough. If the root CLI payload is absent,
+  # the app can show onboarding but every gateway start/restart command exits
+  # before launchd gets a valid service to boot.
+  [[ -f "$runtime_root/openclaw.mjs" ]] || missing+=("openclaw.mjs")
+  [[ -f "$runtime_root/package.json" ]] || missing+=("package.json")
+  if [[ ! -f "$runtime_root/dist/index.js" && ! -f "$runtime_root/dist/index.mjs" ]]; then
+    missing+=("dist/index.(m)js")
+  fi
+  if [[ ! -f "$runtime_root/dist/entry.js" && ! -f "$runtime_root/dist/entry.mjs" ]]; then
+    missing+=("dist/entry.(m)js")
+  fi
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "ERROR: bundled runtime is missing required CLI payload." >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    echo "Expected runtime root: $runtime_root" >&2
+    exit 1
+  fi
+}
+
 load_consumer_default_bundled_skills() {
   local skills_config_path="$ROOT_DIR/src/commands/onboard-non-interactive/local/skills-config.ts"
   local skills_output=""
@@ -258,6 +282,8 @@ assert_required_templates "$APP_PATH/Contents/Resources/templates" "app resource
 assert_required_templates \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/docs/reference/templates" \
   "bundled runtime workspace templates"
+assert_bundled_runtime_cli_payload \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw"
 assert_required_bundled_skills \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
   "bundled runtime skills"

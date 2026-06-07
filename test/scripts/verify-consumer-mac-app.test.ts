@@ -17,4 +17,16 @@ describe("scripts/verify-consumer-mac-app.sh", () => {
     expect(script).toContain("--app-version");
     expect(script).toContain("packaged Jarvis backend activation probe failed.");
   });
+
+  it("rejects packages whose bundled runtime cannot boot the CLI", () => {
+    expect(script).toContain("assert_bundled_runtime_cli_payload()");
+    expect(script).toContain("bundled runtime is missing required CLI payload");
+    expect(script).toContain('[[ -f "$runtime_root/openclaw.mjs" ]]');
+    expect(script).toContain('[[ -f "$runtime_root/package.json" ]]');
+    expect(script).toContain("dist/index.(m)js");
+    expect(script).toContain("dist/entry.(m)js");
+    expect(script).toContain(
+      'assert_bundled_runtime_cli_payload \\\n  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw"',
+    );
+  });
 });

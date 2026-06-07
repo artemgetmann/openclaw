@@ -158,12 +158,39 @@ verify_info_plist() {
   echo "  embedded_commit=$commit"
 }
 
+runtime_js_ready() {
+  # Gate2 is a clean-user proof lane, so a shell-only app bundle is worse than
+  # no bundle: it reaches onboarding and then cannot boot the gateway.
+  [[ -f "$ROOT_DIR/dist/index.js" || -f "$ROOT_DIR/dist/index.mjs" ]] || return 1
+  [[ -f "$ROOT_DIR/dist/entry.js" || -f "$ROOT_DIR/dist/entry.mjs" ]] || return 1
+}
+
+gate2_default_skip_tsc() {
+  local requested="${SKIP_TSC:-1}"
+
+  if [[ "${REUSE_RUNTIME:-0}" == "1" ]]; then
+    runtime_js_ready || die "runtime JS missing; --reuse-runtime is unsafe. Rerun --fast once to rebuild runtime JS."
+    printf '%s\n' "$requested"
+    return 0
+  fi
+
+  if ! runtime_js_ready; then
+    echo "runtime JS missing; forcing one JS build for the Gate2 package" >&2
+    printf '0\n'
+    return 0
+  fi
+
+  printf '%s\n' "$requested"
+}
+
 package_gate2_app_fast() {
   local package_args=(--instance "$GATE2_INSTANCE_ID")
+  local default_skip_tsc=""
 
   if [[ "${REUSE_RUNTIME:-0}" == "1" ]]; then
     package_args+=(--reuse-runtime)
   fi
+  default_skip_tsc="$(gate2_default_skip_tsc)"
 
   APP_NAME="$GATE2_APP_NAME" \
   APP_BUNDLE_NAME="$GATE2_APP_BUNDLE_NAME" \
@@ -173,7 +200,7 @@ package_gate2_app_fast() {
   OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=0 \
   OPENCLAW_CONSUMER_FAST_PACKAGING=1 \
   SKIP_PNPM_INSTALL="${SKIP_PNPM_INSTALL:-1}" \
-  SKIP_TSC="${SKIP_TSC:-1}" \
+  SKIP_TSC="$default_skip_tsc" \
   SKIP_UI_BUILD="${SKIP_UI_BUILD:-1}" \
   BUILD_CONFIG="${BUILD_CONFIG:-release}" \
   BUILD_ARCHS="${BUILD_ARCHS:-all}" \

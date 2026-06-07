@@ -98,6 +98,15 @@ describe("consumer runtime reuse guard", () => {
     );
   });
 
+  it("fails packaging when the bundled CLI runtime payload is incomplete", () => {
+    expect(packageScript).toContain("verify_bundled_consumer_runtime_cli_payload()");
+    expect(packageScript).toContain("source runtime build output");
+    expect(packageScript).toContain("staged bundled consumer runtime");
+    expect(packageScript).toContain("cached bundled consumer runtime");
+    expect(packageScript).toContain("reused bundled consumer runtime");
+    expect(packageScript).toContain("dist/entry.(m)js");
+  });
+
   it("probes packaged backend activation after seeded defaults generation", () => {
     expect(packageScript).toContain("consumer_probe_seeded_backend_activation()");
     expect(packageScript).toContain("scripts/probe-consumer-release-activation.mjs");
