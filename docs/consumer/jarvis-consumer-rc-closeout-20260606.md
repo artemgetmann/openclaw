@@ -9,7 +9,7 @@ Finish Jarvis Consumer RC validation in strict gates without mixing failure laye
 - Worktree: `/Users/user/Programming_Projects/openclaw/.worktrees/jarvis-final-release-20260601`
 - Branch: `codex/jarvis-final-release-20260601`
 - PR: `#840`
-- Current pushed head: `16dff99c10b752867d68f48b6ea89241595e7932`
+- Current local head when this recovery plan was added: `ca7f68e1c86aa36a619924d1f3eef6736cb10355`
 - Installed RC app: `/Applications/Jarvis Consumer.app`
 - Installed app embedded commit: `16dff99c10`
 - Bundle id: `ai.openclaw.consumer.mac.consumer-rc`
@@ -26,6 +26,88 @@ Finish Jarvis Consumer RC validation in strict gates without mixing failure laye
 3. PR `#840` CI and merge readiness.
 4. Final notarized release.
 5. Sparkle `N` to `N+1` update proof.
+
+## Recovery Checklist - 2026-06-07
+
+This checklist supersedes the Gate 2 notes below until a new isolated Gate2 run proves otherwise.
+
+Status:
+
+- [x] Preserve the failed clean-user-ish finding as evidence, not proof.
+- [x] Mark the latest `jarvistest` run invalid because port `31417` was owned by the normal `user` gateway. That means `jarvistest` likely talked to stale current-user runtime state.
+- [ ] Keep PR `#840` draft until product fixes, real Gate2 proof, and current-head CI are green.
+- [ ] Do not count the contaminated `31417` run as Gate 2.
+- [ ] Do not reuse the `jarvis-consumer-rc` identity for the next clean-user proof.
+- [ ] Do not touch `/Applications/Jarvis.app` or the shared `ai.openclaw.gateway`.
+- [ ] Do not commit unrelated packaging cleanup files unless a separate packaging cleanup slice is explicitly opened.
+
+Current blockers to fix before another clean-user test:
+
+- [ ] Telegram state: root-cause and fix the case where the UI shows `Telegram verified` but `Next` stays disabled.
+- [ ] Telegram tests: add focused Swift coverage that verified Telegram state allows advancing.
+- [ ] Telegram copy: bot approval copy must end with `Return to Jarvis.`
+- [ ] Telegram copy: remove duplicate bot-side instruction to click `Verify Telegram`.
+- [ ] ChatGPT auth fallback: keep default-browser launch, but show `Trouble signing in?` after roughly 8-10 seconds while auth is pending.
+- [ ] ChatGPT auth fallback: expanded fallback should offer copy sign-in link and browser recovery.
+- [ ] Permissions: treat Location as optional and do not block `Next` on it.
+- [ ] Permissions: do not change Accessibility or Screen Recording gating until the real Gate2 harness proves their behavior.
+
+Gate2 harness requirements:
+
+- [ ] Package a distinct app identity for the next clean-user proof:
+  - Display name: `Jarvis Consumer Gate2`
+  - Bundle id: `ai.openclaw.consumer.mac.gate2`
+  - Instance id: `jarvis-consumer-gate2`
+  - Expected gateway port: `25229`
+  - Expected launchd label: `ai.openclaw.consumer.jarvis-consumer-gate2.gateway`
+- [ ] Stage the app under the `jarvistest` Desktop, not `/Applications`.
+- [ ] Prove no process owns port `25229` before launch.
+- [ ] Add or run a `/Users/Shared` log collector that captures:
+  - `jarvistest` runtime identity
+  - LaunchAgent state
+  - port owner
+  - redacted config
+  - relevant logs
+- [ ] After launch as `jarvistest`, prove port `25229` is owned by `jarvistest`.
+- [ ] Prove state lives under `/Users/jarvistest/Library/Application Support/OpenClaw/instances/jarvis-consumer-gate2`.
+- [ ] Prove `/Applications/Jarvis.app` and shared `ai.openclaw.gateway` were untouched.
+
+Work lanes:
+
+- Coordinator lane:
+  - Own Gate2 harness, packaging identity, runtime ownership proof, and final clean-user validation.
+  - Do not delegate LaunchAgent, gateway restart, `/Applications/Jarvis.app`, or live runtime ownership work.
+- PR conflict/CI lane:
+  - Use a separate worktree from `origin/codex/jarvis-final-release-20260601`.
+  - Resolve the current or last-known merge conflict in `src/browser/server-context.existing-session.test.ts`.
+  - Push with `git push origin HEAD:codex/jarvis-final-release-20260601`.
+  - Watch CI, but do not mark ready, enable automerge, or merge while Gate2 is incomplete.
+- Telegram blocker lane:
+  - Use a separate worktree and focused Swift/code tests.
+  - Fix only Telegram verify/advance/copy behavior.
+- ChatGPT fallback lane:
+  - Use a separate worktree or combine with the UI lane only if there is no overlap.
+  - Implement delayed fallback and test on the normal user. No clean-user proof is needed for this slice.
+
+Required local validation before final Gate2:
+
+```bash
+swift test --package-path apps/macos --filter TelegramSetupBootstrapTests
+```
+
+Add and run focused tests for:
+
+- onboarding readiness after Telegram verification
+- pairing message copy
+- ChatGPT fallback timing, if this is testable in Swift
+
+Final clean-user retest criteria:
+
+- Build Gate2 app with `APP_INSTANCE_ID=jarvis-consumer-gate2`.
+- Verify `Info.plist` bundle id, instance id, and embedded commit.
+- Prove port `25229` is free before launch.
+- Validate first-run bootstrap, Gatekeeper behavior, Accessibility, Screen Recording, optional Location, Telegram completion, and no disabled-`Next` dead end.
+- Treat required CI truth as `CI / pr-required` plus `Workflow Sanity / actionlint`; queued `Labeler` or `Install Smoke` jobs are not readiness proof.
 
 ## Gate 1 - Telegram Onboarding UX
 
