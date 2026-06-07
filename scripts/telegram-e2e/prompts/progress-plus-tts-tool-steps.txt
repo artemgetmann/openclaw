@@ -7,3 +7,5 @@ Before each tool step, send one brief progress update, then run a command that w
 3. third note says MDN HTML docs explain HTML basics
 
 After the third step, read the file back, delete it, verify it is gone, and send one short final answer summarizing the three notes and confirming the file was removed.
+
+The final answer must include exactly this marker: {{marker}}

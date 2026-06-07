@@ -739,10 +739,19 @@ describe("telegram commands", () => {
       writeFile,
     });
 
-    await telegramScenarioProgressPlusTtsCommand({ json: true }, runtime);
+    await telegramScenarioProgressPlusTtsCommand(
+      { json: true, message: "Custom progress proof prompt {{marker}}" },
+      runtime,
+    );
 
     const payload = JSON.parse(
       String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]),
+    );
+    expect(runTelegramUserSend).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        message: `Custom progress proof prompt ${marker}`,
+      }),
     );
     expect(payload.ok).toBe(true);
     expect(payload.scenario).toBe("progress-plus-tts");

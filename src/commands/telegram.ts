@@ -1151,7 +1151,9 @@ async function runTelegramFeatureScenario(
       });
     }
 
-    const message = requestedMessage ?? defaultTelegramScenarioMessage(scenario, marker);
+    const message = requestedMessage
+      ? requestedMessage.replaceAll("{{marker}}", marker)
+      : defaultTelegramScenarioMessage(scenario, marker);
     const sendResult = await telegramCommandDeps.runTelegramUserSend({
       chat,
       envFile: envFile ?? undefined,
