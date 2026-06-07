@@ -189,6 +189,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
+  prepareTtsVisiblePayload: (params: { payload: ReplyPayload }) => params.payload,
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
 }));
 
@@ -325,6 +326,43 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends final text before additive TTS audio", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const replyResolver = async () => ({ text: "Final answer for TTS." }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "Final answer for TTS.",
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps final text delivered when additive TTS generation fails", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    ttsMocks.maybeApplyTtsToPayload.mockRejectedValueOnce(new Error("tts failed"));
+    const replyResolver = async () => ({ text: "Final survives." }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final survives." });
   });
 
   it("keeps native command replies visible in group turns", async () => {
@@ -1299,13 +1337,13 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "PROGRESS visible answer",
-        mediaUrl: "https://example.com/tts-synth.opus",
-        audioAsVoice: true,
-      }),
-    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "PROGRESS visible answer",
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+    });
   });
 
   it("keeps ACP accumulated block text on synthetic TTS finals", async () => {
@@ -1352,13 +1390,13 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
 
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "FINAL visible answer",
-        mediaUrl: "https://example.com/tts-synth.opus",
-        audioAsVoice: true,
-      }),
-    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "FINAL visible answer",
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+    });
   });
 
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {
@@ -1950,10 +1988,13 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
 
-    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
-    expect(finalPayload?.text).toBe("Hello from ACP streaming.");
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "Hello from ACP streaming.",
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+    });
   });
 
   it("routes ACP block output to originating channel without parent dispatcher duplicates", async () => {

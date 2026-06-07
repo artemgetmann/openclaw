@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../types.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -21,6 +22,7 @@ vi.mock("./route-reply.js", () => ({
 
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+  prepareTtsVisiblePayload: (params: { payload: unknown }) => params.payload,
 }));
 
 function createDispatcher(): ReplyDispatcher {
@@ -65,8 +67,16 @@ function createCoordinator(params?: {
 }
 
 describe("createAcpDispatchDeliveryCoordinator", () => {
-  it("routes same-source Telegram ACP blocks through the dispatcher preview lane", async () => {
+  beforeEach(() => {
     routeMocks.routeReply.mockClear();
+    ttsMocks.maybeApplyTtsToPayload.mockReset();
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload: unknown };
+      return params.payload;
+    });
+  });
+
+  it("routes same-source Telegram ACP blocks through the dispatcher preview lane", async () => {
     const { coordinator, dispatcher } = createCoordinator({
       provider: "telegram",
       surface: "telegram",
@@ -86,7 +96,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   });
 
   it("keeps non-Telegram originating ACP blocks on direct routeReply delivery", async () => {
-    routeMocks.routeReply.mockClear();
     const { coordinator, dispatcher } = createCoordinator({
       provider: "discord",
       surface: "discord",
@@ -126,6 +135,56 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await coordinator.startReplyLifecycle();
 
     expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers same-source Telegram final text before additive TTS audio", async () => {
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload: ReplyPayload; kind: string };
+      if (params.kind === "final" && params.payload.text) {
+        return {
+          ...params.payload,
+          mediaUrl: "https://example.com/tts.opus",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+    const { coordinator, dispatcher } = createCoordinator({
+      provider: "telegram",
+      surface: "telegram",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:123",
+    });
+
+    await coordinator.deliver("final", { text: "Final answer." });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, { text: "Final answer." });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "https://example.com/tts.opus",
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps routed final text when additive TTS generation fails", async () => {
+    ttsMocks.maybeApplyTtsToPayload.mockRejectedValueOnce(new Error("tts failed"));
+    const { coordinator } = createCoordinator({
+      provider: "discord",
+      surface: "discord",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+    });
+
+    const delivered = await coordinator.deliver("final", { text: "Final answer." });
+
+    expect(delivered).toBe(true);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "Final answer." },
+      }),
+    );
   });
 
   it("does not start reply lifecycle for empty payload delivery", async () => {

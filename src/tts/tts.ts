@@ -893,14 +893,21 @@ export async function textToSpeechTelephony(params: {
   return buildTtsFailureResult(errors);
 }
 
-export async function maybeApplyTtsToPayload(params: {
+type TtsPayloadPreparation = {
+  config: ResolvedTtsConfig;
+  prefsPath: string;
+  autoMode: TtsAutoMode;
+  directives: TtsDirectiveParseResult;
+  nextPayload: ReplyPayload;
+  text: string;
+  ttsText: string;
+};
+
+function prepareTtsPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
-  channel?: string;
-  kind?: "tool" | "block" | "final";
-  inboundAudio?: boolean;
   ttsAuto?: string;
-}): Promise<ReplyPayload> {
+}): TtsPayloadPreparation | { autoMode: "off"; nextPayload: ReplyPayload } {
   const config = resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
@@ -909,7 +916,7 @@ export async function maybeApplyTtsToPayload(params: {
     sessionAuto: params.ttsAuto,
   });
   if (autoMode === "off") {
-    return params.payload;
+    return { autoMode, nextPayload: params.payload };
   }
 
   const text = params.payload.text ?? "";
@@ -930,6 +937,40 @@ export async function maybeApplyTtsToPayload(params: {
           ...params.payload,
           text: visibleText.length > 0 ? visibleText : undefined,
         };
+
+  return {
+    config,
+    prefsPath,
+    autoMode,
+    directives,
+    nextPayload,
+    text,
+    ttsText,
+  };
+}
+
+export function prepareTtsVisiblePayload(params: {
+  payload: ReplyPayload;
+  cfg: OpenClawConfig;
+  ttsAuto?: string;
+}): ReplyPayload {
+  return prepareTtsPayload(params).nextPayload;
+}
+
+export async function maybeApplyTtsToPayload(params: {
+  payload: ReplyPayload;
+  cfg: OpenClawConfig;
+  channel?: string;
+  kind?: "tool" | "block" | "final";
+  inboundAudio?: boolean;
+  ttsAuto?: string;
+}): Promise<ReplyPayload> {
+  const preparation = prepareTtsPayload(params);
+  if (preparation.autoMode === "off") {
+    return preparation.nextPayload;
+  }
+
+  const { config, prefsPath, autoMode, directives, nextPayload, text, ttsText } = preparation;
 
   if (autoMode === "tagged" && !directives.hasDirective) {
     return nextPayload;

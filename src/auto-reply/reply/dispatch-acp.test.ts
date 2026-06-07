@@ -73,6 +73,7 @@ vi.mock("../../infra/outbound/message-action-runner.js", () => ({
 
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+  prepareTtsVisiblePayload: (params: { payload: unknown }) => params.payload,
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
 }));
 

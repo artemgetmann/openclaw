@@ -2,16 +2,18 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { maybeApplyTtsToPayload } from "../../tts/tts.js";
+import { maybeApplyTtsToPayload, prepareTtsVisiblePayload } from "../../tts/tts.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { routeReply } from "./route-reply.js";
+import { buildTtsAudioSupplementPayload } from "./tts-supplement.js";
 
 export type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
   allowEdit?: boolean;
+  ttsPayloadOverride?: ReplyPayload;
 };
 
 type ToolMessageHandle = {
@@ -186,30 +188,25 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       await startReplyLifecycleOnce();
     }
 
-    const ttsPayload = await maybeApplyTtsToPayload({
-      payload,
-      cfg: params.cfg,
-      channel: params.ttsChannel,
-      kind,
-      inboundAudio: params.inboundAudio,
-      ttsAuto: params.sessionTtsAuto,
-    });
+    const deliverPreparedPayload = async (preparedPayload: ReplyPayload): Promise<boolean> => {
+      if (shouldUseSourceDispatcherForTelegram()) {
+        return deliverViaDispatcher(kind, preparedPayload);
+      }
 
-    if (shouldUseSourceDispatcherForTelegram()) {
-      return deliverViaDispatcher(kind, ttsPayload);
-    }
+      if (!params.shouldRouteToOriginating || !params.originatingChannel || !params.originatingTo) {
+        return deliverViaDispatcher(kind, preparedPayload);
+      }
 
-    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
       const toolCallId = meta?.toolCallId?.trim();
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
-        const edited = await tryEditToolMessage(ttsPayload, toolCallId);
+        const edited = await tryEditToolMessage(preparedPayload, toolCallId);
         if (edited) {
           return true;
         }
       }
 
       const result = await routeReply({
-        payload: ttsPayload,
+        payload: preparedPayload,
         channel: params.originatingChannel,
         to: params.originatingTo,
         sessionKey: params.ctx.SessionKey,
@@ -234,9 +231,54 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       }
       state.routedCounts[kind] += 1;
       return true;
+    };
+
+    if (kind === "final") {
+      const visiblePayload = prepareTtsVisiblePayload({
+        payload,
+        cfg: params.cfg,
+        ttsAuto: params.sessionTtsAuto,
+      });
+      const visibleDelivered = await deliverPreparedPayload(visiblePayload);
+      if (!visibleDelivered) {
+        return false;
+      }
+
+      try {
+        const ttsPayload =
+          meta?.ttsPayloadOverride ??
+          (await maybeApplyTtsToPayload({
+            payload,
+            cfg: params.cfg,
+            channel: params.ttsChannel,
+            kind,
+            inboundAudio: params.inboundAudio,
+            ttsAuto: params.sessionTtsAuto,
+          }));
+        const ttsSupplement = buildTtsAudioSupplementPayload({
+          sourcePayload: payload,
+          ttsPayload,
+        });
+        if (ttsSupplement) {
+          await deliverPreparedPayload(ttsSupplement);
+        }
+      } catch (error) {
+        logVerbose(
+          `dispatch-acp: final TTS supplement failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      return true;
     }
 
-    return deliverViaDispatcher(kind, ttsPayload);
+    const ttsPayload = await maybeApplyTtsToPayload({
+      payload,
+      cfg: params.cfg,
+      channel: params.ttsChannel,
+      kind,
+      inboundAudio: params.inboundAudio,
+      ttsAuto: params.sessionTtsAuto,
+    });
+    return deliverPreparedPayload(ttsPayload);
   };
 
   return {

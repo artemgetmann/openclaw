@@ -317,16 +317,19 @@ export async function tryDispatchAcpReply(params: {
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
     if (ttsMode === "final" && delivery.getBlockCount() > 0 && accumulatedBlockText.trim()) {
       try {
+        const syntheticSourcePayload = { text: accumulatedBlockText };
         const ttsSyntheticReply = await maybeApplyTtsToPayload({
-          payload: { text: accumulatedBlockText },
+          payload: syntheticSourcePayload,
           cfg: params.cfg,
           channel: params.ttsChannel,
           kind: "final",
           inboundAudio: params.inboundAudio,
           ttsAuto: params.sessionTtsAuto,
         });
-        if (ttsSyntheticReply.mediaUrl) {
-          const delivered = await delivery.deliver("final", ttsSyntheticReply);
+        if (ttsSyntheticReply.mediaUrl || (ttsSyntheticReply.mediaUrls?.length ?? 0) > 0) {
+          const delivered = await delivery.deliver("final", syntheticSourcePayload, {
+            ttsPayloadOverride: ttsSyntheticReply,
+          });
           queuedFinal = queuedFinal || delivered;
         }
       } catch (err) {

@@ -41,7 +41,12 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { truncateLine } from "../../shared/subagents-format.js";
-import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
+import {
+  maybeApplyTtsToPayload,
+  normalizeTtsAutoMode,
+  prepareTtsVisiblePayload,
+  resolveTtsConfig,
+} from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -53,6 +58,7 @@ import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import { buildTtsAudioSupplementPayload } from "./tts-supplement.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -759,21 +765,20 @@ export async function dispatchReplyFromConfig(params: {
       if (shouldSuppressReasoningPayload(reply)) {
         continue;
       }
-      const ttsReply = await maybeApplyTtsToPayload({
-        payload: reply,
-        cfg,
-        channel: ttsChannel,
-        kind: "final",
-        inboundAudio,
-        ttsAuto: sessionTtsAuto,
-      });
       if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         continue;
       }
+
+      const visibleReply = prepareTtsVisiblePayload({
+        payload: reply,
+        cfg,
+        ttsAuto: sessionTtsAuto,
+      });
+      let visibleDelivered = false;
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
         const result = await routeReply({
-          payload: sanitizeTelegramVisiblePayload(ttsReply),
+          payload: sanitizeTelegramVisiblePayload(visibleReply),
           channel: originatingChannel,
           to: originatingTo,
           sessionKey: ctx.SessionKey,
@@ -791,10 +796,60 @@ export async function dispatchReplyFromConfig(params: {
         queuedFinal = result.ok || queuedFinal;
         if (result.ok) {
           routedFinalCount += 1;
+          visibleDelivered = true;
         }
       } else {
-        queuedFinal =
-          dispatcher.sendFinalReply(sanitizeTelegramVisiblePayload(ttsReply)) || queuedFinal;
+        visibleDelivered = dispatcher.sendFinalReply(sanitizeTelegramVisiblePayload(visibleReply));
+        queuedFinal = visibleDelivered || queuedFinal;
+      }
+
+      if (!visibleDelivered) {
+        continue;
+      }
+
+      try {
+        const ttsReply = await maybeApplyTtsToPayload({
+          payload: reply,
+          cfg,
+          channel: ttsChannel,
+          kind: "final",
+          inboundAudio,
+          ttsAuto: sessionTtsAuto,
+        });
+        const ttsSupplement = buildTtsAudioSupplementPayload({
+          sourcePayload: reply,
+          ttsPayload: ttsReply,
+        });
+        if (!ttsSupplement) {
+          continue;
+        }
+        if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+          const result = await routeReply({
+            payload: ttsSupplement,
+            channel: originatingChannel,
+            to: originatingTo,
+            sessionKey: ctx.SessionKey,
+            accountId: ctx.AccountId,
+            threadId: routeThreadId,
+            cfg,
+            isGroup,
+            groupId,
+          });
+          if (result.ok) {
+            routedFinalCount += 1;
+          }
+          if (!result.ok) {
+            logVerbose(
+              `dispatch-from-config: route-reply (final TTS supplement) failed: ${result.error ?? "unknown error"}`,
+            );
+          }
+        } else {
+          dispatcher.sendFinalReply(ttsSupplement);
+        }
+      } catch (err) {
+        logVerbose(
+          `dispatch-from-config: final TTS supplement failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
@@ -817,17 +872,18 @@ export async function dispatchReplyFromConfig(params: {
           inboundAudio,
           ttsAuto: sessionTtsAuto,
         });
-        // Only send if TTS was actually applied (mediaUrl exists).
-        if (ttsSyntheticReply.mediaUrl) {
-          // Preserve the visible text as the media caption. Telegram users
-          // otherwise see a voice-only final after the progress preview, which
-          // makes the agent look like it dropped the answer.
-          const ttsFinalPayload: ReplyPayload = ttsSyntheticReply;
+        const ttsSupplement = buildTtsAudioSupplementPayload({
+          sourcePayload: { text: accumulatedBlockText },
+          ttsPayload: ttsSyntheticReply,
+        });
+        // Only send if TTS was actually applied.
+        if (ttsSupplement) {
+          const visibleFinalPayload: ReplyPayload = { text: accumulatedBlockText };
           if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
             // The model was instructed to use the message tool for visible output.
           } else if (shouldRouteToOriginating && originatingChannel && originatingTo) {
             const result = await routeReply({
-              payload: ttsFinalPayload,
+              payload: visibleFinalPayload,
               channel: originatingChannel,
               to: originatingTo,
               sessionKey: ctx.SessionKey,
@@ -843,12 +899,35 @@ export async function dispatchReplyFromConfig(params: {
             }
             if (!result.ok) {
               logVerbose(
-                `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
+                `dispatch-from-config: route-reply (synthetic TTS final text) failed: ${result.error ?? "unknown error"}`,
               );
+            } else {
+              const supplementResult = await routeReply({
+                payload: ttsSupplement,
+                channel: originatingChannel,
+                to: originatingTo,
+                sessionKey: ctx.SessionKey,
+                accountId: ctx.AccountId,
+                threadId: routeThreadId,
+                cfg,
+                isGroup,
+                groupId,
+              });
+              if (supplementResult.ok) {
+                routedFinalCount += 1;
+              }
+              if (!supplementResult.ok) {
+                logVerbose(
+                  `dispatch-from-config: route-reply (synthetic TTS supplement) failed: ${supplementResult.error ?? "unknown error"}`,
+                );
+              }
             }
           } else {
-            const didQueue = dispatcher.sendFinalReply(ttsFinalPayload);
+            const didQueue = dispatcher.sendFinalReply(visibleFinalPayload);
             queuedFinal = didQueue || queuedFinal;
+            if (didQueue) {
+              dispatcher.sendFinalReply(ttsSupplement);
+            }
           }
         }
       } catch (err) {
