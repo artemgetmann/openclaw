@@ -538,6 +538,15 @@ export async function runAgentTurnWithFallback(params: {
           return (async () => {
             let attemptCompactionCount = 0;
             try {
+              const visibleChannel = resolveMessageChannel(
+                params.sessionCtx.Surface,
+                params.sessionCtx.Provider,
+              );
+              const originatingChannel = resolveMessageChannel(
+                params.sessionCtx.OriginatingChannel,
+              );
+              const deferPhaseUnknownBlockReplies =
+                visibleChannel === "telegram" || originatingChannel === "telegram";
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
@@ -550,20 +559,17 @@ export async function runAgentTurnWithFallback(params: {
                 prompt: params.commandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {
-                  const channel = resolveMessageChannel(
-                    params.sessionCtx.Surface,
-                    params.sessionCtx.Provider,
-                  );
-                  if (!channel) {
+                  if (!visibleChannel) {
                     return "markdown";
                   }
-                  return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
+                  return isMarkdownCapableMessageChannel(visibleChannel) ? "markdown" : "plain";
                 })(),
                 suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                 images: params.opts?.images,
                 abortSignal: params.opts?.abortSignal,
+                deferPhaseUnknownBlockReplies,
                 blockReplyBreak: params.resolvedBlockStreamingBreak,
                 blockReplyChunking: params.blockReplyChunking,
                 onPartialReply: async (payload) => {

@@ -399,6 +399,13 @@ export async function handleToolExecutionStart(
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
   // Flush pending block replies to preserve message boundaries before tool execution.
+  // If Telegram deferred phase-unknown text until this tool boundary, the text
+  // immediately before a tool call is structurally commentary. Stamp that before
+  // flushing so Telegram routes it through transient progress instead of durable
+  // final-message delivery. Other channels keep their legacy phase-less output.
+  if (ctx.params.deferPhaseUnknownBlockReplies === true) {
+    ctx.state.currentAssistantPhase ??= "commentary";
+  }
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
     await ctx.params.onBlockReplyFlush();
