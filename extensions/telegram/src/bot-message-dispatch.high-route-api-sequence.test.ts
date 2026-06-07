@@ -78,6 +78,7 @@ function createRuntime(): RuntimeEnv {
 function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {
   const base = {
     ctxPayload: {
+      CommandAuthorized: true,
       Provider: "telegram",
       Surface: "telegram",
       Body: "do the thing",
@@ -246,7 +247,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
 
     await dispatchWithHarness({
       bot: harness.bot,
-      context: createContext({ ctxPayload: { SessionKey: "high-route-generic-progress" } }),
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "high-route-generic-progress" },
+      }),
       telegramCfg: { blockStreaming: true },
     });
 
@@ -304,7 +307,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
 
     await dispatchWithHarness({
       bot: harness.bot,
-      context: createContext({ ctxPayload: { SessionKey: "terminal-phase-unknown-high-route" } }),
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "terminal-phase-unknown-high-route" },
+      }),
       telegramCfg: { blockStreaming: true },
     });
 
@@ -351,7 +356,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     });
     await dispatchWithHarness({
       bot: harness.bot,
-      context: createContext({ ctxPayload: { SessionKey: "telegram-progress-session" } }),
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "telegram-progress-session" },
+      }),
       telegramCfg: { blockStreaming: true },
     });
 
@@ -361,7 +368,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     });
     await dispatchWithHarness({
       bot: harness.bot,
-      context: createContext({ ctxPayload: { SessionKey: "telegram-progress-session" } }),
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "telegram-progress-session" },
+      }),
       telegramCfg: { blockStreaming: true },
     });
 
@@ -374,7 +383,9 @@ describe("dispatchTelegramMessage high-route progress API sequence", () => {
     });
     await dispatchWithHarness({
       bot: harness.bot,
-      context: createContext({ ctxPayload: { SessionKey: "telegram-progress-session" } }),
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "telegram-progress-session" },
+      }),
       telegramCfg: { blockStreaming: true },
     });
 

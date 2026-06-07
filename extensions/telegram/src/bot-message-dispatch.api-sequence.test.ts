@@ -76,7 +76,7 @@ function createRuntime(): RuntimeEnv {
 
 function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {
   const base = {
-    ctxPayload: {},
+    ctxPayload: { CommandAuthorized: true },
     primaryCtx: { message: { chat: { id: 123, type: "private" } } },
     msg: {
       chat: { id: 123, type: "private" },
@@ -103,6 +103,10 @@ function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMes
   return {
     ...base,
     ...overrides,
+    ctxPayload: {
+      ...(base.ctxPayload as object),
+      ...(overrides?.ctxPayload ? (overrides.ctxPayload as object) : null),
+    } as TelegramMessageContext["ctxPayload"],
     primaryCtx: {
       ...(base.primaryCtx as object),
       ...(overrides?.primaryCtx ? (overrides.primaryCtx as object) : null),
@@ -255,7 +259,9 @@ describe("dispatchTelegramMessage progress API sequence", () => {
 
     await dispatchWithHarness({
       bot: harness.bot,
-      context: createContext({ ctxPayload: { SessionKey: "api-progress-sequence" } }),
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "api-progress-sequence" },
+      }),
     });
 
     const sends = sendMessageCalls(harness.calls);
@@ -363,7 +369,9 @@ describe("dispatchTelegramMessage progress API sequence", () => {
 
     await dispatchWithHarness({
       bot: harness.bot,
-      context: createContext({ ctxPayload: { SessionKey: "terminal-phase-unknown-api" } }),
+      context: createContext({
+        ctxPayload: { CommandAuthorized: true, SessionKey: "terminal-phase-unknown-api" },
+      }),
     });
 
     const sends = sendMessageCalls(harness.calls);
