@@ -17,4 +17,9 @@ describe("scripts/verify-consumer-mac-app.sh", () => {
     expect(script).toContain("--app-version");
     expect(script).toContain("packaged Jarvis backend activation probe failed.");
   });
+
+  it("requires the packaged onboarding icon resource", () => {
+    expect(script).toContain("OpenClaw_OpenClaw.bundle/Jarvis.icns");
+    expect(script).toContain("bundled onboarding icon missing");
+  });
 });

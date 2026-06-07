@@ -253,6 +253,10 @@ if [[ -z "$actual_icon_basename" || ! -f "$APP_PATH/Contents/Resources/${actual_
   echo "ERROR: bundled app icon missing for CFBundleIconFile '$actual_icon_file'" >&2
   exit 1
 fi
+if [[ ! -f "$APP_PATH/Contents/Resources/OpenClaw_OpenClaw.bundle/Jarvis.icns" ]]; then
+  echo "ERROR: bundled onboarding icon missing at Contents/Resources/OpenClaw_OpenClaw.bundle/Jarvis.icns" >&2
+  exit 1
+fi
 
 assert_required_templates "$APP_PATH/Contents/Resources/templates" "app resource templates"
 assert_required_templates \

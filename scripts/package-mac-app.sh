@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/validated-node.sh"
+source "$ROOT_DIR/scripts/lib/build-artifacts.sh"
 openclaw_use_validated_node "$ROOT_DIR" >/dev/null
 VALIDATED_NODE_BIN="$OPENCLAW_NODE_BIN"
 APP_VARIANT="${APP_VARIANT:-consumer}"
@@ -56,13 +57,19 @@ VALIDATED_NPM_BIN="$(dirname "$VALIDATED_NODE_BIN")/npm"
 if [[ ! -x "$VALIDATED_NPM_BIN" ]]; then
   VALIDATED_NPM_BIN="$(command -v npm || true)"
 fi
+OPENCLAW_BUILD_ARTIFACT_ROOT="$(openclaw_build_artifact_root)"
+OPENCLAW_BUILD_RUN_ROOT="${OPENCLAW_BUILD_RUN_ROOT:-$(openclaw_build_run_root "package-mac-app")}"
+OPENCLAW_BUILD_DISK_BEFORE_KIB="$(openclaw_build_disk_available_kib "$OPENCLAW_BUILD_ARTIFACT_ROOT")"
+export OPENCLAW_BUILD_ARTIFACT_ROOT
+export OPENCLAW_BUILD_RUN_ROOT
 CLI_ARCHIVE_STAGED=""
 CLI_ARCHIVE_STAGE_DIR=""
 OPENCLAW_CONSUMER_FAST_PACKAGING="${OPENCLAW_CONSUMER_FAST_PACKAGING:-0}"
 OPENCLAW_CONSUMER_REUSE_RUNTIME="${OPENCLAW_CONSUMER_REUSE_RUNTIME:-0}"
 OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS="${OPENCLAW_CONSUMER_ALLOW_BUNDLED_PROVIDER_KEYS:-0}"
 PACKAGE_TIMING="${PACKAGE_TIMING:-0}"
-BUNDLED_RUNTIME_CACHE_ROOT="${OPENCLAW_CONSUMER_RUNTIME_CACHE_ROOT:-$ROOT_DIR/.cache/consumer-runtime-packages}"
+BUNDLED_RUNTIME_CACHE_ROOT="${OPENCLAW_CONSUMER_RUNTIME_CACHE_ROOT:-$OPENCLAW_BUILD_ARTIFACT_ROOT/runtime-cache/consumer-runtime-packages}"
+CONSUMER_RUNTIME_TOOL_CACHE_ROOT="${OPENCLAW_CONSUMER_TOOL_RUNTIME_CACHE_ROOT:-$OPENCLAW_BUILD_ARTIFACT_ROOT/runtime-cache/consumer-runtime}"
 REUSABLE_RUNTIME_STAGE_DIR=""
 CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
   "AGENTS.md"
@@ -75,6 +82,82 @@ CONSUMER_REQUIRED_WORKSPACE_TEMPLATES=(
   "BOOTSTRAP.md"
   "MEMORY.md"
 )
+
+run_prebuild_artifact_cleanup() {
+  local cleanup_script="$ROOT_DIR/scripts/cleanup-build-artifacts.sh"
+  local cleanup_args=()
+  local cleanup_status=0
+
+  if [[ "${OPENCLAW_BUILD_CLEANUP:-1}" == "0" ]]; then
+    echo "🧹 OpenClaw build cleanup: disabled by OPENCLAW_BUILD_CLEANUP=0"
+    return 0
+  fi
+  if [[ ! -f "$cleanup_script" ]]; then
+    echo "WARN: build cleanup script missing: $cleanup_script" >&2
+    return 0
+  fi
+
+  # Packaging is the expensive path that used to leave stale worktree outputs
+  # behind. Prune only sibling worktrees before this build starts; the current
+  # checkout's dist/ is intentionally preserved because it is the active build
+  # product and runtime JS location.
+  cleanup_args=(
+    --apply
+    --deps
+    --older-than-days "${OPENCLAW_BUILD_CLEANUP_OLDER_THAN_DAYS:-7}"
+    --deps-older-than-days "${OPENCLAW_BUILD_CLEANUP_DEPS_OLDER_THAN_DAYS:-21}"
+  )
+
+  echo "🧹 OpenClaw build cleanup: pruning stale sibling worktree artifacts"
+  set +e
+  bash "$cleanup_script" "${cleanup_args[@]}"
+  cleanup_status=$?
+  set -e
+  if [[ "$cleanup_status" != "0" ]]; then
+    echo "WARN: build cleanup failed with status $cleanup_status" >&2
+    if [[ "${OPENCLAW_BUILD_CLEANUP_STRICT:-0}" == "1" ]]; then
+      exit "$cleanup_status"
+    fi
+  fi
+}
+
+finish_build_artifacts() {
+  local status="$1"
+  local old_runs_deleted=0
+  local old_temp_deleted=0
+  local disk_after_kib=""
+
+  # Failed runs keep their per-run directory for diagnosis. A later successful
+  # package prunes stale run directories after the retention window below.
+  if [[ "$status" == "0" ]]; then
+    rm -rf "$OPENCLAW_BUILD_RUN_ROOT"
+  fi
+
+  old_runs_deleted="$(openclaw_build_prune_old_runs "$OPENCLAW_BUILD_ARTIFACT_ROOT" 1440)"
+  old_temp_deleted="$(openclaw_build_prune_old_temp_artifacts "$OPENCLAW_BUILD_ARTIFACT_ROOT" 4320)"
+  disk_after_kib="$(openclaw_build_disk_available_kib "$OPENCLAW_BUILD_ARTIFACT_ROOT")"
+  openclaw_build_prune_empty_parents "$OPENCLAW_BUILD_ARTIFACT_ROOT"
+
+  echo "🧹 OpenClaw build artifact report:"
+  echo "  final_app=$APP_ROOT"
+  echo "  cache_root=$OPENCLAW_BUILD_ARTIFACT_ROOT"
+  echo "  run_temp_root=$OPENCLAW_BUILD_RUN_ROOT"
+  echo "  current_run_cleanup=$([[ "$status" == "0" ]] && echo removed || echo kept-for-failure)"
+  echo "  stale_runs_deleted=$old_runs_deleted"
+  echo "  stale_temp_deleted=$old_temp_deleted"
+  if [[ -n "${OPENCLAW_BUILD_DISK_BEFORE_KIB:-}" && -n "$disk_after_kib" ]]; then
+    echo "  disk_available_before=$(openclaw_build_human_kib "$OPENCLAW_BUILD_DISK_BEFORE_KIB")"
+    echo "  disk_available_after=$(openclaw_build_human_kib "$disk_after_kib")"
+  fi
+}
+
+on_exit_build_artifacts() {
+  local status="$?"
+  finish_build_artifacts "$status"
+  exit "$status"
+}
+
+trap on_exit_build_artifacts EXIT
 
 resolve_app_icon_basename() {
   local explicit_icon="${APP_ICON_BASENAME:-}"
@@ -247,6 +330,8 @@ consumer_require_backend_activation_token() {
 
 consumer_require_backend_activation_token
 
+run_prebuild_artifact_cleanup
+
 consumer_require_bundled_speech_key() {
   if [[ "$APP_VARIANT" != "consumer" ]]; then
     return 0
@@ -260,7 +345,7 @@ consumer_require_bundled_speech_key() {
   # values, which could produce a "voice-ready" bundle that still failed on the
   # first transcription request because the wrong key got embedded.
   local seeded_tmp
-  seeded_tmp="$(mktemp)"
+  seeded_tmp="$(openclaw_build_tmp_file "$OPENCLAW_BUILD_RUN_ROOT" "seeded-openai-check")"
   "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" "$seeded_tmp"
   if ! grep -q '"OPENCLAW_CONSUMER_OPENAI_API_KEY"' "$seeded_tmp"; then
     rm -f "$seeded_tmp"
@@ -286,7 +371,7 @@ consumer_require_bundled_gemini_key() {
   # dedicated consumer Gemini key is missing instead of shipping a starter skill
   # that is broken on first use.
   local seeded_tmp
-  seeded_tmp="$(mktemp)"
+  seeded_tmp="$(openclaw_build_tmp_file "$OPENCLAW_BUILD_RUN_ROOT" "seeded-gemini-check")"
   "$VALIDATED_NODE_BIN" "$ROOT_DIR/scripts/generate-consumer-seeded-defaults.mjs" "$seeded_tmp"
   if ! grep -q '"OPENCLAW_CONSUMER_GEMINI_API_KEY"' "$seeded_tmp"; then
     rm -f "$seeded_tmp"
@@ -489,7 +574,7 @@ merge_framework_machos() {
 
       local missing_files=()
       local tmp_dir
-      tmp_dir=$(mktemp -d)
+      tmp_dir="$(openclaw_build_tmp_dir "$OPENCLAW_BUILD_RUN_ROOT" "framework-lipo")"
       for fw in "${others[@]}"; do
         local other_file="$fw/$rel"
         if [[ ! -f "$other_file" ]]; then
@@ -534,7 +619,7 @@ bundle_consumer_cli_archive() {
   # packs that into the CLI tarball, which bloats the archive and can leave the
   # packaging flow in a stale half-finished state.
   local pack_dir
-  pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-cli-pack.XXXXXX")"
+  pack_dir="$(openclaw_build_tmp_dir "$OPENCLAW_BUILD_RUN_ROOT" "cli-pack")"
   local excluded_dist_dir="$pack_dir/excluded-dist-artifacts"
   local pack_status=0
   local archive_src=""
@@ -680,7 +765,7 @@ sign_consumer_cli_archive_machos() {
     timestamp_arg="--timestamp=none"
   fi
 
-  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-cli-archive-sign.XXXXXX")"
+  work_dir="$(openclaw_build_tmp_dir "$OPENCLAW_BUILD_RUN_ROOT" "cli-archive-sign")"
   tar -xzf "$archive_path" -C "$work_dir"
   if [[ ! -d "$work_dir/package" ]]; then
     echo "ERROR: consumer CLI archive did not contain npm package root." >&2
@@ -709,7 +794,7 @@ sign_consumer_cli_archive_machos() {
 ensure_consumer_node_runtime() {
   local version="$1"
   local arch="$2"
-  local cache_root="${ROOT_DIR}/.cache/consumer-runtime/node-v${version}-${arch}"
+  local cache_root="${CONSUMER_RUNTIME_TOOL_CACHE_ROOT}/node-v${version}-${arch}"
   local download_root=""
   local archive=""
   local download_url=""
@@ -720,7 +805,7 @@ ensure_consumer_node_runtime() {
     return 0
   fi
 
-  download_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-node.XXXXXX")"
+  download_root="$(openclaw_build_tmp_dir "$OPENCLAW_BUILD_RUN_ROOT" "consumer-node")"
   archive="${download_root}/node-v${version}-${arch}.tar.gz"
   download_url="https://nodejs.org/dist/v${version}/node-v${version}-${arch}.tar.gz"
 
@@ -753,7 +838,7 @@ ensure_consumer_node_runtime() {
 ensure_consumer_uv_runtime() {
   local version="$1"
   local arch="$2"
-  local cache_root="${ROOT_DIR}/.cache/consumer-runtime/uv-v${version}-${arch}"
+  local cache_root="${CONSUMER_RUNTIME_TOOL_CACHE_ROOT}/uv-v${version}-${arch}"
   local download_root=""
   local archive=""
   local download_url=""
@@ -782,7 +867,7 @@ ensure_consumer_uv_runtime() {
       ;;
   esac
 
-  download_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-uv.XXXXXX")"
+  download_root="$(openclaw_build_tmp_dir "$OPENCLAW_BUILD_RUN_ROOT" "consumer-uv")"
   archive="${download_root}/uv-${release_arch}-apple-darwin.tar.gz"
   download_url="https://github.com/astral-sh/uv/releases/download/${version}/uv-${release_arch}-apple-darwin.tar.gz"
 
@@ -1047,7 +1132,7 @@ prepare_bundled_consumer_runtime() {
     --exclude '*appcast*.xml' \
     "$ROOT_DIR/dist/" "$BUNDLED_RUNTIME_RESOURCE_DIR/openclaw/dist/"
 
-  deploy_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-deploy.XXXXXX")"
+  deploy_root="$(openclaw_build_tmp_dir "$OPENCLAW_BUILD_RUN_ROOT" "consumer-deploy")"
   trap 'rm -rf "$deploy_root"' RETURN
   echo "📦 Staging bundled consumer runtime node_modules"
   # Consumer app packaging needs a reproducible production dependency tree, not arbitrary
@@ -1121,7 +1206,7 @@ EOF
     local cache_stage_root=""
 
     echo "📦 Caching bundled consumer runtime for the next smoke build"
-    cache_stage_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-runtime-cache.XXXXXX")"
+    cache_stage_root="$(openclaw_build_tmp_dir "$OPENCLAW_BUILD_RUN_ROOT" "consumer-runtime-cache")"
     rm -rf "$cache_root"
     rsync -a "$BUNDLED_RUNTIME_RESOURCE_DIR/" "$cache_stage_root/"
     mkdir -p "$(dirname "$cache_root")"
@@ -1181,7 +1266,7 @@ capture_reusable_bundled_consumer_runtime() {
   # The app bundle is deleted before assembly. Preserve the known-good runtime
   # in a temp dir so shell-only smoke loops can avoid pnpm deploy, Node/uv copy,
   # and runtime payload signing when those inputs have not changed.
-  REUSABLE_RUNTIME_STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-consumer-reuse-runtime.XXXXXX")"
+  REUSABLE_RUNTIME_STAGE_DIR="$(openclaw_build_tmp_dir "$OPENCLAW_BUILD_RUN_ROOT" "consumer-reuse-runtime")"
   rsync -a "$BUNDLED_RUNTIME_RESOURCE_DIR/" "$REUSABLE_RUNTIME_STAGE_DIR/"
 }
 
@@ -1320,7 +1405,7 @@ if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
   for arch in "${BUILD_ARCHS[@]}"; do
     BIN_INPUTS+=("$(bin_for_arch "$arch")")
   done
-  LIPO_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/openclaw-bin.XXXXXX")"
+  LIPO_OUTPUT="$(openclaw_build_tmp_file "$OPENCLAW_BUILD_RUN_ROOT" "openclaw-bin")"
   /usr/bin/lipo -create "${BIN_INPUTS[@]}" -output "$LIPO_OUTPUT"
   mkdir -p "$APP_ROOT/Contents/MacOS"
   mv "$LIPO_OUTPUT" "$APP_ROOT/Contents/MacOS/OpenClaw"
@@ -1423,7 +1508,17 @@ if [ -d "$OPENCLAW_APP_BUNDLE" ]; then
   rm -rf "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle"
   cp -R "$OPENCLAW_APP_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle"
 else
+  if [[ "$APP_VARIANT" == "consumer" ]]; then
+    echo "ERROR: consumer app resource bundle not found at $OPENCLAW_APP_BUNDLE" >&2
+    echo "First-run onboarding needs OpenClaw_OpenClaw.bundle/Jarvis.icns; shipping without it crashes the packaged app." >&2
+    exit 1
+  fi
   echo "WARN: OpenClaw app resource bundle not found at $OPENCLAW_APP_BUNDLE (continuing)" >&2
+fi
+if [[ "$APP_VARIANT" == "consumer" && ! -f "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle/Jarvis.icns" ]]; then
+  echo "ERROR: consumer app is missing OpenClaw_OpenClaw.bundle/Jarvis.icns" >&2
+  echo "First-run onboarding uses this packaged icon before any gateway recovery UI can appear." >&2
+  exit 1
 fi
 
 echo "📦 Copying Textual resources"
