@@ -681,7 +681,7 @@ struct ConsumerSetupReadinessTests {
         #expect(model.statusLine == "Reconnecting Jarvis after sign-in…")
         #expect(model.failureKind == .gatewayUnreachable)
         #expect(model.isWaitingForChatGPTSignIn)
-        #expect(model.canOpenChatGPTSignInAgain)
+        #expect(!model.canOpenChatGPTSignInAgain)
         #expect(model.chatGPTSignInURL?.absoluteString == "https://auth.openai.com/oauth/authorize?client_id=test")
         #expect(!model.isComplete)
     }
@@ -822,6 +822,7 @@ struct ConsumerSetupReadinessTests {
 
     @Test func `consumer model hides raw chatgpt sign in url behind recovery state`() async {
         let probeCalls = SendableCounter()
+        let pendingHelpSleep = SleepContinuationBox()
         let model = ConsumerModelSetupModel(
             probeReadiness: {
                 probeCalls.value += 1
@@ -849,7 +850,14 @@ struct ConsumerSetupReadinessTests {
             listModels: {
                 curatedModelsPayload()
             },
-            postAuthReconnectProbeDelaysMs: [0, 0])
+            postAuthReconnectProbeDelaysMs: [0, 0],
+            chatGPTSignInHelpDelayMs: 9_000,
+            chatGPTSignInHelpSleep: { nanoseconds in
+                #expect(nanoseconds == 9_000_000_000)
+                await withCheckedContinuation { continuation in
+                    pendingHelpSleep.continuation = continuation
+                }
+            })
 
         await model.refresh()
         await model.submitSelectedAuth()
@@ -858,11 +866,89 @@ struct ConsumerSetupReadinessTests {
             "Open: https://auth.openai.com/oauth/authorize?client_id=test-client&code_challenge=secret",
         ])
         #expect(model.isWaitingForChatGPTSignIn)
-        #expect(model.canShowChatGPTSignInHelp)
-        #expect(model.canOpenChatGPTSignInAgain)
         #expect(
             model.chatGPTSignInURL?.absoluteString
                 == "https://auth.openai.com/oauth/authorize?client_id=test-client&code_challenge=secret")
+        #expect(!model.canShowChatGPTSignInHelp)
+        #expect(!model.canOpenChatGPTSignInAgain)
+
+        while pendingHelpSleep.continuation == nil {
+            await Task.yield()
+        }
+        pendingHelpSleep.continuation?.resume()
+        for _ in 0..<1_000 where !model.canShowChatGPTSignInHelp {
+            await Task.yield()
+        }
+
+        #expect(model.canShowChatGPTSignInHelp)
+        #expect(model.canOpenChatGPTSignInAgain)
+    }
+
+    @Test func `consumer model clears delayed chatgpt recovery help after sign in succeeds`() async {
+        let probeCalls = SendableCounter()
+        let pendingReadiness = ReadinessContinuationBox()
+        let pendingHelpSleep = SleepContinuationBox()
+        let model = ConsumerModelSetupModel(
+            probeReadiness: {
+                probeCalls.value += 1
+                if probeCalls.value == 1 {
+                    return blockedReadinessPayload()
+                }
+                return try await withCheckedThrowingContinuation { continuation in
+                    pendingReadiness.continuation = continuation
+                }
+            },
+            listAuthOptions: {
+                ConsumerModelsAuthListPayload(options: [subscriptionOptionPayload()], activeOptionId: nil)
+            },
+            applyAuth: { optionId, _ in
+                #expect(optionId == "openai-codex-oauth")
+                return ConsumerModelsAuthApplyPayload(
+                    optionId: optionId,
+                    providerId: "openai-codex",
+                    methodId: "oauth",
+                    defaultModel: "openai-codex/gpt-5.5",
+                    notes: ["Open: https://auth.openai.com/oauth/authorize?client_id=test"],
+                    profileIds: ["openai-codex:default"],
+                    readiness: readyReadinessPayload())
+            },
+            listModels: {
+                curatedModelsPayload()
+            },
+            chatGPTSignInHelpDelayMs: 9_000,
+            chatGPTSignInHelpSleep: { nanoseconds in
+                #expect(nanoseconds == 9_000_000_000)
+                await withCheckedContinuation { continuation in
+                    pendingHelpSleep.continuation = continuation
+                }
+            })
+
+        await model.refresh()
+        let submitTask = Task {
+            await model.submitSelectedAuth()
+        }
+
+        while pendingReadiness.continuation == nil || pendingHelpSleep.continuation == nil {
+            await Task.yield()
+        }
+
+        #expect(model.isWaitingForChatGPTSignIn)
+        #expect(model.chatGPTSignInURL?.absoluteString == "https://auth.openai.com/oauth/authorize?client_id=test")
+        #expect(!model.canShowChatGPTSignInHelp)
+
+        pendingHelpSleep.continuation?.resume()
+        for _ in 0..<1_000 where !model.canShowChatGPTSignInHelp {
+            await Task.yield()
+        }
+        #expect(model.canShowChatGPTSignInHelp)
+
+        pendingReadiness.continuation?.resume(returning: readyReadinessPayload())
+        await submitTask.value
+
+        #expect(model.isComplete)
+        #expect(!model.isWaitingForChatGPTSignIn)
+        #expect(!model.canShowChatGPTSignInHelp)
+        #expect(!model.canOpenChatGPTSignInAgain)
     }
 
     @Test func `consumer model hides chatgpt recovery link controls until url is available`() async {

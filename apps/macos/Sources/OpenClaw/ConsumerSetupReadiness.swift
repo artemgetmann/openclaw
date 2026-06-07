@@ -203,6 +203,7 @@ final class ConsumerModelSetupModel {
     private(set) var authNotes: [String] = []
     private(set) var chatGPTSignInURL: URL?
     private(set) var isWaitingForChatGPTSignIn = false
+    private(set) var hasWaitedForChatGPTSignInHelp = false
     private(set) var applyingOptionId: String?
     private(set) var activeAuthOptionId: String?
     private(set) var activeModelId: String?
@@ -232,9 +233,12 @@ final class ConsumerModelSetupModel {
     private let gatewayRecoverySleep: RecoverySleep
     private let readinessProbeTimeoutSeconds: Double
     private let postAuthReconnectProbeDelaysMs: [UInt64]
+    private let chatGPTSignInHelpDelayMs: UInt64
+    private let chatGPTSignInHelpSleep: RecoverySleep
     private var lastReadiness: ConsumerModelsReadinessPayload?
     private var gatewayRecoveryTask: Task<Void, Never>?
     private var gatewayRecoveryAttempt = 0
+    private var chatGPTSignInHelpTask: Task<Void, Never>?
 
     init(
         probeReadiness: ReadinessProbe? = nil,
@@ -248,7 +252,9 @@ final class ConsumerModelSetupModel {
         readinessProbeTimeoutSeconds: Double? = nil,
         gatewayRecoveryProbeDelaysMs: [UInt64]? = nil,
         gatewayRecoverySleep: RecoverySleep? = nil,
-        postAuthReconnectProbeDelaysMs: [UInt64]? = nil)
+        postAuthReconnectProbeDelaysMs: [UInt64]? = nil,
+        chatGPTSignInHelpDelayMs: UInt64? = nil,
+        chatGPTSignInHelpSleep: RecoverySleep? = nil)
     {
         self.probeReadiness = probeReadiness ?? Self.gatewayReadinessProbe
         let usesMockedDependencies =
@@ -292,6 +298,13 @@ final class ConsumerModelSetupModel {
             try? await Task.sleep(nanoseconds: nanoseconds)
         }
         self.postAuthReconnectProbeDelaysMs = postAuthReconnectProbeDelaysMs ?? [150, 400, 900, 1_500]
+        // Let the normal browser launch be the whole first impression. Recovery
+        // controls only become eligible if the sign-in is still pending after
+        // the browser had a real chance to open and complete the handoff.
+        self.chatGPTSignInHelpDelayMs = chatGPTSignInHelpDelayMs ?? 9_000
+        self.chatGPTSignInHelpSleep = chatGPTSignInHelpSleep ?? { nanoseconds in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+        }
     }
 
     var isComplete: Bool {
@@ -328,11 +341,13 @@ final class ConsumerModelSetupModel {
     }
 
     var canShowChatGPTSignInHelp: Bool {
-        self.isWaitingForChatGPTSignIn && self.chatGPTSignInURL != nil
+        self.isWaitingForChatGPTSignIn &&
+            self.hasWaitedForChatGPTSignInHelp &&
+            self.chatGPTSignInURL != nil
     }
 
     var canOpenChatGPTSignInAgain: Bool {
-        self.chatGPTSignInURL != nil
+        self.canShowChatGPTSignInHelp
     }
 
     var hasModelOptions: Bool {
@@ -669,8 +684,7 @@ final class ConsumerModelSetupModel {
         self.authNotes = []
         let isChatGPTOAuth = option.providerId == "openai-codex" && option.inputKind == .none
         if isChatGPTOAuth {
-            self.isWaitingForChatGPTSignIn = true
-            self.signInHelpExpanded = false
+            self.beginChatGPTSignInWait()
         } else {
             self.clearChatGPTSignInState()
         }
@@ -694,7 +708,7 @@ final class ConsumerModelSetupModel {
                     self.authError = nil
                 } else {
                     self.authError = "Could not finish sign-in. Try again."
-                    self.isWaitingForChatGPTSignIn = false
+                    self.clearChatGPTSignInState()
                 }
             } else {
                 self.authError = error.localizedDescription
@@ -913,7 +927,7 @@ final class ConsumerModelSetupModel {
         self.activeModelId = nil
         self.failureKind = payload.consumerFailureKind
         if payload.consumerFailureKind == .providerAuthFailed {
-            self.isWaitingForChatGPTSignIn = false
+            self.clearChatGPTSignInState()
         }
         self.phase = .failed(detail)
         self.statusLine = detail
@@ -922,9 +936,30 @@ final class ConsumerModelSetupModel {
     }
 
     private func clearChatGPTSignInState() {
+        self.chatGPTSignInHelpTask?.cancel()
+        self.chatGPTSignInHelpTask = nil
         self.isWaitingForChatGPTSignIn = false
         self.chatGPTSignInURL = nil
+        self.hasWaitedForChatGPTSignInHelp = false
         self.signInHelpExpanded = false
+    }
+
+    private func beginChatGPTSignInWait() {
+        self.chatGPTSignInHelpTask?.cancel()
+        self.isWaitingForChatGPTSignIn = true
+        self.hasWaitedForChatGPTSignInHelp = false
+        self.signInHelpExpanded = false
+
+        let delayNanoseconds = self.chatGPTSignInHelpDelayMs * 1_000_000
+        let sleep = self.chatGPTSignInHelpSleep
+        self.chatGPTSignInHelpTask = Task { [weak self] in
+            await sleep(delayNanoseconds)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.isWaitingForChatGPTSignIn else { return }
+                self.hasWaitedForChatGPTSignInHelp = true
+            }
+        }
     }
 
     private func scheduleGatewayRecoveryProbeIfNeeded() {
