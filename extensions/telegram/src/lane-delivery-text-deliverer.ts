@@ -62,6 +62,15 @@ export type LaneDeliveryResult =
   | "sent"
   | "skipped";
 
+type DurableSendReason = "progress" | "final" | "tool" | "error" | "media" | "fallback" | "unknown";
+
+type SendPayloadContext = {
+  reason?: DurableSendReason;
+  callsite?: string;
+  laneName?: LaneName;
+  infoKind?: string;
+};
+
 type CreateLaneTextDelivererParams = {
   lanes: Record<LaneName, DraftLaneState>;
   archivedAnswerPreviews: ArchivedPreview[];
@@ -69,7 +78,7 @@ type CreateLaneTextDelivererParams = {
   retainPreviewOnCleanupByLane: Record<LaneName, boolean>;
   draftMaxChars: number;
   applyTextToPayload: (payload: ReplyPayload, text: string) => ReplyPayload;
-  sendPayload: (payload: ReplyPayload) => Promise<boolean>;
+  sendPayload: (payload: ReplyPayload, context?: SendPayloadContext) => Promise<boolean>;
   flushDraftLane: (lane: DraftLaneState) => Promise<void>;
   stopDraftLane: (lane: DraftLaneState) => Promise<void>;
   editPreview: (params: {
@@ -500,7 +509,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
     // Send the replacement message first, then clean up the old preview.
     // This avoids the visual "disappear then reappear" flash.
-    const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+    const delivered = await params.sendPayload(params.applyTextToPayload(payload, text), {
+      reason: "final",
+      callsite: "lane-archived-answer-final-fallback",
+      laneName: "answer",
+      infoKind: "final",
+    });
     // Once this archived preview is consumed by a fallback final send, delete it
     // regardless of deleteIfUnused. That flag only applies to unconsumed boundaries.
     if (delivered || archivedPreview.deleteIfUnused !== false) {
@@ -604,7 +618,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         );
       }
       await params.stopDraftLane(lane);
-      const delivered = await params.sendPayload(params.applyTextToPayload(payload, deliveryText));
+      const delivered = await params.sendPayload(params.applyTextToPayload(payload, deliveryText), {
+        reason: payload.isError ? "error" : hasMedia ? "media" : "final",
+        callsite: "lane-final-standard-send",
+        laneName,
+        infoKind,
+      });
       return delivered ? "sent" : "skipped";
     }
 
@@ -622,6 +641,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           );
           const delivered = await params.sendPayload(
             params.applyTextToPayload(payload, deliveryText),
+            {
+              reason: laneName === "reasoning" ? "progress" : "unknown",
+              callsite: "lane-nonfinal-draft-update-fallback",
+              laneName,
+              infoKind,
+            },
           );
           return delivered ? "sent" : "skipped";
         }
@@ -644,7 +669,20 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
     }
 
-    const delivered = await params.sendPayload(params.applyTextToPayload(payload, deliveryText));
+    const delivered = await params.sendPayload(params.applyTextToPayload(payload, deliveryText), {
+      reason: payload.isError
+        ? "error"
+        : hasMedia
+          ? "media"
+          : infoKind === "tool"
+            ? "tool"
+            : infoKind === "block"
+              ? "progress"
+              : "unknown",
+      callsite: "lane-nonfinal-standard-send",
+      laneName,
+      infoKind,
+    });
     return delivered ? "sent" : "skipped";
   };
 }

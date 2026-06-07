@@ -6,4 +6,5 @@ export type BlockReplyPayload = {
   replyToId?: string;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
+  channelData?: Record<string, unknown>;
 };
