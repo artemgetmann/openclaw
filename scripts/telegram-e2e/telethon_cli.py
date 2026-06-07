@@ -280,6 +280,23 @@ def build_chat_payload(chat) -> dict[str, object | None]:
   }
 
 
+def resolve_message_media_type(message) -> str | None:
+  if getattr(message, "voice", None) is not None:
+    return "voice"
+  if getattr(message, "audio", None) is not None:
+    return "audio"
+  if getattr(message, "video_note", None) is not None:
+    return "video_note"
+  if getattr(message, "video", None) is not None:
+    return "video"
+  if getattr(message, "photo", None) is not None:
+    return "photo"
+  if getattr(message, "document", None) is not None:
+    return "document"
+  media = getattr(message, "media", None)
+  return type(media).__name__ if media is not None else None
+
+
 def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
   reply_to = getattr(message, "reply_to", None)
   direct_topic_id = getattr(getattr(message, "direct_messages_topic", None), "topic_id", None)
@@ -300,6 +317,7 @@ def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
     "date": getattr(message, "date", None).isoformat() if getattr(message, "date", None) else None,
     "direct_messages_topic": {"topic_id": int(direct_topic_id)} if direct_topic_id is not None else None,
     "direct_messages_topic_id": int(direct_topic_id) if direct_topic_id is not None else None,
+    "media_type": resolve_message_media_type(message),
     "message_id": int(getattr(message, "id", 0) or 0),
     "out": bool(getattr(message, "out", False)),
     "reply_to_msg_id": int(getattr(reply_to, "reply_to_msg_id", 0)) if getattr(reply_to, "reply_to_msg_id", None) is not None else None,

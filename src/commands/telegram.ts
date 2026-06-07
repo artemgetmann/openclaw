@@ -127,6 +127,7 @@ type TelegramScenarioProof = {
   final_visible_text: string | null;
   empty_voice_only_final_detected: boolean;
   final_answer_present_after_cleanup: boolean | null;
+  tts_audio_message_ids: number[];
   progress_texts: string[];
 };
 
@@ -210,6 +211,9 @@ export const telegramCommandDeps = {
   },
   async readFile(filePath: string) {
     return fs.readFile(filePath, "utf8");
+  },
+  sleep(ms: number) {
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
   },
   fileExists(filePath: string) {
     return fsSync.existsSync(filePath);
@@ -1105,6 +1109,7 @@ async function runTelegramFeatureScenario(
     final_visible_text: null,
     empty_voice_only_final_detected: false,
     final_answer_present_after_cleanup: null,
+    tts_audio_message_ids: [],
     progress_texts: [],
   };
 
@@ -1163,7 +1168,7 @@ async function runTelegramFeatureScenario(
       threadAnchor: topicId ?? undefined,
       timeoutMs: timeoutSeconds * 1000,
     });
-    const readResult = await telegramCommandDeps.runTelegramUserRead({
+    let readResult = await telegramCommandDeps.runTelegramUserRead({
       afterId: sendResult.message.message_id,
       chat,
       envFile: envFile ?? undefined,
@@ -1181,6 +1186,32 @@ async function runTelegramFeatureScenario(
       sendResult,
       waitResult,
     });
+    if (shouldPollForTelegramTtsAudioSupplement(proof)) {
+      for (
+        let attempt = 0;
+        attempt < 8 && shouldPollForTelegramTtsAudioSupplement(proof);
+        attempt += 1
+      ) {
+        await telegramCommandDeps.sleep(2_000);
+        readResult = await telegramCommandDeps.runTelegramUserRead({
+          afterId: sendResult.message.message_id,
+          chat,
+          envFile: envFile ?? undefined,
+          limit: 80,
+          session: session ?? undefined,
+        });
+        proof = classifyTelegramFeatureScenario({
+          chat,
+          doctor,
+          elapsedMs: telegramCommandDeps.now() - startedAt,
+          marker,
+          readResult,
+          scenario,
+          sendResult,
+          waitResult,
+        });
+      }
+    }
   } catch (error) {
     const reason = cleanFailureReason(error);
     proof = {
@@ -1200,6 +1231,13 @@ async function runTelegramFeatureScenario(
   }
 
   return proof;
+}
+
+function shouldPollForTelegramTtsAudioSupplement(proof: TelegramScenarioProof) {
+  return (
+    (proof.scenario === "tts-final-caption" || proof.scenario === "progress-plus-tts") &&
+    proof.failure_reasons.includes("tts_audio_supplement_missing")
+  );
 }
 
 function classifyTelegramSmokeReply(
@@ -1281,22 +1319,24 @@ async function sendAndWaitForAnyReply(params: {
 function defaultTelegramScenarioMessage(scenario: TelegramE2eScenarioName, marker: string) {
   if (scenario === "tts-final-caption") {
     return [
-      "Reply with a final voice/TTS answer if TTS is enabled.",
-      `The visible final text or caption must include exactly this marker: ${marker}.`,
+      "Reply with a normal final text answer. TTS/audio will be generated separately if enabled.",
+      `The visible final text must include exactly this marker: ${marker}.`,
+      "Do not write TTS tags, audio tags, XML tags, or Markdown links.",
       "Keep the answer under 80 words.",
     ].join(" ");
   }
   if (scenario === "progress-long-task") {
     return [
-      "Do a visible multi-step answer before the final response.",
-      "Send meaningful progress about the model/agent work before the final answer.",
+      "Before the final answer, send one short commentary/progress update about the model/agent work.",
       `The final answer must include exactly this marker: ${marker}.`,
       "Do not use only the phrase Still working.",
     ].join(" ");
   }
   return [
-    "Use visible progress before the final response, then produce a final voice/TTS answer if TTS is enabled.",
-    `The visible final text or caption must include exactly this marker: ${marker}.`,
+    "Before the final answer, send one short commentary/progress update about the model/agent work.",
+    "Then reply with a normal final text answer. TTS/audio will be generated separately if enabled.",
+    `The visible final text must include exactly this marker: ${marker}.`,
+    "Do not write TTS tags, audio tags, XML tags, or Markdown links.",
     "Keep the final answer under 80 words.",
   ].join(" ");
 }
@@ -1331,13 +1371,18 @@ function classifyTelegramFeatureScenario(params: {
     .map((message) => cleanString(message.text))
     .filter((text): text is string => Boolean(text));
   const hasMeaningfulProgress = progressTexts.some((text) => !isWatchdogOnlyProgress(text));
+  const ttsAudioMessages = botMessages.filter(
+    (message) =>
+      message.message_id > finalMessage.message_id && isTelegramTtsAudioSupplement(message),
+  );
   const requiresProgress =
     params.scenario === "progress-long-task" || params.scenario === "progress-plus-tts";
-  const requiresTtsCaption =
+  const requiresTts =
     params.scenario === "tts-final-caption" || params.scenario === "progress-plus-tts";
-  const ttsCaptionOk =
-    !requiresTtsCaption ||
+  const ttsFinalTextOk =
+    !requiresTts ||
     (Boolean(finalVisibleText?.includes(params.marker)) && !emptyVoiceOnlyFinalDetected);
+  const ttsSupplementOk = !requiresTts || ttsAudioMessages.length > 0;
   const progressOk = !requiresProgress || hasMeaningfulProgress;
   const finalAnswerPresentInReadback = botMessages.some(
     (message) => message.message_id === finalMessage.message_id,
@@ -1345,9 +1390,10 @@ function classifyTelegramFeatureScenario(params: {
   const finalAnswerPresentAfterCleanup =
     params.scenario === "progress-plus-tts" ? finalAnswerPresentInReadback : null;
   const previewCleanupOk = params.scenario !== "progress-plus-tts" || finalAnswerPresentInReadback;
-  const ok = ttsCaptionOk && progressOk && previewCleanupOk;
+  const ok = ttsFinalTextOk && ttsSupplementOk && progressOk && previewCleanupOk;
   const failureReasons = [
-    ttsCaptionOk ? null : "final_tts_visible_text_missing",
+    ttsFinalTextOk ? null : "final_tts_visible_text_missing",
+    ttsSupplementOk ? null : "tts_audio_supplement_missing",
     progressOk ? null : "meaningful_progress_missing",
     previewCleanupOk ? null : "final_answer_deleted_after_preview_cleanup",
   ].filter((reason): reason is string => Boolean(reason));
@@ -1386,8 +1432,19 @@ function classifyTelegramFeatureScenario(params: {
     final_visible_text: finalVisibleText,
     empty_voice_only_final_detected: emptyVoiceOnlyFinalDetected,
     final_answer_present_after_cleanup: finalAnswerPresentAfterCleanup,
+    tts_audio_message_ids: ttsAudioMessages.map((message) => message.message_id),
     progress_texts: progressTexts,
   };
+}
+
+function isTelegramTtsAudioSupplement(message: TelegramUserReadResult["messages"][number]) {
+  const mediaType = cleanString(message.media_type)?.toLowerCase();
+  if (mediaType === "voice" || mediaType === "audio" || mediaType === "document") {
+    return true;
+  }
+  // Older userbot payloads did not expose media_type. A post-final bot message
+  // with no visible text is still useful evidence for a separate media bubble.
+  return !cleanString(message.text);
 }
 
 function isWatchdogOnlyProgress(text: string) {

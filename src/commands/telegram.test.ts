@@ -688,7 +688,23 @@ describe("telegram commands", () => {
             reply_to_msg_id: 410,
             reply_to_top_id: 410,
             sender_id: 777,
-            text: `Final voice caption with ${marker}`,
+            text: `Final text with ${marker}`,
+            thread_anchor: null,
+          },
+          {
+            chat_id: 777,
+            chat_title: null,
+            chat_username: "jarvis_tester_1_bot",
+            date: null,
+            direct_messages_topic: null,
+            direct_messages_topic_id: null,
+            media_type: "voice",
+            message_id: 413,
+            out: false,
+            reply_to_msg_id: 410,
+            reply_to_top_id: 410,
+            sender_id: 777,
+            text: "",
             thread_anchor: null,
           },
         ],
@@ -716,7 +732,7 @@ describe("telegram commands", () => {
             reply_to_msg_id: 410,
             reply_to_top_id: 410,
             sender_id: 777,
-            text: `Final voice caption with ${marker}`,
+            text: `Final text with ${marker}`,
           },
           matched_by: "reply_to_msg_id",
         }),
@@ -732,6 +748,7 @@ describe("telegram commands", () => {
     expect(payload.scenario).toBe("progress-plus-tts");
     expect(payload.progress_message_ids).toEqual([411]);
     expect(payload.final_message_id).toBe(412);
+    expect(payload.tts_audio_message_ids).toEqual([413]);
     expect(payload.empty_voice_only_final_detected).toBe(false);
     expect(payload.final_answer_present_after_cleanup).toBe(true);
     expect(payload.mergeReadiness).toBe("sufficient");

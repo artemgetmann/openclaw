@@ -134,7 +134,7 @@ export function registerTelegramCli(program: Command) {
   addTelegramHarnessOptions(
     scenario
       .command("tts-final-caption")
-      .description("Run the TTS final-caption Telegram live scenario"),
+      .description("Run the TTS final text plus audio Telegram live scenario"),
     { requireChat: false },
   ).action(async (opts) => {
     await runCommandWithRuntime(defaultRuntime, async () => {

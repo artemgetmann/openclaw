@@ -65,7 +65,7 @@ and more reliable default.
     - Wiring proof only: runtime ownership, bot claim, userbot session, send/read/wait.
     - A baseline pass is not merge proof for a feature change.
   - `pnpm openclaw:local telegram scenario tts-final-caption --json`
-    - Feature-specific proof for final caption behavior after TTS output.
+    - Feature-specific proof for final text plus separate TTS audio behavior.
   - `pnpm openclaw:local telegram scenario progress-long-task --json`
     - Feature-specific proof for progress updates during a long task.
   - `pnpm openclaw:local telegram scenario progress-plus-tts --json`

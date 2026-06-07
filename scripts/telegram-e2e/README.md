@@ -61,8 +61,8 @@ pnpm openclaw:local telegram scenario progress-long-task --json
 pnpm openclaw:local telegram scenario progress-plus-tts --json
 ```
 
-- `tts-final-caption`: proves the final visible caption/answer behavior after
-  TTS output.
+- `tts-final-caption`: proves the final visible text plus separate TTS audio
+  behavior.
 - `progress-long-task`: proves progress updates during a long-running task and
   a final answer after cleanup.
 - `progress-plus-tts`: proves progress updates plus final TTS output behavior.

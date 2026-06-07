@@ -9,6 +9,7 @@ export type TelegramUserMessage = {
   date: string | null;
   direct_messages_topic: TelegramUserDirectMessagesTopic | null;
   direct_messages_topic_id: number | null;
+  media_type?: string | null;
   message_id: number;
   out: boolean;
   reply_to_msg_id: number | null;
