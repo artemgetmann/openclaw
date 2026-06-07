@@ -155,6 +155,63 @@ struct OnboardingViewSmokeTests {
         }
     }
 
+    @Test func `production telegram step advances when verified even if location is not granted`() async {
+        let instanceId = "production-telegram-nav-\(UUID().uuidString)"
+        defer {
+            ChannelsStore.shared.configDraft = [:]
+            ChannelsStore.shared.telegramSetupBotId = nil
+            UserDefaults.standard.removeObject(
+                forKey: ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(instanceId: instanceId))
+            UserDefaults.standard.removeObject(
+                forKey: ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey())
+        }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            "OPENCLAW_CONSUMER_INSTANCE_ID": instanceId,
+        ]) {
+            // Reproduce the stranding path from production onboarding, not the
+            // debug page override: Telegram is visibly verified, while optional
+            // Location and stale earlier page models must not disable this page.
+            ChannelsStore.shared.configDraft = [
+                "channels": [
+                    "telegram": [
+                        "enabled": true,
+                        "botToken": "8932460707:AAHOdovm5s6t_pVIxg9_dtMiKFPBpyNNQQA",
+                        "dmPolicy": "allowlist",
+                        "allowFrom": ["1336356696"],
+                    ],
+                ],
+            ]
+            ChannelsStore.shared.telegramSetupBotId = 8932460707
+            UserDefaults.standard.set(
+                8932460707,
+                forKey: ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(instanceId: instanceId))
+            UserDefaults.standard.set(
+                8932460707,
+                forKey: ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey())
+
+            let permissionMonitor = PermissionMonitor()
+            let state = AppState(preview: true)
+            state.connectionMode = .local
+            let view = OnboardingView(
+                state: state,
+                permissionMonitor: permissionMonitor,
+                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
+
+            #expect(permissionMonitor.status[.location] != true)
+            #expect(!ConsumerPermissionCatalog.coreCapabilities.contains(.location))
+            #expect(view.consumerSetupDebugStep == nil)
+            #expect(view.isConsumerSetupShellActive)
+            #expect(view.isConsumerSetupStepComplete(.telegram))
+            #expect(view.canAdvanceConsumerSetupStepForVisibleStep(.telegram))
+            #expect(!view.canAdvanceConsumerSetupStepForVisibleStep(.chrome))
+            #expect(!view.canAdvanceConsumerSetupStepForVisibleStep(.permissions))
+            #expect(!view.canAdvanceConsumerSetupStepForVisibleStep(.aiAccess))
+            #expect(!view.canAdvanceConsumerSetupStepForVisibleStep(.accountActivation))
+        }
+    }
+
     @Test func `debug setup navigation can advance after verified telegram without prior prerequisites`() async {
         let instanceId = "debug-nav-\(UUID().uuidString)"
         defer {

@@ -315,14 +315,18 @@ struct OnboardingView: View {
 
     var canAdvanceConsumerSetupStep: Bool {
         guard self.isConsumerSetupShellActive else { return false }
+        return self.canAdvanceConsumerSetupStepForVisibleStep(self.consumerSetupStep)
+    }
+
+    func canAdvanceConsumerSetupStepForVisibleStep(_ step: ConsumerSetupStep) -> Bool {
         // Debug smoke can open one setup page directly, then advance through
         // later pages without walking earlier prerequisites. In that mode each
         // visible page owns its gate so visual proof can verify the current
         // page state without changing production setup ordering.
         if self.consumerSetupDebugStep != nil {
-            return self.isConsumerSetupStepComplete(self.consumerSetupStep)
+            return self.isConsumerSetupStepComplete(step)
         }
-        switch self.consumerSetupStep {
+        switch step {
         case .chrome:
             return self.browserSetup.isComplete
         case .permissions:
@@ -338,7 +342,11 @@ struct OnboardingView: View {
                 self.modelSetup.isComplete &&
                 self.accountActivation.isActivated
         case .telegram:
-            return self.canFinishConsumerInlineSetup
+            // Earlier setup pages own their own gates before the user reaches
+            // Telegram. Once this page is visible, do not re-check stale page
+            // models; the visible job is complete when the bot is live and the
+            // first chat is verified.
+            return self.channelsStore.consumerTelegramReadyForFirstTask()
         case .telegramGroup:
             return self.channelsStore.consumerTelegramReadyForFirstTask()
         }

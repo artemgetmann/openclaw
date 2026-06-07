@@ -100,7 +100,9 @@ describe("buildPairingReply", () => {
     });
 
     expect(text).toContain("Jarvis is ready to approve this chat.");
-    expect(text).toContain("Return to Jarvis and click Verify Telegram.");
+    expect(text).toContain("Return to Jarvis.");
+    expect(text.endsWith("Return to Jarvis.")).toBe(true);
+    expect(text).not.toContain("click Verify Telegram");
     expect(text).not.toContain("finish your first Telegram check");
     expect(text).toContain("Your Telegram user id: 42");
     expect(text).not.toContain("OpenClaw");
