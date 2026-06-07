@@ -1451,7 +1451,17 @@ if [ -d "$OPENCLAW_APP_BUNDLE" ]; then
   rm -rf "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle"
   cp -R "$OPENCLAW_APP_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle"
 else
+  if [[ "$APP_VARIANT" == "consumer" ]]; then
+    echo "ERROR: consumer app resource bundle not found at $OPENCLAW_APP_BUNDLE" >&2
+    echo "First-run onboarding needs OpenClaw_OpenClaw.bundle/Jarvis.icns; shipping without it crashes the packaged app." >&2
+    exit 1
+  fi
   echo "WARN: OpenClaw app resource bundle not found at $OPENCLAW_APP_BUNDLE (continuing)" >&2
+fi
+if [[ "$APP_VARIANT" == "consumer" && ! -f "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle/Jarvis.icns" ]]; then
+  echo "ERROR: consumer app is missing OpenClaw_OpenClaw.bundle/Jarvis.icns" >&2
+  echo "First-run onboarding uses this packaged icon before any gateway recovery UI can appear." >&2
+  exit 1
 fi
 
 echo "📦 Copying Textual resources"

@@ -29,4 +29,9 @@ describe("scripts/verify-consumer-mac-app.sh", () => {
       'assert_bundled_runtime_cli_payload \\\n  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw"',
     );
   });
+
+  it("requires the packaged onboarding icon resource", () => {
+    expect(script).toContain("OpenClaw_OpenClaw.bundle/Jarvis.icns");
+    expect(script).toContain("bundled onboarding icon missing");
+  });
 });
