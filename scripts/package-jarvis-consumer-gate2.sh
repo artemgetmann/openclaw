@@ -104,6 +104,19 @@ stage_gate2_app() {
   echo "  app=$staged_app"
 }
 
+assert_stage_target_ready() {
+  local home
+  local desktop
+
+  home="$(target_home)"
+  desktop="$home/Desktop"
+
+  [[ -d "$desktop" ]] \
+    || die "target Desktop is missing: $desktop"
+  [[ -w "$desktop" ]] \
+    || die "target Desktop is not writable from $(whoami): $desktop"
+}
+
 stage_collector() {
   mkdir -p "$GATE2_SHARED_DIR"
   /usr/bin/ditto \
@@ -215,6 +228,7 @@ done
 
 assert_expected_identity
 assert_port_free
+assert_stage_target_ready
 package_gate2_app_fast
 verify_info_plist
 stage_gate2_app

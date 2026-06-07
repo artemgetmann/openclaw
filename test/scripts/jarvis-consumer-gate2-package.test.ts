@@ -34,6 +34,13 @@ describe("Jarvis Consumer Gate2 packaging harness", () => {
     expect(packageScript).toContain("port $GATE2_EXPECTED_PORT is already owned");
   });
 
+  it("preflights clean-user Desktop access before spending a package build", () => {
+    expect(packageScript.indexOf("assert_stage_target_ready")).toBeLessThan(
+      packageScript.indexOf("package_gate2_app_fast"),
+    );
+    expect(packageScript).toContain("target Desktop is not writable from $(whoami): $desktop");
+  });
+
   it("copies a self-contained collector to Users Shared", () => {
     expect(packageScript).toContain(
       'GATE2_SHARED_DIR="${JARVIS_GATE2_SHARED_DIR:-/Users/Shared/JarvisConsumerGate2}"',
