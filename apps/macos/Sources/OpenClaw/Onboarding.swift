@@ -120,8 +120,8 @@ final class OnboardingController {
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         // Older agent-style packages and menu-bar relaunches can create this
-        // window outside the active Space. Promote it across Spaces and force an
-        // unconditional front order so onboarding cannot strand users.
+        // window outside the active Space. Move it to the active Space without
+        // making onboarding permanently float above the user's work.
         window.collectionBehavior.insert(.moveToActiveSpace)
         window.collectionBehavior.insert(.fullScreenAuxiliary)
         window.center()

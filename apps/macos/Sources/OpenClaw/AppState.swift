@@ -907,6 +907,14 @@ enum AppStateStore {
 @MainActor
 enum AppActivationPolicy {
     static func apply(showDockIcon: Bool) {
+        if AppFlavor.current.isConsumer {
+            // Consumer launches are driven by onboarding/settings windows. Apply
+            // the foreground policy synchronously during app startup so Stage
+            // Manager never classifies the first window as a menu-bar accessory
+            // app before DockIconManager's async observer pass runs.
+            NSApp.setActivationPolicy(.regular)
+            return
+        }
         _ = showDockIcon
         DockIconManager.shared.updateDockVisibility()
     }

@@ -39,12 +39,29 @@ final class DockIconManager: NSObject, @unchecked Sendable {
             } ?? []
 
             let hasVisibleWindows = !visibleWindows.isEmpty
-            if !userWantsDockHidden || hasVisibleWindows {
+            if Self.shouldUseRegularActivationPolicy(
+                isConsumer: AppFlavor.current.isConsumer,
+                userWantsDockHidden: userWantsDockHidden,
+                hasVisibleWindows: hasVisibleWindows)
+            {
                 NSApp?.setActivationPolicy(.regular)
             } else {
                 NSApp?.setActivationPolicy(.accessory)
             }
         }
+    }
+
+    static func shouldUseRegularActivationPolicy(
+        isConsumer: Bool,
+        userWantsDockHidden: Bool,
+        hasVisibleWindows: Bool)
+        -> Bool
+    {
+        // Consumer packages are first-run window apps, not background menu-bar
+        // agents. Keeping them regular prevents Stage Manager from treating the
+        // onboarding surface as a hidden side-strip thumbnail when Dock hiding is
+        // still at its default.
+        isConsumer || !userWantsDockHidden || hasVisibleWindows
     }
 
     @MainActor

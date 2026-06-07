@@ -95,6 +95,14 @@ struct LowCoverageViewSmokeTests {
         UserDefaults.standard.set(false, forKey: showDockIconKey)
         DockIconManager.shared.updateDockVisibility()
         DockIconManager.shared.temporarilyShowDock()
+        #expect(DockIconManager.shouldUseRegularActivationPolicy(
+            isConsumer: true,
+            userWantsDockHidden: true,
+            hasVisibleWindows: false))
+        #expect(!DockIconManager.shouldUseRegularActivationPolicy(
+            isConsumer: false,
+            userWantsDockHidden: true,
+            hasVisibleWindows: false))
     }
 
     @Test func `voice wake settings exercises helpers`() {
