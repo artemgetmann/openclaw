@@ -193,6 +193,35 @@ function stripInternalToolSummaryLines(text: string): string {
     .join("\n");
 }
 
+function markAcpSourcePreviewPayload(payload: ReplyPayload): ReplyPayload {
+  const channelData =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData
+      : {};
+  const openclaw =
+    channelData.openclaw &&
+    typeof channelData.openclaw === "object" &&
+    !Array.isArray(channelData.openclaw)
+      ? channelData.openclaw
+      : {};
+
+  // ACP text_delta chunks are live assistant stream previews. Telegram uses
+  // this structural marker to update mutable progress instead of sending
+  // durable text or TTS before the final answer.
+  return {
+    ...payload,
+    channelData: {
+      ...channelData,
+      openclaw: {
+        ...openclaw,
+        sourcePreview: true,
+      },
+    },
+  };
+}
+
 export type AcpReplyProjector = {
   onEvent: (event: AcpRuntimeEvent) => Promise<void>;
   flush: (force?: boolean) => Promise<void>;
@@ -219,7 +248,7 @@ export function createAcpReplyProjector(params: {
   const createTurnBlockReplyPipeline = () =>
     createBlockReplyPipeline({
       onBlockReply: async (payload) => {
-        await params.deliver("block", payload);
+        await params.deliver("block", markAcpSourcePreviewPayload(payload));
       },
       timeoutMs: ACP_BLOCK_REPLY_TIMEOUT_MS,
       coalescing: settings.deliveryMode === "live" ? undefined : streaming.coalescing,

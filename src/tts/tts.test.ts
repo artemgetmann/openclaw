@@ -774,6 +774,34 @@ describe("tts", () => {
         expect(body.input).not.toContain("utm_source");
       });
     });
+
+    it("sends only final text to TTS when progress poison strings exist elsewhere", async () => {
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const marker = "OC-E2E-PROGRESS-PLUS-TTS-UNIT";
+        const progressOne = `PROGRESS_DO_NOT_VOICE_1 ${marker}`;
+        const progressTwo = `PROGRESS_DO_NOT_VOICE_2 ${marker}`;
+        const finalText = `Final only TTS marker ${marker}`;
+
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: finalText },
+          cfg: baseCfg,
+          channel: "telegram",
+          kind: "final",
+          inboundAudio: true,
+        });
+
+        expect(result.mediaUrl).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        if (typeof init.body !== "string") {
+          throw new Error("expected TTS request body to be a string");
+        }
+        const body = JSON.parse(init.body) as { input?: string };
+        expect(body.input).toBe(finalText);
+        expect(body.input).not.toContain(progressOne);
+        expect(body.input).not.toContain(progressTwo);
+      });
+    });
   });
 
   describe("sanitizeUrlsForSpeech", () => {

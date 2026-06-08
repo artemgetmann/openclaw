@@ -186,6 +186,172 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("preserves final payloads after transient Telegram preview block streaming", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      preserveFinalPayloadsAfterBlockStreaming: true,
+      payloads: [{ text: "Final answer." }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("Final answer.");
+  });
+
+  it("drops source-preview-only payloads after transient Telegram preview block streaming", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      preserveFinalPayloadsAfterBlockStreaming: true,
+      payloads: [
+        {
+          text: "Checking example.com.",
+          channelData: { openclaw: { sourcePreview: true } },
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("preserves only final answer text when finalization mixes source-preview progress and final payloads", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      preserveFinalPayloadsAfterBlockStreaming: true,
+      payloads: [
+        {
+          text: "Checking example.com.",
+          channelData: { openclaw: { sourcePreview: true } },
+        },
+        { text: "Final answer." },
+      ],
+    });
+
+    expect(replyPayloads.map((payload) => payload.text)).toEqual(["Final answer."]);
+  });
+
+  it("keeps only the last text final after transient Telegram preview streaming", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      preserveFinalPayloadsAfterBlockStreaming: true,
+      payloads: [
+        { text: "Opening the three pages first." },
+        { text: "Pages are open. Writing the temp file now." },
+        { text: "Readback looks good. Deleting the temp file now." },
+        {
+          text: "example.com is reserved; IANA explains example domains; MDN documents HTML. The temporary file was removed.",
+        },
+      ],
+    });
+
+    expect(replyPayloads.map((payload) => payload.text)).toEqual([
+      "example.com is reserved; IANA explains example domains; MDN documents HTML. The temporary file was removed.",
+    ]);
+  });
+
+  it("keeps media but drops stale text progress before the latest Telegram final", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      preserveFinalPayloadsAfterBlockStreaming: true,
+      payloads: [
+        { mediaUrl: "file:///tmp/iana.png" },
+        { mediaUrl: "file:///tmp/mdn.png" },
+        { text: "On it — I’ll keep the updates brief." },
+        {
+          text: "example.com is reserved; IANA explains example domains; MDN documents HTML. The temporary file was removed.",
+        },
+      ],
+    });
+
+    expect(
+      replyPayloads.map((payload) => ({
+        text: payload.text,
+        mediaUrl: payload.mediaUrl,
+      })),
+    ).toEqual([
+      { text: undefined, mediaUrl: "file:///tmp/iana.png" },
+      { text: undefined, mediaUrl: "file:///tmp/mdn.png" },
+      {
+        text: "example.com is reserved; IANA explains example domains; MDN documents HTML. The temporary file was removed.",
+        mediaUrl: undefined,
+      },
+    ]);
+  });
+
+  it("keeps final text once when a source-preview snapshot matches the final answer", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      preserveFinalPayloadsAfterBlockStreaming: true,
+      payloads: [
+        {
+          text: "Final answer.",
+          channelData: { openclaw: { sourcePreview: true } },
+        },
+        { text: "Final answer." },
+      ],
+    });
+
+    expect(replyPayloads.map((payload) => payload.text)).toEqual(["Final answer."]);
+  });
+
   it("deduplicates final payloads against directly sent block keys regardless of replyToId", async () => {
     // When block streaming is not active but directlySentBlockKeys has entries
     // (e.g. from pre-tool flush), the key should match even if replyToId differs.

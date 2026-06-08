@@ -23,6 +23,7 @@ export function createBlockReplyCoalescer(params: {
   let bufferText = "";
   let bufferReplyToId: ReplyPayload["replyToId"];
   let bufferAudioAsVoice: ReplyPayload["audioAsVoice"];
+  let bufferSourcePreview = false;
   let idleTimer: NodeJS.Timeout | undefined;
 
   const clearIdleTimer = () => {
@@ -37,7 +38,38 @@ export function createBlockReplyCoalescer(params: {
     bufferText = "";
     bufferReplyToId = undefined;
     bufferAudioAsVoice = undefined;
+    bufferSourcePreview = false;
   };
+
+  const hasOpenClawSourcePreviewMarker = (payload: ReplyPayload): boolean => {
+    const openclaw =
+      payload.channelData &&
+      typeof payload.channelData === "object" &&
+      !Array.isArray(payload.channelData)
+        ? payload.channelData.openclaw
+        : undefined;
+    return (
+      openclaw != null &&
+      typeof openclaw === "object" &&
+      !Array.isArray(openclaw) &&
+      (openclaw as { sourcePreview?: unknown }).sourcePreview === true
+    );
+  };
+
+  const buildBufferedPayload = (): ReplyPayload => ({
+    text: bufferText,
+    replyToId: bufferReplyToId,
+    audioAsVoice: bufferAudioAsVoice,
+    ...(bufferSourcePreview
+      ? {
+          channelData: {
+            openclaw: {
+              sourcePreview: true,
+            },
+          },
+        }
+      : {}),
+  });
 
   const scheduleIdleFlush = () => {
     if (idleMs <= 0) {
@@ -62,11 +94,7 @@ export function createBlockReplyCoalescer(params: {
       scheduleIdleFlush();
       return;
     }
-    const payload: ReplyPayload = {
-      text: bufferText,
-      replyToId: bufferReplyToId,
-      audioAsVoice: bufferAudioAsVoice,
-    };
+    const payload = buildBufferedPayload();
     resetBuffer();
     await onFlush(payload);
   };
@@ -78,6 +106,7 @@ export function createBlockReplyCoalescer(params: {
     const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
     const text = payload.text ?? "";
     const hasText = text.trim().length > 0;
+    const sourcePreview = hasOpenClawSourcePreviewMarker(payload);
     if (hasMedia) {
       void flush({ force: true });
       void onFlush(payload);
@@ -95,6 +124,7 @@ export function createBlockReplyCoalescer(params: {
       }
       bufferReplyToId = payload.replyToId;
       bufferAudioAsVoice = payload.audioAsVoice;
+      bufferSourcePreview = sourcePreview;
       bufferText = text;
       void flush({ force: true });
       return;
@@ -105,13 +135,19 @@ export function createBlockReplyCoalescer(params: {
       payload.replyToId &&
       (!bufferReplyToId || bufferReplyToId !== payload.replyToId),
     );
-    if (bufferText && (replyToConflict || bufferAudioAsVoice !== payload.audioAsVoice)) {
+    if (
+      bufferText &&
+      (replyToConflict ||
+        bufferAudioAsVoice !== payload.audioAsVoice ||
+        bufferSourcePreview !== sourcePreview)
+    ) {
       void flush({ force: true });
     }
 
     if (!bufferText) {
       bufferReplyToId = payload.replyToId;
       bufferAudioAsVoice = payload.audioAsVoice;
+      bufferSourcePreview = sourcePreview;
     }
 
     const nextText = bufferText ? `${bufferText}${joiner}${text}` : text;
@@ -120,6 +156,7 @@ export function createBlockReplyCoalescer(params: {
         void flush({ force: true });
         bufferReplyToId = payload.replyToId;
         bufferAudioAsVoice = payload.audioAsVoice;
+        bufferSourcePreview = sourcePreview;
         if (text.length >= maxChars) {
           void onFlush(payload);
           return;

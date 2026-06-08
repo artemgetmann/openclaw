@@ -53,6 +53,31 @@ type ResolvedAssistantErrorState = {
   normalizedErrorText: string | null;
 };
 
+function resolveRawAnswerTexts(params: {
+  assistantTexts: string[];
+  lastAssistant: AssistantMessage | undefined;
+  suppressAssistantArtifacts: boolean;
+}): string[] {
+  if (params.suppressAssistantArtifacts) {
+    return [];
+  }
+  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  if (!params.assistantTexts.length) {
+    return fallbackAnswerText ? [fallbackAnswerText] : [];
+  }
+  if (params.lastAssistant?.stopReason !== "stop" || !fallbackAnswerText.trim()) {
+    return params.assistantTexts;
+  }
+  const normalizedFallback = normalizeTextForComparison(fallbackAnswerText);
+  const alreadyCaptured =
+    normalizedFallback.length > 0 &&
+    params.assistantTexts.some((text) => normalizeTextForComparison(text) === normalizedFallback);
+  // Earlier streamed/tool-adjacent snippets can populate assistantTexts before
+  // the provider emits the final_answer message. Keep that real stopped final
+  // instead of letting progress or screenshot captions hide it.
+  return alreadyCaptured ? params.assistantTexts : [...params.assistantTexts, fallbackAnswerText];
+}
+
 const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "required",
   "missing",
@@ -138,14 +163,11 @@ export function buildEmbeddedRunPayloads(params: {
 
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
-  const rawAnswerTexts = suppressAssistantArtifacts
-    ? []
-    : params.assistantTexts.length
-      ? params.assistantTexts
-      : fallbackAnswerText
-        ? [fallbackAnswerText]
-        : [];
+  const rawAnswerTexts = resolveRawAnswerTexts({
+    assistantTexts: params.assistantTexts,
+    lastAssistant: params.lastAssistant,
+    suppressAssistantArtifacts,
+  });
   const activeErrorAssistant = resolveEmbeddedRunPayloadErrorAssistant(params);
   const activeErrorState = resolveAssistantErrorState(activeErrorAssistant, params);
   const shouldSuppressRawErrorText = createRawErrorSuppressor(activeErrorState);
@@ -337,12 +359,11 @@ export function resolveEmbeddedRunPayloadErrorAssistant(params: {
   if (params.lastAssistant?.stopReason === "error") {
     return params.lastAssistant;
   }
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
-  const rawAnswerTexts = params.assistantTexts.length
-    ? params.assistantTexts
-    : fallbackAnswerText
-      ? [fallbackAnswerText]
-      : [];
+  const rawAnswerTexts = resolveRawAnswerTexts({
+    assistantTexts: params.assistantTexts,
+    lastAssistant: params.lastAssistant,
+    suppressAssistantArtifacts,
+  });
   const priorErroredAssistant =
     params.lastErroredAssistant?.stopReason === "error" ? params.lastErroredAssistant : undefined;
   if (!priorErroredAssistant) {

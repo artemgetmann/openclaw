@@ -24,6 +24,49 @@ function hasPayloadMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 }
 
+function hasOpenClawSourcePreviewMarker(payload: ReplyPayload): boolean {
+  const channelData = payload.channelData;
+  const openclaw =
+    channelData && typeof channelData === "object" && !Array.isArray(channelData)
+      ? channelData.openclaw
+      : undefined;
+
+  // Source previews are working-status payloads for transient channel previews.
+  // The marker, not the text content, defines the contract; finalization must
+  // never upgrade these payloads into durable replies.
+  return (
+    openclaw != null &&
+    typeof openclaw === "object" &&
+    !Array.isArray(openclaw) &&
+    (openclaw as { sourcePreview?: unknown }).sourcePreview === true
+  );
+}
+
+function isTextOnlyDurableFinalPayload(payload: ReplyPayload): boolean {
+  return (
+    typeof payload.text === "string" &&
+    payload.text.trim().length > 0 &&
+    !hasPayloadMedia(payload) &&
+    !payload.interactive &&
+    !payload.btw &&
+    !payload.isError
+  );
+}
+
+function keepLastTextOnlyFinalPayload(payloads: ReplyPayload[]): ReplyPayload[] {
+  const lastTextOnlyIndex = payloads.findLastIndex(isTextOnlyDurableFinalPayload);
+  if (lastTextOnlyIndex < 0) {
+    return payloads;
+  }
+
+  // Telegram progress-preview runs can leave several model-authored status
+  // snapshots in the final payload array. Only the last text final is product
+  // output; earlier text-only finals are progress and must not become durable.
+  return payloads.filter(
+    (payload, index) => !isTextOnlyDurableFinalPayload(payload) || index === lastTextOnlyIndex,
+  );
+}
+
 async function normalizeReplyPayloadMedia(params: {
   payload: ReplyPayload;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
@@ -107,6 +150,7 @@ export async function buildReplyPayloads(params: {
   messagingToolSentTargets?: Parameters<
     typeof shouldSuppressMessagingToolReplies
   >[0]["messagingToolSentTargets"];
+  preserveFinalPayloadsAfterBlockStreaming?: boolean;
   originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
   accountId?: string;
@@ -162,6 +206,7 @@ export async function buildReplyPayloads(params: {
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
   const shouldDropFinalPayloads =
+    !params.preserveFinalPayloadsAfterBlockStreaming &&
     params.blockStreamingEnabled &&
     Boolean(params.blockReplyPipeline?.didStream()) &&
     !params.blockReplyPipeline?.isAborted();
@@ -204,18 +249,24 @@ export async function buildReplyPayloads(params: {
         sentMediaUrls: messagingToolSentMediaUrls,
       })
     : dedupedPayloads;
+  const durablePayloads = mediaFilteredPayloads.filter(
+    (payload) => !hasOpenClawSourcePreviewMarker(payload),
+  );
+  const preservedFinalPayloads = params.preserveFinalPayloadsAfterBlockStreaming
+    ? keepLastTextOnlyFinalPayload(durablePayloads)
+    : durablePayloads;
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads
     ? []
     : params.blockStreamingEnabled
-      ? mediaFilteredPayloads.filter(
+      ? preservedFinalPayloads.filter(
           (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
         )
       : params.directlySentBlockKeys?.size
-        ? mediaFilteredPayloads.filter(
+        ? preservedFinalPayloads.filter(
             (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
           )
-        : mediaFilteredPayloads;
+        : preservedFinalPayloads;
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
 
   return {

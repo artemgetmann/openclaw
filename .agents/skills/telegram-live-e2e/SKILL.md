@@ -25,6 +25,9 @@ Do not skip the preflight.
 2. `scripts/telegram-e2e/README.md`
 3. `docs/agent-guides/runtime-ops.md` when the shared gateway or LaunchAgent is involved
 
+When progress/status/final/TTS behavior is under test, also read
+`docs/agent-guides/telegram-progress-proof.md` before running live proof.
+
 ## Mandatory preflight
 
 Before trusting any Telegram result, print:

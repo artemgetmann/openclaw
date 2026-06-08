@@ -754,6 +754,102 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("skips TTS for source-preview tool progress while preserving final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({
+        text: "Reading source…",
+        channelData: {
+          openclaw: {
+            sourcePreview: true,
+          },
+        },
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "done" },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "done",
+        mediaUrl: "https://example.com/tts-synth.opus",
+      }),
+    );
+  });
+
+  it("skips TTS for source-preview block progress while preserving one final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({
+        text: "PROGRESS_DO_NOT_VOICE",
+        channelData: {
+          openclaw: {
+            sourcePreview: true,
+          },
+        },
+      });
+      return { text: "FINAL_ONLY_VOICE" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "FINAL_ONLY_VOICE" },
+      }),
+    );
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({
+      text: "PROGRESS_DO_NOT_VOICE",
+      channelData: {
+        openclaw: {
+          sourcePreview: true,
+        },
+      },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "FINAL_ONLY_VOICE",
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
   it("suppresses direct Telegram text-session tool summaries when verbose is off", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -1279,7 +1375,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("keeps accumulated block text on synthetic TTS finals", async () => {
+  it("does not synthesize final TTS from block-only progress text", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
     const cfg = emptyConfig;
@@ -1299,16 +1395,22 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: "PROGRESS visible answer",
-        mediaUrl: "https://example.com/tts-synth.opus",
-        audioAsVoice: true,
+        kind: "block",
+        payload: { text: "PROGRESS visible answer" },
       }),
     );
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "PROGRESS visible answer" },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("keeps ACP accumulated block text on synthetic TTS finals", async () => {
+  it("does not synthesize ACP final TTS from accumulated block text", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
     const runtime = createAcpRuntime([
@@ -1352,13 +1454,13 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
 
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        text: "FINAL visible answer",
-        mediaUrl: "https://example.com/tts-synth.opus",
-        audioAsVoice: true,
+        kind: "final",
+        payload: { text: "FINAL visible answer" },
       }),
     );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {
@@ -1906,7 +2008,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("generates final-mode TTS audio after ACP block streaming completes", async () => {
+  it("does not generate final-mode TTS audio from ACP block streaming alone", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
     const runtime = createAcpRuntime([
@@ -1950,10 +2052,13 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
 
-    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
-    expect(finalPayload?.text).toBe("Hello from ACP streaming.");
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "Hello from ACP streaming." },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("routes ACP block output to originating channel without parent dispatcher duplicates", async () => {

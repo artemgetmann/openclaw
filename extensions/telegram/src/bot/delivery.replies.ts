@@ -260,6 +260,7 @@ async function deliverMediaReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  voiceFallbackTextAlreadySent?: boolean;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   let first = true;
@@ -294,7 +295,7 @@ async function deliverMediaReply(params: {
     });
     const shouldAttachButtonsToMedia = isFirstMedia && params.replyMarkup && !followUpText;
     const mediaParams: Record<string, unknown> = {
-      caption: htmlCaption,
+      ...(htmlCaption ? { caption: htmlCaption } : {}),
       ...(htmlCaption ? { parse_mode: "HTML" } : {}),
       ...(shouldAttachButtonsToMedia ? { reply_markup: params.replyMarkup } : {}),
       ...buildTelegramSendParams({
@@ -378,6 +379,12 @@ async function deliverMediaReply(params: {
           if (isVoiceMessagesForbidden(voiceErr)) {
             const fallbackText = params.reply.text;
             if (!fallbackText || !fallbackText.trim()) {
+              if (params.voiceFallbackTextAlreadySent) {
+                logVerbose(
+                  "telegram sendVoice forbidden after visible text was already delivered; skipping voice supplement",
+                );
+                continue;
+              }
               throw voiceErr;
             }
             logVerbose(
@@ -676,7 +683,34 @@ export async function deliverReplies(params: {
           progress,
         });
       } else {
-        firstDeliveredMessageId = await deliverMediaReply({
+        const shouldSplitVoiceSupplement =
+          reply.audioAsVoice === true &&
+          typeof reply.text === "string" &&
+          reply.text.trim().length > 0;
+        if (shouldSplitVoiceSupplement) {
+          // TTS voice is a supplement to the durable final text, not a second
+          // visible copy of that final as a media caption. Send the text first,
+          // then send the voice/audio payload without caption text.
+          firstDeliveredMessageId = await deliverTextReply({
+            bot: params.bot,
+            chatId: params.chatId,
+            runtime: params.runtime,
+            thread: params.thread,
+            chunkText,
+            replyText: reply.text || "",
+            replyMarkup,
+            replyQuoteMessageId: params.replyQuoteMessageId,
+            replyQuoteText: params.replyQuoteText,
+            replyQuotePosition: params.replyQuotePosition,
+            replyQuoteEntities: params.replyQuoteEntities,
+            linkPreview: params.linkPreview,
+            replyToId,
+            replyToMode: params.replyToMode,
+            progress,
+          });
+          reply = { ...reply, text: undefined };
+        }
+        const mediaMessageId = await deliverMediaReply({
           reply,
           mediaList,
           bot: params.bot,
@@ -696,7 +730,9 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          voiceFallbackTextAlreadySent: shouldSplitVoiceSupplement,
         });
+        firstDeliveredMessageId ??= mediaMessageId;
       }
       await maybePinFirstDeliveredMessage({
         shouldPin: shouldPinFirstMessage,
