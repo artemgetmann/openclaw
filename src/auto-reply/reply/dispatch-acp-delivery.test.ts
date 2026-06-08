@@ -8,12 +8,25 @@ const routeMocks = vi.hoisted(() => ({
   routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
 }));
 
-const ttsMocks = vi.hoisted(() => ({
-  maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
-    const params = paramsUnknown as { payload: unknown };
-    return params.payload;
-  }),
-}));
+const ttsMocks = vi.hoisted(() => {
+  const state = {
+    synthesizeFinalAudio: false,
+  };
+  return {
+    state,
+    maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { kind?: string; payload: Record<string, unknown> };
+      if (state.synthesizeFinalAudio && params.kind === "final") {
+        return {
+          ...params.payload,
+          mediaUrl: "https://example.com/final-tts.opus",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    }),
+  };
+});
 
 vi.mock("./route-reply.js", () => ({
   routeReply: (params: unknown) => routeMocks.routeReply(params),
@@ -67,6 +80,7 @@ function createCoordinator(params?: {
 describe("createAcpDispatchDeliveryCoordinator", () => {
   beforeEach(() => {
     routeMocks.routeReply.mockClear();
+    ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
   });
 
@@ -195,5 +209,25 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       channelData: sourcePreview,
     });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final answer." });
+  });
+
+  it("delivers synthesized final TTS as a media-only supplement", async () => {
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const { coordinator, dispatcher } = createCoordinator();
+
+    await coordinator.deliverFinalTtsSupplement("Final answer already visible.");
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "Final answer already visible." },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: undefined,
+      mediaUrl: "https://example.com/final-tts.opus",
+      audioAsVoice: true,
+    });
   });
 });

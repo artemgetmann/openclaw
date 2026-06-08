@@ -279,6 +279,10 @@ export async function dispatchReplyFromConfig(params: {
     ctx.MessageThreadId ?? parseSessionThreadInfo(acpDispatchSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
+  // Voice-in should get voice-out for this turn only. Keep explicit `/tts on`
+  // as-is, but let inbound audio override typed-message modes like `off` or
+  // `tagged` without writing a new preference.
+  const turnTtsAuto = inboundAudio && sessionTtsAuto !== "always" ? "inbound" : sessionTtsAuto;
   const hookRunner = getGlobalHookRunner();
 
   // Extract message context for hooks (plugin and internal)
@@ -598,7 +602,7 @@ export async function dispatchReplyFromConfig(params: {
       dispatcher,
       sessionKey: acpDispatchSessionKey,
       inboundAudio,
-      sessionTtsAuto,
+      sessionTtsAuto: turnTtsAuto,
       ttsChannel,
       shouldRouteToOriginating,
       originatingChannel,
@@ -678,7 +682,7 @@ export async function dispatchReplyFromConfig(params: {
                   channel: ttsChannel,
                   kind: "tool",
                   inboundAudio,
-                  ttsAuto: sessionTtsAuto,
+                  ttsAuto: turnTtsAuto,
                 });
             const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
             if (!deliveryPayload) {
@@ -708,7 +712,7 @@ export async function dispatchReplyFromConfig(params: {
                   channel: ttsChannel,
                   kind: "block",
                   inboundAudio,
-                  ttsAuto: sessionTtsAuto,
+                  ttsAuto: turnTtsAuto,
                 });
             if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
               return;
@@ -739,7 +743,7 @@ export async function dispatchReplyFromConfig(params: {
         dispatcher,
         sessionKey: acpDispatchSessionKey,
         inboundAudio,
-        sessionTtsAuto,
+        sessionTtsAuto: turnTtsAuto,
         ttsChannel,
         shouldRouteToOriginating,
         originatingChannel,
@@ -771,7 +775,7 @@ export async function dispatchReplyFromConfig(params: {
         channel: ttsChannel,
         kind: "final",
         inboundAudio,
-        ttsAuto: sessionTtsAuto,
+        ttsAuto: turnTtsAuto,
       });
       if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         continue;

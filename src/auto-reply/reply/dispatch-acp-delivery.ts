@@ -80,6 +80,7 @@ export type AcpDispatchDeliveryCoordinator = {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ) => Promise<boolean>;
+  deliverFinalTtsSupplement: (text: string) => Promise<boolean>;
   getBlockCount: () => number;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
@@ -134,6 +135,55 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return params.dispatcher.sendBlockReply(payload);
     }
     return params.dispatcher.sendFinalReply(payload);
+  };
+
+  const deliverPreparedPayload = async (
+    kind: ReplyDispatchKind,
+    payload: ReplyPayload,
+    meta?: AcpDispatchDeliveryMeta,
+  ): Promise<boolean> => {
+    if (shouldUseSourceDispatcherForTelegram()) {
+      return deliverViaDispatcher(kind, payload);
+    }
+
+    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
+      const toolCallId = meta?.toolCallId?.trim();
+      if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
+        const edited = await tryEditToolMessage(payload, toolCallId);
+        if (edited) {
+          return true;
+        }
+      }
+
+      const result = await routeReply({
+        payload,
+        channel: params.originatingChannel,
+        to: params.originatingTo,
+        sessionKey: params.ctx.SessionKey,
+        accountId: params.ctx.AccountId,
+        threadId: params.ctx.MessageThreadId,
+        cfg: params.cfg,
+      });
+      if (!result.ok) {
+        logVerbose(
+          `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
+        );
+        return false;
+      }
+      if (kind === "tool" && meta?.toolCallId && result.messageId) {
+        state.toolMessageByCallId.set(meta.toolCallId, {
+          channel: params.originatingChannel,
+          accountId: params.ctx.AccountId,
+          to: params.originatingTo,
+          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          messageId: result.messageId,
+        });
+      }
+      state.routedCounts[kind] += 1;
+      return true;
+    }
+
+    return deliverViaDispatcher(kind, payload);
   };
 
   const tryEditToolMessage = async (
@@ -206,53 +256,39 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           ttsAuto: params.sessionTtsAuto,
         });
 
-    if (shouldUseSourceDispatcherForTelegram()) {
-      return deliverViaDispatcher(kind, ttsPayload);
+    return deliverPreparedPayload(kind, ttsPayload, meta);
+  };
+
+  const deliverFinalTtsSupplement = async (text: string): Promise<boolean> => {
+    const finalText = text.trim();
+    if (!finalText) {
+      return false;
+    }
+    const ttsPayload = await maybeApplyTtsToPayload({
+      payload: { text: finalText },
+      cfg: params.cfg,
+      channel: params.ttsChannel,
+      kind: "final",
+      inboundAudio: params.inboundAudio,
+      ttsAuto: params.sessionTtsAuto,
+    });
+    if (!ttsPayload.mediaUrl && !(ttsPayload.mediaUrls?.length ?? 0)) {
+      return false;
     }
 
-    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
-      const toolCallId = meta?.toolCallId?.trim();
-      if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
-        const edited = await tryEditToolMessage(ttsPayload, toolCallId);
-        if (edited) {
-          return true;
-        }
-      }
-
-      const result = await routeReply({
-        payload: ttsPayload,
-        channel: params.originatingChannel,
-        to: params.originatingTo,
-        sessionKey: params.ctx.SessionKey,
-        accountId: params.ctx.AccountId,
-        threadId: params.ctx.MessageThreadId,
-        cfg: params.cfg,
-      });
-      if (!result.ok) {
-        logVerbose(
-          `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
-        );
-        return false;
-      }
-      if (kind === "tool" && meta?.toolCallId && result.messageId) {
-        state.toolMessageByCallId.set(meta.toolCallId, {
-          channel: params.originatingChannel,
-          accountId: params.ctx.AccountId,
-          to: params.originatingTo,
-          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
-          messageId: result.messageId,
-        });
-      }
-      state.routedCounts[kind] += 1;
-      return true;
-    }
-
-    return deliverViaDispatcher(kind, ttsPayload);
+    // The ACP block path has already made the final text visible. Send only
+    // the generated media here so TTS remains additive instead of duplicating
+    // the visible answer as a second final text/caption.
+    return deliverPreparedPayload("final", {
+      ...ttsPayload,
+      text: undefined,
+    });
   };
 
   return {
     startReplyLifecycle: startReplyLifecycleOnce,
     deliver,
+    deliverFinalTtsSupplement,
     getBlockCount: () => state.blockCount,
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
