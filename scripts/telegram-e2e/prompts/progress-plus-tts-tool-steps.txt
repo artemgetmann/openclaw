@@ -1,0 +1,21 @@
+Run marker: {{marker}}
+
+Do a deterministic progress-and-final check:
+
+1. Use the message tool with action `send` and no target/channel fields to send
+   this exact progress update to the current Telegram chat:
+   `progress 1: inspecting working directory`
+2. Inspect the current working directory path.
+3. Wait for about 8 seconds.
+4. Use the message tool with action `send` and no target/channel fields to send
+   this exact progress update to the current Telegram chat:
+   `progress 2: inspecting UTC date`
+5. Inspect the current UTC date.
+
+Those two message-tool sends are progress updates, not final answers. After the
+checks, send one final answer with exactly this shape:
+
+Marker: {{marker}}
+Directory: <working directory path>
+UTC date: <YYYY-MM-DD>
+Done.

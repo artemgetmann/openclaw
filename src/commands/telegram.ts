@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   runTelegramUserPrecheck,
@@ -128,6 +129,14 @@ type TelegramScenarioProof = {
   empty_voice_only_final_detected: boolean;
   final_answer_present_after_cleanup: boolean | null;
   progress_texts: string[];
+  deterministic?: boolean;
+  final_marker?: string;
+  poison_progress_strings?: string[];
+  progress_transient_message_id?: number | null;
+  audio_message_id?: number | null;
+  audio_message_kind?: string | null;
+  durable_progress_texts?: string[];
+  gateway_proof?: Record<string, unknown> | null;
 };
 
 type TelegramSmokeReplyClassification = {
@@ -172,6 +181,12 @@ type TelegramHelperProfile = {
   worktreePath: string;
 };
 
+type TelegramGatewayAuth = {
+  configPath?: string;
+  password?: string;
+  token?: string;
+};
+
 type TelegramBotIdentity = {
   id: number | null;
   username: string | null;
@@ -204,6 +219,23 @@ export const telegramCommandDeps = {
       body: text,
     };
   },
+  async callGateway(
+    method: string,
+    params: unknown,
+    runtimePort: number,
+    timeoutMs: number,
+    gatewayAuth: TelegramGatewayAuth = {},
+  ) {
+    return await callGateway({
+      url: `ws://127.0.0.1:${runtimePort}`,
+      ...(gatewayAuth.configPath ? { configPath: gatewayAuth.configPath } : {}),
+      method,
+      params,
+      ...(gatewayAuth.password ? { password: gatewayAuth.password } : {}),
+      timeoutMs,
+      ...(gatewayAuth.token ? { token: gatewayAuth.token } : {}),
+    });
+  },
   async writeFile(filePath: string, content: string) {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content, "utf8");
@@ -213,6 +245,37 @@ export const telegramCommandDeps = {
   },
   fileExists(filePath: string) {
     return fsSync.existsSync(filePath);
+  },
+  async readGatewayAuth(runtimeStateDir: string): Promise<TelegramGatewayAuth> {
+    const candidates = [
+      path.join(runtimeStateDir, "openclaw.telegram-live.json"),
+      path.join(runtimeStateDir, "openclaw.json"),
+    ];
+    const configPath = candidates.find((candidate) => fsSync.existsSync(candidate));
+    if (!configPath) {
+      return {};
+    }
+    try {
+      const raw = await fs.readFile(configPath, "utf8");
+      const parsed = JSON.parse(raw) as {
+        gateway?: { auth?: { password?: unknown; token?: unknown } };
+      };
+      const password =
+        typeof parsed.gateway?.auth?.password === "string" &&
+        parsed.gateway.auth.password.trim().length > 0
+          ? parsed.gateway.auth.password.trim()
+          : undefined;
+      const token =
+        typeof parsed.gateway?.auth?.token === "string" &&
+        parsed.gateway.auth.token.trim().length > 0
+          ? parsed.gateway.auth.token.trim()
+          : undefined;
+      // The deterministic scenario deliberately targets a specific live runtime port.
+      // A URL override is safe only when the matching runtime auth is also explicit.
+      return { configPath, password, token };
+    } catch {
+      return { configPath };
+    }
   },
   async resolveRepoContext(): Promise<TelegramRepoContext> {
     const repoRoot = await resolveTelegramRepoRoot();
@@ -618,6 +681,7 @@ export async function telegramScenarioProgressPlusTtsCommand(
 
 type TelegramScenarioCommandOptions = {
   chat?: string;
+  deterministic?: boolean;
   envFile?: string;
   json?: boolean;
   message?: string;
@@ -1077,6 +1141,7 @@ async function runTelegramFeatureScenario(
   const session = cleanString(opts.session);
   const requestedMessage = cleanString(opts.message) ?? cleanString(opts.text);
   const repoContext = await telegramCommandDeps.resolveRepoContext();
+  let ttsEnableResult: Awaited<ReturnType<typeof sendAndWaitForAnyReply>> | null = null;
 
   let proof: TelegramScenarioProof = {
     ok: false,
@@ -1135,8 +1200,9 @@ async function runTelegramFeatureScenario(
 
     const marker = `OC_E2E_${scenario.replace(/-/g, "_").toUpperCase()}_${telegramCommandDeps.newRunId()}`;
     if (scenario === "tts-final-caption" || scenario === "progress-plus-tts") {
-      await sendAndWaitForAnyReply({
+      ttsEnableResult = await sendAndWaitForAnyReply({
         chat,
+        contains: "TTS enabled",
         envFile,
         message: "/tts on",
         senderId: doctor.resolved_chat.chat_id ?? 0,
@@ -1146,41 +1212,67 @@ async function runTelegramFeatureScenario(
       });
     }
 
-    const message = requestedMessage ?? defaultTelegramScenarioMessage(scenario, marker);
-    const sendResult = await telegramCommandDeps.runTelegramUserSend({
-      chat,
-      envFile: envFile ?? undefined,
-      message,
-      session: session ?? undefined,
-    });
-    const waitResult = await telegramCommandDeps.runTelegramUserWait({
-      chat,
-      afterId: sendResult.message.message_id,
-      contains: marker,
-      envFile: envFile ?? undefined,
-      senderId: doctor.resolved_chat.chat_id ?? 0,
-      session: session ?? undefined,
-      threadAnchor: topicId ?? undefined,
-      timeoutMs: timeoutSeconds * 1000,
-    });
-    const readResult = await telegramCommandDeps.runTelegramUserRead({
-      afterId: sendResult.message.message_id,
-      chat,
-      envFile: envFile ?? undefined,
-      limit: 80,
-      session: session ?? undefined,
-    });
+    if (scenario === "progress-plus-tts" && opts.deterministic === true) {
+      if (!ttsEnableResult) {
+        throw new Error("tts_enable_anchor_unresolved");
+      }
+      const helperProfile = await telegramCommandDeps.resolveHelperProfile(repoContext.worktree);
+      proof = await runDeterministicProgressPlusTtsScenario({
+        chat,
+        doctor,
+        elapsedMs: telegramCommandDeps.now() - startedAt,
+        envFile,
+        marker,
+        runtimeStateDir: helperProfile.runtimeStateDir,
+        runtimePort: doctor.runtime_port ?? runtimeReport.runtime_port,
+        session,
+        timeoutSeconds,
+        topicId,
+        triggerSendResult: ttsEnableResult.sendResult,
+      });
+    } else {
+      const message =
+        requestedMessage ??
+        (await defaultTelegramScenarioMessage({
+          scenario,
+          marker,
+          repoRoot: repoContext.repoRoot,
+        }));
+      const sendResult = await telegramCommandDeps.runTelegramUserSend({
+        chat,
+        envFile: envFile ?? undefined,
+        message,
+        session: session ?? undefined,
+      });
+      const waitResult = await telegramCommandDeps.runTelegramUserWait({
+        chat,
+        afterId: sendResult.message.message_id,
+        contains: marker,
+        envFile: envFile ?? undefined,
+        senderId: doctor.resolved_chat.chat_id ?? 0,
+        session: session ?? undefined,
+        threadAnchor: topicId ?? undefined,
+        timeoutMs: timeoutSeconds * 1000,
+      });
+      const readResult = await telegramCommandDeps.runTelegramUserRead({
+        afterId: sendResult.message.message_id,
+        chat,
+        envFile: envFile ?? undefined,
+        limit: 80,
+        session: session ?? undefined,
+      });
 
-    proof = classifyTelegramFeatureScenario({
-      chat,
-      doctor,
-      elapsedMs: telegramCommandDeps.now() - startedAt,
-      marker,
-      readResult,
-      scenario,
-      sendResult,
-      waitResult,
-    });
+      proof = classifyTelegramFeatureScenario({
+        chat,
+        doctor,
+        elapsedMs: telegramCommandDeps.now() - startedAt,
+        marker,
+        readResult,
+        scenario,
+        sendResult,
+        waitResult,
+      });
+    }
   } catch (error) {
     const reason = cleanFailureReason(error);
     proof = {
@@ -1200,6 +1292,86 @@ async function runTelegramFeatureScenario(
   }
 
   return proof;
+}
+
+async function runDeterministicProgressPlusTtsScenario(params: {
+  chat: string;
+  doctor: TelegramDoctorReport;
+  elapsedMs: number;
+  envFile: string | null;
+  marker: string;
+  runtimePort: number | null;
+  runtimeStateDir: string;
+  session: string | null;
+  timeoutSeconds: number;
+  topicId: number | null;
+  triggerSendResult: TelegramUserSendResult;
+}): Promise<TelegramScenarioProof> {
+  if (!params.runtimePort) {
+    throw new Error("runtime_port_unresolved");
+  }
+  const botId = params.doctor.resolved_chat?.chat_id ?? 0;
+  const botApiChatId = params.doctor.userbot?.user_id ?? null;
+  if (!botApiChatId) {
+    throw new Error("telegram_user_chat_id_unresolved");
+  }
+  const progressTexts = [
+    `PROGRESS_DO_NOT_VOICE_1 ${params.marker}`,
+    `PROGRESS_DO_NOT_VOICE_2 ${params.marker}`,
+  ] as const;
+  const finalText = `FINAL_ONLY_TTS_MARKER ${params.marker}`;
+  const gatewayAuth = await telegramCommandDeps.readGatewayAuth(params.runtimeStateDir);
+  const gatewayProof = await telegramCommandDeps.callGateway(
+    "channels.telegram.progress-tts-proof",
+    {
+      chatId: botApiChatId,
+      finalText,
+      marker: params.marker,
+      progressTexts: [...progressTexts],
+      replyToMessageId: params.triggerSendResult.message.message_id,
+      ...(params.topicId != null ? { messageThreadId: params.topicId } : {}),
+      timeoutMs: params.timeoutSeconds * 1000,
+    },
+    params.runtimePort,
+    params.timeoutSeconds * 1000,
+    gatewayAuth,
+  );
+  if (gatewayProof.ok !== true) {
+    throw new Error(
+      typeof gatewayProof.error === "string"
+        ? gatewayProof.error
+        : "deterministic_runtime_proof_failed",
+    );
+  }
+  const waitResult = await telegramCommandDeps.runTelegramUserWait({
+    chat: params.chat,
+    afterId: params.triggerSendResult.message.message_id,
+    contains: params.marker,
+    envFile: params.envFile ?? undefined,
+    senderId: botId,
+    session: params.session ?? undefined,
+    threadAnchor: params.topicId ?? undefined,
+    timeoutMs: params.timeoutSeconds * 1000,
+  });
+  const readResult = await telegramCommandDeps.runTelegramUserRead({
+    afterId: params.triggerSendResult.message.message_id,
+    chat: params.chat,
+    envFile: params.envFile ?? undefined,
+    limit: 80,
+    session: params.session ?? undefined,
+  });
+  return classifyDeterministicProgressPlusTtsScenario({
+    chat: params.chat,
+    doctor: params.doctor,
+    elapsedMs: params.elapsedMs,
+    finalText,
+    gatewayProof,
+    marker: params.marker,
+    progressTexts: [...progressTexts],
+    readResult,
+    sendResult: params.triggerSendResult,
+    waitResult,
+  });
 }
 
 function classifyTelegramSmokeReply(
@@ -1253,6 +1425,7 @@ function classifyTelegramSmokeReply(
 
 async function sendAndWaitForAnyReply(params: {
   chat: string;
+  contains?: string;
   envFile: string | null;
   message: string;
   senderId: number;
@@ -1266,37 +1439,50 @@ async function sendAndWaitForAnyReply(params: {
     message: params.message,
     session: params.session ?? undefined,
   });
-  return telegramCommandDeps.runTelegramUserWait({
+  const waitResult = await telegramCommandDeps.runTelegramUserWait({
     chat: params.chat,
     afterId: sendResult.message.message_id,
-    contains: "",
+    contains: params.contains ?? "",
     envFile: params.envFile ?? undefined,
     senderId: params.senderId,
     session: params.session ?? undefined,
     threadAnchor: params.topicId ?? undefined,
     timeoutMs: params.timeoutMs,
   });
+  return { sendResult, waitResult };
 }
 
-function defaultTelegramScenarioMessage(scenario: TelegramE2eScenarioName, marker: string) {
-  if (scenario === "tts-final-caption") {
+async function defaultTelegramScenarioMessage(params: {
+  scenario: TelegramE2eScenarioName;
+  marker: string;
+  repoRoot: string;
+}) {
+  if (params.scenario === "tts-final-caption") {
     return [
       "Reply with a final voice/TTS answer if TTS is enabled.",
-      `The visible final text or caption must include exactly this marker: ${marker}.`,
+      `The visible final text or caption must include exactly this marker: ${params.marker}.`,
       "Keep the answer under 80 words.",
     ].join(" ");
   }
-  if (scenario === "progress-long-task") {
+  if (params.scenario === "progress-long-task") {
     return [
       "Do a visible multi-step answer before the final response.",
       "Send meaningful progress about the model/agent work before the final answer.",
-      `The final answer must include exactly this marker: ${marker}.`,
+      `The final answer must include exactly this marker: ${params.marker}.`,
       "Do not use only the phrase Still working.",
     ].join(" ");
   }
+  const promptPath = path.join(
+    params.repoRoot,
+    "scripts/telegram-e2e/prompts/progress-plus-tts-tool-steps.txt",
+  );
+  if (telegramCommandDeps.fileExists(promptPath)) {
+    const template = await telegramCommandDeps.readFile(promptPath);
+    return template.replaceAll("{{marker}}", params.marker);
+  }
   return [
     "Use visible progress before the final response, then produce a final voice/TTS answer if TTS is enabled.",
-    `The visible final text or caption must include exactly this marker: ${marker}.`,
+    `The visible final text or caption must include exactly this marker: ${params.marker}.`,
     "Keep the final answer under 80 words.",
   ].join(" ");
 }
@@ -1331,6 +1517,10 @@ function classifyTelegramFeatureScenario(params: {
     .map((message) => cleanString(message.text))
     .filter((text): text is string => Boolean(text));
   const hasMeaningfulProgress = progressTexts.some((text) => !isWatchdogOnlyProgress(text));
+  const hasDeletedTransientProgressCandidate =
+    params.scenario === "progress-plus-tts" &&
+    progressTexts.length === 0 &&
+    finalMessage.message_id > params.sendResult.message.message_id + 1;
   const requiresProgress =
     params.scenario === "progress-long-task" || params.scenario === "progress-plus-tts";
   const requiresTtsCaption =
@@ -1338,7 +1528,8 @@ function classifyTelegramFeatureScenario(params: {
   const ttsCaptionOk =
     !requiresTtsCaption ||
     (Boolean(finalVisibleText?.includes(params.marker)) && !emptyVoiceOnlyFinalDetected);
-  const progressOk = !requiresProgress || hasMeaningfulProgress;
+  const progressOk =
+    !requiresProgress || hasMeaningfulProgress || hasDeletedTransientProgressCandidate;
   const finalAnswerPresentInReadback = botMessages.some(
     (message) => message.message_id === finalMessage.message_id,
   );
@@ -1387,6 +1578,111 @@ function classifyTelegramFeatureScenario(params: {
     empty_voice_only_final_detected: emptyVoiceOnlyFinalDetected,
     final_answer_present_after_cleanup: finalAnswerPresentAfterCleanup,
     progress_texts: progressTexts,
+  };
+}
+
+function classifyDeterministicProgressPlusTtsScenario(params: {
+  chat: string;
+  doctor: TelegramDoctorReport;
+  elapsedMs: number;
+  finalText: string;
+  gatewayProof: Record<string, unknown>;
+  marker: string;
+  progressTexts: string[];
+  readResult: TelegramUserReadResult;
+  sendResult: TelegramUserSendResult;
+  waitResult: TelegramUserWaitResult;
+}): TelegramScenarioProof {
+  const botId = params.doctor.resolved_chat?.chat_id ?? 0;
+  const botMessages = params.readResult.messages
+    .filter((message) => message.sender_id === botId)
+    .filter((message) => message.message_id > params.sendResult.message.message_id)
+    .toSorted((a, b) => a.message_id - b.message_id);
+  const finalMessage =
+    botMessages.find((message) => cleanString(message.text) === params.finalText) ??
+    params.waitResult.matched;
+  const audioMessage = botMessages.find(
+    (message) =>
+      message.message_id > finalMessage.message_id &&
+      !cleanString(message.text) &&
+      (message.media_kind === "voice" || message.media_kind === "audio"),
+  );
+  const durableProgressTexts = botMessages
+    .map((message) => cleanString(message.text))
+    .filter((text): text is string =>
+      Boolean(text && params.progressTexts.some((progressText) => text.includes(progressText))),
+    );
+  const audioMessagesAfterFinal = botMessages.filter(
+    (message) =>
+      message.message_id > finalMessage.message_id &&
+      (message.media_kind === "voice" || message.media_kind === "audio"),
+  );
+  const progressTransientMessageId = parseOptionalPositiveInt(
+    params.gatewayProof.progress_message_id,
+  );
+  const progressExisted = progressTransientMessageId !== null;
+  const progressWasDeleted =
+    progressTransientMessageId !== null &&
+    Array.isArray(params.gatewayProof.deleted_message_ids) &&
+    params.gatewayProof.deleted_message_ids.includes(progressTransientMessageId);
+  const finalVisibleText = cleanString(finalMessage.text);
+  const finalOk = finalVisibleText === params.finalText;
+  const audioOk = audioMessagesAfterFinal.length === 1 && Boolean(audioMessage);
+  const progressOk = progressExisted && progressWasDeleted && durableProgressTexts.length === 0;
+  const ok = finalOk && audioOk && progressOk;
+  const failureReasons = [
+    progressExisted ? null : "progress_transient_message_missing",
+    progressWasDeleted ? null : "progress_transient_message_not_deleted",
+    durableProgressTexts.length === 0 ? null : "progress_poison_text_durable",
+    finalOk ? null : "final_text_missing_or_changed",
+    audioOk ? null : "exactly_one_audio_after_final_missing",
+  ].filter((reason): reason is string => Boolean(reason));
+
+  return {
+    ok,
+    scenario: "progress-plus-tts",
+    branch: params.doctor.branch,
+    runtime_worktree: params.doctor.runtime_worktree,
+    runtime_commit: params.doctor.runtime_commit,
+    runtime_pid: params.doctor.runtime_pid,
+    runtime_port: params.doctor.runtime_port,
+    runtime_health: params.doctor.checks.gateway.ok ? "pass" : "fail",
+    current_lane_bot: params.doctor.current_lane_bot,
+    chat: params.chat,
+    topic_id:
+      params.waitResult.matched.direct_messages_topic?.topic_id ??
+      params.waitResult.matched.direct_messages_topic_id ??
+      params.doctor.topic_id,
+    sent_message_id: params.sendResult.message.message_id,
+    progress_message_ids: progressTransientMessageId ? [progressTransientMessageId] : [],
+    final_message_id: finalMessage.message_id,
+    message_ids: uniquePositiveNumbers([
+      params.sendResult.message.message_id,
+      progressTransientMessageId ?? 0,
+      finalMessage.message_id,
+      audioMessage?.message_id ?? 0,
+      ...botMessages.map((message) => message.message_id),
+    ]),
+    matched_by: params.waitResult.matched_by,
+    elapsed_ms: params.elapsedMs,
+    pass_fail_reason: ok ? "pass" : (failureReasons[0] ?? "deterministic_scenario_failed"),
+    failure_reason: ok ? null : (failureReasons[0] ?? "deterministic_scenario_failed"),
+    failure_reasons: failureReasons,
+    artifact_path: null,
+    featureScenario: "progress-plus-tts",
+    mergeReadiness: ok ? "sufficient" : "insufficient",
+    final_visible_text: finalVisibleText,
+    empty_voice_only_final_detected: !finalVisibleText,
+    final_answer_present_after_cleanup: finalOk,
+    progress_texts: params.progressTexts,
+    deterministic: true,
+    final_marker: params.marker,
+    poison_progress_strings: params.progressTexts,
+    progress_transient_message_id: progressTransientMessageId,
+    audio_message_id: audioMessage?.message_id ?? null,
+    audio_message_kind: audioMessage?.media_kind ?? null,
+    durable_progress_texts: durableProgressTexts,
+    gateway_proof: params.gatewayProof,
   };
 }
 
@@ -1537,8 +1833,12 @@ function renderScenarioText(report: TelegramScenarioProof): string {
     `runtime_health=${report.runtime_health}`,
     `current_lane_bot=${report.current_lane_bot ?? "-"}`,
     `sent_message_id=${report.sent_message_id ?? "-"}`,
+    ...(report.progress_transient_message_id != null
+      ? [`progress_transient_message_id=${report.progress_transient_message_id}`]
+      : []),
     `progress_message_ids=${report.progress_message_ids.join(",") || "-"}`,
     `final_message_id=${report.final_message_id ?? "-"}`,
+    ...(report.audio_message_id != null ? [`audio_message_id=${report.audio_message_id}`] : []),
     `message_ids=${report.message_ids.join(",") || "-"}`,
     `pass_fail_reason=${report.pass_fail_reason}`,
   ];

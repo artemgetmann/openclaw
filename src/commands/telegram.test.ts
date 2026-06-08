@@ -602,7 +602,7 @@ describe("telegram commands", () => {
     expect(payload.current_lane_bot).toBe("@jarvis_tester_2_bot");
   });
 
-  it("classifies progress plus TTS scenario with visible final text and retained final answer", async () => {
+  it("classifies progress plus TTS when transient progress is cleaned before final", async () => {
     const writeFile = vi.fn(async () => undefined);
     const marker = "OC_E2E_PROGRESS_PLUS_TTS_scenario";
     const runTelegramUserPrecheck = vi.fn().mockResolvedValue({
@@ -621,6 +621,162 @@ describe("telegram commands", () => {
       now: vi.fn(() => 3_000),
       probeGateway: vi.fn(async () => ({ ok: true, failureReason: null })),
       readTelegramBotToken: vi.fn(async () => "777:token"),
+      resolveBotIdentity: vi.fn(async () => ({
+        id: 777,
+        username: "jarvis_tester_1_bot",
+        name: "Jarvis",
+      })),
+      resolveHelperProfile: vi.fn(async () => ({
+        profileId: "tg-live-test",
+        runtimePort: 24567,
+        runtimeStateDir: "/tmp/state",
+        worktreePath: "/tmp/repo",
+      })),
+      resolveRepoContext: vi.fn(async () => ({
+        branch: "feature/test",
+        commit: "abc123",
+        repoRoot: "/tmp/repo",
+        worktree: "/tmp/repo",
+      })),
+      resolveRuntimeCommit: vi.fn(async () => "abc123"),
+      resolveRuntimeOwnership: vi.fn(async () => ({
+        pid: 31337,
+        worktree: "/tmp/repo",
+        command: "openclaw gateway run",
+        ownershipOk: true,
+        failureReason: null,
+      })),
+      resolveTokenClaimPaths: vi.fn(async () => ["/tmp/repo"]),
+      fileExists: vi.fn(() => true),
+      readFile: vi.fn(async () => "Prompt marker={{marker}}"),
+      runRuntimeScript: vi.fn(async () => ({
+        ok: true,
+        stdout: [
+          "branch=feature/test",
+          "runtime_worktree=/tmp/repo",
+          "runtime_pid=31337",
+          "runtime_port=24567",
+          "current_lane_bot=@jarvis_tester_1_bot",
+        ].join("\n"),
+        stderr: "",
+      })),
+      runTelegramUserPrecheck,
+      runTelegramUserRead: vi.fn(async () => ({
+        messages: [
+          {
+            chat_id: 777,
+            chat_title: null,
+            chat_username: "jarvis_tester_1_bot",
+            date: null,
+            direct_messages_topic: null,
+            direct_messages_topic_id: null,
+            message_id: 412,
+            out: false,
+            reply_to_msg_id: 410,
+            reply_to_top_id: 410,
+            sender_id: 777,
+            text: `Final voice caption with ${marker}`,
+            thread_anchor: null,
+          },
+          {
+            chat_id: 777,
+            chat_title: null,
+            chat_username: "jarvis_tester_1_bot",
+            date: null,
+            direct_messages_topic: null,
+            direct_messages_topic_id: null,
+            message_id: 413,
+            out: false,
+            reply_to_msg_id: 410,
+            reply_to_top_id: 410,
+            sender_id: 777,
+            text: "",
+            thread_anchor: null,
+          },
+        ],
+      })),
+      runTelegramUserSend,
+      runTelegramUserWait: vi
+        .fn()
+        .mockResolvedValueOnce({
+          matched: {
+            direct_messages_topic: null,
+            direct_messages_topic_id: null,
+            message_id: 402,
+            reply_to_msg_id: 401,
+            reply_to_top_id: 401,
+            sender_id: 777,
+            text: "TTS enabled.",
+          },
+          matched_by: "reply_to_msg_id",
+        })
+        .mockResolvedValueOnce({
+          matched: {
+            direct_messages_topic: null,
+            direct_messages_topic_id: null,
+            message_id: 412,
+            reply_to_msg_id: 410,
+            reply_to_top_id: 410,
+            sender_id: 777,
+            text: `Final voice caption with ${marker}`,
+          },
+          matched_by: "reply_to_msg_id",
+        }),
+      writeFile,
+    });
+
+    await telegramScenarioProgressPlusTtsCommand({ json: true }, runtime);
+
+    expect(runTelegramUserSend).toHaveBeenNthCalledWith(2, {
+      chat: "@jarvis_tester_1_bot",
+      envFile: undefined,
+      message: `Prompt marker=${marker}`,
+      session: undefined,
+    });
+    const payload = JSON.parse(
+      String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]),
+    );
+    expect(payload.ok).toBe(true);
+    expect(payload.scenario).toBe("progress-plus-tts");
+    expect(payload.progress_message_ids).toEqual([]);
+    expect(payload.final_message_id).toBe(412);
+    expect(payload.empty_voice_only_final_detected).toBe(false);
+    expect(payload.final_answer_present_after_cleanup).toBe(true);
+    expect(payload.mergeReadiness).toBe("sufficient");
+  });
+
+  it("runs deterministic progress plus TTS through the gateway proof RPC", async () => {
+    const writeFile = vi.fn(async () => undefined);
+    const marker = "OC_E2E_PROGRESS_PLUS_TTS_determ";
+    const runTelegramUserPrecheck = vi.fn().mockResolvedValue({
+      backend_meta: {},
+      chat: { chat_id: 777, peer_type: "User", username: "jarvis_tester_1_bot" },
+      session_path: "/tmp/userbot.session",
+      user: { user_id: 99, username: "artem" },
+    });
+    const runTelegramUserSend = vi.fn().mockResolvedValueOnce({ message: { message_id: 501 } });
+    const callGateway = vi.fn(async () => ({
+      ok: true,
+      marker,
+      progress_message_id: 511,
+      progress_texts: [`PROGRESS_DO_NOT_VOICE_1 ${marker}`, `PROGRESS_DO_NOT_VOICE_2 ${marker}`],
+      deleted_message_ids: [511],
+      final_text_message_id: 512,
+      audio_message_id: 513,
+      audio_message_kind: "voice",
+      tts_media_generated: true,
+    }));
+
+    Object.assign(telegramCommandDeps, {
+      callGateway,
+      newRunId: () => "determ",
+      now: vi.fn(() => 4_000),
+      probeGateway: vi.fn(async () => ({ ok: true, failureReason: null })),
+      readTelegramBotToken: vi.fn(async () => "777:token"),
+      readGatewayAuth: vi.fn(async () => ({
+        configPath: "/tmp/state/openclaw.telegram-live.json",
+        token: "gateway-token",
+      })),
       resolveBotIdentity: vi.fn(async () => ({
         id: 777,
         username: "jarvis_tester_1_bot",
@@ -668,12 +824,13 @@ describe("telegram commands", () => {
             date: null,
             direct_messages_topic: null,
             direct_messages_topic_id: null,
-            message_id: 411,
+            message_id: 512,
+            media_kind: null,
             out: false,
-            reply_to_msg_id: 410,
-            reply_to_top_id: 410,
+            reply_to_msg_id: 510,
+            reply_to_top_id: 510,
             sender_id: 777,
-            text: "Checking model context and preparing the answer.",
+            text: `FINAL_ONLY_TTS_MARKER ${marker}`,
             thread_anchor: null,
           },
           {
@@ -683,12 +840,13 @@ describe("telegram commands", () => {
             date: null,
             direct_messages_topic: null,
             direct_messages_topic_id: null,
-            message_id: 412,
+            message_id: 513,
+            media_kind: "voice",
             out: false,
-            reply_to_msg_id: 410,
-            reply_to_top_id: 410,
+            reply_to_msg_id: 510,
+            reply_to_top_id: 510,
             sender_id: 777,
-            text: `Final voice caption with ${marker}`,
+            text: "",
             thread_anchor: null,
           },
         ],
@@ -700,9 +858,9 @@ describe("telegram commands", () => {
           matched: {
             direct_messages_topic: null,
             direct_messages_topic_id: null,
-            message_id: 402,
-            reply_to_msg_id: 401,
-            reply_to_top_id: 401,
+            message_id: 502,
+            reply_to_msg_id: 501,
+            reply_to_top_id: 501,
             sender_id: 777,
             text: "TTS enabled.",
           },
@@ -712,28 +870,56 @@ describe("telegram commands", () => {
           matched: {
             direct_messages_topic: null,
             direct_messages_topic_id: null,
-            message_id: 412,
-            reply_to_msg_id: 410,
-            reply_to_top_id: 410,
+            message_id: 512,
+            reply_to_msg_id: 510,
+            reply_to_top_id: 510,
             sender_id: 777,
-            text: `Final voice caption with ${marker}`,
+            text: `FINAL_ONLY_TTS_MARKER ${marker}`,
           },
           matched_by: "reply_to_msg_id",
         }),
       writeFile,
     });
 
-    await telegramScenarioProgressPlusTtsCommand({ json: true }, runtime);
+    await telegramScenarioProgressPlusTtsCommand({ deterministic: true, json: true }, runtime);
 
+    expect(runTelegramUserSend).toHaveBeenCalledTimes(1);
+    expect(runTelegramUserSend).toHaveBeenNthCalledWith(1, {
+      chat: "@jarvis_tester_1_bot",
+      envFile: undefined,
+      message: "/tts on",
+      session: undefined,
+    });
+    expect(callGateway).toHaveBeenCalledWith(
+      "channels.telegram.progress-tts-proof",
+      expect.objectContaining({
+        chatId: 99,
+        finalText: `FINAL_ONLY_TTS_MARKER ${marker}`,
+        marker,
+        progressTexts: [`PROGRESS_DO_NOT_VOICE_1 ${marker}`, `PROGRESS_DO_NOT_VOICE_2 ${marker}`],
+        replyToMessageId: 501,
+      }),
+      24567,
+      180_000,
+      {
+        configPath: "/tmp/state/openclaw.telegram-live.json",
+        token: "gateway-token",
+      },
+    );
     const payload = JSON.parse(
       String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]),
     );
     expect(payload.ok).toBe(true);
-    expect(payload.scenario).toBe("progress-plus-tts");
-    expect(payload.progress_message_ids).toEqual([411]);
-    expect(payload.final_message_id).toBe(412);
-    expect(payload.empty_voice_only_final_detected).toBe(false);
-    expect(payload.final_answer_present_after_cleanup).toBe(true);
+    expect(payload.deterministic).toBe(true);
+    expect(payload.progress_transient_message_id).toBe(511);
+    expect(payload.final_message_id).toBe(512);
+    expect(payload.audio_message_id).toBe(513);
+    expect(payload.audio_message_kind).toBe("voice");
+    expect(payload.poison_progress_strings).toEqual([
+      `PROGRESS_DO_NOT_VOICE_1 ${marker}`,
+      `PROGRESS_DO_NOT_VOICE_2 ${marker}`,
+    ]);
+    expect(payload.durable_progress_texts).toEqual([]);
     expect(payload.mergeReadiness).toBe("sufficient");
   });
 });

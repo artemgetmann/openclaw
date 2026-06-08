@@ -120,6 +120,31 @@ function hasUserFacingToolEnvelope(payload: ReplyPayload) {
   );
 }
 
+function hasOpenClawSourcePreviewMarker(payload: ReplyPayload): boolean {
+  const openclaw =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData.openclaw
+      : undefined;
+
+  return (
+    openclaw != null &&
+    typeof openclaw === "object" &&
+    !Array.isArray(openclaw) &&
+    (openclaw as { sourcePreview?: unknown }).sourcePreview === true
+  );
+}
+
+function isTextOnlyOpenClawSourcePreview(payload: ReplyPayload): boolean {
+  return (
+    hasOpenClawSourcePreviewMarker(payload) &&
+    typeof payload.text === "string" &&
+    payload.text.trim().length > 0 &&
+    !hasUserFacingToolEnvelope(payload)
+  );
+}
+
 function resolveOpenClawAssistantPhase(
   payload: ReplyPayload,
 ): "commentary" | "final_answer" | undefined {
@@ -1010,6 +1035,14 @@ export const dispatchTelegramMessage = async ({
     return result.delivered;
   };
   const sendToolPayload = async (payload: ReplyPayload) => {
+    if (isTextOnlyOpenClawSourcePreview(payload)) {
+      // Same-chat message-tool progress is model-authored working state. Render
+      // it through the mutable progress controller so it never becomes durable
+      // Telegram text and never reaches TTS as a tool result.
+      updateAnswerProgressFromBlock(payload.text);
+      return;
+    }
+
     const sanitizedPayload = stripInternalToolTraceText(payload);
     if (!sanitizedPayload) {
       return;

@@ -24,7 +24,6 @@ type ToolMessageHandle = {
 
 type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
-  accumulatedBlockText: string;
   blockCount: number;
   routedCounts: Record<ReplyDispatchKind, number>;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
@@ -32,6 +31,22 @@ type AcpDispatchDeliveryState = {
 
 const ACP_INTERNAL_TOOL_SUMMARY_LINE_RE =
   /^🔧\s+[\w./:-]+(?:\s+(?:start|update|completed|failed|cancelled|done|error))?$/iu;
+
+function isSourcePreviewToolPayload(payload: ReplyPayload): boolean {
+  const channelData = payload.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return false;
+  }
+
+  // Source previews are transient progress/status payloads emitted through the
+  // tool lane. They should remain eligible for delivery filtering, but must not
+  // be upgraded into voice/audio replies by the TTS layer.
+  const openclaw = channelData.openclaw;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return false;
+  }
+  return (openclaw as { sourcePreview?: unknown }).sourcePreview === true;
+}
 
 function stripAcpInternalToolSummaryLines(text: string): string {
   const lines = text.split("\n");
@@ -66,7 +81,6 @@ export type AcpDispatchDeliveryCoordinator = {
     meta?: AcpDispatchDeliveryMeta,
   ) => Promise<boolean>;
   getBlockCount: () => number;
-  getAccumulatedBlockText: () => string;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
@@ -86,7 +100,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
 }): AcpDispatchDeliveryCoordinator {
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
-    accumulatedBlockText: "",
     blockCount: 0,
     routedCounts: {
       tool: 0,
@@ -175,10 +188,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       };
     }
     if (kind === "block" && payload.text?.trim()) {
-      if (state.accumulatedBlockText.length > 0) {
-        state.accumulatedBlockText += "\n";
-      }
-      state.accumulatedBlockText += payload.text;
       state.blockCount += 1;
     }
 
@@ -186,14 +195,16 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       await startReplyLifecycleOnce();
     }
 
-    const ttsPayload = await maybeApplyTtsToPayload({
-      payload,
-      cfg: params.cfg,
-      channel: params.ttsChannel,
-      kind,
-      inboundAudio: params.inboundAudio,
-      ttsAuto: params.sessionTtsAuto,
-    });
+    const ttsPayload = isSourcePreviewToolPayload(payload)
+      ? payload
+      : await maybeApplyTtsToPayload({
+          payload,
+          cfg: params.cfg,
+          channel: params.ttsChannel,
+          kind,
+          inboundAudio: params.inboundAudio,
+          ttsAuto: params.sessionTtsAuto,
+        });
 
     if (shouldUseSourceDispatcherForTelegram()) {
       return deliverViaDispatcher(kind, ttsPayload);
@@ -243,7 +254,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     startReplyLifecycle: startReplyLifecycleOnce,
     deliver,
     getBlockCount: () => state.blockCount,
-    getAccumulatedBlockText: () => state.accumulatedBlockText,
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;

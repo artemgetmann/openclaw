@@ -227,6 +227,7 @@ describe("telegram cli", () => {
         "/tmp/userbot.session",
         "--message",
         "narrate progress",
+        "--deterministic",
         "--json",
       ],
       { from: "user" },
@@ -235,6 +236,7 @@ describe("telegram cli", () => {
     expect(telegramScenarioProgressPlusTtsCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         envFile: "/tmp/tg.env",
+        deterministic: true,
         json: true,
         message: "narrate progress",
         session: "/tmp/userbot.session",

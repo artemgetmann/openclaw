@@ -194,6 +194,43 @@ describe("createAcpReplyProjector", () => {
     ]);
   });
 
+  it("marks streamed ACP block chunks as source previews", async () => {
+    const payloads: Array<{ kind: string; payload: unknown }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 128,
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        payloads.push({ kind, payload });
+        return true;
+      },
+    });
+
+    await projector.onEvent({
+      type: "text_delta",
+      text: "Checking example.com.",
+      tag: "agent_message_chunk",
+    });
+    await projector.flush(true);
+
+    expect(payloads).toEqual([
+      {
+        kind: "block",
+        payload: {
+          text: "Checking example.com.",
+          channelData: { openclaw: { sourcePreview: true } },
+        },
+      },
+    ]);
+  });
+
   it("does not suppress identical short text across terminal turn boundaries", async () => {
     const { deliveries, projector } = createProjectorHarness(
       createLiveCfgOverrides({

@@ -72,6 +72,10 @@ and more reliable default.
     - Feature-specific proof for progress updates plus TTS final output.
   - Run baseline first to prove the lane is wired, then run the smallest
     feature-specific scenario that matches the code change.
+  - For progress/status/final/TTS behavior, use
+    `/agent-guides/telegram-progress-proof` after baseline. It defines the
+    message-ID and GUI proof bar for transient progress, durable media, final
+    text, and additive TTS.
   - Release the lane when done: `bash scripts/telegram-live-runtime.sh release`.
 - User E2E operator path:
   - Start broad triage with `pnpm openclaw:local telegram-user inbox --json`

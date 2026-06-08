@@ -293,6 +293,19 @@ def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
     else None
   )
   resolved_chat = chat if chat is not None else getattr(message, "chat", None)
+  media_kind = None
+  # Keep readback lightweight, but expose enough media shape for live proof gates
+  # to distinguish a captionless voice/audio supplement from an empty text reply.
+  if getattr(message, "voice", None) is not None:
+    media_kind = "voice"
+  elif getattr(message, "audio", None) is not None:
+    media_kind = "audio"
+  elif getattr(message, "photo", None) is not None:
+    media_kind = "photo"
+  elif getattr(message, "video", None) is not None:
+    media_kind = "video"
+  elif getattr(message, "document", None) is not None:
+    media_kind = "document"
   return {
     "chat_id": int(getattr(message, "chat_id", 0) or 0) or None,
     "chat_title": getattr(resolved_chat, "title", None),
@@ -301,6 +314,7 @@ def build_message_payload(message, *, chat = None) -> dict[str, object | None]:
     "direct_messages_topic": {"topic_id": int(direct_topic_id)} if direct_topic_id is not None else None,
     "direct_messages_topic_id": int(direct_topic_id) if direct_topic_id is not None else None,
     "message_id": int(getattr(message, "id", 0) or 0),
+    "media_kind": media_kind,
     "out": bool(getattr(message, "out", False)),
     "reply_to_msg_id": int(getattr(reply_to, "reply_to_msg_id", 0)) if getattr(reply_to, "reply_to_msg_id", None) is not None else None,
     "reply_to_top_id": int(getattr(reply_to, "reply_to_top_id", 0)) if getattr(reply_to, "reply_to_top_id", None) is not None else None,
