@@ -47,6 +47,7 @@ import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
+import { isControlCommandReplyPayload } from "./control-command-reply.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -596,6 +597,26 @@ export async function dispatchReplyFromConfig(params: {
       const text = stripTelegramInternalToolSummaryLines(payload.text);
       return text === payload.text ? payload : { ...payload, text };
     };
+    const maybeApplyAutomaticTts = async (
+      payload: ReplyPayload,
+      kind: ReplyDispatchKind,
+    ): Promise<ReplyPayload> => {
+      // Command handlers mark their own control replies. That keeps `/status`
+      // and `/model` text visible without voicing product UI, while command
+      // surfaces that continue into a real assistant answer still get normal
+      // final-answer TTS.
+      if (isControlCommandReplyPayload(payload)) {
+        return payload;
+      }
+      return maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: ttsChannel,
+        kind,
+        inboundAudio,
+        ttsAuto: turnTtsAuto,
+      });
+    };
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
@@ -680,14 +701,7 @@ export async function dispatchReplyFromConfig(params: {
           const run = async () => {
             const ttsPayload = isSourcePreviewToolPayload(payload)
               ? payload
-              : await maybeApplyTtsToPayload({
-                  payload,
-                  cfg,
-                  channel: ttsChannel,
-                  kind: "tool",
-                  inboundAudio,
-                  ttsAuto: turnTtsAuto,
-                });
+              : await maybeApplyAutomaticTts(payload, "tool");
             const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
             if (!deliveryPayload) {
               return;
@@ -716,14 +730,7 @@ export async function dispatchReplyFromConfig(params: {
             }
             const ttsPayload = isSourcePreviewToolPayload(payload)
               ? payload
-              : await maybeApplyTtsToPayload({
-                  payload,
-                  cfg,
-                  channel: ttsChannel,
-                  kind: "block",
-                  inboundAudio,
-                  ttsAuto: turnTtsAuto,
-                });
+              : await maybeApplyAutomaticTts(payload, "block");
             if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
               return;
             }
@@ -774,14 +781,10 @@ export async function dispatchReplyFromConfig(params: {
     let queuedFinal = false;
     let routedFinalCount = 0;
     if (replies.length === 0 && durableBlockFinalText.trim()) {
-      const ttsReply = await maybeApplyTtsToPayload({
-        payload: { text: durableBlockFinalText.trim() },
-        cfg,
-        channel: ttsChannel,
-        kind: "final",
-        inboundAudio,
-        ttsAuto: turnTtsAuto,
-      });
+      const ttsReply = await maybeApplyAutomaticTts(
+        { text: durableBlockFinalText.trim() },
+        "final",
+      );
       const hasFinalTtsMedia = Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
       if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         const ttsSupplement = sanitizeTelegramVisiblePayload({
@@ -820,14 +823,7 @@ export async function dispatchReplyFromConfig(params: {
       if (shouldSuppressReasoningPayload(reply)) {
         continue;
       }
-      const ttsReply = await maybeApplyTtsToPayload({
-        payload: reply,
-        cfg,
-        channel: ttsChannel,
-        kind: "final",
-        inboundAudio,
-        ttsAuto: turnTtsAuto,
-      });
+      const ttsReply = await maybeApplyAutomaticTts(reply, "final");
       if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         continue;
       }
