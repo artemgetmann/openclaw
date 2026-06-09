@@ -94,6 +94,13 @@ Current package truth:
 - Public release assets for `v2026.3.15` now include `Jarvis.dmg`,
   `Jarvis.zip`, and `jarvis-appcast.xml`; the Jarvis appcast URL returns 200
   and points Sparkle at the uploaded `Jarvis.zip`.
+- Future sendable Jarvis packages must come from the canonical publish lane:
+  `bash scripts/package-openclaw-mac-dist.sh --publish-release-assets --github-release-tag <latest-tag>`.
+  A release is not sendable unless that command ends with
+  `release_sendable=true` and `sparkle_update_live=true`.
+- The canonical publish lane uploads exactly `Jarvis.dmg`, `Jarvis.zip`, and
+  `jarvis-appcast.xml` to `artemgetmann/openclaw`, then verifies the public
+  `releases/latest/download` URLs and public appcast metadata.
 - `/Applications/Jarvis.app` on Artem's machine has been installed from the
   final trusted-tester DMG and now reports `OpenClawGitCommit=ab9c3c1ca1`,
   `CFBundleDisplayName=Jarvis`, and `CFBundleIdentifier=ai.openclaw.consumer.mac`.
@@ -151,6 +158,9 @@ Current package truth:
   `NOTARYTOOL_KEY`, `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the
   machine release env; leave `NOTARYTOOL_PROFILE` unset unless deliberately
   using the fallback path.
+- For a real app update, bump `APP_VERSION` and/or `APP_BUILD` before running
+  the publish lane. Sparkle only offers an update when the published
+  `CFBundleVersion` is higher than the installed app build.
 - Dry-run release preflight truth from 2026-05-16: ASC API-key lane was ready
   on Artem's machine, the fallback `NOTARYTOOL_PROFILE` was present and usable,
   and the preflight stayed read-only. It did not submit notarization, staple,
@@ -449,6 +459,10 @@ Say this directly:
   should receive a current-main recut after P0 onboarding fixes. Wider
   distribution still waits on `ai.jarvis.mac` migration, post-launch bundle
   immutability, and the remaining beta gates.
+- future sendable Jarvis packages must come from the canonical publish lane and
+  end with `release_sendable=true` plus `sparkle_update_live=true`; full
+  Sparkle N-to-N+1 proof is still needed before trusting the next automatic
+  update cycle at scale.
 
 ### Roadmap
 
