@@ -76,4 +76,35 @@ describe("consumer Sparkle release gates", () => {
     expect(verifier).toContain("releases/download/v${shortVersion}/Jarvis.zip");
     expect(verifier).not.toContain("DEFAULT_ZIP_URL");
   });
+
+  it("documents and gates the post-app-build resume phase", () => {
+    const script = fs.readFileSync(
+      path.join(root, "scripts", "package-openclaw-mac-dist.sh"),
+      "utf8",
+    );
+    const readme = fs.readFileSync(path.join(root, "apps", "macos", "README.md"), "utf8");
+
+    expect(script).toContain("--phase <full|post-app-build>");
+    expect(script).toContain('PACKAGE_PHASE="full"');
+    expect(script).toContain("--resume-after-app-build");
+    expect(script).toContain("verify_resume_app_bundle");
+    expect(script).toContain('if [[ "$PACKAGE_PHASE" == "full" ]]');
+    expect(script).toContain("write_app_build_receipt");
+    expect(script).toContain("Do not source this file");
+    expect(readme).toContain("--phase post-app-build");
+    expect(readme).toContain("resumes from the existing `dist/Jarvis.app`");
+  });
+
+  it("keeps notarization retry guidance focused on polling or retrying artifacts", () => {
+    const script = fs.readFileSync(path.join(root, "scripts", "notarize-mac-artifact.sh"), "utf8");
+    const readme = fs.readFileSync(path.join(root, "apps", "macos", "README.md"), "utf8");
+
+    expect(script).toContain("print_submit_retry_hint");
+    expect(script).toContain("if notarytool printed a submission ID");
+    expect(script).toContain("--poll <submission-id>");
+    expect(script).toContain("retry the same artifact");
+    expect(readme).toContain("HTTPClientError.deadlineExceeded");
+    expect(readme).toContain("instead of rebuilding the app");
+    expect(readme).toContain("Receipts and logs must not contain secrets");
+  });
 });
