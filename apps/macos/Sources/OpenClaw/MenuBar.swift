@@ -426,7 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Self.logger.info("opening settings window")
-        SettingsWindowOpener.shared.open(tab: preferredSettingsTab ?? .general)
+        SettingsWindowOpener.shared.reveal(tab: preferredSettingsTab ?? .general)
     }
 
     @MainActor
@@ -482,7 +482,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func shouldHandleConsumerReopen(isConsumer: Bool, hasVisibleWindows: Bool) -> Bool {
-        isConsumer && !hasVisibleWindows
+        // A consumer Dock click is an explicit request for Jarvis, even if
+        // AppKit thinks a window is already visible somewhere. Always route it
+        // through the reveal path so hidden, backgrounded, or stale Settings
+        // windows get raised instead of producing a no-op click.
+        isConsumer
     }
 
     static func shouldRecoverVisibleSurfaceOnActivation(

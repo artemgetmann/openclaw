@@ -214,4 +214,25 @@ struct ChannelsSettingsSmokeTests {
             store: store,
             presentation: .settings).body
     }
+
+    @Test func `consumer telegram settings shows connected pending verification without internals`() async {
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_APP_VARIANT": "consumer"],
+            defaults: [showAdvancedSettingsKey: false])
+        {
+            let store = makeConsumerTelegramSetupStore()
+            defer { store.clearConsumerTelegramFirstTaskVerified() }
+            store.clearConsumerTelegramFirstTaskVerified()
+            store.telegramSetupStatus = "Telegram bot is live as @openclawbot. Click Verify Telegram to approve access."
+
+            let view = ChannelsSettings(store: store)
+
+            #expect(view.telegramSummary == "Connected")
+            #expect(view.telegramDetails == "Telegram connected as @openclawbot. One final check remains: send a message to Jarvis, then click Verify Telegram.")
+            #expect(view.telegramDetails?.localizedCaseInsensitiveContains("token source") == false)
+            #expect(view.telegramDetails?.localizedCaseInsensitiveContains("mode") == false)
+            #expect(view.telegramDetails?.localizedCaseInsensitiveContains("probe") == false)
+            #expect(view.telegramDetails?.localizedCaseInsensitiveContains("runtime") == false)
+        }
+    }
 }

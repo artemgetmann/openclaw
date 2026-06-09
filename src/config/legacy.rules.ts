@@ -1,3 +1,4 @@
+import { shouldMigrateJarvisConsumerModelDefaults } from "./jarvis-consumer-model-migration.js";
 import type { LegacyConfigRule } from "./legacy.shared.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -167,6 +168,12 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     message:
       "tools.media.video.models[].apiKey is no longer supported; use provider auth settings instead (auto-migrated on load).",
     match: (value) => hasLegacyMediaModelApiKey(value),
+  },
+  {
+    path: ["agents", "defaults"],
+    message:
+      "Jarvis consumer model allowlist is missing current GPT-5.5/Sonnet defaults (auto-migrated on load).",
+    match: (_value, root) => shouldMigrateJarvisConsumerModelDefaults(root),
   },
   {
     path: ["telegram", "requireMention"],
