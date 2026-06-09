@@ -3,6 +3,33 @@ import { migrateLegacyConfig } from "./legacy-migrate.js";
 import { WHISPER_BASE_AUDIO_MODEL } from "./legacy-migrate.test-helpers.js";
 
 describe("legacy migrate audio transcription", () => {
+  it("removes legacy inline apiKey values from media understanding models", () => {
+    const res = migrateLegacyConfig({
+      tools: {
+        media: {
+          models: [{ provider: "openai", model: "gpt-5-mini", apiKey: "global-key" }],
+          audio: {
+            models: [
+              {
+                provider: "openai",
+                model: "whisper-1",
+                apiKey: "audio-key",
+                timeoutSeconds: 30,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Removed tools.media.models[].apiKey (1).");
+    expect(res.changes).toContain("Removed tools.media.audio.models[].apiKey (1).");
+    expect(res.config?.tools?.media?.models).toEqual([{ provider: "openai", model: "gpt-5-mini" }]);
+    expect(res.config?.tools?.media?.audio?.models).toEqual([
+      { provider: "openai", model: "whisper-1", timeoutSeconds: 30 },
+    ]);
+  });
+
   it("moves routing.transcribeAudio into tools.media.audio.models", () => {
     const res = migrateLegacyConfig({
       routing: {

@@ -445,6 +445,27 @@ describe("config strict validation", () => {
     });
   });
 
+  it("flags legacy inline media model apiKey values as auto-migratable", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        tools: {
+          media: {
+            audio: {
+              models: [{ provider: "openai", model: "whisper-1", apiKey: "old-key" }],
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(false);
+      expect(snap.legacyIssues.some((issue) => issue.path === "tools.media.audio.models")).toBe(
+        true,
+      );
+    });
+  });
+
   it("does not mark resolved-only gateway.bind aliases as auto-migratable legacy", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {

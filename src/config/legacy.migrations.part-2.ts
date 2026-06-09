@@ -35,7 +35,49 @@ function applyLegacyAudioTranscriptionModel(params: {
   params.changes.push(params.alreadySetMessage);
 }
 
+function removeLegacyMediaModelApiKeys(params: {
+  root: Record<string, unknown>;
+  path: string[];
+  changes: string[];
+}) {
+  let cursor: unknown = params.root;
+  for (const segment of params.path) {
+    cursor = getRecord(cursor)?.[segment];
+  }
+  if (!Array.isArray(cursor)) {
+    return;
+  }
+
+  let removed = 0;
+  for (const model of cursor) {
+    if (!isRecord(model) || !Object.prototype.hasOwnProperty.call(model, "apiKey")) {
+      continue;
+    }
+    // Legacy media models briefly accepted apiKey inline. Current provider auth
+    // owns secrets, so keep the model entry and drop only the unsupported key.
+    delete model.apiKey;
+    removed += 1;
+  }
+  if (removed > 0) {
+    params.changes.push(`Removed ${params.path.join(".")}[].apiKey (${removed}).`);
+  }
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
+  {
+    id: "tools.media.model-api-key-v2",
+    describe: "Remove unsupported inline apiKey values from media understanding model entries",
+    apply: (raw, changes) => {
+      for (const path of [
+        ["tools", "media", "models"],
+        ["tools", "media", "image", "models"],
+        ["tools", "media", "audio", "models"],
+        ["tools", "media", "video", "models"],
+      ]) {
+        removeLegacyMediaModelApiKeys({ root: raw, path, changes });
+      }
+    },
+  },
   {
     id: "agent.model-config-v2",
     describe:
