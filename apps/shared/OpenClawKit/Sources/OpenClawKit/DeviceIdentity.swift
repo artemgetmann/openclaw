@@ -98,13 +98,18 @@ public enum DeviceIdentityStore {
         if let currentIdentity = self.loadIdentity(at: currentDeviceURL),
            self.authFile(at: currentAuthURL, hasTokenFor: currentIdentity.deviceId, role: "operator")
         {
+            // Canonical auth is already usable. Keep the sibling pre-cutover file
+            // as a mirror so the next launch cannot import an older operator token.
+            DeviceAuthStore.reconcileMirroredAuth(deviceId: currentIdentity.deviceId, role: "operator")
             return false
         }
 
         do {
             try FileManager.default.createDirectory(at: currentDir, withIntermediateDirectories: true)
             try Data(contentsOf: legacyDeviceURL).write(to: currentDeviceURL, options: [.atomic])
-            try Data(contentsOf: legacyAuthURL).write(to: currentAuthURL, options: [.atomic])
+            // Import only the missing operator role. Same-device canonical node
+            // auth may already be healthy and must survive legacy repair.
+            DeviceAuthStore.reconcileMirroredAuth(deviceId: legacyIdentity.deviceId, role: "operator")
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: currentDeviceURL.path)
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: currentAuthURL.path)
             return true

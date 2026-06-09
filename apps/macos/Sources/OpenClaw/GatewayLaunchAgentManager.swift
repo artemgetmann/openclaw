@@ -228,7 +228,23 @@ enum GatewayLaunchAgentManager {
             env["OPENCLAW_HOME"] == identity.runtimeRootURL.path &&
             env["OPENCLAW_STATE_DIR"] == identity.stateDirURL.path &&
             env["OPENCLAW_CONFIG_PATH"] == identity.configURL.path &&
-            actualCanonicalConfigPath == expectedCanonicalConfigPath
+            actualCanonicalConfigPath == expectedCanonicalConfigPath &&
+            self.launchAgentHasExpectedBundledNodePath(env: env, identity: identity)
+    }
+
+    private static func launchAgentHasExpectedBundledNodePath(
+        env: [String: String],
+        identity: RuntimeIdentity)
+        -> Bool
+    {
+        guard AppFlavor.current.isConsumer else { return true }
+        let expected = identity.stateDirURL
+            .appendingPathComponent("tools/node/bin", isDirectory: true)
+            .path
+        let entries = env["PATH"]?
+            .split(separator: ":")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) } ?? []
+        return entries.contains(expected)
     }
 
     private static func shouldPreserveLoadedConsumerGatewayOnStop() async -> Bool {

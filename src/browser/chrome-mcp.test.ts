@@ -14,7 +14,9 @@ import {
   openChromeMcpTab,
   pressChromeMcpKey,
   resetChromeMcpSessionsForTest,
+  resolveChromeMcpCommandForTest,
   setChromeMcpDevToolsWsEndpointProberForTest,
+  setChromeMcpNpxResolverInputsForTest,
   resolveChromeMcpArgsForTest,
   setChromeMcpDefaultUserDataDirForTest,
   setChromeMcpLiveChromeLauncherForTest,
@@ -120,6 +122,75 @@ function createFakeSessionBundle(): ChromeMcpSessionBundle {
 function createFakeSession(): ChromeMcpSession {
   return createFakeSessionBundle().session;
 }
+
+async function writeExecutableFile(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(filePath, 0o755);
+}
+
+describe("chrome MCP npx resolution", () => {
+  beforeEach(async () => {
+    await resetChromeMcpSessionsForTest();
+  });
+
+  it("uses the bundled absolute npx when the packaged toolchain is executable", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-npx-"));
+    const bundledNpx = path.join(tempDir, "tools/node/bin/npx");
+    const runtimeNpx = path.join(tempDir, "runtime/bin/npx");
+    await writeExecutableFile(bundledNpx);
+    await writeExecutableFile(runtimeNpx);
+    setChromeMcpNpxResolverInputsForTest({
+      stateDir: tempDir,
+      execPath: path.join(tempDir, "runtime/bin/node"),
+    });
+
+    try {
+      expect(resolveChromeMcpCommandForTest()).toEqual({
+        source: "bundled",
+        path: bundledNpx,
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses npx next to the running node executable when the bundled npx is absent", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-npx-"));
+    const runtimeNpx = path.join(tempDir, "runtime/bin/npx");
+    await writeExecutableFile(runtimeNpx);
+    setChromeMcpNpxResolverInputsForTest({
+      stateDir: tempDir,
+      execPath: path.join(tempDir, "runtime/bin/node"),
+    });
+
+    try {
+      expect(resolveChromeMcpCommandForTest()).toEqual({
+        source: "node-adjacent",
+        path: runtimeNpx,
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to PATH npx only when bundled and runtime npx are absent", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chrome-mcp-npx-"));
+    setChromeMcpNpxResolverInputsForTest({
+      stateDir: null,
+      execPath: path.join(tempDir, "runtime/bin/node"),
+    });
+
+    try {
+      expect(resolveChromeMcpCommandForTest()).toEqual({
+        source: "path",
+        path: "npx",
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("chrome MCP page parsing", () => {
   beforeEach(async () => {

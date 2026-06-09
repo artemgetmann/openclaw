@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { loadModelCatalog } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveModelsCommandReply } from "./commands-models.js";
 
@@ -17,6 +18,7 @@ vi.mock("../../agents/model-catalog.js", () => ({
 }));
 
 describe("resolveModelsCommandReply", () => {
+  const mockedLoadModelCatalog = vi.mocked(loadModelCatalog);
   const cfg = {
     agents: {
       defaults: {
@@ -84,5 +86,33 @@ describe("resolveModelsCommandReply", () => {
     expect(reply?.text).toContain("- claude-cli/sonnet[1m]");
     expect(reply?.text).toContain("- claude-cli/opus");
     expect(reply?.text).toContain("- claude-cli/opus[1m]");
+  });
+
+  it("shows config-only GPT-5.5 entries even when the generated catalog is stale", async () => {
+    mockedLoadModelCatalog.mockResolvedValueOnce([
+      { provider: "openai-codex", id: "gpt-5.4", name: "GPT 5.4" },
+    ]);
+
+    const reply = await resolveModelsCommandReply({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.5" },
+            models: {
+              "openai-codex/gpt-5.4": {},
+              "openai-codex/gpt-5.5": {},
+              "localai/custom": {},
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      commandBodyNormalized: "/models openai-codex all",
+      surface: "whatsapp",
+    });
+
+    expect(reply?.text).toContain("Models (openai-codex)");
+    expect(reply?.text).toContain("- openai-codex/gpt-5.4");
+    expect(reply?.text).toContain("- openai-codex/gpt-5.5");
+    expect(reply?.text).not.toContain("localai/custom");
   });
 });
