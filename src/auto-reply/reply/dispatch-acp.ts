@@ -22,6 +22,7 @@ import {
   normalizeAttachments,
 } from "../../media-understanding/attachments.normalize.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   isCommandEnabled,
   maybeResolveTextAlias,
@@ -178,6 +179,17 @@ function hasBoundConversationForSession(params: {
   });
 }
 
+function isTelegramAcpDeliveryTarget(params: {
+  ctx: FinalizedMsgContext;
+  shouldRouteToOriginating: boolean;
+  originatingChannel?: string;
+}): boolean {
+  const channel = params.shouldRouteToOriginating
+    ? params.originatingChannel
+    : (params.ctx.Surface ?? params.ctx.Provider);
+  return normalizeMessageChannel(channel) === "telegram";
+}
+
 export type AcpDispatchAttemptResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
@@ -315,10 +327,24 @@ export async function tryDispatchAcpReply(params: {
     const finalOutputText = projector.getFinalOutputText().trim();
     if (finalOutputText) {
       // ACP output chunks are delivered as source previews so progress never
-      // speaks early. Once the turn is complete, synthesize exactly one audio
-      // supplement from the accepted final assistant output.
-      const delivered = await delivery.deliverFinalTtsSupplement(finalOutputText);
-      queuedFinal = queuedFinal || delivered;
+      // speaks early. In Telegram, source previews are transient progress, so
+      // the accepted final text must be delivered as durable final text before
+      // any media-only TTS supplement is allowed to follow.
+      let visibleFinalDelivered = true;
+      if (
+        isTelegramAcpDeliveryTarget({
+          ctx: params.ctx,
+          shouldRouteToOriginating: params.shouldRouteToOriginating,
+          originatingChannel: params.originatingChannel,
+        })
+      ) {
+        visibleFinalDelivered = await delivery.deliverFinalTextBeforeTts(finalOutputText);
+        queuedFinal = queuedFinal || visibleFinalDelivered;
+      }
+      if (visibleFinalDelivered) {
+        const delivered = await delivery.deliverFinalTtsSupplement(finalOutputText);
+        queuedFinal = queuedFinal || delivered;
+      }
     }
     if (shouldEmitResolvedIdentityNotice) {
       const currentMeta = readAcpSessionEntry({

@@ -34,13 +34,26 @@ const messageActionMocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
 }));
 
-const ttsMocks = vi.hoisted(() => ({
-  maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
-    const params = paramsUnknown as { payload: unknown };
-    return params.payload;
-  }),
-  resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
-}));
+const ttsMocks = vi.hoisted(() => {
+  const state = {
+    synthesizeFinalAudio: false,
+  };
+  return {
+    state,
+    maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { kind?: string; payload: Record<string, unknown> };
+      if (state.synthesizeFinalAudio && params.kind === "final") {
+        return {
+          ...params.payload,
+          mediaUrl: "https://example.com/final-tts.opus",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    }),
+    resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+  };
+});
 
 const sessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionEntry: vi.fn<
@@ -132,6 +145,7 @@ async function runDispatch(params: {
   bodyForAgent: string;
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
+  sessionTtsAuto?: "always" | "off" | "tagged" | "inbound";
   shouldRouteToOriginating?: boolean;
   shouldSendToolSummaries?: boolean;
   onReplyStart?: () => void;
@@ -149,6 +163,7 @@ async function runDispatch(params: {
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     sessionKey,
     inboundAudio: false,
+    sessionTtsAuto: params.sessionTtsAuto,
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
       ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
@@ -226,6 +241,7 @@ describe("tryDispatchAcpReply", () => {
     routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
     messageActionMocks.runMessageAction.mockReset();
     messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
+    ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.resolveTtsConfig.mockReset();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
@@ -259,6 +275,96 @@ describe("tryDispatchAcpReply", () => {
       }),
     );
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("routes Telegram ACP final text before the media-only TTS supplement in the same thread", async () => {
+    setReadyAcpResolution();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "Final answer.", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      sessionTtsAuto: "always",
+      shouldRouteToOriginating: true,
+      ctxOverrides: {
+        MessageThreadId: 777,
+      },
+    });
+
+    expect(result?.queuedFinal).toBe(true);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+        threadId: 777,
+        payload: expect.objectContaining({
+          text: "Final answer.",
+          channelData: {
+            openclaw: {
+              assistantPhase: "final_answer",
+            },
+          },
+        }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+        threadId: 777,
+        payload: expect.objectContaining({
+          text: undefined,
+          mediaUrl: "https://example.com/final-tts.opus",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+  });
+
+  it("does not send Telegram ACP media-only TTS when visible final text delivery fails", async () => {
+    setReadyAcpResolution();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    routeMocks.routeReply
+      .mockResolvedValueOnce({ ok: true, messageId: "progress-preview" })
+      .mockResolvedValueOnce({ ok: false, messageId: "" });
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "Final answer.", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      sessionTtsAuto: "always",
+      shouldRouteToOriginating: true,
+      ctxOverrides: {
+        MessageThreadId: 777,
+      },
+    });
+
+    expect(result?.queuedFinal).toBe(false);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "Final answer.",
+        }),
+      }),
+    );
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
   });
 
   it("edits ACP tool lifecycle updates in place when supported", async () => {

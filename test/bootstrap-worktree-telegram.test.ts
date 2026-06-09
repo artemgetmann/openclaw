@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -47,6 +54,33 @@ exit 1
 };
 
 describe("bootstrap-worktree-telegram", () => {
+  it("copies canonical Telegram assets without claiming a tester bot in copy-only mode", () => {
+    const { mainRepo, worktree } = initFixture();
+
+    const result = runResult(
+      worktree,
+      "bash",
+      ["scripts/bootstrap-worktree-telegram.sh", "--copy-only"],
+      { OPENCLAW_MAIN_REPO: mainRepo },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("telegram bootstrap complete");
+    expect(readFileSync(path.join(worktree, ".env.bots"), "utf8")).toContain(
+      "BOT_TOKEN=111:exhausted",
+    );
+    expect(readFileSync(path.join(worktree, "scripts", "telegram-e2e", ".env.local"), "utf8")).toBe(
+      "TG_LOCAL=canonical-local\n",
+    );
+    expect(
+      readFileSync(
+        path.join(worktree, "scripts", "telegram-e2e", "tmp", "userbot.session"),
+        "utf8",
+      ),
+    ).toBe("session-bytes\n");
+    expect(existsSync(path.join(worktree, ".env.local"))).toBe(false);
+  });
+
   it("copies canonical Telegram assets before an optional exhausted-pool claim failure", () => {
     const { mainRepo, worktree } = initFixture();
 

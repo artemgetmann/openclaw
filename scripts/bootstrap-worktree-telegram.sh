@@ -4,6 +4,7 @@ set -euo pipefail
 MAIN_REPO_DEFAULT="/Users/user/Programming_Projects/openclaw"
 MAIN_REPO="${OPENCLAW_MAIN_REPO:-$MAIN_REPO_DEFAULT}"
 OPTIONAL=0
+COPY_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -15,9 +16,13 @@ while [[ $# -gt 0 ]]; do
       OPTIONAL=0
       shift
       ;;
+    --copy-only)
+      COPY_ONLY=1
+      shift
+      ;;
     --help|-h)
       cat <<'EOF'
-Usage: scripts/bootstrap-worktree-telegram.sh [--optional|--strict]
+Usage: scripts/bootstrap-worktree-telegram.sh [--optional|--strict|--copy-only]
 EOF
       exit 0
       ;;
@@ -61,6 +66,13 @@ fi
 
 # Bot token pool for worktree assignment.
 copy_if_exists "$MAIN_REPO/.env.bots" "./.env.bots"
+
+if [[ "$COPY_ONLY" -eq 1 ]]; then
+  # Warm lanes still need the canonical userbot/env files, but they must not
+  # auto-claim a tester token before the operator explicitly runs ensure.
+  echo "telegram bootstrap complete"
+  exit 0
+fi
 
 if [[ -f "./.env.bots" ]]; then
   assign_output="$({ bash scripts/assign-bot.sh; } 2>&1)" || {
