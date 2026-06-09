@@ -665,6 +665,10 @@ export async function dispatchReplyFromConfig(params: {
       systemEvent: shouldRouteToOriginating,
     });
 
+    // Some reply resolvers stream the durable answer only through block callbacks
+    // and return no final payload. Track those visible blocks so final-mode TTS
+    // still gets one additive supplement; sourcePreview blocks stay progress-only.
+    let durableBlockFinalText = "";
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
@@ -703,6 +707,12 @@ export async function dispatchReplyFromConfig(params: {
             // Telegram has its own dispatch path that handles reasoning splitting.
             if (shouldSuppressReasoningPayload(payload)) {
               return;
+            }
+            const shouldTrackBlockAsDurableFinal =
+              !isSourcePreviewToolPayload(payload) &&
+              !sourceReplyPolicy.suppressAutomaticSourceDelivery;
+            if (shouldTrackBlockAsDurableFinal && payload.text?.trim()) {
+              durableBlockFinalText += payload.text;
             }
             const ttsPayload = isSourcePreviewToolPayload(payload)
               ? payload
@@ -763,6 +773,47 @@ export async function dispatchReplyFromConfig(params: {
 
     let queuedFinal = false;
     let routedFinalCount = 0;
+    if (replies.length === 0 && durableBlockFinalText.trim()) {
+      const ttsReply = await maybeApplyTtsToPayload({
+        payload: { text: durableBlockFinalText.trim() },
+        cfg,
+        channel: ttsChannel,
+        kind: "final",
+        inboundAudio,
+        ttsAuto: turnTtsAuto,
+      });
+      const hasFinalTtsMedia = Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
+      if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
+        const ttsSupplement = sanitizeTelegramVisiblePayload({
+          ...ttsReply,
+          text: undefined,
+        });
+        if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+          const result = await routeReply({
+            payload: ttsSupplement,
+            channel: originatingChannel,
+            to: originatingTo,
+            sessionKey: ctx.SessionKey,
+            accountId: ctx.AccountId,
+            threadId: routeThreadId,
+            cfg,
+            isGroup,
+            groupId,
+          });
+          if (!result.ok) {
+            logVerbose(
+              `dispatch-from-config: route-reply (block-final-tts) failed: ${result.error ?? "unknown error"}`,
+            );
+          }
+          queuedFinal = result.ok || queuedFinal;
+          if (result.ok) {
+            routedFinalCount += 1;
+          }
+        } else {
+          queuedFinal = dispatcher.sendFinalReply(ttsSupplement) || queuedFinal;
+        }
+      }
+    }
     for (const reply of replies) {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
