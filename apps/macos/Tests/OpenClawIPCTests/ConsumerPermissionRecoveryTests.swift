@@ -203,6 +203,11 @@ struct ConsumerPermissionRecoveryTests {
     }
 
     @Test func `consumer settings keeps media permissions optional`() {
+        #expect(PermissionsSettings.consumerRecommendedCapabilities == [
+            .accessibility,
+            .screenRecording,
+            .location,
+        ])
         #expect(PermissionsSettings.consumerRecommendedCapabilities.contains(.screenRecording))
         #expect(PermissionsSettings.consumerRecommendedCapabilities.contains(.accessibility))
         #expect(PermissionsSettings.consumerRecommendedCapabilities.contains(.location))

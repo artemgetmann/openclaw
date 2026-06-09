@@ -52,4 +52,28 @@ describe("consumer Sparkle release gates", () => {
     expect(script).toContain('APPCAST_OUTPUT="$ZIP_DIR/appcast.xml"');
     expect(script).toContain("SPARKLE_RELEASE_VERSION");
   });
+
+  it("pins Sparkle appcast payload URLs to the release tag", () => {
+    const script = fs.readFileSync(
+      path.join(root, "scripts", "package-openclaw-mac-dist.sh"),
+      "utf8",
+    );
+    const verifier = fs.readFileSync(
+      path.join(root, "scripts", "verify-jarvis-release-assets.mjs"),
+      "utf8",
+    );
+
+    expect(script).toContain("JARVIS_LATEST_RELEASE_DOWNLOAD_BASE");
+    expect(script).toContain("jarvis_tagged_release_download_base");
+    expect(script).toContain("jarvis_appcast_zip_public_url");
+    expect(script).toContain("releases/download/%s");
+    expect(script).toContain('SPARKLE_DOWNLOAD_URL_PREFIX="${zip_download_base}/"');
+    expect(script).toContain('--zip-url "$(jarvis_appcast_zip_public_url)"');
+    expect(script).not.toContain(
+      'SPARKLE_DOWNLOAD_URL_PREFIX="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/"',
+    );
+    expect(verifier).toContain("defaultVersionedZipUrl");
+    expect(verifier).toContain("releases/download/v${shortVersion}/Jarvis.zip");
+    expect(verifier).not.toContain("DEFAULT_ZIP_URL");
+  });
 });

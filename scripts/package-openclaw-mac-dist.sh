@@ -17,10 +17,10 @@ INSTANCE_EXPLICIT=0
 PUBLISH_RELEASE_ASSETS=0
 GITHUB_RELEASE_TAG=""
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-artemgetmann/openclaw}"
-JARVIS_RELEASE_DOWNLOAD_BASE="https://github.com/${GITHUB_RELEASE_REPO}/releases/latest/download"
-JARVIS_DMG_PUBLIC_URL="${JARVIS_RELEASE_DOWNLOAD_BASE}/Jarvis.dmg"
-JARVIS_ZIP_PUBLIC_URL="${JARVIS_RELEASE_DOWNLOAD_BASE}/Jarvis.zip"
-JARVIS_APPCAST_PUBLIC_URL="${JARVIS_RELEASE_DOWNLOAD_BASE}/jarvis-appcast.xml"
+JARVIS_LATEST_RELEASE_DOWNLOAD_BASE="https://github.com/${GITHUB_RELEASE_REPO}/releases/latest/download"
+JARVIS_DMG_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/Jarvis.dmg"
+JARVIS_ZIP_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/Jarvis.zip"
+JARVIS_APPCAST_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/jarvis-appcast.xml"
 
 usage() {
   cat <<'EOF'
@@ -36,8 +36,8 @@ Options:
                       verify the public Sparkle feed before declaring sendable.
   --github-release-tag <tag>
                       Required with --publish-release-assets. Must match the
-                      repo's latest release because Sparkle points at
-                      releases/latest/download URLs.
+                      repo's latest release because Sparkle checks the public
+                      releases/latest/download appcast feed.
 
 Env:
   SKIP_NOTARIZE=1     Build release zip + DMG without notarization/stapling
@@ -128,9 +128,25 @@ require_latest_release_tag() {
     echo "ERROR: --github-release-tag must match the latest release." >&2
     echo "Provided: $GITHUB_RELEASE_TAG" >&2
     echo "Latest:   $latest_tag" >&2
-    echo "The appcast uses releases/latest/download URLs, so publishing to an older tag would lie to Sparkle." >&2
+    echo "The app's feed URL uses releases/latest/download/jarvis-appcast.xml, so publishing to an older tag would lie to Sparkle." >&2
     exit 1
   fi
+}
+
+jarvis_tagged_release_download_base() {
+  if [[ -z "$GITHUB_RELEASE_TAG" ]]; then
+    echo "ERROR: a tagged Jarvis release URL requires --github-release-tag." >&2
+    exit 1
+  fi
+  printf 'https://github.com/%s/releases/download/%s\n' "$GITHUB_RELEASE_REPO" "$GITHUB_RELEASE_TAG"
+}
+
+jarvis_appcast_zip_public_url() {
+  if [[ -n "$GITHUB_RELEASE_TAG" ]]; then
+    printf '%s/Jarvis.zip\n' "$(jarvis_tagged_release_download_base)"
+    return 0
+  fi
+  printf '%s\n' "$JARVIS_ZIP_PUBLIC_URL"
 }
 
 require_release_publish_prereqs() {
@@ -217,11 +233,18 @@ generate_jarvis_appcast() {
   require_sparkle_private_key_file
 
   local appcast="$ROOT_DIR/dist/jarvis-appcast.xml"
+  local zip_download_base="$JARVIS_LATEST_RELEASE_DOWNLOAD_BASE"
+  if [[ -n "$GITHUB_RELEASE_TAG" ]]; then
+    # Sparkle signs the exact ZIP bytes listed in the appcast. The appcast
+    # itself can live at latest/download, but the enclosure must be immutable;
+    # otherwise a later release can make old appcasts validate the wrong ZIP.
+    zip_download_base="$(jarvis_tagged_release_download_base)"
+  fi
   echo "✨ Appcast: $appcast"
   SPARKLE_APP_NAME="$APP_NAME" \
   SPARKLE_RELEASE_VERSION="$VERSION" \
   SPARKLE_APPCAST_OUTPUT="$appcast" \
-  SPARKLE_DOWNLOAD_URL_PREFIX="${JARVIS_RELEASE_DOWNLOAD_BASE}/" \
+  SPARKLE_DOWNLOAD_URL_PREFIX="${zip_download_base}/" \
     "$ROOT_DIR/scripts/make_appcast.sh" "$ZIP" "$SPARKLE_FEED_URL"
 }
 
@@ -274,7 +297,7 @@ publish_release_assets() {
     --app-path "$APP_PATH" \
     --zip-path "$ZIP" \
     --dmg-url "$JARVIS_DMG_PUBLIC_URL" \
-    --zip-url "$JARVIS_ZIP_PUBLIC_URL" \
+    --zip-url "$(jarvis_appcast_zip_public_url)" \
     --appcast-url "$JARVIS_APPCAST_PUBLIC_URL"
 }
 

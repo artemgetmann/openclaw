@@ -19,6 +19,14 @@ struct ConsumerTelegramSetupCardContent: View {
         self.store.telegramRuntimeOwnershipIssue()
     }
 
+    private var showsRuntimeOwnershipIssue: Bool {
+        !(AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey))
+    }
+
+    private var shouldBlockVerificationForRuntimeOwnershipIssue: Bool {
+        self.showsRuntimeOwnershipIssue && self.runtimeOwnershipIssue != nil
+    }
+
     private var isTokenEditingLocked: Bool {
         self.store.telegramBusy || self.store.telegramSetupPhase != .idle
     }
@@ -199,7 +207,7 @@ struct ConsumerTelegramSetupCardContent: View {
                     .disabled(
                         self.store.telegramBusy
                             || self.normalizedToken.isEmpty
-                            || self.runtimeOwnershipIssue != nil)
+                            || self.shouldBlockVerificationForRuntimeOwnershipIssue)
 
                     if self.store.telegramSetupWaitingForDM
                         || self.store.telegramSetupPhase == .savingSetup
@@ -211,7 +219,7 @@ struct ConsumerTelegramSetupCardContent: View {
                 }
             }
 
-            if let runtimeOwnershipIssue {
+            if let runtimeOwnershipIssue, self.showsRuntimeOwnershipIssue {
                 Text(runtimeOwnershipIssue)
                     .font(.caption)
                     .foregroundStyle(.orange)
