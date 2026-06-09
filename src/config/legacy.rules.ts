@@ -46,6 +46,15 @@ function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   );
 }
 
+function hasLegacyMediaModelApiKey(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some(
+    (entry) => isRecord(entry) && Object.prototype.hasOwnProperty.call(entry, "apiKey"),
+  );
+}
+
 export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["whatsapp"],
@@ -134,6 +143,30 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     path: ["routing", "transcribeAudio"],
     message:
       "routing.transcribeAudio was moved; use tools.media.audio.models instead (auto-migrated on load).",
+  },
+  {
+    path: ["tools", "media", "models"],
+    message:
+      "tools.media.models[].apiKey is no longer supported; use provider auth settings instead (auto-migrated on load).",
+    match: (value) => hasLegacyMediaModelApiKey(value),
+  },
+  {
+    path: ["tools", "media", "image", "models"],
+    message:
+      "tools.media.image.models[].apiKey is no longer supported; use provider auth settings instead (auto-migrated on load).",
+    match: (value) => hasLegacyMediaModelApiKey(value),
+  },
+  {
+    path: ["tools", "media", "audio", "models"],
+    message:
+      "tools.media.audio.models[].apiKey is no longer supported; use provider auth settings instead (auto-migrated on load).",
+    match: (value) => hasLegacyMediaModelApiKey(value),
+  },
+  {
+    path: ["tools", "media", "video", "models"],
+    message:
+      "tools.media.video.models[].apiKey is no longer supported; use provider auth settings instead (auto-migrated on load).",
+    match: (value) => hasLegacyMediaModelApiKey(value),
   },
   {
     path: ["telegram", "requireMention"],

@@ -90,6 +90,56 @@ describe("runGatewayStartupConfigPreflight", () => {
     expect(writeConfig).not.toHaveBeenCalled();
   });
 
+  it("repairs legacy media model apiKey before startup validation", async () => {
+    const legacyParsed = {
+      tools: {
+        media: {
+          audio: {
+            models: [{ provider: "openai", model: "whisper-1", apiKey: "old-key" }],
+          },
+        },
+      },
+    };
+    const migratedConfig: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            models: [{ provider: "openai", model: "whisper-1" }],
+          },
+        },
+      },
+    };
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        createSnapshot({
+          parsed: legacyParsed,
+          valid: false,
+          legacyIssues: [
+            {
+              path: "tools.media.audio.models",
+              message: "legacy inline media model apiKey",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(createSnapshot({ config: migratedConfig }));
+    const writeConfig = vi.fn<(config: OpenClawConfig) => Promise<void>>().mockResolvedValue();
+
+    const result = await runGatewayStartupConfigPreflight({
+      readSnapshot,
+      writeConfig,
+      log: { info: vi.fn(), warn: vi.fn() },
+      isNixMode: false,
+    });
+
+    const writtenConfig = writeConfig.mock.calls[0]?.[0];
+    expect(writtenConfig?.tools?.media?.audio?.models).toEqual([
+      { provider: "openai", model: "whisper-1" },
+    ]);
+    expect(result.config).toEqual(migratedConfig);
+  });
+
   it("writes auto-enabled plugins and re-reads snapshot on success", async () => {
     const phaseTwo = createSnapshot({
       config: { plugins: { entries: { msteams: { enabled: false } } } },
