@@ -21,12 +21,21 @@ final class SettingsWindowOpener {
     }
 
     func open(tab: SettingsTab? = nil) {
-        // A visible Settings window may be open while Jarvis is backgrounded.
-        // Re-activating on every status/menu-bar path steals focus repeatedly,
-        // so only run the AppKit reveal loop when this call has to surface a
-        // newly created or hidden window.
+        self.open(tab: tab, revealPolicy: .whenNoVisibleContentWindow)
+    }
+
+    func reveal(tab: SettingsTab? = nil) {
+        self.open(tab: tab, revealPolicy: .always)
+    }
+
+    private func open(tab: SettingsTab?, revealPolicy: RevealPolicy) {
+        // Menu/status refreshes should not steal focus from another app just
+        // because Settings already exists. Explicit Dock/app activation is
+        // different: the user asked for the app, so re-raise the window even if
+        // AppKit says a content window is technically visible.
         let shouldRevealWindow = Self.shouldRevealContentWindow(
-            hasVisibleContentWindow: Self.hasVisibleContentWindow())
+            hasVisibleContentWindow: Self.hasVisibleContentWindow(),
+            forceReveal: revealPolicy == .always)
         if !shouldRevealWindow {
             self.selectTab(tab)
             return
@@ -91,7 +100,13 @@ final class SettingsWindowOpener {
     }
 
     static func shouldRevealContentWindow(hasVisibleContentWindow: Bool) -> Bool {
-        !hasVisibleContentWindow
+        self.shouldRevealContentWindow(
+            hasVisibleContentWindow: hasVisibleContentWindow,
+            forceReveal: false)
+    }
+
+    static func shouldRevealContentWindow(hasVisibleContentWindow: Bool, forceReveal: Bool) -> Bool {
+        forceReveal || !hasVisibleContentWindow
     }
 
     static func isContentWindowCandidate(_ window: NSWindow) -> Bool {
@@ -120,4 +135,9 @@ final class SettingsWindowOpener {
         // a contentViewController. Content view presence is enough to re-raise.
         return hasContentView || hasContentViewController
     }
+}
+
+private enum RevealPolicy {
+    case whenNoVisibleContentWindow
+    case always
 }

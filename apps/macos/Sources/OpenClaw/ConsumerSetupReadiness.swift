@@ -135,7 +135,7 @@ extension ConsumerAIAccessFailureKind {
         case .providerAuthFailed:
             return "AI model needs attention"
         case .readinessFailed:
-            return "AI is reachable, but not ready"
+            return "AI access needs a quick reset"
         }
     }
 }
@@ -1348,9 +1348,9 @@ struct ConsumerModelsReadinessPayload: Decodable {
         case .gatewayUnreachable:
             return "\(AppFlavor.current.appName) is still starting. Wait a moment, then try again."
         case .providerAuthFailed:
-            return "\(AppFlavor.current.appName) could not verify a usable AI account yet."
+            return "\(AppFlavor.current.appName) needs a fresh AI sign-in."
         case .readinessFailed:
-            return "\(AppFlavor.current.appName) reached the AI provider, but it is not ready yet."
+            return "\(AppFlavor.current.appName) could not finish an AI test message. Restart \(AppFlavor.current.appName), then try again."
         }
     }
 
@@ -1817,18 +1817,32 @@ struct ConsumerModelSetupCardContent: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if self.model.canRestartOperator {
-                Button {
-                    Task { await self.model.restartOperator() }
-                } label: {
-                    if self.model.isRestartingOperator {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Label("Restart \(AppFlavor.current.appName)", systemImage: "arrow.clockwise")
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await self.model.restartOperator() }
+                    } label: {
+                        if self.model.isRestartingOperator {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Restart \(AppFlavor.current.appName)", systemImage: "arrow.clockwise")
+                        }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.model.isRestartingOperator)
+
+                    Button("Try Again") {
+                        Task { await self.model.refresh() }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.model.isRestartingOperator)
+                }
+            } else {
+                Button("Choose Another Access Method") {
+                    self.model.alternateMethodExpanded = true
+                    self.model.authSectionExpanded = true
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.model.isRestartingOperator)
             }
         }
     }

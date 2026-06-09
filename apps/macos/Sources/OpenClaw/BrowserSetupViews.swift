@@ -47,10 +47,9 @@ struct BrowserSetupCardContent: View {
     private var header: some View {
         if self.presentation == .settings {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Browser")
+                Text("Choose Your Main Chrome Account")
                     .font(.headline)
-                Text(
-                    "Choose the Chrome profile \(AppFlavor.current.appName) can use for browser tasks. Your normal Chrome windows stay separate.")
+                Text("Jarvis will use this Chrome browser, so you don’t have to log in everywhere again.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -166,19 +165,20 @@ struct BrowserSetupCardContent: View {
                 Divider()
                     .padding(.vertical, 2)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("If a website needs extra help")
-                        .font(.subheadline.weight(.semibold))
-                    ForEach(BrowserRuntimeFailureTemplateKind.allCases, id: \.self) { kind in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(kind.title)
-                                .font(.caption.weight(.semibold))
-                            Text(kind.body)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                DisclosureGroup("If a website needs extra help") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(BrowserRuntimeFailureTemplateKind.allCases, id: \.self) { kind in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(kind.title)
+                                    .font(.caption.weight(.semibold))
+                                Text(kind.body)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
+                    .padding(.top, 6)
                 }
             }
         }
