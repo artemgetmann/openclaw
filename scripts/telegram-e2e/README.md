@@ -142,6 +142,18 @@ pnpm openclaw:local telegram-user send \
   --message "hello from the Telegram user CLI" \
   --json
 
+pnpm openclaw:local telegram-user topic-create \
+  --chat -1003783709877 \
+  --title "voice proof $(date +%s)" \
+  --json
+
+pnpm openclaw:local telegram-user send \
+  --chat -1003783709877 \
+  --media /tmp/proof.ogg \
+  --voice \
+  --reply-to <topic_anchor> \
+  --json
+
 pnpm openclaw:local telegram-user read \
   --chat @jarvis_tester_1_bot \
   --limit 5 \

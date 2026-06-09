@@ -13,7 +13,7 @@ export type SafeBinProfile = {
   longFlagPrefixMap?: ReadonlyMap<string, string | null>;
 };
 
-export type SafeBinValueGuard = "forbid" | "safeLiteral" | "stdinOnly";
+export type SafeBinValueGuard = "forbid" | "pathOrSafeLiteral" | "safeLiteral" | "stdinOnly";
 
 export type SafeBinProfileFixture = {
   minPositional?: number;
@@ -305,19 +305,22 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       ["telegram-user", "logout"],
       ["telegram-user", "precheck"],
       ["telegram-user", "send"],
+      ["telegram-user", "topic-create"],
       ["telegram-user", "read"],
       ["telegram-user", "wait"],
     ],
     allowUnknownOptions: false,
-    allowedFlags: ["--help", "--json", "--version"],
+    allowedFlags: ["--audio-as-voice", "--help", "--json", "--version", "--voice"],
     allowedValueFlags: [
       "--after-id",
       "--before-id",
       "--chat",
+      "--caption",
       "--code",
       "--contains",
       "--env-file",
       "--limit",
+      "--media",
       "--message",
       "--phone",
       "--poll-interval-ms",
@@ -326,7 +329,11 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--session",
       "--thread-anchor",
       "--timeout-ms",
+      "--title",
     ],
+    guardedValueFlags: {
+      "--media": "pathOrSafeLiteral",
+    },
   },
   jq: {
     maxPositional: 1,
@@ -513,7 +520,11 @@ function normalizeGuardedValueFlags(
     .map(([rawFlag, rawGuard]) => [rawFlag.trim(), rawGuard] as const)
     .filter(
       ([flag, guard]) =>
-        flag.length > 0 && (guard === "forbid" || guard === "safeLiteral" || guard === "stdinOnly"),
+        flag.length > 0 &&
+        (guard === "forbid" ||
+          guard === "pathOrSafeLiteral" ||
+          guard === "safeLiteral" ||
+          guard === "stdinOnly"),
     )
     .toSorted(([a], [b]) => a.localeCompare(b));
   return normalizedEntries.length > 0 ? Object.fromEntries(normalizedEntries) : undefined;

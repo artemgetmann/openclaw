@@ -50,6 +50,10 @@ function validateGuardedValue(value: string | undefined, guard: SafeBinValueGuar
   if (guard === "stdinOnly") {
     return value === "-";
   }
+  if (guard === "pathOrSafeLiteral") {
+    const trimmed = value?.trim();
+    return Boolean(trimmed) && !hasGlobToken(trimmed ?? "");
+  }
   return !isInvalidValueToken(value);
 }
 

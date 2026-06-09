@@ -75,6 +75,14 @@ export type TelegramUserSendResult = {
   message: TelegramUserMessage;
 };
 
+export type TelegramUserTopicCreateResult = {
+  backend_meta?: TelegramUserBackendMeta;
+  chat_id: number | null;
+  message_id: number;
+  topic_anchor: number;
+  topic_title: string;
+};
+
 export type TelegramUserReadResult = {
   backend_meta?: TelegramUserBackendMeta;
   messages: TelegramUserMessage[];

@@ -47,6 +47,14 @@ export function registerTelegramUserCli(program: Command) {
             "Send as the Telegram user account.",
           ],
           [
+            "pnpm openclaw:local telegram-user send --chat @jarvis_tester_1_bot --media /tmp/proof.ogg --voice --json",
+            "Upload media as the Telegram user account, with --reply-to available for topic targeting.",
+          ],
+          [
+            'pnpm openclaw:local telegram-user topic-create --chat -1003783709877 --title "voice proof" --json',
+            "Create a forum topic and return its topic anchor for follow-up replies.",
+          ],
+          [
             "pnpm openclaw:local telegram-user read --chat @jarvis_tester_1_bot --limit 5 --json",
             "Read recent DM messages with raw metadata.",
           ],
@@ -123,8 +131,12 @@ export function registerTelegramUserCli(program: Command) {
       .command("send")
       .description("Send a Telegram DM or message as the user account")
       .requiredOption("--chat <target>", "Target chat username or id")
-      .requiredOption("--message <text>", "Message body"),
+      .option("--message <text>", "Message body, or caption when --media is present"),
   )
+    .option("--media <path-or-url>", "Upload this media file or URL")
+    .option("--caption <text>", "Caption for --media; overrides --message when both are present")
+    .option("--voice", "Send uploaded audio as a Telegram voice note", false)
+    .option("--audio-as-voice", "Alias for --voice", false)
     .option("--reply-to <id>", "Reply to this message id")
     .action(async (opts) => {
       await runTelegramUserCommand(async () => {
@@ -132,6 +144,19 @@ export function registerTelegramUserCli(program: Command) {
         await telegramUserSendCommand(opts, defaultRuntime);
       });
     });
+
+  withTelegramUserBase(
+    telegramUser
+      .command("topic-create")
+      .description("Create a Telegram forum topic as the user account")
+      .requiredOption("--chat <target>", "Target forum chat username or id")
+      .requiredOption("--title <title>", "Forum topic title"),
+  ).action(async (opts) => {
+    await runTelegramUserCommand(async () => {
+      const { telegramUserTopicCreateCommand } = await import("../commands/telegram-user.js");
+      await telegramUserTopicCreateCommand(opts, defaultRuntime);
+    });
+  });
 
   withTelegramUserBase(
     telegramUser
