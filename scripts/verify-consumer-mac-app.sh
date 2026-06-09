@@ -128,6 +128,30 @@ assert_required_templates() {
   done
 }
 
+assert_bundled_runtime_cli_payload() {
+  local runtime_root="$1"
+  local missing=()
+
+  # Identity/signing checks are not enough. If the root CLI payload is absent,
+  # the app can show onboarding but every gateway start/restart command exits
+  # before launchd gets a valid service to boot.
+  [[ -f "$runtime_root/openclaw.mjs" ]] || missing+=("openclaw.mjs")
+  [[ -f "$runtime_root/package.json" ]] || missing+=("package.json")
+  if [[ ! -f "$runtime_root/dist/index.js" && ! -f "$runtime_root/dist/index.mjs" ]]; then
+    missing+=("dist/index.(m)js")
+  fi
+  if [[ ! -f "$runtime_root/dist/entry.js" && ! -f "$runtime_root/dist/entry.mjs" ]]; then
+    missing+=("dist/entry.(m)js")
+  fi
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "ERROR: bundled runtime is missing required CLI payload." >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    echo "Expected runtime root: $runtime_root" >&2
+    exit 1
+  fi
+}
+
 load_consumer_default_bundled_skills() {
   local skills_config_path="$ROOT_DIR/src/commands/onboard-non-interactive/local/skills-config.ts"
   local skills_output=""
@@ -204,6 +228,7 @@ actual_icon_file="$(plist_print CFBundleIconFile)"
 actual_variant="$(plist_print OpenClawAppVariant)"
 actual_instance_id="$(/usr/libexec/PlistBuddy -c "Print :OpenClawConsumerInstanceID" "$INFO_PLIST" 2>/dev/null || true)"
 actual_url_scheme="$(/usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes:0:CFBundleURLSchemes:0" "$INFO_PLIST" 2>/dev/null || true)"
+actual_lsui_element="$(/usr/libexec/PlistBuddy -c "Print :LSUIElement" "$INFO_PLIST" 2>/dev/null || true)"
 actual_version="$(plist_print CFBundleShortVersionString)"
 actual_build="$(plist_print CFBundleVersion)"
 actual_commit="$(/usr/libexec/PlistBuddy -c "Print :OpenClawGitCommit" "$INFO_PLIST" 2>/dev/null || echo "unknown")"
@@ -243,6 +268,12 @@ if [[ "$actual_variant" != "$EXPECTED_VARIANT" ]]; then
   exit 1
 fi
 
+if [[ "$actual_lsui_element" != "false" ]]; then
+  echo "ERROR: consumer app must be packaged as a foreground app for first-run onboarding." >&2
+  echo "Expected LSUIElement=false, got '${actual_lsui_element:-<missing>}'." >&2
+  exit 1
+fi
+
 if [[ "$actual_url_scheme" != "$EXPECTED_URL_SCHEME" ]]; then
   echo "ERROR: expected URL scheme '$EXPECTED_URL_SCHEME', got '$actual_url_scheme'" >&2
   exit 1
@@ -262,6 +293,8 @@ assert_required_templates "$APP_PATH/Contents/Resources/templates" "app resource
 assert_required_templates \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/docs/reference/templates" \
   "bundled runtime workspace templates"
+assert_bundled_runtime_cli_payload \
+  "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw"
 assert_required_bundled_skills \
   "$APP_PATH/Contents/Resources/OpenClawRuntime/openclaw/skills" \
   "bundled runtime skills"
@@ -422,6 +455,7 @@ echo "  display_name=$actual_name"
 echo "  bundle_id=$actual_bundle_id"
 echo "  icon_file=$actual_icon_file"
 echo "  variant=$actual_variant"
+echo "  lsui_element=$actual_lsui_element"
 echo "  instance_id=${EFFECTIVE_INSTANCE_ID:-default}"
 echo "  url_scheme=$actual_url_scheme"
 echo "  version=$actual_version"

@@ -103,9 +103,11 @@ final class OnboardingController {
             return
         }
         if let window {
-            DockIconManager.shared.temporarilyShowDock()
+            DockIconManager.shared.bringAppForward()
             window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
             NSApp.activate(ignoringOtherApps: true)
+            DockIconManager.shared.bringAppForward()
             return
         }
         let hosting = NSHostingController(rootView: OnboardingView())
@@ -116,11 +118,30 @@ final class OnboardingController {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
+        window.isReleasedWhenClosed = false
+        // Older agent-style packages and menu-bar relaunches can create this
+        // window outside the active Space. Move it to the active Space without
+        // making onboarding permanently float above the user's work.
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.collectionBehavior.insert(.fullScreenAuxiliary)
         window.center()
-        DockIconManager.shared.temporarilyShowDock()
+        DockIconManager.shared.bringAppForward()
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        window.orderFrontRegardless()
+        DockIconManager.shared.bringAppForward()
         self.window = window
+        self.refocus(window)
+    }
+
+    private func refocus(_ window: NSWindow) {
+        for delay in [0.15, 0.45, 0.9] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                DockIconManager.shared.bringAppForward()
+                window.deminiaturize(nil)
+                window.makeKeyAndOrderFront(nil)
+                window.orderFrontRegardless()
+            }
+        }
     }
 
     func close() {

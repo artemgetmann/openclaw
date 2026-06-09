@@ -53,11 +53,23 @@ if [[ -n "$INSTANCE_ID" ]]; then
   PACKAGE_ARGS+=(--instance "$INSTANCE_ID")
 fi
 
+runtime_js_ready() {
+  # A packaged app needs both entrypoints: launchd ownership still points at
+  # dist/index.*, while openclaw.mjs boots through dist/entry.* for user-facing
+  # CLI commands. Shipping only the app shell strands onboarding at startup.
+  [[ -f "$ROOT_DIR/dist/index.js" || -f "$ROOT_DIR/dist/index.mjs" ]] || return 1
+  [[ -f "$ROOT_DIR/dist/entry.js" || -f "$ROOT_DIR/dist/entry.mjs" ]] || return 1
+}
+
 # Fresh or partially bootstrapped lanes may not have a built runtime yet. Fall
 # back to one JS build instead of claiming a fast smoke path that cannot verify.
-if [[ "${SKIP_TSC+x}" != x && ! -f "$ROOT_DIR/dist/index.js" ]]; then
+if [[ "$REUSE_RUNTIME" == "1" ]] && ! runtime_js_ready; then
+  echo "ERROR: runtime JS missing; --reuse-runtime is unsafe. Rerun once without --reuse-runtime to rebuild runtime JS." >&2
+  exit 1
+fi
+if [[ "$REUSE_RUNTIME" != "1" ]] && ! runtime_js_ready; then
   DEFAULT_SKIP_TSC=0
-  echo "📦 dist/index.js missing; forcing JS build once so fast packaging has a real runtime payload"
+  echo "📦 runtime JS missing; forcing JS build once so fast packaging has a real runtime payload"
 fi
 
 OPENCLAW_CONSUMER_FAST_PACKAGING=1 \

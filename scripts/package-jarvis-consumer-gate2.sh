@@ -104,6 +104,19 @@ stage_gate2_app() {
   echo "  app=$staged_app"
 }
 
+assert_stage_target_ready() {
+  local home
+  local desktop
+
+  home="$(target_home)"
+  desktop="$home/Desktop"
+
+  [[ -d "$desktop" ]] \
+    || die "target Desktop is missing: $desktop"
+  [[ -w "$desktop" ]] \
+    || die "target Desktop is not writable from $(whoami): $desktop"
+}
+
 stage_collector() {
   mkdir -p "$GATE2_SHARED_DIR"
   /usr/bin/ditto \
@@ -121,6 +134,7 @@ verify_info_plist() {
   local bundle_id
   local instance_id
   local commit
+  local lsui_element
 
   [[ -f "$info" ]] || die "Info.plist missing: $info"
 
@@ -128,6 +142,7 @@ verify_info_plist() {
   bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")"
   instance_id="$(/usr/libexec/PlistBuddy -c 'Print :OpenClawConsumerInstanceID' "$info")"
   commit="$(/usr/libexec/PlistBuddy -c 'Print :OpenClawGitCommit' "$info" 2>/dev/null || true)"
+  lsui_element="$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$info" 2>/dev/null || true)"
 
   [[ "$display_name" == "$GATE2_APP_NAME" ]] \
     || die "expected display name '$GATE2_APP_NAME', got '$display_name'"
@@ -135,6 +150,8 @@ verify_info_plist() {
     || die "expected bundle id '$GATE2_BUNDLE_ID', got '$bundle_id'"
   [[ "$instance_id" == "$GATE2_INSTANCE_ID" ]] \
     || die "expected instance id '$GATE2_INSTANCE_ID', got '$instance_id'"
+  [[ "$lsui_element" == "false" ]] \
+    || die "expected LSUIElement=false for Gate2 foreground onboarding, got '${lsui_element:-<missing>}'"
   [[ -n "$commit" ]] \
     || die "embedded commit missing"
 
@@ -142,15 +159,43 @@ verify_info_plist() {
   echo "  display_name=$display_name"
   echo "  bundle_id=$bundle_id"
   echo "  instance_id=$instance_id"
+  echo "  lsui_element=$lsui_element"
   echo "  embedded_commit=$commit"
+}
+
+runtime_js_ready() {
+  # Gate2 is a clean-user proof lane, so a shell-only app bundle is worse than
+  # no bundle: it reaches onboarding and then cannot boot the gateway.
+  [[ -f "$ROOT_DIR/dist/index.js" || -f "$ROOT_DIR/dist/index.mjs" ]] || return 1
+  [[ -f "$ROOT_DIR/dist/entry.js" || -f "$ROOT_DIR/dist/entry.mjs" ]] || return 1
+}
+
+gate2_default_skip_tsc() {
+  local requested="${SKIP_TSC:-1}"
+
+  if [[ "${REUSE_RUNTIME:-0}" == "1" ]]; then
+    runtime_js_ready || die "runtime JS missing; --reuse-runtime is unsafe. Rerun --fast once to rebuild runtime JS."
+    printf '%s\n' "$requested"
+    return 0
+  fi
+
+  if ! runtime_js_ready; then
+    echo "runtime JS missing; forcing one JS build for the Gate2 package" >&2
+    printf '0\n'
+    return 0
+  fi
+
+  printf '%s\n' "$requested"
 }
 
 package_gate2_app_fast() {
   local package_args=(--instance "$GATE2_INSTANCE_ID")
+  local default_skip_tsc=""
 
   if [[ "${REUSE_RUNTIME:-0}" == "1" ]]; then
     package_args+=(--reuse-runtime)
   fi
+  default_skip_tsc="$(gate2_default_skip_tsc)"
 
   APP_NAME="$GATE2_APP_NAME" \
   APP_BUNDLE_NAME="$GATE2_APP_BUNDLE_NAME" \
@@ -160,7 +205,7 @@ package_gate2_app_fast() {
   OPENCLAW_CONSUMER_STABLE_TCC_IDENTITY=0 \
   OPENCLAW_CONSUMER_FAST_PACKAGING=1 \
   SKIP_PNPM_INSTALL="${SKIP_PNPM_INSTALL:-1}" \
-  SKIP_TSC="${SKIP_TSC:-1}" \
+  SKIP_TSC="$default_skip_tsc" \
   SKIP_UI_BUILD="${SKIP_UI_BUILD:-1}" \
   BUILD_CONFIG="${BUILD_CONFIG:-release}" \
   BUILD_ARCHS="${BUILD_ARCHS:-all}" \
@@ -215,6 +260,7 @@ done
 
 assert_expected_identity
 assert_port_free
+assert_stage_target_ready
 package_gate2_app_fast
 verify_info_plist
 stage_gate2_app

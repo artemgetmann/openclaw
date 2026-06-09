@@ -39,7 +39,11 @@ final class DockIconManager: NSObject, @unchecked Sendable {
             } ?? []
 
             let hasVisibleWindows = !visibleWindows.isEmpty
-            if !userWantsDockHidden || hasVisibleWindows {
+            if Self.shouldUseRegularActivationPolicy(
+                isConsumer: AppFlavor.current.isConsumer,
+                userWantsDockHidden: userWantsDockHidden,
+                hasVisibleWindows: hasVisibleWindows)
+            {
                 NSApp?.setActivationPolicy(.regular)
             } else {
                 NSApp?.setActivationPolicy(.accessory)
@@ -47,14 +51,39 @@ final class DockIconManager: NSObject, @unchecked Sendable {
         }
     }
 
+    static func shouldUseRegularActivationPolicy(
+        isConsumer: Bool,
+        userWantsDockHidden: Bool,
+        hasVisibleWindows: Bool)
+        -> Bool
+    {
+        // Consumer packages are first-run window apps, not background menu-bar
+        // agents. Keeping them regular prevents Stage Manager from treating the
+        // onboarding surface as a hidden side-strip thumbnail when Dock hiding is
+        // still at its default.
+        isConsumer || !userWantsDockHidden || hasVisibleWindows
+    }
+
+    @MainActor
     func temporarilyShowDock() {
-        Task { @MainActor in
-            guard NSApp != nil else {
-                self.logger.warning("NSApp not ready, cannot show Dock icon")
-                return
-            }
-            NSApp.setActivationPolicy(.regular)
+        guard NSApp != nil else {
+            self.logger.warning("NSApp not ready, cannot show Dock icon")
+            return
         }
+        NSApp.setActivationPolicy(.regular)
+    }
+
+    @MainActor
+    func bringAppForward() {
+        // LSUIElement/menu-bar launches can create windows without making the app
+        // the active Stage Manager set. Promote the app and all of its windows in
+        // one place before callers order first-run or settings surfaces.
+        self.temporarilyShowDock()
+        NSApp.unhide(nil)
+        _ = NSRunningApplication.current.activate(options: [
+            .activateAllWindows,
+        ])
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func setupObservers() {

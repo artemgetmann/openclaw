@@ -166,7 +166,7 @@ enum ConsumerBundledRuntime {
             at: installPrefixURL.appendingPathComponent(self.installedManifestFileName),
             with: stagingRoot.appendingPathComponent(self.installedManifestFileName),
             fileManager: fileManager)
-        try self.verifyInstalledRuntimeCode(at: installPrefixURL, fileManager: fileManager)
+        try self.verifyInstalledNodeRuntime(at: installPrefixURL, fileManager: fileManager)
 
         return .seeded
     }
@@ -213,7 +213,7 @@ enum ConsumerBundledRuntime {
             && fileManager.isExecutableFile(atPath: uvURL.path)
             && fileManager.isReadableFile(atPath: entryURL.path)
             && fileManager.isReadableFile(atPath: chalkPackageURL.path)
-            && self.installedRuntimeCodeIsValid(installPrefixURL: installPrefixURL, fileManager: fileManager)
+            && self.installedNodeRuntimeIsValid(installPrefixURL: installPrefixURL, fileManager: fileManager)
             && templatesReady
     }
 
@@ -306,22 +306,22 @@ enum ConsumerBundledRuntime {
         try fileManager.moveItem(at: sourceURL, to: destinationURL)
     }
 
-    private static func installedRuntimeCodeIsValid(
+    private static func installedNodeRuntimeIsValid(
         installPrefixURL: URL,
         fileManager: FileManager)
         -> Bool
     {
         do {
-            try self.verifyInstalledRuntimeCode(at: installPrefixURL, fileManager: fileManager)
+            try self.verifyInstalledNodeRuntime(at: installPrefixURL, fileManager: fileManager)
             return true
         } catch {
             self.logger.warning(
-                "installed bundled runtime code verification failed at \(installPrefixURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                "installed bundled Node runtime verification failed at \(installPrefixURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
 
-    private static func verifyInstalledRuntimeCode(
+    private static func verifyInstalledNodeRuntime(
         at installPrefixURL: URL,
         fileManager: FileManager) throws
     {
@@ -335,22 +335,10 @@ enum ConsumerBundledRuntime {
 
         try self.verifyCodeSignature(at: nodeURL)
         try self.verifyNodeRuntimeEntitlements(at: nodeURL)
-
-        let addonRoot = installPrefixURL
-            .appendingPathComponent("lib", isDirectory: true)
-            .appendingPathComponent(self.installedPayloadDirectoryName, isDirectory: true)
-        if let enumerator = fileManager.enumerator(at: addonRoot, includingPropertiesForKeys: nil) {
-            for case let fileURL as URL in enumerator {
-                guard self.shouldVerifyInstalledAddon(fileURL) else { continue }
-                try self.verifyCodeSignature(at: fileURL)
-            }
-        }
-    }
-
-    private static func shouldVerifyInstalledAddon(_ fileURL: URL) -> Bool {
-        guard fileURL.pathExtension == "node" else { return false }
-        let lowercasedPath = fileURL.path.lowercased()
-        return lowercasedPath.contains("darwin") || lowercasedPath.contains("universal")
+        // Do not walk the vendored JS/runtime tree here. This method runs on the
+        // app's startup path before AppDelegate can show first-run onboarding; a
+        // recursive node_modules audit can strand the user in a no-window launch.
+        // The packaging verifier owns exhaustive native-addon signing checks.
     }
 
     private static func verifyCodeSignature(at fileURL: URL) throws {
