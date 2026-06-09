@@ -328,6 +328,7 @@ struct ConsumerSetupReadinessTests {
 
         #expect(model.failureKind == .readinessFailed)
         #expect(model.phase == .failed("Jarvis-managed AI did not answer the readiness probe in time."))
+        #expect(model.failureKind?.title == "AI access needs a quick reset")
         #expect(model.canRestartOperator)
     }
 

@@ -201,6 +201,7 @@ vi.mock("../../tts/tts.js", () => ({
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+const { markControlCommandReplyPayload } = await import("./control-command-reply.js");
 const { resetInboundDedupe } = await import("./inbound-dedupe.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
 const { __testing: pluginBindingTesting } = await import("../../plugins/conversation-binding.js");
@@ -854,6 +855,44 @@ describe("dispatchReplyFromConfig", () => {
         text: "FINAL_ONLY_VOICE",
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
+      }),
+    );
+  });
+
+  it("does not synthesize TTS for native control command final replies", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    sessionStoreMocks.currentEntry = {
+      ttsAuto: "always",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      CommandBody: "/status",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      SessionKey: "agent:main:telegram:direct:control-status",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        commands: {
+          text: true,
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () =>
+        markControlCommandReplyPayload({ text: "Control status stays text-only." }),
+      ),
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Control status stays text-only.",
       }),
     );
   });
