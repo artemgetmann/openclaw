@@ -75,7 +75,7 @@ require direct BYOK until the backend exposes managed utilities for those shapes
 
 ## Release package status
 
-Current RC truth as of 2026-06-05:
+Current RC truth as of 2026-06-08:
 
 - Current RC app commit is `d9981f111d`.
 - Jarvis visible branding is in place for the app name, release artifacts, and
@@ -90,13 +90,18 @@ Current RC truth as of 2026-06-05:
 - The fast RC package path produces a Developer ID signed app, but the
   `--fast` artifact is unnotarized. Gatekeeper rejection is expected for that
   local RC artifact and is not a product regression.
-- The final tester/release artifact still requires a notarized DMG and ZIP:
-  submit with App Store Connect API-key notarization, staple the result, verify
-  Gatekeeper acceptance, and publish only the notarized assets.
-- Sparkle feed reachability from the May package was useful proof, but it is
-  not enough for the current release. Final release still requires a real
-  N-to-N+1 Sparkle proof: download, signature verification, install, relaunch,
-  and state preservation.
+- The sendable tester/release artifact is `dist/Jarvis.dmg` from the canonical
+  publish lane:
+  `bash scripts/package-openclaw-mac-dist.sh --publish-release-assets --github-release-tag <latest-tag>`.
+  A release is not sendable unless that command ends with
+  `release_sendable=true` and `sparkle_update_live=true`.
+- The canonical publish lane uploads exactly `Jarvis.dmg`, `Jarvis.zip`, and
+  `jarvis-appcast.xml` to `artemgetmann/openclaw`, then verifies the public
+  `releases/latest/download` URLs and public appcast metadata.
+- Full Sparkle N-to-N+1 proof is required before trusting the next automatic
+  update cycle at scale, not before sending the first sendable DMG. That proof
+  needs an already-installed older Jarvis plus a newly published higher
+  `CFBundleVersion`.
 - Fallback BotFather-token Telegram proof passed for the RC using
   `@jarvis_4918_bot`. This proves the fallback RC onboarding path and packaged
   Telegram runtime path.
@@ -115,6 +120,9 @@ Current RC truth as of 2026-06-05:
   notarization submit/poll/staple receipts. Set `NOTARYTOOL_KEY`,
   `NOTARYTOOL_KEY_ID`, and `NOTARYTOOL_ISSUER` through the machine release env;
   leave `NOTARYTOOL_PROFILE` unset unless deliberately using the fallback path.
+- For a real app update, bump `APP_VERSION` and/or `APP_BUILD` before running
+  the publish lane. Sparkle only offers an update when the published
+  `CFBundleVersion` is higher than the installed app build.
 - Read-only preflight on 2026-05-16 ended with `Final: ASC API key lane ready.`
   That proved credential readiness only; it did not submit notarization, staple,
   package, upload, or mutate release assets.
@@ -366,8 +374,10 @@ Say this directly:
   inside Telegram/BotFather before the backend callback.
 - `--fast` RC packages are Developer ID signed but unnotarized, so Gatekeeper
   rejection is expected. Do not present a fast RC artifact as the final release.
-- final release still needs notarized DMG/ZIP assets and a real Sparkle N-to-N+1
-  update proof before it can be treated as release-ready.
+- the current sendable package must come from the canonical publish lane and
+  end with `release_sendable=true` plus `sparkle_update_live=true`; a full
+  Sparkle N-to-N+1 update proof is still needed before trusting the next
+  automatic update cycle at scale.
 
 ### Roadmap
 
@@ -383,10 +393,10 @@ truth:
   blocker is Telegram/BotFather hanging inside Create Bot before Jarvis
   receives the backend callback; keep the managed tracker as the detailed
   source of truth.
-- Needed before waiting testers receive a package: notarized DMG/ZIP from the
-  current RC line, Gatekeeper/stapler verification, package secret audit, and
-  proof that the shipped app matches the current RC code and expected
-  onboarding path.
+- Needed before waiting testers receive a package: a canonical publish-lane
+  `Jarvis.dmg` with Gatekeeper/stapler verification, package secret audit,
+  public Sparkle appcast verification, and proof that the shipped app matches
+  the current RC code and expected onboarding path.
 - Needed before Reddit / broad public beta: `ai.jarvis.mac` bundle/runtime/
   update identity migration, full Sparkle N-to-N+1 update proof, broader
   onboarding polish, Claude Code consumer exposure, Telegram model-picker
