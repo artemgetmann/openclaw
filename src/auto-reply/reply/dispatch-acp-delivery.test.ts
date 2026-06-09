@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -65,8 +65,12 @@ function createCoordinator(params?: {
 }
 
 describe("createAcpDispatchDeliveryCoordinator", () => {
-  it("routes same-source Telegram ACP blocks through the dispatcher preview lane", async () => {
+  beforeEach(() => {
     routeMocks.routeReply.mockClear();
+    ttsMocks.maybeApplyTtsToPayload.mockClear();
+  });
+
+  it("routes same-source Telegram ACP blocks through the dispatcher preview lane", async () => {
     const { coordinator, dispatcher } = createCoordinator({
       provider: "telegram",
       surface: "telegram",
@@ -86,7 +90,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   });
 
   it("keeps non-Telegram originating ACP blocks on direct routeReply delivery", async () => {
-    routeMocks.routeReply.mockClear();
     const { coordinator, dispatcher } = createCoordinator({
       provider: "discord",
       surface: "discord",
@@ -156,5 +159,41 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await coordinator.deliver("block", { text });
 
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text });
+  });
+
+  it("skips TTS for source-preview progress but keeps final TTS eligible", async () => {
+    const { coordinator, dispatcher } = createCoordinator();
+    const sourcePreview = {
+      openclaw: {
+        sourcePreview: true,
+      },
+    };
+
+    await coordinator.deliver("tool", {
+      text: "Checking example.com.",
+      channelData: sourcePreview,
+    });
+    await coordinator.deliver("block", {
+      text: "Reading IANA.",
+      channelData: sourcePreview,
+    });
+    await coordinator.deliver("final", { text: "Final answer." });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "Final answer." },
+      }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({
+      text: "Checking example.com.",
+      channelData: sourcePreview,
+    });
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({
+      text: "Reading IANA.",
+      channelData: sourcePreview,
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final answer." });
   });
 });

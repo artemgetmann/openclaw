@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { formatBillingErrorMessage } from "../../pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { resolveEmbeddedRunPayloadErrorAssistant } from "./payloads.js";
 import {
   buildPayloads,
   expectSinglePayloadText,
@@ -138,6 +139,45 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectSinglePayloadText(payloads, "Recovered with the final answer.");
     expect(payloads[0]?.isError).toBeUndefined();
+  });
+
+  it("keeps a distinct stopped final after earlier assistant snippets", () => {
+    const finalAnswer =
+      "[[reply_to_current]] Example.com is a placeholder demo page, IANA explains reserved example domains, and MDN documents HTML.";
+    const payloads = buildPayloads({
+      assistantTexts: ["IANA screenshot.", "MDN screenshot."],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: finalAnswer }],
+      }),
+    });
+
+    expect(payloads.map((payload) => payload.text)).toContain(
+      "Example.com is a placeholder demo page, IANA explains reserved example domains, and MDN documents HTML.",
+    );
+  });
+
+  it("uses a distinct stopped final when deciding whether a prior error was masked", () => {
+    const finalAnswer =
+      "[[reply_to_current]] Example.com is a placeholder demo page, IANA explains reserved example domains, and MDN documents HTML.";
+    const surfacedError = resolveEmbeddedRunPayloadErrorAssistant({
+      assistantTexts: ["IANA screenshot.", "MDN screenshot."],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: finalAnswer }],
+      }),
+      lastErroredAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: "old provider error",
+      }),
+      sessionKey: "agent:main:test",
+      inlineToolResultsAllowed: false,
+      toolMetas: [],
+    });
+
+    expect(surfacedError).toBeUndefined();
   });
 
   it("includes provider and model context for billing errors", () => {

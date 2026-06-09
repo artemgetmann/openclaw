@@ -7,6 +7,7 @@ const BASE_METHODS = [
   "logs.tail",
   "channels.status",
   "channels.logout",
+  "channels.telegram.progress-tts-proof",
   "channels.telegram.setup-replay",
   "status",
   "usage.status",

@@ -57,6 +57,7 @@ export type EmbeddedPiSubscribeState = {
   lastAssistantTextMessageIndex: number;
   lastAssistantTextNormalized?: string;
   lastAssistantTextTrimmed?: string;
+  currentAssistantPhase?: "commentary" | "final_answer";
   assistantTextBaseline: number;
   suppressBlockChunks: boolean;
   lastReasoningSent?: string;
@@ -137,6 +138,7 @@ export type ToolHandlerParams = Pick<
   | "onBlockReplyFlush"
   | "onAgentEvent"
   | "onToolResult"
+  | "deferPhaseUnknownBlockReplies"
   | "sessionKey"
   | "sessionId"
   | "agentId"
@@ -157,6 +159,7 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentTargets"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
+  | "currentAssistantPhase"
 >;
 
 export type ToolHandlerContext = {

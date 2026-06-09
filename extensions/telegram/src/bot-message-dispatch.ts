@@ -48,6 +48,10 @@ import {
   normalizeAdjacentProgressBoundaries,
 } from "./lane-delivery.js";
 import {
+  createTelegramProgressController,
+  type TelegramProgressController,
+} from "./progress-controller.js";
+import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
@@ -59,6 +63,16 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 /** Minimum chars before sending first streaming message (improves push notification UX). */
 const DRAFT_MIN_INITIAL_CHARS = 12;
 const DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW = 1;
+const PROGRESS_FINAL_CLEANUP_TIMEOUT_MS = 2_000;
+
+// Continuation-style agent runs can re-enter Telegram delivery between tool
+// turns. A function-local progress controller gets cleared at the end of each
+// dispatch and turns every progress update into a durable message. Keep one
+// controller per Telegram conversation/session until a final or fallback reply
+// explicitly clears it.
+const activeTelegramProgressControllers = new Map<string, TelegramProgressController>();
+
+type ProgressCleanupResult = "none" | "completed" | "timed-out" | "failed";
 
 function normalizeToolProgressLine(text?: string) {
   return text?.replace(/\s+/g, " ").trim();
@@ -104,6 +118,47 @@ function hasUserFacingToolEnvelope(payload: ReplyPayload) {
     payload.isError ||
     hasExecApprovalPayload(payload),
   );
+}
+
+function hasOpenClawSourcePreviewMarker(payload: ReplyPayload): boolean {
+  const openclaw =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData.openclaw
+      : undefined;
+
+  return (
+    openclaw != null &&
+    typeof openclaw === "object" &&
+    !Array.isArray(openclaw) &&
+    (openclaw as { sourcePreview?: unknown }).sourcePreview === true
+  );
+}
+
+function isTextOnlyOpenClawSourcePreview(payload: ReplyPayload): boolean {
+  return (
+    hasOpenClawSourcePreviewMarker(payload) &&
+    typeof payload.text === "string" &&
+    payload.text.trim().length > 0 &&
+    !hasUserFacingToolEnvelope(payload)
+  );
+}
+
+function resolveOpenClawAssistantPhase(
+  payload: ReplyPayload,
+): "commentary" | "final_answer" | undefined {
+  const openclaw =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData) &&
+    payload.channelData.openclaw &&
+    typeof payload.channelData.openclaw === "object" &&
+    !Array.isArray(payload.channelData.openclaw)
+      ? (payload.channelData.openclaw as Record<string, unknown>)
+      : undefined;
+  const phase = openclaw?.assistantPhase;
+  return phase === "commentary" || phase === "final_answer" ? phase : undefined;
 }
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
@@ -164,6 +219,20 @@ type DispatchTelegramMessageParams = {
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
+type TelegramDurableSendReason =
+  | "progress"
+  | "final"
+  | "tool"
+  | "error"
+  | "media"
+  | "fallback"
+  | "unknown";
+
+type TelegramDurableSendClassification = {
+  reason: TelegramDurableSendReason;
+  callsite: string;
+  sourceKind?: string;
+};
 
 function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
@@ -186,6 +255,45 @@ function resolveTelegramReasoningLevel(params: {
     // Fall through to default.
   }
   return "off";
+}
+
+function logTelegramDurableSendClassification(params: {
+  reason: TelegramDurableSendReason;
+  callsite: string;
+  laneName?: LaneName;
+  messageId?: number | "unknown";
+  draftCallsite?: string;
+  previewTransport?: string;
+  threadFallback?: boolean;
+  delivered?: boolean;
+  hasMedia?: boolean;
+  isError?: boolean;
+  infoKind?: string;
+  sourceKind?: string;
+  retained?: boolean;
+  deleteOnCleanup?: boolean;
+}) {
+  // Keep these diagnostics as stable key/value fields so live Telegram proof can
+  // grep a message id and immediately know which structural path created it.
+  const fields = [
+    `reason=${params.reason}`,
+    `callsite=${params.callsite}`,
+    params.laneName ? `lane=${params.laneName}` : undefined,
+    `message=${params.messageId ?? "unknown"}`,
+    params.infoKind ? `infoKind=${params.infoKind}` : undefined,
+    params.sourceKind ? `sourceKind=${params.sourceKind}` : undefined,
+    params.draftCallsite ? `draftCallsite=${params.draftCallsite}` : undefined,
+    params.previewTransport ? `previewTransport=${params.previewTransport}` : undefined,
+    params.threadFallback != null ? `threadFallback=${String(params.threadFallback)}` : undefined,
+    params.delivered != null ? `delivered=${String(params.delivered)}` : undefined,
+    params.hasMedia != null ? `hasMedia=${String(params.hasMedia)}` : undefined,
+    params.isError != null ? `isError=${String(params.isError)}` : undefined,
+    params.retained != null ? `retained=${String(params.retained)}` : undefined,
+    params.deleteOnCleanup != null
+      ? `deleteOnCleanup=${String(params.deleteOnCleanup)}`
+      : undefined,
+  ].filter((field): field is string => Boolean(field));
+  logVerbose(`telegram: durable send classified ${fields.join(" ")}`);
 }
 
 export const dispatchTelegramMessage = async ({
@@ -255,9 +363,15 @@ export const dispatchTelegramMessage = async ({
       : undefined;
   const hasNativeQuoteReply =
     replyToMode !== "off" && replyQuoteText != null && replyQuoteMessageId != null;
+  const canStreamProgressDraft = previewStreamingEnabled && !hasNativeQuoteReply;
+  // Telegram progress UX needs structural assistant-phase routing. If answer
+  // partial previews are installed, early commentary text like "Step" becomes
+  // a durable answer-lane message before the signed commentary block arrives.
+  const forceBlockStreamingForProgress = canStreamProgressDraft;
   const canStreamAnswerDraft =
     previewStreamingEnabled &&
     !hasNativeQuoteReply &&
+    !forceBlockStreamingForProgress &&
     !accountBlockStreamingEnabled &&
     !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
@@ -265,16 +379,46 @@ export const dispatchTelegramMessage = async ({
     replyToMode !== "off" && typeof msg.message_id === "number"
       ? (replyQuoteMessageId ?? msg.message_id)
       : undefined;
+  const progressThreadKey = threadSpec ? `${threadSpec.scope}:${threadSpec.id ?? ""}` : "none";
+  const progressControllerKey = [
+    route.accountId,
+    String(chatId),
+    progressThreadKey,
+    ctxPayload.SessionKey ?? "no-session",
+  ].join("|");
   // Keep DM preview lanes on real message transport. Native draft previews still
   // require a draft->message materialize hop, and that overlap keeps reintroducing
   // a visible duplicate flash at finalize time.
-  const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
+  const useMessagePreviewTransportForDm =
+    threadSpec?.scope === "dm" && (canStreamAnswerDraft || canStreamProgressDraft);
   const draftMinInitialChars = useMessagePreviewTransportForDm
     ? DRAFT_MIN_INITIAL_CHARS_DM_MESSAGE_PREVIEW
     : DRAFT_MIN_INITIAL_CHARS;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
+  // Draft streams only know that they created a real Telegram message. The
+  // dispatcher owns the semantic reason, so it tags the next real send before
+  // each update/materialize path that can allocate a message id.
+  const draftDurableSendClassificationByLane: Record<LaneName, TelegramDurableSendClassification> =
+    {
+      answer: {
+        reason: "unknown",
+        callsite: "answer-preview",
+        sourceKind: "unknown",
+      },
+      reasoning: {
+        reason: "progress",
+        callsite: "reasoning-preview",
+        sourceKind: "reasoning",
+      },
+    };
+  const setDraftDurableSendClassification = (
+    laneName: LaneName,
+    classification: TelegramDurableSendClassification,
+  ) => {
+    draftDurableSendClassificationByLane[laneName] = classification;
+  };
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
       ? createTelegramDraftStream({
@@ -286,7 +430,16 @@ export const dispatchTelegramMessage = async ({
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
-          onMessageDelivered: () => {
+          onMessageDelivered: (messageId, event) => {
+            const classification = draftDurableSendClassificationByLane[laneName];
+            logTelegramDurableSendClassification({
+              ...classification,
+              laneName,
+              messageId,
+              draftCallsite: event.callsite,
+              previewTransport: event.previewTransport,
+              threadFallback: event.threadFallback,
+            });
             recordChannelActivity({
               channel: "telegram",
               accountId: route.accountId,
@@ -342,6 +495,7 @@ export const dispatchTelegramMessage = async ({
   let retainedAnswerProgressFromExplicitBoundary = false;
   let forceNextAnswerFinalSend = false;
   let draftLaneEventQueue = Promise.resolve();
+  let progressController: TelegramProgressController | undefined;
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
     const next = draftLaneEventQueue.then(task);
@@ -379,25 +533,108 @@ export const dispatchTelegramMessage = async ({
       retainedAnswerProgressFromExplicitBoundary = false;
     }
   };
-  const appendAnswerProgressText = (text: string) => {
-    const normalized = text.trim();
-    if (!normalized) {
-      return "";
+  const getProgressController = () => {
+    if (!canStreamProgressDraft) {
+      return undefined;
     }
-    const current = retainedAnswerProgressPreviewText.trim();
-    if (!current) {
-      retainedAnswerProgressPreviewText = normalized;
-    } else if (normalized.startsWith(current)) {
-      retainedAnswerProgressPreviewText = normalized;
-    } else if (normalized !== current && !current.includes(normalized)) {
-      retainedAnswerProgressPreviewText = `${current}\n\n${normalized}`;
+    const existingController = activeTelegramProgressControllers.get(progressControllerKey);
+    if (existingController) {
+      progressController = existingController;
+      return existingController;
     }
-    retainedAnswerProgressFromExplicitBoundary = true;
-    return retainedAnswerProgressPreviewText;
+    if (!progressController) {
+      progressController = createTelegramProgressController({
+        api: bot.api,
+        chatId,
+        maxChars: draftMaxChars,
+        thread: threadSpec,
+        replyToMessageId: draftReplyToMessageId,
+        minInitialChars: draftMinInitialChars,
+        renderText: renderDraftPreview,
+        onMessageDelivered: (messageId, event) => {
+          logTelegramDurableSendClassification({
+            reason: "progress",
+            callsite: "telegram-progress-controller-preview",
+            laneName: "answer",
+            messageId,
+            draftCallsite: event.callsite,
+            previewTransport: event.previewTransport,
+            threadFallback: event.threadFallback,
+            sourceKind: "block",
+          });
+          recordChannelActivity({
+            channel: "telegram",
+            accountId: route.accountId,
+            direction: "outbound",
+          });
+        },
+        log: logVerbose,
+        warn: logVerbose,
+      });
+      activeTelegramProgressControllers.set(progressControllerKey, progressController);
+    }
+    return progressController;
+  };
+  const clearProgressController = async (callsite: string, options?: { timeoutMs?: number }) => {
+    const controller =
+      activeTelegramProgressControllers.get(progressControllerKey) ?? progressController;
+    if (!controller) {
+      return "none";
+    }
+    const cleanupPromise = controller.clear();
+    let cleanupResult: ProgressCleanupResult = "completed";
+    try {
+      const timeoutMs = options?.timeoutMs;
+      if (typeof timeoutMs !== "number" || timeoutMs <= 0) {
+        await cleanupPromise;
+      } else {
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        const raceResult = await Promise.race([
+          cleanupPromise.then(() => "completed" as const),
+          new Promise<"timed-out">((resolve) => {
+            timeoutHandle = setTimeout(() => resolve("timed-out"), timeoutMs);
+          }),
+        ]);
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+        if (raceResult === "timed-out") {
+          cleanupResult = "timed-out";
+          // Final delivery is the durable product contract. Progress cleanup is
+          // best effort after the bounded window so a stuck Telegram delete/edit
+          // cannot strand the user's answer.
+          void cleanupPromise.catch((err) => {
+            logVerbose(
+              `telegram: progress cleanup failed after timeout callsite=${callsite}: ${String(err)}`,
+            );
+          });
+          logVerbose(
+            `telegram: progress cleanup timed out callsite=${callsite} timeoutMs=${timeoutMs}; continuing delivery`,
+          );
+        }
+      }
+    } catch (err) {
+      cleanupResult = "failed";
+      logVerbose(`telegram: progress cleanup failed callsite=${callsite}: ${String(err)}`);
+    } finally {
+      if (activeTelegramProgressControllers.get(progressControllerKey) === controller) {
+        activeTelegramProgressControllers.delete(progressControllerKey);
+      }
+      if (progressController === controller) {
+        progressController = undefined;
+      }
+    }
+    return cleanupResult;
   };
   const rotateAnswerLaneForNewAssistantMessage = async () => {
     let didForceNewMessage = false;
     if (answerLane.hasStreamedMessage) {
+      const boundaryClassification: TelegramDurableSendClassification = {
+        reason: retainedAnswerProgressFromExplicitBoundary ? "progress" : "unknown",
+        callsite: "answer-boundary-rotation-materialize",
+        sourceKind: retainedAnswerProgressFromExplicitBoundary ? "block" : "partial",
+      };
+      setDraftDurableSendClassification("answer", boundaryClassification);
       // Materialize the current streamed draft into a permanent message
       // so it remains visible across tool boundaries.
       const materializedId = await answerLane.stream?.materialize?.();
@@ -410,6 +647,14 @@ export const dispatchTelegramMessage = async ({
           messageId: previewMessageId,
           textSnapshot: answerLane.lastPartialText,
           deleteIfUnused: false,
+        });
+        logTelegramDurableSendClassification({
+          ...boundaryClassification,
+          callsite: "answer-boundary-rotation-retain",
+          laneName: "answer",
+          messageId: previewMessageId,
+          retained: true,
+          deleteOnCleanup: false,
         });
       }
       answerLane.stream?.forceNewMessage();
@@ -443,11 +688,27 @@ export const dispatchTelegramMessage = async ({
       answerLane.stream.update(progressToMaterialize);
       answerLane.lastPartialText = progressToMaterialize;
     }
+    setDraftDurableSendClassification("answer", {
+      reason: "progress",
+      callsite: "answer-progress-before-final-materialize",
+      sourceKind: "block",
+    });
     // Materialization snapshots the last delivered preview. Force any restored
     // progress-only edit out first so a late partial containing the final
     // answer cannot be frozen into the retained progress bubble.
     await answerLane.stream.flush();
-    await answerLane.stream.materialize?.();
+    const materializedProgressMessageId = await answerLane.stream.materialize?.();
+    if (typeof materializedProgressMessageId === "number") {
+      logTelegramDurableSendClassification({
+        reason: "progress",
+        callsite: "answer-progress-before-final-retain",
+        laneName: "answer",
+        messageId: materializedProgressMessageId,
+        retained: true,
+        deleteOnCleanup: false,
+        sourceKind: "block",
+      });
+    }
     answerLane.stream.forceNewMessage();
     resetDraftLaneState(answerLane);
     // The retained progress bubble is now permanent. The paired final answer
@@ -514,6 +775,12 @@ export const dispatchTelegramMessage = async ({
     if (previewText === lane.lastPartialText) {
       return;
     }
+    const laneName: LaneName = lane === answerLane ? "answer" : "reasoning";
+    setDraftDurableSendClassification(laneName, {
+      reason: laneName === "reasoning" ? "progress" : "unknown",
+      callsite: `${laneName}-partial-preview`,
+      sourceKind: "partial",
+    });
     // Mark only previews we actually render. A suppressed heading like
     // "example.com:" is just an early final-answer prefix, not progress.
     lane.hasStreamedMessage = true;
@@ -544,16 +811,22 @@ export const dispatchTelegramMessage = async ({
     await lane.stream.flush();
   };
   const updateAnswerProgressFromBlock = (text: string | undefined) => {
-    if (!answerLane.stream || !text) {
+    if (!text) {
       return false;
     }
-    const progressText = appendAnswerProgressText(text);
+    const progressText = normalizeAdjacentProgressBoundaries(text).trim();
     if (!progressText) {
       return false;
     }
-    answerLane.hasStreamedMessage = true;
-    answerLane.lastPartialText = progressText;
-    answerLane.stream.update(progressText);
+    const controller = getProgressController();
+    if (!controller) {
+      return false;
+    }
+    // Progress owns the transient bubble. The final answer must be sent as its
+    // own durable message after progress cleanup, not routed through the answer
+    // preview lane that caused the old staircase retention.
+    forceNextAnswerFinalSend = true;
+    controller.update(progressText);
     return true;
   };
   const renderTextWithToolProgress = (text: string) => {
@@ -567,11 +840,13 @@ export const dispatchTelegramMessage = async ({
     ? true
     : forceBlockStreamingForReasoning
       ? false
-      : typeof telegramCfg.blockStreaming === "boolean"
-        ? !telegramCfg.blockStreaming
-        : canStreamAnswerDraft
-          ? true
-          : undefined;
+      : forceBlockStreamingForProgress
+        ? false
+        : typeof telegramCfg.blockStreaming === "boolean"
+          ? !telegramCfg.blockStreaming
+          : canStreamAnswerDraft
+            ? true
+            : undefined;
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -688,6 +963,31 @@ export const dispatchTelegramMessage = async ({
     }
     return { ...payload, replyToId: implicitQuoteReplyTargetId };
   };
+  const classifyPayloadDurableSendReason = (
+    payload: ReplyPayload,
+    infoKind?: string,
+  ): TelegramDurableSendReason => {
+    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    if (payload.isError) {
+      return "error";
+    }
+    if (hasMedia) {
+      return "media";
+    }
+    if (infoKind === "final") {
+      return "final";
+    }
+    if (infoKind === "tool") {
+      return "tool";
+    }
+    if (infoKind === "block") {
+      return "progress";
+    }
+    if (infoKind === "fallback") {
+      return "fallback";
+    }
+    return "unknown";
+  };
   const stripInternalToolTraceText = (payload: ReplyPayload): ReplyPayload | undefined => {
     if (payload.isError || !hasInternalToolTraceText(payload.text)) {
       return payload;
@@ -698,11 +998,32 @@ export const dispatchTelegramMessage = async ({
     }
     return withoutTraceText;
   };
-  const sendPayload = async (payload: ReplyPayload) => {
+  const sendPayload = async (
+    payload: ReplyPayload,
+    classification?: {
+      reason?: TelegramDurableSendReason;
+      callsite?: string;
+      laneName?: LaneName;
+      infoKind?: string;
+    },
+  ) => {
     const normalizedPayload =
       typeof payload.text === "string"
         ? applyTextToPayload(payload, normalizeAdjacentProgressBoundaries(payload.text))
         : payload;
+    const hasMedia =
+      Boolean(normalizedPayload.mediaUrl) || (normalizedPayload.mediaUrls?.length ?? 0) > 0;
+    logTelegramDurableSendClassification({
+      reason:
+        classification?.reason ??
+        classifyPayloadDurableSendReason(normalizedPayload, classification?.infoKind),
+      callsite: classification?.callsite ?? "dispatch-send-payload",
+      laneName: classification?.laneName,
+      messageId: "unknown",
+      infoKind: classification?.infoKind,
+      hasMedia,
+      isError: normalizedPayload.isError === true,
+    });
     const result = await deliverReplies({
       ...deliveryBaseOptions,
       replies: [applyQuoteReplyTarget(normalizedPayload)],
@@ -714,6 +1035,14 @@ export const dispatchTelegramMessage = async ({
     return result.delivered;
   };
   const sendToolPayload = async (payload: ReplyPayload) => {
+    if (isTextOnlyOpenClawSourcePreview(payload)) {
+      // Same-chat message-tool progress is model-authored working state. Render
+      // it through the mutable progress controller so it never becomes durable
+      // Telegram text and never reaches TTS as a tool result.
+      updateAnswerProgressFromBlock(payload.text);
+      return;
+    }
+
     const sanitizedPayload = stripInternalToolTraceText(payload);
     if (!sanitizedPayload) {
       return;
@@ -724,7 +1053,11 @@ export const dispatchTelegramMessage = async ({
     if (!hasUserFacingToolEnvelope(sanitizedPayload)) {
       return;
     }
-    await sendPayload(sanitizedPayload);
+    await sendPayload(sanitizedPayload, {
+      reason: classifyPayloadDurableSendReason(sanitizedPayload, "tool"),
+      callsite: "dispatch-tool-payload",
+      infoKind: "tool",
+    });
   };
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
@@ -770,9 +1103,28 @@ export const dispatchTelegramMessage = async ({
       hasMedia,
       isError: payload.isError,
     });
+    const progressCleanupResult = await clearProgressController("before-final", {
+      timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
+    });
+    if (progressCleanupResult === "timed-out") {
+      // The timed-out cleanup may still delete the old progress message later.
+      // Force the final through a fresh send so late cleanup cannot erase the
+      // user's durable answer.
+      forceNextAnswerFinalSend = true;
+    }
+    setDraftDurableSendClassification("answer", {
+      reason: classifyPayloadDurableSendReason(payload, "final"),
+      callsite: "answer-final-preview",
+      sourceKind: "final",
+    });
     if (forceNextAnswerFinalSend) {
       forceNextAnswerFinalSend = false;
-      const delivered = await sendPayload(applyTextToPayload(payload, preparedText));
+      const delivered = await sendPayload(applyTextToPayload(payload, preparedText), {
+        reason: classifyPayloadDurableSendReason(payload, "final"),
+        callsite: "answer-final-forced-send",
+        laneName: "answer",
+        infoKind: "final",
+      });
       return delivered ? "sent" : "skipped";
     }
     return deliverLaneText({
@@ -784,7 +1136,48 @@ export const dispatchTelegramMessage = async ({
     });
   };
 
+  type PendingAmbiguousAnswerBlock = {
+    text: string;
+    payload: ReplyPayload;
+    previewButtons?: TelegramInlineButtons;
+    hasMedia: boolean;
+  };
+
   let queuedFinal = false;
+  let pendingAmbiguousAnswerBlock: PendingAmbiguousAnswerBlock | undefined;
+
+  const bufferAmbiguousAnswerBlock = (pending: PendingAmbiguousAnswerBlock) => {
+    pendingAmbiguousAnswerBlock = pending;
+    logVerbose("telegram: buffered phase-unknown answer block until lifecycle boundary");
+  };
+
+  const flushAmbiguousAnswerBlockAsProgress = (callsite: string) => {
+    const pending = pendingAmbiguousAnswerBlock;
+    if (!pending) {
+      return;
+    }
+    pendingAmbiguousAnswerBlock = undefined;
+    logVerbose(`telegram: routing phase-unknown answer block as progress callsite=${callsite}`);
+    updateAnswerProgressFromBlock(renderTextWithToolProgress(pending.text));
+  };
+
+  const flushAmbiguousAnswerBlockAsFinal = async (callsite: string) => {
+    const pending = pendingAmbiguousAnswerBlock;
+    if (!pending) {
+      return;
+    }
+    pendingAmbiguousAnswerBlock = undefined;
+    logVerbose(
+      `telegram: routing terminal phase-unknown answer block as final callsite=${callsite}`,
+    );
+    const result = await deliverFinalAnswerText({
+      text: pending.text,
+      payload: pending.payload,
+      previewButtons: pending.previewButtons,
+      hasMedia: pending.hasMedia,
+    });
+    queuedFinal = result !== "skipped" || queuedFinal;
+  };
 
   if (statusReactionController) {
     void statusReactionController.setThinking();
@@ -812,7 +1205,22 @@ export const dispatchTelegramMessage = async ({
         typingCallbacks,
         deliver: async (payload, info) => {
           try {
-            if (info.kind === "final") {
+            const assistantPhase = resolveOpenClawAssistantPhase(payload);
+            const deliveryKind =
+              info.kind === "block" && assistantPhase === "final_answer" ? "final" : info.kind;
+            if (
+              pendingAmbiguousAnswerBlock &&
+              (deliveryKind === "final" ||
+                deliveryKind === "tool" ||
+                assistantPhase === "commentary" ||
+                (deliveryKind === "block" && !assistantPhase))
+            ) {
+              // A later structural boundary proves the previous phase-less
+              // block was in-flight commentary. Route it through the mutable
+              // progress controller before handling the new event.
+              flushAmbiguousAnswerBlockAsProgress(`before-${deliveryKind}`);
+            }
+            if (deliveryKind === "final") {
               // Assistant callbacks are fire-and-forget; ensure queued boundary
               // rotations/partials are applied before final delivery mapping.
               await enqueueDraftLaneEvent(async () => {});
@@ -830,7 +1238,7 @@ export const dispatchTelegramMessage = async ({
             const previewButtons = (
               payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
             )?.buttons;
-            if (info.kind === "tool") {
+            if (deliveryKind === "tool") {
               const sanitizedPayload = stripInternalToolTraceText(payload);
               if (!sanitizedPayload) {
                 return;
@@ -871,7 +1279,7 @@ export const dispatchTelegramMessage = async ({
             for (const segment of segments) {
               if (
                 segment.lane === "answer" &&
-                info.kind === "final" &&
+                deliveryKind === "final" &&
                 reasoningStepState.shouldBufferFinalAnswer()
               ) {
                 reasoningStepState.bufferFinalAnswer({
@@ -883,16 +1291,32 @@ export const dispatchTelegramMessage = async ({
               if (segment.lane === "reasoning") {
                 reasoningStepState.noteReasoningHint();
               }
-              if (segment.lane === "answer" && info.kind !== "final") {
+              if (segment.lane === "answer" && deliveryKind !== "final") {
                 if (hasMedia || payload.isError) {
-                  await sendPayload(payload);
+                  await sendPayload(payload, {
+                    reason: classifyPayloadDurableSendReason(payload, deliveryKind),
+                    callsite: "dispatch-nonfinal-answer-envelope",
+                    laneName: "answer",
+                    infoKind: deliveryKind,
+                  });
+                } else if (deliveryKind === "block" && !assistantPhase) {
+                  // Phase metadata is the only safe way to distinguish
+                  // commentary from final-answer text. If it is missing, wait
+                  // until the next lifecycle signal: a tool/final/known phase
+                  // makes this progress; end-of-run makes it the final answer.
+                  bufferAmbiguousAnswerBlock({
+                    text: segment.text,
+                    payload,
+                    previewButtons,
+                    hasMedia,
+                  });
                 } else {
                   updateAnswerProgressFromBlock(renderTextWithToolProgress(segment.text));
                 }
                 continue;
               }
               const result =
-                segment.lane === "answer" && info.kind === "final"
+                segment.lane === "answer" && deliveryKind === "final"
                   ? await deliverFinalAnswerText({
                       text: segment.text,
                       payload,
@@ -906,7 +1330,7 @@ export const dispatchTelegramMessage = async ({
                           ? renderTextWithToolProgress(segment.text)
                           : segment.text,
                       payload,
-                      infoKind: info.kind,
+                      infoKind: deliveryKind,
                       previewButtons,
                       allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
                     });
@@ -917,7 +1341,7 @@ export const dispatchTelegramMessage = async ({
                 }
                 continue;
               }
-              if (info.kind === "final") {
+              if (deliveryKind === "final") {
                 if (reasoningLane.hasStreamedMessage) {
                   activePreviewLifecycleByLane.reasoning = "complete";
                   retainPreviewOnCleanupByLane.reasoning = true;
@@ -932,15 +1356,22 @@ export const dispatchTelegramMessage = async ({
               if (hasMedia) {
                 const payloadWithoutSuppressedReasoning =
                   typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-                await sendPayload(payloadWithoutSuppressedReasoning);
+                await sendPayload(payloadWithoutSuppressedReasoning, {
+                  reason: classifyPayloadDurableSendReason(
+                    payloadWithoutSuppressedReasoning,
+                    deliveryKind,
+                  ),
+                  callsite: "dispatch-suppressed-reasoning-media",
+                  infoKind: deliveryKind,
+                });
               }
-              if (info.kind === "final") {
+              if (deliveryKind === "final") {
                 await flushBufferedFinalAnswer();
               }
               return;
             }
 
-            if (info.kind === "final") {
+            if (deliveryKind === "final") {
               await answerLane.stream?.stop();
               await reasoningLane.stream?.stop();
               reasoningStepState.resetForNextStep();
@@ -948,25 +1379,34 @@ export const dispatchTelegramMessage = async ({
             const canSendAsIs =
               hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
             if (!canSendAsIs) {
-              if (info.kind === "final") {
+              if (deliveryKind === "final") {
                 await flushBufferedFinalAnswer();
               }
               return;
             }
             if (
-              info.kind !== "final" &&
+              deliveryKind !== "final" &&
               typeof payload.text === "string" &&
               !hasMedia &&
               !payload.isError
             ) {
-              updateAnswerProgressFromBlock(renderTextWithToolProgress(payload.text));
+              if (deliveryKind === "block" && !assistantPhase) {
+                bufferAmbiguousAnswerBlock({
+                  text: payload.text,
+                  payload,
+                  previewButtons,
+                  hasMedia,
+                });
+              } else {
+                updateAnswerProgressFromBlock(renderTextWithToolProgress(payload.text));
+              }
               return;
             }
             await sendPayload(
               payload.text
                 ? applyTextToPayload(
                     payload,
-                    info.kind === "final"
+                    deliveryKind === "final"
                       ? await prepareFinalAnswerText(payload.text, {
                           hasMedia,
                           isError: payload.isError,
@@ -974,12 +1414,20 @@ export const dispatchTelegramMessage = async ({
                       : renderTextWithToolProgress(payload.text),
                   )
                 : payload,
+              {
+                reason: classifyPayloadDurableSendReason(payload, deliveryKind),
+                callsite: "dispatch-direct-payload",
+                infoKind: deliveryKind,
+              },
             );
-            if (info.kind === "final") {
+            if (deliveryKind === "final") {
               await flushBufferedFinalAnswer();
             }
           } finally {
-            if (info.kind === "final") {
+            if (
+              info.kind === "final" ||
+              resolveOpenClawAssistantPhase(payload) === "final_answer"
+            ) {
               resetToolProgressDraft();
             }
           }
@@ -999,6 +1447,7 @@ export const dispatchTelegramMessage = async ({
         disableBlockStreaming,
         onToolResult: (payload) =>
           enqueueDraftLaneEvent(async () => {
+            flushAmbiguousAnswerBlockAsProgress("before-tool-result");
             await sendToolPayload(payload);
           }),
         onPartialReply:
@@ -1048,11 +1497,13 @@ export const dispatchTelegramMessage = async ({
                 splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
               })
           : undefined,
-        onToolStart: statusReactionController
-          ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
-            }
-          : undefined,
+        onToolStart: async (payload) => {
+          flushAmbiguousAnswerBlockAsProgress("before-tool-start");
+          if (!statusReactionController) {
+            return;
+          }
+          await statusReactionController.setTool(payload.name);
+        },
         onCompactionStart: statusReactionController
           ? () => statusReactionController.setCompacting()
           : undefined,
@@ -1072,6 +1523,9 @@ export const dispatchTelegramMessage = async ({
     // Upstream assistant callbacks are fire-and-forget; drain queued lane work
     // before stream cleanup so boundary rotations/materialization complete first.
     await draftLaneEventQueue;
+    if (!dispatchError) {
+      await flushAmbiguousAnswerBlockAsFinal("dispatch-settled");
+    }
     // Must stop() first to flush debounced content before clear() wipes state.
     const streamCleanupStates = new Map<
       NonNullable<DraftLaneState["stream"]>,
@@ -1142,6 +1596,15 @@ export const dispatchTelegramMessage = async ({
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
+    await clearProgressController("before-fallback", {
+      timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
+    });
+    logTelegramDurableSendClassification({
+      reason: "fallback",
+      callsite: "dispatch-empty-or-error-fallback",
+      messageId: "unknown",
+      infoKind: "fallback",
+    });
     const result = await deliverReplies({
       replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,

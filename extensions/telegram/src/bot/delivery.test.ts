@@ -182,7 +182,7 @@ function createVoiceFailureHarness(params: {
 describe("deliverReplies", () => {
   beforeEach(() => {
     resetChannelActivityForTest();
-    loadWebMedia.mockClear();
+    loadWebMedia.mockReset();
     triggerInternalHook.mockReset();
     messageHookRunner.hasHooks.mockReset();
     messageHookRunner.hasHooks.mockReturnValue(false);
@@ -474,6 +474,40 @@ describe("deliverReplies", () => {
     expect(onVoiceRecording).toHaveBeenCalledTimes(1);
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["recordVoice", "sendVoice"]);
+  });
+
+  it("sends voice supplements without duplicating final text as a caption", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn(async () => ({ message_id: 10, chat: { id: "123" } }));
+    const sendVoice = vi.fn(async () => ({ message_id: 11, chat: { id: "123" } }));
+    const bot = createBot({ sendMessage, sendVoice });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Final answer.",
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Final answer."),
+      expect.any(Object),
+    );
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    const sendVoiceCalls = sendVoice.mock.calls as unknown as Array<
+      [unknown, unknown, Record<string, unknown>?]
+    >;
+    const sendVoiceOptions = sendVoiceCalls[0]?.[2] ?? {};
+    expect(sendVoiceOptions).not.toHaveProperty("caption");
+    expect(sendVoiceOptions).not.toHaveProperty("parse_mode");
   });
 
   it("renders markdown in media captions", async () => {
@@ -899,7 +933,7 @@ describe("deliverReplies", () => {
   it("rethrows non-VOICE_MESSAGES_FORBIDDEN errors from sendVoice", async () => {
     const runtime = createRuntime();
     const sendVoice = vi.fn().mockRejectedValue(new Error("Network error"));
-    const sendMessage = vi.fn();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
     const bot = createBot({ sendVoice, sendMessage });
 
     mockMediaLoad("note.ogg", "audio/ogg", "voice");
@@ -913,8 +947,8 @@ describe("deliverReplies", () => {
     ).rejects.toThrow("Network error");
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
-    // Text fallback should NOT be attempted for other errors
-    expect(sendMessage).not.toHaveBeenCalled();
+    // Text is the durable final and is sent before the optional voice supplement.
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("replyToMode 'first' only applies reply-to to the first text chunk", async () => {

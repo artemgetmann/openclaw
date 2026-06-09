@@ -2373,6 +2373,7 @@ export async function runEmbeddedAttempt(
             }
           : undefined,
         onBlockReplyFlush: params.onBlockReplyFlush,
+        deferPhaseUnknownBlockReplies: params.deferPhaseUnknownBlockReplies,
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
         onPartialReply: params.onPartialReply

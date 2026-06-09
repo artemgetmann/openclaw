@@ -116,7 +116,12 @@ describe("shouldSuppressMessagingToolReplies", () => {
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123:topic:77",
         messagingToolSentTargets: [
-          { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "telegram:group:-100123:topic:77",
+            threadId: "77",
+          },
         ],
       }),
     ).toBe(true);
@@ -149,7 +154,45 @@ describe("shouldSuppressMessagingToolReplies", () => {
       shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123",
-        messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "-100123" }],
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "telegram:group:-100123" },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress final replies after same-target media-only sends", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "telegram:1336356696",
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "telegram:1336356696",
+            hasMedia: true,
+            hasText: false,
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("still suppresses final replies after same-target text sends", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "telegram:1336356696",
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "telegram:1336356696",
+            hasMedia: false,
+            hasText: true,
+          },
+        ],
       }),
     ).toBe(true);
   });

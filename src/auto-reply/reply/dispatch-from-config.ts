@@ -41,7 +41,7 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { truncateLine } from "../../shared/subagents-format.js";
-import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
+import { maybeApplyTtsToPayload, normalizeTtsAutoMode } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -118,6 +118,22 @@ function compactNativeTelegramToolText(text: string): string {
   const preview = previewLines.join("\n").trimEnd();
   const suffix = `… truncated (${lines.length} lines, ${normalized.length} chars)`;
   return preview ? `${preview}\n\n${suffix}` : suffix;
+}
+
+function isSourcePreviewToolPayload(payload: ReplyPayload): boolean {
+  const channelData = payload.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return false;
+  }
+
+  // Source previews are transient progress/status payloads emitted through the
+  // tool lane. They should remain eligible for normal delivery filtering, but
+  // must not be upgraded into voice/audio replies by the TTS layer.
+  const openclaw = channelData.openclaw;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return false;
+  }
+  return (openclaw as { sourcePreview?: unknown }).sourcePreview === true;
 }
 
 const TELEGRAM_INTERNAL_TOOL_SUMMARY_LINE_RE =
@@ -597,12 +613,6 @@ export async function dispatchReplyFromConfig(params: {
       return acpDispatch;
     }
 
-    // Track accumulated block text for TTS generation after streaming completes.
-    // When block streaming succeeds, there's no final reply, so we need to generate
-    // TTS audio separately from the accumulated block content.
-    let accumulatedBlockText = "";
-    let blockCount = 0;
-
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
         shouldSuppressLocalExecApprovalPrompt({
@@ -660,14 +670,16 @@ export async function dispatchReplyFromConfig(params: {
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
-            const ttsPayload = await maybeApplyTtsToPayload({
-              payload,
-              cfg,
-              channel: ttsChannel,
-              kind: "tool",
-              inboundAudio,
-              ttsAuto: sessionTtsAuto,
-            });
+            const ttsPayload = isSourcePreviewToolPayload(payload)
+              ? payload
+              : await maybeApplyTtsToPayload({
+                  payload,
+                  cfg,
+                  channel: ttsChannel,
+                  kind: "tool",
+                  inboundAudio,
+                  ttsAuto: sessionTtsAuto,
+                });
             const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
             if (!deliveryPayload) {
               return;
@@ -688,22 +700,16 @@ export async function dispatchReplyFromConfig(params: {
             if (shouldSuppressReasoningPayload(payload)) {
               return;
             }
-            // Accumulate block text for TTS generation after streaming
-            if (payload.text) {
-              if (accumulatedBlockText.length > 0) {
-                accumulatedBlockText += "\n";
-              }
-              accumulatedBlockText += payload.text;
-              blockCount++;
-            }
-            const ttsPayload = await maybeApplyTtsToPayload({
-              payload,
-              cfg,
-              channel: ttsChannel,
-              kind: "block",
-              inboundAudio,
-              ttsAuto: sessionTtsAuto,
-            });
+            const ttsPayload = isSourcePreviewToolPayload(payload)
+              ? payload
+              : await maybeApplyTtsToPayload({
+                  payload,
+                  cfg,
+                  channel: ttsChannel,
+                  kind: "block",
+                  inboundAudio,
+                  ttsAuto: sessionTtsAuto,
+                });
             if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
               return;
             }
@@ -795,66 +801,6 @@ export async function dispatchReplyFromConfig(params: {
       } else {
         queuedFinal =
           dispatcher.sendFinalReply(sanitizeTelegramVisiblePayload(ttsReply)) || queuedFinal;
-      }
-    }
-
-    const ttsMode = resolveTtsConfig(cfg).mode ?? "final";
-    // Generate TTS-only reply after block streaming completes (when there's no final reply).
-    // This handles the case where block streaming succeeds and drops final payloads,
-    // but we still want TTS audio to be generated from the accumulated block content.
-    if (
-      ttsMode === "final" &&
-      replies.length === 0 &&
-      blockCount > 0 &&
-      accumulatedBlockText.trim()
-    ) {
-      try {
-        const ttsSyntheticReply = await maybeApplyTtsToPayload({
-          payload: { text: accumulatedBlockText },
-          cfg,
-          channel: ttsChannel,
-          kind: "final",
-          inboundAudio,
-          ttsAuto: sessionTtsAuto,
-        });
-        // Only send if TTS was actually applied (mediaUrl exists).
-        if (ttsSyntheticReply.mediaUrl) {
-          // Preserve the visible text as the media caption. Telegram users
-          // otherwise see a voice-only final after the progress preview, which
-          // makes the agent look like it dropped the answer.
-          const ttsFinalPayload: ReplyPayload = ttsSyntheticReply;
-          if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
-            // The model was instructed to use the message tool for visible output.
-          } else if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-            const result = await routeReply({
-              payload: ttsFinalPayload,
-              channel: originatingChannel,
-              to: originatingTo,
-              sessionKey: ctx.SessionKey,
-              accountId: ctx.AccountId,
-              threadId: routeThreadId,
-              cfg,
-              isGroup,
-              groupId,
-            });
-            queuedFinal = result.ok || queuedFinal;
-            if (result.ok) {
-              routedFinalCount += 1;
-            }
-            if (!result.ok) {
-              logVerbose(
-                `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
-              );
-            }
-          } else {
-            const didQueue = dispatcher.sendFinalReply(ttsFinalPayload);
-            queuedFinal = didQueue || queuedFinal;
-          }
-        }
-      } catch (err) {
-        logVerbose(
-          `dispatch-from-config: accumulated block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
       }
     }
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { ReplyPayload } from "../types.js";
 import { parseAudioTag } from "./audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
@@ -720,6 +721,37 @@ describe("block reply coalescer", () => {
 
     expect(flushes[0].text).toBe("Hello world");
     expect(flushes[1].mediaUrls).toEqual(["https://example.com/a.png"]);
+    coalescer.stop();
+  });
+
+  it("preserves source-preview metadata across text coalescing", async () => {
+    const flushes: ReplyPayload[] = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " " },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push(payload);
+      },
+    });
+
+    coalescer.enqueue({
+      text: "Checking example.com.",
+      channelData: { openclaw: { sourcePreview: true } },
+    });
+    coalescer.enqueue({
+      text: "Reading IANA.",
+      channelData: { openclaw: { sourcePreview: true } },
+    });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      {
+        text: "Checking example.com. Reading IANA.",
+        audioAsVoice: undefined,
+        replyToId: undefined,
+        channelData: { openclaw: { sourcePreview: true } },
+      },
+    ]);
     coalescer.stop();
   });
 });

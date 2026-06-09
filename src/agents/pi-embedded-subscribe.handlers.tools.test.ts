@@ -372,8 +372,60 @@ describe("messaging tool media URL tracking", () => {
     await handleToolExecutionEnd(ctx, endEvt);
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    expect(onToolResult).toHaveBeenCalledWith({ text: "Checking example.com." });
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "Checking example.com.",
+      channelData: {
+        openclaw: {
+          sourcePreview: true,
+        },
+      },
+    });
     expect(ctx.state.messagingToolSentTexts).toEqual(["Checking example.com."]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([]);
+  });
+
+  it("does not mark source-preview message sends as durable same-target sends", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    ctx.shouldEmitToolResult = () => true;
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-preview-target",
+      args: {
+        action: "send",
+        channel: "telegram",
+        target: "telegram:1336356696",
+        message: "Cleaning up the temporary file now.",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-preview-target",
+      isError: false,
+      result: {
+        details: {
+          ok: true,
+          __openclawSourcePreview: true,
+          message: "Cleaning up the temporary file now.",
+        },
+      },
+    });
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "Cleaning up the temporary file now.",
+      channelData: {
+        openclaw: {
+          sourcePreview: true,
+        },
+      },
+    });
+    expect(ctx.state.messagingToolSentTexts).toEqual(["Cleaning up the temporary file now."]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([]);
   });
 
   it("tracks media arg from messaging tool as pending", async () => {
