@@ -11,6 +11,7 @@ const backendMocks = vi.hoisted(() => ({
   runTelegramUserRead: vi.fn(),
   runTelegramUserSend: vi.fn(),
   runTelegramUserStatus: vi.fn(),
+  runTelegramUserTopicCreate: vi.fn(),
   sleep: vi.fn(async () => {}),
 }));
 
@@ -37,6 +38,7 @@ const {
   telegramUserReadCommand,
   telegramUserSendCommand,
   telegramUserStatusCommand,
+  telegramUserTopicCreateCommand,
   telegramUserWaitCommand,
 } = await import("./telegram-user.js");
 
@@ -158,6 +160,154 @@ describe("telegram-user commands", () => {
       expect.stringContaining("direct_messages_topic.topic_id=7001"),
     );
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('text="hello"'));
+  });
+
+  it("preserves text send behavior when media flags are absent", async () => {
+    backendMocks.runTelegramUserSend.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      message: {
+        chat_id: 10,
+        chat_title: null,
+        chat_username: "jarvis_tester_1_bot",
+        date: "2026-03-24T00:00:00.000Z",
+        direct_messages_topic: null,
+        direct_messages_topic_id: null,
+        media_kind: null,
+        message_id: 124,
+        out: true,
+        reply_to_msg_id: null,
+        reply_to_top_id: null,
+        sender_id: 99,
+        text: "hello",
+        thread_anchor: null,
+      },
+    });
+
+    await telegramUserSendCommand({ chat: "@jarvis_tester_1_bot", message: "hello" }, runtime);
+
+    expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith({
+      caption: undefined,
+      chat: "@jarvis_tester_1_bot",
+      envFile: undefined,
+      media: undefined,
+      message: "hello",
+      session: undefined,
+      voice: false,
+      replyTo: undefined,
+    });
+  });
+
+  it("sends media with optional caption and explicit voice mode", async () => {
+    backendMocks.runTelegramUserSend.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      message: {
+        chat_id: 10,
+        chat_title: null,
+        chat_username: "jarvis_tester_1_bot",
+        date: "2026-03-24T00:00:00.000Z",
+        direct_messages_topic: null,
+        direct_messages_topic_id: null,
+        media_kind: "voice",
+        message_id: 125,
+        out: true,
+        reply_to_msg_id: 120,
+        reply_to_top_id: 120,
+        sender_id: 99,
+        text: "voice caption",
+        thread_anchor: 120,
+      },
+    });
+
+    await telegramUserSendCommand(
+      {
+        caption: "voice caption",
+        chat: "-1003783709877",
+        media: "/tmp/proof.ogg",
+        replyTo: "120",
+        voice: true,
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith({
+      caption: "voice caption",
+      chat: "-1003783709877",
+      envFile: undefined,
+      media: "/tmp/proof.ogg",
+      message: undefined,
+      session: undefined,
+      voice: true,
+      replyTo: 120,
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("message_id=125"));
+  });
+
+  it("uses message text as the media caption when caption is omitted", async () => {
+    backendMocks.runTelegramUserSend.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      message: {
+        chat_id: 10,
+        chat_title: null,
+        chat_username: "jarvis_tester_1_bot",
+        date: "2026-03-24T00:00:00.000Z",
+        direct_messages_topic: null,
+        direct_messages_topic_id: null,
+        media_kind: "document",
+        message_id: 126,
+        out: true,
+        reply_to_msg_id: null,
+        reply_to_top_id: null,
+        sender_id: 99,
+        text: "fallback caption",
+        thread_anchor: null,
+      },
+    });
+
+    await telegramUserSendCommand(
+      {
+        chat: "-1003783709877",
+        media: "/tmp/proof.pdf",
+        message: "fallback caption",
+      },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "fallback caption",
+        media: "/tmp/proof.pdf",
+        message: undefined,
+      }),
+    );
+  });
+
+  it("rejects send without text or media", async () => {
+    await expect(
+      telegramUserSendCommand({ chat: "@jarvis_tester_1_bot" }, runtime),
+    ).rejects.toThrow(/requires --chat and either --message or --media/i);
+  });
+
+  it("renders topic-create JSON with topic anchor metadata", async () => {
+    backendMocks.runTelegramUserTopicCreate.mockResolvedValueOnce({
+      backend_meta: backendMeta,
+      chat_id: -1003783709877,
+      message_id: 15250,
+      topic_anchor: 15250,
+      topic_title: "voice proof",
+    });
+
+    await telegramUserTopicCreateCommand(
+      { chat: "-1003783709877", json: true, title: "voice proof" },
+      runtime,
+    );
+
+    expect(backendMocks.runTelegramUserTopicCreate).toHaveBeenCalledWith({
+      chat: "-1003783709877",
+      envFile: undefined,
+      session: undefined,
+      title: "voice proof",
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"topic_anchor": 15250'));
   });
 
   it("renders recent messages as a table", async () => {
