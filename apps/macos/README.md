@@ -210,6 +210,25 @@ bash scripts/package-openclaw-mac-dist.sh \
   --github-release-tag "<latest-tag-from-gh-release-view>"
 ```
 
+`--phase <full|post-app-build>` controls where packaging starts. The default is
+`full`: build, sign, verify, notarize, package, publish, and verify in one
+pass. Use the narrower recovery phase only after the app build/sign/verify
+steps already succeeded and `dist/Jarvis.app` is still present:
+
+```bash
+bash scripts/package-openclaw-mac-dist.sh \
+  --phase post-app-build \
+  --publish-release-assets \
+  --github-release-tag "<latest-tag-from-gh-release-view>"
+```
+
+`--phase post-app-build` resumes from the existing `dist/Jarvis.app`, then
+notarizes and staples the app, creates/signs/notarizes `Jarvis.dmg`, creates
+`Jarvis.zip`, generates `jarvis-appcast.xml`, and publishes/verifies release
+assets when `--publish-release-assets` is present. Do not use it after changing
+source, dependencies, signing inputs, app version/build, Sparkle keys, or bundle
+metadata; run the default full phase instead.
+
 Required successful ending:
 
 ```text
@@ -221,8 +240,9 @@ If notarized packaging is run without `--publish-release-assets`, the local DMG
 may be useful for debugging, but it is not the sendable release. The script must
 print `release_sendable=false` in that mode.
 
-For slow notarization queues, submit and poll as separate steps instead of
-blocking the whole release lane:
+For `HTTPClientError.deadlineExceeded`, Apple queue stalls, or other cases
+where submission likely succeeded but waiting timed out, submit and poll as
+separate steps instead of rebuilding the app:
 
 ```bash
 ditto -c -k --sequesterRsrc --keepParent \
@@ -241,6 +261,10 @@ bash scripts/notarize-mac-artifact.sh \
   --artifact "$NOTARY_ARTIFACT" \
   --staple-app "$NOTARY_STAPLE_APP_PATH"
 ```
+
+Receipts and logs must not contain secrets. Keep them to the notary submission
+ID, artifact path, staple target, status, and timestamps; credentials stay in
+Keychain or local env outside the repo.
 
 ## Signing behavior
 

@@ -131,6 +131,17 @@ notary_id() {
   json_field "id"
 }
 
+print_submit_retry_hint() {
+  cat >&2 <<EOF
+Hint: if notarytool printed a submission ID before this error, poll it instead
+of rebuilding:
+  scripts/notarize-mac-artifact.sh --poll <submission-id> --artifact '$ARTIFACT'
+If no submission ID was created, retry the same artifact after Apple/network
+recovery. Receipts must contain only submission IDs, artifact paths, staple
+targets, statuses, and timestamps; keep credentials in Keychain or local env.
+EOF
+}
+
 staple_outputs() {
   case "$ARTIFACT" in
     *.dmg|*.pkg)
@@ -215,7 +226,15 @@ fi
 
 echo "🧾 Notarizing: $ARTIFACT"
 if [[ "$MODE" == "submit-only" ]]; then
-  submit_json="$(xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --output-format json)"
+  set +e
+  submit_json="$(xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --output-format json 2>&1)"
+  submit_status=$?
+  set -e
+  if [[ $submit_status -ne 0 ]]; then
+    echo "$submit_json" >&2
+    print_submit_retry_hint
+    exit "$submit_status"
+  fi
   submission_id="$(printf '%s\n' "$submit_json" | notary_id)"
   if [[ -z "$submission_id" ]]; then
     echo "$submit_json" >&2
@@ -230,7 +249,14 @@ if [[ "$MODE" == "submit-only" ]]; then
   exit 0
 fi
 
+set +e
 xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --wait
+submit_status=$?
+set -e
+if [[ $submit_status -ne 0 ]]; then
+  print_submit_retry_hint
+  exit "$submit_status"
+fi
 staple_outputs
 
 echo "✅ Notarization complete"

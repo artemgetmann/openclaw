@@ -16,6 +16,7 @@ INSTANCE_ID="${OPENCLAW_CONSUMER_INSTANCE_ID:-}"
 INSTANCE_EXPLICIT=0
 PUBLISH_RELEASE_ASSETS=0
 GITHUB_RELEASE_TAG=""
+PACKAGE_PHASE="full"
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-artemgetmann/openclaw}"
 JARVIS_LATEST_RELEASE_DOWNLOAD_BASE="https://github.com/${GITHUB_RELEASE_REPO}/releases/latest/download"
 JARVIS_DMG_PUBLIC_URL="${JARVIS_LATEST_RELEASE_DOWNLOAD_BASE}/Jarvis.dmg"
@@ -38,6 +39,12 @@ Options:
                       Required with --publish-release-assets. Must match the
                       repo's latest release because Sparkle checks the public
                       releases/latest/download appcast feed.
+  --phase <full|post-app-build>
+                      full is the default one-shot lane. post-app-build resumes
+                      from an existing dist/Jarvis.app and runs the release tail:
+                      app notarization, DMG, ZIP, appcast, optional publish.
+  --resume-after-app-build
+                      Alias for --phase post-app-build.
 
 Env:
   SKIP_NOTARIZE=1     Build release zip + DMG without notarization/stapling
@@ -375,6 +382,67 @@ copy_handoff_artifacts() {
   echo "  app_bundle_handoff=not copied (use dmg/zip for distribution)"
 }
 
+app_build_receipt_path() {
+  printf '%s\n' "${OPENCLAW_CONSUMER_APP_BUILD_RECEIPT:-$ROOT_DIR/dist/${APP_NAME}.app.release.env}"
+}
+
+receipt_value() {
+  local receipt_path="$1"
+  local key="$2"
+
+  /usr/bin/sed -n "s/^${key}=//p" "$receipt_path" | /usr/bin/head -n 1
+}
+
+read_app_build_receipt() {
+  local receipt_path
+  receipt_path="$(app_build_receipt_path)"
+
+  if [[ ! -f "$receipt_path" ]]; then
+    echo "🧾 App build receipt: missing ($receipt_path); continuing from $APP_PATH"
+    return 0
+  fi
+
+  # Receipt values are operator context only. Do not source this file: recovery
+  # metadata must never become a shell execution surface.
+  echo "🧾 App build receipt: $receipt_path"
+  echo "  receipt_app_path=$(receipt_value "$receipt_path" "JARVIS_APP_PATH")"
+  echo "  receipt_version=$(receipt_value "$receipt_path" "JARVIS_APP_VERSION")"
+  echo "  receipt_build=$(receipt_value "$receipt_path" "JARVIS_APP_BUILD")"
+  echo "  receipt_signing_authority=$(receipt_value "$receipt_path" "JARVIS_SIGNING_AUTHORITY")"
+}
+
+write_app_build_receipt() {
+  local receipt_path
+  receipt_path="$(app_build_receipt_path)"
+
+  mkdir -p "$(dirname "$receipt_path")"
+  {
+    printf 'JARVIS_PACKAGE_PHASE=%q\n' "post-app-build"
+    printf 'JARVIS_APP_PATH=%q\n' "$APP_PATH"
+    printf 'JARVIS_APP_VERSION=%q\n' "$VERSION"
+    printf 'JARVIS_APP_BUILD=%q\n' "$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "unknown")"
+    printf 'JARVIS_SIGNING_AUTHORITY=%q\n' "${SIGNING_AUTHORITY:-unknown}"
+    printf 'JARVIS_GIT_COMMIT=%q\n' "$(/usr/libexec/PlistBuddy -c "Print OpenClawGitCommit" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "unknown")"
+    printf 'JARVIS_RECEIPT_CREATED_AT=%q\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  } >"$receipt_path"
+
+  echo "🧾 App build receipt: $receipt_path"
+}
+
+verify_resume_app_bundle() {
+  if [[ ! -d "$APP_PATH" ]]; then
+    echo "ERROR: --phase post-app-build requires an existing app bundle: $APP_PATH" >&2
+    echo "Run the default package lane once, or point APP_NAME/APP_BUNDLE_NAME at the already-built Jarvis app." >&2
+    exit 1
+  fi
+
+  read_app_build_receipt
+  echo "🔁 Resuming release packaging from existing app bundle: $APP_PATH"
+  BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
+  APP_NAME="$APP_NAME" \
+    "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --publish-release-assets)
@@ -388,6 +456,18 @@ while [[ $# -gt 0 ]]; do
       fi
       GITHUB_RELEASE_TAG="$2"
       shift 2
+      ;;
+    --phase)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --phase requires a value: full or post-app-build" >&2
+        exit 1
+      fi
+      PACKAGE_PHASE="$2"
+      shift 2
+      ;;
+    --resume-after-app-build)
+      PACKAGE_PHASE="post-app-build"
+      shift
       ;;
     --instance)
       if [[ $# -lt 2 ]]; then
@@ -409,6 +489,16 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+case "$PACKAGE_PHASE" in
+  full|post-app-build)
+    ;;
+  *)
+    echo "ERROR: unknown --phase value: $PACKAGE_PHASE" >&2
+    echo "Use --phase full or --phase post-app-build." >&2
+    exit 1
+    ;;
+esac
 
 NORMALIZED_INSTANCE_ID="$(consumer_instance_normalize_id "$INSTANCE_ID")"
 # Release/demo artifacts must stay on the default consumer identity. Named
@@ -453,32 +543,36 @@ if [[ "$NOTARIZE" == "1" ]]; then
   require_sparkle_private_key_file
 fi
 
-# Stale release artifacts under dist/ can get copied into the bundled runtime
-# before the fresh app is assembled. Remove only mac release outputs here; JS
-# build outputs under dist/ are still needed by the packaged CLI/runtime.
-rm -f \
-  "$ROOT_DIR"/dist/"$APP_NAME"*.zip \
-  "$ROOT_DIR"/dist/"$APP_NAME"*.dmg \
-  "$ROOT_DIR"/dist/"$PRODUCT"*.dSYM.zip \
-  "$ROOT_DIR"/dist/*appcast*.xml
-
-APP_NAME="$APP_NAME" \
-APP_BUNDLE_NAME="$APP_BUNDLE_NAME" \
-BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
-APP_VARIANT="$EXPECTED_VARIANT" \
-APP_INSTANCE_ID="$NORMALIZED_INSTANCE_ID" \
-URL_SCHEME="$EXPECTED_URL_SCHEME" \
-BUILD_CONFIG="$BUILD_CONFIG" \
-BUILD_ARCHS="$BUILD_ARCHS" \
-"$ROOT_DIR/scripts/package-mac-app.sh"
-
 if [[ -n "$NORMALIZED_INSTANCE_ID" ]]; then
   VERIFY_ARGS+=(--instance "$NORMALIZED_INSTANCE_ID")
 fi
 
-BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
-APP_NAME="$APP_NAME" \
-  "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+if [[ "$PACKAGE_PHASE" == "full" ]]; then
+  # Stale release artifacts under dist/ can get copied into the bundled runtime
+  # before the fresh app is assembled. Remove only mac release outputs here; JS
+  # build outputs under dist/ are still needed by the packaged CLI/runtime.
+  rm -f \
+    "$ROOT_DIR"/dist/"$APP_NAME"*.zip \
+    "$ROOT_DIR"/dist/"$APP_NAME"*.dmg \
+    "$ROOT_DIR"/dist/"$PRODUCT"*.dSYM.zip \
+    "$ROOT_DIR"/dist/*appcast*.xml
+
+  APP_NAME="$APP_NAME" \
+  APP_BUNDLE_NAME="$APP_BUNDLE_NAME" \
+  BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
+  APP_VARIANT="$EXPECTED_VARIANT" \
+  APP_INSTANCE_ID="$NORMALIZED_INSTANCE_ID" \
+  URL_SCHEME="$EXPECTED_URL_SCHEME" \
+  BUILD_CONFIG="$BUILD_CONFIG" \
+  BUILD_ARCHS="$BUILD_ARCHS" \
+  "$ROOT_DIR/scripts/package-mac-app.sh"
+
+  BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
+  APP_NAME="$APP_NAME" \
+    "$ROOT_DIR/scripts/verify-consumer-mac-app.sh" "${VERIFY_ARGS[@]}" "$APP_PATH"
+else
+  verify_resume_app_bundle
+fi
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
 ARTIFACT_BASENAME="${APP_NAME}"
@@ -494,6 +588,7 @@ DMG="$ROOT_DIR/dist/${ARTIFACT_BASENAME}.dmg"
 NOTARY_ZIP="$ROOT_DIR/dist/${APP_NAME}-${VERSION}.notary.zip"
 DSYM_ZIP="$ROOT_DIR/dist/${PRODUCT}-${VERSION}.dSYM.zip"
 SIGNING_AUTHORITY="$(bundle_signing_authority "$APP_PATH")"
+write_app_build_receipt
 
 # Remove stale artifacts before building new ones. DMG assembly temporarily
 # needs a copied app bundle plus a writable image; keeping an old zip beside it
@@ -571,6 +666,7 @@ copy_handoff_artifacts
 publish_release_assets
 
 echo "OpenClaw distribution package ready:"
+echo "  phase=$PACKAGE_PHASE"
 echo "  app=$APP_PATH"
 echo "  zip=$ZIP"
 echo "  dmg=$DMG"
