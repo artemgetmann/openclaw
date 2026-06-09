@@ -335,7 +335,7 @@ describe("tryDispatchAcpReply", () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     routeMocks.routeReply
       .mockResolvedValueOnce({ ok: true, messageId: "progress-preview" })
-      .mockResolvedValueOnce({ ok: false, error: "topic missing" });
+      .mockResolvedValueOnce({ ok: false, messageId: "" });
     managerMocks.runTurn.mockImplementation(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
         await onEvent({ type: "text_delta", text: "Final answer.", tag: "agent_message_chunk" });

@@ -282,7 +282,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
   it("does not send the media-only TTS supplement when visible final text fails", async () => {
     ttsMocks.state.synthesizeFinalAudio = true;
-    routeMocks.routeReply.mockResolvedValueOnce({ ok: false, error: "thread missing" });
+    routeMocks.routeReply.mockResolvedValueOnce({ ok: false, messageId: "" });
     const { coordinator } = createCoordinator({
       provider: "discord",
       surface: "discord",
