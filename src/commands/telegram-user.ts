@@ -9,6 +9,7 @@ import {
   runTelegramUserRead,
   runTelegramUserSend,
   runTelegramUserStatus,
+  runTelegramUserTopicCreate,
 } from "../telegram-user/backend.js";
 import type {
   TelegramUserAuthStatus,
@@ -22,6 +23,7 @@ import type {
   TelegramUserPrecheck,
   TelegramUserReadResult,
   TelegramUserSendResult,
+  TelegramUserTopicCreateResult,
   TelegramUserWaitParams,
   TelegramUserWaitResult,
 } from "../telegram-user/types.js";
@@ -265,6 +267,18 @@ function logSendText(runtime: RuntimeEnv, result: TelegramUserSendResult) {
   runtime.log(`text=${JSON.stringify(message.text)}`);
 }
 
+function logTopicCreateText(runtime: RuntimeEnv, result: TelegramUserTopicCreateResult) {
+  const rich = isRich();
+  const ok = rich ? theme.success : (text: string) => text;
+  runtime.log(
+    ok(
+      `Telegram user topic-create ok. topic_anchor=${result.topic_anchor} message_id=${result.message_id} chat_id=${result.chat_id}`,
+    ),
+  );
+  runtime.log(formatBackendMeta(result.backend_meta));
+  runtime.log(`topic_title=${JSON.stringify(result.topic_title)}`);
+}
+
 function logReadText(runtime: RuntimeEnv, result: TelegramUserReadResult) {
   runtime.log(
     `Telegram user read completed. messages=${result.messages.length} ${formatBackendMeta(result.backend_meta)}`,
@@ -503,20 +517,50 @@ export async function telegramUserLogoutCommand(
 export async function telegramUserSendCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {
   const chat = readStringOpt(opts, "chat");
   const message = readStringOpt(opts, "message");
-  if (!chat || !message) {
-    throw new Error("Telegram user send requires --chat and --message.");
+  const media = readStringOpt(opts, "media");
+  const caption = readStringOpt(opts, "caption");
+  if (!chat || (!message && !media)) {
+    throw new Error("Telegram user send requires --chat and either --message or --media.");
   }
+  // Keep the old text path exact. When media is present, --message remains
+  // useful as a caption alias so existing smoke snippets can grow a media flag
+  // without changing their wording option.
+  const mediaCaption = media ? (caption ?? message) : undefined;
   const result = await runTelegramUserSend({
     ...resolveBackendOptions(opts),
+    caption: mediaCaption,
     chat,
-    message,
+    media,
+    message: media ? undefined : message,
     replyTo: readNumberOpt(opts, "replyTo"),
+    voice: readBooleanOpt(opts, "voice") || readBooleanOpt(opts, "audioAsVoice"),
   });
   if (readBooleanOpt(opts, "json")) {
     logJson(runtime, result);
     return;
   }
   logSendText(runtime, result);
+}
+
+export async function telegramUserTopicCreateCommand(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+) {
+  const chat = readStringOpt(opts, "chat");
+  const title = readStringOpt(opts, "title");
+  if (!chat || !title) {
+    throw new Error("Telegram user topic-create requires --chat and --title.");
+  }
+  const result = await runTelegramUserTopicCreate({
+    ...resolveBackendOptions(opts),
+    chat,
+    title,
+  });
+  if (readBooleanOpt(opts, "json")) {
+    logJson(runtime, result);
+    return;
+  }
+  logTopicCreateText(runtime, result);
 }
 
 export async function telegramUserReadCommand(opts: Record<string, unknown>, runtime: RuntimeEnv) {

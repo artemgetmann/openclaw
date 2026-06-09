@@ -89,6 +89,37 @@ is_gateway_restart_command() {
   return 1
 }
 
+is_telegram_user_command() {
+  [[ $# -ge 1 && "$1" == "telegram-user" ]]
+}
+
+ensure_telegram_user_lane_assets() {
+  local env_file="$ROOT/scripts/telegram-e2e/.env.local"
+  local session_file="$ROOT/scripts/telegram-e2e/tmp/userbot.session"
+  local bootstrap_script="$ROOT/scripts/bootstrap-worktree-telegram.sh"
+  local api_id=""
+  local api_hash=""
+
+  if [[ ! -f "$bootstrap_script" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$env_file" ]]; then
+    api_id="$(read_last_env_value "$env_file" "TELEGRAM_API_ID")"
+    api_hash="$(read_last_env_value "$env_file" "TELEGRAM_API_HASH")"
+  fi
+
+  # Ad-hoc worktrees can bypass scripts/new-worktree.sh and land without the
+  # userbot env/session that telegram-user depends on. Self-heal that lane-local
+  # bootstrap here so read-only transcript/debug commands do not fail on a
+  # missing copy step.
+  if [[ -n "$api_id" && -n "$api_hash" && -f "$session_file" ]]; then
+    return 0
+  fi
+
+  bash "$bootstrap_script" --strict >/dev/null
+}
+
 if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
@@ -165,6 +196,10 @@ fi
 
 if [[ -x "$LOCAL_RESTART" ]]; then
   export OPENCLAW_LOCAL_RESTART_SCRIPT="${OPENCLAW_LOCAL_RESTART_SCRIPT:-$LOCAL_RESTART}"
+fi
+
+if is_telegram_user_command "$@"; then
+  ensure_telegram_user_lane_assets
 fi
 
 # Hard-pin lane restart commands to the local fork service script, but never

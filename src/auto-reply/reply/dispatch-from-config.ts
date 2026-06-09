@@ -43,10 +43,12 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { truncateLine } from "../../shared/subagents-format.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { maybeResolveTextAlias } from "../commands-registry.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
+import { isControlCommandReplyPayload } from "./control-command-reply.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -92,6 +94,49 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   }
   return AUDIO_HEADER_RE.test(trimmed);
 };
+
+function resolveCommandCandidateText(ctx: FinalizedMsgContext): string {
+  const candidate =
+    typeof ctx.CommandBody === "string"
+      ? ctx.CommandBody
+      : typeof ctx.BodyForCommands === "string"
+        ? ctx.BodyForCommands
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+  return candidate.trim();
+}
+
+function isTelegramControlCommandReply(
+  ctx: FinalizedMsgContext,
+  cfg: OpenClawConfig,
+  visibilityChannel: string | undefined,
+): boolean {
+  if (visibilityChannel !== "telegram") {
+    return false;
+  }
+  if (ctx.CommandSource === "native") {
+    return true;
+  }
+
+  const candidate = resolveCommandCandidateText(ctx);
+  if (!candidate) {
+    return false;
+  }
+  if (maybeResolveTextAlias(candidate, cfg) != null) {
+    return true;
+  }
+  // Slash/native command replies are control-plane feedback. Hidden/plugin
+  // commands can be slash-shaped without appearing in the core alias registry.
+  // They may change persistent TTS preferences, but the command acknowledgement
+  // itself must not be upgraded into an automatic voice note.
+  if (candidate.startsWith("/")) {
+    return true;
+  }
+  return Boolean(ctx.CommandAuthorized) && candidate.startsWith("!");
+}
 
 function compactNativeTelegramToolText(text: string): string {
   const normalized = text.replace(/\r\n?/g, "\n").trimEnd();
@@ -279,10 +324,15 @@ export async function dispatchReplyFromConfig(params: {
     ctx.MessageThreadId ?? parseSessionThreadInfo(acpDispatchSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
+  const isControlCommandReply = isTelegramControlCommandReply(ctx, cfg, visibilityChannel);
   // Voice-in should get voice-out for this turn only. Keep explicit `/tts on`
   // as-is, but let inbound audio override typed-message modes like `off` or
   // `tagged` without writing a new preference.
-  const turnTtsAuto = inboundAudio && sessionTtsAuto !== "always" ? "inbound" : sessionTtsAuto;
+  const turnTtsAuto = isControlCommandReply
+    ? "off"
+    : inboundAudio && sessionTtsAuto !== "always"
+      ? "inbound"
+      : sessionTtsAuto;
   const hookRunner = getGlobalHookRunner();
 
   // Extract message context for hooks (plugin and internal)
@@ -596,6 +646,26 @@ export async function dispatchReplyFromConfig(params: {
       const text = stripTelegramInternalToolSummaryLines(payload.text);
       return text === payload.text ? payload : { ...payload, text };
     };
+    const maybeApplyAutomaticTts = async (
+      payload: ReplyPayload,
+      kind: ReplyDispatchKind,
+    ): Promise<ReplyPayload> => {
+      // Command handlers mark their own control replies. That keeps `/status`
+      // and `/model` text visible without voicing product UI, while command
+      // surfaces that continue into a real assistant answer still get normal
+      // final-answer TTS.
+      if (isControlCommandReplyPayload(payload)) {
+        return payload;
+      }
+      return maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: ttsChannel,
+        kind,
+        inboundAudio,
+        ttsAuto: turnTtsAuto,
+      });
+    };
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
@@ -680,14 +750,7 @@ export async function dispatchReplyFromConfig(params: {
           const run = async () => {
             const ttsPayload = isSourcePreviewToolPayload(payload)
               ? payload
-              : await maybeApplyTtsToPayload({
-                  payload,
-                  cfg,
-                  channel: ttsChannel,
-                  kind: "tool",
-                  inboundAudio,
-                  ttsAuto: turnTtsAuto,
-                });
+              : await maybeApplyAutomaticTts(payload, "tool");
             const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
             if (!deliveryPayload) {
               return;
@@ -716,14 +779,7 @@ export async function dispatchReplyFromConfig(params: {
             }
             const ttsPayload = isSourcePreviewToolPayload(payload)
               ? payload
-              : await maybeApplyTtsToPayload({
-                  payload,
-                  cfg,
-                  channel: ttsChannel,
-                  kind: "block",
-                  inboundAudio,
-                  ttsAuto: turnTtsAuto,
-                });
+              : await maybeApplyAutomaticTts(payload, "block");
             if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
               return;
             }
@@ -774,14 +830,10 @@ export async function dispatchReplyFromConfig(params: {
     let queuedFinal = false;
     let routedFinalCount = 0;
     if (replies.length === 0 && durableBlockFinalText.trim()) {
-      const ttsReply = await maybeApplyTtsToPayload({
-        payload: { text: durableBlockFinalText.trim() },
-        cfg,
-        channel: ttsChannel,
-        kind: "final",
-        inboundAudio,
-        ttsAuto: turnTtsAuto,
-      });
+      const ttsReply = await maybeApplyAutomaticTts(
+        { text: durableBlockFinalText.trim() },
+        "final",
+      );
       const hasFinalTtsMedia = Boolean(ttsReply.mediaUrl) || (ttsReply.mediaUrls?.length ?? 0) > 0;
       if (hasFinalTtsMedia && !sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         const ttsSupplement = sanitizeTelegramVisiblePayload({
@@ -820,14 +872,7 @@ export async function dispatchReplyFromConfig(params: {
       if (shouldSuppressReasoningPayload(reply)) {
         continue;
       }
-      const ttsReply = await maybeApplyTtsToPayload({
-        payload: reply,
-        cfg,
-        channel: ttsChannel,
-        kind: "final",
-        inboundAudio,
-        ttsAuto: turnTtsAuto,
-      });
+      const ttsReply = await maybeApplyAutomaticTts(reply, "final");
       if (sourceReplyPolicy.suppressAutomaticSourceDelivery) {
         continue;
       }

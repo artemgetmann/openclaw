@@ -140,6 +140,75 @@ describe("runGatewayStartupConfigPreflight", () => {
     expect(result.config).toEqual(migratedConfig);
   });
 
+  it("repairs stale Jarvis consumer model defaults before startup validation", async () => {
+    const legacyParsed = {
+      jarvis: {
+        managedServices: { mode: "managed" as const },
+        backend: { baseUrl: "https://jarvis.example.invalid" },
+      },
+      auth: {
+        profiles: {
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" as const },
+        },
+        order: {
+          "openai-codex": ["openai-codex:default"],
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.4" },
+          models: {
+            "openai-codex/gpt-5.3-codex": {},
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+    };
+    const migratedConfig: OpenClawConfig = {
+      ...legacyParsed,
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+          models: {
+            "openai-codex/gpt-5.3-codex": {},
+            "openai-codex/gpt-5.4": {},
+            "openai-codex/gpt-5.5": {},
+          },
+        },
+      },
+    };
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        createSnapshot({
+          parsed: legacyParsed,
+          valid: false,
+          legacyIssues: [
+            {
+              path: "agents.defaults",
+              message: "stale Jarvis consumer model defaults",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(createSnapshot({ config: migratedConfig }));
+    const writeConfig = vi.fn<(config: OpenClawConfig) => Promise<void>>().mockResolvedValue();
+
+    const result = await runGatewayStartupConfigPreflight({
+      readSnapshot,
+      writeConfig,
+      log: { info: vi.fn(), warn: vi.fn() },
+      isNixMode: false,
+    });
+
+    const writtenConfig = writeConfig.mock.calls[0]?.[0];
+    expect(writtenConfig?.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.5",
+    });
+    expect(writtenConfig?.agents?.defaults?.models?.["openai-codex/gpt-5.5"]).toEqual({});
+    expect(result.config).toEqual(migratedConfig);
+  });
+
   it("writes auto-enabled plugins and re-reads snapshot on success", async () => {
     const phaseTwo = createSnapshot({
       config: { plugins: { entries: { msteams: { enabled: false } } } },

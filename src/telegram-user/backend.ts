@@ -16,6 +16,7 @@ import type {
   TelegramUserPrecheck,
   TelegramUserReadResult,
   TelegramUserSendResult,
+  TelegramUserTopicCreateResult,
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -422,14 +423,36 @@ export async function runTelegramUserLogout(
 
 export async function runTelegramUserSend(
   params: {
+    caption?: string | null;
     chat: string;
-    message: string;
+    media?: string | null;
+    message?: string | null;
     replyTo?: number | null;
+    voice?: boolean | null;
   } & TelegramUserBackendOptions,
 ): Promise<TelegramUserSendResult> {
-  const args = ["send", "--chat", params.chat, "--message", params.message];
+  const args = ["send", "--chat", params.chat];
+  pushOptionalStringArg(args, "--message", params.message);
+  pushOptionalStringArg(args, "--media", params.media);
+  pushOptionalStringArg(args, "--caption", params.caption);
   pushOptionalNumberArg(args, "--reply-to", params.replyTo);
+  if (params.voice) {
+    args.push("--voice");
+  }
   return runBackendCommand<TelegramUserSendResult>({
+    ...params,
+    args,
+  });
+}
+
+export async function runTelegramUserTopicCreate(
+  params: {
+    chat: string;
+    title: string;
+  } & TelegramUserBackendOptions,
+): Promise<TelegramUserTopicCreateResult> {
+  const args = ["topic-create", "--chat", params.chat, "--title", params.title];
+  return runBackendCommand<TelegramUserTopicCreateResult>({
     ...params,
     args,
   });

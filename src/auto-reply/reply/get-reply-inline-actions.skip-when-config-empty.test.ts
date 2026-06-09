@@ -164,7 +164,17 @@ describe("handleInlineActions", () => {
       }),
     );
 
-    expect(result).toEqual({ kind: "reply", reply: { text: "done" } });
+    expect(result).toEqual({
+      kind: "reply",
+      reply: expect.objectContaining({
+        text: "done",
+        channelData: expect.objectContaining({
+          openclaw: expect.objectContaining({
+            controlCommandReply: true,
+          }),
+        }),
+      }),
+    });
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
     expect(handleCommandsMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -290,7 +300,17 @@ describe("handleInlineActions", () => {
       }),
     );
 
-    expect(result).toEqual({ kind: "reply", reply: { text: "ok" } });
+    expect(result).toEqual({
+      kind: "reply",
+      reply: expect.objectContaining({
+        text: "ok",
+        channelData: expect.objectContaining({
+          openclaw: expect.objectContaining({
+            controlCommandReply: true,
+          }),
+        }),
+      }),
+    });
     expect(sessionStore["s:main"]?.abortCutoffMessageSid).toBeUndefined();
     expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);

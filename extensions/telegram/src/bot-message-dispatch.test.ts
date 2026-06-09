@@ -2445,6 +2445,51 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("sends visible final text before a media-only voice supplement in the same thread", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Final answer.",
+          channelData: { openclaw: { assistantPhase: "final_answer" } },
+        },
+        { kind: "final" },
+      );
+      await dispatcherOptions.deliver(
+        {
+          mediaUrl: "file:///tmp/final-voice.ogg",
+          audioAsVoice: true,
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        thread: { id: 777, scope: "dm" },
+        replies: [expect.objectContaining({ text: "Final answer." })],
+      }),
+    );
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        thread: { id: 777, scope: "dm" },
+        replies: [
+          expect.objectContaining({
+            mediaUrl: "file:///tmp/final-voice.ogg",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("delivers tool-result media without falling back to empty response", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);

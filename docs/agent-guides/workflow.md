@@ -137,7 +137,8 @@ ready`.
   - `--mode clean` is the default and keeps the current clean-room behavior for consumer E2E, runtime-sensitive work, or anything that must prove isolation honestly.
   - `--mode warm` creates the worktree and dev launch env, installs JS dependencies in-place, and skips the slower build step so coding/debugging lanes come up faster.
 - Warm mode is intentionally conservative:
-  - it does not reuse runtime/auth/session/browser state
+  - it still copies the canonical `scripts/telegram-e2e/.env.local` and `scripts/telegram-e2e/tmp/userbot.session` into the lane
+  - it does not auto-claim tester bot/runtime/browser state
   - it does not symlink or copy `node_modules`
   - it does not share Swift `.build` artifacts
   - it still must pass the ready-lane proof for local JS tooling before handoff

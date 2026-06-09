@@ -103,6 +103,95 @@ class FakeInboxClient:
       yield dialog
 
 
+class FakeSentMessage:
+  def __init__(
+    self,
+    *,
+    chat_id: int,
+    message_id: int,
+    media_kind: str | None = None,
+    text: str = "",
+  ) -> None:
+    self.chat_id = chat_id
+    self.date = None
+    self.direct_messages_topic = None
+    self.id = message_id
+    self.message = text
+    self.out = True
+    self.reply_to = None
+    self.sender_id = 99
+    self.audio = SimpleNamespace() if media_kind == "audio" else None
+    self.document = SimpleNamespace() if media_kind == "document" else None
+    self.photo = SimpleNamespace() if media_kind == "photo" else None
+    self.video = SimpleNamespace() if media_kind == "video" else None
+    self.voice = SimpleNamespace() if media_kind == "voice" else None
+
+  async def get_chat(self):
+    return SimpleNamespace(id = self.chat_id, title = "Jarvis Lab", username = None)
+
+
+class FakeSendClient:
+  def __init__(self) -> None:
+    self.disconnected = False
+    self.send_file_calls: list[dict[str, object]] = []
+    self.send_message_calls: list[dict[str, object]] = []
+
+  async def disconnect(self) -> None:
+    self.disconnected = True
+
+  async def send_file(self, **kwargs):
+    self.send_file_calls.append(kwargs)
+    return FakeSentMessage(
+      chat_id = -1003783709877,
+      media_kind = "voice" if kwargs.get("voice_note") else "document",
+      message_id = 501,
+      text = str(kwargs.get("caption") or ""),
+    )
+
+  async def send_message(self, **kwargs):
+    self.send_message_calls.append(kwargs)
+    return FakeSentMessage(
+      chat_id = -1003783709877,
+      message_id = 502,
+      text = str(kwargs.get("message") or ""),
+    )
+
+
+class FakeTopicClient:
+  def __init__(self) -> None:
+    self.disconnected = False
+    self.requests: list[object] = []
+
+  async def __call__(self, request):
+    self.requests.append(request)
+    action = type("MessageActionTopicCreate", (), {})()
+    message = SimpleNamespace(
+      action = action,
+      chat_id = -1003783709877,
+      date = None,
+      direct_messages_topic = None,
+      id = 777,
+      message = "",
+      out = True,
+      reply_to = None,
+      sender_id = 99,
+    )
+    return SimpleNamespace(updates = [SimpleNamespace(message = message)])
+
+  async def disconnect(self) -> None:
+    self.disconnected = True
+
+
+class FakeCreateForumTopicRequest:
+  def __init__(self, *, peer, title: str) -> None:
+    self.peer = peer
+    self.title = title
+
+
+class FakeTelethonFunctions:
+  messages = SimpleNamespace(CreateForumTopicRequest = FakeCreateForumTopicRequest)
+
+
 def build_fake_dialog(
   *,
   chat_id: int,
@@ -281,6 +370,110 @@ class TelethonCliTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(len(emitted["dialogs"]), 1)
     self.assertEqual(emitted["dialogs"][0]["chat_username"], "jarvis_tester_1_bot")
 
+  async def test_run_send_uploads_media_as_voice_with_caption_and_reply_target(self) -> None:
+    fake_client = FakeSendClient()
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_send(
+          argparse.Namespace(
+            caption = "voice proof",
+            chat = "-1003783709877",
+            media = "/tmp/proof.ogg",
+            message = None,
+            reply_to = 15248,
+            session = str(session_path),
+            voice = True,
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(fake_client.send_message_calls, [])
+    self.assertTrue(fake_client.disconnected)
+    self.assertEqual(fake_client.send_file_calls[0]["caption"], "voice proof")
+    self.assertEqual(fake_client.send_file_calls[0]["file"], "/tmp/proof.ogg")
+    self.assertEqual(fake_client.send_file_calls[0]["reply_to"], 15248)
+    self.assertTrue(fake_client.send_file_calls[0]["voice_note"])
+    self.assertEqual(emitted["message"]["media_kind"], "voice")
+    self.assertEqual(emitted["message"]["message_id"], 501)
+
+  async def test_run_send_preserves_text_send_when_media_is_absent(self) -> None:
+    fake_client = FakeSendClient()
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_send(
+          argparse.Namespace(
+            caption = None,
+            chat = "-1003783709877",
+            media = None,
+            message = "text proof",
+            reply_to = 0,
+            session = str(session_path),
+            voice = False,
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(fake_client.send_file_calls, [])
+    self.assertEqual(fake_client.send_message_calls[0]["message"], "text proof")
+    self.assertIsNone(fake_client.send_message_calls[0]["reply_to"])
+    self.assertEqual(emitted["message"]["media_kind"], None)
+
+  async def test_run_topic_create_returns_stable_topic_anchor_payload(self) -> None:
+    fake_client = FakeTopicClient()
+    emitted: dict[str, object] = {}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      session_path = Path(temp_dir) / "userbot.session"
+      session_path.touch()
+
+      with (
+        patch.object(telethon_cli, "connect_client", return_value = (fake_client, object())),
+        patch.object(telethon_cli, "functions", FakeTelethonFunctions),
+        patch.object(
+          telethon_cli,
+          "emit",
+          side_effect = lambda payload: emitted.update(payload) or 0,
+        ),
+      ):
+        exit_code = await telethon_cli.run_topic_create(
+          argparse.Namespace(
+            chat = "-1003783709877",
+            session = str(session_path),
+            title = "voice proof",
+          )
+        )
+
+    self.assertEqual(exit_code, 0)
+    self.assertTrue(fake_client.disconnected)
+    self.assertEqual(emitted["chat_id"], -1003783709877)
+    self.assertEqual(emitted["message_id"], 777)
+    self.assertEqual(emitted["topic_anchor"], 777)
+    self.assertEqual(emitted["topic_title"], "voice proof")
+
 
 class TelethonCliSyncTests(unittest.TestCase):
   def test_build_dialog_payload_accepts_datetime_mute_until(self) -> None:
@@ -315,6 +508,34 @@ class TelethonCliSyncTests(unittest.TestCase):
     parser = telethon_cli.build_parser()
     with self.assertRaises(SystemExit):
       parser.parse_args(["login", "--phone", "+15551234567", "--password", "secret"])
+
+  def test_build_parser_accepts_topic_create_and_media_send_flags(self) -> None:
+    parser = telethon_cli.build_parser()
+
+    topic_args = parser.parse_args([
+      "topic-create",
+      "--chat",
+      "-1003783709877",
+      "--title",
+      "voice proof",
+    ])
+    self.assertEqual(topic_args.command, "topic-create")
+    self.assertEqual(topic_args.title, "voice proof")
+
+    send_args = parser.parse_args([
+      "send",
+      "--chat",
+      "-1003783709877",
+      "--media",
+      "/tmp/proof.ogg",
+      "--caption",
+      "voice proof",
+      "--voice",
+    ])
+    self.assertEqual(send_args.command, "send")
+    self.assertEqual(send_args.media, "/tmp/proof.ogg")
+    self.assertEqual(send_args.caption, "voice proof")
+    self.assertTrue(send_args.voice)
 
   def test_compute_inbox_scan_cap_keeps_filtered_queries_bounded_but_deeper(self) -> None:
     self.assertEqual(
