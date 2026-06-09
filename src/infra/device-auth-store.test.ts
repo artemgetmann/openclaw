@@ -19,6 +19,25 @@ function deviceAuthFile(stateDir: string): string {
   return path.join(stateDir, "identity", "device-auth.json");
 }
 
+function legacyDeviceAuthFile(stateDir: string): string {
+  return path.join(path.dirname(stateDir), "identity", "device-auth.json");
+}
+
+async function writeAuthFile(
+  filePath: string,
+  payload: {
+    deviceId: string;
+    tokens: Record<string, { token: string; role: string; scopes: string[]; updatedAtMs: number }>;
+  },
+): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(
+    filePath,
+    `${JSON.stringify({ version: 1, deviceId: payload.deviceId, tokens: payload.tokens }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 describe("infra/device-auth-store", () => {
   it("stores and loads device auth tokens under the configured state dir", async () => {
     await withTempDir("openclaw-device-auth-", async (stateDir) => {
@@ -55,6 +74,193 @@ describe("infra/device-auth-store", () => {
           operator: entry,
         },
       });
+    });
+  });
+
+  it("keeps healthy canonical operator auth and repairs stale legacy mirror", async () => {
+    await withTempDir("openclaw-device-auth-", async (root) => {
+      const stateDir = path.join(root, ".openclaw");
+      const env = createEnv(stateDir);
+      const canonicalEntry = {
+        token: "canonical-operator",
+        role: "operator",
+        scopes: ["operator.admin"],
+        updatedAtMs: 10,
+      };
+      const nodeEntry = {
+        token: "canonical-node",
+        role: "node",
+        scopes: ["node.invoke"],
+        updatedAtMs: 11,
+      };
+
+      await writeAuthFile(deviceAuthFile(stateDir), {
+        deviceId: "device-1",
+        tokens: { operator: canonicalEntry, node: nodeEntry },
+      });
+      await writeAuthFile(legacyDeviceAuthFile(stateDir), {
+        deviceId: "legacy-device",
+        tokens: {
+          operator: {
+            token: "stale-legacy",
+            role: "operator",
+            scopes: ["operator.admin"],
+            updatedAtMs: 1,
+          },
+        },
+      });
+
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toEqual(
+        canonicalEntry,
+      );
+      expect(JSON.parse(await fs.readFile(legacyDeviceAuthFile(stateDir), "utf8"))).toEqual({
+        version: 1,
+        deviceId: "device-1",
+        tokens: { operator: canonicalEntry, node: nodeEntry },
+      });
+    });
+  });
+
+  it("imports legacy auth once when canonical cannot authenticate", async () => {
+    await withTempDir("openclaw-device-auth-", async (root) => {
+      const stateDir = path.join(root, ".openclaw");
+      const env = createEnv(stateDir);
+      const legacyOperator = {
+        token: "legacy-operator",
+        role: "operator",
+        scopes: ["operator.admin"],
+        updatedAtMs: 21,
+      };
+      const legacyNode = {
+        token: "legacy-node",
+        role: "node",
+        scopes: ["node.invoke"],
+        updatedAtMs: 22,
+      };
+
+      await writeAuthFile(deviceAuthFile(stateDir), {
+        deviceId: "other-device",
+        tokens: {
+          operator: {
+            token: "wrong-canonical",
+            role: "operator",
+            scopes: ["operator.admin"],
+            updatedAtMs: 1,
+          },
+        },
+      });
+      await writeAuthFile(legacyDeviceAuthFile(stateDir), {
+        deviceId: "device-1",
+        tokens: { operator: legacyOperator, node: legacyNode },
+      });
+
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toEqual(
+        legacyOperator,
+      );
+      expect(JSON.parse(await fs.readFile(deviceAuthFile(stateDir), "utf8"))).toEqual({
+        version: 1,
+        deviceId: "device-1",
+        tokens: { operator: legacyOperator, node: legacyNode },
+      });
+      expect(JSON.parse(await fs.readFile(legacyDeviceAuthFile(stateDir), "utf8"))).toEqual({
+        version: 1,
+        deviceId: "device-1",
+        tokens: { operator: legacyOperator, node: legacyNode },
+      });
+    });
+  });
+
+  it("imports a missing legacy operator token without deleting canonical node auth", async () => {
+    await withTempDir("openclaw-device-auth-", async (root) => {
+      const stateDir = path.join(root, ".openclaw");
+      const env = createEnv(stateDir);
+      const nodeEntry = {
+        token: "canonical-node",
+        role: "node",
+        scopes: ["node.invoke"],
+        updatedAtMs: 31,
+      };
+      const legacyOperator = {
+        token: "legacy-operator",
+        role: "operator",
+        scopes: ["operator.admin"],
+        updatedAtMs: 32,
+      };
+
+      await writeAuthFile(deviceAuthFile(stateDir), {
+        deviceId: "device-1",
+        tokens: { node: nodeEntry },
+      });
+      await writeAuthFile(legacyDeviceAuthFile(stateDir), {
+        deviceId: "device-1",
+        tokens: { operator: legacyOperator },
+      });
+
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toEqual(
+        legacyOperator,
+      );
+      const expected = {
+        version: 1,
+        deviceId: "device-1",
+        tokens: { node: nodeEntry, operator: legacyOperator },
+      };
+      expect(JSON.parse(await fs.readFile(deviceAuthFile(stateDir), "utf8"))).toEqual(expected);
+      expect(JSON.parse(await fs.readFile(legacyDeviceAuthFile(stateDir), "utf8"))).toEqual(
+        expected,
+      );
+    });
+  });
+
+  it("rotates only operator auth while preserving node tokens in both files", async () => {
+    await withTempDir("openclaw-device-auth-", async (root) => {
+      vi.spyOn(Date, "now").mockReturnValue(4000);
+      const stateDir = path.join(root, ".openclaw");
+      const env = createEnv(stateDir);
+      const nodeEntry = {
+        token: "node-token",
+        role: "node",
+        scopes: ["node.invoke"],
+        updatedAtMs: 3000,
+      };
+
+      await writeAuthFile(deviceAuthFile(stateDir), {
+        deviceId: "device-1",
+        tokens: {
+          operator: {
+            token: "old-operator",
+            role: "operator",
+            scopes: ["operator.admin"],
+            updatedAtMs: 1000,
+          },
+          node: nodeEntry,
+        },
+      });
+
+      storeDeviceAuthToken({
+        deviceId: "device-1",
+        role: "operator",
+        token: "new-operator",
+        scopes: ["operator.read"],
+        env,
+      });
+
+      const expected = {
+        version: 1,
+        deviceId: "device-1",
+        tokens: {
+          operator: {
+            token: "new-operator",
+            role: "operator",
+            scopes: ["operator.read"],
+            updatedAtMs: 4000,
+          },
+          node: nodeEntry,
+        },
+      };
+      expect(JSON.parse(await fs.readFile(deviceAuthFile(stateDir), "utf8"))).toEqual(expected);
+      expect(JSON.parse(await fs.readFile(legacyDeviceAuthFile(stateDir), "utf8"))).toEqual(
+        expected,
+      );
     });
   });
 
