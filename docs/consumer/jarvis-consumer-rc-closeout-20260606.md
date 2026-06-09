@@ -27,6 +27,117 @@ Finish Jarvis Consumer RC validation in strict gates without mixing failure laye
 4. Final notarized release.
 5. Sparkle `N` to `N+1` update proof.
 
+## Same-User RC Manual Run - 2026-06-09
+
+Purpose: catch product/onboarding bugs on the normal macOS user before spending
+time on the real clean-user proof.
+
+Current app under test:
+
+- App: `/Applications/Jarvis Consumer.app`
+- Bundle id: `ai.openclaw.consumer.mac.consumer-rc`
+- Instance id: `jarvis-consumer-rc`
+- Gateway label: `ai.openclaw.consumer.jarvis-consumer-rc.gateway`
+- Gateway port: `31417`
+- Embedded commit observed during package verification: `a945dde0dc`
+
+Setup proof:
+
+- [x] Reset only the RC lane before launch: quit `Jarvis Consumer`, boot out only
+      the RC gateway, delete only `jarvis-consumer-rc` runtime state, and delete
+      only `ai.openclaw.consumer.mac.consumer-rc` prefs.
+- [x] Rebuilt and installed `/Applications/Jarvis Consumer.app` with
+      `bash scripts/package-jarvis-consumer-rc.sh --fast`.
+- [x] Verifier passed for both `dist/Jarvis Consumer.app` and
+      `/Applications/Jarvis Consumer.app`.
+- [x] Confirmed app process and isolated gateway process were running.
+- [x] Confirmed visible first-run window title: `Welcome to Jarvis`.
+- [x] Confirmed `/Applications/Jarvis.app` and shared `ai.openclaw.gateway` were
+      not replaced by this RC package flow.
+
+Live issues found during the run:
+
+- [x] ChatGPT auth fallback: `Trouble signing in?` must appear after roughly
+      8-10 seconds while ChatGPT sign-in is pending, even when the default
+      browser successfully opened. Reason: the user may be logged into ChatGPT
+      in a different browser and needs copy/open-link recovery without waiting
+      for the default browser path to fail.
+- [x] Telegram copy: bot-side approval message must not repeat app-side button
+      instructions. It should end with exactly `Return to the Jarvis app.` The
+      app already owns the `Verify Telegram` button.
+- [x] Telegram verification: after `/start`, the bot replied with the approval
+      message and RC config persisted `dmPolicy=allowlist` plus
+      `allowFrom=["1336356696"]`, but the app stayed on `Approving Telegram
+    chat...` for more than a minute and the first-task marker remained
+      missing. The verifier must complete once pending pairing/allowFrom proves
+      the private chat is approved; it must not require another DM or leave the
+      user in a spinner.
+- [x] Telegram instruction copy: onboarding must preserve the original first-task
+      phrase: `Tap Start in Telegram, send "Wake up, my friend", then click
+    Verify Telegram.`
+- [x] Telegram first-message replay: after `/start`, the user's first real DM can
+      arrive while the bot is still in pairing mode and before `allowFrom` is
+      saved. `Verify Telegram` must approve the sender and replay that captured
+      first real DM so the bot replies without requiring a second message.
+- [x] Partial-approval preflight: launch preflight no longer suppresses
+      onboarding only because Telegram `allowFrom` exists; it now requires the
+      first-task marker to match the configured bot id.
+
+Fix proof:
+
+- [x] `swift test --package-path apps/macos --filter TelegramSetupBootstrapTests`
+      passed 36 tests after the bot-copy, original first-task copy, and pending
+      first-DM replay fixes.
+- [x] `swift test --package-path apps/macos --filter ConsumerSetupResumeTests`
+      passed 9 tests.
+- [x] `swift test --package-path apps/macos --filter ConsumerSetupReadinessTests`
+      passed 39 tests.
+- [x] `pnpm exec vitest run src/pairing/pairing-messages.test.ts` passed 8
+      tests after the bot-side copy fix.
+- [x] `pnpm exec vitest run src/pairing/pairing-messages.test.ts
+    src/commands/models/consumer-auth.test.ts` passed 15 tests in the earlier
+      ChatGPT fallback/copy batch.
+- [x] Rebuilt and installed `/Applications/Jarvis Consumer.app`; verifier passed
+      for `dist/Jarvis Consumer.app` and `/Applications/Jarvis Consumer.app`.
+- [x] Same-user recovery proof: with Telegram config already containing
+      `allowFrom=["1336356696"]` and the first-task marker missing, clicking
+      `Verify Telegram` set
+      `OpenClawConsumerTelegramFirstTaskVerified.jarvis-consumer-rc=8818357939`,
+      showed `Telegram verified`, enabled `Next`, and onboarding finished.
+- [x] Installed binary proof: `/Applications/Jarvis Consumer.app` from build
+      timestamp `2026-06-09T06:11:00Z` contains the original `Wake up, my
+    friend` instruction and the runtime JS was rebuilt with bot copy
+      `Return to the Jarvis app.`
+
+Iteration rule:
+
+- Do not spend a 30-40 minute RC package cycle to validate small copy/UI logic
+  changes unless the packaged artifact itself is the thing under test. First use
+  the fastest lane that exercises the changed layer:
+  - Swift app/UI-only changes: targeted Swift tests plus
+    `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance jarvis-consumer-rc`
+    or `bash scripts/package-jarvis-consumer-rc.sh --fast --reuse-runtime` when
+    the bundled runtime is unchanged.
+  - Runtime TypeScript changes: targeted `pnpm exec vitest ...` plus one direct
+    runtime/local gateway proof where possible; pay a full `SKIP_TSC=0`
+    package only after batching runtime changes.
+  - Final artifact proof: full RC package/notarized DMG only after the same-user
+    walkthrough stops producing product bugs.
+- If a package run is unavoidable, state why before starting it. The expected
+  reasons are: runtime JS changed and must be embedded, signing/notarization is
+  under test, TCC/LaunchAgent identity is under test, or clean-user Gate2 proof
+  is starting.
+
+Manual run rule:
+
+- Keep moving through onboarding and append issues here. Fix the batch after the
+  walkthrough unless a blocker prevents reaching the next step.
+- 2026-06-09 same-user verdict: accepted for RC. The bot-side copy is now
+  correct (`Return to the Jarvis app.`), the app instruction is back to `Wake
+up, my friend`, and Telegram replies after verification. Minor first-message
+  timing friction is not worth another package rebuild. Do not reopen Telegram
+  onboarding polish unless clean-user proof exposes a blocker.
+
 ## Recovery Checklist - 2026-06-07
 
 This checklist supersedes the Gate 2 notes below until a new isolated Gate2 run proves otherwise.

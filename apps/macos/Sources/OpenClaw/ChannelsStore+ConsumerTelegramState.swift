@@ -172,6 +172,33 @@ extension ChannelsStore {
     }
 
     @discardableResult
+    func completeConsumerTelegramFirstTaskVerificationFromApprovedConfigIfPossible() -> Bool {
+        guard self.consumerTelegramLooksLive() else { return false }
+        guard self.consumerTelegramConfiguredBotId() != nil else { return false }
+        if self.consumerTelegramFirstTaskVerified { return true }
+
+        let fallback = self.consumerTelegramConfigFallback()
+        let lockedSenderId = fallback.lockedSenderId ?? self.telegramSetupFirstSenderId
+        guard lockedSenderId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return false
+        }
+
+        // This is the managed-bot approval shape: the bot already captured the
+        // private user id and Jarvis persisted it into allowFrom, but the UI may
+        // have missed the local defaults marker during gateway restart/reload.
+        self.markConsumerTelegramFirstTaskVerified()
+        self.telegramSetupWaitingForDM = false
+        self.telegramSetupPhase = .idle
+        if self.telegramSetupFirstSenderId == nil {
+            self.telegramSetupFirstSenderId = lockedSenderId
+        }
+        self.telegramSetupStatus = self.consumerTelegramBotUsername().map {
+            "Telegram bot is live as @\($0). Chat approved."
+        } ?? "Telegram bot is live. Chat approved."
+        return true
+    }
+
+    @discardableResult
     func completeConsumerTelegramFirstTaskVerificationForResumeIfSafe() -> Bool {
         guard self.consumerTelegramLooksLive() else { return false }
         guard self.consumerTelegramConfiguredBotId() != nil else { return false }

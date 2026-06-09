@@ -10,6 +10,9 @@ struct ConsumerSetupResumeTests {
             let defaults = Self.makeDefaults()
             let profile = Self.profile()
             defaults.set(profile.directoryName, forKey: browserSelectedChromeProfileIDKey)
+            defaults.set(
+                123456,
+                forKey: ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey())
 
             let completed = ConsumerSetupResumePreflight.completeIfExistingSetupLooksUsable(
                 defaults: defaults,
@@ -30,6 +33,22 @@ struct ConsumerSetupResumeTests {
                 root: [
                     "gateway": ["mode": "local"],
                 ],
+                configExists: { true })
+
+            #expect(!completed)
+            #expect(!defaults.bool(forKey: onboardingSeenKey))
+        }
+    }
+
+    @Test func `preflight does not suppress onboarding when telegram allowlist lacks first task marker`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let defaults = Self.makeDefaults()
+            let profile = Self.profile()
+            defaults.set(profile.directoryName, forKey: browserSelectedChromeProfileIDKey)
+
+            let completed = ConsumerSetupResumePreflight.completeIfExistingSetupLooksUsable(
+                defaults: defaults,
+                root: Self.usableSetupRoot(),
                 configExists: { true })
 
             #expect(!completed)

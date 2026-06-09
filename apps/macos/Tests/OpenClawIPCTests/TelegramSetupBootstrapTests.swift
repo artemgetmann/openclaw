@@ -261,7 +261,7 @@ struct TelegramSetupBootstrapTests {
 
         #expect(instruction == "Tap Start in Telegram, send \"Wake up, my friend\", then click Verify Telegram.")
         #expect(instruction.contains("Tap Start"))
-        #expect(instruction.contains("Wake up, my friend"))
+        #expect(instruction.contains("\"Wake up, my friend\""))
         #expect(instruction.contains("Verify Telegram"))
         #expect(instruction != "Tap Start in Telegram, then click Verify Telegram.")
         #expect(instruction.contains("Tap Start in Telegram, then click Verify Telegram.") == false)
@@ -479,6 +479,81 @@ struct TelegramSetupBootstrapTests {
         }
     }
 
+    @Test func `verified allowlist config promotes missing first task marker`() async throws {
+        let instanceId = "approved-config-\(UUID().uuidString)"
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: instanceId,
+        ]) {
+            let defaultsKey = ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(
+                instanceId: instanceId)
+            defer {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            }
+
+            let store = ChannelsStore(isPreview: true)
+            store.clearConsumerTelegramFirstTaskVerified()
+            store.configDraft = [
+                "channels": [
+                    "telegram": [
+                        "enabled": true,
+                        "botToken": "8932460707:token",
+                        "dmPolicy": "allowlist",
+                        "allowFrom": ["1336356696"],
+                    ],
+                ],
+            ]
+            store.snapshot = makeConsumerTelegramSnapshot(
+                running: true,
+                inboundAt: nil,
+                outboundAt: nil,
+                botId: 8_932_460_707,
+                username: "jarvis_e4851665_bot")
+
+            #expect(!store.consumerTelegramFirstTaskVerified)
+            #expect(store.completeConsumerTelegramFirstTaskVerificationFromApprovedConfigIfPossible())
+            #expect(store.consumerTelegramFirstTaskVerified)
+            #expect(store.telegramSetupFirstSenderId == "1336356696")
+            #expect(store.telegramSetupStatus == "Telegram bot is live as @jarvis_e4851665_bot. Chat approved.")
+        }
+    }
+
+    @Test func `verified allowlist config does not promote without sender evidence`() async throws {
+        let instanceId = "approved-config-negative-\(UUID().uuidString)"
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_APP_VARIANT": "consumer",
+            ConsumerInstance.envKey: instanceId,
+        ]) {
+            let defaultsKey = ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey(
+                instanceId: instanceId)
+            defer {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            }
+
+            let store = ChannelsStore(isPreview: true)
+            store.clearConsumerTelegramFirstTaskVerified()
+            store.configDraft = [
+                "channels": [
+                    "telegram": [
+                        "enabled": true,
+                        "botToken": "8932460707:token",
+                        "dmPolicy": "allowlist",
+                        "allowFrom": [],
+                    ],
+                ],
+            ]
+            store.snapshot = makeConsumerTelegramSnapshot(
+                running: true,
+                inboundAt: nil,
+                outboundAt: nil,
+                botId: 8_932_460_707,
+                username: "jarvis_e4851665_bot")
+
+            #expect(!store.completeConsumerTelegramFirstTaskVerificationFromApprovedConfigIfPossible())
+            #expect(!store.consumerTelegramFirstTaskVerified)
+        }
+    }
+
     @Test func `telegram replay params keep messageId as integer`() throws {
         let store = ChannelsStore(isPreview: true)
         let params = try #require(store._testTelegramReplayGatewayParams(
@@ -499,6 +574,36 @@ struct TelegramSetupBootstrapTests {
         #expect(payload["messageId"] as? Int == 202)
         #expect(payload["updateId"] as? Int == 101)
         #expect(payload["chatId"] as? Int == 303)
+    }
+
+    @Test func `pending pairing replay skips setup command and keeps first real message`() throws {
+        let startDM = TelegramSetupDirectMessage(
+            updateId: 101,
+            messageId: 202,
+            chatId: 303,
+            chatUsername: "jarvis_consumer_smoke_2",
+            senderId: 404,
+            senderUsername: "artem",
+            senderFirstName: "Artem",
+            text: "/start",
+            caption: nil,
+            date: 505,
+            messageThreadId: nil)
+        let taskDM = TelegramSetupDirectMessage(
+            updateId: 102,
+            messageId: 203,
+            chatId: 303,
+            chatUsername: "jarvis_consumer_smoke_2",
+            senderId: 404,
+            senderUsername: "artem",
+            senderFirstName: "Artem",
+            text: "Wake up, my friend",
+            caption: nil,
+            date: 506,
+            messageThreadId: nil)
+
+        #expect(!ChannelsStore.consumerTelegramShouldReplayPendingPairingMessage(startDM))
+        #expect(ChannelsStore.consumerTelegramShouldReplayPendingPairingMessage(taskDM))
     }
 
     @Test func `pending pairing replay synthesizes positive update id when Telegram metadata omits it`() throws {

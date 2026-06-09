@@ -17,7 +17,7 @@ enum ConsumerSetupResumePreflight {
         guard self.hasLocalGateway(root: root) else { return false }
         guard self.hasBrowserSelection(defaults: defaults, root: root) else { return false }
         guard self.hasModelAccess(root: root) else { return false }
-        guard self.hasTelegramSetup(root: root) else { return false }
+        guard self.hasTelegramSetup(defaults: defaults, root: root) else { return false }
 
         defaults.set(true, forKey: onboardingSeenKey)
         defaults.set(currentOnboardingVersion, forKey: onboardingVersionKey)
@@ -72,7 +72,8 @@ enum ConsumerSetupResumePreflight {
         return false
     }
 
-    private static func hasTelegramSetup(root: [String: Any]) -> Bool {
+    @MainActor
+    private static func hasTelegramSetup(defaults: UserDefaults, root: [String: Any]) -> Bool {
         let channels = root["channels"] as? [String: Any] ?? [:]
         let telegram = channels["telegram"] as? [String: Any] ?? [:]
         guard telegram["enabled"] as? Bool == true else { return false }
@@ -81,9 +82,18 @@ enum ConsumerSetupResumePreflight {
         else {
             return false
         }
-        if let allowed = telegram["allowFrom"] as? [Any] {
-            return !allowed.isEmpty
+
+        // `allowFrom` proves Telegram captured a private chat id, but the first
+        // task is not complete until onboarding records the exact configured bot
+        // id. Without this marker a partial approval can suppress onboarding and
+        // strand users in Settings with no way to finish Verify Telegram.
+        guard let botId = Int(token.split(separator: ":").first ?? "") else {
+            return false
         }
-        return false
+        let verificationKey = ChannelsStore.consumerTelegramFirstTaskVerificationDefaultsKey()
+        guard let verifiedBotId = defaults.object(forKey: verificationKey) as? Int else {
+            return false
+        }
+        return verifiedBotId == botId
     }
 }

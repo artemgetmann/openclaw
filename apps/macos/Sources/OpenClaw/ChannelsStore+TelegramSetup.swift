@@ -344,6 +344,11 @@ extension ChannelsStore {
     }
 
     func verifyConsumerTelegramFirstTask() async {
+        await self.refresh(probe: true)
+        if self.completeConsumerTelegramFirstTaskVerificationFromApprovedConfigIfPossible() {
+            return
+        }
+
         let route = Self.consumerTelegramFirstTaskVerificationRoute(
             hasPendingPairing: Self.latestPendingTelegramPairingRequest() != nil,
             looksLive: self.consumerTelegramLooksLive())
@@ -371,6 +376,9 @@ extension ChannelsStore {
             return
         }
         if self.completeConsumerTelegramFirstTaskVerificationFromRecentActivityIfPossible() {
+            return
+        }
+        if self.completeConsumerTelegramFirstTaskVerificationFromApprovedConfigIfPossible() {
             return
         }
 
@@ -671,16 +679,53 @@ extension ChannelsStore {
         self.telegramSetupFirstSenderId = pending.id
         self.telegramSetupStatus = "Approving Telegram chat..."
 
-        _ = try await self.applyTelegramSetupBootstrap(
+        let persisted = try await self.applyTelegramSetupBootstrap(
             token: token,
             dmPolicy: "allowlist",
             allowFrom: [pending.id],
             enabled: true)
 
+        if let dm = Self.consumerTelegramDirectMessage(from: pending),
+           Self.consumerTelegramShouldReplayPendingPairingMessage(dm)
+        {
+            // The first real DM can be blocked while Telegram is still in
+            // pairing mode. Approval must not only save the allowlist; it also
+            // needs to replay that captured task so the user gets the first
+            // Jarvis reply without sending a second message.
+            self.telegramSetupWaitingForDM = false
+            self.telegramSetupStatus = "Running your first Telegram task..."
+            self.telegramSetupPhase = .startingFirstReply
+            self.telegramSetupBaselineInboundAt = self.consumerTelegramLatestInboundAt()
+                ?? Double(dm.date * 1_000)
+            self.telegramSetupBaselineOutboundAt = self.consumerTelegramLatestOutboundAt()
+
+            let replayResult = await self.startFirstTelegramReply(dm: dm)
+            let replayDecision = Self.consumerTelegramReplayDecision(
+                replyStarted: replayResult.replyStarted,
+                replyCompleted: replayResult.replyCompleted,
+                error: replayResult.error)
+            let activityConfirmed = replayDecision.shouldWaitForActivityConfirmation
+                ? await self.waitForConsumerTelegramFirstTaskActivityRefreshes()
+                : false
+
+            if replayDecision.shouldTrustReplayCompletion || activityConfirmed {
+                self.markConsumerTelegramFirstTaskVerified()
+            } else {
+                self.clearConsumerTelegramFirstTaskVerified()
+            }
+            self.telegramSetupPhase = .idle
+            self.telegramSetupStatus = self.telegramCaptureStatus(
+                dm: dm,
+                persistedRoot: persisted,
+                replayResult: replayResult,
+                activityConfirmed: activityConfirmed)
+            return true
+        }
+
         // A pending pairing request means the Telegram bot already received a
         // private /start or first DM and replied with the approval instruction.
-        // Once Jarvis saves that sender in allowFrom, the setup proof is done:
-        // asking for a second DM only proves the UI state machine, not Telegram.
+        // If the only captured text is the setup command, there is no user task
+        // to replay. In that case the allowlist save is the setup proof.
         self.markConsumerTelegramFirstTaskVerified()
         self.telegramSetupWaitingForDM = false
         self.telegramSetupPhase = .idle
@@ -715,6 +760,22 @@ extension ChannelsStore {
             caption: caption,
             date: Self.consumerTelegramPendingMessageDate(pending),
             messageThreadId: Int(meta["messageThreadId"] ?? ""))
+    }
+
+    static func consumerTelegramShouldReplayPendingPairingMessage(
+        _ dm: TelegramSetupDirectMessage
+    ) -> Bool {
+        let text = (dm.text ?? dm.caption ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+
+        // /start opens the pairing path; replaying it would only repeat setup
+        // instructions. Replay the first actual task message instead.
+        let command = text
+            .split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            .first?
+            .lowercased() ?? ""
+        return command != "/start"
     }
 
     private static func consumerTelegramReplayUpdateId(

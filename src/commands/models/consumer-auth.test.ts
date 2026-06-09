@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
@@ -209,6 +212,9 @@ describe("consumer auth Claude CLI setup detection", () => {
 
 describe("consumer auth ChatGPT OAuth setup", () => {
   it("opens ChatGPT OAuth in the default browser on macOS", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-consumer-auth-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     const runCommand = vi.fn(async () => ({
       stdout: "",
       stderr: "",
@@ -223,12 +229,20 @@ describe("consumer auth ChatGPT OAuth setup", () => {
       platform: "darwin",
       runCommand,
       openUrlImpl: fallbackOpenUrl,
+    }).finally(() => {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
     });
-
     expect(opened).toBe(true);
     expect(runCommand).toHaveBeenCalledWith(["/usr/bin/open", "https://chatgpt.com/oauth"], {
       timeoutMs: 5_000,
     });
+    expect(
+      fs.readFileSync(path.join(stateDir, "oauth", "openai-codex-signin-url.txt"), "utf8"),
+    ).toBe("https://chatgpt.com/oauth");
     expect(fallbackOpenUrl).not.toHaveBeenCalled();
   });
 

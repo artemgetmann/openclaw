@@ -137,6 +137,8 @@ export async function openConsumerOAuthUrl(
   const runCommand = deps.runCommand ?? runCommandWithTimeout;
   const openUrlImpl = deps.openUrlImpl ?? openUrl;
 
+  persistConsumerOAuthSignInUrl(url);
+
   if (platform === "darwin") {
     try {
       // OAuth is an account sign-in, not a browser-control task. Respect the
@@ -163,6 +165,27 @@ export async function openConsumerOAuthUrl(
   }
 
   return Boolean(await openUrlImpl(url));
+}
+
+function persistConsumerOAuthSignInUrl(url: string): void {
+  try {
+    const parsed = new URL(url);
+    if (
+      parsed.protocol !== "https:" ||
+      (!parsed.host.endsWith("openai.com") && !parsed.host.endsWith("chatgpt.com"))
+    ) {
+      return;
+    }
+    const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+    if (!stateDir) {
+      return;
+    }
+    const dir = path.join(stateDir, "oauth");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "openai-codex-signin-url.txt"), url, "utf8");
+  } catch {
+    // Browser launch must not fail just because the recovery-link cache failed.
+  }
 }
 
 const CONSUMER_AUTH_CHOICES: readonly ConsumerAuthChoiceDefinition[] = [

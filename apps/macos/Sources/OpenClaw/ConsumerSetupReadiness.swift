@@ -946,7 +946,9 @@ final class ConsumerModelSetupModel {
 
     private func beginChatGPTSignInWait() {
         self.chatGPTSignInHelpTask?.cancel()
+        Self.clearPendingChatGPTSignInURL()
         self.isWaitingForChatGPTSignIn = true
+        self.chatGPTSignInURL = nil
         self.hasWaitedForChatGPTSignInHelp = false
         self.signInHelpExpanded = false
 
@@ -957,9 +959,38 @@ final class ConsumerModelSetupModel {
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, self.isWaitingForChatGPTSignIn else { return }
+                self.loadPendingChatGPTSignInURL()
                 self.hasWaitedForChatGPTSignInHelp = true
             }
         }
+    }
+
+    private func loadPendingChatGPTSignInURL() {
+        guard self.chatGPTSignInURL == nil else { return }
+        self.chatGPTSignInURL = Self.pendingChatGPTSignInURL()
+    }
+
+    private static func pendingChatGPTSignInURL() -> URL? {
+        guard let raw = try? String(contentsOf: self.pendingChatGPTSignInURLFileURL(), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !raw.isEmpty,
+            let url = URL(string: raw),
+            url.scheme == "https",
+            url.host?.contains("openai.com") == true
+        else {
+            return nil
+        }
+        return url
+    }
+
+    private static func clearPendingChatGPTSignInURL() {
+        try? FileManager.default.removeItem(at: self.pendingChatGPTSignInURLFileURL())
+    }
+
+    private static func pendingChatGPTSignInURLFileURL() -> URL {
+        ConsumerRuntime.stateDirURL
+            .appendingPathComponent("oauth", isDirectory: true)
+            .appendingPathComponent("openai-codex-signin-url.txt")
     }
 
     private func scheduleGatewayRecoveryProbeIfNeeded() {
