@@ -402,7 +402,9 @@ export async function handleInlineActions(params: {
       defaultGroupActivation: defaultActivation,
       mediaDecisions: ctx.MediaUnderstandingDecisions,
     });
-    await sendInlineReply(markControlCommandReplyPayload(inlineStatusReply));
+    await sendInlineReply(
+      inlineStatusReply ? markControlCommandReplyPayload(inlineStatusReply) : inlineStatusReply,
+    );
     directives = { ...directives, hasStatusDirective: false };
   }
 
