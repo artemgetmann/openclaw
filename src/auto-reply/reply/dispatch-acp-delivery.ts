@@ -80,6 +80,7 @@ export type AcpDispatchDeliveryCoordinator = {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ) => Promise<boolean>;
+  deliverFinalTextBeforeTts: (text: string) => Promise<boolean>;
   deliverFinalTtsSupplement: (text: string) => Promise<boolean>;
   getBlockCount: () => number;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
@@ -259,6 +260,26 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     return deliverPreparedPayload(kind, ttsPayload, meta);
   };
 
+  const deliverFinalTextBeforeTts = async (text: string): Promise<boolean> => {
+    const finalText = text.trim();
+    if (!finalText) {
+      return false;
+    }
+
+    await startReplyLifecycleOnce();
+    return deliverPreparedPayload("final", {
+      text: finalText,
+      // ACP stream previews are intentionally transient in Telegram. This
+      // structural final marker forces the accepted assistant output through
+      // the durable final lane before any media-only TTS supplement can follow.
+      channelData: {
+        openclaw: {
+          assistantPhase: "final_answer",
+        },
+      },
+    });
+  };
+
   const deliverFinalTtsSupplement = async (text: string): Promise<boolean> => {
     const finalText = text.trim();
     if (!finalText) {
@@ -288,6 +309,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   return {
     startReplyLifecycle: startReplyLifecycleOnce,
     deliver,
+    deliverFinalTextBeforeTts,
     deliverFinalTtsSupplement,
     getBlockCount: () => state.blockCount,
     getRoutedCounts: () => ({ ...state.routedCounts }),

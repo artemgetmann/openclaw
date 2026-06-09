@@ -61,7 +61,29 @@ openclaw_use_validated_node() {
   );
   writeFileSync(
     path.join(cloneDir, "scripts", "bootstrap-worktree-telegram.sh"),
-    "#!/usr/bin/env bash\nexit 0\n",
+    `#!/usr/bin/env bash
+set -euo pipefail
+MODE="optional"
+case "\${1:-}" in
+  --copy-only)
+    MODE="copy-only"
+    ;;
+  --optional)
+    MODE="optional"
+    ;;
+  --strict)
+    MODE="strict"
+    ;;
+esac
+mkdir -p "./scripts/telegram-e2e/tmp"
+printf 'TG_LOCAL=canonical-local\\n' > "./scripts/telegram-e2e/.env.local"
+printf 'session-bytes\\n' > "./scripts/telegram-e2e/tmp/userbot.session"
+printf 'BOOT_TOKEN=111:fixture\\n' > "./.env.bots"
+if [[ "$MODE" != "copy-only" ]]; then
+  printf 'TELEGRAM_BOT_TOKEN=111:fixture\\n' > "./.env.local"
+fi
+echo "telegram bootstrap complete"
+`,
     { encoding: "utf8", mode: 0o755 },
   );
   writeFileSync(
@@ -170,12 +192,22 @@ describe("scripts/new-worktree.sh readiness gating", () => {
 
     const worktreePath = output.match(/^worktree=(.+)$/m)?.[1];
     expect(output).toContain("lane_mode=warm");
+    expect(output).toContain("telegram_bootstrap=copy-only");
     expect(output).toContain("bootstrap_runtime=dependencies-only");
     expect(output).toContain("lane_ready=yes");
     expect(worktreePath).toBeTruthy();
     expect(readFileSync(path.join(worktreePath!, ".dev-launch.env"), "utf8")).toContain(
       "OPENCLAW_GATEWAY_PORT=",
     );
+    expect(
+      readFileSync(path.join(worktreePath!, "scripts", "telegram-e2e", ".env.local"), "utf8"),
+    ).toBe("TG_LOCAL=canonical-local\n");
+    expect(
+      readFileSync(
+        path.join(worktreePath!, "scripts", "telegram-e2e", "tmp", "userbot.session"),
+        "utf8",
+      ),
+    ).toBe("session-bytes\n");
     expect(() => readFileSync(path.join(worktreePath!, "dist", "index.js"), "utf8")).toThrow();
   });
 

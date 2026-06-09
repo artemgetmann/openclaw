@@ -259,6 +259,9 @@ What it does:
      emergency backport.
 3. Creates `.worktrees/my-feature` on `codex/my-feature` from that base.
 4. Runs `bash scripts/bootstrap-worktree-telegram.sh`.
+   - Warm lanes use a copy-only bootstrap so `scripts/telegram-e2e/.env.local`
+     and `scripts/telegram-e2e/tmp/userbot.session` still land in the lane
+     without auto-claiming a tester bot token.
 5. Attempts a bounded `scripts/telegram-live-runtime.sh ensure` so worktree creation does not hang for minutes waiting on runtime health.
    - If no tester token is claimable, bootstrap leaves the worktree usable and tells you to free a lane with `scripts/telegram-live-runtime.sh release`.
 6. Writes `.dev-launch.env` with a deterministic `OPENCLAW_STATE_DIR` and `OPENCLAW_GATEWAY_PORT`.

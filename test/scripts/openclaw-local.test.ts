@@ -61,6 +61,20 @@ function createOpenclawLocalHarness(): {
     ].join("\n"),
   );
   writeExecutable(
+    path.join(root, "scripts", "bootstrap-worktree-telegram.sh"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'mkdir -p "$PWD/scripts/telegram-e2e/tmp"',
+      "cat > \"$PWD/scripts/telegram-e2e/.env.local\" <<'EOF'",
+      "TELEGRAM_API_ID=123456",
+      "TELEGRAM_API_HASH=test-hash",
+      "EOF",
+      'printf "session" > "$PWD/scripts/telegram-e2e/tmp/userbot.session"',
+      'printf "bootstrap:%s\\n" "$*" >> "$OPENCLAW_TEST_CALLS"',
+    ].join("\n"),
+  );
+  writeExecutable(
     path.join(root, "scripts", "lib", "worktree-guards.sh"),
     [
       "#!/usr/bin/env bash",
@@ -123,6 +137,28 @@ describe("scripts/openclaw-local.sh restart routing", () => {
       expect(result.status).toBe(66);
       expect(calls).toBe("local-helper:\n");
       expect(calls).not.toContain("node:");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("bootstraps missing Telegram userbot assets before telegram-user commands", () => {
+    const harness = createOpenclawLocalHarness();
+    try {
+      const result = harness.run(["telegram-user", "status", "--json"]);
+      const calls = fs.readFileSync(harness.callsPath, "utf8");
+
+      expect(result.status).toBe(0);
+      expect(calls).toContain("bootstrap:--strict");
+      expect(calls).toContain(
+        `node:${fs.realpathSync(path.join(harness.root, "openclaw.mjs"))} telegram-user status --json`,
+      );
+      expect(
+        fs.readFileSync(path.join(harness.root, "scripts", "telegram-e2e", ".env.local"), "utf8"),
+      ).toContain("TELEGRAM_API_ID=123456");
+      expect(
+        fs.existsSync(path.join(harness.root, "scripts", "telegram-e2e", "tmp", "userbot.session")),
+      ).toBe(true);
     } finally {
       harness.cleanup();
     }

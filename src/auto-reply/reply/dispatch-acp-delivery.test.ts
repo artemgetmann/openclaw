@@ -52,6 +52,7 @@ function createCoordinator(params?: {
   shouldSendToolSummaries?: boolean;
   provider?: string;
   surface?: string;
+  messageThreadId?: string | number;
   shouldRouteToOriginating?: boolean;
   originatingChannel?: string;
   originatingTo?: string;
@@ -63,6 +64,7 @@ function createCoordinator(params?: {
       Provider: params?.provider ?? "discord",
       Surface: params?.surface ?? params?.provider ?? "discord",
       SessionKey: "agent:codex-acp:session-1",
+      ...(params?.messageThreadId != null ? { MessageThreadId: params.messageThreadId } : {}),
     }),
     dispatcher,
     inboundAudio: false,
@@ -229,5 +231,70 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       mediaUrl: "https://example.com/final-tts.opus",
       audioAsVoice: true,
     });
+  });
+
+  it("delivers visible final text before media-only TTS in the same Telegram thread", async () => {
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const { coordinator } = createCoordinator({
+      provider: "discord",
+      surface: "discord",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+      messageThreadId: 777,
+    });
+
+    const visibleDelivered = await coordinator.deliverFinalTextBeforeTts("Final answer.");
+    const voiceDelivered = await coordinator.deliverFinalTtsSupplement("Final answer.");
+
+    expect(visibleDelivered).toBe(true);
+    expect(voiceDelivered).toBe(true);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+        threadId: 777,
+        payload: expect.objectContaining({
+          text: "Final answer.",
+          channelData: {
+            openclaw: {
+              assistantPhase: "final_answer",
+            },
+          },
+        }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+        threadId: 777,
+        payload: expect.objectContaining({
+          text: undefined,
+          mediaUrl: "https://example.com/final-tts.opus",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+  });
+
+  it("does not send the media-only TTS supplement when visible final text fails", async () => {
+    ttsMocks.state.synthesizeFinalAudio = true;
+    routeMocks.routeReply.mockResolvedValueOnce({ ok: false, error: "thread missing" });
+    const { coordinator } = createCoordinator({
+      provider: "discord",
+      surface: "discord",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+      messageThreadId: 777,
+    });
+
+    const visibleDelivered = await coordinator.deliverFinalTextBeforeTts("Final answer.");
+
+    expect(visibleDelivered).toBe(false);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
   });
 });

@@ -43,6 +43,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { truncateLine } from "../../shared/subagents-format.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { maybeResolveTextAlias } from "../commands-registry.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -93,6 +94,49 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   }
   return AUDIO_HEADER_RE.test(trimmed);
 };
+
+function resolveCommandCandidateText(ctx: FinalizedMsgContext): string {
+  const candidate =
+    typeof ctx.CommandBody === "string"
+      ? ctx.CommandBody
+      : typeof ctx.BodyForCommands === "string"
+        ? ctx.BodyForCommands
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+  return candidate.trim();
+}
+
+function isTelegramControlCommandReply(
+  ctx: FinalizedMsgContext,
+  cfg: OpenClawConfig,
+  visibilityChannel: string | undefined,
+): boolean {
+  if (visibilityChannel !== "telegram") {
+    return false;
+  }
+  if (ctx.CommandSource === "native") {
+    return true;
+  }
+
+  const candidate = resolveCommandCandidateText(ctx);
+  if (!candidate) {
+    return false;
+  }
+  if (maybeResolveTextAlias(candidate, cfg) != null) {
+    return true;
+  }
+  // Slash/native command replies are control-plane feedback. Hidden/plugin
+  // commands can be slash-shaped without appearing in the core alias registry.
+  // They may change persistent TTS preferences, but the command acknowledgement
+  // itself must not be upgraded into an automatic voice note.
+  if (candidate.startsWith("/")) {
+    return true;
+  }
+  return Boolean(ctx.CommandAuthorized) && candidate.startsWith("!");
+}
 
 function compactNativeTelegramToolText(text: string): string {
   const normalized = text.replace(/\r\n?/g, "\n").trimEnd();
@@ -280,10 +324,15 @@ export async function dispatchReplyFromConfig(params: {
     ctx.MessageThreadId ?? parseSessionThreadInfo(acpDispatchSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
+  const isControlCommandReply = isTelegramControlCommandReply(ctx, cfg, visibilityChannel);
   // Voice-in should get voice-out for this turn only. Keep explicit `/tts on`
   // as-is, but let inbound audio override typed-message modes like `off` or
   // `tagged` without writing a new preference.
-  const turnTtsAuto = inboundAudio && sessionTtsAuto !== "always" ? "inbound" : sessionTtsAuto;
+  const turnTtsAuto = isControlCommandReply
+    ? "off"
+    : inboundAudio && sessionTtsAuto !== "always"
+      ? "inbound"
+      : sessionTtsAuto;
   const hookRunner = getGlobalHookRunner();
 
   // Extract message context for hooks (plugin and internal)

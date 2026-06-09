@@ -936,6 +936,86 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("does not auto-voice Telegram native command replies when session TTS is always", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    sessionStoreMocks.currentEntry = {
+      ttsAuto: "always",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      CommandSource: "native",
+      CommandBody: "/model",
+      BodyForCommands: "/model",
+      BodyForAgent: "/model",
+      CommandAuthorized: true,
+      SessionKey: "agent:main:telegram:direct:native-model",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(
+        async () => ({ text: "Model: openai-codex/gpt-5.5" }) satisfies ReplyPayload,
+      ),
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        inboundAudio: false,
+        ttsAuto: "off",
+        payload: { text: "Model: openai-codex/gpt-5.5" },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "Model: openai-codex/gpt-5.5",
+    });
+  });
+
+  it("does not auto-voice Telegram slash command replies when session TTS is always", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    sessionStoreMocks.currentEntry = {
+      ttsAuto: "always",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      CommandSource: "text",
+      CommandBody: "/status",
+      BodyForCommands: "/status",
+      BodyForAgent: "/status",
+      CommandAuthorized: true,
+      SessionKey: "agent:main:telegram:direct:text-status",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => ({ text: "Status: running" }) satisfies ReplyPayload),
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        inboundAudio: false,
+        ttsAuto: "off",
+        payload: { text: "Status: running" },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "Status: running",
+    });
+  });
+
   it("keeps typed text silent when TTS is off", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
@@ -1613,10 +1693,23 @@ describe("dispatchReplyFromConfig", () => {
         payload: { text: "FINAL visible answer" },
       }),
     );
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "FINAL visible answer",
+        channelData: {
+          openclaw: {
+            assistantPhase: "final_answer",
+          },
+        },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
+        text: undefined,
       }),
     );
   });
@@ -1701,11 +1794,24 @@ describe("dispatchReplyFromConfig", () => {
         },
       }),
     );
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "FINAL_ONLY_VOICE",
+        channelData: {
+          openclaw: {
+            assistantPhase: "final_answer",
+          },
+        },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         mediaUrl: "https://example.com/tts-synth.opus",
         audioAsVoice: true,
+        text: undefined,
       }),
     );
   });

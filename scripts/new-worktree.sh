@@ -413,6 +413,12 @@ TELEGRAM_BOOTSTRAP_STATUS="skipped"
 if [[ "$LANE_MODE" == "clean" ]]; then
   (cd "$WORKTREE_PATH" && bash "$BOOTSTRAP_SCRIPT" --optional)
   TELEGRAM_BOOTSTRAP_STATUS="optional"
+elif [[ "$LANE_MODE" == "warm" ]]; then
+  # Warm lanes still need the canonical Telegram userbot files so CLI probes
+  # and read-only media tooling work immediately. Only the tester bot claim and
+  # runtime ensure stay deferred until the operator asks for them.
+  (cd "$WORKTREE_PATH" && bash "$BOOTSTRAP_SCRIPT" --copy-only)
+  TELEGRAM_BOOTSTRAP_STATUS="copy-only"
 fi
 
 DEV_PORT="$(WORKTREE_PATH="$WORKTREE_PATH" "$VALIDATED_NODE_BIN" --input-type=module - <<'NODE'
@@ -521,7 +527,7 @@ fi
 if [[ "$LANE_MODE" == "clean" ]] && [[ -f "$WORKTREE_PATH/.env.local" ]]; then
   run_ensure_with_timeout "$WORKTREE_PATH"
 elif [[ "$LANE_MODE" == "warm" ]]; then
-  echo "info: warm mode skips Telegram lane claim/ensure and the build step; dependencies are installed in-place" >&2
+  echo "info: warm mode copies canonical Telegram userbot files but skips Telegram lane claim/ensure and the build step; dependencies are installed in-place" >&2
 else
   echo "warning: no Telegram token claim was assigned; skipping telegram-live-runtime ensure" >&2
 fi
