@@ -269,7 +269,7 @@ struct ConsumerSetupReadinessTests {
         let blockerDetail = """
         Telegram runtime ownership mismatch at /Users/user/Programming_Projects/openclaw/.worktrees/onboarding-ai-access-recovery-20260519-2158/apps/macos/Sources/OpenClaw/Telegram/DM/bridge.swift
         """
-        let expectedMessage = "\(AppFlavor.current.appName) is still updating its local helper. Restart \(AppFlavor.current.appName), then try again."
+        let expectedMessage = "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName), then try again."
         let model = ConsumerModelSetupModel(
             probeReadiness: {
                 readyReadinessPayload()
@@ -288,6 +288,7 @@ struct ConsumerSetupReadinessTests {
 
         #expect(model.phase == .failed(expectedMessage))
         #expect(model.statusLine == expectedMessage)
+        #expect(model.statusLine?.localizedCaseInsensitiveContains("local helper") == false)
         #expect(model.statusLine?.contains("Telegram") == false)
         #expect(model.statusLine?.contains("DM") == false)
         #expect(model.statusLine?.contains("/Users/") == false)

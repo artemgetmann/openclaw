@@ -235,4 +235,23 @@ struct ChannelsSettingsSmokeTests {
             #expect(view.telegramDetails?.localizedCaseInsensitiveContains("runtime") == false)
         }
     }
+
+    @Test func `consumer telegram ownership diagnostics do not override live primary state`() {
+        #expect(!ChannelsSettings.shouldSurfaceConsumerTelegramOwnershipIssue(
+            isConsumerSimpleTelegramPath: true,
+            telegramLooksLive: true,
+            readyForFirstTask: false))
+        #expect(!ChannelsSettings.shouldSurfaceConsumerTelegramOwnershipIssue(
+            isConsumerSimpleTelegramPath: true,
+            telegramLooksLive: true,
+            readyForFirstTask: true))
+        #expect(ChannelsSettings.shouldSurfaceConsumerTelegramOwnershipIssue(
+            isConsumerSimpleTelegramPath: true,
+            telegramLooksLive: false,
+            readyForFirstTask: false))
+        #expect(ChannelsSettings.shouldSurfaceConsumerTelegramOwnershipIssue(
+            isConsumerSimpleTelegramPath: false,
+            telegramLooksLive: true,
+            readyForFirstTask: true))
+    }
 }

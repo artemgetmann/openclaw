@@ -18,6 +18,13 @@ extension ChannelsSettings {
             && !self.store.consumerTelegramReadyForFirstTask()
     }
 
+    private var shouldSurfaceConsumerTelegramOwnershipIssue: Bool {
+        Self.shouldSurfaceConsumerTelegramOwnershipIssue(
+            isConsumerSimpleTelegramPath: self.isConsumerSimpleTelegramPath,
+            telegramLooksLive: self.store.consumerTelegramLooksLive(),
+            readyForFirstTask: self.store.consumerTelegramReadyForFirstTask())
+    }
+
     var consumerTelegramBotUsername: String? {
         self.store.consumerTelegramBotUsername()
     }
@@ -138,7 +145,9 @@ extension ChannelsSettings {
     }
 
     var telegramTint: Color {
-        if self.consumerTelegramOwnershipIssue != nil {
+        if self.consumerTelegramOwnershipIssue != nil,
+           self.shouldSurfaceConsumerTelegramOwnershipIssue
+        {
             return .orange
         }
         if self.consumerTelegramAwaitingFirstTaskVerification {
@@ -206,7 +215,9 @@ extension ChannelsSettings {
     }
 
     var telegramSummary: String {
-        if self.consumerTelegramOwnershipIssue != nil {
+        if self.consumerTelegramOwnershipIssue != nil,
+           self.shouldSurfaceConsumerTelegramOwnershipIssue
+        {
             return "Needs attention"
         }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
@@ -287,7 +298,9 @@ extension ChannelsSettings {
     }
 
     var telegramDetails: String? {
-        if let ownershipIssue = self.consumerTelegramOwnershipIssue {
+        if let ownershipIssue = self.consumerTelegramOwnershipIssue,
+           self.shouldSurfaceConsumerTelegramOwnershipIssue
+        {
             return ownershipIssue
         }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
@@ -669,5 +682,20 @@ extension ChannelsSettings {
 
     private func channelStatusDictionary(_ id: String) -> [String: AnyCodable]? {
         self.store.snapshot?.channels[id]?.dictionaryValue
+    }
+
+    static func shouldSurfaceConsumerTelegramOwnershipIssue(
+        isConsumerSimpleTelegramPath: Bool,
+        telegramLooksLive: Bool,
+        readyForFirstTask: Bool) -> Bool
+    {
+        // Runtime ownership paths are operator diagnostics. Once the consumer
+        // bot is already live or verified, the primary Channels row should stay
+        // anchored on the user-visible Telegram state instead of overriding it
+        // with a worktree/launchd mismatch.
+        if isConsumerSimpleTelegramPath, telegramLooksLive || readyForFirstTask {
+            return false
+        }
+        return true
     }
 }

@@ -26,9 +26,12 @@ struct SettingsRootView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             if self.isNixMode {
                 self.nixManagedBanner
+                    .padding(.horizontal, 28)
+                    .padding(.top, 22)
+                    .padding(.bottom, 12)
             }
             NavigationSplitView {
                 List(self.visibleTabs, id: \.self, selection: self.$selectedTab) { tab in
@@ -41,9 +44,9 @@ struct SettingsRootView: View {
                 self.settingsView(for: self.selectedTab ?? .general)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 22)
+        .background(Color(nsColor: .windowBackgroundColor))
         .background(SettingsWindowVisibilityBridge())
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

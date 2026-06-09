@@ -1152,7 +1152,7 @@ final class ConsumerModelSetupModel {
     }
 
     private static func consumerFriendlyRuntimeOwnershipBlockerStatusLine() -> String {
-        "\(AppFlavor.current.appName) is still updating its local helper. Restart \(AppFlavor.current.appName), then try again."
+        "\(AppFlavor.current.appName) is finishing an update. Restart \(AppFlavor.current.appName), then try again."
     }
 
     private static func consumerAccessFailureKind(for error: Error) -> ConsumerAIAccessFailureKind {
@@ -1809,15 +1809,15 @@ struct ConsumerModelSetupCardContent: View {
     @ViewBuilder
     private func failureCallout(message: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(self.model.failureKind?.title ?? "AI setup still needs attention")
+            Text(self.model.failureKind?.title ?? "AI access needs attention")
                 .font(.subheadline.weight(.semibold))
             Text(message)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if self.model.canRestartOperator {
-                HStack(spacing: 10) {
+            HStack(spacing: 10) {
+                if self.model.canRestartOperator {
                     Button {
                         Task { await self.model.restartOperator() }
                     } label: {
@@ -1837,12 +1837,22 @@ struct ConsumerModelSetupCardContent: View {
                     .buttonStyle(.bordered)
                     .disabled(self.model.isRestartingOperator)
                 }
-            } else {
-                Button("Choose Another Access Method") {
-                    self.model.alternateMethodExpanded = true
-                    self.model.authSectionExpanded = true
+
+                if self.model.canRestartOperator {
+                    Button("Choose Another Access Method") {
+                        self.model.alternateMethodExpanded = true
+                        self.model.authSectionExpanded = true
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.model.isRestartingOperator)
+                } else {
+                    Button("Choose Another Access Method") {
+                        self.model.alternateMethodExpanded = true
+                        self.model.authSectionExpanded = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.model.isRestartingOperator)
                 }
-                .buttonStyle(.borderedProminent)
             }
         }
     }

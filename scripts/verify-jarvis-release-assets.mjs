@@ -11,10 +11,9 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_DMG_URL =
   "https://github.com/artemgetmann/openclaw/releases/latest/download/Jarvis.dmg";
-const DEFAULT_ZIP_URL =
-  "https://github.com/artemgetmann/openclaw/releases/latest/download/Jarvis.zip";
 const DEFAULT_APPCAST_URL =
   "https://github.com/artemgetmann/openclaw/releases/latest/download/jarvis-appcast.xml";
+const DEFAULT_RELEASE_REPO_URL = "https://github.com/artemgetmann/openclaw";
 const MAX_REDIRECTS = 10;
 const MAX_APPCAST_BYTES = 1024 * 1024;
 
@@ -29,7 +28,7 @@ function parseArgs(argv) {
     appPath: null,
     zipPath: null,
     dmgUrl: DEFAULT_DMG_URL,
-    zipUrl: DEFAULT_ZIP_URL,
+    zipUrl: null,
     appcastUrl: DEFAULT_APPCAST_URL,
   };
 
@@ -64,6 +63,10 @@ function parseArgs(argv) {
   }
 
   return options;
+}
+
+function defaultVersionedZipUrl(shortVersion) {
+  return `${DEFAULT_RELEASE_REPO_URL}/releases/download/v${shortVersion}/Jarvis.zip`;
 }
 
 async function readPlistValue(plistPath, key) {
@@ -363,6 +366,7 @@ async function main(argv = process.argv.slice(2)) {
   }
 
   const versions = await readAppVersions(appPath);
+  const expectedZipUrl = options.zipUrl ?? defaultVersionedZipUrl(versions.shortVersion);
   console.log(
     `app_versions_ok bundle_version=${versions.bundleVersion} short_version=${versions.shortVersion}`,
   );
@@ -372,7 +376,7 @@ async function main(argv = process.argv.slice(2)) {
     `public_asset_ok kind=dmg status=200 content_length=${parseContentLength(dmgResponse.headers, "dmg") ?? "absent"}`,
   );
 
-  const zipResponse = await verifyUrlOk("zip", options.zipUrl);
+  const zipResponse = await verifyUrlOk("zip", expectedZipUrl);
   const publicZipLength = parseContentLength(zipResponse.headers, "zip");
   if (publicZipLength !== null && publicZipLength !== zipStats.size) {
     throw new Error(
@@ -391,7 +395,7 @@ async function main(argv = process.argv.slice(2)) {
   const appcastProof = verifyAppcast(appcastResponse.body, {
     bundleVersion: versions.bundleVersion,
     shortVersion: versions.shortVersion,
-    zipUrl: options.zipUrl,
+    zipUrl: expectedZipUrl,
     zipSize: zipStats.size,
   });
   console.log(
