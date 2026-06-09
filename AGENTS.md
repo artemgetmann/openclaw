@@ -27,6 +27,7 @@
 - Before creating, moving, or cleaning up worktrees, read `docs/agent-guides/workflow.md`. Default workflow is now the sacred home clone `~/Programming_Projects/openclaw` on `main`; `~/Programming_Projects/openclaw-consumer` is legacy/emergency fallback only. The home clone is a pull-only runtime anchor. All implementation work happens in temporary worktrees created from the correct sacred home clone, and default task spawn should create that temp worktree immediately.
 - Before touching gateway runtime ownership, worktree bot validation, or LaunchAgent behavior, read `docs/agent-guides/workflow.md` and `docs/agent-guides/runtime-ops.md`.
 - For consumer macOS packaging/relaunch iteration, prefer `bash scripts/rebuild-relaunch-consumer-mac-app.sh --instance <id>` and the notes in `apps/macos/README.md` instead of rediscovering the warm-path flags by hand.
+- For a sendable Jarvis DMG or app update, follow the canonical release lane in `apps/macos/README.md`; keep this file as a pointer, not the release playbook.
 - Use `docs/agent-guides/workflow.md` as the source of truth for the two-clone model, migration path, feature-branch rule, and draft-PR workflow. Do not rely on memory for branch/home-clone conventions.
 - Before opening or updating a PR:
   - For fork PRs targeting `artemgetmann/openclaw` `main`, read `FORK_CONTRIBUTING.md`
