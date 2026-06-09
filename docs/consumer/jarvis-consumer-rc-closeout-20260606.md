@@ -81,13 +81,13 @@ Live issues found during the run:
 - [x] Telegram verification: after `/start`, the bot replied with the approval
       message and RC config persisted `dmPolicy=allowlist` plus
       `allowFrom=["1336356696"]`, but the app stayed on `Approving Telegram
-  chat...` for more than a minute and the first-task marker remained
+chat...` for more than a minute and the first-task marker remained
       missing. The verifier must complete once pending pairing/allowFrom proves
       the private chat is approved; it must not require another DM or leave the
       user in a spinner.
 - [x] Telegram instruction copy: onboarding must preserve the original first-task
       phrase: `Tap Start in Telegram, send "Wake up, my friend", then click
-  Verify Telegram.`
+Verify Telegram.`
 - [x] Telegram first-message replay: after `/start`, the user's first real DM can
       arrive while the bot is still in pairing mode and before `allowFrom` is
       saved. `Verify Telegram` must approve the sender and replay that captured
@@ -108,7 +108,7 @@ Fix proof:
 - [x] `pnpm exec vitest run src/pairing/pairing-messages.test.ts` passed 8
       tests after the bot-side copy fix.
 - [x] `pnpm exec vitest run src/pairing/pairing-messages.test.ts
-  src/commands/models/consumer-auth.test.ts` passed 15 tests in the earlier
+src/commands/models/consumer-auth.test.ts` passed 15 tests in the earlier
       ChatGPT fallback/copy batch.
 - [x] Rebuilt and installed `/Applications/Jarvis Consumer.app`; verifier passed
       for `dist/Jarvis Consumer.app` and `/Applications/Jarvis Consumer.app`.
@@ -119,7 +119,7 @@ Fix proof:
       showed `Telegram verified`, enabled `Next`, and onboarding finished.
 - [x] Installed binary proof: `/Applications/Jarvis Consumer.app` from build
       timestamp `2026-06-09T06:11:00Z` contains the original `Wake up, my
-  friend` instruction and the runtime JS was rebuilt with bot copy
+friend` instruction and the runtime JS was rebuilt with bot copy
       `Return to the Jarvis app.`
 
 Iteration rule:

@@ -1,11 +1,11 @@
 ---
 current_stage: private_beta
-users_total: 20
-paying_users: 0
+users_total: TBD
+paying_users: TBD
 active_beta_users_7d: TBD
-updated_at: 2026-05-14
+updated_at: 2026-06-09
 stale_after_days: 14
-source_of_truth: Founder-reported beta snapshot in the Jarvis project-status context slice.
+source_of_truth: 2026-06-09 refresh confirmed no newer founder-reported beta snapshot than the older private-beta note, so counts are intentionally TBD until a verified refresh is recorded.
 decision_implication: Use this only for launch, pricing, reliability, scaling, and architecture context while fresh; expired numbers are not decision-grade.
 ---
 
@@ -22,9 +22,9 @@ copy, and pricing truth in `docs/consumer/jarvis-launch-package.md`.
 
 Jarvis is in private beta.
 
-The current planning snapshot is about 20 total users, 0 paying users, and
-`active_beta_users_7d` is still TBD until analytics or an explicit beta-activity
-source is wired in.
+There is no fresh verified beta count in this branch as of 2026-06-09, so
+`users_total`, `paying_users`, and `active_beta_users_7d` are intentionally
+`TBD` until a founder-reported snapshot or analytics-backed refresh is recorded.
 
 Current beta blocker: onboarding to first useful task still needs a cleaner
 account/AI-access/Telegram sequence before the next tester package is worth
