@@ -1208,6 +1208,17 @@ export const dispatchTelegramMessage = async ({
             const assistantPhase = resolveOpenClawAssistantPhase(payload);
             const deliveryKind =
               info.kind === "block" && assistantPhase === "final_answer" ? "final" : info.kind;
+            const hasPayloadMedia =
+              Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+            const hasPayloadText =
+              typeof payload.text === "string" && payload.text.trim().length > 0;
+            const isMediaOnlyFinalBoundary =
+              deliveryKind === "final" && hasPayloadMedia && !hasPayloadText;
+            if (deliveryKind === "final") {
+              // Assistant callbacks are fire-and-forget; ensure queued boundary
+              // rotations/partials are applied before final delivery mapping.
+              await enqueueDraftLaneEvent(async () => {});
+            }
             if (
               pendingAmbiguousAnswerBlock &&
               (deliveryKind === "final" ||
@@ -1215,15 +1226,18 @@ export const dispatchTelegramMessage = async ({
                 assistantPhase === "commentary" ||
                 (deliveryKind === "block" && !assistantPhase))
             ) {
-              // A later structural boundary proves the previous phase-less
-              // block was in-flight commentary. Route it through the mutable
-              // progress controller before handling the new event.
-              flushAmbiguousAnswerBlockAsProgress(`before-${deliveryKind}`);
-            }
-            if (deliveryKind === "final") {
-              // Assistant callbacks are fire-and-forget; ensure queued boundary
-              // rotations/partials are applied before final delivery mapping.
-              await enqueueDraftLaneEvent(async () => {});
+              if (isMediaOnlyFinalBoundary) {
+                // A TTS/audio supplement is a final boundary, but it is not the
+                // final text. Preserve the buffered answer as durable text first
+                // so the voice message stays additive and cannot inherit a stale
+                // mutable progress bubble.
+                await flushAmbiguousAnswerBlockAsFinal(`before-${deliveryKind}-media`);
+              } else {
+                // A later structural boundary proves the previous phase-less
+                // block was in-flight commentary. Route it through the mutable
+                // progress controller before handling the new event.
+                flushAmbiguousAnswerBlockAsProgress(`before-${deliveryKind}`);
+              }
             }
             if (
               shouldSuppressLocalTelegramExecApprovalPrompt({
@@ -1354,6 +1368,11 @@ export const dispatchTelegramMessage = async ({
             }
             if (split.suppressedReasoningOnly) {
               if (hasMedia) {
+                if (deliveryKind === "final") {
+                  await clearProgressController("before-final-media", {
+                    timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
+                  });
+                }
                 const payloadWithoutSuppressedReasoning =
                   typeof payload.text === "string" ? { ...payload, text: "" } : payload;
                 await sendPayload(payloadWithoutSuppressedReasoning, {
@@ -1381,6 +1400,9 @@ export const dispatchTelegramMessage = async ({
             if (!canSendAsIs) {
               if (deliveryKind === "final") {
                 await flushBufferedFinalAnswer();
+                await clearProgressController("before-final-empty", {
+                  timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
+                });
               }
               return;
             }
@@ -1401,6 +1423,11 @@ export const dispatchTelegramMessage = async ({
                 updateAnswerProgressFromBlock(renderTextWithToolProgress(payload.text));
               }
               return;
+            }
+            if (deliveryKind === "final") {
+              await clearProgressController("before-final-payload", {
+                timeoutMs: PROGRESS_FINAL_CLEANUP_TIMEOUT_MS,
+              });
             }
             await sendPayload(
               payload.text

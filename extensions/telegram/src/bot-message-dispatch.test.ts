@@ -2490,6 +2490,97 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("finalizes a phase-less answer block before a media-only voice supplement and does not reuse progress on the next turn", async () => {
+    const leakedProgressDraftStream = createSequencedDraftStream(9001);
+    createTelegramDraftStream.mockReturnValue(leakedProgressDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver(
+          { text: "hi Sir. Still suspiciously operational." },
+          {
+            kind: "block",
+          },
+        );
+        await dispatcherOptions.deliver(
+          {
+            mediaUrl: "file:///tmp/hi-voice.ogg",
+            audioAsVoice: true,
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "Princess Fiona repeat." }, { kind: "block" });
+        await dispatcherOptions.deliver(
+          {
+            mediaUrl: "file:///tmp/fiona-voice.ogg",
+            audioAsVoice: true,
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    const context = createContext({
+      ctxPayload: {
+        SessionKey: "topic-15431",
+      } as unknown as TelegramMessageContext["ctxPayload"],
+    });
+
+    await dispatchWithContext({ context });
+    await dispatchWithContext({ context });
+
+    // The phase-less text block is the visible final answer when the next
+    // boundary is only the TTS media supplement. It must never enter the mutable
+    // progress controller, because that controller edits one Telegram bubble
+    // across callbacks and can be reused by the next user turn.
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(leakedProgressDraftStream.update).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: "hi Sir. Still suspiciously operational.",
+          }),
+        ],
+      }),
+    );
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            mediaUrl: "file:///tmp/hi-voice.ogg",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: "Princess Fiona repeat.",
+          }),
+        ],
+      }),
+    );
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            mediaUrl: "file:///tmp/fiona-voice.ogg",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("delivers tool-result media without falling back to empty response", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
