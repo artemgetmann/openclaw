@@ -466,6 +466,38 @@ describe("config strict validation", () => {
     });
   });
 
+  it("flags stale Jarvis consumer model defaults as auto-migratable", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        jarvis: {
+          managedServices: { mode: "managed" },
+          backend: { baseUrl: "https://jarvis.example.invalid" },
+        },
+        auth: {
+          profiles: {
+            "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+          },
+          order: {
+            "openai-codex": ["openai-codex:default"],
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.4" },
+            models: {
+              "openai-codex/gpt-5.3-codex": {},
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.legacyIssues.some((issue) => issue.path === "agents.defaults")).toBe(true);
+    });
+  });
+
   it("does not mark resolved-only gateway.bind aliases as auto-migratable legacy", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
