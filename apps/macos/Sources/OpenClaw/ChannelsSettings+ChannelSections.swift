@@ -96,7 +96,7 @@ extension ChannelsSettings {
 
     var telegramSetupSection: some View {
         self.telegramSection(
-            title: self.store.consumerTelegramReadyForFirstTask() ? "Connected bot" : "One-time setup")
+            title: self.store.consumerTelegramLooksLive() ? "Connected bot" : "One-time setup")
     }
 
     var consumerTelegramLiveSection: some View {

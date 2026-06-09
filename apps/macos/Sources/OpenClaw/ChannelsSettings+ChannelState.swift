@@ -12,8 +12,27 @@ extension ChannelsSettings {
         AppFlavor.current.isConsumer && !UserDefaults.standard.bool(forKey: showAdvancedSettingsKey)
     }
 
+    private var consumerTelegramAwaitingFirstTaskVerification: Bool {
+        self.isConsumerSimpleTelegramPath
+            && self.store.consumerTelegramLooksLive()
+            && !self.store.consumerTelegramReadyForFirstTask()
+    }
+
     var consumerTelegramBotUsername: String? {
         self.store.consumerTelegramBotUsername()
+    }
+
+    private var consumerTelegramPendingVerificationDetails: String {
+        let action = "One final check remains: send a message to Jarvis, then click Verify Telegram."
+        return self.consumerTelegramBotUsername.map {
+            "Telegram connected as @\($0). \(action)"
+        } ?? "Telegram connected. \(action)"
+    }
+
+    private var consumerTelegramVerifiedDetails: String {
+        self.consumerTelegramBotUsername.map {
+            "Telegram connected as @\($0) and verified."
+        } ?? "Telegram connected and verified."
     }
 
     private func channelStatus<T: Decodable>(
@@ -122,6 +141,9 @@ extension ChannelsSettings {
         if self.consumerTelegramOwnershipIssue != nil {
             return .orange
         }
+        if self.consumerTelegramAwaitingFirstTaskVerification {
+            return .orange
+        }
         guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
         else {
             guard self.store.consumerTelegramLooksLive() else { return .secondary }
@@ -194,7 +216,7 @@ extension ChannelsSettings {
             }
             if self.isConsumerSimpleTelegramPath {
                 if self.store.consumerTelegramReadyForFirstTask() { return "Live" }
-                if self.store.consumerTelegramLooksLive() { return "Verify Telegram" }
+                if self.store.consumerTelegramLooksLive() { return "Connected" }
                 return "Setup needed"
             }
             return "Checking…"
@@ -202,7 +224,7 @@ extension ChannelsSettings {
         if self.isConsumerSimpleTelegramPath {
             if self.store.consumerTelegramConflictMessage(status.lastError) != nil { return "Busy elsewhere" }
             if self.store.consumerTelegramReadyForFirstTask() { return "Live" }
-            if self.store.consumerTelegramLooksLive() { return "Verify Telegram" }
+            if self.store.consumerTelegramLooksLive() { return "Connected" }
             if status.configured { return "Setup complete" }
             return "Setup needed"
         }
@@ -276,6 +298,9 @@ extension ChannelsSettings {
             if let gate = self.store.consumerTelegramAccessGateMessage(self.store.telegramSetupStatus) {
                 return gate
             }
+            if self.consumerTelegramAwaitingFirstTaskVerification {
+                return self.consumerTelegramPendingVerificationDetails
+            }
             if let status = self.store.telegramSetupStatus, !status.isEmpty {
                 return status
             }
@@ -286,6 +311,14 @@ extension ChannelsSettings {
         }
         if let gate = self.store.consumerTelegramAccessGateMessage(status.lastError) {
             return gate
+        }
+        if self.isConsumerSimpleTelegramPath {
+            if self.store.consumerTelegramReadyForFirstTask() {
+                return self.consumerTelegramVerifiedDetails
+            }
+            if self.store.consumerTelegramLooksLive() {
+                return self.consumerTelegramPendingVerificationDetails
+            }
         }
         var lines: [String] = []
         if let source = status.tokenSource {
